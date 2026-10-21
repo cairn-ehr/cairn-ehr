@@ -179,7 +179,7 @@ pub fn doubted_link_note(rows: &[MedicationRow]) -> Option<String> {
         .any(|line| line.reasons.doubted_link);
     any_doubted.then(|| {
         format!(
-            "! This record's links are in doubt, so the line(s) marked above are withheld from \
+            "! This record's links are in doubt, so the line(s) marked above are left out of \
              sign-off (issue #697). {DOUBTED_LINK_INSTRUCTION}"
         )
     })
@@ -377,6 +377,8 @@ mod tests {
             cross_patient: wrong_chart.any(),
             wrong_chart,
             source_charts: vec![],
+            holds: vec![],
+            cessation_reason: None,
         }
     }
 
@@ -386,6 +388,8 @@ mod tests {
         let note = doubted_link_note(&rows).expect("two doubted rows: one note");
         assert_eq!(note.matches(DOUBTED_LINK_INSTRUCTION).count(), 1, "{note}");
         assert!(note.starts_with("! "), "{note}");
+        // #803: "withheld" now means a clinical hold, so this note says "left out".
+        assert!(note.contains("are left out of sign-off"), "{note}");
     }
 
     /// Residual R2: a ceased line needs no signature, so it is never withheld — a doubted

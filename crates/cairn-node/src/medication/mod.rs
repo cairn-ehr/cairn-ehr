@@ -2,7 +2,7 @@
 //! by default (signed by the node key, a `recorded` contributor, no attestation);
 //! the slice-4 attestation path (`attestation.rs`) layers human responsibility as a
 //! separable overlay. Orchestrators over an immortal `medication_id` thread:
-//! assert / cease / change-dose / correct-dose, plus reconcile / separate over a
+//! assert / cease / change-dose / correct-dose / withhold / release-hold, plus reconcile / separate over a
 //! thread PAIR. Offline-first throughout (no event requires its target thread to be
 //! present locally). Split by verb to keep each file focused (house rule 4).
 mod assert;
@@ -13,6 +13,7 @@ mod dose;
 mod hazard;
 // Public for the CLI's benefit, same as `read` and `signoff`: `main.rs`'s `MedicationList`
 // and `MedicationSignOff` arms call straight into these pure formatters.
+pub mod hold_text;
 pub mod list_text;
 pub mod read;
 mod reconciliation;
@@ -24,6 +25,7 @@ mod reconciliation;
 // `signoff` are already public, for the CLI's benefit.)
 pub mod sealed_submit;
 pub mod signoff;
+mod withhold;
 
 pub use assert::{
     assert_medication, assert_medication_returning_event, build_assert_body, coding_from_parts,
@@ -47,3 +49,7 @@ pub use reconciliation::{
     validate_distinct_subjects, ReconcileInput,
 };
 pub use sealed_submit::AuthorParams;
+pub use withhold::{
+    build_release_body, build_withhold_body, distinct_holds, release_medication_holds,
+    withhold_medication, WithholdMedicationInput,
+};

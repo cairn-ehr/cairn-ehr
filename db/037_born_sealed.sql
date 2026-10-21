@@ -136,8 +136,9 @@ ON CONFLICT (event_type) DO NOTHING;
 --    verb writes derived plaintext, so EVERY verb's projection is in scope — not only the
 --    three the walking skeleton first shipped (code-review finding #2). The provenance-precise
 --    key differs per table: medication_statement / medication_coding / medication_cessation /
---    medication_dose_correction / medication_reconciliation / medication_attestation all carry
---    the PRODUCING event's content_address (db/031/032/033/034) so they scrub by
+--    medication_dose_correction / medication_reconciliation / medication_attestation /
+--    medication_withhold / medication_withhold_release all carry the PRODUCING event's
+--    content_address (db/031/032/033/034/059) so they scrub by
 --    `content_address = v_ca`; the initial-dose seed row is keyed by the assert event's own
 --    id (db/032); and
 --    medication_group_member is a DERIVED table (recomputed from the standing reconciled
@@ -197,6 +198,14 @@ BEGIN
         END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
+        END IF;
+        -- Withhold / release rows (db/059, ADR-0081): the hold's reason is clinical plaintext
+        -- keyed by THIS event's content_address, so the same provenance-precise scrub applies.
+        IF to_regclass('public.medication_withhold') IS NOT NULL THEN
+            DELETE FROM medication_withhold WHERE content_address = v_ca;
+        END IF;
+        IF to_regclass('public.medication_withhold_release') IS NOT NULL THEN
+            DELETE FROM medication_withhold_release WHERE content_address = v_ca;
         END IF;
         -- Dose-CORRECTION overlay (db/032/035): the corrected amount/unit/effective/reason/note
         -- is clinical plaintext keyed by the corrected point but carrying THIS event's CA.

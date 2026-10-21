@@ -10,13 +10,15 @@
 //! the thread; a *cessation* (`cessation`) ends it; a *dose change / correction*
 //! (`dose`, slice 2) overlays the dose over time. A *reconciliation / separation*
 //! (`reconciliation`, slice 3) is the one verb about TWO threads — it links (or
-//! splits) two threads declared to be the same real drug (never-merge-always-link).
+//! splits) two threads declared to be the same real drug (never-merge-always-link). A *withhold* (`withhold`) is a time-bounded hold on a
+//! thread (ADR-0081) and its *release* ends named holds early; neither ends the thread.
 pub mod assert;
 pub mod attestation;
 pub mod cessation;
 pub mod coding;
 pub mod dose;
 pub mod reconciliation;
+pub mod withhold;
 
 pub use assert::{
     medication_assertion_body, render_medication_twin, MedicationAssertion, SubstanceCoding,
@@ -39,4 +41,9 @@ pub use dose::{
 pub use reconciliation::{
     reconciliation_body, render_reconciliation_twin, render_separation_twin, separation_body,
     ReconciliationAssertion,
+};
+pub use withhold::{
+    medication_withhold_body, medication_withhold_release_body,
+    render_medication_withhold_release_twin, render_medication_withhold_twin, HoldUntil,
+    MedicationWithhold, MedicationWithholdRelease,
 };

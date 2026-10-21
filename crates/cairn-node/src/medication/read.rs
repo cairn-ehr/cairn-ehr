@@ -46,7 +46,8 @@
 //! column is cast back to text in the SELECT list and parsed on the Rust side.
 use super::hazard::wrong_chart_reasons;
 use cairn_medication_view::{
-    ChartSet, MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons,
+    ChartSet, MedicationHold, MedicationRow, MedicationStatus, MemberVouch, VouchState,
+    WrongChartReasons,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
@@ -117,6 +118,8 @@ async fn list_chart_set_medications(
     let reconciliation_flagged = read_reconciliation_flagged_groups(client, charts).await?;
     let coding_conflict = read_coding_conflict_groups(client, charts).await?;
     let doubted = set_has_doubted_link(client, charts).await?;
+    let holds = read_group_holds(client, &groups).await?;
+    let cessation_reasons = read_cessation_reasons(client, &groups).await?;
 
     // Each group's wrong-chart reasons (`medication::hazard`), over EVERY chart it touches
     // (`touched_charts`: the union of three sources, any one naming a chart is enough).
@@ -168,6 +171,21 @@ async fn list_chart_set_medications(
                 // statements (READ COMMITTED, see the module note) — in which case the
                 // group's row is normally gone too and `groups_missing_from_chart` reports it.
                 source_charts: group_charts.get(&group_id).cloned().unwrap_or_default(),
+                // A hold rides BESIDE the status (ADR-0081): a withheld line is still Active.
+                // Cessation wins over any hold (decision 5): a ceased row carries none.
+                holds: if status == MedicationStatus::Active {
+                    holds.get(&group_id).cloned().unwrap_or_default()
+                } else {
+                    vec![]
+                },
+                // Only a ceased line shows a reason. (A group reads active or ceased by
+                // latest-effective-wins, ADR-0047, so a group with a ceased member may be
+                // either; `status` already says which.)
+                cessation_reason: if status == MedicationStatus::Ceased {
+                    cessation_reasons.get(&group_id).cloned()
+                } else {
+                    None
+                },
             });
         }
     }
@@ -320,6 +338,55 @@ fn list_sql(view: &str) -> String {
          dose_unit, sig, started_value, started_precision, coding_display \
          FROM {view} WHERE medication_id = ANY($1::text[]::uuid[])"
     )
+}
+
+/// The holds in force or pending on each group (db/059 `cairn_medication_group_holds`), latest
+/// start first (ADR-0081). The ORDER BY is ours: a set-returning function's internal order
+/// is not a caller guarantee. Instants come back as RFC 3339 UTC text to the second (a hold
+/// until 08:00:45 is still in force at 08:00:30, so minutes would mislead), and an open
+/// hold's end as the wire's own `"reviewed"`, never null.
+async fn read_group_holds(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    groups: &[Uuid],
+) -> anyhow::Result<HashMap<Uuid, Vec<MedicationHold>>> {
+    const FMT: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
+    let sql = format!(
+        "SELECT group_id::text AS group_id, medication_id::text AS medication_id, \
+         withhold_event_id::text AS withhold_event_id, reason, withholder_kid, pending, \
+         to_char(starts_at AT TIME ZONE 'UTC', {FMT}) AS starts_at_txt, \
+         CASE WHEN until_reviewed THEN 'reviewed' \
+              ELSE to_char(until_at AT TIME ZONE 'UTC', {FMT}) END AS until_at \
+         FROM cairn_medication_group_holds($1::text[]::uuid[], clock_timestamp()) \
+         ORDER BY group_id, starts_at DESC, withhold_event_id"
+    );
+    let mut out: HashMap<Uuid, Vec<MedicationHold>> = HashMap::new();
+    for r in client.query(&sql, &[&uuid_strings(groups)]).await? {
+        let group: Uuid = r.get::<_, String>("group_id").parse()?;
+        out.entry(group).or_default().push(MedicationHold {
+            withhold_event_id: r.get::<_, String>("withhold_event_id").parse()?,
+            medication_id: r.get::<_, String>("medication_id").parse()?,
+            reason: r.get("reason"),
+            starts_at: r.get("starts_at_txt"),
+            until: r.get("until_at"),
+            withholder: r.get("withholder_kid"),
+            pending: r.get("pending"),
+        });
+    }
+    Ok(out)
+}
+
+/// Each ceased group's cessation reason (`medication_group_cessation`), non-empty only.
+async fn read_cessation_reasons(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    groups: &[Uuid],
+) -> anyhow::Result<HashMap<Uuid, String>> {
+    let sql = "SELECT group_id::text AS group_id, reason FROM medication_group_cessation \
+               WHERE group_id = ANY($1::text[]::uuid[]) AND btrim(coalesce(reason, '')) <> ''";
+    let mut out = HashMap::new();
+    for r in client.query(sql, &[&uuid_strings(groups)]).await? {
+        out.insert(r.get::<_, String>("group_id").parse()?, r.get("reason"));
+    }
+    Ok(out)
 }
 
 /// Every member thread of the given groups, regardless of which chart each member

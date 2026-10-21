@@ -121,6 +121,9 @@ fn strip_new_fields(list: &mut Value) {
     for row in list["rows"].as_array_mut().unwrap() {
         row.as_object_mut().unwrap().remove("source_charts");
         row.as_object_mut().unwrap().remove("wrong_chart");
+        // #803 added `holds` and `cessation_reason`; pinned by medication_read.rs.
+        row.as_object_mut().unwrap().remove("holds");
+        row.as_object_mut().unwrap().remove("cessation_reason");
         for member in row["members"].as_array_mut().unwrap() {
             member.as_object_mut().unwrap().remove("patient_id");
         }

@@ -46,6 +46,8 @@ fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
         // The ordinary fixture rows all live on the one fixture chart; the cross-patient
         // row overrides this below to name BOTH charts its group spans.
         source_charts: vec![uid(1)],
+        holds: vec![],
+        cessation_reason: None,
     }
 }
 

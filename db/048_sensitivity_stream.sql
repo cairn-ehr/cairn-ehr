@@ -443,7 +443,7 @@ DECLARE
     v_thread uuid;
 BEGIN
     -- !! LANGUAGE plpgsql, NOT sql, AND THE GUARD IS LOAD-BEARING !!
-    -- cairn-sync loads a SUBSET of the migrations that does NOT include db/031/032, so the
+    -- cairn-sync loads a SUBSET of the migrations that does NOT include db/031/032/059, so the
     -- medication projections DO NOT EXIST on that node. A LANGUAGE sql body binds its table
     -- references EAGERLY at CREATE time, so this function would fail to create there and
     -- db/048 would fail to load — taking clinical sync down entirely. (Same late-binding
@@ -455,18 +455,20 @@ BEGIN
     -- see medication threads cannot resolve one, which is the SAME state as holding no
     -- custody. Section 11's conservative bound then applies. Safe direction by construction.
     --
-    -- WHY TWO to_regclass PROBES AND NOT ONE: the UNION below spans FIVE tables from TWO
+    -- WHY THREE to_regclass PROBES AND NOT ONE: the UNION below spans SEVEN tables from THREE
     -- migration files (medication_statement/medication_cessation/medication_coding from db/031;
-    -- medication_dose_event/medication_dose_correction from db/032). Checking only
-    -- medication_statement silently assumed the other four always arrive with it. No shipped
-    -- loader ever lists one of 031/032 without the other (cairn-node loads both; cairn-sync
-    -- loads neither) — but the loop that replays db/*.sql is not one atomic transaction, so a
-    -- loader that crashes mid-replay between 031 and 032 is a real (if narrow) window in which
-    -- medication_statement exists and medication_dose_event does not. Checking one
-    -- representative table PER SOURCE FILE (031 and 032) costs nothing and closes that window
-    -- instead of assuming it shut.
+    -- medication_dose_event/medication_dose_correction from db/032; medication_withhold/
+    -- medication_withhold_release from db/059). Checking only medication_statement silently
+    -- assumed the other six always arrive with it. No shipped loader ever lists one of
+    -- 031/032/059 without the others (cairn-node loads all three; cairn-sync loads none) — but
+    -- the loop that replays db/*.sql is not one atomic transaction, so a loader that crashes
+    -- mid-replay between 031 and 059 is a real (if narrow) window in which
+    -- medication_statement exists and medication_withhold does not. Checking one
+    -- representative table PER SOURCE FILE (031, 032, 059) costs nothing and closes that
+    -- window instead of assuming it shut.
     IF to_regclass('public.medication_statement') IS NULL
-       OR to_regclass('public.medication_dose_event') IS NULL THEN
+       OR to_regclass('public.medication_dose_event') IS NULL
+       OR to_regclass('public.medication_withhold') IS NULL THEN
         RETURN NULL;
     END IF;
 
@@ -479,12 +481,12 @@ BEGIN
 
     -- #385: a type section 10b has POSITIVELY confirmed to be thread-free (note.%,
     -- demographic.%, identity.%, patient.%, sensitivity.%, erasure.%) cannot be WRITTEN into
-    -- any of the five medication projections below, because only the medication apply
+    -- any of the seven medication projections below, because only the medication apply
     -- functions write them and only ever under their own triggering event's address. So the
-    -- five scans can only ever return nothing — and the chart-wide reading in
+    -- seven scans can only ever return nothing — and the chart-wide reading in
     -- `chart_sensitivity` resolves off the chart's registration event whenever one is on file
     -- (it has an explicit no-registration arm — see sensitivity/report.rs — which does not
-    -- reach here at all), i.e. the common path paid for all five, per chart, every time.
+    -- reach here at all), i.e. the common path paid for all seven, per chart, every time.
     --
     -- BEHAVIOUR-NEUTRAL FOR THE LIST AS IT STANDS: every type in it already answered NULL, so
     -- this returns the same NULL sooner. The neutrality is worth stating because a reader will
@@ -520,7 +522,7 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- The five medication-thread projection tables from db/031 and db/032, unioned on their
+    -- The seven medication-thread projection tables from db/031, db/032 and db/059, unioned on their
     -- shared (medication_id, content_address) shape. NOTE: db/032's dose-point table is named
     -- medication_dose_event (not medication_dose) — checked against the actual db/032
     -- CREATE TABLE rather than assumed, since a wrong name here would bind at first
@@ -529,13 +531,13 @@ BEGIN
     --
     -- NOT "every medication-thread projection table": db/034's medication_attestation also
     -- carries both medication_id and content_address (PRIMARY KEY (event_id), so genuinely
-    -- per-event) and is deliberately absent. Adding it would need a THIRD to_regclass probe,
+    -- per-event) and is deliberately absent. Adding it would need a FOURTH to_regclass probe,
     -- since db/034 is outside cairn-sync's subset too. The omission is safe by construction —
     -- an attestation's event type is clinical.%, so it fails cairn_event_type_has_no_thread and
     -- takes the conservative bound instead, which over-protects.
     --
     -- WHAT THIS RESOLVES, AND WHAT IT DOES NOT — stated plainly so the comment cannot be
-    -- read as promising more than it does. FOUR of these five tables are one-row-per-key
+    -- read as promising more than it does. FOUR of these seven tables are one-row-per-key
     -- upserts carrying only the CURRENT WINNING event's content_address:
     --   * medication_statement, medication_cessation, medication_coding —
     --     `PRIMARY KEY (medication_id)` with `ON CONFLICT (medication_id) DO UPDATE` apply
@@ -556,7 +558,11 @@ BEGIN
     -- `clinical.medication.asserted`, seeding a row whose
     -- dose_event_id IS that assert's own event_id and whose content_address is that assert's
     -- own. So a superseded `clinical.medication.asserted` — and likewise a superseded
-    -- `-dose-change.asserted` — still resolves here, permanently and precisely.
+    -- `-dose-change.asserted` — still resolves here, permanently and precisely. So does every
+    -- withhold and every release this node has applied (db/059; one it holds no custody for, or
+    -- that was shredded, has no row): medication_withhold and medication_withhold_release
+    -- are keyed on the event's own content_address (`ON CONFLICT ... DO NOTHING`), one row per
+    -- event, never overlaid — there is no winner between two holds to pick.
     --
     -- The real limitation is narrower and differently shaped: it is a superseded `ceased` or
     -- `coding` event (their tables are keyed on medication_id) and a RE-corrected
@@ -576,6 +582,9 @@ BEGIN
         UNION ALL SELECT medication_id, content_address FROM medication_coding
         UNION ALL SELECT medication_id, content_address FROM medication_dose_event
         UNION ALL SELECT medication_id, content_address FROM medication_dose_correction
+        -- db/059 (#803): per-event tables, so every applied withhold or release resolves.
+        UNION ALL SELECT medication_id, content_address FROM medication_withhold
+        UNION ALL SELECT medication_id, content_address FROM medication_withhold_release
     ) t
     WHERE t.content_address = v_ca
     LIMIT 1;

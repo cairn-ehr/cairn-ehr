@@ -47,6 +47,12 @@ never blocking an uncoded record and never requiring the *reader* to hold `drugr
 needs is **captured at coding time and carried**, not re-derived downstream); the coding shape and its
 honest-degradation contract live in [§3.16](#316-clinical-concept-coding-the-icd-11-interlingua-and-the-local-terminology-overlay)
 ([ADR-0059](decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)).
+A medication can also be **withheld** — the paper chart's "W" — by a pair of additive events: a
+withhold with a required reason and a required `until` (an exact instant, or the explicit
+`"reviewed"`), and a release naming the withhold event ids it ends. Expiry is a read-time fold that
+needs no event and resumes the drug by default; cessation wins over any hold; the hold sits beside the
+active/ceased status, so a withheld line stays current and signable; and both event types join the
+sign-off commitment ([ADR-0081](decisions/0081-medication-withhold-is-a-time-bounded-hold.md)).
 
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 

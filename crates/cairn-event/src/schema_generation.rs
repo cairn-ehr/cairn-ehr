@@ -39,10 +39,10 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/058_schema_replay_stamp.sql` → 58).
+/// (`db/059_medication_withhold.sql` → 59).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 58;
+pub const SCHEMA_GENERATION: i32 = 59;
 
 /// Advisory-lock key (ASCII `"CARNLOAD"`) serializing a loader's whole
 /// check→replay→stamp sequence against every other loader on the same database.

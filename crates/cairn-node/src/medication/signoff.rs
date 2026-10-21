@@ -585,6 +585,8 @@ mod tests {
             cross_patient: false,
             wrong_chart: Default::default(),
             source_charts: vec![],
+            holds: vec![],
+            cessation_reason: None,
         }
     }
 

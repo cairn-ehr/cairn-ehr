@@ -377,6 +377,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "058_schema_replay_stamp",
         include_str!("../../../db/058_schema_replay_stamp.sql"),
     ),
+    // db/059 (ADR-0081, #803): the medication withhold ("W") and its release — two event
+    // types, their floor, per-event projections and local-door refusals. Node-only like every
+    // medication file; cairn-sync's list lags legitimately (#284).
+    (
+        "059_medication_withhold",
+        include_str!("../../../db/059_medication_withhold.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

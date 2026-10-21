@@ -150,13 +150,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS medication_patient_conflict_flag_natural_idx
 -- flagged, not refused, on remote apply). The trade is deliberate: a coder who codes
 -- against the wrong chart now blocks the real assert with a legible error, rather than
 -- silently splitting the thread's chart across two projections.
+--
+-- The FOURTH arm, last (#803, ADR-0081): an orphan withhold (db/059) claims its thread the
+-- same way, for the same reason. This is the ONE definition — db/059 does not redefine it,
+-- so a schema replay never runs a body that lacks the arm. The arm is guarded by
+-- to_regclass because medication_withhold is created by a LATER file: a replay that crashed
+-- after this file and before db/059 must still answer from the first three arms, not raise
+-- "relation does not exist". medication_withhold holds one row PER EVENT, so the arm picks
+-- deterministically: the EARLIEST claim stands (HLC order, byte-collated), on every call,
+-- after any reproject, and on every node that holds the same withhold rows (a node without
+-- custody of the earliest withhold has no row for it).
 CREATE OR REPLACE FUNCTION cairn_medication_thread_patient(p_med uuid)
 RETURNS uuid LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_patient uuid;
 BEGIN
-    RETURN COALESCE(
+    v_patient := COALESCE(
         (SELECT patient_id FROM medication_statement WHERE medication_id = p_med),
         (SELECT patient_id FROM medication_cessation WHERE medication_id = p_med),
         (SELECT patient_id FROM medication_coding    WHERE medication_id = p_med));
+    IF v_patient IS NULL AND to_regclass('public.medication_withhold') IS NOT NULL THEN
+        SELECT patient_id INTO v_patient FROM medication_withhold WHERE medication_id = p_med
+         ORDER BY hlc_wall, hlc_counter, origin COLLATE "C", content_address LIMIT 1;
+    END IF;
+    RETURN v_patient;
 END;
 $$;
 

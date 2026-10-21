@@ -142,6 +142,8 @@ mod tests {
             cross_patient: false,
             wrong_chart: WrongChartReasons::default(),
             source_charts: vec![uid(999)],
+            holds: vec![],
+            cessation_reason: None,
         }
     }
 

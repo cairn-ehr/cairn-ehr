@@ -10,6 +10,53 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #803 — THE MEDICATION WITHHOLD (ADR-0081) — do not undo** (pins: `tests/medication_withhold.rs`,
+`medication_withhold_fold.rs`, `medication_withhold_signoff.rs`, `medication_withhold_clock.rs`, `medication_read.rs`):
+- **The start of an un-`from`'d hold and a release's instant are the authoring node's PHYSICAL clock, carried as
+  `t_effective`; the authoring node never stamps them from its HLC wall.** A peer whose clock runs fast pushes this node's HLC up to 24 h ahead (db/020),
+  and a "W from now" stamped with that wall starts in the future: pending, so the drug reads as givable. db/059 has
+  **no HLC-wall fallback**: the floor refuses, at both doors, a withhold with neither `from` nor `t_effective` and a
+  release without `t_effective` (another client's, or a hand-built body). **Tempting wrong fix:** restore the
+  `COALESCE(…, to_timestamp(hlc_wall/1000))` fallback "for robustness" — it makes a third-party client's "W from now"
+  read as not started. The instant is read BEFORE the HLC tick, so the bitemporal ceiling never flags it. A test that
+  hand-builds such a body stamps it with `medication_kit::effective_at_wall`.
+  Pins: `medication_withhold_clock.rs` (both tests, each mutation-checked against its own line);
+  `a_missing_t_effective_is_refused_at_the_sync_door_too`.
+- **A hold sits BESIDE `MedicationStatus`; there is no `Withheld` variant.** **Tempting wrong fix:** add one.
+  `signoff.rs` filters `status == Active` and the window's `view.rs`/`row_view.rs` (`current`, `can_cease`) would
+  silently drop withheld drugs out of sign-off. Pin: `a_withheld_line_stays_current_and_signable`.
+- **Expiry writes no event.** Whether a line is withheld is the read-time fold `cairn_medication_group_holds(groups,
+  now)` (db/059); `now` is a parameter so tests pin instants (the fold tests; the staleness-clock pin
+  `expiry_does_not_stale_a_sign_off`).
+- **A release names the withholds it ends by EVENT ID, and only on its own `medication_id` THREAD** (`r.medication_id =
+  w.medication_id` in the fold is the only guard on the sync path; the list shows holds per LINE, so `hold_line`
+  prints each hold's event id and thread, and the local door's refusal names the thread a sibling's hold is on).
+  Pins: `a_synced_release_on_another_line_ends_nothing`, `a_release_naming_another_lines_withhold_is_refused`.
+  A release also cancels a not-yet-started hold (`a_release_cancels_a_pending_hold`).
+- **Refusals split in two.** The structural floor runs at both doors (`an_empty_span_is_refused_by_the_floor_at_sync_apply_too`);
+  state refusals (ceased line, `until` <= resolved start, release naming a non-withhold or another thread's) live at the
+  LOCAL door only. **Tempting wrong fix:** move a state refusal to the sync door; a peer's valid event then wedges or
+  forks sync. Pins: `a_sync_applied_withhold_on_a_ceased_line_is_admitted`,
+  `a_peer_hold_already_over_is_admitted_at_sync_but_never_shown`; the structural tables
+  `every_structural_{withhold,release}_refusal_holds_at_the_local_door`.
+- **A ceased row carries no holds** (cessation wins, ADR-0081 decision 5). Pin: `a_ceased_line_shows_no_holds`.
+- **`cairn_medication_thread_patient` has ONE definition, in db/031; its withhold arm is `to_regclass`-guarded
+  there and orders by `(hlc_wall, hlc_counter, origin COLLATE "C", content_address)`**: the earliest claim stands. The
+  other arms hold one row per thread; this one holds many. **Tempting wrong fix:** redefine the fn in db/059 — every
+  replay then briefly runs db/031's body without the arm. Pin:
+  `the_earliest_orphan_withhold_claim_stands_whatever_the_arrival_order`.
+- **`cairn_event_thread` (db/048) probes one table per source file — db/031, db/032 AND db/059.** Pin: cairn-sync's
+  `schema_subset_alone_satisfies_every_door`, whose two crash-mid-replay windows each leave exactly one probe deciding
+  (window 1 probe 2, window 2 probe 3). Deleting probe 2 or probe 3 each turns it red (mutation-checked separately).
+  Probe 1 has no window of its own: a replay that lacks db/031's table lacks db/032's and db/059's too (they load
+  later), so probes 2 and 3 already return NULL there. A new
+  medication source file needs a probe AND a window of its own.
+- **The sign-off thread index was RENAMED `event_log_medication_thread_idx2`** (db/034) and the old one dropped in
+  db/059: an `IF NOT EXISTS` index never picks up an edited predicate, so a type added to the commitment lists needs a
+  NEW name again, never an edited predicate. Pin: `only_the_six_type_thread_index_survives_a_schema_load`.
+- **Pinned counts this slice moved:** twin registry 26 (`twin_registry.rs`, `db/tests/034`), projection registry 29/31
+  (`projection_registry.rs`, `db/tests/039`), `thread_resolution_cost.rs` 7 tables / 8 types.
+
 **⇒ #822 + #823 — THE CLI AFTER AN UNKNOWN COMMIT OUTCOME — do not undo** (pins: `db_diagnosis.rs`'s
 `only_a_stale_refusal_or_an_unknown_outcome_gets_the_cli_remedy`, `tests/event_lookup.rs`, `auto_apply.rs`'s
 `run_verdict` tests, and `tests/identity_commit_lost.rs`'s `a_lost_auto_apply_commit_stops_the_run_with_its_summary`,

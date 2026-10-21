@@ -381,7 +381,7 @@ pub fn render_chart_report(chart: &str, r: &ChartReport) -> Vec<String> {
             .to_string(),
     );
     out.push(
-        "(report only — nothing is withheld; enforcement needs custody narrowing, \
+        "(report only — nothing is hidden; enforcement needs custody narrowing, \
          #232 part C)"
             .to_string(),
     );

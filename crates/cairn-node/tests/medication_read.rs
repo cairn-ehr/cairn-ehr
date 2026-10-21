@@ -32,7 +32,9 @@
 //! before.
 mod common;
 
+use cairn_event::medication::HoldUntil;
 use cairn_event::SigningKey;
+use cairn_medication_view::sign_off_targets;
 use cairn_medication_view::{withheld_group_ids, MedicationStatus, VouchState};
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
@@ -41,6 +43,7 @@ use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, reconcile_medications,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ReconcileInput, SubstanceCoding,
 };
+use cairn_node::medication::{withhold_medication, WithholdMedicationInput};
 use common::{attestation_count, cs, medication_setup as setup};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -725,4 +728,164 @@ async fn a_hazardous_line_never_blocks_a_sound_one() {
         0,
         "patient A's thread is not vouched by patient B's sign-off"
     );
+}
+
+/// #803: a withheld line is still ACTIVE (current list, signable); the hold rides beside the
+/// status, so a withheld drug cannot silently drop out of sign-off.
+#[tokio::test]
+async fn a_withheld_line_stays_current_and_signable() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    let ev = withhold_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "origin-a",
+        patient,
+        thread,
+        &WithholdMedicationInput {
+            reason: "contrast tomorrow",
+            from: None,
+            until: HoldUntil::Reviewed,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, MedicationStatus::Active);
+    assert!(rows[0].is_withheld());
+    assert_eq!(rows[0].holds.len(), 1);
+    assert_eq!(rows[0].holds[0].withhold_event_id, ev);
+    assert_eq!(rows[0].holds[0].reason, "contrast tomorrow");
+    assert_eq!(
+        rows[0].holds[0].until, "reviewed",
+        "an open hold says so explicitly, never null"
+    );
+    assert_eq!(sign_off_targets(&rows), vec![thread], "still signable");
+}
+
+/// #803: the cessation's reason reaches the row (empty reasons stay `None`).
+#[tokio::test]
+async fn a_ceased_line_carries_its_reason() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "origin-a",
+        patient,
+        thread,
+        &CeaseMedicationInput {
+            stopped: None,
+            stopped_precision: None,
+            reason: Some("rash"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
+    assert_eq!(rows[0].cessation_reason.as_deref(), Some("rash"));
+    assert!(rows[0].holds.is_empty());
+}
+
+/// #803 (ADR-0081 decision 5): cessation wins over any hold — a ceased line shows no holds.
+#[tokio::test]
+async fn a_ceased_line_shows_no_holds() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    let w = WithholdMedicationInput {
+        reason: "contrast",
+        from: None,
+        until: HoldUntil::Reviewed,
+    };
+    withhold_medication(&mut c, &sk, &kid, "origin-a", patient, thread, &w, None)
+        .await
+        .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "origin-a",
+        patient,
+        thread,
+        &CeaseMedicationInput {
+            stopped: None,
+            stopped_precision: None,
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
+    assert_eq!(rows[0].status, MedicationStatus::Ceased);
+    assert!(rows[0].holds.is_empty(), "cessation wins over any hold");
+    assert!(!rows[0].is_withheld());
+}
+
+/// #803: a hold that has not started yet is listed (flagged pending) but does not withhold.
+#[tokio::test]
+async fn a_pending_hold_is_listed_but_the_line_is_not_withheld() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    withhold_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "origin-a",
+        patient,
+        thread,
+        &WithholdMedicationInput {
+            reason: "planned procedure",
+            from: Some("2099-01-01T00:00:00+00:00"),
+            until: HoldUntil::Reviewed,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
+    assert_eq!(rows[0].holds.len(), 1);
+    assert!(rows[0].holds[0].pending);
+    assert_eq!(rows[0].holds[0].starts_at, "2099-01-01T00:00:00Z");
+    assert!(!rows[0].is_withheld());
 }
