@@ -175,9 +175,37 @@ pub struct MedicationRow {
     /// see `cairn-node`'s `medication/read.rs`). Renderers name that state ("not read")
     /// rather than printing an empty label.
     pub source_charts: Vec<Uuid>,
+    /// The holds on this line that are in force or not yet started, newest start first
+    /// (ADR-0081). A hold does NOT change `status`: a withheld line is still on the current
+    /// list, signable and ceasable (a third status would drop it out of sign-off).
+    pub holds: Vec<MedicationHold>,
+    /// Why the line was ceased, when the cessation gave a reason (non-empty only).
+    pub cessation_reason: Option<String>,
+}
+
+/// One hold on a medication line (ADR-0081, #803): the paper drug chart's "W".
+/// Instants are RFC 3339 UTC text from the DB. Serialize only, like `MedicationRow`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MedicationHold {
+    pub withhold_event_id: Uuid,
+    /// The thread the withhold named (a member of the line's group).
+    pub medication_id: Uuid,
+    pub reason: String,
+    pub starts_at: String,
+    /// `None` means "until reviewed".
+    pub until: Option<String>,
+    /// Key id of the clinician who withheld it.
+    pub withholder: String,
+    /// Not yet started: listed, but the line is not withheld by it.
+    pub pending: bool,
 }
 
 impl MedicationRow {
+    /// Whether any hold on this line is in force now (pending ones do not count).
+    pub fn is_withheld(&self) -> bool {
+        self.holds.iter().any(|h| !h.pending)
+    }
+
     /// Whether this line must be withheld from sign-off as a wrong-chart hazard. Either signal
     /// is enough, so a builder that sets only one of the two fields still withholds the line
     /// (fail-safe; the read sets both from one rule).
@@ -235,7 +263,28 @@ mod tests {
             cross_patient: false,
             wrong_chart: WrongChartReasons::default(),
             source_charts: vec![],
+            holds: vec![],
+            cessation_reason: None,
         }
+    }
+
+    #[test]
+    fn is_withheld_ignores_pending_holds() {
+        let hold = |pending| MedicationHold {
+            withhold_event_id: Uuid::from_u128(1),
+            medication_id: Uuid::from_u128(2),
+            reason: "r".into(),
+            starts_at: "2030-01-01T00:00Z".into(),
+            until: None,
+            withholder: "k".into(),
+            pending,
+        };
+        let mut r = row("x", None);
+        assert!(!r.is_withheld());
+        r.holds = vec![hold(true)];
+        assert!(!r.is_withheld());
+        r.holds.push(hold(false));
+        assert!(r.is_withheld());
     }
 
     #[test]

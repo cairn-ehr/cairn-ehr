@@ -22,7 +22,9 @@ pub use chart::{
 };
 pub use chart_set::ChartSet;
 pub use display::{short_kid, DISPLAYED_KID_CHARS};
-pub use row::{MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons};
+pub use row::{
+    MedicationHold, MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons,
+};
 pub use targeting::{
     sign_off_targets, withheld_group_ids, withheld_reasons, withheld_rows, WithheldLine,
 };

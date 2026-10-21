@@ -377,6 +377,8 @@ mod tests {
             cross_patient: wrong_chart.any(),
             wrong_chart,
             source_charts: vec![],
+            holds: vec![],
+            cessation_reason: None,
         }
     }
 
