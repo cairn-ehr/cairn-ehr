@@ -55,14 +55,14 @@ fn a_release_counts_what_it_released() {
     );
 }
 
-/// A hold that ended (or was released by someone else) after the screen was drawn is named, not
-/// silently dropped: the clinician pressed Release on it.
+/// A hold shown that is no longer on the line (ended, or released by someone else, after the
+/// screen was drawn) is counted, not silently dropped: the clinician pressed Release on it.
 #[test]
-fn a_release_names_holds_that_had_already_ended() {
+fn a_release_names_holds_no_longer_on_the_line() {
     assert_eq!(
         release_outcome(1, 2, &[], &[]),
-        "Released 1 hold(s) on this drug. 2 hold(s) shown had already ended and were left as \
-         they are."
+        "Released 1 hold(s) on this drug. 2 hold(s) shown are no longer on this line (ended or \
+         released meanwhile) and were left as they are."
     );
 }
 
@@ -74,7 +74,7 @@ fn a_release_names_what_it_did_not_release() {
     ];
     assert_eq!(
         release_outcome(1, 0, &failed, &[]),
-        "Released 1 hold(s) on this drug. 2 were NOT released and are still withheld: \
+        "Released 1 hold(s) on this drug. 2 item(s) were NOT released and are still withheld: \
          thread x: refused; hold h on thread y: held back"
     );
 }
@@ -108,8 +108,8 @@ fn a_mixed_release_keeps_every_part_in_order() {
     let text = release_outcome(2, 1, &failed, &u);
     let order = [
         "Released 2 hold(s) on this drug.",
-        "1 hold(s) shown had already ended",
-        "1 were NOT released and are still withheld: thread x: refused",
+        "1 hold(s) shown are no longer on this line",
+        "1 item(s) were NOT released and are still withheld: thread x: refused",
         "Whether the holds on 2 thread(s) of this drug were released is NOT known",
     ];
     let mut at = 0;

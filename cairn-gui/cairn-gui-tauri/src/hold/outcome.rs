@@ -27,9 +27,10 @@ pub(crate) fn withhold_outcome(unknown: Option<&UnknownThread>) -> (String, Opti
     }
 }
 
-/// What one Release did: the holds released, the holds shown that had already ended (`gone`, left
-/// as they are), those NOT released (`failed`: a thread whose write failed, or a hold deliberately
-/// held back — each already a named sentence), and threads whose commit got no ordinary answer
+/// What one Release did: the holds released (`released` counts hold ids), the holds shown that are
+/// no longer on the line (`gone`, left as they are), the items NOT released (`failed`: a thread
+/// whose write failed, which may carry several holds, or one hold deliberately held back — each
+/// already a named sentence, so the count is of items, not holds), and threads whose commit got no ordinary answer
 /// (#814), which may or may not be released, so they are neither. "Released 0" is left out beside
 /// an unknown: that thread's holds may be released, so the count would be false.
 pub(crate) fn release_outcome(
@@ -44,12 +45,13 @@ pub(crate) fn release_outcome(
     }
     if gone > 0 {
         parts.push(format!(
-            "{gone} hold(s) shown had already ended and were left as they are."
+            "{gone} hold(s) shown are no longer on this line (ended or released meanwhile) \
+             and were left as they are."
         ));
     }
     if !failed.is_empty() {
         parts.push(format!(
-            "{} were NOT released and are still withheld: {}",
+            "{} item(s) were NOT released and are still withheld: {}",
             failed.len(),
             failed.join("; ")
         ));

@@ -119,6 +119,7 @@ fn both_gestures_sort_an_interrupted_commit_from_a_failure() {
     let withhold = flat("withhold_impl");
     for shape in [
         "matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
+        "Some(event)=>Some(UnknownThread{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
         "None=>returnErr(node_failure(&e)),",
         "withhold_outcome(unknown.as_ref())",
     ] {
