@@ -39,16 +39,31 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `choosing_until_reviewed_clears_the_time`, `a_re_read_keeps_the_until_choice_and_time`.
 - **One press, one W.** The pressed button is disabled before it sends and stays so until the re-read; a returned
   report clears that line's fields (so the next press cannot repeat the W), a THROWN failure keeps them (the
-  clinician's typing is not lost). **Tempting wrong fix:** clear on every outcome, or re-enable in `finally`.
-  Pins: `a_gesture_button_disables_itself_before_it_sends`, `a_returned_report_clears_the_line_before_the_re_read`.
+  clinician's typing is not lost) and re-enables its own button — nothing was written, and the re-read may have
+  failed and kept the old line. **Tempting wrong fix:** clear on every outcome, or re-enable in `finally` (that
+  makes a recorded W pressable again). Pins: `a_gesture_button_disables_itself_before_it_sends`,
+  `a_returned_report_clears_the_line_before_the_re_read`.
 - **`status_label` "withheld" is wording only; `current` is the fact.** `current`, `can_cease` and sign-off are
   unchanged by a hold. **Tempting wrong fix:** key behaviour off the label. Pin: `a_withheld_line_stays_current_signable_and_ceasable`.
+  The row's styling (`data-withheld`, `data-ceased`) is the one reader of the words, tied to Rust's by
+  `the_row_draws_the_w_and_its_controls`.
+- **The list is re-read when a hold starts or ends.** A hold changes with the clock, not with an event, so a screen
+  left open kept "withheld · W until 20:00" into the next morning (where the dateless time read as today's) and
+  "current" past a pending W's start. Rust sends `next_hold_change`; `drawList` arms one timer at it, a failed re-read
+  retries each minute. **Tempting wrong fix:** always print the date instead — the status word would still be
+  stale. Pins: `the_next_hold_change_is_the_earliest_instant_still_ahead`,
+  `the_list_is_read_again_when_a_hold_starts_or_ends`.
+- **A Release that can write nothing from this chart says so before the key** (a hazard line's other-chart holds),
+  and only a release that released something is timed. Pin: `the_refusals_come_before_the_key`, which also pins
+  that a withhold's reason and end are refused before the line lookup and the key.
 - **Times on screen are LOCAL; the wire stays UTC.** `local_instant` converts for display only. **Tempting wrong
   fix:** send the local string. Pins: the `hold_view` display tests (`a_hold_ending_today_shows_the_local_clock_time`
   and its siblings) for the local half; for the UTC half, the `toISOString()` conversion pinned in
   `until_reviewed_is_the_default_and_never_an_empty_time` (`holds_webview_tests.rs`).
 - **An unknown commit outcome is "NOT known", never "failed"** (a dropped connection mid-commit may have recorded the
-  event), and release transactions are per thread. Pin: `both_gestures_sort_an_interrupted_commit_from_a_failure`.
+  event). Pin: `both_gestures_sort_an_interrupted_commit_from_a_failure`. Release writes one event per thread
+  (`a_release_writes_one_event_per_thread`, the plan half), each in its own call — the transaction scope is not
+  pinned in the window.
 - **The two gestures are timed** (`withhold`, `release` in `ui_gesture_timing`, db/044's check constraint).
   Pin: `the_withhold_gestures_are_timed`.
 

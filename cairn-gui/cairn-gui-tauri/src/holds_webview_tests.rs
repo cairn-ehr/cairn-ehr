@@ -117,6 +117,20 @@ fn the_row_draws_the_w_and_its_controls() {
         !row.contains("cell(\"td\", row.status_label)"),
         "the bare status cell would hide every W: {row}"
     );
+    // The two words the styling compares are the words Rust sends: a reworded label must turn
+    // this red, not silently drop the withheld (or ceased) bar.
+    let view =
+        cairn_gui_tab_medications::build_view(&cairn_medication_view::fixtures::sample_chart());
+    for word in ["withheld", "ceased"] {
+        assert!(
+            view.rows.iter().any(|r| r.status_label == word),
+            "the fixture chart has no {word} line: {view:?}"
+        );
+        assert!(
+            row.contains(&format!("row.status_label === \"{word}\"")),
+            "{word} in {row}"
+        );
+    }
     let stops = position(INDEX_HTML, "<script src=\"stop_reasons.js\"></script>");
     let holds = position(INDEX_HTML, "<script src=\"holds.js\"></script>");
     let boot = position(INDEX_HTML, "<script src=\"funnel.js\"></script>");
@@ -168,10 +182,15 @@ fn until_reviewed_is_the_default_and_never_an_empty_time() {
         "the first option is the default: {controls}"
     );
     let withhold = js_fn(HOLDS_JS, "withhold");
+    // Only the field's own shape is read: a text-field fallback's "02/03/2026 08:00" would be
+    // read month-first by `new Date`, a wrong end with no word said.
     assert!(
-        withhold.contains("const at = new Date(local);"),
+        withhold.contains("const at = LOCAL_TIME.test(local) ? new Date(local) : NaN;"),
         "{withhold}"
     );
+    assert!(HOLDS_JS.contains(
+        "const LOCAL_TIME = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?$/;"
+    ));
     assert!(
         withhold.contains(
             "const until = kind === \"reviewed\" ? \"reviewed\" : isNaN(at) ? \"\" : at.toISOString();"
@@ -206,14 +225,16 @@ fn both_gestures_re_read_like_cease() {
                 ),
             "{name}: {body}"
         );
-        assert!(caught.contains("return;"), "{name}: {body}");
+        // Resolves false on a refusal (nothing written: the button comes back), true on a report.
+        assert!(caught.contains("return false;"), "{name}: {body}");
         let after = &body[caught_at + caught.len()..];
+        let reread = position(
+            after,
+            "await refresh(el(\"outcome\").textContent, report.behind_the_record);",
+        );
         assert!(
-            position(after, "say(report.text);")
-                < position(
-                    after,
-                    "await refresh(el(\"outcome\").textContent, report.behind_the_record);"
-                ),
+            position(after, "say(report.text);") < reread
+                && reread < position(after, "return true;"),
             "{name}: {body}"
         );
         for sent in ["patientId: renderedPatient,", "charts: renderedCharts,"] {
@@ -265,11 +286,12 @@ fn typing_a_time_chooses_until_a_time() {
         controls,
         "const kind = (untilAt.value || untilAt.validity.badInput) ? \"time\" : untilKind.value;",
     );
+    let shown = position(controls, "untilKind.value = kind;");
     let sent = position(
         controls,
-        "withhold(row.group_id, whyHold.value, kind, untilAt.value);",
+        "void withhold(row.group_id, whyHold.value, kind, untilAt.value).then(",
     );
-    assert!(pressed < kind && kind < sent, "{controls}");
+    assert!(pressed < kind && kind < shown && shown < sent, "{controls}");
 }
 
 /// The other direction (final review, #832): once a time is typed, setting the select BACK to
@@ -300,8 +322,10 @@ fn choosing_until_reviewed_clears_the_time() {
 
 /// One press, one W. A second press while the first is in flight would read the same still-filled
 /// fields and write a second W (nothing downstream refuses an overlapping hold), so each button
-/// disables itself before it sends; the re-read after the gesture — success or thrown failure —
-/// rebuilds the line with a fresh, enabled button.
+/// disables itself before it sends; the re-read after the gesture rebuilds the line with a fresh,
+/// enabled button. That re-read can fail and keep the old line, so a REFUSED press (nothing was
+/// written) re-enables its own button — else Withhold sat dead with no word why (#838 review). A
+/// press that returned a report keeps it disabled: a recorded W must not be pressable again.
 #[test]
 fn a_gesture_button_disables_itself_before_it_sends() {
     let controls = js_fn(HOLDS_JS, "holdControls");
@@ -317,6 +341,13 @@ fn a_gesture_button_disables_itself_before_it_sends() {
             pressed + position(&controls[pressed..], &format!("{button}.disabled = true;"));
         assert!(
             disabled < pressed + position(&controls[pressed..], send),
+            "{button}: {controls}"
+        );
+        let resolved = pressed + position(&controls[pressed..], ".then((reported) => {");
+        assert!(
+            controls[resolved..].starts_with(&format!(
+                ".then((reported) => {{\n        if (!reported) {button}.disabled = false;"
+            )),
             "{button}: {controls}"
         );
     }
@@ -369,4 +400,51 @@ fn a_returned_report_clears_the_line_before_the_re_read() {
     // write that landed, or the re-read below it never runs.
     let set = js_fn(HOLDS_JS, "setField");
     assert!(set.contains("if (field) field.value = value;"), "{set}");
+}
+
+/// A W starts and ends with the clock, so nothing but a timer re-reads the chart then (#838
+/// review: an unattended ward screen kept "withheld · W until 20:00" into the next morning, which
+/// then read as today's 20:00, and kept "current" past a pending W's start). Every list drawn arms
+/// the re-read at Rust's `next_hold_change`, replacing the last; the wait is capped at a day
+/// (setTimeout fires AT ONCE past ~24.8 days, which would loop); the re-read runs only while that
+/// patient's list is the one drawn; and a failed re-read tries again rather than leaving the
+/// boundary passed in silence.
+#[test]
+fn the_list_is_read_again_when_a_hold_starts_or_ends() {
+    let draw = js_fn(MAIN_JS, "drawList");
+    assert!(
+        position(draw, "restoreReasons(typed);")
+            < position(
+                draw,
+                "rereadAtNextHoldChange(view.next_hold_change, patient);"
+            ),
+        "{draw}"
+    );
+    let arm = js_fn(HOLDS_JS, "rereadAtNextHoldChange");
+    for part in [
+        "clearTimeout(holdChangeTimer);\n  holdChangeTimer = null;\n  if (!next) return;",
+        "Math.min(Math.max(0, Date.parse(next) - Date.now()) + 1000, DAY_MS)",
+        "if (renderedPatient !== patient) return;\n    await refresh(rereadLead());",
+        "if (holdChangeTimer === armed && renderedPatient === patient) {",
+        "holdChangeTimer = armed;",
+    ] {
+        assert!(arm.contains(part), "{part} in {arm}");
+    }
+    assert!(HOLDS_JS.contains("const DAY_MS = 24 * 60 * 60 * 1000;"));
+}
+
+/// The detail's reveal is the `hidden` attribute, and it hides only because the global
+/// `[hidden]` rule wins over any `display` an element's own rule sets: lose `!important`, or give
+/// `.hold-detail` a `display`, and every reason sits open over Stop/Withhold/Release.
+#[test]
+fn a_hidden_detail_is_hidden() {
+    let at = position(STYLE_CSS, "\n[hidden] {");
+    let rule = &STYLE_CSS[at..at + STYLE_CSS[at..].find("\n}").unwrap()];
+    assert!(rule.contains("display: none !important;"), "{rule}");
+    let at = position(STYLE_CSS, "\n.hold-detail {");
+    let rule = &STYLE_CSS[at..at + STYLE_CSS[at..].find("\n}").unwrap()];
+    assert!(
+        !rule.contains("display:") && !rule.contains("visibility:"),
+        "{rule}"
+    );
 }

@@ -8,7 +8,11 @@
 > reason) and offers **Withhold**/**Release**, always visible on the line. Durable rules: the `#832` block in
 > `developers/durable-rules.md`. **Owed by a human: RUNBOOK §15** (W ≤ 10 s, Release ≤ 5 s, VoiceOver/keyboard; the
 > WebKit time-field reset is confirmed only in headless WebKit). Filed **#839** (Release's stale refusal and "in force"
-> wording); #809 gained item 5.
+> wording); #809 gained item 5. **Second review (2026-10-22), fixed in the PR:** the list re-reads itself when a hold
+> starts or ends (Rust's `next_hold_change`; an open screen kept "withheld · W until 20:00" into the next morning), a
+> refused press re-enables its button, a Release with nothing writable here answers before the key, seconds kept.
+> Filed **#840** (cease/release: every thread failed still returns a report) and **#841** (Withhold offered on a
+> hazard line it must refuse; a partial time lost across a refusal).
 > **Merged 2026-10-21: PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)**
 > (#803 slice A): the medication **withhold "W"** in the record and the CLI — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md),
 > spec **v0.83**, `db/059`, SCHEMA_GENERATION **59**. Its durable rules are the #803 block in `developers/durable-rules.md`.

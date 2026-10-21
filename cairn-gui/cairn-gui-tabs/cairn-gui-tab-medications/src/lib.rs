@@ -233,7 +233,9 @@ mod semantic_tests {
     }
 
     /// ADR-0081: every hold, a ceased line's reason, and the controls that write a hold are
-    /// labelled buttons — with the labels holds.js gives them (the contract must not drift).
+    /// labelled buttons — with the labels holds.js gives them (the contract must not drift:
+    /// this pins the Rust half, the tauri crate's `the_w_is_a_button_whose_label_is_its_reason`
+    /// the JS half).
     #[test]
     fn every_hold_and_hold_control_is_a_labelled_button() {
         let view = crate::view::build_view(&cairn_medication_view::fixtures::sample_chart());

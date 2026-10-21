@@ -13,8 +13,9 @@
 -- (principle 12), and here it would additionally turn a site metric into a person-level
 -- record.
 --
--- Replay-safe: CREATE TABLE IF NOT EXISTS, and the loader re-runs every db/*.sql on every
--- connect. Nothing here is widened later without a paired ALTER (see #207).
+-- Replay-safe: CREATE TABLE IF NOT EXISTS, and the loader re-runs every db/*.sql whenever the
+-- embedded schema changed (ADR-0080). Nothing here is widened later without a paired ALTER
+-- (see #207).
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS ui_gesture_timing (

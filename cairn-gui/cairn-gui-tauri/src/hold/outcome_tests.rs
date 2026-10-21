@@ -91,7 +91,7 @@ fn a_release_names_what_it_did_not_release() {
     ];
     assert_eq!(
         release_outcome(1, 0, 0, &failed, &[]),
-        "Released 1 hold(s) on this drug. 2 item(s) were NOT released and are still withheld: \
+        "Released 1 hold(s) on this drug. 2 item(s) were NOT released and are still on this line: \
          thread x: refused; hold h on thread y: held back"
     );
 }
@@ -127,7 +127,7 @@ fn a_mixed_release_keeps_every_part_in_order() {
         "Released 2 hold(s) on this drug.",
         "1 hold(s) shown are no longer on this line",
         "3 hold(s) added since this line was drawn are still in force",
-        "1 item(s) were NOT released and are still withheld: thread x: refused",
+        "1 item(s) were NOT released and are still on this line: thread x: refused",
         "Whether the holds on 2 thread(s) of this drug were released is NOT known",
     ];
     let mut at = 0;

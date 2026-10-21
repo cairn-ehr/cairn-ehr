@@ -488,6 +488,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   force) always visible on the line (maintainer's call, K = 2). New `hold` module (pure `withhold_target`/`release_plan`,
   `cease`-shaped commands, unknown commits never "failed"), `holds.js`, db/044 times `withhold`/`release` (paired ALTER +
   a replay-convergence test). RUNBOOK §15 owes the human timing and VoiceOver pass. Filed **#839**; #809 gained item 5.
+  Second review: the list re-reads at a hold's start or end (`next_hold_change`); filed **#840**, **#841**.
 - **Next:** review and merge PR #838, then its RUNBOOK §15; **#804** (needs #690), **#825** (a decision); then the
   open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 

@@ -3,9 +3,11 @@
 //! the database; the two commands that act on those plans; and the sentences they report
 //! (`outcome`).
 //!
-//! Both commands follow `commands::cease_impl` step for step — the same refusal order, the same
+//! Both commands follow `commands::cease_impl`'s steps — the wrong-chart refusal first, the same
 //! "each thread written on its own chart" rule (ADR-0076 decision 2), the same split of a lost
-//! commit from an ordinary failure (#814) — so a reviewer who knows one knows the others. The
+//! commit from an ordinary failure (#814) — so a reviewer who knows one knows the others. One
+//! difference in order: the signing key is checked LAST here, after every refusal that is a
+//! verdict on the gesture (a cease checks it before finding the line). The
 //! in-DB floor (db/059) is the real enforcement: it refuses a withhold on a ceased line, an empty
 //! reason, an end not after the start, and a release naming something that is not a hold, and
 //! its legible sentence reaches the clinician through `node_failure`. The window's own checks
@@ -48,9 +50,11 @@ pub(crate) enum UntilChoice {
     At(String),
 }
 
-/// Read the webview's end-of-hold field. The end is a clinical fact the clinician must choose,
-/// so an empty field is refused with a sentence saying what to choose — never defaulted to
-/// "until reviewed", which would be a hold nobody decided on (principle 4). Only the shape is
+/// Read the webview's end-of-hold field. The end is a clinical fact the clinician must choose:
+/// the webview preselects "until reviewed" ON SCREEN, where it is seen and changed, and sends
+/// `""` for "until a time" with no (or a partly typed) time. That empty end is refused with a
+/// sentence saying what to choose — never turned into "until reviewed" here, which would be a
+/// hold nobody decided on (principle 4). Only the shape is
 /// checked here; that the end is AFTER the start is the floor's rule (db/059).
 pub(crate) fn parse_until(until: &str) -> Result<UntilChoice, String> {
     match until {
@@ -76,7 +80,8 @@ pub async fn withhold(
     withhold_impl(&state, &patient_id, charts, &group_id, &reason, &until).await
 }
 
-/// `charts` is the chart SET the webview displayed, exactly as for `commands::cease_impl`.
+/// The testable body of [`withhold`]; the flow is the module doc's. `charts` is the chart SET
+/// the webview displayed, exactly as for `commands::cease_impl`.
 pub async fn withhold_impl(
     state: &AppState,
     patient_id: &str,
@@ -119,8 +124,8 @@ pub async fn withhold_impl(
     // Which thread carries the W, and the chart it lives on (`plan::withhold_target`): never
     // the opened chart by assumption, and never another person's drug on a hazard line.
     let (medication_id, thread_chart) = plan::withhold_target(row, patient).map_err(refused)?;
-    // The key last, as for a cease: a locked key is not a verdict on the gesture, so every
-    // refusal that IS one is said first.
+    // The key last (a cease asks for it earlier): a locked key is not a verdict on the gesture,
+    // so every refusal that IS one is said first.
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
@@ -224,6 +229,9 @@ pub async fn release_impl(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
+    if withholds.is_empty() {
+        return Err(refused("no hold named — nothing was done"));
+    }
     let shown = withholds
         .iter()
         .map(|id| id.parse::<Uuid>())
@@ -244,6 +252,15 @@ pub async fn release_impl(
         return Err(stale(
             "the holds shown are no longer on this line — nothing was done",
         ));
+    }
+    // Nothing this chart may write, only holds held back: said now, before the key — a locked
+    // key would otherwise hide "release it from its own chart" behind an unlock that writes
+    // nothing — and no timing sample, as no gesture was made.
+    if plan.write.is_empty() {
+        return Ok(HoldReport {
+            text: release_outcome(0, plan.gone.len(), plan.unseen, &plan.held_back, &[]),
+            behind_the_record: None,
+        });
     }
     let reason = Some(reason.trim()).filter(|r| !r.is_empty());
     let (human_sk, human_kid) = state
@@ -300,7 +317,9 @@ pub async fn release_impl(
         }
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    if unknown.is_empty() {
+    // Timed only when it released something and no outcome is unknown (#818 review): a release
+    // whose every write failed made no gesture worth a sample.
+    if unknown.is_empty() && released > 0 {
         record_timing(state, "release", 1, elapsed_ms).await;
     }
     Ok(HoldReport {

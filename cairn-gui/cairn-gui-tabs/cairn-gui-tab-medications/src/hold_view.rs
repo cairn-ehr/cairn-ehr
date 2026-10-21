@@ -7,7 +7,7 @@
 //! not UTC. The CLI's equivalent (`cairn-node`'s `hold_text.rs`) prints the raw instants: it
 //! is an operator tool, this is the bedside window.
 use cairn_medication_view::{short_kid, MedicationHold};
-use chrono::{DateTime, Datelike, TimeZone};
+use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 use serde::Serialize;
 use std::fmt::Display;
 
@@ -18,15 +18,17 @@ pub struct HoldView {
     pub withhold_event_id: String,
     /// The button's text: "W until 20:00" | "W until reviewed" | "W from Thu 22 Oct 08:00".
     pub symbol: String,
-    /// The revealed text AND the accessible label.
+    /// The revealed text, and the second half of the accessible label (`symbol — detail`).
     pub detail: String,
     /// Not started yet: the line is not withheld by this hold.
     pub pending: bool,
 }
 
 /// An RFC 3339 instant in `now`'s zone: "20:00" when it falls on `now`'s local date, else
-/// "Thu 22 Oct 08:00". Text that does not parse is returned unchanged — shown as recorded,
-/// never blank (principle 4).
+/// "Thu 22 Oct 08:00". Seconds are shown only when the instant has them ("20:00:45"): a hold
+/// written from the CLI or a peer may end mid-minute, and "until 20:00" would then read as over
+/// while it is still in force. Text that does not parse is returned unchanged — shown as
+/// recorded, never blank (principle 4).
 pub fn local_instant<Tz: TimeZone>(utc: &str, now: &DateTime<Tz>) -> String
 where
     Tz::Offset: Display,
@@ -35,14 +37,37 @@ where
         return utc.to_string();
     };
     let t = t.with_timezone(&now.timezone());
-    if t.date_naive() == now.date_naive() {
-        t.format("%H:%M").to_string()
+    let clock = if t.second() == 0 { "%H:%M" } else { "%H:%M:%S" };
+    let day = if t.date_naive() == now.date_naive() {
+        ""
     } else if t.year() != now.year() {
-        // A far date must not read as the coming month of this year.
-        t.format("%a %-d %b %Y %H:%M").to_string()
+        // A date in another year must not read as that month of this year.
+        "%a %-d %b %Y "
     } else {
-        t.format("%a %-d %b %H:%M").to_string()
-    }
+        "%a %-d %b "
+    };
+    t.format(&format!("{day}{clock}")).to_string()
+}
+
+/// The next instant after `now` at which one of `holds` starts or ends, as RFC 3339 UTC — the
+/// moment the list on screen stops being true. A hold starts and ends with the clock, not with
+/// an event, so nothing else re-reads the chart then: without this the window kept "withheld"
+/// (or "W from 22:00" on a line reading "current") on screen long after it stopped being so,
+/// and a same-day time, printed without its date, read as today's (#838 review). The window
+/// re-reads at this instant. Every time printed without a date is such an instant (a pending
+/// hold's start, a live hold's end, both later today), so it is never on screen past midnight.
+/// An unparseable instant is no boundary (it is shown as recorded).
+pub fn next_hold_change<'a, Tz: TimeZone>(
+    holds: impl Iterator<Item = &'a MedicationHold>,
+    now: &DateTime<Tz>,
+) -> Option<String> {
+    holds
+        .flat_map(|h| [h.starts_at.as_str(), h.until.as_str()])
+        .filter_map(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.with_timezone(&Utc))
+        .filter(|t| *t > now.with_timezone(&Utc))
+        .min()
+        .map(|t| t.to_rfc3339())
 }
 
 /// The hold's end as words: "reviewed" is the wire's spelling of an open hold.
@@ -153,6 +178,31 @@ mod tests {
     }
 
     #[test]
+    fn an_instant_with_seconds_keeps_them() {
+        assert_eq!(local_instant("2026-10-21T10:00:45Z", &now()), "20:00:45");
+    }
+
+    /// The re-read instant: the earliest start or end still ahead — a pending hold's start
+    /// before its own end, an ended hold's past end never — and none for open, unparseable or
+    /// absent holds.
+    #[test]
+    fn the_next_hold_change_is_the_earliest_instant_still_ahead() {
+        let mut pending = hold("2026-10-22T10:00:00Z", true); // starts 21 Oct 22:00 UTC
+        pending.starts_at = "2026-10-21T12:00:00Z".into();
+        let mut live = hold("2026-10-21T15:00:00Z", false);
+        live.starts_at = "2026-10-20T00:00:00Z".into(); // past
+        let holds = [pending, live];
+        assert_eq!(
+            next_hold_change(holds.iter(), &now()).as_deref(),
+            Some("2026-10-21T12:00:00+00:00")
+        );
+        let mut open = hold("reviewed", false);
+        open.starts_at = "garbage".into();
+        assert_eq!(next_hold_change([open].iter(), &now()), None);
+        assert_eq!(next_hold_change([].iter(), &now()), None);
+    }
+
+    #[test]
     fn an_unparseable_instant_is_shown_as_recorded() {
         let v = hold_view(&hold("garbage", false), &now());
         assert_eq!(v.symbol, "W until garbage");
@@ -164,7 +214,6 @@ mod tests {
     }
 
     // ---- The row: a hold sits BESIDE the status (the durable ADR-0081 rule).
-    // (These live here, not in row_view.rs, to keep that file's size down.)
 
     fn active_row_with(holds: Vec<MedicationHold>) -> cairn_medication_view::MedicationRow {
         let mut r = row(

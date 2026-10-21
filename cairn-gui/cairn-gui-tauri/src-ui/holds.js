@@ -2,18 +2,31 @@
 // status, the reason it reveals, and the two gestures — Withhold (write a W) and Release (end the
 // W early). A ceased line's reason is revealed the same way, on its status word.
 //
-// Like main.js, this file renders and decides nothing. Every sentence — the W's symbol ("W until
-// reviewed"), its detail ("Withheld until reviewed by … : BP 85/50"), whether a line may be held
-// or released, and every outcome — is worded in Rust (cairn-gui-tab-medications' `hold_view`, the
-// `hold` command module) and tested there. The one thing done here is turning the clinician's
-// `datetime-local` value into an ISO instant, because only the browser knows the field's zone.
+// Like main.js, this file WORDS nothing. Every sentence — the W's symbol ("W until reviewed"), its
+// detail ("Withheld until reviewed by … : BP 85/50"), whether a line may be held or released, the
+// instant the list stops being true, and every outcome — is worded in Rust (cairn-gui-tab-
+// medications' `hold_view`, the `hold` command module) and tested there. What IS decided here,
+// each pinned in holds_webview_tests.rs: turning the clinician's `datetime-local` value into an
+// ISO instant (only the browser knows the field's zone); keeping the until select and the time
+// field in step (a typed time picks "until a time", "until reviewed" empties the time); disabling
+// a pressed button until its gesture is answered; and re-reading the chart when a hold starts or
+// ends (`rereadAtNextHoldChange`).
 //
 // A separate file only to keep main.js small (it must stay under 500 lines). Classic script,
 // loaded right after stop_reasons.js and sharing main.js's global scope (`el`, `cell`, `say`,
-// `refresh`, `renderedPatient`, `renderedCharts`, and funnel.js's `failureText` and
-// chart_stale.js's `behindTheRecord`, which are read only when a gesture runs, long after every
-// script has loaded). main.js's `renderRow` calls `statusCell` and `holdControls`.
+// `invoke`, `refresh`, `renderedPatient`, `renderedCharts`, funnel.js's `failureText` and
+// chart_stale.js's `behindTheRecord` and `rereadLead`, which are read only when a gesture or the
+// re-read timer runs, long after every script has loaded). main.js's `renderRow` calls
+// `statusCell` and `holdControls`; its `drawList` calls `rereadAtNextHoldChange`.
 "use strict";
+
+/** A `datetime-local` value: "2026-10-21T20:00", seconds optional. */
+const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+/** setTimeout fires AT ONCE past ~24.8 days; a farther boundary is waited for a day at a time. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** After a failed boundary re-read, the next try. */
+const HOLD_REREAD_RETRY_MS = 60 * 1000;
+let holdChangeTimer = null;
 
 /**
  * A row's status cell: the status word, then one W button per hold. Each button's accessible
@@ -142,12 +155,18 @@ function holdControls(row) {
     holdButton.setAttribute("aria-label", "Withhold " + row.primary);
     holdButton.addEventListener("click", () => {
       // One press, one W: a second press while this one is in flight would read the same
-      // fields and write a second W. The re-read after the gesture draws a fresh button.
+      // fields and write a second W. The re-read after the gesture draws a fresh button; a
+      // refused press (nothing written) re-enables this one, as that re-read may have failed.
       holdButton.disabled = true;
       // A partly typed time (a date, no hour) has value "" and fired no `input`, but it is still
       // a time the clinician started — never "until reviewed". Sent as "", Rust refuses it.
       const kind = (untilAt.value || untilAt.validity.badInput) ? "time" : untilKind.value;
-      withhold(row.group_id, whyHold.value, kind, untilAt.value);
+      // ...and the select says so, so the re-read after a refusal keeps "until a time" (#799's
+      // restore) and a second press is refused again, never an open-ended W (#841).
+      untilKind.value = kind;
+      void withhold(row.group_id, whyHold.value, kind, untilAt.value).then((reported) => {
+        if (!reported) holdButton.disabled = false;
+      });
     });
 
     nodes.push(whyHold, untilKind, untilAt, holdButton);
@@ -166,7 +185,10 @@ function holdControls(row) {
     releaseButton.setAttribute("aria-label", "Release the holds on " + row.primary);
     releaseButton.addEventListener("click", () => {
       releaseButton.disabled = true; // one press, one release, as Withhold
-      release(row.group_id, row.holds.map((hold) => hold.withhold_event_id), whyRelease.value);
+      const sent = release(row.group_id, row.holds.map((hold) => hold.withhold_event_id), whyRelease.value);
+      void sent.then((reported) => {
+        if (!reported) releaseButton.disabled = false;
+      });
     });
 
     nodes.push(whyRelease, releaseButton);
@@ -178,10 +200,13 @@ function holdControls(row) {
  * Write a W. `kind` is the until choice; `local` the `datetime-local` value, read in the
  * workstation's zone and sent as an ISO instant. An empty or unreadable time is sent as "" so
  * Rust words the refusal ("choose when the hold ends") — never turned into "until reviewed".
- * The rest is `cease`'s shape exactly: say the outcome, then re-read the chart.
+ * The rest is `cease`'s shape exactly: say the outcome, then re-read the chart. Resolves true
+ * when a report came back (the W recorded, or not known), false when the press was refused.
  */
 async function withhold(groupId, reason, kind, local) {
-  const at = new Date(local);
+  // Only the field's own shape: a webview that draws `datetime-local` as a plain text field would
+  // hand `new Date` "02/03/2026 08:00", which it reads month-first — the wrong end, silently.
+  const at = LOCAL_TIME.test(local) ? new Date(local) : NaN;
   const until = kind === "reviewed" ? "reviewed" : isNaN(at) ? "" : at.toISOString();
   let report;
   try {
@@ -195,7 +220,7 @@ async function withhold(groupId, reason, kind, local) {
   } catch (failure) {
     say("Could not withhold this drug: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
-    return; // the fields stay as typed, so the clinician can correct and retry
+    return false; // the fields stay as typed, so the clinician can correct and retry
   }
   // A report came back (recorded, or not known): clear what was typed for this W BEFORE the
   // re-read, or #799's restore would put it back and a second press write a second W.
@@ -204,6 +229,7 @@ async function withhold(groupId, reason, kind, local) {
   setField("until-at-" + groupId, "");
   say(report.text); // worded in Rust: `hold::outcome::withhold_outcome`
   await refresh(el("outcome").textContent, report.behind_the_record);
+  return true;
 }
 
 /** End the holds `withholds` (the ids a row drew) early. `cease`'s shape, as `withhold`. */
@@ -220,19 +246,44 @@ async function release(groupId, withholds, reason) {
   } catch (failure) {
     say("Could not release this hold: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
-    return; // the reason stays as typed, so the clinician can retry
+    return false; // the reason stays as typed, so the clinician can retry
   }
   setField("reason-r-" + groupId, ""); // as `withhold`: cleared before the re-read
   say(report.text); // worded in Rust: `hold::outcome::release_outcome`
   await refresh(el("outcome").textContent, report.behind_the_record);
+  return true;
 }
 
 /**
  * Set field `id` of a line to `value`, if the line still has it: a re-read that landed while the
  * gesture was in flight may have redrawn the line without it (a drug now ceased). Never throws —
- * the write has already landed, and the re-read after it must still run.
+ * the gesture has already returned, and the re-read after it must still run.
  */
 function setField(id, value) {
   const field = el(id);
   if (field) field.value = value;
+}
+
+/**
+ * Re-read the chart at `next` (the view's `next_hold_change`: when a hold on it starts or ends),
+ * while `patient`'s list is the one drawn. A hold changes with the clock, not with an event, so
+ * without this a line kept saying "withheld" after its W ended — or "current" after a pending W
+ * began — until someone happened to re-read (#838 review). Called by every list drawn, which
+ * replaces the previous timer. A failed re-read drew nothing, so nothing re-armed: the screen is
+ * past the boundary and still shows what was true before it, so it tries again each minute.
+ */
+function rereadAtNextHoldChange(next, patient) {
+  clearTimeout(holdChangeTimer);
+  holdChangeTimer = null;
+  if (!next) return;
+  // +1 s: the node's clock must be past the instant too when the read reaches it.
+  const wait = Math.min(Math.max(0, Date.parse(next) - Date.now()) + 1000, DAY_MS);
+  const armed = setTimeout(async () => {
+    if (renderedPatient !== patient) return;
+    await refresh(rereadLead());
+    if (holdChangeTimer === armed && renderedPatient === patient) {
+      rereadAtNextHoldChange(new Date(Date.now() + HOLD_REREAD_RETRY_MS).toISOString(), patient);
+    }
+  }, wait);
+  holdChangeTimer = armed;
 }

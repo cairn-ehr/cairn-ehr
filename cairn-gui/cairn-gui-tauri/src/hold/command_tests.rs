@@ -1,8 +1,9 @@
 //! Tests for the withhold and release commands (`hold/mod.rs`), against `AppState::mock` as
 //! `commands_tests.rs` tests `cease`: each gesture acts only on the chart on SCREEN, and with the
 //! right chart fixture mode's own refusal is what the clinician reads. The writes themselves need
-//! a node; what is pinned here without one is the refusal order, `parse_until`, and (by source)
-//! that an interrupted commit is sorted from an ordinary failure.
+//! a node; what is pinned here without one is the first two refusals (wrong chart, then fixture
+//! mode), `parse_until`, and — by source, because fixture mode returns before them — the order of
+//! the later refusals and that an interrupted commit is sorted from an ordinary failure.
 use super::*;
 use crate::funnel::view::Retry;
 
@@ -83,7 +84,8 @@ async fn a_withhold_on_the_chart_on_screen_meets_the_fixture_refusal() {
 }
 
 /// The end of a hold is a clinical fact the clinician must choose (ADR-0081): a time, or "until
-/// reviewed". Nothing is ever defaulted, and a text that is not an instant is refused by name.
+/// reviewed". An empty end is refused, never turned into "until reviewed" here, and a text that
+/// is not an instant is refused by name.
 #[test]
 fn parse_until_reads_reviewed_or_an_instant_and_nothing_else() {
     assert_eq!(parse_until("reviewed"), Ok(UntilChoice::Reviewed));
@@ -133,4 +135,51 @@ fn both_gestures_sort_an_interrupted_commit_from_a_failure() {
     ] {
         assert!(release.contains(shape), "{shape}\n{release}");
     }
+}
+
+/// The refusals fixture mode hides (it returns before them, so only the source can pin them).
+/// A withhold names a missing reason and a missing or partial end BEFORE it finds the line or asks
+/// for the key: a locked key must never hide "needs a reason", and the end is refused, never
+/// defaulted — the `parse_until` call is the one place an empty end could become "until
+/// reviewed". A release that can write nothing from this chart says so before asking for the key,
+/// and a release is timed only when it released something.
+#[test]
+fn the_refusals_come_before_the_key() {
+    let src = include_str!("mod.rs");
+    let flat = |name| -> String {
+        crate::source_guard::rust_fn(src, name)
+            .split_whitespace()
+            .collect()
+    };
+    let withhold = flat("withhold_impl");
+    let order = [
+        "ifstate.is_mock(){",
+        "ifreason.is_empty(){",
+        "letuntil=parse_until(until).map_err(refused)?;",
+        "letrow=chart",
+        "plan::withhold_target(row,patient).map_err(refused)?;",
+        "state.live_key(",
+    ];
+    let at: Vec<usize> = order
+        .iter()
+        .map(|shape| {
+            withhold
+                .find(shape)
+                .unwrap_or_else(|| panic!("{shape}\n{withhold}"))
+        })
+        .collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{withhold}");
+
+    let release = flat("release_impl");
+    let early = release
+        .find("ifplan.write.is_empty(){returnOk(HoldReport{")
+        .expect(&release);
+    assert!(
+        early < release.find("state.live_key(").unwrap(),
+        "{release}"
+    );
+    assert!(
+        release.contains("ifunknown.is_empty()&&released>0{record_timing(state,\"release\""),
+        "{release}"
+    );
 }

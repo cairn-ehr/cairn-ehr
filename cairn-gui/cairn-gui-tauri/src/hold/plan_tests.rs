@@ -68,7 +68,7 @@ fn a_non_hazard_line_missing_its_own_thread_names_the_real_cause() {
     assert!(err.contains(&u(99).to_string()), "{err}");
 }
 
-/// Design 4.2a on a hazard line: the representative thread wins when it is on the opened chart,
+/// Design §4.2a (`docs/superpowers/specs/2026-10-21-medication-withhold-803-design.md`) on a hazard line: the representative thread wins when it is on the opened chart,
 /// not merely the first thread there.
 #[test]
 fn a_hazard_line_keeps_the_representative_thread_when_it_is_on_this_chart() {
@@ -96,6 +96,17 @@ fn a_hold_not_shown_is_counted_unseen() {
     assert_eq!(p.unseen, 2);
     // Every hold shown: nothing unseen.
     assert_eq!(release_plan(&r, &[u(100), u(101), u(102)], u(1)).unseen, 0);
+}
+
+/// A pending hold the row DREW is released like a live one: a release also cancels a W that has
+/// not started (the row offers Release for it). Filtering pending holds out of `live` would leave
+/// nothing to write, and the command would refuse the Release as stale — falsely.
+#[test]
+fn a_shown_pending_hold_is_released() {
+    let mut r = row(false, 10, &[(10, 1)], &[(100, 10)]);
+    r.holds[0].pending = true;
+    let p = release_plan(&r, &[u(100)], u(1));
+    assert_eq!(p.write, vec![(u(10), u(1), vec![u(100)])]);
 }
 
 #[test]

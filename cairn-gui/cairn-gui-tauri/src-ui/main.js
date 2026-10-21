@@ -255,6 +255,7 @@ function drawList(pane, patient) {
     body.append(...renderRow(row));
   }
   restoreReasons(typed);
+  rereadAtNextHoldChange(view.next_hold_change, patient); // a W starts and ends with the clock (holds.js)
 
   const button = el("sign-off");
   button.disabled = !view.sign_off_enabled;

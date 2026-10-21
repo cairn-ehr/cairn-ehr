@@ -22,7 +22,7 @@ use uuid::Uuid;
 /// One rendered drug line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MedListRowView {
-    /// Stable id for the DOM and for the cease command.
+    /// Stable id for the DOM and for the cease, withhold and release commands.
     pub group_id: String,
     /// The drug's coded name when it has one, else the term exactly as asserted.
     pub primary: String,
@@ -31,9 +31,12 @@ pub struct MedListRowView {
     pub formulation: String,
     pub sig: String,
     pub started: String,
-    /// "current" or "ceased" — WORDING, for the table. Code that needs to know whether a drug
-    /// is current reads [`MedListRowView::current`] instead: a reworded or translated label
-    /// must never change which drugs a caller counts as current (PR #707 review).
+    /// "current", "withheld" or "ceased" — WORDING, for the table. Code that needs to know
+    /// whether a drug is current reads [`MedListRowView::current`] instead: a reworded or
+    /// translated label must never change which drugs a caller counts as current (PR #707
+    /// review). The one reader of the words is main.js's row styling (`data-ceased`,
+    /// `data-withheld`), tied to these exact words by the tauri crate's
+    /// `the_row_draws_the_w_and_its_controls`.
     pub status_label: String,
     /// True while the drug is active — the typed fact `status_label` words.
     pub current: bool,

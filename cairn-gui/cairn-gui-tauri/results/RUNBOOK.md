@@ -802,12 +802,14 @@ vanished when the read failed is a finding to file, never a budget to adjust.**
 The window's two new gestures: **Withhold** (the paper chart's "W", a time-bounded hold on a line that stays
 current, signable and ceasable) and **Release** (ending a hold early). Paper counterpart: writing W in the
 drug chart's administration slot(s) with initials and the reason in the slot code or a short note; rescinding is
-a note; resuming is giving the next dose, no act. **Live only for the timings** (the write is the measurement);
+a note; resuming is giving the next dose, no act. **Live only for the timings and the behaviour checks** (the
+write is the measurement, and a `--mock` window refuses every press as "fixture mode" before reading the time);
 the `--mock` window is enough for the accessibility checks below.
 
 **Budgets (from the slice plan's §1.2).** Withhold **≤ 10 s from the chart open to recorded** (paper *N* = 2 →
 architecture-forced *M* = 2 → UI bundling target *K* = 2: type the reason in the line's W field, press
-*Withhold*; "until reviewed" is the default, so no further act). A W *until a time* adds the time entry, as
+*Withhold*. The wire needs an explicit end; the window bundles it — "until reviewed" is preselected on screen — so
+no further act). A W *until a time* adds the time entry, as
 paper's slot choice does. Release **≤ 5 s** (paper 1 → Cairn 1; its reason is optional). Resume is paper 0 →
 Cairn 0: expiry is a read-time fold and writes no event. **A figure outside its budget, or `M > N`, is the
 finding — file an issue; never adjust the budget.**
@@ -828,10 +830,10 @@ $NODE medication-list "$PATIENT"     # two lines, both [current] — unsigned
 **Measurement 1 — Withhold.** Start the stopwatch when the window appears (as section 4). Unlock the key, type a
 reason into the W field of one current line, leave *until* on "until reviewed", press *Withhold*. Stop when the
 line draws its W ("W until reviewed"). Repeat with *until a time* and a time later today (stop at "W until
-HH:MM"). Five runs each, on fresh charts.
+HH:MM"). Five runs each; repeated holds on one line are admitted, so a fresh chart is not needed per run.
 
-**Measurement 2 — Release.** On a line that now shows a W, press *Release* (reason optional). Stop when the W is gone
-from the line. Five runs.
+**Measurement 2 — Release.** On a line that now shows a W, start the stopwatch, press *Release* (reason optional).
+Stop when the W is gone from the line. Five runs.
 
 **Behaviours to confirm while you are there** (each is a pinned guard; a miss is a finding):
 
@@ -843,7 +845,11 @@ from the line. Five runs.
       time too — WebKit needs the type reset in holds.js), and the W is then
       recorded "until reviewed" (never until the time that was typed).
 - [ ] A second press during the write does nothing (the pressed button is disabled until the re-read). After
-      a recorded W the line's W fields are empty; after a failure they keep what you typed.
+      a recorded W the line's W fields are empty; after a refusal they keep what you typed and the button
+      works again.
+- [ ] A W *until a time* two minutes ahead: leave the window alone; within a few seconds of that minute the W is
+      gone from the line and the status word reads "current" again, with no press. A W written from the CLI with
+      `--from` two minutes ahead reads "W from HH:MM" and "current", then "withheld" at that minute.
 - [ ] The line still counts in the *Sign off N unsigned* button and still has *Stop*.
 - [ ] Hovering the W does not make it flicker (the detail must not move the table).
 - [ ] A line that is both withheld and about to be signed shows both left bars (will-sign outermost).

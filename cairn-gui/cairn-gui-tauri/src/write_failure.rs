@@ -1,4 +1,5 @@
-//! How a failed NODE write is handed to the webview as an `ErrorView` (sign-off, cease).
+//! How a failed NODE write is handed to the webview as an `ErrorView` (sign-off, cease, and the
+//! withhold and release of `hold`, #832).
 //!
 //! Sign-off and cease used to return a bare `String`, so the webview could not tell "the record
 //! moved under you" from "the node refused" from "the node is unreachable" and treated all of
@@ -6,7 +7,8 @@
 //! `data_error_from` classification), so this module only maps it onto the funnel's `Retry`
 //! vocabulary, passing the node's own legible sentence (§9.6) through untouched. One case is
 //! worded here instead: a commit lost mid-flight, which may have written, so it is neither
-//! "failed" nor done (#814, #818: a sign-off's `sign_off_outcome`, a cease's `cease_outcome`).
+//! "failed" nor done (#814, #818: a sign-off's `sign_off_outcome`, a cease's `cease_outcome`, a
+//! withhold's or release's `hold::outcome`).
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use cairn_gui_data::port::DataError;
 
