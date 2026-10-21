@@ -56,8 +56,7 @@ pub(crate) enum UntilChoice {
 /// `""` for "until a time" with no (or a partly typed) time. That empty end is refused with a
 /// sentence saying the time is missing or incomplete and what to choose (#841) — never turned
 /// into "until reviewed" here, which would be a hold nobody decided on (principle 4). Only the
-/// shape is
-/// checked here; that the end is AFTER the start is the floor's rule (db/059).
+/// shape is checked here; that the end is AFTER the start is the floor's rule (db/059).
 pub(crate) fn parse_until(until: &str) -> Result<UntilChoice, String> {
     match until {
         "reviewed" => Ok(UntilChoice::Reviewed),
@@ -329,17 +328,15 @@ pub async fn release_impl(
     // Every write failed and none is unknown: nothing was released, so this is a refusal, not
     // a report (#840). As a report it wiped the typed reason and dropped the failure's class,
     // so a stale refusal left the list unmarked if the re-read after it failed.
-    if released == 0 && unknown.is_empty() {
-        if let Some(retry) = retry_when_nothing_written(&retries) {
-            return Err(ErrorView {
-                text: release_outcome(0, plan.gone.len(), plan.unseen, &failed, &[]),
-                retry,
-            });
-        }
+    if let Some(retry) = retry_when_nothing_written(released, &unknown, &retries) {
+        return Err(ErrorView {
+            text: release_outcome(0, plan.gone.len(), plan.unseen, &failed, &[]),
+            retry,
+        });
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    // Timed only when it released something and no outcome is unknown (#818 review): a release
-    // whose every write failed made no gesture worth a sample.
+    // Timed only when no outcome is unknown (#818 review). `released > 0` is belt and braces: a
+    // release that ended nothing has returned above, as a refusal or before the key.
     if unknown.is_empty() && released > 0 {
         record_timing(state, "release", 1, elapsed_ms).await;
     }

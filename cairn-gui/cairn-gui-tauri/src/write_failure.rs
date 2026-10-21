@@ -40,13 +40,25 @@ pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
     }
 }
 
-/// The one class a cease or release answers with when EVERY write it tried failed and none is
-/// unknown, so nothing was written (#840): `retries` are those failures' classes, in order.
+/// Whether a cease or release that has run its writes must answer with a REFUSAL instead of a
+/// report, and with which class (#840). A refusal exactly when NOTHING was written: no write
+/// succeeded (`written == 0`), none has an unknown outcome (`unknown` empty — that may have been
+/// written, so it is reported), and at least one was tried and failed (`retries`, those
+/// failures' classes in order). As a report it would wipe the typed reason and drop the class.
+///
 /// Stale wins: one failure that proved the list out of date makes the whole gesture "re-read
 /// first" — the safe superset, as a live retry over a stale list is only refused again.
-/// Otherwise the first failure's class. `None` when nothing was tried (every thread held back):
-/// there is no failure to classify, and the caller's report stands.
-pub(crate) fn retry_when_nothing_written(retries: &[Retry]) -> Option<Retry> {
+/// Otherwise the first failure's class. `None` when something was written, an outcome is
+/// unknown, or nothing was tried (every thread held back — only a cease reaches the loop so; a
+/// release answers that before the key): the caller's report stands.
+pub(crate) fn retry_when_nothing_written(
+    written: usize,
+    unknown: &[UnknownThread],
+    retries: &[Retry],
+) -> Option<Retry> {
+    if written > 0 || !unknown.is_empty() {
+        return None;
+    }
     let stale = Retry::AfterReread(Recorded::No);
     if retries.contains(&stale) {
         return Some(stale);

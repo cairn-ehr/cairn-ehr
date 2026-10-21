@@ -30,9 +30,15 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `a_gesture_that_wrote_nothing_takes_one_class_and_stale_wins`, `a_gesture_that_wrote_nothing_is_a_refusal_with_its_class`.
 - **Withhold and Stop are drawn only where their command can write (#841)** — `chart_pane` asks `withhold_target`
   and `cease_plan` with the opened chart, so a hazard line with nothing on this chart offers no press that can only
-  refuse or stop nothing. A cease that stopped nothing is no timing sample (`ceased > 0`, as a release's
-  `released > 0`). **Tempting wrong fix:** compute either from `status` in `build_row` (it has no opened chart).
-  Pins: `withhold_and_stop_are_offered_only_where_they_can_write`, `a_gesture_that_wrote_nothing_is_a_refusal_with_its_class`.
+  refuse or stop nothing — and SAYS where to go instead (`NOT_ON_OPENED_CHART`): the refused press used to. Hazard
+  lines only: an ordinary line `withhold_target` refuses is an anomaly (a reconcile raced the list's reads), and the
+  press names it where a hidden button says nothing. A cease that can write nothing answers before the key, marked
+  behind the record (as release); one that stopped nothing is no timing sample. **Tempting wrong fixes:** compute
+  either from `status` in `build_row` (it has no opened chart); narrow every row on `.is_ok()`. Pins:
+  `withhold_and_stop_are_offered_only_where_they_can_write`, `the_refusals_come_before_the_key`.
+- **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
+  report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
+  refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.
 - **The W is a BUTTON whose accessible name carries its reason** (symbol + " — " + detail), and a ceased line
   whose cessation gave a reason has its status word as such a button, revealing `"Stopped: <reason>"` (no reason:
   plain text). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin

@@ -493,7 +493,8 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **2026-10-22 (#839 + #840 + #841, PR #842):** #838's follow-ups. A Release names unseen holds (on its all-gone
   refusal too) as "still on this line"; a cease or release that wrote nothing returns `Err` with one class (stale
   wins); Withhold and Stop are drawn only where their command can write; an empty end is "missing or incomplete".
-  Review filed **#843** (a release of an already-ended hold is admitted, never a stale refusal).
+  Review filed **#843** (a release of an already-ended hold is admitted, never a stale refusal) and **#844** (Release
+  is not yet offered only where it can write).
 - **Next:** review and merge PR #842, run #838's RUNBOOK §15; **#804** (needs #690), **#825** (a decision), **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 

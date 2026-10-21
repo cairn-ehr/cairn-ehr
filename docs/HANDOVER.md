@@ -7,9 +7,10 @@
 > branch `fix/839-840-841-hold-followups`), the three follow-ups from #838's review. A Release names a hold it was
 > not shown, even on its all-gone refusal, and says "still on this line", never "in force" (a pending W has not
 > started). A cease or release whose every write failed returns `Err`, not a report; **stale wins** (maintainer's
-> ruling, 2026-10-22). Withhold and Stop are drawn only where their command can write; an empty end is "missing
-> or incomplete". Review filed **#843** (the floor admits a release of an ended hold, so "stale wins" cannot yet fire
-> for cease or release — a decision). Durable rules: the `#832` block in `developers/durable-rules.md`.
+> ruling, 2026-10-22). Withhold and Stop are drawn only where their command can write (hazard lines only, and the
+> line then says where to go); an empty end is "missing or incomplete". Review filed **#843** (the floor admits a
+> release of an ended hold, so "stale wins" cannot yet fire for cease or release — a decision) and **#844** (Release
+> is not yet narrowed the same way). Durable rules: the `#832` block in `developers/durable-rules.md`.
 > **Merged 2026-10-21: PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)** (#832, #803 slice B): the window
 > draws the **W** and offers **Withhold**/**Release**. **Owed by a human: RUNBOOK §15** (W ≤ 10 s, Release ≤ 5 s,
 > VoiceOver/keyboard; the WebKit time-field reset is confirmed only in headless WebKit). #809 gained item 5.
@@ -200,7 +201,11 @@ Chosen with the maintainer over #807 and the #690/#825 decisions; #840's open ru
 - **⇒ Read the code before the issue's fix list**: half of #841 item 2 (the select switching to "until a time" on a
   partial time) had already landed in #838's second review; only the refusal's wording was left.
 - **⇒ A view that cannot see a rule's input must not guess the rule.** `build_row` has no opened chart, so the
-  Withhold offer is tightened in `chart_pane` by the command's own `withhold_target`, not re-derived from status.
+  Withhold and Stop offers are tightened in `chart_pane` by the commands' own rules, not re-derived from status.
+- **⇒ Hiding a button hides what its refusal said.** The PR's review: the hidden Stop took "stop it from its own
+  chart" with it, so the line now says it; and an `.is_ok()` over every row hid buttons on a non-hazard anomaly.
+  Also fixed: a stale refusal no longer re-enables Withhold/Release; a cease that can write nothing answers before
+  the key; the nothing-written decision is one pure function (`retry_when_nothing_written`), not two copies.
 
 ### 2026-10-21 (second) — #832 (PR #838): the W in the window, plan → SDD
 

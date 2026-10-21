@@ -147,8 +147,8 @@ fn both_gestures_sort_an_interrupted_commit_from_a_failure() {
 /// A withhold names a missing reason and a missing or partial end BEFORE it finds the line or asks
 /// for the key: a locked key must never hide "needs a reason", and the end is refused, never
 /// defaulted — the `parse_until` call is the one place an empty end could become "until
-/// reviewed". A release that can write nothing from this chart says so before asking for the key,
-/// and a release is timed only when it released something.
+/// reviewed". A release — and a cease — that can write nothing from this chart says so before
+/// asking for the key, and a release is timed only when it released something.
 #[test]
 fn the_refusals_come_before_the_key() {
     let src = include_str!("mod.rs");
@@ -188,6 +188,21 @@ fn the_refusals_come_before_the_key() {
         release.contains("ifunknown.is_empty()&&released>0{record_timing(state,\"release\""),
         "{release}"
     );
+
+    // A cease likewise: a line it can stop nothing on is answered before the key (an unlock
+    // that writes nothing), and the answer marks the list behind the record (#841's offer rule
+    // means the screen drew a Stop it would no longer draw).
+    let cease: String = crate::source_guard::rust_fn(include_str!("../commands.rs"), "cease_impl")
+        .split_whitespace()
+        .collect();
+    let early = cease
+        .find("ifplan.write.is_empty(){returnOk(CeaseReport{")
+        .expect(&cease);
+    assert!(early < cease.find("state.live_key(").unwrap(), "{cease}");
+    assert!(
+        cease[early..].contains("behind_the_record:Some(Recorded::No),"),
+        "{cease}"
+    );
 }
 
 /// #840, both gestures: when every thread's write failed and no outcome is unknown, NOTHING was
@@ -221,8 +236,10 @@ fn a_gesture_that_wrote_nothing_is_a_refusal_with_its_class() {
             body.contains("None=>{retries.push(node_failure(&e).retry);failed.push("),
             "each ordinary failure keeps its class\n{body}"
         );
+        // Which outcomes make a refusal is `retry_when_nothing_written`'s, unit-tested in
+        // write_failure_tests; pinned here is only that each command asks it, before timing.
         let refusal = format!(
-            "if{count}==0&&unknown.is_empty(){{ifletSome(retry)=retry_when_nothing_written(&retries){{returnErr(ErrorView{{text:{sentence},retry,}});}}}}"
+            "ifletSome(retry)=retry_when_nothing_written({count},&unknown,&retries){{returnErr(ErrorView{{text:{sentence},retry,}});}}"
         );
         let at = body
             .find(&refusal)

@@ -846,7 +846,8 @@ Stop when the W is gone from the line. Five runs.
       recorded "until reviewed" (never until the time that was typed).
 - [ ] A second press during the write does nothing (the pressed button is disabled until the re-read). After
       a recorded W the line's W fields are empty; after a refusal they keep what you typed and the button
-      works again.
+      works again — unless the refusal found the list out of date, when it stays down until the re-read draws
+      the line afresh.
 - [ ] A W *until a time* two minutes ahead: leave the window alone; within a few seconds of that minute the W is
       gone from the line and the status word reads "current" again, with no press. A W written from the CLI with
       `--from` two minutes ahead reads "W from HH:MM" and "current", then "withheld" at that minute.
@@ -854,9 +855,12 @@ Stop when the W is gone from the line. Five runs.
 - [ ] Hovering the W does not make it flicker (the detail must not move the table).
 - [ ] A line that is both withheld and about to be signed shows both left bars (will-sign outermost).
 - [ ] A Release while a colleague's newer W is on the line but not yet drawn (write one from the CLI after the
-      window drew the line) leaves that W in force, and the outcome line says so ("… added since this line was
+      window drew the line) leaves that W on the line, and the outcome line says so ("… added since this line was
       drawn are still on this line …"), even when every W the line drew had already gone ("… no longer on this
       line — nothing was done. 1 hold(s) added …", #839).
+- [ ] On a line flagged as possibly another person's drug that has no record on the opened chart (§13's
+      doubted-link set-up, opened from the OTHER chart), neither *Withhold* nor *Stop* is drawn, and the line
+      says "… stop or withhold it from its own chart" (#841).
 
 **Read it back (the same §5 query, plus the events).** The write half is aggregated with no user, patient or
 timestamp, by gesture kind `withhold` and `release`:

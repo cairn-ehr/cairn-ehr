@@ -156,7 +156,8 @@ function holdControls(row) {
     holdButton.addEventListener("click", () => {
       // One press, one W: a second press while this one is in flight would read the same
       // fields and write a second W. The re-read after the gesture draws a fresh button; a
-      // refused press (nothing written) re-enables this one, as that re-read may have failed.
+      // refused press (nothing written) re-enables this one, as that re-read may have failed —
+      // unless the refusal proved the list stale, when a retry would only be refused again.
       holdButton.disabled = true;
       // A partly typed time (a date, no hour) has value "" and fired no `input`, but it is still
       // a time the clinician started — never "until reviewed". Sent as "", Rust refuses it.
@@ -164,8 +165,8 @@ function holdControls(row) {
       // ...and the select says so, so the re-read after a refusal keeps "until a time" (#799's
       // restore) and a second press is refused again, never an open-ended W (#841).
       untilKind.value = kind;
-      void withhold(row.group_id, whyHold.value, kind, untilAt.value).then((reported) => {
-        if (!reported) holdButton.disabled = false;
+      void withhold(row.group_id, whyHold.value, kind, untilAt.value).then((spent) => {
+        if (!spent) holdButton.disabled = false;
       });
     });
 
@@ -186,8 +187,8 @@ function holdControls(row) {
     releaseButton.addEventListener("click", () => {
       releaseButton.disabled = true; // one press, one release, as Withhold
       const sent = release(row.group_id, row.holds.map((hold) => hold.withhold_event_id), whyRelease.value);
-      void sent.then((reported) => {
-        if (!reported) releaseButton.disabled = false;
+      void sent.then((spent) => {
+        if (!spent) releaseButton.disabled = false;
       });
     });
 
@@ -199,9 +200,12 @@ function holdControls(row) {
 /**
  * Write a W. `kind` is the until choice; `local` the `datetime-local` value, read in the
  * workstation's zone and sent as an ISO instant. An empty or unreadable time is sent as "" so
- * Rust words the refusal ("choose when the hold ends") — never turned into "until reviewed".
+ * Rust words the refusal ("the end time is missing or incomplete …") — never turned into
+ * "until reviewed".
  * The rest is `cease`'s shape exactly: say the outcome, then re-read the chart. Resolves true
- * when a report came back (the W recorded, or not known), false when the press was refused.
+ * when the press is spent and its button must stay down — a report came back (the W recorded,
+ * or not known), or a refusal proved the list stale (the re-read draws a fresh button) — and
+ * false when a refusal leaves the same press worth retrying.
  */
 async function withhold(groupId, reason, kind, local) {
   // Only the field's own shape: a webview that draws `datetime-local` as a plain text field would
@@ -220,7 +224,9 @@ async function withhold(groupId, reason, kind, local) {
   } catch (failure) {
     say("Could not withhold this drug: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
-    return false; // the fields stay as typed, so the clinician can correct and retry
+    // The fields stay as typed, so the clinician can correct and retry — but a stale refusal
+    // keeps the button down: never a live retry over a list known to be behind the record.
+    return behindTheRecord(failure) !== null;
   }
   // A report came back (recorded, or not known): clear what was typed for this W BEFORE the
   // re-read, or #799's restore would put it back and a second press write a second W.
@@ -246,7 +252,8 @@ async function release(groupId, withholds, reason) {
   } catch (failure) {
     say("Could not release this hold: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
-    return false; // the reason stays as typed, so the clinician can retry
+    // The reason stays as typed; the button comes back unless the list is stale, as `withhold`.
+    return behindTheRecord(failure) !== null;
   }
   setField("reason-r-" + groupId, ""); // as `withhold`: cleared before the re-read
   say(report.text); // worded in Rust: `hold::outcome::release_outcome`

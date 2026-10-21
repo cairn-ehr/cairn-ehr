@@ -339,17 +339,24 @@ async fn a_linked_set_without_a_database_is_an_error_not_an_empty_list() {
 }
 
 /// #841: Withhold and Stop are drawn only where the command could write them. A wrong-chart
-/// hazard line with no thread on the opened chart can only be refused (Withhold) or stop nothing
-/// (Stop, which holds every thread back), so offering either costs the clinician a typed reason,
-/// a key unlock and a press for nothing — steps paper never has. The offer asks each command's
-/// own rule (`hold::plan::withhold_target`, `cease_plan`), so they cannot drift.
+/// hazard line with no thread on the opened chart can only be refused (Withhold: a typed reason
+/// and a press for nothing) or stop nothing (Stop, which holds every thread back — and asks for
+/// the key first), steps paper never has. The offer asks each command's own rule
+/// (`hold::plan::withhold_target`, `cease_plan`), so they cannot drift.
+///
+/// Hiding them must not hide the way forward: the line SAYS where to stop or withhold it, as the
+/// refused press used to. And only a hazard line is narrowed — an ordinary line whose own thread
+/// is missing from its members (a reconcile re-keying a group between the list's reads) keeps
+/// both, so the press names that anomaly and its remedy rather than the buttons vanishing.
 #[test]
 fn withhold_and_stop_are_offered_only_where_they_can_write() {
     let mut list = cairn_medication_view::fixtures::sample_chart();
     list.rows = vec![
-        plan_row(true, &[(11, 2)]), // hazard, nothing on chart 1: no Withhold
-        plan_row(true, &[(10, 1), (11, 2)]), // hazard, a thread on chart 1: Withhold
+        plan_row(true, &[(11, 2)]), // hazard, nothing on chart 1: neither, and said
+        plan_row(true, &[(10, 1), (11, 2)]), // hazard, a thread on chart 1: both
+        plan_row(false, &[(0xABCD, 1)]), // ordinary, own thread missing: both (the press names it)
     ];
+    assert!(crate::hold::plan::withhold_target(&list.rows[2], Uuid::from_u128(1)).is_err());
     let pane = chart_pane(
         &list,
         Uuid::from_u128(1),
@@ -364,7 +371,14 @@ fn withhold_and_stop_are_offered_only_where_they_can_write() {
         .iter()
         .map(|r| (r.can_withhold, r.can_cease))
         .collect();
-    assert_eq!(offered, [(false, false), (true, true)]);
+    assert_eq!(offered, [(false, false), (true, true), (true, true)]);
+    let said = |i: usize| {
+        pane.list.rows[i]
+            .flags
+            .contains(&NOT_ON_OPENED_CHART.to_string())
+    };
+    assert!(said(0), "{:?}", pane.list.rows[0].flags);
+    assert!(!said(1) && !said(2), "said only where something was hidden");
     // An ordinary line is untouched: the sample chart's current lines all offer it.
     let sample = cairn_medication_view::fixtures::sample_chart();
     let opened = sample.charts.members()[0];
@@ -379,5 +393,6 @@ fn withhold_and_stop_are_offered_only_where_they_can_write() {
     for (row, built) in pane.list.rows.iter().zip(build_view(&sample).rows) {
         assert_eq!(row.can_withhold, built.can_withhold, "{}", row.primary);
         assert_eq!(row.can_cease, built.can_cease, "{}", row.primary);
+        assert_eq!(row.flags, built.flags, "{}", row.primary);
     }
 }

@@ -403,16 +403,6 @@ pub async fn cease_impl(
     let group: Uuid = group_id
         .parse()
         .map_err(|_| refused("not a medication id"))?;
-    let (human_sk, human_kid) = state
-        .live_key(Now::read())
-        .await
-        .ok_or_else(|| key_locked("your signing key is locked — unlock it to stop a drug"))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
-        .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-
     // Each member thread paired with the chart it LIVES on — a cessation is written to its
     // thread's own chart, never to the chart that happened to be opened (ADR-0076 decision
     // 2) — and, on a line withheld as a wrong-chart hazard, only the opened chart's threads
@@ -424,6 +414,28 @@ pub async fn cease_impl(
         .find(|row| row.group_id == group)
         .ok_or_else(|| stale("that drug is no longer on this chart — nothing was done"))?;
     let plan = cease_plan(row, patient);
+    // Nothing this chart may write: said now, before the key, as a release does — an unlock
+    // that writes nothing is a step paper never has — and not timed. On a hazard line the window
+    // draws Stop only where `cease_plan` writes (#841), and an ordinary line has a thread unless
+    // its read raced a reconcile — so a press reaching here means the list on screen is behind
+    // the record: say so, so a failed re-read marks it out of date.
+    if plan.write.is_empty() {
+        return Ok(CeaseReport {
+            ceased: 0,
+            text: cease_outcome(0, &plan.held_back, &[]),
+            failed: plan.held_back,
+            behind_the_record: Some(Recorded::No),
+        });
+    }
+    let (human_sk, human_kid) = state
+        .live_key(Now::read())
+        .await
+        .ok_or_else(|| key_locked("your signing key is locked — unlock it to stop a drug"))?;
+    let node_sk = state
+        .node_sk
+        .as_ref()
+        .ok_or_else(|| node_cannot_write("no node key"))?;
+    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
     let started = Instant::now();
     let mut ceased = 0usize;
@@ -481,17 +493,15 @@ pub async fn cease_impl(
     // Every write failed and none is unknown: nothing was stopped, so this is a refusal, not a
     // report (#840) — as a report it dropped the failure's class, so a stale refusal left the
     // list unmarked if the re-read after it failed. Not timed: no gesture was made.
-    if ceased == 0 && unknown.is_empty() {
-        if let Some(retry) = retry_when_nothing_written(&retries) {
-            return Err(ErrorView {
-                text: cease_outcome(0, &failed, &[]),
-                retry,
-            });
-        }
+    if let Some(retry) = retry_when_nothing_written(ceased, &unknown, &retries) {
+        return Err(ErrorView {
+            text: cease_outcome(0, &failed, &[]),
+            retry,
+        });
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    // As for a sign-off: a gesture with an unknown outcome is no timing sample (#818 review), and
-    // nor is one that stopped nothing (every thread held back), as for a release.
+    // As for a sign-off: a gesture with an unknown outcome is no timing sample (#818 review).
+    // `ceased > 0` is belt and braces: a cease that stopped nothing has returned above.
     if unknown.is_empty() && ceased > 0 {
         record_timing(state, "cease", 1, elapsed_ms).await;
     }
