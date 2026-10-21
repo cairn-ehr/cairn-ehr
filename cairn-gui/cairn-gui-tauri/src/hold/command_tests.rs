@@ -228,5 +228,10 @@ fn a_gesture_that_wrote_nothing_is_a_refusal_with_its_class() {
             .find(&refusal)
             .unwrap_or_else(|| panic!("{refusal}\n{body}"));
         assert!(at < body.find(timing).unwrap(), "{body}");
+        let timed = format!("ifunknown.is_empty()&&{count}>0{{{timing}");
+        assert!(
+            body.contains(&timed),
+            "only a gesture that wrote something is timed\n{body}"
+        );
     }
 }

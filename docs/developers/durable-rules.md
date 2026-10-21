@@ -28,10 +28,11 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   stale class. A gesture whose threads were all HELD BACK (no write tried) still returns its report. **Tempting
   wrong fix:** return the report "so the outcome line names every thread" — the `Err` text already does. Pins:
   `a_gesture_that_wrote_nothing_takes_one_class_and_stale_wins`, `a_gesture_that_wrote_nothing_is_a_refusal_with_its_class`.
-- **Withhold is drawn only where `withhold_target` accepts it (#841)** — `chart_pane` asks the command's own rule
-  with the opened chart, so a hazard line with nothing on this chart offers no press it can only refuse.
-  **Tempting wrong fix:** compute it from `status` in `build_row` (it has no opened chart). Pin:
-  `withhold_is_offered_only_where_it_can_be_written`.
+- **Withhold and Stop are drawn only where their command can write (#841)** — `chart_pane` asks `withhold_target`
+  and `cease_plan` with the opened chart, so a hazard line with nothing on this chart offers no press that can only
+  refuse or stop nothing. A cease that stopped nothing is no timing sample (`ceased > 0`, as a release's
+  `released > 0`). **Tempting wrong fix:** compute either from `status` in `build_row` (it has no opened chart).
+  Pins: `withhold_and_stop_are_offered_only_where_they_can_write`, `a_gesture_that_wrote_nothing_is_a_refusal_with_its_class`.
 - **The W is a BUTTON whose accessible name carries its reason** (symbol + " — " + detail), and a ceased line
   whose cessation gave a reason has its status word as such a button, revealing `"Stopped: <reason>"` (no reason:
   plain text). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin

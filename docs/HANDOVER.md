@@ -7,8 +7,9 @@
 > branch `fix/839-840-841-hold-followups`), the three follow-ups from #838's review. A Release names a hold it was
 > not shown, even on its all-gone refusal, and says "still on this line", never "in force" (a pending W has not
 > started). A cease or release whose every write failed returns `Err`, not a report; **stale wins** (maintainer's
-> ruling, 2026-10-22). Withhold is drawn only where `withhold_target` accepts it, and an empty end is "missing or
-> incomplete". Durable rules: the `#832` block in `developers/durable-rules.md`.
+> ruling, 2026-10-22). Withhold and Stop are drawn only where their command can write; an empty end is "missing
+> or incomplete". Review filed **#843** (the floor admits a release of an ended hold, so "stale wins" cannot yet fire
+> for cease or release — a decision). Durable rules: the `#832` block in `developers/durable-rules.md`.
 > **Merged 2026-10-21: PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)** (#832, #803 slice B): the window
 > draws the **W** and offers **Withhold**/**Release**. **Owed by a human: RUNBOOK §15** (W ≤ 10 s, Release ≤ 5 s,
 > VoiceOver/keyboard; the WebKit time-field reset is confirmed only in headless WebKit). #809 gained item 5.

@@ -490,8 +490,9 @@ pub async fn cease_impl(
         }
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    // As for a sign-off: a gesture with an unknown outcome is no timing sample (#818 review).
-    if unknown.is_empty() {
+    // As for a sign-off: a gesture with an unknown outcome is no timing sample (#818 review), and
+    // nor is one that stopped nothing (every thread held back), as for a release.
+    if unknown.is_empty() && ceased > 0 {
         record_timing(state, "cease", 1, elapsed_ms).await;
     }
 

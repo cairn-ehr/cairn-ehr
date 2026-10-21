@@ -338,12 +338,13 @@ async fn a_linked_set_without_a_database_is_an_error_not_an_empty_list() {
     assert!(linked_members(&state, &set(&[1, 2])).await.is_err());
 }
 
-/// #841: Withhold is drawn only where the command could write it. A wrong-chart hazard line with
-/// no thread on the opened chart can only be refused ("…another person's drug…"), so offering
-/// it costs the clinician a typed reason and a press for nothing — a step paper never has. The
-/// offer asks the command's own rule (`hold::plan::withhold_target`), so the two cannot drift.
+/// #841: Withhold and Stop are drawn only where the command could write them. A wrong-chart
+/// hazard line with no thread on the opened chart can only be refused (Withhold) or stop nothing
+/// (Stop, which holds every thread back), so offering either costs the clinician a typed reason,
+/// a key unlock and a press for nothing — steps paper never has. The offer asks each command's
+/// own rule (`hold::plan::withhold_target`, `cease_plan`), so they cannot drift.
 #[test]
-fn withhold_is_offered_only_where_it_can_be_written() {
+fn withhold_and_stop_are_offered_only_where_they_can_write() {
     let mut list = cairn_medication_view::fixtures::sample_chart();
     list.rows = vec![
         plan_row(true, &[(11, 2)]), // hazard, nothing on chart 1: no Withhold
@@ -357,8 +358,13 @@ fn withhold_is_offered_only_where_it_can_be_written() {
         DuplicateSection::checked_none_open(),
         None,
     );
-    let offered: Vec<bool> = pane.list.rows.iter().map(|r| r.can_withhold).collect();
-    assert_eq!(offered, [false, true]);
+    let offered: Vec<(bool, bool)> = pane
+        .list
+        .rows
+        .iter()
+        .map(|r| (r.can_withhold, r.can_cease))
+        .collect();
+    assert_eq!(offered, [(false, false), (true, true)]);
     // An ordinary line is untouched: the sample chart's current lines all offer it.
     let sample = cairn_medication_view::fixtures::sample_chart();
     let opened = sample.charts.members()[0];
@@ -372,5 +378,6 @@ fn withhold_is_offered_only_where_it_can_be_written() {
     );
     for (row, built) in pane.list.rows.iter().zip(build_view(&sample).rows) {
         assert_eq!(row.can_withhold, built.can_withhold, "{}", row.primary);
+        assert_eq!(row.can_cease, built.can_cease, "{}", row.primary);
     }
 }
