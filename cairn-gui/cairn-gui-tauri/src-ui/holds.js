@@ -17,10 +17,12 @@
 
 /**
  * A row's status cell: the status word, then one W button per hold. Each button's accessible
- * name is its detail, so a screen reader hears WHY on reaching it; the detail is also revealed
- * beside it on focus or hover, and stays open once clicked ("pinned") until clicked again. Click
- * must work alone: WebKit (Tauri's webview on macOS) does not focus a button a mouse clicks.
- * On a ceased line that gave a reason, the word "ceased" is such a button.
+ * name is its visible text then its detail ("W until reviewed — Withheld until reviewed by …"),
+ * so a voice user can say what they see and a screen reader hears WHY on reaching it. The detail
+ * is also revealed beside it on focus or hover, and stays open once clicked ("pinned", kept on
+ * the button as `data-pinned`) until clicked again, Escape, or a click elsewhere (`unpinDetails`).
+ * Click must work alone: WebKit (Tauri's webview on macOS) does not focus a button a mouse
+ * clicks. On a ceased line that gave a reason, the word "ceased" is such a button.
  */
 function statusCell(row) {
   const td = document.createElement("td");
@@ -34,7 +36,7 @@ function statusCell(row) {
     button.setAttribute("aria-controls", id);
     const detail = cell("span", shown, { id: id, class: "hold-detail" });
     detail.hidden = true;
-    let pinned = false;
+    const pinned = () => button.dataset.pinned === "true";
     const show = (open) => {
       detail.hidden = !open;
       button.setAttribute("aria-expanded", String(open));
@@ -42,25 +44,51 @@ function statusCell(row) {
     show(false);
     button.addEventListener("focus", () => show(true));
     button.addEventListener("mouseenter", () => show(true));
-    button.addEventListener("blur", () => show(pinned));
-    button.addEventListener("mouseleave", () => show(pinned));
+    button.addEventListener("blur", () => show(pinned()));
+    button.addEventListener("mouseleave", () => show(pinned()));
     button.addEventListener("click", () => {
-      pinned = !pinned;
-      show(pinned);
+      button.dataset.pinned = String(!pinned());
+      show(pinned());
     });
     return [button, detail];
   };
   if (row.cessation_detail) {
-    const label = "ceased — " + row.cessation_detail;
+    const label = row.status_label + " — " + row.cessation_detail;
     td.append(...reveal(row.status_label, label, row.cessation_detail, "cessation-detail-" + row.group_id));
   } else {
     td.append(row.status_label);
   }
   for (const hold of row.holds) {
-    td.append(" ", ...reveal(hold.symbol, hold.detail, hold.detail, "hold-detail-" + hold.withhold_event_id));
+    td.append(
+      " ",
+      ...reveal(hold.symbol, hold.symbol + " — " + hold.detail, hold.detail, "hold-detail-" + hold.withhold_event_id),
+    );
   }
   return td;
 }
+
+/**
+ * Put away every revealed detail but the one `target` is in (null: all of them) — Escape, or a
+ * click outside it. A pinned detail sits over the cells beside it (style.css), so it can cover the
+ * line's own Stop/Withhold/Release and the line under it; it must never be in the way for long.
+ */
+function unpinDetails(target) {
+  for (const button of document.querySelectorAll('.hold-symbol[aria-expanded="true"]')) {
+    const detail = document.getElementById(button.getAttribute("aria-controls"));
+    if (target && (button.contains(target) || detail.contains(target))) continue;
+    button.dataset.pinned = "false";
+    detail.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  }
+}
+
+// Registered ONCE, here at load — not in `statusCell`, which runs on every redraw and would stack
+// a listener per row per read. A click on a W itself reaches its own handler first (it toggles
+// its pin), and is skipped here because the target is inside it.
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") unpinDetails(null);
+});
+document.addEventListener("click", (event) => unpinDetails(event.target));
 
 /**
  * The Withhold and Release controls for a row's action cell, beside Stop — inline, never behind
@@ -101,9 +129,15 @@ function holdControls(row) {
     holdButton.id = "withhold-" + row.group_id;
     holdButton.textContent = "Withhold";
     holdButton.setAttribute("aria-label", "Withhold " + row.primary);
-    holdButton.addEventListener("click", () =>
-      withhold(row.group_id, whyHold.value, untilKind.value, untilAt.value),
-    );
+    holdButton.addEventListener("click", () => {
+      // One press, one W: a second press while this one is in flight would read the same
+      // fields and write a second W. The re-read after the gesture draws a fresh button.
+      holdButton.disabled = true;
+      // A partly typed time (a date, no hour) has value "" and fired no `input`, but it is still
+      // a time the clinician started — never "until reviewed". Sent as "", Rust refuses it.
+      const kind = (untilAt.value || untilAt.validity.badInput) ? "time" : untilKind.value;
+      withhold(row.group_id, whyHold.value, kind, untilAt.value);
+    });
 
     nodes.push(whyHold, untilKind, untilAt, holdButton);
   }
@@ -119,9 +153,10 @@ function holdControls(row) {
     releaseButton.id = "release-" + row.group_id;
     releaseButton.textContent = "Release";
     releaseButton.setAttribute("aria-label", "Release the holds on " + row.primary);
-    releaseButton.addEventListener("click", () =>
-      release(row.group_id, row.holds.map((hold) => hold.withhold_event_id), whyRelease.value),
-    );
+    releaseButton.addEventListener("click", () => {
+      releaseButton.disabled = true; // one press, one release, as Withhold
+      release(row.group_id, row.holds.map((hold) => hold.withhold_event_id), whyRelease.value);
+    });
 
     nodes.push(whyRelease, releaseButton);
   }

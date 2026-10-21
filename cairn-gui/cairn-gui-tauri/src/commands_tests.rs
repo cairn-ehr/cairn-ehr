@@ -164,8 +164,8 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         for field in fields_read_by_the_webview(binding) {
             assert!(
                 available.contains(&field),
-                "src-ui/main.js reads `{binding}.{field}`, which the backend does not \
-                 send. Available: {available:?}"
+                "a webview script (main.js, chart_stale.js or holds.js) reads \
+                 `{binding}.{field}`, which the backend does not send. Available: {available:?}"
             );
         }
     }

@@ -13,9 +13,10 @@ const HOLDS_JS: &str = include_str!("../src-ui/holds.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const STOP_REASONS_JS: &str = include_str!("../src-ui/stop_reasons.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
+const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 
-/// The W is a real button whose accessible name is its reason (Rust's `hold.detail`, which is
-/// also what it reveals), so a screen reader hears WHY on reaching it. The reveal works on focus
+/// The W is a real button whose accessible name is its visible text THEN its reason (WCAG 2.5.3,
+/// label in name: a voice user says what they see), so a screen reader hears WHY on reaching it. The reveal works on focus
 /// (keyboard) AND on click alone: WebKit, Tauri's webview on macOS, does not focus a clicked
 /// button, so a focus-only reveal would never open for a mouse user there. A ceased line's
 /// reason rides the same button, on its status word.
@@ -33,20 +34,54 @@ fn the_w_is_a_button_whose_label_is_its_reason() {
         "button.addEventListener(\"focus\", () => show(true));",
         "button.addEventListener(\"mouseenter\", () => show(true));",
         // Leaving keeps a PINNED detail open: a mouse user who clicked to read it can move away.
-        "button.addEventListener(\"blur\", () => show(pinned));",
-        "button.addEventListener(\"mouseleave\", () => show(pinned));",
-        "pinned = !pinned;",
-        // The hold's label and revealed text are both its detail, never its symbol.
-        "reveal(hold.symbol, hold.detail, hold.detail, \"hold-detail-\" + hold.withhold_event_id)",
-        "\"ceased — \" + row.cessation_detail",
+        "button.addEventListener(\"blur\", () => show(pinned()));",
+        "button.addEventListener(\"mouseleave\", () => show(pinned()));",
+        "button.dataset.pinned = String(!pinned());",
+        // The label is the visible text first, then the reason; the reveal is the reason alone.
+        "reveal(hold.symbol, hold.symbol + \" — \" + hold.detail, hold.detail, \"hold-detail-\" + hold.withhold_event_id)",
+        "row.status_label + \" — \" + row.cessation_detail",
     ] {
         assert!(status.contains(part), "{part} in {status}");
     }
     let clicked = position(status, "button.addEventListener(\"click\"");
     assert!(
-        status[clicked..].contains("show(pinned)"),
+        status[clicked..].contains("show(pinned())"),
         "a click shows what it pinned: {status}"
     );
+}
+
+/// A pinned detail sits over the cells beside it (out of flow — see the CSS guard below), so it
+/// can cover the same line's Stop/Withhold/Release and the line under it. Escape, or a click
+/// anywhere outside it, puts it away. ONE document-level pair of listeners, registered at the top
+/// level of holds.js — never inside `statusCell`, which runs on every redraw and would stack them.
+#[test]
+fn escape_or_a_click_elsewhere_unpins_a_detail() {
+    let unpin = js_fn(HOLDS_JS, "unpinDetails");
+    for part in [
+        "if (target && (button.contains(target) || detail.contains(target))) continue;",
+        "button.dataset.pinned = \"false\";",
+        "detail.hidden = true;",
+        "button.setAttribute(\"aria-expanded\", \"false\");",
+    ] {
+        assert!(unpin.contains(part), "{part} in {unpin}");
+    }
+    for listener in [
+        "\ndocument.addEventListener(\"keydown\", (event) => {\n  if (event.key === \"Escape\") unpinDetails(null);",
+        "\ndocument.addEventListener(\"click\", (event) => unpinDetails(event.target));",
+    ] {
+        assert_eq!(HOLDS_JS.matches(listener).count(), 1, "{listener}");
+    }
+    assert!(!js_fn(HOLDS_JS, "statusCell").contains("document.addEventListener"));
+}
+
+/// Revealed IN flow, the detail re-laid the table out, its button jumped from under the pointer,
+/// `mouseleave` hid it, the button jumped back — a flicker loop no mouse could click through
+/// (found walking #832). `position: absolute` is what keeps the reveal from moving anything.
+#[test]
+fn a_revealed_detail_moves_nothing() {
+    let at = position(STYLE_CSS, "\n.hold-detail {");
+    let rule = &STYLE_CSS[at..at + STYLE_CSS[at..].find("\n}").unwrap()];
+    assert!(rule.contains("\n  position: absolute;"), "{rule}");
 }
 
 /// main.js draws the status cell through `statusCell`, marks a withheld line in the DOM (not by
@@ -87,11 +122,18 @@ fn a_release_sends_only_the_holds_it_drew() {
     );
     let release = js_fn(HOLDS_JS, "release");
     assert!(release.contains("withholds: withholds,"), "{release}");
-    for js in [HOLDS_JS, MAIN_JS] {
-        let sends = js.matches("invoke(\"release\"").count();
-        assert_eq!(sends, usize::from(js == HOLDS_JS), "one release call");
-    }
     assert!(release.contains("invoke(\"release\""), "{release}");
+    // ...and it is the only one in every script the webview has, so a new script is covered.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src-ui");
+    let mut sends = 0;
+    for entry in std::fs::read_dir(&dir).expect("src-ui is readable") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_some_and(|e| e == "js") {
+            let js = std::fs::read_to_string(&path).expect("a readable script");
+            sends += js.matches("invoke(\"release\"").count();
+        }
+    }
+    assert_eq!(sends, 1, "one release call in src-ui");
 }
 
 /// "Until reviewed" is the default end (the open-ended paper W), and it is sent only when it was
@@ -189,6 +231,11 @@ fn a_re_read_keeps_the_until_choice_and_time() {
 /// Typing a time IS choosing "until a time" (controller ruling on #832 task 5): a time typed while
 /// the select still shows its default "until reviewed" would otherwise be dropped without a word
 /// and the hold written open-ended — the clinician's stated end silently discarded (principle 4).
+///
+/// A PARTLY typed time (a date, no hour) is not caught by that listener: the field's value stays
+/// `""` and fires no `input`. So the press itself reads the field: anything in it — a value, or
+/// input the browser cannot read (`validity.badInput`) — makes the kind "time", and a partial
+/// time then goes as `""`, which Rust refuses ("choose when the hold ends").
 #[test]
 fn typing_a_time_chooses_until_a_time() {
     let controls = js_fn(HOLDS_JS, "holdControls");
@@ -197,6 +244,40 @@ fn typing_a_time_chooses_until_a_time() {
         controls[listens..].contains("untilKind.value = \"time\";"),
         "{controls}"
     );
+    let pressed = position(controls, "holdButton.addEventListener(\"click\", () => {");
+    let kind = position(
+        controls,
+        "const kind = (untilAt.value || untilAt.validity.badInput) ? \"time\" : untilKind.value;",
+    );
+    let sent = position(
+        controls,
+        "withhold(row.group_id, whyHold.value, kind, untilAt.value);",
+    );
+    assert!(pressed < kind && kind < sent, "{controls}");
+}
+
+/// One press, one W. A second press while the first is in flight would read the same still-filled
+/// fields and write a second W (nothing downstream refuses an overlapping hold), so each button
+/// disables itself before it sends; the re-read after the gesture — success or thrown failure —
+/// rebuilds the line with a fresh, enabled button.
+#[test]
+fn a_gesture_button_disables_itself_before_it_sends() {
+    let controls = js_fn(HOLDS_JS, "holdControls");
+    for (button, send) in [
+        ("holdButton", "withhold(row.group_id,"),
+        ("releaseButton", "release(row.group_id,"),
+    ] {
+        let pressed = position(
+            controls,
+            &format!("{button}.addEventListener(\"click\", () => {{"),
+        );
+        let disabled =
+            pressed + position(&controls[pressed..], &format!("{button}.disabled = true;"));
+        assert!(
+            disabled < pressed + position(&controls[pressed..], send),
+            "{button}: {controls}"
+        );
+    }
 }
 
 /// Every control names its drug: six rows of an identical "Withhold until (local time)" are
