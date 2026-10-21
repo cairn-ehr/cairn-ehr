@@ -10,6 +10,31 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #803 — THE MEDICATION WITHHOLD (ADR-0081) — do not undo** (pins: `tests/medication_withhold.rs`,
+`medication_withhold_fold.rs`, `medication_withhold_signoff.rs`, `medication_read.rs`):
+- **A hold sits BESIDE `MedicationStatus`; there is no `Withheld` variant.** **Tempting wrong fix:** add one.
+  `signoff.rs` filters `status == Active` and the window's `view.rs`/`row_view.rs` (`current`, `can_cease`) would
+  silently drop withheld drugs out of sign-off. Pin: `a_withheld_line_stays_current_and_signable`.
+- **Expiry writes no event.** Whether a line is withheld is the read-time fold `cairn_medication_group_holds(groups,
+  now)` (db/059); `now` is a parameter so tests pin instants (the fold tests; the staleness-clock pin
+  `expiry_does_not_stale_a_sign_off`).
+- **A release names the withholds it ends by EVENT ID, and only on its own `medication_id`** (`r.medication_id =
+  w.medication_id` in the fold is the only guard on the sync path). Pin: `a_synced_release_on_another_line_ends_nothing`.
+  A release also cancels a not-yet-started hold (`a_release_cancels_a_pending_hold`).
+- **Refusals split in two.** The structural floor runs at both doors (`an_empty_span_is_refused_by_the_floor_at_sync_apply_too`);
+  state refusals (ceased line, `until` <= resolved start, release naming a non-withhold or another line) live at the
+  LOCAL door only. **Tempting wrong fix:** move a state refusal to the sync door; a peer's valid event then wedges or
+  forks sync. Pin: `a_sync_applied_withhold_on_a_ceased_line_is_admitted`.
+- **A ceased row carries no holds** (cessation wins, ADR-0081 decision 5). Pin: `a_ceased_line_shows_no_holds`.
+- **`cairn_medication_thread_patient`'s withhold arm orders by `(hlc_wall, hlc_counter, origin COLLATE "C",
+  content_address)`**: the earliest claim stands. The other arms hold one row per thread; this one holds many. Pin:
+  `the_earliest_orphan_withhold_claim_stands_whatever_the_arrival_order`.
+- **The sign-off thread index was RENAMED `event_log_medication_thread_idx2`** (db/034) and the old one dropped in
+  db/059: an `IF NOT EXISTS` index never picks up an edited predicate, so a type added to the commitment lists needs a
+  NEW name again, never an edited predicate. Pin: `only_the_six_type_thread_index_survives_a_schema_load`.
+- **Pinned counts this slice moved:** twin registry 26 (`twin_registry.rs`, `db/tests/034`), projection registry 29/31
+  (`projection_registry.rs`, `db/tests/039`), `thread_resolution_cost.rs` 7 tables / 8 types.
+
 **⇒ #822 + #823 — THE CLI AFTER AN UNKNOWN COMMIT OUTCOME — do not undo** (pins: `db_diagnosis.rs`'s
 `only_a_stale_refusal_or_an_unknown_outcome_gets_the_cli_remedy`, `tests/event_lookup.rs`, `auto_apply.rs`'s
 `run_verdict` tests, and `tests/identity_commit_lost.rs`'s `a_lost_auto_apply_commit_stops_the_run_with_its_summary`,
