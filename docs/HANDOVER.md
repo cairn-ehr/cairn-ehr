@@ -3,27 +3,30 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ NO PR AWAITS THE MAINTAINER (2026-10-21).** #803 (medication withhold) is in brainstorm on branch
-> `feat/803-medication-withhold`. With PR #830 (#828), every CLI write verb prints its event ids on success.
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)** (#803 slice A, branch
+> `feat/803-medication-withhold`): the medication **withhold "W"** in the record and the CLI — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md),
+> spec **v0.83**, `db/059`, SCHEMA_GENERATION **59**. Its durable rules are the #803 block in `developers/durable-rules.md`.
+> **The window is NOT hold-aware yet** (a withheld drug shows as plain current there until #832).
 > **Merged 2026-10-18/20 (ROADMAP has each):** PR #830 (#828) · PR #829 (#826: `assert-observed-evidence` prints its event ids) · PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
 > `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
 > COMMIT driven end to end; review filed **#825**, the window drops an unknown outcome's error chain — a decision on
 > where operator diagnostics live) · PR #821 (#817) · PR #819 (#815 + #818) · PR #816 (#814) · PR #813 (#811) · PR #805
 > (#797, "Read this chart again"; RUNBOOK §14 is its owed human timing) · PR #802. The repair path (#679 · #680 · #681)
 > is built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's
-> runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest
-> ADR-0080). DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate
+> runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.83** (newest
+> ADR-0081). DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate
 > a pair an older test asserts absent — fix the fixture date, never the assertion.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **#825** needs a decision (where the window's operator diagnostics
+> 1. **Review and merge PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)** (#803 slice A). Then **#832** (slice B, the
+>    window: the W on the line, click/focus reveals a hold's and a cessation's reason, Withhold/Release, local times,
+>    its RUNBOOK timing). **#825** needs a decision (where the window's operator diagnostics
 >    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
-> 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
->    state between active and ceased, with a reason; a new event type, needs an ADR; settle the clash with the window's
->    existing "withheld" = hidden-lines wording) → **#804** (on link, show only where the two charts' medication
+> 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A in PR #831; slice B #832; follow-ups #833 ward-level
+>    list, #834 no marker for an undecryptable event) → **#804** (on link, show only where the two charts' medication
 >    lists DIFFER, with continue / discontinue / withhold per line; needs #803 and **#690**). From #797's reviews:
 >    **#812** (window type/test tightening) · **#807** (the window never
 >    reconnects after a lost connection) · **#808** (two outcome-line races) · **#809** (window tech debt) · **#810**
@@ -148,12 +151,12 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
-ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
+ROADMAP. · **Spec:** **v0.83** (newest ADR-0081;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
-wording only) · **`SCHEMA_GENERATION`:** **58** (`db/058`; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
+wording only) · **`SCHEMA_GENERATION`:** **59** (`db/059`; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a
@@ -182,6 +185,21 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
+### 2026-10-21 — #803 slice A (PR #831): the medication withhold, brainstorm → ADR-0081 → SDD
+
+Brainstormed with the maintainer (paper W: per slot, written by doctor or nurse, ends by itself; pro tem "until
+reviewed"), design + builder check, plan, eight SDD tasks each reviewed, an opus whole-branch review, one fix wave.
+- **⇒ The logical clock is not a wall clock.** A peer may push `hlc_state` up to 24 h ahead (db/020), so any
+  clinically-meaningful "now" stamped from the HLC wall can land hours in the future: a "W from now" read as not yet in
+  force. Use the node's physical clock as `t_effective` (`medication_withhold_clock.rs`). The suite had hit this and
+  worked around it in the TESTS — a test-side workaround for product behaviour is a finding, not a fix.
+- **⇒ A new value for an enum other code reads as "on the list" is a silent filter.** `status == Active` gates
+  sign-off and Stop; a `Withheld` variant would have dropped held drugs out of sign-off with every test green. Put a
+  new state beside the enum.
+- **⇒ An `IF NOT EXISTS` index never picks up an edited predicate** — rename it (db/034 `_idx2`).
+- **⇒ A guard probing "one table per source file" needs a probe per new file**, and the crash-window test needs a window
+  per probe, or a probe goes unpinned (db/048, the cairn-sync test).
+
 ### 2026-10-20 — #826 (PR #829) and #828 (PR #830): event ids on the CLI's success lines
 
 - **⇒ An issue's survey is a claim** (#826): six of its seven verbs already printed their event ids; reading each arm
@@ -209,84 +227,22 @@ end-to-end auto-apply test (the #820 kill switch on `patient_link`); disabling t
 - **⇒ Two true sentences can contradict each other on one screen**: the marker's generic "may be recorded twice" sat
   above auto-apply's specific "safe to run again". Read the whole output a run prints, not each line alone.
 
-### 2026-10-18 (sixth) — #820: #819's review follow-ons
+### 2026-10-18 — #811 (b), #814, #815 + #818, #817, #820: interrupted commits say only what is known (PRs #813–#824)
 
-All three items plus the John-Doe drive-through #821's review added.
-- **⇒ To learn an id a rolled-back transaction minted, have the kill switch SAY it.** The orchestrators mint their
-  event ids inside and the lost COMMIT rolls everything back, so nothing is left to read. The test trigger raises a
-  WARNING naming the event behind its row (and its chart) before it terminates the backend; the test's own
-  `tokio_postgres` connection polls `poll_message` for notices (`db::connect` drops them, #585). A notice is sent at
-  once, ahead of the FATAL. Rig: `tests/identity_commit_lost.rs`; mutation-checked (a nil marker id goes red).
-- **Not done (optional in #820):** one renderer for the CLI's and the window's interruption sentence. Their remedies
-  differ by surface ("check the chart before signing it again" vs "once the window can reach the node again").
-
-### 2026-10-18 (fifth) — #817: the identity-side commits
-
-TDD: the commit inventory went red first (`identify.rs`, 0 of 1
-marked); every site then routed through `commit_failure`. Checked each site for a doubled write: the restore's commit
-is fenced, and so are both link paths (a proposal's status), which are marked anyway because the marker only claims
-less. The review found the inventory blind to files that only AUTOCOMMIT (three sat unmarked and unlisted on a green
-guard); autocommits are now detected, which classified `identity.rs` and the three actor-enrolment sites. It also found
-John Doe's post-commit ordinal read could fail a landed registration with no chart named; it now comes back beside the
-chart.
-- **⇒ A hand-declared count in a guard is a hole in the guard.** The autocommit numbers were typed in, so a file the
-  author never thought of was never counted. Derive what the guard counts from the code it guards.
-- **⇒ A count-pinned shape survives a rewrite only if you keep the shape.** Wrapping auto-apply's `LocalDbFault`
-  inside `commit_failure(…)` hid it from the #477 guard's `.map_err(|e| LocalDbFault::new(` count. Chaining a second
-  `.map_err` kept both guards honest; lowering the pinned count would have hidden a real revert.
-
-### 2026-10-18 (fourth) — #815 + #818: registration and sign-off after an interrupted commit
-
-The maintainer chose #815 option (a). TDD: the commit inventory
-went red first, then three GUI tests failed to compile, then #818's DB test (a deferred trigger on
-`medication_attestation` makes the backend terminate itself at line 2's COMMIT, a real FATAL); each pin mutation-checked.
-- **⇒ An outcome that MAY have written settles like a success, not like a failure.** Dropping the attested search was
-  not enough: a background search minted mid-flight, before the chart existed, would still license a second chart.
-- **⇒ A port that flattens an error loses its marker.** The live adapter's `data_error_from` turned the node's
-  `anyhow` chain into `DataError`, so the cause needed its own variant to cross (`OutcomeUnknown`); `node_failure`'s
-  own marker check became redundant and went.
-- **⇒ CI's GUI clippy runs `--tests` only**, so dead code in the non-test binary is invisible to it
-  (`ChartSetError::text`, now `#[cfg(test)]`). Run `--all-targets` locally.
-- **⇒ A test-only trigger goes on a projection table, session-gated** (`cairn.test_kill_thread`): `event_log` has
-  an "only the dispatcher" trigger pin, and a leaked trigger must be inert for every other connection. Name the line
-  it fires on, never count lines: a raised ERROR rolls back a session counter set in the same transaction.
-- **Review round (five reviewers), all fixed in the PR** (the CLI's "nothing was signed off" beside a maybe-signed
-  line, the marker's text in the clinician's sentence, `settle` routing, funnel.js's spent token, a timing sample for
-  an interrupted gesture, the CLI's registration error naming the chart, two DB pins); the rest went to #820 (PR #824).
-
-### 2026-10-18 (third) — #814: the medication writes' interrupted commits
-
-TDD: a source guard (every clinical commit through
-`commit_failure`, no bare `.commit().await?`) went red first, then the window's tests failed to compile (6 errors);
-each new pin was mutation-checked, one mutation per run.
-- **⇒ A rule stated in one site is a rule one site keeps.** #713 put "unanswered ⇒ unknown" inline in `judge.rs`;
-  the medication writes never got it. It is now one function, and a guard lists every site.
-- **⇒ An autocommit statement IS a commit.** `seal_sign_submit`'s unattested arm has no `tx.commit()`, yet a lost
-  answer to its `execute` leaves the same doubt.
-- **⇒ "Stopped 0" is a claim too.** Next to "whether 1 thread was stopped is NOT known" it says that thread was
-  not stopped. Walk the count sentences through the new state, not just the new sentence.
-- **⇒ A real unanswered `tokio_postgres` error is testable:** `pg_terminate_backend` from a second connection, then
-  wait for `is_closed()` before the next call, or the server's FATAL (a `DbError`) answers it instead.
-- **⇒ The review (4 agents) found "a `DbError` ⇒ rolled back" false for PANIC/FATAL**: a PANIC while flushing the
-  commit's WAL is sent to the client, yet crash recovery replays the commit. Only an ERROR-severity answer now proves a
-  rollback. A self-`pg_terminate_backend` gives a real FATAL answer to test with. Also fixed: the CLI's
-  `attest_medication_thread` was unmarked; the guard read only its four files (now a tree inventory, which also
-  counts commits per file, so a second `.commit().await.context(…)?` in a marked file is red); the cease sentence moved
-  to Rust (`cease_outcome`, truth-table tested); `node_failure` itself re-reads a marked error. The new sentences
-  say "once the window can reach the node again" because the window never reconnects (#807).
-
-### 2026-10-18 (first, second) — PR #805's second review; #811 option (b)
-
-Five reviewers over PR #805, every finding fixed (filed #811, #812); then #811 built as the maintainer chose (b), 8 JS
-source guards red first, a second four-reviewer round fixed or filed everything (#814; #812 items 7–10).
-- **⇒ A flag or sentence carried by ONE async call dies with that call.** Anything a later, overtaking read must still
-  honour or say ("this list is stale", the M4 sentence) is window state with its own end condition (`behindAfter`,
-  `unknownLeads`), and "ends when a newer thing draws" needs a revision, not a boolean.
-- **⇒ A two-cause class needs its cause in the TYPE as soon as the window must WORD the causes differently.** Word a
-  sentence where the ACT is known, not where the cause lands; "worst of several" is not one fact (`No` wins).
-- **⇒ A guard that pins a call's ARGUMENTS but not the `if` in front of it passes the inverted condition** (pin the
-  gate, `refresh_gates`, and the helper bodies the pinned lines lean on). **A rustfmt pass can break a source guard
-  that pins one line**: pin the formatting-proof fragment (bit again this session).
+- **⇒ An outcome that MAY have written settles like a success, not a failure**; only an ERROR-severity answer proves a
+  rollback (a PANIC flushing WAL is replayed by recovery). One `commit_failure` marks every commit; a tree inventory
+  guard counts commits per file and detects AUTOCOMMITS (an autocommit statement IS a commit; a hand-declared count in a
+  guard is a hole in it). A port that flattens an error loses its marker (`DataError::OutcomeUnknown`, #815).
+- **⇒ To learn an id a rolled-back transaction minted, have the kill switch SAY it** (a WARNING before the FATAL;
+  `tests/identity_commit_lost.rs`, #820). A real unanswered error: `pg_terminate_backend` from a second connection, then
+  wait for `is_closed()`; a test-only trigger goes on a projection table, session-gated (`cairn.test_kill_thread`).
+- **⇒ A flag or sentence carried by ONE async call dies with that call** — window state with its own end condition
+  (`behindAfter`, `unknownLeads`, #811); word a sentence where the ACT is known. A guard that pins a call's arguments but
+  not the `if` passes the inverted condition; a rustfmt pass can break a one-line pin.
+- **⇒ "Stopped 0" is a claim too**; CI's GUI clippy runs `--tests` only (run `--all-targets`); chaining a second
+  `.map_err` keeps a count-pinned shape (#477) honest. Not done (optional in #820): one renderer for the CLI's and the
+  window's interruption sentence. The window never reconnects (#807); nothing reads Postgres notices (#585); #812 items
+  7–10 and #814 came from the reviews; #713 first stated "unanswered ⇒ unknown" inline.
 
 ### 2026-10-17 (third) — #797 brainstormed, planned, built SDD (PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805))
 

@@ -463,66 +463,29 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   partly-recorded "Different people" carries its stale pair (`behind_the_record`), the CLI prints a remedy line after
   a stale refusal, a node-side guard against sentences naming window acts — closing **#806** too. Filed #811 (a
   decision: `AfterReread` lumps "not recorded" with "may have been", #713) and #812 (type/test tightening).
-- **2026-10-18 (#811, option (b), maintainer's choice):** `Retry::AfterReread(Recorded::{No, Unknown})`.
-  - M4: after an interrupted Link or Unlink, its own sentence says a change the re-read names may be the clinician's
-    own. That sentence survives an overtaken re-read.
-  - After any interrupted commit, a failed re-read's banner and sign-off button say the list MAY be out of date,
-    unless a stale refusal still open proves it.
-  - M5: any re-read that names a change says "review it", once per line.
-  - A second review round fixed every finding on the branch. Filed #814 (an interrupted sign-off or cease commit is
-    still reported as "failed"); the smaller tightenings went to #812. **Merged** (PR #813).
-- **2026-10-18 (#814, PR #816):** the medication writes' interrupted commits are marked too. The judgement and every
-  medication commit (a sign-off line, a medication submit, a reconciliation, the CLI's attestation) go through one
-  rule, `db_diagnosis::commit_failure`: a commit with no ordinary ERROR answer is outcome-unknown. A sign-off says "whether the
-  sign-off was recorded is NOT known", never "failed"; a cease names each unknown thread, and never says "Stopped 0"
-  over one. Filed **#815** (registration's commit is still unmarked, and its retry mints a second chart), **#817**
-  (the identity-side commits) and **#818** (an interrupted sign-off discards its partial report). **Merged** (PR #816).
-- **2026-10-18 (#815 + #818, PR #819):** registration's commit is marked too (maintainer's choice: mark + search
-  again, not an idempotent re-send). The front door says "whether this registration was recorded is NOT known"
-  with no live retry, and `TokenStore::settle` spends every search like a success (it asks the error,
-  `RegistrationFailure`), so the next Register press searches first and finds the chart if it landed. A sign-off cut off mid-gesture now reports the lines signed,
-  the line it stopped at (NOT known, or NOT signed) and the lines never tried, in one Rust sentence
-  (`sign_off_outcome`); the CLI prints the same and exits 1. Re-sending the same signed batch (safe at the floor:
-  `submit_event` is idempotent on `event_id`) stays possible later, after #807, with #649. Review follow-ons: **#820**.
-- **2026-10-18 (#817, PR #821):** every identity-side commit is marked too: identify, a John-Doe chart (whose re-run
-  would mint a second chart), observed and photo evidence, a proposal's link, an auto-applied link, and the autocommit
-  submits of a sensitivity grade/withdrawal, a shred and a text evidence. Left unmarked, each with its reason: a
-  restore's `finalize_identity` (a landed one fences the door), the node-plane events (`trust_peer` is latest-wins)
-  and the actor enrolments (their standing checks refuse a re-run). The inventory now finds autocommit writes
-  itself. A John Doe whose ordinal read fails after the commit still returns its chart. Review follow-ons:
-  **#822** (no CLI command to check an unknown outcome), **#823** (auto-apply ends as a plain outage), and a
-  John-Doe drive-through added to **#820**. **Merged** (PR #821).
-- **2026-10-18 (#820, PR #824):** #819's review follow-ons. A real lost COMMIT is now driven end to end: a registration's
-  through `LiveData::register` → `OutcomeUnknown` → `settle` (search spent), and in the root tree a John Doe, a standard
-  registration and observed evidence, each pinning WHICH event the marker names. `SignOffOutcome`'s three readers
-  destructure it with no `..`, pinned by a source guard in each tree; cease's unknown tuple is the named
-  `CeaseUnknown`; a judgement's unknown outcome says "no ordinary answer came back", not "the connection was lost".
-  Not done (optional): one renderer for the CLI's and the window's interruption sentence — their remedies differ by
-  surface. Review filed **#825** (the window drops an unknown outcome's error chain; needs an operator-log decision).
-  **Merged** (PR #824).
-- **2026-10-19 (#822 + #823, PR #827):** #821's review follow-ons. `cairn-node event <id>` (read-only, clear envelope
-  columns) says whether this node holds an event, and the CLI's remedy line after an unknown-outcome commit names it.
-  Auto-apply stops at a pair whose commit outcome is unknown and returns its summary (`outcome_unknown`,
-  `not_attempted`), its last line saying a re-run is safe — no longer a plain "connection closed"; a connection lost
-  anywhere in a pair stops it the same way (review), as does any failed HLC tick, and "not recorded" says "as of now"
-  with the check to make before a re-run (second review). Skipped: event ids on the success lines (#826). **Merged**
-  (PR #827).
-- **2026-10-20 (#826, PR #829):** `assert-observed-evidence` prints the id of every event it recorded (its orchestrator
-  returns them, pinned against `event_log`, mutation-checked). The issue's other six verbs already printed theirs.
-  Filed **#828**: `patient-register`, `register-john-doe` and `medication-assert` print a chart/thread id, never the event id
-  a lost commit names. **Merged** (PR #829).
-- **2026-10-20 (#828):** `patient-register` and `register-john-doe` print `registration event <id>` on its own line (the
-  first line is the RUNBOOK's parse contract, pinned by `the_runbook_sed_still_reads_the_chart_id_alone`);
-  `medication-assert` appends `; event <id>` like its sibling verbs. Each orchestrator gained a `*_returning_event`
-  sibling returning `db_diagnosis::Committed<T>`; each id pinned against `event_log`, mutation-checked. Every CLI write
-  verb now prints its event ids. **Merged** (PR #830). Its review moved all three lines into pure builders
-  (`registered_patient_lines`, `registered_john_doe_lines`, `recorded_medication_line`), each unit-tested, pinned the
-  attested assert's event id too, and corrected the RUNBOOK's "last line" sentence.
-- **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
-  first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
-  needs #803 and #690).
-- **Next:** #825 (a decision); #803 (brainstorm + ADR first, started 2026-10-21 on `feat/803-medication-withhold`); then the open issues above
-  (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
+- **2026-10-18 → 10-20 (PRs #813 · #816 · #819 · #821 · #824 · #827 · #829 · #830, all merged): an interrupted commit
+  says only what is known.** #811 option (b): `Retry::AfterReread(Recorded::{No, Unknown})`, window state with its own
+  end conditions. #814: the medication writes' commits go through one `commit_failure` marker; only an ERROR answer
+  proves a rollback; a tree inventory guards every commit. #815 + #818 (maintainer: mark + search): registration and
+  sign-off marked, a maybe-recorded outcome settles like a success. #817: every identity-side commit marked, autocommits
+  detected; the window never reconnects after a lost connection (**#807**). #820: a real lost COMMIT driven end to end (`tests/identity_commit_lost.rs`); filed **#825** (window
+  operator diagnostics — a decision). #822 + #823: `cairn-node event <id>`; auto-apply stops at an unknown outcome with
+  its summary. #826 + #828: every CLI write verb prints its event ids, through pure line builders (the RUNBOOK's
+  first-line parse contract pinned by `the_runbook_sed_still_reads_the_chart_id_alone`).
+- **2026-10-21 (#803 slice A, PR #831):** medication **withhold "W"** — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md)
+  (spec v0.83), brainstormed with the maintainer. Two additive born-sealed events (`clinical.medication-withhold.asserted`
+  with a reason and a span: `until` a time or "reviewed"; `…-withhold-release.asserted` naming withholds by event id),
+  `db/059` (SCHEMA_GENERATION 59): structural floor at both doors, state refusals at the local door only; a read-time
+  fold `cairn_medication_group_holds(groups, now)` — expiry writes no event, the default is resume; a release cancels a
+  not-yet-started hold; cessation wins. Holds sit BESIDE `MedicationStatus` (no third status, so a withheld line stays
+  signable); both types join the sign-off commitment (a W after sign-off stales it; expiry does not), shred and thread
+  resolution. CLI `medication-withhold` / `medication-release`; `medication-list` prints W lines and a cessation's
+  reason; "withheld" now means held, "not shown" hidden. The whole-branch review caught a fast PEER clock starting
+  holds hours late (the HLC wall); a hold's start and a release's instant are now the authoring node's physical clock.
+  Filed **#832** (slice B: the window), **#833** (ward-level new-withholds list), **#834** (no marker for an
+  undecryptable event on a line).
+- **Next:** review and merge PR #831; then **#832** (slice B), **#804** (needs #690), **#825** (a decision); then the
+  open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
 
