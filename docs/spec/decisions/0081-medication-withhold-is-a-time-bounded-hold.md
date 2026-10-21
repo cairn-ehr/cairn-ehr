@@ -97,6 +97,13 @@ not after `from`, a missing `until`; a release with an empty `releases` or namin
 same thread. Sync apply never refuses on a clinical-state veto (a node-local veto would fork the event set); the
 fold is defined for every arrival order. The floor's structural checks still run at both doors.
 
+A refusal that reads only the payload is **structural** and runs at both doors (db/059's
+`cairn_check_medication_withhold`): an empty reason, a missing or malformed `until`, a malformed `from`, `until` not
+after `from` when both are given, a bad `medication_id`, an empty or malformed `releases`. A refusal that reads what
+this node holds is **clinical state** and runs at the local door only (db/059's apply functions): a ceased line, an
+`until` not after the hold's start once an absent `from` is resolved to the event's time, and a release naming
+something that is not a withhold on the same thread.
+
 ### 9. Wording
 
 "Withheld" is the clinical word and means the hold only. Clinician-facing text where it meant *hidden* is reworded to
