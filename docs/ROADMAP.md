@@ -483,7 +483,12 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   reason; "withheld" now means held, "not shown" hidden. The whole-branch review caught a fast PEER clock starting
   holds hours late (the HLC wall); a hold's start and a release's instant are now the authoring node's physical clock.
   Filed **#832** (slice B: the window), **#833** (ward-level new-withholds list), **#834** (no marker for an
-  undecryptable event on a line).
+  undecryptable event on a line). The PR's second review (fixed in the PR) removed db/059's last HLC-wall fallback:
+  the floor now REFUSES, at both doors, a hold with neither `from` nor `t_effective` and a release without one, since
+  another client could otherwise start a "W from now" hours late. It also put each hold's ids on the `medication-list`
+  line, so anyone can release it. Filed **#835** (a future-dated release is invisible), **#836** (the #192
+  conflict flag is never read, so a wrong-chart W projects), **#837** (test gaps: authorship, double release,
+  shredding a release).
 - **Next:** review and merge PR #831; then **#832** (slice B), **#804** (needs #690), **#825** (a decision); then the
   open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 

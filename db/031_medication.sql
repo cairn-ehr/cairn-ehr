@@ -158,7 +158,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS medication_patient_conflict_flag_natural_idx
 -- after this file and before db/059 must still answer from the first three arms, not raise
 -- "relation does not exist". medication_withhold holds one row PER EVENT, so the arm picks
 -- deterministically: the EARLIEST claim stands (HLC order, byte-collated), on every call,
--- after any reproject, on every node.
+-- after any reproject, and on every node that holds the same withhold rows (a node without
+-- custody of the earliest withhold has no row for it).
 CREATE OR REPLACE FUNCTION cairn_medication_thread_patient(p_med uuid)
 RETURNS uuid LANGUAGE plpgsql STABLE AS $$
 DECLARE

@@ -4,10 +4,13 @@
 //! The refusals split in two, and these tests pin each half at the door it belongs to:
 //!   * STRUCTURAL (both doors, `cairn_check_medication_withhold`): an empty reason, a
 //!     missing or malformed `until`, a malformed (or null) `from`, `until <= from` (pinned
-//!     at the sync door too), an empty `releases`, a null/blank/non-string release `reason`.
+//!     at the sync door too), an empty `releases`, a null/blank/non-string release `reason`,
+//!     a bad `medication_id`, and a missing `t_effective` where it is the hold's start or
+//!     the release's instant (pinned at the sync door too) — one table per verb below.
 //!   * CLINICAL STATE (local door only, in the apply fns): a withhold on a ceased line, a
 //!     hold whose span has already ended once `from` is resolved, a release naming
-//!     something that is not a withhold on the same line. Sync apply never refuses on
+//!     something that is not a withhold on the same thread, a thread on another chart
+//!     (#192). Sync apply never refuses on
 //!     state — a node-local veto would fork the event set — so the last test drives a
 //!     withhold on a ceased line through `apply_remote_event` and sees it admitted.
 //!   * The standing chart of an orphan thread claimed by several withholds is the EARLIEST
@@ -18,6 +21,7 @@
 use cairn_event::medication::HoldUntil;
 use cairn_event::{sign, Hlc, SigningKey};
 use cairn_node::db;
+use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
     build_assert_body, build_release_body, build_withhold_body, reconcile_medications,
     release_medication_holds, withhold_medication, ReconcileInput, WithholdMedicationInput,
@@ -82,7 +86,7 @@ async fn a_withhold_is_recorded_with_its_resolved_span() {
     let wid = withhold(&mut c, &sk, &kid, patient, med, "BP 85/50").await;
 
     // One row, keyed to the returned event id; the open end is "reviewed", and an absent
-    // `from` resolved to the event's own time (t_effective is absent, so its HLC wall).
+    // `from` resolved to the event's own time (its t_effective: the node's physical clock).
     let row = c
         .query_one(
             "SELECT until_reviewed, until_at IS NULL, reason, \
@@ -327,7 +331,7 @@ async fn a_release_naming_an_unknown_event_is_refused() {
 
     let err = release_err(&mut c, &sk, &kid, patient, med, &[Uuid::now_v7()]).await;
     assert!(
-        err.contains("medication release:") && err.contains("is not a withhold on this line"),
+        err.contains("medication release:") && err.contains("is not a withhold on this thread"),
         "got: {err}"
     );
 }
@@ -342,10 +346,14 @@ async fn a_release_naming_another_lines_withhold_is_refused() {
     let med_b = add_med(&mut c, &sk, &kid, patient).await;
     let wid_a = withhold(&mut c, &sk, &kid, patient, med_a, "BP 85/50").await;
 
-    // A real withhold, but on a DIFFERENT line: a release can only end holds on its own.
+    // A real withhold, but on a DIFFERENT thread: a release can only end holds on its own,
+    // and the refusal says where the hold IS, so the clinician can release it there.
     let err = release_err(&mut c, &sk, &kid, patient, med_b, &[wid_a]).await;
     assert!(
-        err.contains("medication release:") && err.contains("is not a withhold on this line"),
+        err.contains("medication release:")
+            && err.contains(&format!(
+                "{wid_a} is a withhold on thread {med_a}, not {med_b}: release it there"
+            )),
         "got: {err}"
     );
 }
@@ -370,7 +378,11 @@ async fn a_sync_applied_withhold_on_a_ceased_line_is_admitted() {
         node_origin: "peer".into(),
     };
     let w = until_reviewed("HR 44 on the ward");
-    let body = build_withhold_body(Uuid::now_v7(), med, patient, &w, &kid, peer);
+    let body = effective_at_wall(
+        &c,
+        build_withhold_body(Uuid::now_v7(), med, patient, &w, &kid, peer),
+    )
+    .await;
     c.execute(
         "SELECT apply_remote_event($1)",
         &[&sign(&body, &sk).unwrap().signed_bytes],
@@ -541,8 +553,16 @@ async fn the_earliest_orphan_withhold_claim_stands_whatever_the_arrival_order() 
     let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
 
     let w = until_reviewed("NBM");
-    let late_body = build_withhold_body(Uuid::now_v7(), med, late, &w, &kid, peer_hlc(wall + 10));
-    let early_body = build_withhold_body(Uuid::now_v7(), med, early, &w, &kid, peer_hlc(wall));
+    let late_body = effective_at_wall(
+        &c,
+        build_withhold_body(Uuid::now_v7(), med, late, &w, &kid, peer_hlc(wall + 10)),
+    )
+    .await;
+    let early_body = effective_at_wall(
+        &c,
+        build_withhold_body(Uuid::now_v7(), med, early, &w, &kid, peer_hlc(wall)),
+    )
+    .await;
     apply_remote(&c, &sk, &late_body)
         .await
         .expect("later claim applies");
@@ -566,4 +586,346 @@ async fn the_earliest_orphan_withhold_claim_stands_whatever_the_arrival_order() 
             .get(0);
         assert_eq!(standing, early.to_string(), "the earliest claim stands");
     }
+}
+
+/// One row of a structural-refusal table: what the case is, how it breaks the payload, and
+/// the word the floor's refusal must contain.
+type StructuralCase = (
+    &'static str,
+    Box<dyn Fn(&mut serde_json::Map<String, serde_json::Value>)>,
+    &'static str,
+);
+
+/// A well-formed withhold body ("until reviewed", no `from`, stamped `t_effective`) for the
+/// structural tables to break one field at a time.
+async fn valid_withhold_body(
+    c: &Client,
+    kid: &str,
+    patient: Uuid,
+    med: Uuid,
+) -> cairn_event::EventBody {
+    let hlc = db::next_hlc(c, "test-node").await.unwrap();
+    let body = build_withhold_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &until_reviewed("NBM"),
+        kid,
+        hlc,
+    );
+    effective_at_wall(c, body).await
+}
+
+#[tokio::test]
+async fn every_structural_withhold_refusal_holds_at_the_local_door() {
+    // ADR-0081 decision 8: the floor's promise against a raw-SQL client, field by field.
+    // Each case breaks ONE thing in an otherwise valid body; the refusal must name it.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    use serde_json::{json, Value};
+
+    // (what to do to the payload, the word the refusal must contain)
+    let cases: Vec<StructuralCase> = vec![
+        (
+            "medication_id not a string",
+            Box::new(|p| {
+                p.insert("medication_id".into(), json!(42));
+            }),
+            "medication_id",
+        ),
+        (
+            "medication_id not a uuid",
+            Box::new(|p| {
+                p.insert("medication_id".into(), json!("nope"));
+            }),
+            "medication_id",
+        ),
+        (
+            "reason absent",
+            Box::new(|p| {
+                p.remove("reason");
+            }),
+            "reason",
+        ),
+        (
+            "reason not a string",
+            Box::new(|p| {
+                p.insert("reason".into(), json!(5));
+            }),
+            "reason",
+        ),
+        (
+            "until null",
+            Box::new(|p| {
+                p.insert("until".into(), Value::Null);
+            }),
+            "until",
+        ),
+        (
+            "until a number",
+            Box::new(|p| {
+                p.insert("until".into(), json!(7));
+            }),
+            "until",
+        ),
+        (
+            "until garbage",
+            Box::new(|p| {
+                p.insert("until".into(), json!("soon"));
+            }),
+            "until",
+        ),
+        // The literal string "null" is refused, never read as "from now" (db/059's special case).
+        (
+            "from the string null",
+            Box::new(|p| {
+                p.insert("from".into(), json!("null"));
+            }),
+            "from",
+        ),
+        (
+            "from offset-less",
+            Box::new(|p| {
+                p.insert("from".into(), json!("2030-01-01T00:00:00"));
+            }),
+            "from",
+        ),
+        (
+            "from garbage",
+            Box::new(|p| {
+                p.insert("from".into(), json!("tonight"));
+            }),
+            "from",
+        ),
+    ];
+    for (what, break_it, word) in &cases {
+        let mut body = valid_withhold_body(&c, &kid, patient, med).await;
+        break_it(body.payload.as_object_mut().unwrap());
+        let err = db_msg(&seal_and_submit(&c, &sk, body).await.unwrap_err());
+        assert!(
+            err.contains("medication withhold:") && err.contains(word),
+            "{what}: got: {err}"
+        );
+    }
+
+    // No `from` and no t_effective: the start would be the HLC wall, which a fast peer can
+    // push hours ahead — so the floor refuses rather than guess.
+    let mut body = valid_withhold_body(&c, &kid, patient, med).await;
+    body.t_effective = None;
+    let err = db_msg(&seal_and_submit(&c, &sk, body).await.unwrap_err());
+    assert!(
+        err.contains("medication withhold:") && err.contains("t_effective"),
+        "got: {err}"
+    );
+    assert_eq!(withhold_rows(&c, med).await, 0, "nothing was admitted");
+}
+
+/// A well-formed release of `wid` (stamped `t_effective`), for the release table to break.
+async fn valid_release_body(
+    c: &Client,
+    kid: &str,
+    patient: Uuid,
+    med: Uuid,
+    wid: Uuid,
+) -> cairn_event::EventBody {
+    let hlc = db::next_hlc(c, "test-node").await.unwrap();
+    let body = build_release_body(Uuid::now_v7(), med, patient, &[wid], None, kid, hlc);
+    effective_at_wall(c, body).await
+}
+
+#[tokio::test]
+async fn every_structural_release_refusal_holds_at_the_local_door() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let wid = withhold(&mut c, &sk, &kid, patient, med, "BP 85/50").await;
+    use serde_json::json;
+
+    let cases: Vec<StructuralCase> = vec![
+        (
+            "medication_id not a uuid",
+            Box::new(|p| {
+                p.insert("medication_id".into(), json!("nope"));
+            }),
+            "medication_id",
+        ),
+        (
+            "releases not an array",
+            Box::new(|p| {
+                p.insert("releases".into(), json!("x"));
+            }),
+            "releases",
+        ),
+        (
+            "releases holding null",
+            Box::new(|p| {
+                p.insert("releases".into(), json!([null]));
+            }),
+            "releases",
+        ),
+        (
+            "releases holding a number",
+            Box::new(|p| {
+                p.insert("releases".into(), json!([5]));
+            }),
+            "releases",
+        ),
+        (
+            "releases holding a non-uuid",
+            Box::new(|p| {
+                p.insert("releases".into(), json!(["nope"]));
+            }),
+            "releases",
+        ),
+    ];
+    for (what, break_it, word) in &cases {
+        let mut body = valid_release_body(&c, &kid, patient, med, wid).await;
+        break_it(body.payload.as_object_mut().unwrap());
+        let err = db_msg(&seal_and_submit(&c, &sk, body).await.unwrap_err());
+        assert!(
+            err.contains("medication release:") && err.contains(word),
+            "{what}: got: {err}"
+        );
+    }
+
+    // A release with no t_effective: its instant would be the HLC wall — refused.
+    let mut body = valid_release_body(&c, &kid, patient, med, wid).await;
+    body.t_effective = None;
+    let err = db_msg(&seal_and_submit(&c, &sk, body).await.unwrap_err());
+    assert!(
+        err.contains("medication release:") && err.contains("t_effective"),
+        "got: {err}"
+    );
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM medication_withhold_release", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "nothing was admitted");
+}
+
+#[tokio::test]
+async fn a_missing_t_effective_is_refused_at_the_sync_door_too() {
+    // Structural, so the same verdict on every node: a peer's (or a raw client's) body that
+    // leaves the start to the HLC wall is refused at sync apply as well — forking nothing,
+    // because every node refuses it.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+
+    let w = build_withhold_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &until_reviewed("NBM"),
+        &kid,
+        peer_hlc(wall),
+    );
+    let err = db_msg(&apply_remote(&c, &sk, &w).await.unwrap_err());
+    assert!(
+        err.contains("medication withhold:") && err.contains("t_effective"),
+        "got: {err}"
+    );
+    let r = build_release_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &[Uuid::now_v7()],
+        None,
+        &kid,
+        peer_hlc(wall + 1),
+    );
+    let err = db_msg(&apply_remote(&c, &sk, &r).await.unwrap_err());
+    assert!(
+        err.contains("medication release:") && err.contains("t_effective"),
+        "got: {err}"
+    );
+    assert_eq!(withhold_rows(&c, med).await, 0);
+}
+
+#[tokio::test]
+async fn a_withhold_naming_another_charts_thread_is_refused_at_the_local_door() {
+    // #192 via the shared patient guard: a thread belongs to one chart for life, so a W on
+    // patient B naming patient A's drug is the wrong-chart error, refused where it is typed.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (_patient_a, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let patient_b = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
+
+    let err = withhold_err(&mut c, &sk, &kid, patient_b, med, &until_reviewed("NBM")).await;
+    assert!(err.contains("patient cannot change"), "got: {err}");
+    assert_eq!(withhold_rows(&c, med).await, 0);
+}
+
+#[tokio::test]
+async fn a_withhold_synced_before_its_prescription_shows_once_the_prescription_lands() {
+    // Offline-first order: the W reaches this node before the assert it names. While the
+    // thread is an orphan it is on no line; once the assert lands the line must read
+    // WITHHELD — never "givable" because the W came first.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let med = Uuid::now_v7(); // asserted only AFTER the withhold arrives
+
+    // Started at a FIXED past instant, not at the HLC wall: earlier tests in this binary
+    // push the shared node clock ahead of the physical one (peer events at wall + 1 s), and
+    // a start stamped from that wall can be a moment in the future — pending, not in force.
+    let local = db::next_hlc(&c, "test-node").await.unwrap();
+    let mut w = build_withhold_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &until_reviewed("K+ 6.1"),
+        &kid,
+        peer_hlc(local.wall),
+    );
+    w.t_effective = Some("2020-01-01T00:00:00Z".into());
+    apply_remote(&c, &sk, &w)
+        .await
+        .expect("the orphan withhold applies");
+    assert!(
+        list_patient_medications(&c, patient)
+            .await
+            .unwrap()
+            .rows
+            .is_empty(),
+        "no line yet: the assert has not arrived"
+    );
+
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let assert_body = build_assert_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &sample_input(),
+        &kid,
+        hlc,
+        None,
+    );
+    seal_and_submit(&c, &sk, assert_body)
+        .await
+        .expect("the prescription lands");
+
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].is_withheld(),
+        "the earlier W holds the line: {:?}",
+        rows[0].holds
+    );
+    assert_eq!(rows[0].holds[0].reason, "K+ 6.1");
 }

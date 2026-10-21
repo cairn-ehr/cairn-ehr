@@ -276,7 +276,11 @@ async fn a_synced_release_on_another_line_ends_nothing() {
     let b = add_med(&mut c, &sk, &kid, p).await;
     let w = open_ended(&mut c, &sk, &kid, p, a, "2030-01-01T00:00:00Z").await;
     let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
-    let r_body = build_release_body(Uuid::now_v7(), b, p, &[w], None, &kid, peer_hlc(wall));
+    let r_body = effective_at_wall(
+        &c,
+        build_release_body(Uuid::now_v7(), b, p, &[w], None, &kid, peer_hlc(wall)),
+    )
+    .await;
     apply_remote(&c, &sk, &r_body)
         .await
         .expect("the sync door admits the stray release");
@@ -405,15 +409,19 @@ async fn a_release_synced_before_its_withhold_ends_it_on_arrival() {
         until: HoldUntil::Reviewed,
     };
     let w_body = build_withhold_body(wid, med, p, &w_in, &kid, peer_hlc(wall));
-    let r_body = build_release_body(
-        Uuid::now_v7(),
-        med,
-        p,
-        &[wid],
-        None,
-        &kid,
-        peer_hlc(wall + 10),
-    );
+    let r_body = effective_at_wall(
+        &c,
+        build_release_body(
+            Uuid::now_v7(),
+            med,
+            p,
+            &[wid],
+            None,
+            &kid,
+            peer_hlc(wall + 10),
+        ),
+    )
+    .await;
     apply_remote(&c, &sk, &r_body)
         .await
         .expect("release applies first");
@@ -461,4 +469,68 @@ async fn a_release_takes_effect_at_its_own_instant() {
         "a second before the release the hold still stands"
     );
     assert!(holds_at(&c, &[g], "2030-01-01T00:00:00Z").await.is_empty());
+}
+
+#[tokio::test]
+async fn holds_are_listed_latest_start_first() {
+    // ADR-0081 decision 3: several holds can stand at once, all shown, latest start first —
+    // written in the opposite order, so insertion order cannot pass for the rule.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let early = open_ended(&mut c, &sk, &kid, p, med, "2030-01-01T00:00:00Z").await;
+    let late = open_ended(&mut c, &sk, &kid, p, med, "2030-01-02T00:00:00Z").await;
+    let g = group_of(&c, med).await;
+
+    let order: Vec<String> = holds_at(&c, &[g], "2030-06-01T00:00:00Z")
+        .await
+        .into_iter()
+        .map(|h| h.withhold_event)
+        .collect();
+    assert_eq!(order, vec![late.to_string(), early.to_string()]);
+}
+
+#[tokio::test]
+async fn a_peer_hold_already_over_is_admitted_at_sync_but_never_shown() {
+    // A node offline for hours syncs a timed W whose `until` has since passed. The "until
+    // already past" check is CLINICAL STATE (it reads the event's time against this node's
+    // view), so the sync door must admit the validly-signed event — refusing it would fork
+    // the event set. And an empty span is never in force, so the fold never shows it, not
+    // even as "pending" at an instant before its (later) start.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let g = group_of(&c, med).await;
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let w_in = WithholdMedicationInput {
+        reason: "NBM for theatre",
+        from: None,
+        until: HoldUntil::At("2001-01-01T00:00:00Z"),
+    };
+    let body = effective_at_wall(
+        &c,
+        build_withhold_body(Uuid::now_v7(), med, p, &w_in, &kid, peer_hlc(wall)),
+    )
+    .await;
+    apply_remote(&c, &sk, &body)
+        .await
+        .expect("the sync door admits a hold whose until has passed");
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_withhold WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 1, "the row is stored");
+
+    // Before `until` (2000) its start (now) is still ahead, yet it is never "coming".
+    assert!(holds_at(&c, &[g], "2000-06-01T00:00:00Z").await.is_empty());
+    assert!(holds_at(&c, &[g], "2030-06-01T00:00:00Z").await.is_empty());
 }

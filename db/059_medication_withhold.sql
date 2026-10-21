@@ -5,24 +5,29 @@
 --   clinical.medication-withhold.asserted          — "do not give this from <from> until
 --                                                     <until | reviewed>", with a reason
 --   clinical.medication-withhold-release.asserted  — end the NAMED holds early (by withhold
---                                                     event id: only holds its author saw)
+--                                                     event id: only holds its author saw,
+--                                                     and only on the thread it names)
 --
 -- WHAT IS STORED, AND WHAT IS NOT. Each event is its own row (no overlay, no HLC winner):
 -- several holds can stand on one line at once, and a release ends only the ones it names.
 -- Nothing here stores "withheld" as a fact — whether a hold is in force is a READ-TIME fold
 -- against the node's clock (ADR-0081 decision 3), so a hold expires with no event and the
--- line simply resumes. Cessation still wins over any hold (decision 5); that, too, is the
--- fold's job, not this file's.
+-- line simply resumes. Cessation still wins over any hold (decision 5), but NOT in this file:
+-- the fold below returns holds on a ceased line too, and the READER (cairn-node
+-- `medication/read.rs`) drops them, so any caller of cairn_medication_group_holds must filter
+-- on the line's status itself.
 --
 -- WHERE THE REFUSALS LIVE (ADR-0081 decision 8). Two layers, deliberately split:
 --   * STRUCTURAL — cairn_check_medication_withhold, run at BOTH doors (it is the registered
---     floor fn): a blank reason, a missing/malformed `until`, a malformed `from`, `until`
---     not after `from`, an empty/malformed `releases`, a null/blank/non-string release
---     `reason`, a bad medication_id. A payload like
+--     floor fn; at sync apply, wherever this node can open the body): a blank reason, a
+--     missing/malformed `until`, a malformed `from`, `until` not after `from`, a hold with
+--     no `from` and no `t_effective`, an empty/malformed `releases`, a null/blank/non-string
+--     release `reason`, a release with no `t_effective`, a bad medication_id. A body like
 --     that is malformed everywhere, so refusing it at sync apply forks nothing.
 --   * CLINICAL STATE — in the apply fns, LOCAL DOOR ONLY (cairn.remote_apply not 'on'): a
---     withhold on a ceased line, a hold already over once `from` is resolved to the event's
---     time, a release naming something that is not a withhold on this line. These depend on
+--     withhold on a ceased line, a hold with `from` absent whose `until` is not after the
+--     event's time, a release naming something that is not a withhold on this THREAD (plus
+--     the shared #192 patient guard). These depend on
 --     what THIS node happens to hold, so at sync apply they would be a node-local veto on a
 --     validly-signed event — the fork ADR-0056 forbids. The fold is defined for every
 --     arrival order instead (e.g. a release that arrives before its withhold).
@@ -63,7 +68,9 @@ BEGIN
     BEGIN
         RETURN cairn_t_effective(p_raw);
     EXCEPTION WHEN others THEN
-        RAISE EXCEPTION 'medication withhold: % must be an ISO-8601 instant with an explicit UTC offset (e.g. 2026-10-21T20:00:00+10:00), got "%"', p_field, p_raw;
+        -- DETAIL keeps the parser's own words, so a non-parse fault is not passed off as one.
+        RAISE EXCEPTION 'medication withhold: % must be an ISO-8601 instant with an explicit UTC offset (e.g. 2026-10-21T20:00:00+10:00), got "%"', p_field, p_raw
+            USING DETAIL = SQLERRM;
     END;
 END;
 $$;
@@ -122,6 +129,13 @@ BEGIN
             RAISE EXCEPTION 'medication withhold: until (%) must be after from (%)',
                 p ->> 'until', p ->> 'from';
         END IF;
+        -- With `from` absent the hold starts at the event's t_effective, so it must be there.
+        -- The HLC wall is NO stand-in: a fast peer can push it up to 24 h ahead (db/020), and
+        -- a "W from now" stamped with it would read as not started yet — the drug givable.
+        -- Structural (it reads only the envelope), so it is the same verdict on every node.
+        IF NOT (p ? 'from') AND jsonb_typeof(b -> 't_effective') IS DISTINCT FROM 'string' THEN
+            RAISE EXCEPTION 'medication withhold: a hold without "from" must carry t_effective (the instant it starts)';
+        END IF;
     ELSE
         -- A release names the holds it ends by withhold EVENT id: at least one, all uuids.
         -- Two IFs, not one OR: SQL does not promise left-to-right evaluation, and
@@ -150,6 +164,12 @@ BEGIN
         IF p ? 'reason' AND length(btrim(p ->> 'reason')) = 0 THEN
             RAISE EXCEPTION 'medication release: reason, when given, must be a non-empty string (omit it otherwise)';
         END IF;
+        -- A release ends its holds at its t_effective — never the HLC wall, for the mirror of
+        -- the withhold's reason: a fast wall would leave the drug shown withheld for hours
+        -- after the prescriber released it.
+        IF jsonb_typeof(b -> 't_effective') IS DISTINCT FROM 'string' THEN
+            RAISE EXCEPTION 'medication release: must carry t_effective (the instant the holds end)';
+        END IF;
     END IF;
 END;
 $$;
@@ -172,8 +192,9 @@ WHERE (cairn_event_twin_check.check_fn, cairn_event_twin_check.twin_required_msg
 --    no winner to pick between two holds, and a replay of the same event converges. No FK to
 --    medication_statement: a withhold may arrive before the assert it names (offline-first).
 --
---    starts_at is RESOLVED at apply: the payload's `from`, else the event's t_effective, else
---    its HLC wall (t_recorded). until_at is NULL exactly when the hold is "until reviewed".
+--    starts_at is RESOLVED at apply: the payload's `from`, else the event's t_effective (the
+--    floor refuses a hold with neither). until_at is NULL exactly when the hold is "until
+--    reviewed".
 CREATE TABLE IF NOT EXISTS medication_withhold (
     content_address BYTEA       PRIMARY KEY,
     event_id        UUID        NOT NULL UNIQUE,
@@ -238,9 +259,8 @@ BEGIN
     IF NOT v_reviewed THEN
         v_until := cairn_medication_hold_instant(p ->> 'until', 'until');
     END IF;
-    v_starts := COALESCE(cairn_medication_hold_instant(p ->> 'from', 'from'),
-                         e.t_effective,
-                         to_timestamp(e.hlc_wall / 1000.0));
+    -- Never the HLC wall: the floor refused a hold with neither (see the check fn).
+    v_starts := COALESCE(cairn_medication_hold_instant(p ->> 'from', 'from'), e.t_effective);
 
     IF current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
         -- The LINE's status, not the thread's: a reconciled group with a ceased member and a
@@ -270,7 +290,9 @@ $$;
 REVOKE EXECUTE ON FUNCTION medication_withhold_apply(event_log) FROM PUBLIC;
 
 -- 8. Fold a release into its row. Local door: every named id must be a withhold on THIS
---    line (a release can never end another line's hold, nor one its author did not see).
+--    THREAD (a release can never end another thread's hold, nor one its author did not see).
+--    The list shows holds per LINE (a reconciled group), so when the id IS a withhold but on
+--    a sibling thread, the refusal names that thread: "release it there".
 --    At sync apply a release may legitimately arrive before the withhold it names; the
 --    fold ends that hold once it arrives (ADR-0081 decision 4).
 CREATE OR REPLACE FUNCTION medication_withhold_release_apply(e event_log)
@@ -280,6 +302,7 @@ DECLARE
     v_med uuid;
     v_ids uuid[];
     v_id  uuid;
+    v_on  uuid;   -- the thread a named withhold is on; NULL when it is no withhold here
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
     v_med := (p ->> 'medication_id')::uuid;
@@ -288,9 +311,12 @@ BEGIN
 
     IF current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
         FOREACH v_id IN ARRAY v_ids LOOP
-            IF NOT EXISTS (SELECT 1 FROM medication_withhold
-                            WHERE event_id = v_id AND medication_id = v_med) THEN
-                RAISE EXCEPTION 'medication release: % is not a withhold on this line', v_id;
+            v_on := (SELECT w.medication_id FROM medication_withhold w WHERE w.event_id = v_id);
+            IF v_on IS NULL THEN
+                RAISE EXCEPTION 'medication release: % is not a withhold on this thread', v_id;
+            ELSIF v_on <> v_med THEN
+                RAISE EXCEPTION 'medication release: % is a withhold on thread %, not %: release it there',
+                    v_id, v_on, v_med;
             END IF;
         END LOOP;
     END IF;
@@ -299,7 +325,7 @@ BEGIN
         (content_address, event_id, medication_id, patient_id, released_event_ids,
          released_at, reason, hlc_wall, hlc_counter, origin)
     VALUES (e.content_address, e.event_id, v_med, e.patient_id, v_ids,
-            COALESCE(e.t_effective, to_timestamp(e.hlc_wall / 1000.0)),
+            e.t_effective,  -- never the HLC wall: the floor refused a release without one
             p ->> 'reason', e.hlc_wall, e.hlc_counter, e.node_origin)
     ON CONFLICT (content_address) DO NOTHING;
 END;
@@ -348,6 +374,9 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --         sync BEFORE the withhold it names works too: the two tables are independent and
 --         this join only meets them at read time.
 --
+--     An EMPTY span (until <= the resolved start: refused at the local door, but a peer's can
+--     be admitted) is never in force, so it is never returned either.
+--
 --     `pending` = `starts_at > p_now`: an advance hold ("NBM from 06:00 tomorrow") is RETURNED
 --     so the chart can show it coming, flagged so a caller never treats it as in force. A
 --     hold is IN FORCE exactly when it is returned and not pending. Strict `>` again:
@@ -371,6 +400,7 @@ LANGUAGE sql STABLE AS $$
     JOIN medication_thread_group g ON g.medication_id = w.medication_id
     WHERE g.group_id = ANY (p_groups)
       AND (w.until_reviewed OR w.until_at > p_now)
+      AND (w.until_reviewed OR w.until_at > w.starts_at)
       AND NOT EXISTS (
             SELECT 1 FROM medication_withhold_release r
             WHERE r.medication_id = w.medication_id

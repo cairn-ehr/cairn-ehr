@@ -178,7 +178,9 @@ async fn list_chart_set_medications(
                 } else {
                     vec![]
                 },
-                // Only a ceased line shows a reason: a mixed group reads active.
+                // Only a ceased line shows a reason. (A group reads active or ceased by
+                // latest-effective-wins, ADR-0047, so a group with a ceased member may be
+                // either; `status` already says which.)
                 cessation_reason: if status == MedicationStatus::Ceased {
                     cessation_reasons.get(&group_id).cloned()
                 } else {
@@ -338,19 +340,21 @@ fn list_sql(view: &str) -> String {
     )
 }
 
-/// The holds in force or pending on each group (db/059 `cairn_medication_group_holds`), newest
+/// The holds in force or pending on each group (db/059 `cairn_medication_group_holds`), latest
 /// start first (ADR-0081). The ORDER BY is ours: a set-returning function's internal order
-/// is not a caller guarantee. Instants come back as RFC 3339 UTC text, minute precision.
+/// is not a caller guarantee. Instants come back as RFC 3339 UTC text to the second (a hold
+/// until 08:00:45 is still in force at 08:00:30, so minutes would mislead), and an open
+/// hold's end as the wire's own `"reviewed"`, never null.
 async fn read_group_holds(
     client: &(impl tokio_postgres::GenericClient + Sync),
     groups: &[Uuid],
 ) -> anyhow::Result<HashMap<Uuid, Vec<MedicationHold>>> {
-    const FMT: &str = "'YYYY-MM-DD\"T\"HH24:MI\"Z\"'";
+    const FMT: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
     let sql = format!(
         "SELECT group_id::text AS group_id, medication_id::text AS medication_id, \
          withhold_event_id::text AS withhold_event_id, reason, withholder_kid, pending, \
          to_char(starts_at AT TIME ZONE 'UTC', {FMT}) AS starts_at_txt, \
-         CASE WHEN until_reviewed THEN NULL \
+         CASE WHEN until_reviewed THEN 'reviewed' \
               ELSE to_char(until_at AT TIME ZONE 'UTC', {FMT}) END AS until_at \
          FROM cairn_medication_group_holds($1::text[]::uuid[], clock_timestamp()) \
          ORDER BY group_id, starts_at DESC, withhold_event_id"

@@ -2136,9 +2136,11 @@ enum Cmd {
     MedicationRelease {
         /// The patient UUID the thread belongs to.
         patient: Uuid,
-        /// The medication thread id.
+        /// The thread the withholds were written on (`medication-list` prints it beside each
+        /// hold; on a reconciled line it can differ from the line's id).
         medication_id: Uuid,
-        /// Event id(s) of the withhold(s) to end (printed by `medication-withhold`).
+        /// Event id(s) of the withhold(s) to end (printed by `medication-withhold` and
+        /// `medication-list`).
         #[arg(long = "withhold", required = true)]
         withhold: Vec<Uuid>,
         /// Optional free-text reason.
@@ -5073,7 +5075,7 @@ async fn run() -> anyhow::Result<()> {
                 cairn_node::medication::hold_text::released_line(
                     event_id,
                     medication_id,
-                    withhold.len()
+                    cairn_node::medication::distinct_holds(&withhold).len()
                 )
             );
         }

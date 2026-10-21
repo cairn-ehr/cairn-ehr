@@ -36,10 +36,11 @@ Both are `additive` with `targets_other_author` FALSE: a W is the withholder's o
 or suppress anyone else's prescription (ADR-0043). No existing event type changes (ADR-0012). The legibility twins
 carry no drug name, following the cessation precedent: the name lives on the thread's assertion and a copy could
 disagree with a later correction of it. Withhold: `Withheld medication from <from|"now"> until <until|"reviewed"> —
-<reason>`. Release: `Released withheld medication (<n> hold(s))`, plus ` — <reason>` when given.
+<reason>`. Release: `Released withheld medication (1 hold)` or `(<n> holds)`, plus ` — <reason>` when given.
 
 A release names the withholds it ends by **event id**, not content address. It still ends only holds its author saw,
-and event ids are what the CLI prints and `cairn-node event <id>` reads.
+and event ids are what the CLI prints (`medication-withhold`'s success line, and each hold `medication-list` shows,
+with the thread it is on) and `cairn-node event <id>` reads.
 
 ### 2. A hold is a time span; `until` is required; exact instants only
 
@@ -55,8 +56,8 @@ not refused at a self-asserted clock grade, but it is recorded as a clock-ceilin
 is not one — it would misuse the field. Without `from`, the hold starts at the authoring node's **physical** clock,
 carried as `t_effective`; a release's instant is carried the same way. The authoring node never stamps either from
 its HLC wall: a peer whose clock runs fast can push that wall hours ahead, and a "W from now" would then start in the
-future. db/059 falls back to the HLC wall only for an event that carries no `t_effective` (a peer's, or a hand-built
-body).
+future. Nor does db/059: it refuses, at both doors, a withhold with neither `from` nor `t_effective` and a release
+without `t_effective` (another client's, or a hand-built body), rather than fall back to the HLC wall.
 
 ### 3. Expiry is a read-time fold: no event, default resume
 
@@ -64,8 +65,8 @@ A hold is in force at `now` when `from <= now` (absent `from` means the event's 
 `"reviewed"` or `until > now` (strictly: at `until == now` the hold has ended), and no release naming it has an
 effective time `<= now`. Instants compare as instants, whatever their offsets. Nothing stores "withheld" as a fact;
 the status is computed against the node's clock. When a span ends the line reads as it did before the W, with no act by
-anyone: the default is **resume**, never "stays held". Several holds can be in force at once; all are shown, newest
-first. A hold not yet started is shown as "W from <time>" on an active line.
+anyone: the default is **resume**, never "stays held". Several holds can be in force at once; all are shown, latest
+start first. A hold not yet started is shown as "W from <time>" on an active line.
 
 ### 4. A release names withholds by event id
 
@@ -86,8 +87,10 @@ unchanged).
 There is no `Withheld` variant. Existing readers treat `status == Active` as "on the current list, signable, ceasable";
 a third variant would silently drop withheld drugs out of sign-off, which is the very failure this design avoids. A
 withheld line therefore stays current and signable. A line is withheld if a hold is in force on any member thread of its
-reconciled group (ADR-0047), a group with a ceased member and an active member reads active, and a withhold is written
-once, on the line's representative thread.
+reconciled group (ADR-0047). A group reads active or ceased by ADR-0047's latest-effective-wins, so a group with a
+ceased member can read active, and a withhold is refused only on a line that reads ceased. The floor and the CLI
+accept a withhold on any member thread; writing it once, on the line's representative thread, is the UI gesture's
+rule (#832).
 
 ### 7. Sign-off
 
@@ -99,13 +102,15 @@ which includes what happens at 20:00. Signing a line upholds every W in force on
 ### 8. Structural refusals at both doors; state refusals at the local door only
 
 Every refusal is legible, and where it runs depends on what it reads. A refusal that reads only the payload is
-**structural** and runs at both doors (db/059's `cairn_check_medication_withhold`), because such a payload is malformed
-on every node: an empty reason, a missing or malformed `until`, a malformed `from` (a JSON null included), `until` not
-after `from` when both are given, a bad `medication_id`, an empty or malformed `releases`, a release `reason` that is
-present but null, blank or not a string. A refusal that reads what this node holds is **clinical state** and runs at the
-local door only (db/059's apply functions): a withhold on a ceased line, an `until` not after the hold's start once an
-absent `from` is resolved to the event's time, and a release naming something that is not a withhold on the same
-thread. Sync apply never refuses on clinical state, because a node-local veto would fork the event set; the fold is
+**structural** and runs at both doors (db/059's `cairn_check_medication_withhold`; at sync apply, wherever the node
+can open the body), because such a body is malformed on every node: an empty reason, a missing or malformed `until`, a
+malformed `from` (a JSON null included), `until` not after `from` when both are given, a withhold with neither `from`
+nor `t_effective`, a bad `medication_id`, an empty or malformed `releases`, a release `reason` that is present but null,
+blank or not a string, a release without `t_effective`. A refusal that reads what this node holds is **clinical
+state** and runs at the local door only (db/059's apply functions): a withhold on a line that reads ceased, an `until`
+not after the hold's start once an absent `from` is resolved to the event's time, a release naming something that is
+not a withhold on the same thread (when it is a withhold on a sibling thread, the refusal names that thread), and the
+thread patient guard every medication verb shares (#192). Sync apply never refuses on clinical state, because a node-local veto would fork the event set; the fold is
 defined for every arrival order instead.
 
 ### 9. Wording
@@ -124,3 +129,6 @@ defined for every arrival order instead.
   written into". The ward-level list of new withholds across patients, and any forced acknowledgement of a nurse's W,
   are later work or not wanted.
 - Anyone may withhold; restricting it is local policy above the floor.
+- The `until` vocabulary is closed. The floor checks a body by its event type, not its schema version, so a node on
+  this generation refuses an `until` it does not know, at both doors. A new kind of end (say, "at discharge") is
+  therefore a new event type, never a `/2` of this one.

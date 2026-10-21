@@ -4,7 +4,7 @@
 //! offline-first like cessation: no local-presence check here. The in-DB floor (db/059)
 //! is the real enforcement — it refuses a malformed span at both doors and, at the local
 //! door only, a withhold on a ceased line or a release of something that is not a hold on
-//! this line.
+//! this thread.
 use cairn_event::medication::{
     medication_withhold_body, medication_withhold_release_body,
     render_medication_withhold_release_twin, render_medication_withhold_twin, HoldUntil,
@@ -72,10 +72,7 @@ pub fn build_withhold_body(
         medication_id: &mid,
         reason: input.reason,
         from: input.from,
-        until: match input.until {
-            HoldUntil::At(t) => HoldUntil::At(t),
-            HoldUntil::Reviewed => HoldUntil::Reviewed,
-        },
+        until: input.until,
     };
     device_body(
         event_id,
@@ -89,10 +86,22 @@ pub fn build_withhold_body(
     )
 }
 
+/// The holds a release names, each once, in first-seen order. `medication-release --withhold
+/// X --withhold X` names ONE hold: the payload, the twin and the CLI's success line all count
+/// through this, so none of them can say "2 holds".
+pub fn distinct_holds(withholds: &[Uuid]) -> Vec<Uuid> {
+    let mut out: Vec<Uuid> = Vec::with_capacity(withholds.len());
+    for id in withholds {
+        if !out.contains(id) {
+            out.push(*id);
+        }
+    }
+    out
+}
+
 /// Assemble the `clinical.medication-withhold-release.asserted` EventBody. `withholds` are
-/// the event ids of the holds it ends — only holds its author saw (ADR-0081 decision 4).
-/// A hold named twice is recorded once (first-seen order kept), so the payload and the
-/// twin's "N holds" count the holds actually ended.
+/// the event ids of the holds it ends — only holds its author saw (ADR-0081 decision 4),
+/// each recorded once ([`distinct_holds`]).
 pub fn build_release_body(
     event_id: Uuid,
     medication_id: Uuid,
@@ -103,12 +112,10 @@ pub fn build_release_body(
     hlc: Hlc,
 ) -> EventBody {
     let mid = medication_id.to_string();
-    let mut releases: Vec<String> = Vec::with_capacity(withholds.len());
-    for id in withholds.iter().map(Uuid::to_string) {
-        if !releases.contains(&id) {
-            releases.push(id);
-        }
-    }
+    let releases: Vec<String> = distinct_holds(withholds)
+        .iter()
+        .map(Uuid::to_string)
+        .collect();
     let r = MedicationWithholdRelease {
         medication_id: &mid,
         releases: &releases,

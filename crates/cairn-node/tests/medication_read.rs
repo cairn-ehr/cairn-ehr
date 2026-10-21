@@ -768,7 +768,10 @@ async fn a_withheld_line_stays_current_and_signable() {
     assert_eq!(rows[0].holds.len(), 1);
     assert_eq!(rows[0].holds[0].withhold_event_id, ev);
     assert_eq!(rows[0].holds[0].reason, "contrast tomorrow");
-    assert_eq!(rows[0].holds[0].until, None, "until reviewed");
+    assert_eq!(
+        rows[0].holds[0].until, "reviewed",
+        "an open hold says so explicitly, never null"
+    );
     assert_eq!(sign_off_targets(&rows), vec![thread], "still signable");
 }
 
@@ -883,6 +886,6 @@ async fn a_pending_hold_is_listed_but_the_line_is_not_withheld() {
     let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(rows[0].holds.len(), 1);
     assert!(rows[0].holds[0].pending);
-    assert_eq!(rows[0].holds[0].starts_at, "2099-01-01T00:00Z");
+    assert_eq!(rows[0].holds[0].starts_at, "2099-01-01T00:00:00Z");
     assert!(!rows[0].is_withheld());
 }

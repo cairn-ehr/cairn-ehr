@@ -558,8 +558,9 @@ BEGIN
     -- `clinical.medication.asserted`, seeding a row whose
     -- dose_event_id IS that assert's own event_id and whose content_address is that assert's
     -- own. So a superseded `clinical.medication.asserted` — and likewise a superseded
-    -- `-dose-change.asserted` — still resolves here, permanently and precisely. So do EVERY
-    -- withhold and EVERY release (db/059): medication_withhold and medication_withhold_release
+    -- `-dose-change.asserted` — still resolves here, permanently and precisely. So does every
+    -- withhold and every release this node has applied (db/059; one it holds no custody for, or
+    -- that was shredded, has no row): medication_withhold and medication_withhold_release
     -- are keyed on the event's own content_address (`ON CONFLICT ... DO NOTHING`), one row per
     -- event, never overlaid — there is no winner between two holds to pick.
     --
@@ -581,7 +582,7 @@ BEGIN
         UNION ALL SELECT medication_id, content_address FROM medication_coding
         UNION ALL SELECT medication_id, content_address FROM medication_dose_event
         UNION ALL SELECT medication_id, content_address FROM medication_dose_correction
-        -- db/059 (#803): per-event tables, so a withhold or release always resolves.
+        -- db/059 (#803): per-event tables, so every applied withhold or release resolves.
         UNION ALL SELECT medication_id, content_address FROM medication_withhold
         UNION ALL SELECT medication_id, content_address FROM medication_withhold_release
     ) t

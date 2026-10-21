@@ -50,6 +50,6 @@ pub use reconciliation::{
 };
 pub use sealed_submit::AuthorParams;
 pub use withhold::{
-    build_release_body, build_withhold_body, release_medication_holds, withhold_medication,
-    WithholdMedicationInput,
+    build_release_body, build_withhold_body, distinct_holds, release_medication_holds,
+    withhold_medication, WithholdMedicationInput,
 };

@@ -191,6 +191,25 @@ pub fn peer_hlc(wall: i64) -> Hlc {
     }
 }
 
+/// Give a hand-built withhold or release the `t_effective` an orchestrator would stamp: here,
+/// the body's own HLC wall as an instant (never after it, so no ceiling anomaly). The floor
+/// refuses a withhold without `from`, and any release, that carries none (db/059 — the HLC
+/// wall is no stand-in), so a test that builds one by hand must say when it took effect.
+/// Not for a hold that must be in force at the REAL now: earlier tests in a binary push the
+/// shared HLC ahead of the physical clock, so this instant can be a moment in the future.
+pub async fn effective_at_wall(c: &Client, mut body: EventBody) -> EventBody {
+    let at: String = c
+        .query_one(
+            "SELECT to_char(to_timestamp($1::bigint / 1000.0) AT TIME ZONE 'UTC',                             'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')",
+            &[&body.hlc.wall],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    body.t_effective = Some(at);
+    body
+}
+
 /// Sign a CLEAR body and apply it through the sync door (`apply_remote_event`).
 pub async fn apply_remote(
     c: &Client,

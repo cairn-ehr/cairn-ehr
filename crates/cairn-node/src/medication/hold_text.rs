@@ -6,16 +6,26 @@ use cairn_medication_view::{short_kid, MedicationHold};
 use uuid::Uuid;
 
 /// The line printed under a `medication-list` row for one hold: the paper chart's "W".
-/// (The caller indents it under its row.) A pending hold (not started yet) says when it starts, so it cannot be mistaken for a
-/// line that is withheld now.
+/// (The caller indents it under its row.) A pending hold (not started yet) says when it
+/// starts, so it cannot be mistaken for a line that is withheld now.
+///
+/// It ends with the two ids `medication-release` needs — the withhold's event id and the
+/// thread it is on — so the next shift can release a W it did not write without `--json`.
+/// The thread matters on a reconciled line: the hold may sit on a sibling thread, not the
+/// one the row is keyed by.
 pub fn hold_line(h: &MedicationHold) -> String {
-    let until = h.until.as_deref().unwrap_or("reviewed");
     let when = if h.pending {
-        format!("from {} until {until}", h.starts_at)
+        format!("from {} until {}", h.starts_at, h.until)
     } else {
-        format!("withheld until {until}")
+        format!("withheld until {}", h.until)
     };
-    format!("W {when}: {} (by {})", h.reason, short_kid(&h.withholder))
+    format!(
+        "W {when}: {} (by {}) [withhold {} on thread {}]",
+        h.reason,
+        short_kid(&h.withholder),
+        h.withhold_event_id,
+        h.medication_id
+    )
 }
 
 /// The line printed under a CEASED row when the cessation gave a reason.
@@ -28,7 +38,8 @@ pub fn withheld_line(event_id: Uuid, medication_id: Uuid) -> String {
     format!("withheld medication thread {medication_id}; event {event_id}")
 }
 
-/// `medication-release`'s success line; `n` is how many holds the release names.
+/// `medication-release`'s success line; `n` is how many DISTINCT holds the release names
+/// (the caller counts through `distinct_holds`, as the payload does).
 pub fn released_line(event_id: Uuid, medication_id: Uuid, n: usize) -> String {
     format!("released {n} hold(s) on medication thread {medication_id}; event {event_id}")
 }
@@ -37,41 +48,75 @@ pub fn released_line(event_id: Uuid, medication_id: Uuid, n: usize) -> String {
 mod tests {
     use super::*;
 
-    fn hold(until: Option<&str>, pending: bool) -> MedicationHold {
+    fn hold(until: &str, pending: bool) -> MedicationHold {
         MedicationHold {
             withhold_event_id: Uuid::from_u128(1),
             medication_id: Uuid::from_u128(2),
             reason: "BP 85/50".into(),
-            starts_at: "2026-10-21T20:00Z".into(),
-            until: until.map(Into::into),
+            starts_at: "2026-10-21T20:00:00Z".into(),
+            until: until.into(),
             withholder: "1a2b3c4d5e6f".into(),
             pending,
         }
     }
 
+    /// The `[withhold <event> on thread <thread>]` suffix every hold line ends with.
+    fn ids(h: &MedicationHold) -> String {
+        format!(
+            "[withhold {} on thread {}]",
+            h.withhold_event_id, h.medication_id
+        )
+    }
+
     #[test]
     fn a_timed_hold_reads_withheld_until_the_instant() {
+        let h = hold("2026-10-22T08:00:00Z", false);
         assert_eq!(
-            hold_line(&hold(Some("2026-10-22T08:00Z"), false)),
-            "W withheld until 2026-10-22T08:00Z: BP 85/50 (by 1a2b3c4d)"
+            hold_line(&h),
+            format!(
+                "W withheld until 2026-10-22T08:00:00Z: BP 85/50 (by 1a2b3c4d) {}",
+                ids(&h)
+            )
         );
     }
 
     #[test]
     fn an_open_hold_reads_until_reviewed() {
-        let mut h = hold(None, false);
+        let mut h = hold("reviewed", false);
         h.reason = "discuss with GP".into();
         assert_eq!(
             hold_line(&h),
-            "W withheld until reviewed: discuss with GP (by 1a2b3c4d)"
+            format!(
+                "W withheld until reviewed: discuss with GP (by 1a2b3c4d) {}",
+                ids(&h)
+            )
         );
     }
 
     #[test]
     fn a_pending_hold_names_its_start() {
+        let h = hold("reviewed", true);
         assert_eq!(
-            hold_line(&hold(None, true)),
-            "W from 2026-10-21T20:00Z until reviewed: BP 85/50 (by 1a2b3c4d)"
+            hold_line(&h),
+            format!(
+                "W from 2026-10-21T20:00:00Z until reviewed: BP 85/50 (by 1a2b3c4d) {}",
+                ids(&h)
+            )
+        );
+    }
+
+    #[test]
+    fn a_hold_line_names_the_ids_a_release_needs_each_in_its_slot() {
+        // Distinct ids, so a swap of the event id and the thread id cannot pass.
+        let h = hold("reviewed", false);
+        let line = hold_line(&h);
+        assert!(
+            line.ends_with(&format!(
+                "[withhold {} on thread {}]",
+                Uuid::from_u128(1),
+                Uuid::from_u128(2)
+            )),
+            "got: {line}"
         );
     }
 

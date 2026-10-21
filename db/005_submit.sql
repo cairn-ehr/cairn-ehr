@@ -93,7 +93,7 @@ $$;
 -- A THIRD family, of one, was added by #443: cairn_event_twin, the dispatcher that routes an
 -- event type to whichever of these validators the registry names for it. (Not to all of them —
 -- as the paragraph above says, several prefix members are helpers no registration mentions. The
--- registry names 16 distinct check_fns across 24 rows; the REVOKE convention covers all 22.)
+-- registry names 17 distinct check_fns across 26 rows; the REVOKE convention covers all 23.)
 -- Its REVOKE and the reasoning for it sit next to its definition below, not here, because the
 -- safety argument is about ITS callers rather than about this convention.
 -- ---------------------------------------------------------------------------------

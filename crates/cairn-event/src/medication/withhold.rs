@@ -9,6 +9,7 @@
 use serde_json::{json, Value};
 
 /// How a hold ends: at an asserted instant, or when a clinician reviews it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoldUntil<'a> {
     At(&'a str),
     Reviewed,

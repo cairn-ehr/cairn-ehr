@@ -6,7 +6,8 @@
 //!   withholding after a sign-off makes the line stale (the signer vouched for a line that
 //!   was not on hold).
 //! * EXPIRY writes no event, and the commitment takes no clock input, so a hold lapsing can
-//!   never stale a sign-off. Pinned both by behaviour and by a source check.
+//!   never stale a sign-off. Pinned both by behaviour (a hold that lapses within seconds)
+//!   and by a source check.
 //! * A shred of a withhold scrubs its projection row (the reason is clinical plaintext).
 //! * `cairn_event_thread` resolves a withhold and a release to their line.
 //!
@@ -109,6 +110,19 @@ async fn a_release_after_sign_off_makes_the_line_stale() {
     );
 }
 
+/// How many holds the fold returns for `med`'s line at the real clock.
+async fn holds_now(c: &Client, med: Uuid) -> i64 {
+    c.query_one(
+        "SELECT count(*) FROM cairn_medication_group_holds(\
+           ARRAY(SELECT group_id FROM medication_thread_group \
+                  WHERE medication_id = $1::text::uuid), clock_timestamp())",
+        &[&med.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
 #[tokio::test]
 async fn expiry_does_not_stale_a_sign_off() {
     let Some(base) = cs() else { return };
@@ -118,11 +132,13 @@ async fn expiry_does_not_stale_a_sign_off() {
     let human = enroll_human(&c).await;
     let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
 
-    // A hold that lapses in an hour; sign off while it stands.
+    // A hold that lapses within seconds; sign off while it stands, then wait it out.
+    // (clock_timestamp, not now(): now() is the transaction's start, on a pooled connection
+    // possibly long past.)
     let until: String = c
         .query_one(
-            "SELECT to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', \
-                            'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
+            "SELECT to_char((clock_timestamp() + interval '4 seconds') AT TIME ZONE 'UTC', \
+                            'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')",
             &[],
         )
         .await
@@ -139,9 +155,19 @@ async fn expiry_does_not_stale_a_sign_off() {
     sign_off(&mut c, &sk, &human, p, med).await;
     assert!(!stale(&c, med).await);
 
-    // Expiry writes no event, so nothing in the commitment can move when it passes. The
-    // behavioural half cannot wait an hour, so pin the structural half: neither the
-    // commitment, the readable count nor the staleness view reads a clock.
+    // The behaviour: once `until` has passed the hold is gone from the fold, and the
+    // sign-off is exactly as current as before.
+    assert_eq!(holds_now(&c, med).await, 1, "the hold stands at sign-off");
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    assert_eq!(holds_now(&c, med).await, 0, "the hold has lapsed");
+    assert!(
+        !stale(&c, med).await,
+        "a lapsed hold does not stale the sign-off"
+    );
+
+    // And the structure behind it: expiry writes no event, so nothing in the commitment can
+    // move when it passes — neither the commitment, the readable count nor the staleness
+    // view reads a clock.
     let sources: Vec<String> = c
         .query(
             "SELECT pg_get_viewdef('medication_thread_attestation'::regclass) \
@@ -158,7 +184,16 @@ async fn expiry_does_not_stale_a_sign_off() {
     assert_eq!(sources.len(), 3, "the view and both fns were found");
     for s in &sources {
         assert!(
-            !s.contains("now()") && !s.contains("clock_timestamp"),
+            ![
+                "now()",
+                "clock_timestamp",
+                "current_timestamp",
+                "transaction_timestamp",
+                "statement_timestamp",
+                "localtimestamp",
+            ]
+            .iter()
+            .any(|clock| s.to_lowercase().contains(clock)),
             "expiry must not be able to reach staleness: {s}"
         );
     }

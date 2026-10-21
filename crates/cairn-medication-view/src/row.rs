@@ -175,25 +175,31 @@ pub struct MedicationRow {
     /// see `cairn-node`'s `medication/read.rs`). Renderers name that state ("not read")
     /// rather than printing an empty label.
     pub source_charts: Vec<Uuid>,
-    /// The holds on this line that are in force or not yet started, newest start first
+    /// The holds on this line that are in force or not yet started, latest start first
     /// (ADR-0081). A hold does NOT change `status`: a withheld line is still on the current
-    /// list, signable and ceasable (a third status would drop it out of sign-off).
+    /// list, signable and ceasable (a third status would drop it out of sign-off). Always
+    /// empty unless `status` is Active: cessation wins over any hold.
     pub holds: Vec<MedicationHold>,
-    /// Why the line was ceased, when the cessation gave a reason (non-empty only).
+    /// Why the line was ceased, when the cessation gave a reason (non-empty only). Always
+    /// `None` unless `status` is Ceased.
     pub cessation_reason: Option<String>,
 }
 
 /// One hold on a medication line (ADR-0081, #803): the paper drug chart's "W".
-/// Instants are RFC 3339 UTC text from the DB. Serialize only, like `MedicationRow`.
+/// Instants are RFC 3339 UTC text from the DB, to the second (`2026-10-21T20:00:45Z`).
+/// Serialize only, like `MedicationRow`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MedicationHold {
     pub withhold_event_id: Uuid,
-    /// The thread the withhold named (a member of the line's group).
+    /// The thread the withhold named (a member of the line's group) — the thread a release
+    /// must name too.
     pub medication_id: Uuid,
     pub reason: String,
     pub starts_at: String,
-    /// `None` means "until reviewed".
-    pub until: Option<String>,
+    /// The instant the hold ends, or the literal `"reviewed"` for an open hold — the wire's
+    /// own spelling. Never null: a null would read as "end unknown", which an open hold is
+    /// not (principle 4).
+    pub until: String,
     /// Key id of the clinician who withheld it.
     pub withholder: String,
     /// Not yet started: listed, but the line is not withheld by it.
@@ -201,7 +207,8 @@ pub struct MedicationHold {
 }
 
 impl MedicationRow {
-    /// Whether any hold on this line is in force now (pending ones do not count).
+    /// Whether any hold on this line was in force at the instant the row was READ (pending
+    /// ones do not count). A kept row goes stale as holds start and end: re-read it.
     pub fn is_withheld(&self) -> bool {
         self.holds.iter().any(|h| !h.pending)
     }
@@ -268,7 +275,7 @@ mod tests {
         }
     }
 
-    /// The `--json` contract for #803: exact key names, `until: null` for "until reviewed".
+    /// The `--json` contract for #803: exact key names, `until: "reviewed"` for an open hold.
     #[test]
     fn holds_and_cessation_reason_serialize_with_pinned_keys() {
         let mut r = row("x", None);
@@ -278,8 +285,8 @@ mod tests {
                 withhold_event_id: Uuid::from_u128(1),
                 medication_id: Uuid::from_u128(2),
                 reason: "BP".into(),
-                starts_at: "2026-10-21T20:00Z".into(),
-                until: Some("2026-10-22T08:00Z".into()),
+                starts_at: "2026-10-21T20:00:00Z".into(),
+                until: "2026-10-22T08:00:45Z".into(),
                 withholder: "k1".into(),
                 pending: false,
             },
@@ -287,8 +294,8 @@ mod tests {
                 withhold_event_id: Uuid::from_u128(3),
                 medication_id: Uuid::from_u128(2),
                 reason: "GP".into(),
-                starts_at: "2026-10-21T21:00Z".into(),
-                until: None,
+                starts_at: "2026-10-21T21:00:00Z".into(),
+                until: "reviewed".into(),
                 withholder: "k2".into(),
                 pending: true,
             },
@@ -299,11 +306,11 @@ mod tests {
             v["holds"],
             serde_json::json!([
                 {"withhold_event_id": Uuid::from_u128(1), "medication_id": Uuid::from_u128(2),
-                 "reason": "BP", "starts_at": "2026-10-21T20:00Z",
-                 "until": "2026-10-22T08:00Z", "withholder": "k1", "pending": false},
+                 "reason": "BP", "starts_at": "2026-10-21T20:00:00Z",
+                 "until": "2026-10-22T08:00:45Z", "withholder": "k1", "pending": false},
                 {"withhold_event_id": Uuid::from_u128(3), "medication_id": Uuid::from_u128(2),
-                 "reason": "GP", "starts_at": "2026-10-21T21:00Z",
-                 "until": null, "withholder": "k2", "pending": true}
+                 "reason": "GP", "starts_at": "2026-10-21T21:00:00Z",
+                 "until": "reviewed", "withholder": "k2", "pending": true}
             ])
         );
     }
@@ -314,8 +321,8 @@ mod tests {
             withhold_event_id: Uuid::from_u128(1),
             medication_id: Uuid::from_u128(2),
             reason: "r".into(),
-            starts_at: "2030-01-01T00:00Z".into(),
-            until: None,
+            starts_at: "2030-01-01T00:00:00Z".into(),
+            until: "reviewed".into(),
             withholder: "k".into(),
             pending,
         };

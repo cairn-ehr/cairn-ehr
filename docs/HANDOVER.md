@@ -6,7 +6,8 @@
 > **⇒ ONE PR AWAITS THE MAINTAINER: PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)** (#803 slice A, branch
 > `feat/803-medication-withhold`): the medication **withhold "W"** in the record and the CLI — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md),
 > spec **v0.83**, `db/059`, SCHEMA_GENERATION **59**. Its durable rules are the #803 block in `developers/durable-rules.md`.
-> **The window is NOT hold-aware yet** (a withheld drug shows as plain current there until #832).
+> **The window is NOT hold-aware yet** (a withheld drug shows as plain current there until #832). Its second review
+> (2026-10-21) is fixed in the PR; filed **#835** · **#836** · **#837**.
 > **Merged 2026-10-18/20 (ROADMAP has each):** PR #830 (#828) · PR #829 (#826: `assert-observed-evidence` prints its event ids) · PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
 > `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
 > COMMIT driven end to end; review filed **#825**, the window drops an unknown outcome's error chain — a decision on
@@ -199,6 +200,12 @@ reviewed"), design + builder check, plan, eight SDD tasks each reviewed, an opus
 - **⇒ An `IF NOT EXISTS` index never picks up an edited predicate** — rename it (db/034 `_idx2`).
 - **⇒ A guard probing "one table per source file" needs a probe per new file**, and the crash-window test needs a window
   per probe, or a probe goes unpinned (db/048, the cairn-sync test).
+- **⇒ A fallback in the floor is a bypass of the rule the client follows** (second review). The orchestrator never
+  stamped the HLC wall, but db/059 still fell back to it for a body with no `t_effective`, so any other client could
+  produce the hazard the client-side fix removed. ADR-0021: the floor, not the reference client, is the guarantee.
+  The floor now refuses such a body. Its fixtures stamp `effective_at_wall`, and a hold that must be in force at the
+  real now gets a fixed past start instead, because earlier tests push the shared HLC ahead of the clock (that
+  flaked one new test 2 runs in 6).
 
 ### 2026-10-20 — #826 (PR #829) and #828 (PR #830): event ids on the CLI's success lines
 
