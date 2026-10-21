@@ -576,6 +576,9 @@ BEGIN
         UNION ALL SELECT medication_id, content_address FROM medication_coding
         UNION ALL SELECT medication_id, content_address FROM medication_dose_event
         UNION ALL SELECT medication_id, content_address FROM medication_dose_correction
+        -- db/059 (#803): per-event tables, so a withhold or release always resolves.
+        UNION ALL SELECT medication_id, content_address FROM medication_withhold
+        UNION ALL SELECT medication_id, content_address FROM medication_withhold_release
     ) t
     WHERE t.content_address = v_ca
     LIMIT 1;

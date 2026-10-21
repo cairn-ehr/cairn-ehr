@@ -198,6 +198,14 @@ BEGIN
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;
+        -- Withhold / release rows (db/059, ADR-0081): the hold's reason is clinical plaintext
+        -- keyed by THIS event's content_address, so the same provenance-precise scrub applies.
+        IF to_regclass('public.medication_withhold') IS NOT NULL THEN
+            DELETE FROM medication_withhold WHERE content_address = v_ca;
+        END IF;
+        IF to_regclass('public.medication_withhold_release') IS NOT NULL THEN
+            DELETE FROM medication_withhold_release WHERE content_address = v_ca;
+        END IF;
         -- Dose-CORRECTION overlay (db/032/035): the corrected amount/unit/effective/reason/note
         -- is clinical plaintext keyed by the corrected point but carrying THIS event's CA.
         IF to_regclass('public.medication_dose_correction') IS NOT NULL THEN

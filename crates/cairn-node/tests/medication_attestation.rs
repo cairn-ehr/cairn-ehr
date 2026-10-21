@@ -1004,7 +1004,9 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
                  'clinical.medication.asserted', \
                  'clinical.medication-cessation.asserted', \
                  'clinical.medication-dose-change.asserted', \
-                 'clinical.medication-dose-correction.asserted') \
+                 'clinical.medication-dose-correction.asserted', \
+                 'clinical.medication-withhold.asserted', \
+                 'clinical.medication-withhold-release.asserted') \
                AND (cairn_clear_payload(event_log) ->> 'medication_id')::uuid = $1::text::uuid",
             &[&medication_id.to_string()],
         )

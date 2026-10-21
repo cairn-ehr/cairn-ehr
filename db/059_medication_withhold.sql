@@ -31,6 +31,11 @@
 -- nothing when this node holds no custody (honest degradation, principle 4).
 BEGIN;
 
+-- 0. The thread index changed its predicate (db/034 now covers the withhold types). An
+--    IF NOT EXISTS index never picks up an edited predicate, so db/034 creates it under the
+--    new name _idx2 and the stale one is dropped here.
+DROP INDEX IF EXISTS event_log_medication_thread_idx;
+
 -- 1. Register both types in the fail-closed classification registry. Additive, never
 --    targeting another author: a W is the withholder's own act on the thread and edits no
 --    one else's prescription (ADR-0043).

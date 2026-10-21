@@ -44,28 +44,32 @@ use common::{
 };
 use uuid::Uuid;
 
-/// The five tables `cairn_event_thread`'s `UNION ALL` reads, in its order. Kept as data so
+/// The seven tables `cairn_event_thread`'s `UNION ALL` reads, in its order. Kept as data so
 /// the index guard names the offender rather than failing on an anonymous count.
-const THREAD_PROJECTIONS: [&str; 5] = [
+const THREAD_PROJECTIONS: [&str; 7] = [
     "medication_statement",
     "medication_cessation",
     "medication_coding",
     "medication_dose_event",
     "medication_dose_correction",
+    "medication_withhold",
+    "medication_withhold_release",
 ];
 
-/// Every medication event type that writes one of those five tables. The short-circuit is
+/// Every medication event type that writes one of those seven tables. The short-circuit is
 /// safe only while `cairn_event_type_has_no_thread` answers FALSE for all of them.
-const MEDICATION_EVENT_TYPES: [&str; 6] = [
+const MEDICATION_EVENT_TYPES: [&str; 8] = [
     "clinical.medication.asserted",
     "clinical.medication-cessation.asserted",
     "clinical.medication-coding.asserted",
     "clinical.medication-coding-correction.asserted",
     "clinical.medication-dose-change.asserted",
     "clinical.medication-dose-correction.asserted",
+    "clinical.medication-withhold.asserted",
+    "clinical.medication-withhold-release.asserted",
 ];
 
-/// The `content_address` lookup the five-way UNION performs must be index-backed on each arm.
+/// The `content_address` lookup the seven-way UNION performs must be index-backed on each arm.
 ///
 /// Asserted against `pg_index` rather than against the migration text: an index dropped by a
 /// later migration, or never created because its `CREATE INDEX` sat behind a guard that did
@@ -255,7 +259,7 @@ async fn a_thread_free_event_type_never_reaches_the_medication_scans() {
 /// predicate. The short-circuit removed that independence, so this test and
 /// `sensitivity_ladder.rs::f5a_*` are what remain.
 ///
-/// KNOWN LIMIT: `MEDICATION_EVENT_TYPES` is hand-maintained, so a SEVENTH medication verb is
+/// KNOWN LIMIT: `MEDICATION_EVENT_TYPES` is hand-maintained, so a NINTH medication verb is
 /// unguarded until someone adds it here — the mirror-pair hazard `common/mod.rs` warns about,
 /// tracked in #441.
 #[tokio::test]

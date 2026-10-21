@@ -566,6 +566,8 @@ mod tests {
             "clinical.medication-dose-change.asserted",
             "clinical.medication-reconciliation.asserted",
             "clinical.medication-attestation.asserted",
+            "clinical.medication-withhold.asserted",
+            "clinical.medication-withhold-release.asserted",
         ] {
             let existence = render_safety_line(&line(None, None, event_type));
             assert!(

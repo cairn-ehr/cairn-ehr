@@ -150,6 +150,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS medication_patient_conflict_flag_natural_idx
 -- flagged, not refused, on remote apply). The trade is deliberate: a coder who codes
 -- against the wrong chart now blocks the real assert with a legible error, rather than
 -- silently splitting the thread's chart across two projections.
+-- NOTE (#803): db/059 redefines this fn with a fourth (withhold) arm; db/059's body is the live one.
 CREATE OR REPLACE FUNCTION cairn_medication_thread_patient(p_med uuid)
 RETURNS uuid LANGUAGE plpgsql STABLE AS $$
 BEGIN

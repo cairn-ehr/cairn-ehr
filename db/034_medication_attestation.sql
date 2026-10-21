@@ -205,7 +205,9 @@ AS $$
             'clinical.medication.asserted',
             'clinical.medication-cessation.asserted',
             'clinical.medication-dose-change.asserted',
-            'clinical.medication-dose-correction.asserted')
+            'clinical.medication-dose-correction.asserted',
+            'clinical.medication-withhold.asserted',
+            'clinical.medication-withhold-release.asserted')
       AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
 $$;
 
@@ -238,7 +240,9 @@ AS $$
             'clinical.medication.asserted',
             'clinical.medication-cessation.asserted',
             'clinical.medication-dose-change.asserted',
-            'clinical.medication-dose-correction.asserted')
+            'clinical.medication-dose-correction.asserted',
+            'clinical.medication-withhold.asserted',
+            'clinical.medication-withhold-release.asserted')
       AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
 $$;
 
@@ -269,13 +273,18 @@ GRANT EXECUTE ON FUNCTION cairn_medication_thread_readable_count(uuid) TO cairn_
 --     accelerates the UNSEALED path; sealed-thread commitment is a small scan for now
 --     (pre-clinical, acceptable — a sealed-aware index on the event_clear shadow is the
 --     follow-up if the staleness view ever becomes a hot path).
-CREATE INDEX IF NOT EXISTS event_log_medication_thread_idx
+--     Named _idx2 since #803 added the two withhold types: an IF NOT EXISTS index never
+--     picks up an edited predicate, so a changed predicate needs a new name (db/059 drops
+--     the old one).
+CREATE INDEX IF NOT EXISTS event_log_medication_thread_idx2
     ON event_log (((body ->> 'medication_id')::uuid))
     WHERE event_type IN (
         'clinical.medication.asserted',
         'clinical.medication-cessation.asserted',
         'clinical.medication-dose-change.asserted',
-        'clinical.medication-dose-correction.asserted');
+        'clinical.medication-dose-correction.asserted',
+        'clinical.medication-withhold.asserted',
+        'clinical.medication-withhold-release.asserted');
 
 COMMIT;
 
