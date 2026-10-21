@@ -61,6 +61,22 @@ fn a_hazard_line_with_nothing_on_this_chart_is_refused() {
 }
 
 #[test]
+fn a_non_hazard_line_missing_its_own_thread_names_the_real_cause() {
+    let r = row(false, 99, &[(10, 1), (11, 2)], &[]);
+    let err = withhold_target(&r, u(1)).unwrap_err();
+    assert!(!err.contains("another person's drug"), "{err}");
+    assert!(err.contains(&u(99).to_string()), "{err}");
+}
+
+/// Design 4.2a on a hazard line: the representative thread wins when it is on the opened chart,
+/// not merely the first thread there.
+#[test]
+fn a_hazard_line_keeps_the_representative_thread_when_it_is_on_this_chart() {
+    let r = row(true, 11, &[(10, 1), (11, 1), (12, 2)], &[]);
+    assert_eq!(withhold_target(&r, u(1)), Ok((u(11), u(1))));
+}
+
+#[test]
 fn a_release_ends_only_the_holds_it_was_shown() {
     let r = row(false, 10, &[(10, 1)], &[(100, 10), (101, 10)]);
     let p = release_plan(&r, &[u(100)], u(1));
@@ -107,4 +123,9 @@ fn a_hold_on_a_non_member_thread_is_held_back() {
     let p = release_plan(&r, &[u(100)], u(1));
     assert!(p.write.is_empty());
     assert_eq!(p.held_back.len(), 1);
+    assert!(
+        p.held_back[0].contains(&u(100).to_string()),
+        "{}",
+        p.held_back[0]
+    );
 }

@@ -23,11 +23,16 @@ pub fn withhold_target(row: &MedicationRow, opened: Uuid) -> Result<(Uuid, Uuid)
             return Ok((m.medication_id, m.patient_id));
         }
     }
-    match row
-        .members
-        .iter()
-        .find(|m| hazard && m.patient_id == opened)
-    {
+    if !hazard {
+        // Not a hazard, yet the line's own thread is not a member: say that, not the hazard
+        // sentence, and never guess another thread (a refusal names its real cause, §9.6).
+        return Err(format!(
+            "this line's own record (thread {}) is not among its records on this chart — \
+             reopen the chart and try again",
+            row.group_id
+        ));
+    }
+    match row.members.iter().find(|m| m.patient_id == opened) {
         Some(m) => Ok((m.medication_id, m.patient_id)),
         None => Err(
             "this line may carry another person's drug and has no record on this \
