@@ -102,6 +102,8 @@ fn main() -> anyhow::Result<()> {
             commands::lock_state,
             commands::sign_off,
             commands::cease,
+            hold::withhold,
+            hold::release,
             funnel::commands::funnel_status,
             funnel::commands::form_edited,
             funnel::commands::browse,

@@ -512,7 +512,7 @@ pub(crate) async fn read_chart_of(
 /// Timing is observability. A metric that can turn a successful clinical act into a
 /// reported failure is a metric that has been allowed to matter more than the act — so the
 /// error goes to stderr and the caller is never told.
-async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i32) {
+pub(crate) async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i32) {
     let Some(db) = state.db.as_ref() else { return };
     let db = db.lock().await;
     if let Err(e) = cairn_node::ui_timing::record_gesture(&*db, kind, items, elapsed_ms).await {

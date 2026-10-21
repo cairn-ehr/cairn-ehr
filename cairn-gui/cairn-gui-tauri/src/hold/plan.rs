@@ -1,4 +1,3 @@
-#![allow(dead_code)] // removed by Task 4, which calls these from the commands
 //! Pure decisions behind the window's Withhold and Release gestures (#832): which thread a W is
 //! written on, and which holds a Release ends. No database here, so the safety rules are
 //! tested directly (`plan_tests.rs`). The model is `chart_set::cease_plan`.

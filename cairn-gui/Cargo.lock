@@ -525,6 +525,7 @@ dependencies = [
  "cairn-medication-view",
  "cairn-node",
  "cairn-patient-search",
+ "chrono",
  "clap",
  "hex",
  "serde",
