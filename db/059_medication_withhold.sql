@@ -385,6 +385,7 @@ LANGUAGE sql STABLE AS $$
               AND r.released_at <= p_now)
     ORDER BY g.group_id, w.starts_at DESC, w.event_id
 $$;
+REVOKE EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) TO cairn_agent;
 
 COMMIT;

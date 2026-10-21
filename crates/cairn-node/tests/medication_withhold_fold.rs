@@ -233,6 +233,9 @@ async fn a_release_cancels_a_pending_hold() {
 
 #[tokio::test]
 async fn a_release_of_an_ended_hold_is_a_no_op() {
+    // A release effective AFTER the hold's `until` (a peer event, so its t_effective can be
+    // chosen): admitted, and it changes nothing — the hold still shows inside its span and is
+    // gone after `until`, exactly as without the release.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
@@ -249,10 +252,38 @@ async fn a_release_of_an_ended_hold_is_a_no_op() {
     )
     .await;
     let g = group_of(&c, med).await;
-    release(&mut c, &sk, &kid, p, med, &[w]).await;
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let mut r_body = build_release_body(Uuid::now_v7(), med, p, &[w], None, &kid, peer_hlc(wall));
+    r_body.t_effective = Some("2030-01-03T00:00:00Z".into());
+    apply_remote(&c, &sk, &r_body)
+        .await
+        .expect("a late release of an ended hold is admitted");
 
-    // Over by its own clock AND released: nothing, and no error from the fold.
-    assert!(holds_at(&c, &[g], "2030-01-03T00:00:00Z").await.is_empty());
+    assert_eq!(holds_at(&c, &[g], "2030-01-01T12:00:00Z").await.len(), 1);
+    assert!(holds_at(&c, &[g], "2030-01-02T00:00:00Z").await.is_empty());
+    assert!(holds_at(&c, &[g], "2030-01-04T00:00:00Z").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_synced_release_on_another_line_ends_nothing() {
+    // The local door refuses a release naming a withhold of another line; the sync door
+    // admits it (no node-local veto). The fold must still not let it end line a's hold.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, a) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let b = add_med(&mut c, &sk, &kid, p).await;
+    let w = open_ended(&mut c, &sk, &kid, p, a, "2030-01-01T00:00:00Z").await;
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let r_body = build_release_body(Uuid::now_v7(), b, p, &[w], None, &kid, peer_hlc(wall));
+    apply_remote(&c, &sk, &r_body)
+        .await
+        .expect("the sync door admits the stray release");
+
+    let rows = holds_at(&c, &[group_of(&c, a).await], "2030-06-01T00:00:00Z").await;
+    assert_eq!(rows.len(), 1, "line a's hold stands");
+    assert_eq!(rows[0].withhold_event, w.to_string());
 }
 
 #[tokio::test]
@@ -389,6 +420,12 @@ async fn a_release_synced_before_its_withhold_ends_it_on_arrival() {
     apply_remote(&c, &sk, &w_body)
         .await
         .expect("withhold applies second");
+
+    // Before the release's instant the hold is there (pending: it starts in 2030) — proves
+    // the withhold really landed, so the emptiness below is the release's doing.
+    let early = holds_at(&c, &[g], "2020-01-01T00:00:00Z").await;
+    assert_eq!(early.len(), 1);
+    assert!(early[0].pending);
 
     assert!(
         holds_at(&c, &[g], "2030-06-01T00:00:00Z").await.is_empty(),
