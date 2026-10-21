@@ -268,8 +268,12 @@ pub struct ChartPane {
 /// read, the list itself always goes to the screen. A failure becomes `members_error`, worded to
 /// say the list is combined, over how many charts, and that each member's identity state is
 /// unknown — the facts the missing header lines would have conveyed.
+///
+/// `opened` is the chart the clinician opened: Withhold is drawn only on a line the command
+/// could write it on from there (#841).
 pub fn chart_pane(
     list: &PatientMedicationList,
+    opened: Uuid,
     members: Result<Vec<MemberLine>, String>,
     links: Result<crate::link::record_links::RecordLinks, String>,
     duplicates: crate::duplicates::view::DuplicateSection,
@@ -289,8 +293,15 @@ pub fn chart_pane(
     };
     let (links, links_error) =
         crate::link::record_links::links_section(links, &members, list.charts.is_linked());
+    let mut view = build_view(list);
+    // #841: a hazard line with no thread on the opened chart can only refuse a Withhold, so it
+    // is not offered — asked by the command's own rule, so the two cannot drift. `build_view`
+    // keeps `list.rows`' order, so the rows zip one to one.
+    for (shown, row) in view.rows.iter_mut().zip(&list.rows) {
+        shown.can_withhold &= crate::hold::plan::withhold_target(row, opened).is_ok();
+    }
     ChartPane {
-        list: build_view(list),
+        list: view,
         members,
         members_error,
         links,

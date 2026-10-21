@@ -59,12 +59,7 @@ pub(crate) fn release_outcome(
              and were left as they are."
         ));
     }
-    if unseen > 0 {
-        parts.push(format!(
-            "{unseen} hold(s) added since this line was drawn are still in force (they were \
-             not shown, so were not released)."
-        ));
-    }
+    parts.extend(unseen_sentence(unseen));
     if !failed.is_empty() {
         parts.push(format!(
             "{} item(s) were NOT released and are still on this line: {}",
@@ -86,6 +81,29 @@ pub(crate) fn release_outcome(
         ));
     }
     parts.join(" ")
+}
+
+/// The refusal for a Release whose every shown hold has already gone: nothing was done. It
+/// still names holds the clinician was NOT shown (#839): Release is when they decide to give
+/// the drug, and if the re-read after this refusal fails, this sentence is all they see.
+pub(crate) fn all_shown_gone(unseen: usize) -> String {
+    let refusal = "the holds shown are no longer on this line — nothing was done";
+    match unseen_sentence(unseen) {
+        Some(unseen) => format!("{refusal}. {unseen}"),
+        None => refusal.to_string(),
+    }
+}
+
+/// Holds on the line a Release was not shown, never ended (ADR-0081 decision 4) but said.
+/// "Still on this line", never "in force": the count includes pending holds, which have not
+/// started (#839).
+fn unseen_sentence(unseen: usize) -> Option<String> {
+    (unseen > 0).then(|| {
+        format!(
+            "{unseen} hold(s) added since this line was drawn are still on this line (they \
+             were not shown, so were not released)."
+        )
+    })
 }
 
 #[cfg(test)]

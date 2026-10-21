@@ -40,6 +40,20 @@ pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
     }
 }
 
+/// The one class a cease or release answers with when EVERY write it tried failed and none is
+/// unknown, so nothing was written (#840): `retries` are those failures' classes, in order.
+/// Stale wins: one failure that proved the list out of date makes the whole gesture "re-read
+/// first" — the safe superset, as a live retry over a stale list is only refused again.
+/// Otherwise the first failure's class. `None` when nothing was tried (every thread held back):
+/// there is no failure to classify, and the caller's report stands.
+pub(crate) fn retry_when_nothing_written(retries: &[Retry]) -> Option<Retry> {
+    let stale = Retry::AfterReread(Recorded::No);
+    if retries.contains(&stale) {
+        return Some(stale);
+    }
+    retries.first().copied()
+}
+
 /// What one sign-off did, as the outcome line says it (ADR-0060: partial completion is reported,
 /// never implied): the lines signed, those NOT signed (`failed`, each already named), and — when
 /// the gesture stopped early (#818) — the line it stopped at and the lines it never tried. A line

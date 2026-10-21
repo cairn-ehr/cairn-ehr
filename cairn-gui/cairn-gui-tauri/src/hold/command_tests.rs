@@ -85,13 +85,19 @@ async fn a_withhold_on_the_chart_on_screen_meets_the_fixture_refusal() {
 
 /// The end of a hold is a clinical fact the clinician must choose (ADR-0081): a time, or "until
 /// reviewed". An empty end is refused, never turned into "until reviewed" here, and a text that
-/// is not an instant is refused by name.
+/// is not an instant is refused by name. The webview sends an empty end for a time the browser
+/// cannot read — a date with no hour — so the refusal says the time may be INCOMPLETE (#841): "choose
+/// when the hold ends" alone reads as if no time had been typed.
 #[test]
 fn parse_until_reads_reviewed_or_an_instant_and_nothing_else() {
     assert_eq!(parse_until("reviewed"), Ok(UntilChoice::Reviewed));
     assert_eq!(
         parse_until(""),
-        Err("choose when the hold ends: a time, or until reviewed".to_string())
+        Err(
+            "the end time is missing or incomplete — choose when the hold ends: a time, or until \
+             reviewed"
+                .to_string()
+        )
     );
     for instant in ["2026-10-21T20:00:00.000Z", "2026-10-21T20:00:00+10:00"] {
         assert_eq!(
@@ -182,4 +188,45 @@ fn the_refusals_come_before_the_key() {
         release.contains("ifunknown.is_empty()&&released>0{record_timing(state,\"release\""),
         "{release}"
     );
+}
+
+/// #840, both gestures: when every thread's write failed and no outcome is unknown, NOTHING was
+/// written, so the gesture is a refusal (`Err`), not a report. A report would make the webview
+/// wipe the typed reason and lose the failure's class — a stale refusal would not mark the list
+/// out of date if the re-read after it failed. The class is `retry_when_nothing_written`'s (stale
+/// wins); the text is the same outcome sentence, naming every thread. Checked BEFORE the timing
+/// sample: a gesture that wrote nothing is no sample.
+#[test]
+fn a_gesture_that_wrote_nothing_is_a_refusal_with_its_class() {
+    let flat = |src: &str, name| -> String {
+        crate::source_guard::rust_fn(src, name)
+            .split_whitespace()
+            .collect()
+    };
+    for (body, count, sentence, timing) in [
+        (
+            flat(include_str!("mod.rs"), "release_impl"),
+            "released",
+            "release_outcome(0,plan.gone.len(),plan.unseen,&failed,&[])",
+            "record_timing(state,\"release\"",
+        ),
+        (
+            flat(include_str!("../commands.rs"), "cease_impl"),
+            "ceased",
+            "cease_outcome(0,&failed,&[])",
+            "record_timing(state,\"cease\"",
+        ),
+    ] {
+        assert!(
+            body.contains("None=>{retries.push(node_failure(&e).retry);failed.push("),
+            "each ordinary failure keeps its class\n{body}"
+        );
+        let refusal = format!(
+            "if{count}==0&&unknown.is_empty(){{ifletSome(retry)=retry_when_nothing_written(&retries){{returnErr(ErrorView{{text:{sentence},retry,}});}}}}"
+        );
+        let at = body
+            .find(&refusal)
+            .unwrap_or_else(|| panic!("{refusal}\n{body}"));
+        assert!(at < body.find(timing).unwrap(), "{body}");
+    }
 }

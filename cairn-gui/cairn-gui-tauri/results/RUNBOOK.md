@@ -855,7 +855,8 @@ Stop when the W is gone from the line. Five runs.
 - [ ] A line that is both withheld and about to be signed shows both left bars (will-sign outermost).
 - [ ] A Release while a colleague's newer W is on the line but not yet drawn (write one from the CLI after the
       window drew the line) leaves that W in force, and the outcome line says so ("… added since this line was
-      drawn are still in force …").
+      drawn are still on this line …"), even when every W the line drew had already gone ("… no longer on this
+      line — nothing was done. 1 hold(s) added …", #839).
 
 **Read it back (the same §5 query, plus the events).** The write half is aggregated with no user, patient or
 timestamp, by gesture kind `withhold` and `release`:

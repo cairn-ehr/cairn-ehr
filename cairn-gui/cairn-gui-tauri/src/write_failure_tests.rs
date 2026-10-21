@@ -310,3 +310,28 @@ fn a_failed_chart_read_before_the_write_may_be_retried() {
     assert_eq!(view.retry, Retry::Now);
     assert_eq!(view.text, "connection reset");
 }
+
+/// #840's rule (maintainer's ruling, 2026-10-22): a gesture whose every write failed answers with
+/// ONE class. Stale wins — any failure that proved the list out of date makes the whole gesture
+/// "re-read first", the safe superset (a re-read never hurts; a live retry over a stale list is
+/// refused again). Otherwise the first failure's class. No failure, no class: nothing was tried
+/// (every thread held back), and the caller's report stands.
+#[test]
+fn a_gesture_that_wrote_nothing_takes_one_class_and_stale_wins() {
+    let stale = Retry::AfterReread(Recorded::No);
+    assert_eq!(retry_when_nothing_written(&[]), None);
+    assert_eq!(
+        retry_when_nothing_written(&[Retry::Never]),
+        Some(Retry::Never)
+    );
+    assert_eq!(
+        retry_when_nothing_written(&[Retry::Now, Retry::Never]),
+        Some(Retry::Now),
+        "the first failure's class"
+    );
+    assert_eq!(
+        retry_when_nothing_written(&[Retry::Never, stale, Retry::Now]),
+        Some(stale),
+        "stale wins wherever it is"
+    );
+}

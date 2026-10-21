@@ -193,6 +193,7 @@ fn a_failed_identity_read_keeps_the_list_and_says_so() {
     list.charts = set(&[1, 0xB]);
     let pane = chart_pane(
         &list,
+        Uuid::from_u128(1),
         Err("connection reset".into()),
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
@@ -216,6 +217,7 @@ fn a_failed_identity_read_keeps_the_list_and_says_so() {
 fn a_successful_identity_read_carries_no_warning() {
     let pane = chart_pane(
         &cairn_medication_view::fixtures::sample_chart(),
+        Uuid::from_u128(1),
         Ok(vec![]),
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
@@ -231,6 +233,7 @@ fn a_failed_link_read_keeps_the_list_and_says_so() {
     let list = cairn_medication_view::fixtures::sample_chart();
     let pane = chart_pane(
         &list,
+        Uuid::from_u128(1),
         Ok(vec![]),
         Err("x".into()),
         DuplicateSection::checked_none_open(),
@@ -333,4 +336,41 @@ async fn a_single_chart_has_no_member_lines() {
 async fn a_linked_set_without_a_database_is_an_error_not_an_empty_list() {
     let state = AppState::mock(Some(Uuid::from_u128(1)));
     assert!(linked_members(&state, &set(&[1, 2])).await.is_err());
+}
+
+/// #841: Withhold is drawn only where the command could write it. A wrong-chart hazard line with
+/// no thread on the opened chart can only be refused ("…another person's drug…"), so offering
+/// it costs the clinician a typed reason and a press for nothing — a step paper never has. The
+/// offer asks the command's own rule (`hold::plan::withhold_target`), so the two cannot drift.
+#[test]
+fn withhold_is_offered_only_where_it_can_be_written() {
+    let mut list = cairn_medication_view::fixtures::sample_chart();
+    list.rows = vec![
+        plan_row(true, &[(11, 2)]), // hazard, nothing on chart 1: no Withhold
+        plan_row(true, &[(10, 1), (11, 2)]), // hazard, a thread on chart 1: Withhold
+    ];
+    let pane = chart_pane(
+        &list,
+        Uuid::from_u128(1),
+        Ok(vec![]),
+        Ok(RecordLinks::default()),
+        DuplicateSection::checked_none_open(),
+        None,
+    );
+    let offered: Vec<bool> = pane.list.rows.iter().map(|r| r.can_withhold).collect();
+    assert_eq!(offered, [false, true]);
+    // An ordinary line is untouched: the sample chart's current lines all offer it.
+    let sample = cairn_medication_view::fixtures::sample_chart();
+    let opened = sample.charts.members()[0];
+    let pane = chart_pane(
+        &sample,
+        opened,
+        Ok(vec![]),
+        Ok(RecordLinks::default()),
+        DuplicateSection::checked_none_open(),
+        None,
+    );
+    for (row, built) in pane.list.rows.iter().zip(build_view(&sample).rows) {
+        assert_eq!(row.can_withhold, built.can_withhold, "{}", row.primary);
+    }
 }

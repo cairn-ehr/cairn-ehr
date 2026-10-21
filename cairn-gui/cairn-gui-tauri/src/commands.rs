@@ -28,7 +28,7 @@ use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
     cease_outcome, chart_read_failed, key_locked, node_cannot_write, node_failure,
-    sign_off_outcome, UnknownThread,
+    retry_when_nothing_written, sign_off_outcome, UnknownThread,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
@@ -89,7 +89,7 @@ pub async fn med_list_impl(
         members.as_deref().unwrap_or(&[]),
     )
     .await;
-    Ok(chart_pane(&list, members, links, dups, change))
+    Ok(chart_pane(&list, patient, members, links, dups, change))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -428,6 +428,8 @@ pub async fn cease_impl(
     let started = Instant::now();
     let mut ceased = 0usize;
     let mut failed = plan.held_back;
+    // Each ordinary failure's class, for the refusal below when nothing was stopped (#840).
+    let mut retries = Vec::new();
     let mut unknown = Vec::new();
     for (medication_id, thread_chart) in plan.write {
         // One member per call, and `cease_medication` opens its own transaction — so a
@@ -469,8 +471,22 @@ pub async fn cease_impl(
                     event,
                     cause: e.root_cause().to_string(),
                 }),
-                None => failed.push(format!("thread {medication_id}: {e:#}")),
+                None => {
+                    retries.push(node_failure(&e).retry);
+                    failed.push(format!("thread {medication_id}: {e:#}"))
+                }
             },
+        }
+    }
+    // Every write failed and none is unknown: nothing was stopped, so this is a refusal, not a
+    // report (#840) — as a report it dropped the failure's class, so a stale refusal left the
+    // list unmarked if the re-read after it failed. Not timed: no gesture was made.
+    if ceased == 0 && unknown.is_empty() {
+        if let Some(retry) = retry_when_nothing_written(&retries) {
+            return Err(ErrorView {
+                text: cease_outcome(0, &failed, &[]),
+                retry,
+            });
         }
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
