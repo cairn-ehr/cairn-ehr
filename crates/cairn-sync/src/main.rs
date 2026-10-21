@@ -13606,6 +13606,13 @@ mod schema_subset_tests {
         // parser reaches; the mutation run in PR #456 reports exactly that string. (The first
         // cut of this comment named medication_dose_event, the branch the deleted PROBE
         // mentions, which is not the same thing.)
+        //
+        // THE THIRD PROBE MUST PASS HERE TOO (#803): since db/059 added a probe on
+        // medication_withhold, a window with only medication_statement stubbed would be saved
+        // by probe 3 as well, and deleting probe 2 would stay green. So this window ALSO stubs
+        // medication_withhold — not a real replay order (059 never lands without 032), only the
+        // device that leaves probe 2 as the sole decider. It is dropped before the second
+        // window below, which pins probe 3 the same way.
         // In a TRANSACTION, so the stub cannot outlive a failure (#456 review). `postgres`
         // is autocommit, so the first cut's trailing `DROP TABLE` only ran on the success
         // path: any panic in the window below committed a 3-column `medication_statement`
@@ -13625,6 +13632,10 @@ mod schema_subset_tests {
                  content_address bytea)",
         )
         .expect("the db/031-without-db/032 window is modelled with a stub");
+        c.batch_execute(
+            "CREATE TABLE medication_withhold (medication_id uuid, content_address bytea)",
+        )
+        .expect("probe 3 must pass so probe 2 alone decides this window");
         c.execute(
             "INSERT INTO medication_statement (medication_id, patient_id)
              VALUES ($1::text::uuid, $2::text::uuid)",
@@ -13651,11 +13662,14 @@ mod schema_subset_tests {
                 &[&uninterpreted_id],
             )
             .expect(
-                "with db/031's table present and db/032's absent, the SECOND to_regclass probe \
-                 is the only thing standing between this call and a missing-relation error",
+                "with db/031's and db/059's tables present and db/032's absent, the SECOND \
+                 to_regclass probe is the only thing standing between this call and a \
+                 missing-relation error",
             )
             .get(0);
         assert_eq!(still_null, None);
+        c.batch_execute("DROP TABLE medication_withhold")
+            .expect("window 2 needs db/059's table absent again");
 
         // ── The second window: db/031 and db/032 present, db/059 absent (#803) ──────────
         // db/059 put medication_withhold/medication_withhold_release into the UNION and a

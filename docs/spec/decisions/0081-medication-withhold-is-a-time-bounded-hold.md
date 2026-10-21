@@ -53,8 +53,10 @@ purpose: a hold is compared against *now*, and a day-precision `until` has no de
 `from` (a doctor's advance W for tonight) goes in the payload, not the envelope: a `t_effective` after `t_recorded` is
 not refused at a self-asserted clock grade, but it is recorded as a clock-ceiling anomaly (db/005), and an advance hold
 is not one — it would misuse the field. Without `from`, the hold starts at the authoring node's **physical** clock,
-carried as `t_effective`; a release's instant is carried the same way. The HLC wall is never used for either: a peer
-whose clock runs fast can push it hours ahead, and a "W from now" would then start in the future.
+carried as `t_effective`; a release's instant is carried the same way. The authoring node never stamps either from
+its HLC wall: a peer whose clock runs fast can push that wall hours ahead, and a "W from now" would then start in the
+future. db/059 falls back to the HLC wall only for an event that carries no `t_effective` (a peer's, or a hand-built
+body).
 
 ### 3. Expiry is a read-time fold: no event, default resume
 

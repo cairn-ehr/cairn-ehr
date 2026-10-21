@@ -13,10 +13,10 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 **⇒ #803 — THE MEDICATION WITHHOLD (ADR-0081) — do not undo** (pins: `tests/medication_withhold.rs`,
 `medication_withhold_fold.rs`, `medication_withhold_signoff.rs`, `medication_withhold_clock.rs`, `medication_read.rs`):
 - **The start of an un-`from`'d hold and a release's instant are the authoring node's PHYSICAL clock, carried as
-  `t_effective`; never the HLC wall.** A peer whose clock runs fast pushes this node's HLC up to 24 h ahead (db/020),
+  `t_effective`; the authoring node never stamps them from its HLC wall.** A peer whose clock runs fast pushes this node's HLC up to 24 h ahead (db/020),
   and a "W from now" stamped with that wall starts in the future: pending, so the drug reads as givable. **Tempting
   wrong fix:** leave `t_effective` empty and let db/059's `COALESCE` fall back to the HLC wall (the fallback stays only
-  for peer events that carry none). The instant is read BEFORE the HLC tick, so the bitemporal ceiling never flags it.
+  for events that carry none — a peer's, or a hand-built body). The instant is read BEFORE the HLC tick, so the bitemporal ceiling never flags it.
   Pin: `medication_withhold_clock.rs` (both tests, each mutation-checked against its own line).
 - **A hold sits BESIDE `MedicationStatus`; there is no `Withheld` variant.** **Tempting wrong fix:** add one.
   `signoff.rs` filters `status == Active` and the window's `view.rs`/`row_view.rs` (`current`, `can_cease`) would
@@ -38,7 +38,11 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   replay then briefly runs db/031's body without the arm. Pin:
   `the_earliest_orphan_withhold_claim_stands_whatever_the_arrival_order`.
 - **`cairn_event_thread` (db/048) probes one table per source file — db/031, db/032 AND db/059.** Pin: cairn-sync's
-  `schema_subset_alone_satisfies_every_door` (its second crash-mid-replay window, mutation-checked).
+  `schema_subset_alone_satisfies_every_door`, whose two crash-mid-replay windows each leave exactly one probe deciding
+  (window 1 probe 2, window 2 probe 3). Deleting probe 2 or probe 3 each turns it red (mutation-checked separately).
+  Probe 1 has no window of its own: a replay that lacks db/031's table lacks db/032's and db/059's too (they load
+  later), so probes 2 and 3 already return NULL there. A new
+  medication source file needs a probe AND a window of its own.
 - **The sign-off thread index was RENAMED `event_log_medication_thread_idx2`** (db/034) and the old one dropped in
   db/059: an `IF NOT EXISTS` index never picks up an edited predicate, so a type added to the commitment lists needs a
   NEW name again, never an edited predicate. Pin: `only_the_six_type_thread_index_survives_a_schema_load`.
