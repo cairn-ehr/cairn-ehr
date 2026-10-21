@@ -6,7 +6,8 @@
 - **Issues:** [#803](https://github.com/cairn-ehr/cairn-ehr/issues/803) (feeds [#804](https://github.com/cairn-ehr/cairn-ehr/issues/804)) — a maintainer decision of 2026-10-21; design: `docs/superpowers/specs/2026-10-21-medication-withhold-803-design.md`
 - **Derives from:** [principle 3](../index.md#founding-principles-the-lens-for-every-decision) (paper-parity, §1.2: the paper "W" on a drug chart) and principle 4 (acknowledged uncertainty: "until reviewed" is an explicit value)
 - **Applies:** [ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md) (additive-only evolution, the legibility twin) ·
-  [ADR-0043](0043-suppression-self-only-disagreement-is-additive.md) (cross-human suppression is refused; the cessation twin precedent) ·
+  [ADR-0039](0039-globalise-authored-legibility-twin.md) (the authored twin on every event; the cessation twin, `cessation.rs`, is the no-drug-name precedent) ·
+  [ADR-0043](0043-suppression-self-only-disagreement-is-additive.md) (cross-human suppression is refused) ·
   [ADR-0047](0047-medication-reconciliation-resolution.md) (lines are reconciled groups) ·
   [ADR-0049](0049-commitment-based-sign-off-currency.md) (sign-off is a commitment) ·
   [ADR-0052](0052-born-sealed-clinical-bodies.md) (born-sealed bodies) ·
@@ -49,8 +50,11 @@ for it (principle 4). Only an explicit `"reviewed"` may outlive time.
 `from` and `until` are **exact instants**: ISO-8601 with an explicit UTC offset (the `cairn_t_effective` pin), and an
 offset-less value is refused. This departs from the `{value, precision}` times elsewhere in the medication stream, on
 purpose: a hold is compared against *now*, and a day-precision `until` has no defined instant of expiry. A future
-`from` (a doctor's advance W for tonight) must go in the payload, because `t_effective <= t_recorded` is enforced at the
-submit door and the envelope cannot carry it.
+`from` (a doctor's advance W for tonight) goes in the payload, not the envelope: a `t_effective` after `t_recorded` is
+not refused at a self-asserted clock grade, but it is recorded as a clock-ceiling anomaly (db/005), and an advance hold
+is not one — it would misuse the field. Without `from`, the hold starts at the authoring node's **physical** clock,
+carried as `t_effective`; a release's instant is carried the same way. The HLC wall is never used for either: a peer
+whose clock runs fast can push it hours ahead, and a "W from now" would then start in the future.
 
 ### 3. Expiry is a read-time fold: no event, default resume
 
@@ -112,6 +116,8 @@ defined for every arrival order instead.
 - A node on schema generation 58 admits the new events uninterpreted and shows a withheld drug as **active**.
   Acceptable pre-clinically (no node runs clinical care yet).
 - A node with a wrong clock expires holds early or late. The list prints `until`, so a human can judge.
+- The hold's start is the authoring node's physical clock: a node whose own clock is fast starts its holds late. The
+  list prints the times.
 - There is **no administration record (MAR)** and no dose slots; a time span stands in for "the slots the W was
   written into". The ward-level list of new withholds across patients, and any forced acknowledgement of a nurse's W,
   are later work or not wanted.

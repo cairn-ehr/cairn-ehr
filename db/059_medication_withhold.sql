@@ -208,26 +208,14 @@ GRANT SELECT ON medication_withhold_release TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_withhold_release_medication_idx
     ON medication_withhold_release (medication_id);
 
--- 6. The thread's standing patient claim (#192), redefined from db/031 with a FOURTH arm: an
+-- 6. The thread's standing patient claim (#192) gains a FOURTH arm for this file's table: an
 --    orphan withhold (its assert not yet here) claims the thread for its chart, exactly as an
---    orphan cessation or coding does. Without it, a later assert naming a DIFFERENT patient
+--    orphan cessation or coding does — otherwise a later assert naming a DIFFERENT patient
 --    would pass cairn_guard_medication_patient and leave medication_statement and
---    medication_withhold disagreeing about which chart the thread belongs to. Order is
---    db/031's (statement first — the authoritative claim), the new arm last. plpgsql so the
---    body binds at first execution, not at CREATE.
-CREATE OR REPLACE FUNCTION cairn_medication_thread_patient(p_med uuid)
-RETURNS uuid LANGUAGE plpgsql STABLE AS $$
-BEGIN
-    RETURN COALESCE(
-        (SELECT patient_id FROM medication_statement WHERE medication_id = p_med),
-        (SELECT patient_id FROM medication_cessation WHERE medication_id = p_med),
-        (SELECT patient_id FROM medication_coding    WHERE medication_id = p_med),
-        -- One row PER EVENT here, so pick deterministically: the EARLIEST claim stands
-        -- (HLC order, byte-collated), on every call, after any reproject, on every node.
-        (SELECT patient_id FROM medication_withhold  WHERE medication_id = p_med
-          ORDER BY hlc_wall, hlc_counter, origin COLLATE "C", content_address LIMIT 1));
-END;
-$$;
+--    medication_withhold disagreeing about the chart. The arm lives in db/031's single
+--    definition of cairn_medication_thread_patient (to_regclass-guarded there), NOT in a
+--    redefinition here: a second CREATE OR REPLACE would mean every replay briefly runs
+--    db/031's body without the arm.
 
 -- 7. Fold a withhold into its row. Local-door state refusals first (see the header), then
 --    an insert-or-nothing.

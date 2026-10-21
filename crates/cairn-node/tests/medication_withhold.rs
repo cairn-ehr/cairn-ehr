@@ -382,10 +382,10 @@ async fn a_sync_applied_withhold_on_a_ceased_line_is_admitted() {
 
 #[tokio::test]
 async fn an_orphan_withhold_claims_its_thread_for_its_chart() {
-    // #192 via db/059's fourth cairn_medication_thread_patient arm: a W that arrives before
-    // the assert it names files its row under ITS chart, so a later assert of the same thread
-    // under a DIFFERENT chart must be refused at the local door — otherwise the statement
-    // and the withhold would disagree about whose drug this is.
+    // #192 via cairn_medication_thread_patient's fourth (withhold) arm (db/031): a W that
+    // arrives before the assert it names files its row under ITS chart, so a later assert of
+    // the same thread under a DIFFERENT chart must be refused at the local door — otherwise
+    // the statement and the withhold would disagree about whose drug this is.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();

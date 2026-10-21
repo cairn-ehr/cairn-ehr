@@ -85,8 +85,11 @@ upholds it.
   end. (So `from`/`until` are exact instants, unlike the `{value, precision}` start/stop times elsewhere in the
   medication stream: a hold is compared against *now*, and a day-precision "until" would have no defined
   instant of expiry. The ADR records this departure. *Builder-check call.*)
-- `t_effective ≤ t_recorded` is enforced at the submit door, so a **future** start (a doctor's advance W for
-  tonight) cannot ride on the envelope's `t_effective`. It goes in the payload.
+- A **future** start (a doctor's advance W for tonight) goes in the payload, not the envelope: a `t_effective`
+  after `t_recorded` is not refused at a self-asserted clock grade, but it is recorded as a clock-ceiling anomaly
+  (db/005), which an advance hold is not. (Corrected in the final review: an earlier draft said the door
+  enforced `t_effective ≤ t_recorded`. Without `from`, the start is the node's physical clock, carried as
+  `t_effective` — ADR-0081 §2.)
 
 ## 4. Decided design
 

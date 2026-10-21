@@ -213,7 +213,7 @@ $$;
 
 -- 4a. The READABLE content-event count for a thread — the ADR-0049 FALSE-FRESH gate's
 --     tripwire (Task 8, issues #189/#92). Deliberately the SAME filter as the commitment
---     fn above (four content types, read through cairn_clear_payload) and byte-identical
+--     fn above (six content types, read through cairn_clear_payload) and byte-identical
 --     to how the author-time orchestrator sizes reviewed_count
 --     (crates/cairn-node/src/medication/attestation.rs::thread_commitment_on) — so on a
 --     FULL-custody node readable_count == reviewed_count and the gate below never fires
@@ -265,7 +265,7 @@ GRANT EXECUTE ON FUNCTION cairn_medication_thread_readable_count(uuid) TO cairn_
 --     `(body ->> 'medication_id')::uuid = $1` lands on a jsonb expression no existing
 --     event_log index covers. The staleness view calls the fn once per attested
 --     thread, so without this the projection scans event_log per thread. A PARTIAL
---     functional index (only the four content-event types the fn sums) makes each
+--     functional index (only the six content-event types the fn sums) makes each
 --     commitment a bounded index lookup. `(body ->> 'medication_id')` is immutable and
 --     the ::uuid cast is immutable, so the expression is indexable.
 --     ADR-0052 caveat: the commitment fn now reads the thread key through

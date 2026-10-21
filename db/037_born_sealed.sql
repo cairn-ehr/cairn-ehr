@@ -136,8 +136,9 @@ ON CONFLICT (event_type) DO NOTHING;
 --    verb writes derived plaintext, so EVERY verb's projection is in scope — not only the
 --    three the walking skeleton first shipped (code-review finding #2). The provenance-precise
 --    key differs per table: medication_statement / medication_coding / medication_cessation /
---    medication_dose_correction / medication_reconciliation / medication_attestation all carry
---    the PRODUCING event's content_address (db/031/032/033/034) so they scrub by
+--    medication_dose_correction / medication_reconciliation / medication_attestation /
+--    medication_withhold / medication_withhold_release all carry the PRODUCING event's
+--    content_address (db/031/032/033/034/059) so they scrub by
 --    `content_address = v_ca`; the initial-dose seed row is keyed by the assert event's own
 --    id (db/032); and
 --    medication_group_member is a DERIVED table (recomputed from the standing reconciled

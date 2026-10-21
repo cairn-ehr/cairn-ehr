@@ -1,5 +1,6 @@
 //! The medication-suite fixture: the node, the chart and the injection helpers that
-//! `medication_withhold.rs` and `medication_withhold_fold.rs` both need (#803).
+//! `medication_withhold.rs`, `medication_withhold_fold.rs` and `medication_withhold_clock.rs`
+//! need (#803).
 //!
 //! Include it with `#[path = "common/medication_kit.rs"] mod medication_kit;`. The including
 //! binary must ALSO declare `mod common;` (charts are registered through

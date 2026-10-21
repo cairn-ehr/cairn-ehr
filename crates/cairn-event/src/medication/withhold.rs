@@ -139,6 +139,21 @@ mod tests {
     }
 
     #[test]
+    fn withhold_twin_prints_from_then_until_when_both_are_instants() {
+        // from ≠ until, so a renderer that swapped them (or printed one twice) fails here.
+        let w = MedicationWithhold {
+            medication_id: MED,
+            reason: "pre-op",
+            from: Some("2026-10-21T20:00:00+10:00"),
+            until: HoldUntil::At("2026-10-22T08:00:00+10:00"),
+        };
+        assert_eq!(
+            render_medication_withhold_twin(&w),
+            "Withheld medication from 2026-10-21T20:00:00+10:00 until 2026-10-22T08:00:00+10:00 — pre-op"
+        );
+    }
+
+    #[test]
     fn release_body_lists_event_ids_and_omits_absent_reason() {
         let ids = vec!["a".to_string(), "b".to_string()];
         let r = MedicationWithholdRelease {
@@ -172,6 +187,16 @@ mod tests {
         assert_eq!(
             render_medication_withhold_release_twin(&r),
             "Released withheld medication (1 hold)"
+        );
+        // One hold WITH a reason: the singular and the reason together.
+        let r = MedicationWithholdRelease {
+            medication_id: MED,
+            releases: &one,
+            reason: Some("HR back to 70"),
+        };
+        assert_eq!(
+            render_medication_withhold_release_twin(&r),
+            "Released withheld medication (1 hold) — HR back to 70"
         );
     }
 }

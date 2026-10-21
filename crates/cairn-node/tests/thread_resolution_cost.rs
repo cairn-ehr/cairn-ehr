@@ -2,24 +2,25 @@
 //!
 //! # The shape of the problem
 //!
-//! `cairn_event_thread` resolves one event to its medication thread by `UNION ALL` over five
-//! projection tables, filtered on `content_address`. None of the five indexed that column, so
-//! every call was five sequential scans — and `cairn_effective_sensitivity` calls it once per
+//! `cairn_event_thread` resolves one event to its medication thread by `UNION ALL` over its
+//! projection tables (five at #385, seven since db/059 added the two withhold tables, #803),
+//! filtered on `content_address`. None of the five indexed that column then, so every call
+//! was five sequential scans — and `cairn_effective_sensitivity` calls it once per
 //! thread through a `LATERAL`, making a chart report *O(threads on chart × every medication
 //! row on the node)*. That is precisely the shape db/048 §6 cites [#336] to avoid.
 //!
 //! Worse, it was paid unconditionally: the function never asked whether the event's TYPE
 //! could belong to a medication thread at all, so a note, a demographic edit or a
-//! registration ran all five scans to learn what its type already guaranteed. The chart-wide
+//! registration ran every scan to learn what its type already guaranteed. The chart-wide
 //! reading in `chart_sensitivity` resolves off the chart's registration event whenever one is
-//! on file, so on the common path it paid the full five, per chart, every time. (Not
+//! on file, so on the common path it paid for all of them, per chart, every time. (Not
 //! *always*: `sensitivity/report.rs` has an explicit no-registration arm — reachable in
 //! ordinary federated operation, when a chart's events arrive by sync ahead of its
 //! registration — which reads `cairn_sensitivity_standing` directly and never came here.)
 //!
 //! # What is asserted here, and what is deliberately not
 //!
-//! **Asserted:** the five indexes exist (leading-column, valid, on the `public` table); the
+//! **Asserted:** the seven indexes exist (leading-column, valid, on the `public` table); the
 //! type short-circuit genuinely fires; and the predicate it keys on still answers "might have
 //! a thread" for every medication event type — which since #385 is not merely a precondition
 //! for the optimisation but the guard standing between a §10b list edit and silent protection
@@ -138,7 +139,7 @@ async fn every_medication_thread_projection_indexes_content_address() {
 /// medication projection row carries its exact content address**.
 ///
 /// The decoy row is what makes this a real test rather than a restatement. Without the
-/// short-circuit `cairn_event_thread` would scan the five tables, find the seeded address and
+/// short-circuit `cairn_event_thread` would scan the seven tables, find the seeded address and
 /// return that `medication_id`; with it, the function never looks. Delete the short-circuit
 /// and this test fails — which is the only way to pin an optimisation whose whole point is
 /// that it changes no answer in normal use.
@@ -281,7 +282,7 @@ async fn no_medication_event_type_is_classified_thread_free() {
             .get(0);
         assert!(
             !has_no_thread,
-            "{event_type} writes one of the five thread projections, so classifying it \
+            "{event_type} writes one of the seven thread projections, so classifying it \
              thread-free would make cairn_event_thread return NULL for every event on every \
              medication thread (#385)"
         );

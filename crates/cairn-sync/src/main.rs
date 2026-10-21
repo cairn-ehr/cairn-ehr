@@ -13222,16 +13222,16 @@ mod schema_subset_tests {
     /// Needed by Door 5 for a reason worth stating precisely, because getting it slightly
     /// wrong is how the first version of that fixture came out vacuous.
     ///
-    /// The order inside `cairn_event_thread` (db/048) is: the two `to_regclass` probes FIRST,
+    /// The order inside `cairn_event_thread` (db/048) is: the three `to_regclass` probes FIRST,
     /// then the `event_log` lookup, then §10b's thread-free type gate, and only then the
-    /// five-table UNION. So on a subset node every event — `patient.`, `identity.`, all of
+    /// seven-table UNION. So on a subset node every event — `patient.`, `identity.`, all of
     /// them — reaches the probes and is stopped THERE; the type gate is what is never reached.
     /// (The first cut of this comment had that backwards, and a maintainer trusting it would
     /// conclude that moving the probes after the gate is free. It is not — #456 review.)
     ///
     /// The consequence is what matters, and it survives the correction: once the stub
     /// `medication_statement` below makes probe 1 pass, a thread-FREE event falls through to
-    /// the type gate, which returns NULL before the UNION — so deleting probe 2 would still
+    /// the type gate, which returns NULL before the UNION — so deleting probe 2 or 3 would still
     /// look green. Only a type OUTSIDE §10b's list survives the gate and reaches the UNION
     /// that raises. That is what this fixture supplies.
     ///
@@ -13656,6 +13656,34 @@ mod schema_subset_tests {
             )
             .get(0);
         assert_eq!(still_null, None);
+
+        // ── The second window: db/031 and db/032 present, db/059 absent (#803) ──────────
+        // db/059 put medication_withhold/medication_withhold_release into the UNION and a
+        // THIRD probe (medication_withhold) in front of it — the same crash-mid-replay shape,
+        // one migration later. To make that probe the deciding one, stub EVERY table the UNION
+        // names from 031 and 032: the first two probes then pass, the type gate lets this
+        // uninterpreted type through, and the UNION's first missing relation is
+        // medication_withhold. Delete the third probe and this raises `relation
+        // "medication_withhold" does not exist`. Same transaction, same ROLLBACK below.
+        c.batch_execute(
+            "CREATE TABLE medication_cessation       (medication_id uuid, content_address bytea);
+             CREATE TABLE medication_coding          (medication_id uuid, content_address bytea);
+             CREATE TABLE medication_dose_event      (medication_id uuid, content_address bytea);
+             CREATE TABLE medication_dose_correction (medication_id uuid, content_address bytea);",
+        )
+        .expect("the db/031+032-without-db/059 window is modelled with stubs");
+        let still_null_059: Option<String> = c
+            .query_one(
+                "SELECT cairn_event_thread($1::text::uuid)::text",
+                &[&uninterpreted_id],
+            )
+            .expect(
+                "with db/031's and db/032's tables present and db/059's absent, the THIRD \
+                 to_regclass probe is the only thing standing between this call and a \
+                 missing-relation error",
+            )
+            .get(0);
+        assert_eq!(still_null_059, None);
 
         // Leave the database in the subset-only shape the rest of this test asserted. ROLLBACK
         // rather than DROP: it undoes the whole window, and it is what the backend would have
