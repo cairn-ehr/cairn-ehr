@@ -331,4 +331,60 @@ ON CONFLICT (event_type, apply_fn) DO UPDATE SET
 WHERE (r.projection_tables, r.run_order, r.heal_safe)
       IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
+-- 10. The read-time fold: which holds are on these medication lines at instant `p_now`?
+--
+--     A withhold is a time-bounded HOLD, not a state that is stored: whether it is still in
+--     force is a question about the clock, so it is answered when it is ASKED. Nothing here is
+--     ever written back (append-only: a hold that has run its course is not "closed" by any
+--     event, it simply stops being returned).
+--
+--     Why `p_now` is a parameter rather than now(): the same inputs must always give the same
+--     answer. It makes the fold testable at pinned instants, lets a caller evaluate a whole
+--     screen at ONE instant (two calls a second apart must not disagree), and lets a reviewer
+--     ask "what did the chart say at 14:00?" without a time machine. STABLE (not VOLATILE)
+--     because it only reads.
+--
+--     A withhold is RETURNED when BOTH hold:
+--       * it has not run out:  `until_reviewed` (an open hold has no clock) OR `until_at > p_now`.
+--         The comparison is STRICT: `until` is the first instant the hold is over, so at
+--         exactly `until` it is already gone. (timestamptz compares as an instant, so
+--         "+10:00" and "Z" spellings of one moment are equal.)
+--       * no release ended it: no medication_withhold_release row for the SAME thread names
+--         this withhold's event id in `released_event_ids` with `released_at <= p_now`. `<=`
+--         because a release made at `p_now` has already happened. A release that arrived by
+--         sync BEFORE the withhold it names works too: the two tables are independent and
+--         this join only meets them at read time.
+--
+--     `pending` = `starts_at > p_now`: an advance hold ("NBM from 06:00 tomorrow") is RETURNED
+--     so the chart can show it coming, flagged so a caller never treats it as in force. A
+--     hold is IN FORCE exactly when it is returned and not pending. Strict `>` again:
+--     at `starts_at` the hold has begun.
+--
+--     Lines, not threads: a withhold is filed on one thread, but a reconciled group is ONE
+--     drug, so a hold on ANY member shows under the group id (medication_thread_group,
+--     db/033). Separating the group moves the view, not the hold. An orphan withhold (its
+--     assert not yet synced) is on no line yet and is not returned — it has nothing to hold.
+--
+--     Order is for display stability only: group, newest start first, event id to break ties.
+CREATE OR REPLACE FUNCTION cairn_medication_group_holds(p_groups uuid[], p_now timestamptz)
+RETURNS TABLE (group_id uuid, medication_id uuid, withhold_event_id uuid, reason text,
+               starts_at timestamptz, until_at timestamptz, until_reviewed boolean,
+               withholder_kid text, pending boolean)
+LANGUAGE sql STABLE AS $$
+    SELECT g.group_id, w.medication_id, w.event_id, w.reason,
+           w.starts_at, w.until_at, w.until_reviewed, w.withholder_kid,
+           w.starts_at > p_now
+    FROM medication_withhold w
+    JOIN medication_thread_group g ON g.medication_id = w.medication_id
+    WHERE g.group_id = ANY (p_groups)
+      AND (w.until_reviewed OR w.until_at > p_now)
+      AND NOT EXISTS (
+            SELECT 1 FROM medication_withhold_release r
+            WHERE r.medication_id = w.medication_id
+              AND w.event_id = ANY (r.released_event_ids)
+              AND r.released_at <= p_now)
+    ORDER BY g.group_id, w.starts_at DESC, w.event_id
+$$;
+GRANT EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) TO cairn_agent;
+
 COMMIT;
