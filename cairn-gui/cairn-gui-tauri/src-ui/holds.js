@@ -88,7 +88,7 @@ function holdControls(row) {
     const untilAt = document.createElement("input");
     untilAt.type = "datetime-local";
     untilAt.id = "until-at-" + row.group_id;
-    untilAt.setAttribute("aria-label", "Withhold until (local time)");
+    untilAt.setAttribute("aria-label", "Withhold " + row.primary + " until (local time)");
     // Typing a time IS choosing "until a time": a time left under "until reviewed" would be
     // dropped without a word, and the W written open-ended.
     untilAt.addEventListener("input", () => {
@@ -149,8 +149,13 @@ async function withhold(groupId, reason, kind, local) {
   } catch (failure) {
     say("Could not withhold this drug: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
-    return;
+    return; // the fields stay as typed, so the clinician can correct and retry
   }
+  // A report came back (recorded, or not known): clear what was typed for this W BEFORE the
+  // re-read, or #799's restore would put it back and a second press write a second W.
+  setField("reason-w-" + groupId, "");
+  setField("until-kind-" + groupId, "reviewed");
+  setField("until-at-" + groupId, "");
   say(report.text); // worded in Rust: `hold::outcome::withhold_outcome`
   await refresh(el("outcome").textContent, report.behind_the_record);
 }
@@ -169,8 +174,19 @@ async function release(groupId, withholds, reason) {
   } catch (failure) {
     say("Could not release this hold: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
-    return;
+    return; // the reason stays as typed, so the clinician can retry
   }
+  setField("reason-r-" + groupId, ""); // as `withhold`: cleared before the re-read
   say(report.text); // worded in Rust: `hold::outcome::release_outcome`
   await refresh(el("outcome").textContent, report.behind_the_record);
+}
+
+/**
+ * Set field `id` of a line to `value`, if the line still has it: a re-read that landed while the
+ * gesture was in flight may have redrawn the line without it (a drug now ceased). Never throws —
+ * the write has already landed, and the re-read after it must still run.
+ */
+function setField(id, value) {
+  const field = el(id);
+  if (field) field.value = value;
 }

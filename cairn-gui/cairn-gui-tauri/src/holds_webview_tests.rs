@@ -185,3 +185,65 @@ fn a_re_read_keeps_the_until_choice_and_time() {
         "{restore}"
     );
 }
+
+/// Typing a time IS choosing "until a time" (controller ruling on #832 task 5): a time typed while
+/// the select still shows its default "until reviewed" would otherwise be dropped without a word
+/// and the hold written open-ended — the clinician's stated end silently discarded (principle 4).
+#[test]
+fn typing_a_time_chooses_until_a_time() {
+    let controls = js_fn(HOLDS_JS, "holdControls");
+    let listens = position(controls, "untilAt.addEventListener(\"input\", () => {");
+    assert!(
+        controls[listens..].contains("untilKind.value = \"time\";"),
+        "{controls}"
+    );
+}
+
+/// Every control names its drug: six rows of an identical "Withhold until (local time)" are
+/// ambiguous to a screen reader that reads the field out of table context.
+#[test]
+fn the_time_field_names_its_drug() {
+    let controls = js_fn(HOLDS_JS, "holdControls");
+    assert!(
+        controls.contains(
+            "untilAt.setAttribute(\"aria-label\", \"Withhold \" + row.primary + \" until (local time)\");"
+        ),
+        "{controls}"
+    );
+}
+
+/// A gesture that RETURNED a report (recorded, or not known) clears what was typed for it BEFORE
+/// the re-read: #799's `restoreReasons` would otherwise put the W reason back on a line that is
+/// still current, and a second press would write a second W. A THROWN failure keeps the fields,
+/// so the clinician can correct and retry (a refused empty time, say).
+#[test]
+fn a_returned_report_clears_the_line_before_the_re_read() {
+    for (name, clears) in [
+        (
+            "withhold",
+            &[
+                "setField(\"reason-w-\" + groupId, \"\");",
+                "setField(\"until-kind-\" + groupId, \"reviewed\");",
+                "setField(\"until-at-\" + groupId, \"\");",
+            ][..],
+        ),
+        ("release", &["setField(\"reason-r-\" + groupId, \"\");"][..]),
+    ] {
+        let body = js_fn(HOLDS_JS, name);
+        let caught_at = position(body, "catch (failure)");
+        let caught = &body[caught_at..caught_at + body[caught_at..].find("\n  }").unwrap()];
+        assert!(
+            !caught.contains("setField("),
+            "{name} keeps a failure's fields: {body}"
+        );
+        let after = &body[caught_at + caught.len()..];
+        let reread = position(after, "await refresh(");
+        for clear in clears {
+            assert!(position(after, clear) < reread, "{name}: {clear} in {body}");
+        }
+    }
+    // A line a concurrent re-read redrew away has no field: clearing must not throw after a
+    // write that landed, or the re-read below it never runs.
+    let set = js_fn(HOLDS_JS, "setField");
+    assert!(set.contains("if (field) field.value = value;"), "{set}");
+}
