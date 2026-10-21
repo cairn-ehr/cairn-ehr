@@ -223,17 +223,19 @@ Steps: Withhold paper *N* = 2 → forced *M* = 2 → observed *K* = \_\_ · Rele
 | Behaviour | Verdict | Notes |
 |---|---|---|
 | W reads in local time | | |
-| Empty or partial time refused, never "until reviewed" | | |
+| Empty or partial time refused, never "until reviewed"; select back to "until reviewed" empties the time | | |
 | Second press during the write does nothing; fields cleared after success, kept after failure | | |
 | Line still counted by Sign off and still has Stop | | |
 | Hover does not flicker | | |
+| Withheld + will-sign line shows both bars | | |
+| Release beside an undrawn colleague's W leaves it and says so | | |
 
 | Accessibility check | Verdict | Notes |
 |---|---|---|
 | Tab reaches each W; text then reason read | | |
 | Until select and time field labelled with the drug | | |
 | Withhold and Release named by drug | | |
-| Ceased line's reason reads on focus | | |
+| Ceased line's reason (when one was given) reads on focus | | |
 | Pinned reason closes on Escape | | |
 
 ## Verdict

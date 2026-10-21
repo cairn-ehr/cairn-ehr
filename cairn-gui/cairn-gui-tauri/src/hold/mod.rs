@@ -304,7 +304,7 @@ pub async fn release_impl(
         record_timing(state, "release", 1, elapsed_ms).await;
     }
     Ok(HoldReport {
-        text: release_outcome(released, plan.gone.len(), &failed, &unknown),
+        text: release_outcome(released, plan.gone.len(), plan.unseen, &failed, &unknown),
         behind_the_record: (!unknown.is_empty()).then_some(Recorded::Unknown),
     })
 }

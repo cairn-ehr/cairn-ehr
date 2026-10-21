@@ -839,11 +839,17 @@ from the line. Five runs.
       year only when it is not this year).
 - [ ] Choosing *until a time* and leaving the time empty, or typing a **partial** time, is refused with a
       message; it is never recorded as "until reviewed". Typing a time alone switches the select to
-      "until a time".
+      "until a time"; setting the select back to "until reviewed" empties the time field (a partly typed
+      time too — WebKit needs the type reset in holds.js), and the W is then
+      recorded "until reviewed" (never until the time that was typed).
 - [ ] A second press during the write does nothing (the pressed button is disabled until the re-read). After
       a recorded W the line's W fields are empty; after a failure they keep what you typed.
 - [ ] The line still counts in the *Sign off N unsigned* button and still has *Stop*.
 - [ ] Hovering the W does not make it flicker (the detail must not move the table).
+- [ ] A line that is both withheld and about to be signed shows both left bars (will-sign outermost).
+- [ ] A Release while a colleague's newer W is on the line but not yet drawn (write one from the CLI after the
+      window drew the line) leaves that W in force, and the outcome line says so ("… added since this line was
+      drawn are still in force …").
 
 **Read it back (the same §5 query, plus the events).** The write half is aggregated with no user, patient or
 timestamp, by gesture kind `withhold` and `release`:
@@ -875,7 +881,8 @@ above were checked): `$NODE medication-withhold "$PATIENT" <thread> --reason "NB
 - [ ] The *until* select and the time field are each labelled with the drug.
 - [ ] *Withhold* and *Release* are named by drug, not a bare "Withhold".
 - [ ] The reason field of the W announces which drug it belongs to.
-- [ ] A ceased line's status word is a button; its reason ("Stopped: <reason>") reads on focus.
+- [ ] A ceased line whose cessation gave a reason has its status word as a button; its reason
+      (`Stopped: <reason>`) reads on focus. A cessation with no reason leaves the word as plain text.
 - [ ] A pinned reason (click or Enter on a W) closes on **Escape**, and on a click elsewhere.
 - [ ] A withheld line is identifiable without colour (the W text itself).
 

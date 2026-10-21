@@ -84,6 +84,22 @@ fn a_revealed_detail_moves_nothing() {
     assert!(rule.contains("\n  position: absolute;"), "{rule}");
 }
 
+/// A withheld line that will be signed keeps BOTH left bars: the two single-attribute rules set
+/// `box-shadow` on the same cell, so whichever comes later would erase the other (final review,
+/// #832). A rule for a row carrying both draws them side by side.
+#[test]
+fn a_withheld_line_that_will_be_signed_keeps_both_bars() {
+    let at = position(
+        STYLE_CSS,
+        "\ntr[data-will-sign=\"true\"][data-withheld=\"true\"] th[scope=\"row\"] {",
+    );
+    let rule = &STYLE_CSS[at..at + STYLE_CSS[at..].find("\n}").unwrap()];
+    assert!(
+        rule.contains("var(--accent)") && rule.contains("var(--warn-line)"),
+        "{rule}"
+    );
+}
+
 /// main.js draws the status cell through `statusCell`, marks a withheld line in the DOM (not by
 /// colour alone) and appends the hold controls beside Stop; index.html loads holds.js before the
 /// first chart can be drawn (funnel.js's boot) and names the column for both acts.
@@ -254,6 +270,32 @@ fn typing_a_time_chooses_until_a_time() {
         "withhold(row.group_id, whyHold.value, kind, untilAt.value);",
     );
     assert!(pressed < kind && kind < sent, "{controls}");
+}
+
+/// The other direction (final review, #832): once a time is typed, setting the select BACK to
+/// "until reviewed" must mean it. Without this, the press still saw the typed time and sent kind
+/// "time" — a doctor's "hold until I've reviewed the BP" became a W that lapsed silently at the
+/// typed hour, and the antihypertensive read as givable. So choosing "until reviewed" empties the
+/// time field. `value = ""` alone does not discard a PARTLY typed entry in WebKit (Tauri's macOS
+/// webview; walked 2026-10-21: `badInput` stayed true, so the press sent `""` and was refused),
+/// so the field's type is also reset, which does.
+#[test]
+fn choosing_until_reviewed_clears_the_time() {
+    let controls = js_fn(HOLDS_JS, "holdControls");
+    let listens = position(controls, "untilKind.addEventListener(\"change\", () => {");
+    let clears = position(controls, "if (untilKind.value === \"reviewed\") {");
+    assert!(listens < clears, "{controls}");
+    let body = &controls[clears..clears + controls[clears..].find("\n      }").unwrap()];
+    for part in [
+        "untilAt.value = \"\";",
+        "untilAt.type = \"text\";\n        untilAt.type = \"datetime-local\";",
+    ] {
+        assert!(body.contains(part), "{part} in {body}");
+    }
+    assert!(
+        clears < position(controls, "holdButton.addEventListener(\"click\""),
+        "{controls}"
+    );
 }
 
 /// One press, one W. A second press while the first is in flight would read the same still-filled

@@ -60,7 +60,7 @@ pub struct MedListRowView {
     pub can_withhold: bool,
     /// True when there is a hold to release (a release also cancels a pending hold).
     pub can_release: bool,
-    /// "Stopped: <reason>" on a ceased line whose cessation gave a reason.
+    /// `"Stopped: <reason>"` on a ceased line whose cessation gave a reason.
     pub cessation_detail: Option<String>,
 }
 

@@ -14,10 +14,13 @@ fn unknown(n: u128) -> UnknownThread {
 }
 
 #[test]
-fn a_withhold_that_landed_says_the_chart_shows_the_w() {
+fn a_withhold_that_landed_says_the_w_is_recorded() {
     assert_eq!(
         withhold_outcome(None),
-        ("Withheld — the chart now shows the W.".to_string(), None)
+        (
+            "Withheld — the W is recorded on this drug.".to_string(),
+            None
+        )
     );
 }
 
@@ -46,11 +49,11 @@ fn a_withhold_with_an_unknown_commit_says_it_is_not_known() {
 #[test]
 fn a_release_counts_what_it_released() {
     assert_eq!(
-        release_outcome(1, 0, &[], &[]),
+        release_outcome(1, 0, 0, &[], &[]),
         "Released 1 hold(s) on this drug."
     );
     assert_eq!(
-        release_outcome(0, 0, &[], &[]),
+        release_outcome(0, 0, 0, &[], &[]),
         "Released 0 hold(s) on this drug."
     );
 }
@@ -60,10 +63,24 @@ fn a_release_counts_what_it_released() {
 #[test]
 fn a_release_names_holds_no_longer_on_the_line() {
     assert_eq!(
-        release_outcome(1, 2, &[], &[]),
+        release_outcome(1, 2, 0, &[], &[]),
         "Released 1 hold(s) on this drug. 2 hold(s) shown are no longer on this line (ended or \
          released meanwhile) and were left as they are."
     );
+}
+
+/// A hold on the line the clinician never saw (a colleague's W that arrived after the line was
+/// drawn) stays in force (ADR-0081 decision 4) — and the report SAYS so, as information, never
+/// as a failure: "Released 1" alone would read as "this drug is now givable".
+#[test]
+fn a_release_says_a_hold_it_was_not_shown_is_still_in_force() {
+    let text = release_outcome(1, 0, 2, &[], &[]);
+    assert_eq!(
+        text,
+        "Released 1 hold(s) on this drug. 2 hold(s) added since this line was drawn are still \
+         in force (they were not shown, so were not released)."
+    );
+    assert!(!text.contains("NOT"), "information, not a failure: {text}");
 }
 
 #[test]
@@ -73,7 +90,7 @@ fn a_release_names_what_it_did_not_release() {
         "hold h on thread y: held back".to_string(),
     ];
     assert_eq!(
-        release_outcome(1, 0, &failed, &[]),
+        release_outcome(1, 0, 0, &failed, &[]),
         "Released 1 hold(s) on this drug. 2 item(s) were NOT released and are still withheld: \
          thread x: refused; hold h on thread y: held back"
     );
@@ -84,7 +101,7 @@ fn a_release_names_what_it_did_not_release() {
 #[test]
 fn a_release_with_an_unknown_commit_drops_released_zero() {
     let u = [unknown(1)];
-    let text = release_outcome(0, 0, &[], &u);
+    let text = release_outcome(0, 0, 0, &[], &u);
     assert!(!text.contains("Released 0"), "{text}");
     assert!(
         text.starts_with(
@@ -105,10 +122,11 @@ fn a_release_with_an_unknown_commit_drops_released_zero() {
 fn a_mixed_release_keeps_every_part_in_order() {
     let failed = ["thread x: refused".to_string()];
     let u = [unknown(1), unknown(2)];
-    let text = release_outcome(2, 1, &failed, &u);
+    let text = release_outcome(2, 1, 3, &failed, &u);
     let order = [
         "Released 2 hold(s) on this drug.",
         "1 hold(s) shown are no longer on this line",
+        "3 hold(s) added since this line was drawn are still in force",
         "1 item(s) were NOT released and are still withheld: thread x: refused",
         "Whether the holds on 2 thread(s) of this drug were released is NOT known",
     ];

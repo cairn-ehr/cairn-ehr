@@ -175,6 +175,12 @@ tr[data-withheld="true"] th[scope="row"] {
   box-shadow: inset 3px 0 0 0 var(--warn-line);
 }
 
+/* Both: one box-shadow would erase the other, so draw the two bars side by side (the first
+   shadow paints on top — the will-sign bar outermost, the warning bar inside it). */
+tr[data-will-sign="true"][data-withheld="true"] th[scope="row"] {
+  box-shadow: inset 3px 0 0 0 var(--accent), inset 6px 0 0 0 var(--warn-line);
+}
+
 /* The "W" (and a ceased line's status word) is a small button: focus, hover or click reveals
    its reason beside it. */
 .hold-symbol {

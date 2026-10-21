@@ -14,7 +14,11 @@ use crate::write_failure::UnknownThread;
 /// disagree: `Unknown` exactly when the sentence says the W may be on the chart.
 pub(crate) fn withhold_outcome(unknown: Option<&UnknownThread>) -> (String, Option<Recorded>) {
     match unknown {
-        None => ("Withheld — the chart now shows the W.".to_string(), None),
+        // Said BEFORE the re-read, which may fail: claim only what the commit proved.
+        None => (
+            "Withheld — the W is recorded on this drug.".to_string(),
+            None,
+        ),
         Some(u) => (
             format!(
                 "Whether this drug was withheld is NOT known — no ordinary answer came back \
@@ -28,7 +32,8 @@ pub(crate) fn withhold_outcome(unknown: Option<&UnknownThread>) -> (String, Opti
 }
 
 /// What one Release did: the holds released (`released` counts hold ids), the holds shown that are
-/// no longer on the line (`gone`, left as they are), the items NOT released (`failed`: a thread
+/// no longer on the line (`gone`, left as they are), the holds on the line it was NOT shown
+/// (`unseen`: never ended, ADR-0081 decision 4, but said — information, not a failure), the items NOT released (`failed`: a thread
 /// whose write failed, which may carry several holds, or one hold deliberately held back — each
 /// already a named sentence, so the count is of items, not holds), and threads whose commit got no ordinary answer
 /// (#814), which may or may not be released, so they are neither. "Released 0" is left out beside
@@ -36,6 +41,7 @@ pub(crate) fn withhold_outcome(unknown: Option<&UnknownThread>) -> (String, Opti
 pub(crate) fn release_outcome(
     released: usize,
     gone: usize,
+    unseen: usize,
     failed: &[String],
     unknown: &[UnknownThread],
 ) -> String {
@@ -47,6 +53,12 @@ pub(crate) fn release_outcome(
         parts.push(format!(
             "{gone} hold(s) shown are no longer on this line (ended or released meanwhile) \
              and were left as they are."
+        ));
+    }
+    if unseen > 0 {
+        parts.push(format!(
+            "{unseen} hold(s) added since this line was drawn are still in force (they were \
+             not shown, so were not released)."
         ));
     }
     if !failed.is_empty() {

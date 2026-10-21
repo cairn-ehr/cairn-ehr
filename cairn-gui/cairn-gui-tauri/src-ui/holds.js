@@ -122,6 +122,17 @@ function holdControls(row) {
     untilAt.addEventListener("input", () => {
       untilKind.value = "time";
     });
+    // ...and choosing "until reviewed" back means it: the typed (or partly typed) time is emptied,
+    // or the press would still send it and the W lapse silently at that hour.
+    untilKind.addEventListener("change", () => {
+      if (untilKind.value === "reviewed") {
+        untilAt.value = "";
+        // WebKit (Tauri's macOS webview) keeps a PARTLY typed time through `value = ""`;
+        // resetting the type discards it.
+        untilAt.type = "text";
+        untilAt.type = "datetime-local";
+      }
+    });
 
     // Not named `hold`: that name is a HoldView here, and the drift guard reads `hold.<field>`.
     const holdButton = document.createElement("button");

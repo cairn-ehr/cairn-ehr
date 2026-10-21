@@ -84,6 +84,20 @@ fn a_release_ends_only_the_holds_it_was_shown() {
     assert!(p.held_back.is_empty() && p.gone.is_empty());
 }
 
+/// A hold the clinician was not shown — a colleague's W synced in after the line was drawn, or a
+/// pending one — is never ended, but it is COUNTED, so the report can say it is still in force
+/// (the maintainer's rule: say what changed from another source since the chart was taken).
+#[test]
+fn a_hold_not_shown_is_counted_unseen() {
+    let mut r = row(false, 10, &[(10, 1)], &[(100, 10), (101, 10), (102, 10)]);
+    r.holds[2].pending = true;
+    let p = release_plan(&r, &[u(100)], u(1));
+    assert_eq!(p.write, vec![(u(10), u(1), vec![u(100)])]);
+    assert_eq!(p.unseen, 2);
+    // Every hold shown: nothing unseen.
+    assert_eq!(release_plan(&r, &[u(100), u(101), u(102)], u(1)).unseen, 0);
+}
+
 #[test]
 fn a_release_writes_one_event_per_thread() {
     let r = row(false, 10, &[(10, 1), (11, 2)], &[(100, 10), (101, 11)]);

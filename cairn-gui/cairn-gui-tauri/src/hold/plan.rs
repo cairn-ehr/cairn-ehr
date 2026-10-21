@@ -51,6 +51,10 @@ pub struct ReleasePlan {
     pub held_back: Vec<String>,
     /// Shown hold ids no longer on the line (ended or released meanwhile).
     pub gone: Vec<Uuid>,
+    /// Holds on the line the clinician was NOT shown (pending ones too) — e.g. a colleague's W
+    /// that arrived by sync after the line was drawn. Never ended (decision 4), but counted so
+    /// the report can SAY one is still in force, not let "Released 1" imply the line is clear.
+    pub unseen: usize,
 }
 
 /// Plan a Release of the holds the clinician was SHOWN (`shown`), from the chart `opened`.
@@ -60,13 +64,19 @@ pub struct ReleasePlan {
 /// (a repeated id counts once). Shown ids no longer on the line are named `gone`. On a
 /// wrong-chart hazard line only the opened chart's threads are written; the others are held
 /// back and NAMED, as `cease_plan` does. A hold on a thread that is not a member of the line
-/// has no chart to be written on, so it is held back too, never guessed.
+/// has no chart to be written on, so it is held back too, never guessed. Holds on the line that
+/// were NOT shown are counted (`unseen`) so the report says they are still in force.
 pub fn release_plan(row: &MedicationRow, shown: &[Uuid], opened: Uuid) -> ReleasePlan {
     let hazard = row.is_wrong_chart_hazard();
     let mut plan = ReleasePlan {
         write: vec![],
         held_back: vec![],
         gone: vec![],
+        unseen: row
+            .holds
+            .iter()
+            .filter(|h| !shown.contains(&h.withhold_event_id))
+            .count(),
     };
     for id in shown {
         if !row.holds.iter().any(|h| h.withhold_event_id == *id) && !plan.gone.contains(id) {
