@@ -1387,7 +1387,7 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
         1,
         "the chart must still be found, never dropped: {list:?}"
     );
-    assert_eq!(list.people[0].members()[0].display_name, "(name withheld)");
+    assert_eq!(list.people[0].members()[0].display_name, "(name not shown)");
     assert!(
         !list.incomplete,
         "a by-design repudiated-name absence must NOT count as a read failure: {list:?}"

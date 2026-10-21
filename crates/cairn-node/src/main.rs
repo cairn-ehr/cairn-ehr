@@ -2112,6 +2112,41 @@ enum Cmd {
         #[command(flatten)]
         author: AuthorFlags,
     },
+    /// Withhold a medication thread (clinical.medication-withhold.asserted) — the paper
+    /// chart's "W": a time-bounded hold, not a cessation. The line stays current and
+    /// signable. Instants need an explicit UTC offset (e.g. 2026-10-22T08:00:00+10:00).
+    MedicationWithhold {
+        /// The patient UUID the thread belongs to.
+        patient: Uuid,
+        /// The medication thread id (printed by `medication-assert`).
+        medication_id: Uuid,
+        /// Why it is being held (required).
+        #[arg(long)]
+        reason: String,
+        /// Until when: an instant, or the word `reviewed` for an open-ended hold.
+        #[arg(long)]
+        until: String,
+        /// When the hold starts (default: now).
+        #[arg(long)]
+        from: Option<String>,
+        #[command(flatten)]
+        author: AuthorFlags,
+    },
+    /// End named holds early (clinical.medication-withhold-release.asserted).
+    MedicationRelease {
+        /// The patient UUID the thread belongs to.
+        patient: Uuid,
+        /// The medication thread id.
+        medication_id: Uuid,
+        /// Event id(s) of the withhold(s) to end (printed by `medication-withhold`).
+        #[arg(long = "withhold", required = true)]
+        withhold: Vec<Uuid>,
+        /// Optional free-text reason.
+        #[arg(long)]
+        reason: Option<String>,
+        #[command(flatten)]
+        author: AuthorFlags,
+    },
     /// Record a dose change on an existing medication thread
     /// (clinical.medication-dose-change.asserted). Additive — the prior dose stays in
     /// the history. Offline-first: does not require the thread to be present locally.
@@ -4544,7 +4579,7 @@ async fn run() -> anyhow::Result<()> {
                 );
             }
             println!(
-                "(report only — nothing is withheld on the strength of these grades; \
+                "(report only — nothing is hidden on the strength of these grades; \
                  enforcement needs custody narrowing, #232 part C / #376)"
             );
         }
@@ -4967,6 +5002,81 @@ async fn run() -> anyhow::Result<()> {
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
         }
+        Cmd::MedicationWithhold {
+            patient,
+            medication_id,
+            reason,
+            until,
+            from,
+            author,
+        } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
+            let input = cairn_node::medication::WithholdMedicationInput {
+                reason: &reason,
+                from: from.as_deref(),
+                until: if until == "reviewed" {
+                    cairn_event::medication::HoldUntil::Reviewed
+                } else {
+                    cairn_event::medication::HoldUntil::At(&until)
+                },
+            };
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
+            let event_id = cairn_node::medication::withhold_medication(
+                &mut db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                &input,
+                a_params.as_ref(),
+            )
+            .await?;
+            println!(
+                "{}",
+                cairn_node::medication::hold_text::withheld_line(event_id, medication_id)
+            );
+        }
+        Cmd::MedicationRelease {
+            patient,
+            medication_id,
+            withhold,
+            reason,
+            author,
+        } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
+            let event_id = cairn_node::medication::release_medication_holds(
+                &mut db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                &withhold,
+                reason.as_deref(),
+                a_params.as_ref(),
+            )
+            .await?;
+            println!(
+                "{}",
+                cairn_node::medication::hold_text::released_line(
+                    event_id,
+                    medication_id,
+                    withhold.len()
+                )
+            );
+        }
         Cmd::MedicationChangeDose {
             patient,
             medication_id,
@@ -5380,6 +5490,16 @@ async fn run() -> anyhow::Result<()> {
                         &list.separation_targets,
                     ) {
                         println!("{line}");
+                    }
+                    // #803: the paper chart's "W" lines, then a ceased line's reason.
+                    for h in &row.holds {
+                        println!("    {}", cairn_node::medication::hold_text::hold_line(h));
+                    }
+                    if let Some(reason) = &row.cessation_reason {
+                        println!(
+                            "    {}",
+                            cairn_node::medication::hold_text::ceased_reason_line(reason)
+                        );
                     }
                 }
                 // The doubted-link remedy, ONCE for the whole list: each withheld row above

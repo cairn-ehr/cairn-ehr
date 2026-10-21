@@ -13,6 +13,7 @@ mod dose;
 mod hazard;
 // Public for the CLI's benefit, same as `read` and `signoff`: `main.rs`'s `MedicationList`
 // and `MedicationSignOff` arms call straight into these pure formatters.
+pub mod hold_text;
 pub mod list_text;
 pub mod read;
 mod reconciliation;

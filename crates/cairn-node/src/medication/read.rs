@@ -172,7 +172,12 @@ async fn list_chart_set_medications(
                 // group's row is normally gone too and `groups_missing_from_chart` reports it.
                 source_charts: group_charts.get(&group_id).cloned().unwrap_or_default(),
                 // A hold rides BESIDE the status (ADR-0081): a withheld line is still Active.
-                holds: holds.get(&group_id).cloned().unwrap_or_default(),
+                // Cessation wins over any hold (decision 5): a ceased row carries none.
+                holds: if status == MedicationStatus::Active {
+                    holds.get(&group_id).cloned().unwrap_or_default()
+                } else {
+                    vec![]
+                },
                 // Only a ceased line shows a reason: a mixed group reads active.
                 cessation_reason: if status == MedicationStatus::Ceased {
                     cessation_reasons.get(&group_id).cloned()
@@ -344,7 +349,7 @@ async fn read_group_holds(
     let sql = format!(
         "SELECT group_id::text AS group_id, medication_id::text AS medication_id, \
          withhold_event_id::text AS withhold_event_id, reason, withholder_kid, pending, \
-         to_char(starts_at AT TIME ZONE 'UTC', {FMT}) AS starts_at, \
+         to_char(starts_at AT TIME ZONE 'UTC', {FMT}) AS starts_at_txt, \
          CASE WHEN until_reviewed THEN NULL \
               ELSE to_char(until_at AT TIME ZONE 'UTC', {FMT}) END AS until_at \
          FROM cairn_medication_group_holds($1::text[]::uuid[], clock_timestamp()) \
@@ -357,7 +362,7 @@ async fn read_group_holds(
             withhold_event_id: r.get::<_, String>("withhold_event_id").parse()?,
             medication_id: r.get::<_, String>("medication_id").parse()?,
             reason: r.get("reason"),
-            starts_at: r.get("starts_at"),
+            starts_at: r.get("starts_at_txt"),
             until: r.get("until_at"),
             withholder: r.get("withholder_kid"),
             pending: r.get("pending"),

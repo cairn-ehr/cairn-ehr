@@ -268,6 +268,46 @@ mod tests {
         }
     }
 
+    /// The `--json` contract for #803: exact key names, `until: null` for "until reviewed".
+    #[test]
+    fn holds_and_cessation_reason_serialize_with_pinned_keys() {
+        let mut r = row("x", None);
+        r.cessation_reason = Some("rash".into());
+        r.holds = vec![
+            MedicationHold {
+                withhold_event_id: Uuid::from_u128(1),
+                medication_id: Uuid::from_u128(2),
+                reason: "BP".into(),
+                starts_at: "2026-10-21T20:00Z".into(),
+                until: Some("2026-10-22T08:00Z".into()),
+                withholder: "k1".into(),
+                pending: false,
+            },
+            MedicationHold {
+                withhold_event_id: Uuid::from_u128(3),
+                medication_id: Uuid::from_u128(2),
+                reason: "GP".into(),
+                starts_at: "2026-10-21T21:00Z".into(),
+                until: None,
+                withholder: "k2".into(),
+                pending: true,
+            },
+        ];
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["cessation_reason"], "rash");
+        assert_eq!(
+            v["holds"],
+            serde_json::json!([
+                {"withhold_event_id": Uuid::from_u128(1), "medication_id": Uuid::from_u128(2),
+                 "reason": "BP", "starts_at": "2026-10-21T20:00Z",
+                 "until": "2026-10-22T08:00Z", "withholder": "k1", "pending": false},
+                {"withhold_event_id": Uuid::from_u128(3), "medication_id": Uuid::from_u128(2),
+                 "reason": "GP", "starts_at": "2026-10-21T21:00Z",
+                 "until": null, "withholder": "k2", "pending": true}
+            ])
+        );
+    }
+
     #[test]
     fn is_withheld_ignores_pending_holds() {
         let hold = |pending| MedicationHold {

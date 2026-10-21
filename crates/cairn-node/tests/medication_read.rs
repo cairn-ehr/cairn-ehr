@@ -807,6 +807,50 @@ async fn a_ceased_line_carries_its_reason() {
     assert!(rows[0].holds.is_empty());
 }
 
+/// #803 (ADR-0081 decision 5): cessation wins over any hold — a ceased line shows no holds.
+#[tokio::test]
+async fn a_ceased_line_shows_no_holds() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    let w = WithholdMedicationInput {
+        reason: "contrast",
+        from: None,
+        until: HoldUntil::Reviewed,
+    };
+    withhold_medication(&mut c, &sk, &kid, "origin-a", patient, thread, &w, None)
+        .await
+        .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "origin-a",
+        patient,
+        thread,
+        &CeaseMedicationInput {
+            stopped: None,
+            stopped_precision: None,
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
+    assert_eq!(rows[0].status, MedicationStatus::Ceased);
+    assert!(rows[0].holds.is_empty(), "cessation wins over any hold");
+    assert!(!rows[0].is_withheld());
+}
+
 /// #803: a hold that has not started yet is listed (flagged pending) but does not withhold.
 #[tokio::test]
 async fn a_pending_hold_is_listed_but_the_line_is_not_withheld() {

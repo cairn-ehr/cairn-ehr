@@ -131,7 +131,7 @@ impl DisplayName {
     pub(super) fn text(&self) -> String {
         match self {
             DisplayName::Known(name) => name.clone(),
-            DisplayName::Withheld => "(name withheld)".to_string(),
+            DisplayName::Withheld => "(name not shown)".to_string(),
             DisplayName::NotReceived => "(registration not yet received here)".to_string(),
             DisplayName::Unreadable => "(name unavailable)".to_string(),
         }
@@ -237,7 +237,7 @@ mod tests {
             DisplayName::Withheld
         );
         assert!(!DisplayName::Withheld.is_unreadable());
-        assert_eq!(DisplayName::Withheld.text(), "(name withheld)");
+        assert_eq!(DisplayName::Withheld.text(), "(name not shown)");
     }
 
     #[test]
