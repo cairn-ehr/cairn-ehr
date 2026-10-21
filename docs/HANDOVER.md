@@ -3,11 +3,11 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)** (#803 slice A, branch
-> `feat/803-medication-withhold`): the medication **withhold "W"** in the record and the CLI — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md),
+> **⇒ IN PROGRESS: #832** (#803 slice B, the window), branch `feat/832-window-withhold`, plan
+> `superpowers/plans/2026-10-21-832-window-withhold-slice-b.md`. **Merged 2026-10-21: PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)**
+> (#803 slice A): the medication **withhold "W"** in the record and the CLI — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md),
 > spec **v0.83**, `db/059`, SCHEMA_GENERATION **59**. Its durable rules are the #803 block in `developers/durable-rules.md`.
-> **The window is NOT hold-aware yet** (a withheld drug shows as plain current there until #832). Its second review
-> (2026-10-21) is fixed in the PR; filed **#835** · **#836** · **#837**.
+> Its second review filed **#835** · **#836** · **#837**.
 > **Merged 2026-10-18/20 (ROADMAP has each):** PR #830 (#828) · PR #829 (#826: `assert-observed-evidence` prints its event ids) · PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
 > `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
 > COMMIT driven end to end; review filed **#825**, the window drops an unknown outcome's error chain — a decision on
@@ -20,9 +20,9 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)** (#803 slice A). Then **#832** (slice B, the
->    window: the W on the line, click/focus reveals a hold's and a cessation's reason, Withhold/Release, local times,
->    its RUNBOOK timing). **#825** needs a decision (where the window's operator diagnostics
+> 1. **#832** (slice B, the window: the W on the line, click/focus reveals a hold's and a cessation's reason,
+>    Withhold/Release always visible on the line (maintainer, 2026-10-21), local times, its RUNBOOK timing) — in
+>    progress. **#825** needs a decision (where the window's operator diagnostics
 >    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.

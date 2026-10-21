@@ -489,7 +489,9 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   line, so anyone can release it. Filed **#835** (a future-dated release is invisible), **#836** (the #192
   conflict flag is never read, so a wrong-chart W projects), **#837** (test gaps: authorship, double release,
   shredding a release).
-- **Next:** review and merge PR #831; then **#832** (slice B), **#804** (needs #690), **#825** (a decision); then the
+  **PR #831 merged 2026-10-21.**
+- **Next:** **#832** (slice B, the window — in progress on `feat/832-window-withhold`, plan
+  `superpowers/plans/2026-10-21-832-window-withhold-slice-b.md`), **#804** (needs #690), **#825** (a decision); then the
   open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
