@@ -794,3 +794,91 @@ vanished when the read failed is a finding to file, never a budget to adjust.**
 - [ ] Focus stays where the clinician put it; nothing takes focus on its own.
 
 `TEMPLATE.md` carries a matching block (*A colleague's link lands mid-review*).
+
+---
+
+## 15. Withhold and release a drug (#832, ADR-0081 slice B)
+
+The window's two new gestures: **Withhold** (the paper chart's "W", a time-bounded hold on a line that stays
+current, signable and ceasable) and **Release** (ending a hold early). Paper counterpart: writing W in the
+drug chart's administration slot(s) with initials and the reason in the slot code or a short note; rescinding is
+a note; resuming is giving the next dose, no act. **Live only for the timings** (the write is the measurement);
+the `--mock` window is enough for the accessibility checks below.
+
+**Budgets (from the slice plan's §1.2).** Withhold **≤ 10 s from the chart open to recorded** (paper *N* = 2 →
+architecture-forced *M* = 2 → UI bundling target *K* = 2: type the reason in the line's W field, press
+*Withhold*; "until reviewed" is the default, so no further act). A W *until a time* adds the time entry, as
+paper's slot choice does. Release **≤ 5 s** (paper 1 → Cairn 1; its reason is optional). Resume is paper 0 →
+Cairn 0: expiry is a read-time fold and writes no event. **A figure outside its budget, or `M > N`, is the
+finding — file an issue; never adjust the budget.**
+
+**Setup.** Section 0–3 (a throwaway database, enrolled clinician, window launched with `--patient`). The
+chart needs at least two **current** drugs; section 2's five-drug chart is fine, or, minimal (run 2026-10-21
+against a fresh database, same shape as sections 0–2):
+
+```bash
+NODE="cairn-node --conn $CONN --key $NODE_KEY"
+PATIENT=$($NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+    --confirm-new | sed -n 's/^registered patient //p')
+$NODE medication-assert "$PATIENT" --term atorvastatin --dose-amount 40 --dose-unit mg --formulation tablet
+$NODE medication-assert "$PATIENT" --term metformin --dose-amount 1 --dose-unit g --formulation tablet
+$NODE medication-list "$PATIENT"     # two lines, both [current] — unsigned
+```
+
+**Measurement 1 — Withhold.** Start the stopwatch when the window appears (as section 4). Unlock the key, type a
+reason into the W field of one current line, leave *until* on "until reviewed", press *Withhold*. Stop when the
+line draws its W ("W until reviewed"). Repeat with *until a time* and a time later today (stop at "W until
+HH:MM"). Five runs each, on fresh charts.
+
+**Measurement 2 — Release.** On a line that now shows a W, press *Release* (reason optional). Stop when the W is gone
+from the line. Five runs.
+
+**Behaviours to confirm while you are there** (each is a pinned guard; a miss is a finding):
+
+- [ ] The W reads in **local time** ("W until 20:00"; "W from Thu 22 Oct 08:00" for a hold not yet started; a
+      year only when it is not this year).
+- [ ] Choosing *until a time* and leaving the time empty, or typing a **partial** time, is refused with a
+      message; it is never recorded as "until reviewed". Typing a time alone switches the select to
+      "until a time".
+- [ ] A second press during the write does nothing (the pressed button is disabled until the re-read). After
+      a recorded W the line's W fields are empty; after a failure they keep what you typed.
+- [ ] The line still counts in the *Sign off N unsigned* button and still has *Stop*.
+- [ ] Hovering the W does not make it flicker (the detail must not move the table).
+
+**Read it back (the same §5 query, plus the events).** The write half is aggregated with no user, patient or
+timestamp, by gesture kind `withhold` and `release`:
+
+```bash
+psql "$CONN" -c "SELECT * FROM ui_gesture_timing ORDER BY gesture_kind, size_bucket"
+```
+
+Expect `withhold` and `release` rows beside `signoff` and `cease` once the window has done them (a fresh
+database shows `(0 rows)` until then; the check constraint admits all four kinds). The record itself:
+
+```bash
+psql "$CONN" -At -c "SELECT event_type, count(*) FROM event_log
+                     WHERE event_type LIKE 'clinical.medication-withhold%' GROUP BY 1"
+$NODE medication-list "$PATIENT"
+```
+
+Expect one `clinical.medication-withhold.asserted` per press of *Withhold* and one
+`clinical.medication-withhold-release.asserted` per thread released. While a hold is live `medication-list`
+prints under its line `    W withheld until reviewed: <reason> (by <kid>) [withhold <event id> on thread <id>]`;
+after a release the line is bare again. To exercise the CLI half without the window (this is how the commands
+above were checked): `$NODE medication-withhold "$PATIENT" <thread> --reason "NBM" --until reviewed`, then
+`$NODE medication-release "$PATIENT" <thread> --withhold <event id>`.
+
+**Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only; `--mock` is enough):
+
+- [ ] Tab reaches each W; VoiceOver reads its visible text ("W until 20:00") and then the reason ("Withheld
+      until … by <key>: <reason>").
+- [ ] The *until* select and the time field are each labelled with the drug.
+- [ ] *Withhold* and *Release* are named by drug, not a bare "Withhold".
+- [ ] The reason field of the W announces which drug it belongs to.
+- [ ] A ceased line's status word is a button; its reason ("Stopped: <reason>") reads on focus.
+- [ ] A pinned reason (click or Enter on a W) closes on **Escape**, and on a click elsewhere.
+- [ ] A withheld line is identifiable without colour (the W text itself).
+
+**What could not be run here.** The stopwatch figures, the VoiceOver checks and every `ui_gesture_timing` row
+need the window and a human; this section's commands were run against a throwaway database for the CLI half only.
+`TEMPLATE.md` carries a matching block (*Withhold and release*).

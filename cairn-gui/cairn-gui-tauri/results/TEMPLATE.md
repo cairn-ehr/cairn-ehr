@@ -209,6 +209,33 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 | "Read this chart again" reachable by Tab at all times | | |
 | Nothing takes focus on its own | | |
 
+## Withhold and release (#832, runbook §15)
+
+| Gesture | Mode | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| Chart open → W recorded (until reviewed) | live | | | | ≤ 10 s | |
+| Chart open → W recorded (until a time) | live | | | | ≤ 10 s | |
+| Release | live | | | | ≤ 5 s | |
+
+Steps: Withhold paper *N* = 2 → forced *M* = 2 → observed *K* = \_\_ · Release paper 1 → 1 → observed \_\_.
+`M > N` is an architecture defect (file it).
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| W reads in local time | | |
+| Empty or partial time refused, never "until reviewed" | | |
+| Second press during the write does nothing; fields cleared after success, kept after failure | | |
+| Line still counted by Sign off and still has Stop | | |
+| Hover does not flicker | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Tab reaches each W; text then reason read | | |
+| Until select and time field labelled with the drug | | |
+| Withhold and Release named by drug | | |
+| Ceased line's reason reads on focus | | |
+| Pinned reason closes on Escape | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**
