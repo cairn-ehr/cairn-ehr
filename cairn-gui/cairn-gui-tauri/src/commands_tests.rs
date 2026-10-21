@@ -20,6 +20,8 @@ fn fields_read_by_the_webview(binding: &str) -> BTreeSet<String> {
         include_str!("../src-ui/chart_stale.js"),
         binding,
     ));
+    // holds.js draws each row's W and sends Withhold/Release (#832), off the same rows.
+    read.extend(fields_read_in(include_str!("../src-ui/holds.js"), binding));
     read
 }
 
@@ -78,6 +80,14 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         cairn_gui_tab_medications::build_view(&cairn_medication_view::fixtures::sample_chart());
     let view_json = serde_json::to_value(&view).unwrap();
     let row_json = view_json["rows"][0].clone();
+    // holds.js names each of a row's holds `hold`; the fixture chart carries holds (#832).
+    let hold_json = view_json["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|row| row["holds"].as_array().and_then(|holds| holds.first()))
+        .expect("the fixture chart carries a hold")
+        .clone();
     // `med_list` sends the view INSIDE a pane, beside the linked charts' member lines. The
     // JS names the outer payload `pane`, the view `view` and each line `member`.
     let that_link = crate::link::record_links::RecordLinkView {
@@ -120,6 +130,11 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         behind_the_record: None,
     })
     .unwrap();
+    let hold_report = serde_json::to_value(crate::hold::HoldReport {
+        text: String::new(),
+        behind_the_record: None,
+    })
+    .unwrap();
     let lock = serde_json::to_value(LockState {
         unlocked: false,
         kid: None,
@@ -131,6 +146,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
     // comparison: either command may be the one that supplies a given field.
     let mut report_keys = serialized_keys(&sign_off);
     report_keys.extend(serialized_keys(&cease));
+    report_keys.extend(serialized_keys(&hold_report));
 
     for (binding, available) in [
         ("pane", serialized_keys(&pane_json)),
@@ -141,6 +157,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         ),
         ("view", serialized_keys(&view_json)),
         ("row", serialized_keys(&row_json)),
+        ("hold", serialized_keys(&hold_json)),
         ("report", report_keys),
         ("lock", serialized_keys(&lock)),
     ] {
@@ -344,6 +361,7 @@ fn every_command_the_webview_calls_is_registered() {
     let webview = [
         ("main.js", include_str!("../src-ui/main.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
+        ("holds.js", include_str!("../src-ui/holds.js")),
         ("chart_stale.js", include_str!("../src-ui/chart_stale.js")),
         ("duplicates.js", include_str!("../src-ui/duplicates.js")),
         ("worklist.js", include_str!("../src-ui/worklist.js")),

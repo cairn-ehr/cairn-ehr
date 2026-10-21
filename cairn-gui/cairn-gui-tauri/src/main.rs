@@ -28,6 +28,8 @@ mod commands;
 mod duplicates;
 mod funnel;
 mod hold;
+#[cfg(test)]
+mod holds_webview_tests;
 mod link;
 #[cfg(test)]
 mod read_again_webview_tests;

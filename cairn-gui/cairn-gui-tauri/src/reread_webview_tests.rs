@@ -13,6 +13,7 @@ const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const CHART_STALE_JS: &str = include_str!("../src-ui/chart_stale.js");
 const LINK_JS: &str = include_str!("../src-ui/link.js");
 const UNLINK_JS: &str = include_str!("../src-ui/unlink.js");
+const HOLDS_JS: &str = include_str!("../src-ui/holds.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
 /// The arguments of every `refresh(…)` call in `body`, split at top-level commas (a lead such as
@@ -466,8 +467,9 @@ fn mark_list_stale_disables_sign_off_and_warns_above_the_table() {
 
 /// Every handler a stale refusal reaches re-reads the WHOLE chart, flagged stale (so a failed
 /// re-read marks the list): Compare, the review panel's Compare, a link-panel judgement, a
-/// review-panel verdict, sign-off and cease. The flag is `behindTheRecord(failure)` — directly or
-/// through `reread` — and only that helper reads `after_reread`.
+/// review-panel verdict, sign-off, cease, withhold and release (#832). The flag is
+/// `behindTheRecord(failure)` — directly or through `reread` — and only that helper reads
+/// `after_reread`.
 #[test]
 fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
     let behind = js_fn(CHART_STALE_JS, "behindTheRecord");
@@ -476,7 +478,7 @@ fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
         "{behind}"
     );
     assert_eq!(
-        [CHART_STALE_JS, LINK_JS, UNLINK_JS, MAIN_JS]
+        [CHART_STALE_JS, LINK_JS, UNLINK_JS, MAIN_JS, HOLDS_JS]
             .iter()
             .map(|js| js.matches(".after_reread").count())
             .sum::<usize>(),
@@ -505,6 +507,8 @@ fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
         ("unlink.js", UNLINK_JS, "showUnlinkFailure"),
         ("main.js", MAIN_JS, "signOff"),
         ("main.js", MAIN_JS, "cease"),
+        ("holds.js", HOLDS_JS, "withhold"),
+        ("holds.js", HOLDS_JS, "release"),
     ] {
         let body = js_fn(js, name);
         // The catch block alone, to its closing `  }` (signOff's and cease's success re-read

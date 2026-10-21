@@ -169,6 +169,36 @@ tr[data-ceased="true"] td {
   color: var(--muted);
 }
 
+/* A withheld line (#832): a warning bar, as well as the word "withheld" and its "W" in the
+   status cell. Not struck — the drug is still current, only paused. */
+tr[data-withheld="true"] th[scope="row"] {
+  box-shadow: inset 3px 0 0 0 var(--warn-line);
+}
+
+/* The "W" (and a ceased line's status word) is a small button: focus, hover or click reveals
+   its reason beside it. */
+.hold-symbol {
+  padding: 0.05rem 0.4rem;
+  font-weight: 600;
+}
+
+/* Out of flow, over the cells beside it: revealed IN flow, it re-laid the table out, the button
+   jumped from under the pointer, `mouseleave` hid the detail, the button jumped back — a flicker
+   loop no mouse could click through (found walking #832). Absolute with no offsets keeps it
+   where it would have sat, just after its button, and moves nothing. */
+.hold-detail {
+  position: absolute;
+  z-index: 1;
+  max-width: 24rem;
+  margin-left: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  font-size: 0.92rem;
+  /* Being out of flow also keeps a ceased line's strike-through off the reason it reveals. */
+}
+
 /* A per-line flag rides directly under its drug. The "!" prefix is in the text, so the
    marker survives a stylesheet that never loads. */
 tr[data-flag="true"] td {
