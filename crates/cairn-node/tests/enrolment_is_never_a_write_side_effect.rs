@@ -189,11 +189,11 @@ fn every_allowed_provisioning_site_is_still_live() {
     }
 }
 
-/// ⇒ AND THE FIFTEEN WRITE PATHS STILL ASK. The other direction, which nothing pinned.
+/// ⇒ AND THE SEVENTEEN WRITE PATHS STILL ASK. The other direction, which nothing pinned.
 ///
 /// The guard above catches a write path that *provisions*. It cannot catch a write path that
 /// simply stops *asking* — delete a `require_device_actor` call and the command falls through
-/// to db/005's own refusal, which is still safe (every one of the fifteen authors with the
+/// to db/005's own refusal, which is still safe (every one of the seventeen authors with the
 /// node's key as the event signer, so the floor refuses an unenrolled signer with `P0001`
 /// regardless). The review confirmed that, and it is why this is the mild half.
 ///
@@ -201,9 +201,10 @@ fn every_allowed_provisioning_site_is_still_live() {
 /// it, which `not_enrolled_refusal`'s doc calls out in so many words. Losing it silently is
 /// losing the entire operator-facing value of #654 on that command.
 ///
-/// A count, not a per-command assertion, because the per-command version is fifteen rigs for
+/// A count, not a per-command assertion, because the per-command version is seventeen rigs for
 /// one call-site question — the same reasoning the module doc gives for the scan above. If you
-/// add a sixteenth write subcommand, this number goes UP, and that is the deliberate act.
+/// add an eighteenth write subcommand, this number goes UP, and that is the deliberate act. (15 → 17
+/// with #803's `medication-withhold` and `medication-release`.)
 #[test]
 fn every_write_subcommand_still_asks_where_the_key_stands() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
@@ -214,7 +215,7 @@ fn every_write_subcommand_still_asks_where_the_key_stands() {
         .count();
 
     assert_eq!(
-        calls, 15,
+        calls, 17,
         "the number of write subcommands asking `require_device_actor` changed. If you ADDED a \
          write subcommand, raise this number. If a call VANISHED, that command has quietly \
          reverted to db/005's key-id refusal — true, legible, and no remedy — which is the \
