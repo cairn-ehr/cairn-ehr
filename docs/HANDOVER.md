@@ -3,8 +3,13 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ IN PROGRESS: #832** (#803 slice B, the window), branch `feat/832-window-withhold`, plan
-> `superpowers/plans/2026-10-21-832-window-withhold-slice-b.md`. **Merged 2026-10-21: PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)**
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)** (#832, #803 slice B, branch
+> `feat/832-window-withhold`): the window draws the **W** (local time; click/focus reveals the reason and a ceased line's
+> reason) and offers **Withhold**/**Release**, always visible on the line. Durable rules: the `#832` block in
+> `developers/durable-rules.md`. **Owed by a human: RUNBOOK §15** (W ≤ 10 s, Release ≤ 5 s, VoiceOver/keyboard; the
+> WebKit time-field reset is confirmed only in headless WebKit). Filed **#839** (Release's stale refusal and "in force"
+> wording); #809 gained item 5.
+> **Merged 2026-10-21: PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)**
 > (#803 slice A): the medication **withhold "W"** in the record and the CLI — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md),
 > spec **v0.83**, `db/059`, SCHEMA_GENERATION **59**. Its durable rules are the #803 block in `developers/durable-rules.md`.
 > Its second review filed **#835** · **#836** · **#837**.
@@ -20,13 +25,12 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **#832** (slice B, the window: the W on the line, click/focus reveals a hold's and a cessation's reason,
->    Withhold/Release always visible on the line (maintainer, 2026-10-21), local times, its RUNBOOK timing) — in
->    progress. **#825** needs a decision (where the window's operator diagnostics
+> 1. **Review and merge PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)** (#832), then run its RUNBOOK §15.
+>    **#825** needs a decision (where the window's operator diagnostics
 >    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
-> 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A in PR #831; slice B #832; follow-ups #833 ward-level
+> 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A PR #831, merged; slice B #832 in PR #838; follow-ups #833 ward-level
 >    list, #834 no marker for an undecryptable event) → **#804** (on link, show only where the two charts' medication
 >    lists DIFFER, with continue / discontinue / withhold per line; needs #803 and **#690**). From #797's reviews:
 >    **#812** (window type/test tightening) · **#807** (the window never
@@ -152,7 +156,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.83** (newest ADR-0081;
@@ -186,6 +190,23 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
+### 2026-10-21 (second) — #832 (PR #838): the W in the window, plan → SDD
+
+Maintainer's layout call: Withhold controls always visible on the line (K = 2). Six SDD tasks, each reviewed, then an
+opus whole-branch review and one fix wave; a headless walk in Chromium AND WebKit (Playwright's webkit, served through
+`context.route` — WebKit could not reach a local http server).
+- **⇒ A real mouse finds what `element.click()` cannot.** The revealed reason re-laid the table, the W jumped from under
+  the pointer and flickered for ever; the detail is now out of flow (`position: absolute`, pinned).
+- **⇒ One press, one W needs the button disabled, not only the fields cleared**: a second press while the first is in
+  flight reads the same fields, and nothing downstream refuses an overlapping hold (cease is safe only because the
+  second meets a ceased line).
+- **⇒ A control that overrides another must be undone by it.** Making a filled time win over the select (to catch a
+  partial time) made "until reviewed" unreachable after typing — a timed W that lapses silently. Choosing "until
+  reviewed" now clears the time. A ruling is only as true as the code after the NEXT fix.
+- **⇒ Decision 4 needs a sentence, not only a filter**: a release correctly leaves an unseen hold alone, and must SAY
+  it is still in force (the chart-held rule).
+- **⇒ `cargo doc -D warnings` again** (`<reason>` in a pub doc); clippy and tests are blind to it.
+
 ### 2026-10-21 — #803 slice A (PR #831): the medication withhold, brainstorm → ADR-0081 → SDD
 
 Brainstormed with the maintainer (paper W: per slot, written by doctor or nurse, ends by itself; pro tem "until
@@ -209,30 +230,16 @@ reviewed"), design + builder check, plan, eight SDD tasks each reviewed, an opus
 
 ### 2026-10-20 — #826 (PR #829) and #828 (PR #830): event ids on the CLI's success lines
 
-- **⇒ An issue's survey is a claim** (#826): six of its seven verbs already printed their event ids; reading each arm
-  first turned a seven-verb change into one, and found the three unlisted verbs with the real gap (#828).
-- **⇒ A printed line can be a parse contract** (#828): the RUNBOOK reads the chart id with
-  `sed -n 's/^registered patient //p'`, so `; event …` on that line would have broken four runbook blocks. Grep docs and
-  scripts for a line's text before changing it; the event now gets its own line, pinned by a unit test. The review
-  then found the same contract stated in PROSE ("prints the new id on its last line", RUNBOOK) and false: grep for
-  what the docs *say* about a line, not only for the code that parses it.
-- **⇒ Two bare `Uuid`s on one line get a pure builder and a test** (#828 review, as #829's
-  `observed_evidence_line`): a swap type-checks and every DB test still passes.
-- **⇒ Widen a return without touching its callers:** a `*_returning_event` sibling returning
-  `db_diagnosis::Committed<T>`, the old name a one-line wrapper (~215 call sites untouched).
+- **⇒ An issue's survey is a claim** (#826: six of seven verbs already printed their ids). **⇒ A printed line can be a
+  parse contract** (#828: the RUNBOOK `sed`s `registered patient <id>`) — grep docs and scripts for a line's text, and for
+  what the docs SAY about it, before changing it. **⇒ Two bare `Uuid`s on one line get a pure builder and a test.**
+  **⇒ Widen a return without touching its callers** (a `*_returning_event` sibling, the old name a wrapper).
 
 ### 2026-10-19 — #822 + #823: the CLI after an unknown commit outcome
 
-TDD: the remedy test and the `run_verdict` tests red first, then the
-end-to-end auto-apply test (the #820 kill switch on `patient_link`); disabling the stop reproduced the bug exactly
-(the run's `Result` an `Err`).
-- **⇒ A sentence telling an operator to CHECK something needs a command to check with** — run it (`cairn-node event`
-  was run against a real database both ways before the remedy named it).
-- **⇒ A loop that catches per-item errors must ask whether the error killed the session**; if it did, stop and
-  report, or the next item's first call throws away the summary. The review found my first fix asked only via the
-  marker — one of several ways a session dies; ask the connection (`is_closed`) instead.
-- **⇒ Two true sentences can contradict each other on one screen**: the marker's generic "may be recorded twice" sat
-  above auto-apply's specific "safe to run again". Read the whole output a run prints, not each line alone.
+- **⇒ A sentence telling an operator to CHECK something needs a command to check with** — run it. **⇒ A loop that
+  catches per-item errors must ask whether the error killed the session** (ask the connection, `is_closed`, not one
+  marker). **⇒ Two true sentences can contradict each other on one screen** — read a run's whole output.
 
 ### 2026-10-18 — #811 (b), #814, #815 + #818, #817, #820: interrupted commits say only what is known (PRs #813–#824)
 
