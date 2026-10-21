@@ -209,6 +209,7 @@ nav:
       - ADR-0078 · A machine's unlink does not settle a possible duplicate: spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md
       - ADR-0079 · A DOB one keying error away is not a contradiction: spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md
       - ADR-0080 · A connect replays the schema only when it changed: spec/decisions/0080-a-connect-replays-the-schema-only-when-it-changed.md
+      - ADR-0081 · A medication withhold is a time-bounded hold: spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

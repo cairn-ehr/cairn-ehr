@@ -111,7 +111,7 @@ with a later correction or coding of that assertion. *(Builder-check call: follo
 | field | meaning |
 |---|---|
 | `medication_id` | the thread |
-| `releases` | non-empty array of the **content addresses of the withhold events this release ends**: the holds the releaser saw on the line. A release never ends a hold it does not name (the anti-goal above; the same "name what was displayed" pattern as ADR-0061's attested search). |
+| `releases` | non-empty array of the **withhold event ids this release ends** (*Amended 2026-10-21 in the slice A plan: event ids, not content addresses; same guarantee, and event ids are what the CLI prints and `cairn-node event <id>` reads.*): the holds the releaser saw on the line. A release never ends a hold it does not name (the anti-goal above; the same "name what was displayed" pattern as ADR-0061's attested search). |
 | `reason` | optional text ("discussed with GP — continue", "BP recovered") |
 
 A release ends the named holds **from the release's effective time onward**. A named hold whose span had
@@ -121,6 +121,8 @@ whose `from` lies after the release) is **cancelled**: it never comes into force
 opposite, which would have withheld a dose against the prescriber's intent.)*
 
 ### 4.2 Read-time status (the fold)
+
+*Amended 2026-10-21 in the slice A plan: there is no `MedicationStatus::Withheld`; the fold below yields the holds in force, carried beside the Active/Ceased status (see §5 item 12).*
 
 A line's status, evaluated at read time against the node's clock `now`:
 
@@ -236,7 +238,7 @@ From the 2026-10-21 code map. Every place a new medication event type must be re
 11. `db/059_medication_withhold.sql` listed in `crates/cairn-node/src/db.rs`; `SCHEMA_GENERATION` 58 → 59.
 12. Rust: `cairn-event::medication::{withhold, release}` pure builders + twins; `cairn-node::medication`
     orchestrators through `seal_sign_submit` (mind the cairn-sync `clinical_pull.rs` call-site note if a shared
-    signature changes); `MedicationStatus { Active, Withheld(..), Ceased }` in `cairn-medication-view::row`;
+    signature changes); `MedicationStatus` stays `{Active, Ceased}` with `holds: Vec<MedicationHold>` beside it in `cairn-medication-view::row` (*Amended 2026-10-21 in the slice A plan: no `Withheld` variant, because `signoff.rs:267`, `view.rs:81` and `row_view.rs:87,93` read `status == Active` as current/signable/ceasable, and a third variant would drop withheld drugs out of sign-off*);
     `medication/read.rs` reads holds; `list_text.rs` renders them; the window's `row_view.rs`, `main.js`.
 13. Every new DB read wrapped in `LocalDbFault` bumps `db_errors_stay_legible.rs`; every new commit goes through
     `commit_failure` (the #814/#817 commit inventory guard).
