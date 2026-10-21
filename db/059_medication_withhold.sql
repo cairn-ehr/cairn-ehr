@@ -17,7 +17,8 @@
 -- WHERE THE REFUSALS LIVE (ADR-0081 decision 8). Two layers, deliberately split:
 --   * STRUCTURAL — cairn_check_medication_withhold, run at BOTH doors (it is the registered
 --     floor fn): a blank reason, a missing/malformed `until`, a malformed `from`, `until`
---     not after `from`, an empty/malformed `releases`, a bad medication_id. A payload like
+--     not after `from`, an empty/malformed `releases`, a null/blank/non-string release
+--     `reason`, a bad medication_id. A payload like
 --     that is malformed everywhere, so refusing it at sync apply forks nothing.
 --   * CLINICAL STATE — in the apply fns, LOCAL DOOR ONLY (cairn.remote_apply not 'on'): a
 --     withhold on a ceased line, a hold already over once `from` is resolved to the event's
@@ -136,6 +137,14 @@ BEGIN
                 RAISE EXCEPTION 'medication release: releases entry "%" is not a valid uuid', v_el #>> '{}';
             END;
         END LOOP;
+        -- `reason` is optional: OMITTED, or a non-blank string — never null, blank or another
+        -- JSON type (optional fields are omitted, never null).
+        IF p ? 'reason' AND (jsonb_typeof(p -> 'reason') IS DISTINCT FROM 'string') THEN
+            RAISE EXCEPTION 'medication release: reason, when given, must be a non-empty string (omit it otherwise)';
+        END IF;
+        IF p ? 'reason' AND length(btrim(p ->> 'reason')) = 0 THEN
+            RAISE EXCEPTION 'medication release: reason, when given, must be a non-empty string (omit it otherwise)';
+        END IF;
     END IF;
 END;
 $$;
@@ -208,7 +217,10 @@ BEGIN
         (SELECT patient_id FROM medication_statement WHERE medication_id = p_med),
         (SELECT patient_id FROM medication_cessation WHERE medication_id = p_med),
         (SELECT patient_id FROM medication_coding    WHERE medication_id = p_med),
-        (SELECT patient_id FROM medication_withhold  WHERE medication_id = p_med LIMIT 1));
+        -- One row PER EVENT here, so pick deterministically: the EARLIEST claim stands
+        -- (HLC order, byte-collated), on every call, after any reproject, on every node.
+        (SELECT patient_id FROM medication_withhold  WHERE medication_id = p_med
+          ORDER BY hlc_wall, hlc_counter, origin COLLATE "C", content_address LIMIT 1));
 END;
 $$;
 

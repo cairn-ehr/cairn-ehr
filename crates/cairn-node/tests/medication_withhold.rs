@@ -3,13 +3,15 @@
 //!
 //! The refusals split in two, and these tests pin each half at the door it belongs to:
 //!   * STRUCTURAL (both doors, `cairn_check_medication_withhold`): an empty reason, a
-//!     missing or malformed `until`, a malformed `from`, `until <= from`, an empty
-//!     `releases`.
+//!     missing or malformed `until`, a malformed (or null) `from`, `until <= from` (pinned
+//!     at the sync door too), an empty `releases`, a null/blank/non-string release `reason`.
 //!   * CLINICAL STATE (local door only, in the apply fns): a withhold on a ceased line, a
 //!     hold whose span has already ended once `from` is resolved, a release naming
 //!     something that is not a withhold on the same line. Sync apply never refuses on
 //!     state — a node-local veto would fork the event set — so the last test drives a
 //!     withhold on a ceased line through `apply_remote_event` and sees it admitted.
+//!   * The standing chart of an orphan thread claimed by several withholds is the EARLIEST
+//!     claim, whatever the arrival order (#192).
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard` (shared-DB +
 //! TRUNCATE pattern, like medication.rs). Key material is derived at runtime.
@@ -17,9 +19,9 @@ use cairn_event::medication::HoldUntil;
 use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, build_assert_body, build_withhold_body, cease_medication,
-    reconcile_medications, release_medication_holds, withhold_medication, AssertMedicationInput,
-    CeaseMedicationInput, ReconcileInput, WithholdMedicationInput,
+    assert_medication, build_assert_body, build_release_body, build_withhold_body,
+    cease_medication, reconcile_medications, release_medication_holds, withhold_medication,
+    AssertMedicationInput, CeaseMedicationInput, ReconcileInput, WithholdMedicationInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -570,4 +572,183 @@ async fn an_orphan_withhold_claims_its_thread_for_its_chart() {
     );
     let err = db_msg(&seal_and_submit(&c, &sk, body).await.unwrap_err());
     assert!(err.contains("patient cannot change"), "got: {err}");
+}
+
+/// A peer-minted HLC at `wall` (ms) — for events that arrive through `apply_remote_event`.
+fn peer_hlc(wall: i64) -> Hlc {
+    Hlc {
+        wall,
+        counter: 0,
+        node_origin: "peer".into(),
+    }
+}
+
+/// Sign a CLEAR body and apply it through the sync door (`apply_remote_event`).
+async fn apply_remote(
+    c: &Client,
+    sk: &SigningKey,
+    body: &EventBody,
+) -> Result<u64, tokio_postgres::Error> {
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&sign(body, sk).unwrap().signed_bytes],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn an_empty_span_is_refused_by_the_floor_at_sync_apply_too() {
+    // until == from (one instant, two offsets) is STRUCTURAL: malformed everywhere, so the
+    // floor refuses it at the sync door as well. The local-door test above cannot tell the
+    // floor's branch from the apply fn's state check; this one can — the apply fn's checks
+    // are switched off at this door.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+
+    let local = db::next_hlc(&c, "test-node").await.unwrap();
+    let input = WithholdMedicationInput {
+        reason: "NBM for theatre",
+        from: Some("2099-01-01T20:00:00+10:00"),
+        until: HoldUntil::At("2099-01-01T10:00:00Z"),
+    };
+    let body = build_withhold_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &input,
+        &kid,
+        peer_hlc(local.wall + 1_000),
+    );
+    let err = db_msg(&apply_remote(&c, &sk, &body).await.unwrap_err());
+    assert!(
+        err.contains("medication withhold:") && err.contains("after"),
+        "got: {err}"
+    );
+    assert_eq!(withhold_rows(&c, med).await, 0);
+}
+
+#[tokio::test]
+async fn a_null_from_is_refused_by_the_floor() {
+    // Optional fields are OMITTED, never null: a JSON null `from` is malformed, not "now".
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let mut body = build_withhold_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &until_reviewed("NBM"),
+        &kid,
+        hlc,
+    );
+    body.payload
+        .as_object_mut()
+        .unwrap()
+        .insert("from".into(), serde_json::Value::Null);
+    let err = db_msg(&seal_and_submit(&c, &sk, body).await.unwrap_err());
+    assert!(
+        err.contains("medication withhold:") && err.contains("from"),
+        "got: {err}"
+    );
+    assert_eq!(withhold_rows(&c, med).await, 0);
+}
+
+#[tokio::test]
+async fn a_blank_or_null_release_reason_is_refused_by_the_floor() {
+    // The release's `reason` is optional: omitted, or a non-blank string — never null, never
+    // blank, never another JSON type.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let wid = withhold(&mut c, &sk, &kid, patient, med, "BP 85/50").await;
+
+    let err = release_medication_holds(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &[wid],
+        Some("  "),
+        None,
+    )
+    .await
+    .expect_err("a blank release reason is refused");
+    let err = format!("{err:#}");
+    assert!(
+        err.contains("medication release:") && err.contains("reason"),
+        "got: {err}"
+    );
+
+    for bad in [serde_json::Value::Null, serde_json::json!(42)] {
+        let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+        let mut body = build_release_body(Uuid::now_v7(), med, patient, &[wid], None, &kid, hlc);
+        body.payload
+            .as_object_mut()
+            .unwrap()
+            .insert("reason".into(), bad.clone());
+        let err = db_msg(&seal_and_submit(&c, &sk, body).await.unwrap_err());
+        assert!(
+            err.contains("medication release:") && err.contains("reason"),
+            "{bad}: got: {err}"
+        );
+    }
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM medication_withhold_release", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0);
+}
+
+#[tokio::test]
+async fn the_earliest_orphan_withhold_claim_stands_whatever_the_arrival_order() {
+    // Two orphan withholds of one thread, for DIFFERENT charts, arrive by sync — the LATER one
+    // (by HLC) first. The sync door converges-and-flags rather than refusing (#192), so both
+    // rows exist. The thread's standing chart must be the EARLIEST claim, on every call and on
+    // every node, never whichever row a scan happens to meet first.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (early, late) = (Uuid::now_v7(), Uuid::now_v7());
+    let med = Uuid::now_v7();
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+
+    let w = until_reviewed("NBM");
+    let late_body = build_withhold_body(Uuid::now_v7(), med, late, &w, &kid, peer_hlc(wall + 10));
+    let early_body = build_withhold_body(Uuid::now_v7(), med, early, &w, &kid, peer_hlc(wall));
+    apply_remote(&c, &sk, &late_body)
+        .await
+        .expect("later claim applies");
+    apply_remote(&c, &sk, &early_body)
+        .await
+        .expect("earlier claim applies (flagged)");
+    assert_eq!(
+        withhold_rows(&c, med).await,
+        2,
+        "both rows stored (converge-and-flag)"
+    );
+
+    for _ in 0..5 {
+        let standing: String = c
+            .query_one(
+                "SELECT cairn_medication_thread_patient($1::text::uuid)::text",
+                &[&med.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(standing, early.to_string(), "the earliest claim stands");
+    }
 }
