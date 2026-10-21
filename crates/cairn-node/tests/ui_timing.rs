@@ -99,3 +99,27 @@ async fn an_unknown_gesture_kind_is_refused_by_the_floor() {
         "an unrecognised gesture kind must be refused by the CHECK constraint"
     );
 }
+
+/// #832: the medication withhold/release gestures are timed too, so the closed CHECK must
+/// list them (and the cell keys must land in the smallest size bucket).
+#[tokio::test]
+async fn the_withhold_gestures_are_timed() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE ui_gesture_timing").await.unwrap();
+
+    record_gesture(&c, "withhold", 1, 800).await.unwrap();
+    record_gesture(&c, "release", 1, 600).await.unwrap();
+
+    let aggregates = read_aggregates(&c).await.unwrap();
+    for kind in ["withhold", "release"] {
+        assert!(
+            aggregates.contains_key(&(kind.to_string(), "1-3".to_string())),
+            "missing cell for {kind}"
+        );
+    }
+}
