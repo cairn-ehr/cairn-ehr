@@ -100,12 +100,13 @@ pub(crate) fn sign_off_outcome(
     (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
-/// A thread of a cease whose commit got no ordinary answer (#814): it may or may not be stopped.
+/// A thread whose write (a cease, a withhold, a release) got no ordinary answer at commit
+/// (#814): the write may or may not have landed, so the thread is neither done nor failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CeaseUnknown {
-    /// The member thread being stopped.
+pub(crate) struct UnknownThread {
+    /// The member thread being written.
     pub thread: uuid::Uuid,
-    /// The cessation event that may have landed.
+    /// The event that may have landed.
     pub event: uuid::Uuid,
     /// The error's root cause, as the clinician reads it.
     pub cause: String,
@@ -116,7 +117,7 @@ pub(crate) struct CeaseUnknown {
 /// those whose commit got no ordinary answer (#814), which may or may not be stopped, so they
 /// are neither. "Stopped 0" is left out when one is unknown: that thread may be stopped, so the
 /// count would be false. Rust, not the webview, so every combination is tested.
-pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[CeaseUnknown]) -> String {
+pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[UnknownThread]) -> String {
     let mut parts = Vec::new();
     if ceased > 0 || unknown.is_empty() {
         parts.push(format!("Stopped {ceased} thread(s) of this drug."));

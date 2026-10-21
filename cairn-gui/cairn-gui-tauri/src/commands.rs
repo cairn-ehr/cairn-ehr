@@ -28,7 +28,7 @@ use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
     cease_outcome, chart_read_failed, key_locked, node_cannot_write, node_failure,
-    sign_off_outcome, CeaseUnknown,
+    sign_off_outcome, UnknownThread,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
@@ -464,7 +464,7 @@ pub async fn cease_impl(
             Ok(_) => ceased += 1,
             // A commit lost mid-flight may have stopped it (#814): not a failure, not a success.
             Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
-                Some(event) => unknown.push(CeaseUnknown {
+                Some(event) => unknown.push(UnknownThread {
                     thread: medication_id,
                     event,
                     cause: e.root_cause().to_string(),
