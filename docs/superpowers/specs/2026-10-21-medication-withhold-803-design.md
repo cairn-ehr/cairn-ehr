@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-21
 - **Issue:** [#803](https://github.com/cairn-ehr/cairn-ehr/issues/803); feeds [#804](https://github.com/cairn-ehr/cairn-ehr/issues/804)
-- **Status:** design, from a brainstorm with the maintainer (EM physician) on 2026-10-21
+- **Status:** **approved** by the maintainer 2026-10-21 (with the builder-check calls in §4.1, §4.2a and §3)
 - **Needs:** a new ADR (**ADR-0081**). This is a new clinical state and a new pair of event types, not a UI feature.
 
 ## 1. Intent: the paper "W"
@@ -62,7 +62,6 @@ upholds it.
   belongs to #804's before/after list comparison.
 - **No role restriction** on who may withhold. The record keeps who did it; restricting it is local policy
   (principle 9, policy-neutral infrastructure; ADR-0021 hard policy is role-gated above the floor).
-- Showing a **cessation's** reason (today it is shown nowhere) is a separate gap. Filed, not built here.
 
 **Anti-goals (a failure even if it works)**
 - A hold that **stays held by default** after its stated end, the "ACE inhibitor still held at discharge"
@@ -186,7 +185,13 @@ order.
 
 - **CLI `medication-list`:** `W  <drug> …  withheld until <time | reviewed>: <reason> (<withholder>)`; an
   advance hold as `W from <time>`.
-- **Window:** the line carries the same text in its status cell, and keeps its other line actions.
+- **Window:** the status cell shows the **W** symbol with its span ("W until 20:00", "W until reviewed", "W from
+  20:00"). The **reason and withholder** are revealed by **clicking or focusing the symbol**, with hover as a
+  convenience only (maintainer, 2026-10-21). The symbol is a focusable button with an accessible label carrying
+  the reason, because hover alone is invisible to keyboard and VoiceOver users. The line keeps its other actions.
+- **A cessation's reason, too** (maintainer: "the reason needs to be shown"). Today it is shown nowhere. The
+  CLI's ceased lines print it (slice A), and the window's ceased symbol reveals it the same way as the W
+  (slice B).
 - **New CLI verbs:** `medication-withhold --medication-id --reason --until <ts|reviewed> [--from <ts>]` and
   `medication-release --medication-id --withhold <event-id>…`, printing their event ids (house pattern since
   #826/#828).
@@ -243,9 +248,10 @@ shows a withheld drug as **active**. Acceptable pre-clinically (no node runs cli
 
 - **Slice A, below the surface (record + CLI):** ADR-0081; the two event types, floor, projections, fold,
   commitment, shred/thread/registry arms, schema generation 59; `MedicationStatus::Withheld`; the CLI verbs and
-  `medication-list` rendering; the §4.6 rewording. Paper-parity: the CLI is an operator surface, so the plan
+  `medication-list` rendering (the W lines, and the reason on ceased lines); the §4.6 rewording. Paper-parity: the CLI is an operator surface, so the plan
   takes the benchmark section with the gesture's counts as the target for slice B.
-- **Slice B, the window:** the W display on the line, the Withhold and Release gestures, the gesture-timing rows
+- **Slice B, the window:** the W display on the line, the click/focus reveal of a W's or a cessation's reason,
+  the Withhold and Release gestures, the gesture-timing rows
   (db/044's `gesture_kind` CHECK widened), and the RUNBOOK section that owes the human timing.
 
 ## 7. Paper-parity benchmark (§1.2), the target for slice B
@@ -268,5 +274,4 @@ shows a withheld drug as **active**. Acceptable pre-clinically (no node runs cli
 
 ## 9. To file when the ADR lands
 
-- A cessation's reason is shown nowhere (CLI or window).
 - Ward-level list of new withholds across patients (needs §5.11 reader identity).
