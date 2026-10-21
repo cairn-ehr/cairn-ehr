@@ -10,9 +10,11 @@
 //! comes in as `targets`, the set `view::build_view` computed with ONE call to the shared
 //! `sign_off_targets` rule — the rule the node's orchestrator uses — so the badge on a row and
 //! the count on the button can never disagree (see the `view` module doc).
+use crate::hold_view::{cessation_detail, hold_view, HoldView};
 use cairn_medication_view::{
     short_kid, withheld_reasons, MedicationRow, MedicationStatus, VouchState,
 };
+use chrono::{DateTime, Local};
 use serde::Serialize;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -50,6 +52,16 @@ pub struct MedListRowView {
     /// reads both). On a never-linked chart it is `None`, so that chart gains no label — the
     /// label is information only where there is a choice of folder.
     pub source: Option<String>,
+    /// The holds on this line (ADR-0081), in the workstation's local time. A hold sits BESIDE
+    /// the status: `status_label` words it ("withheld") but `current`, `can_cease` and
+    /// `will_be_signed` do not move.
+    pub holds: Vec<HoldView>,
+    /// True on a current line: a "W" can be written on it.
+    pub can_withhold: bool,
+    /// True when there is a hold to release (a release also cancels a pending hold).
+    pub can_release: bool,
+    /// "Stopped: <reason>" on a ceased line whose cessation gave a reason.
+    pub cessation_detail: Option<String>,
 }
 
 /// Shown instead of a blank cell. Principle 4: an unrecorded dose is a recordable state,
@@ -68,7 +80,9 @@ pub(crate) fn build_row(
     row: &MedicationRow,
     targets: &HashSet<Uuid>,
     linked: bool,
+    now: &DateTime<Local>,
 ) -> MedListRowView {
+    let holds: Vec<HoldView> = row.holds.iter().map(|h| hold_view(h, now)).collect();
     MedListRowView {
         group_id: row.group_id.to_string(),
         primary: row.display_name().to_string(),
@@ -81,6 +95,7 @@ pub(crate) fn build_row(
         sig: row.sig.clone().unwrap_or_default(),
         started: row.started_value.clone().unwrap_or_default(),
         status_label: match row.status {
+            MedicationStatus::Active if row.is_withheld() => "withheld".into(),
             MedicationStatus::Active => "current".into(),
             MedicationStatus::Ceased => "ceased".into(),
         },
@@ -93,6 +108,10 @@ pub(crate) fn build_row(
         can_cease: row.status == MedicationStatus::Active,
         flags: flags(row),
         source: linked.then(|| source_label(&row.source_charts)),
+        can_withhold: row.status == MedicationStatus::Active,
+        can_release: !holds.is_empty(),
+        holds,
+        cessation_detail: row.cessation_reason.as_deref().map(cessation_detail),
     }
 }
 
@@ -514,7 +533,12 @@ mod tests {
             vec![member(1, VouchState::Absent)],
         );
         r.source_charts = vec![];
-        let view = super::build_row(&r, &std::collections::HashSet::new(), true);
+        let view = super::build_row(
+            &r,
+            &std::collections::HashSet::new(),
+            true,
+            &chrono::Local::now(),
+        );
         assert_eq!(
             view.source,
             Some("(chart not read)".to_string()),

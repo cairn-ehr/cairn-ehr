@@ -14,7 +14,9 @@
 //! something to report.
 use crate::chart::PatientMedicationList;
 use crate::chart_set::ChartSet;
-use crate::row::{MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons};
+use crate::row::{
+    MedicationHold, MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons,
+};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -61,7 +63,9 @@ fn member(id: u128, vouch: VouchState) -> MemberVouch {
 
 /// A chart covering every shape the view model has to get right: unsigned, signed by
 /// SOMEONE ELSE, stale, ceased, a reconciled group whose two members disagree, and a
-/// cross-patient line that must be shown but never signed.
+/// cross-patient line that must be shown but never signed — plus, for the withhold "W"
+/// (ADR-0081, #832): an in-force open hold (sertraline), a pending hold (amlodipine, starting
+/// in 2098 so it stays pending whenever the demo runs) and a ceased line with its reason.
 pub fn sample_rows() -> Vec<MedicationRow> {
     // A deliberately NON-hex label. A fixture attester id never needs to look like a real
     // key id, and a hex-shaped literal in a key-id field trips CodeQL's
@@ -79,8 +83,30 @@ pub fn sample_rows() -> Vec<MedicationRow> {
     let mut stale = base(30, "sertraline", "50", "mg");
     stale.members = vec![member(30, VouchState::Stale { by: other.clone() })];
 
+    // Withheld in force until reviewed. Non-hex withholder, as above (house rule 6).
+    stale.holds = vec![MedicationHold {
+        withhold_event_id: uid(110),
+        medication_id: uid(30),
+        reason: "BP 85/50".into(),
+        starts_at: "2026-10-21T00:00:00Z".into(),
+        until: "reviewed".into(),
+        withholder: other.clone(),
+        pending: false,
+    }];
+    // Not started yet: the line still reads current, the hold says when it begins.
+    signed_by_other.holds = vec![MedicationHold {
+        withhold_event_id: uid(120),
+        medication_id: uid(20),
+        reason: "procedure".into(),
+        starts_at: "2098-12-31T22:00:00Z".into(),
+        until: "reviewed".into(),
+        withholder: other.clone(),
+        pending: true,
+    }];
+
     let mut ceased = base(40, "ibuprofen", "400", "mg");
     ceased.status = MedicationStatus::Ceased;
+    ceased.cessation_reason = Some("gastric irritation".into());
     ceased.members = vec![member(40, VouchState::Absent)];
 
     // A reconciled pair: ONE row, TWO threads, differing freshness. The group/thread
@@ -168,6 +194,12 @@ mod tests {
             .iter()
             .any(|r| r.status == MedicationStatus::Ceased));
         assert!(chart.rows.iter().any(|r| r.members.len() > 1));
+        assert!(chart.rows.iter().any(|r| r.is_withheld()));
+        assert!(chart
+            .rows
+            .iter()
+            .any(|r| r.holds.iter().all(|h| h.pending) && !r.holds.is_empty()));
+        assert!(chart.rows.iter().any(|r| r.cessation_reason.is_some()));
         assert!(chart.rows.iter().any(|r| r.cross_patient));
         assert!(!chart.groups_missing_from_chart.is_empty());
     }

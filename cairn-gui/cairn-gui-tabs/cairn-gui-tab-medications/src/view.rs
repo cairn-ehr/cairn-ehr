@@ -68,10 +68,13 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
     // One row per chart row; what a single line says is `row_view`'s job. Whether rows name
     // their source chart is a property of the whole list, so it is decided here, once.
     let linked = list.charts.is_linked();
+    // The clock is read ONCE per build so every hold on the screen is worded against the
+    // same instant (and the same workstation zone).
+    let now = chrono::Local::now();
     let view_rows: Vec<MedListRowView> = list
         .rows
         .iter()
-        .map(|row| build_row(row, &targets, linked))
+        .map(|row| build_row(row, &targets, linked, &now))
         .collect();
 
     let sign_off_count = targets.len();

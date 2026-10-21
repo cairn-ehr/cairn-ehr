@@ -498,6 +498,7 @@ version = "0.1.0"
 dependencies = [
  "cairn-gui-tab",
  "cairn-medication-view",
+ "chrono",
  "serde",
  "uuid",
 ]

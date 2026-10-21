@@ -5,11 +5,13 @@
 //! reader announced — what is declared here is what the markup is written to produce.
 //! Verifying that the browser really announces it is still an operator act with a live
 //! screen reader; automating the DOM assertions is issue #332.
+mod hold_view;
 mod row_view;
 #[cfg(test)]
 mod test_rows;
 pub mod view;
 
+pub use hold_view::HoldView;
 pub use view::{build_view, MedListRowView, MedListView};
 
 use cairn_gui_tab::context::Context;
@@ -92,6 +94,16 @@ impl Semantic for MedicationsTab {
                 label.push_str(", ");
                 label.push_str(flag);
             }
+            // Holds and a cessation's reason ride the same utterance (short form; each hold's
+            // full detail is its own button below).
+            for hold in &row.holds {
+                label.push_str(", ");
+                label.push_str(&hold.symbol);
+            }
+            if let Some(why) = &row.cessation_detail {
+                label.push_str(", ");
+                label.push_str(why);
+            }
             fields.push(Field {
                 id: format!("row-{}", row.group_id),
                 role: Role::ListItem,
@@ -104,6 +116,29 @@ impl Semantic for MedicationsTab {
                     id: format!("cease-{}", row.group_id),
                     role: Role::Button,
                     label: format!("Stop {}", row.primary),
+                });
+            }
+            // Each hold is a focusable button (its click reveals the detail); the detail is
+            // also its accessible name, so the reason is announced without opening it.
+            for hold in &row.holds {
+                fields.push(Field {
+                    id: format!("hold-{}", hold.withhold_event_id),
+                    role: Role::Button,
+                    label: hold.detail.clone(),
+                });
+            }
+            if row.can_withhold {
+                fields.push(Field {
+                    id: format!("withhold-{}", row.group_id),
+                    role: Role::Button,
+                    label: format!("Withhold {}", row.primary),
+                });
+            }
+            if row.can_release {
+                fields.push(Field {
+                    id: format!("release-{}", row.group_id),
+                    role: Role::Button,
+                    label: format!("Release the holds on {}", row.primary),
                 });
             }
         }
@@ -186,6 +221,34 @@ mod semantic_tests {
                 .all(|f| f.label.contains("Stop ")),
             "a bare 'Stop' is ambiguous when read out of table context"
         );
+    }
+
+    /// ADR-0081: every hold, and the controls that write one, are labelled buttons.
+    #[test]
+    fn every_hold_and_hold_control_is_a_labelled_button() {
+        let view = crate::view::build_view(&cairn_medication_view::fixtures::sample_chart());
+        let node = MedicationsTab::new(view.clone()).semantics(&ctx());
+        let find = |id: &str| node.fields.iter().find(|f| f.id == id);
+        let mut holds = 0;
+        for row in &view.rows {
+            for h in &row.holds {
+                holds += 1;
+                let f = find(&format!("hold-{}", h.withhold_event_id)).expect("hold button");
+                assert_eq!(f.role, Role::Button);
+                assert_eq!(f.label, h.detail);
+            }
+            assert_eq!(
+                find(&format!("withhold-{}", row.group_id)).map(|f| f.label.clone()),
+                row.current.then(|| format!("Withhold {}", row.primary))
+            );
+            assert_eq!(
+                find(&format!("release-{}", row.group_id)).map(|f| f.label.clone()),
+                (!row.holds.is_empty()).then(|| format!("Release the holds on {}", row.primary))
+            );
+        }
+        assert!(holds >= 2, "the fixture must carry holds");
+        node.assert_complete()
+            .expect("a11y contract must be complete");
     }
 
     /// ADR-0060 decision 2 at the accessibility layer. A warning rendered only as a
