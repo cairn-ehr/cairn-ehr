@@ -237,6 +237,14 @@ mod semantic_tests {
                 assert_eq!(f.role, Role::Button);
                 assert_eq!(f.label, h.detail);
             }
+            // The row's one utterance carries each hold's symbol and a cessation's reason.
+            let spoken = &find(&format!("row-{}", row.group_id)).expect("row").label;
+            for h in &row.holds {
+                assert!(spoken.contains(&h.symbol), "{spoken}");
+            }
+            if let Some(why) = &row.cessation_detail {
+                assert!(spoken.contains(why), "{spoken}");
+            }
             assert_eq!(
                 find(&format!("withhold-{}", row.group_id)).map(|f| f.label.clone()),
                 row.current.then(|| format!("Withhold {}", row.primary))
@@ -247,6 +255,7 @@ mod semantic_tests {
             );
         }
         assert!(holds >= 2, "the fixture must carry holds");
+        assert!(view.rows.iter().any(|r| r.cessation_detail.is_some()));
         node.assert_complete()
             .expect("a11y contract must be complete");
     }

@@ -7,7 +7,7 @@
 //! not UTC. The CLI's equivalent (`cairn-node`'s `hold_text.rs`) prints the raw instants: it
 //! is an operator tool, this is the bedside window.
 use cairn_medication_view::{short_kid, MedicationHold};
-use chrono::{DateTime, TimeZone};
+use chrono::{DateTime, Datelike, TimeZone};
 use serde::Serialize;
 use std::fmt::Display;
 
@@ -37,6 +37,9 @@ where
     let t = t.with_timezone(&now.timezone());
     if t.date_naive() == now.date_naive() {
         t.format("%H:%M").to_string()
+    } else if t.year() != now.year() {
+        // A far date must not read as the coming month of this year.
+        t.format("%a %-d %b %Y %H:%M").to_string()
     } else {
         t.format("%a %-d %b %H:%M").to_string()
     }
@@ -97,10 +100,7 @@ mod tests {
 
     /// 2026-10-21 09:00 at UTC+10.
     fn now() -> DateTime<FixedOffset> {
-        let tz = FixedOffset::east_opt(10 * 3600).unwrap();
-        DateTime::parse_from_rfc3339("2026-10-21T09:00:00+10:00")
-            .unwrap()
-            .with_timezone(&tz)
+        DateTime::parse_from_rfc3339("2026-10-21T09:00:00+10:00").unwrap()
     }
 
     fn hold(until: &str, pending: bool) -> MedicationHold {
@@ -125,6 +125,15 @@ mod tests {
     fn a_hold_ending_another_day_names_the_day() {
         let v = hold_view(&hold("2026-10-21T22:00:00Z", false), &now());
         assert_eq!(v.symbol, "W until Thu 22 Oct 08:00");
+    }
+
+    /// "Thu 1 Jan 08:00" would be read as the coming January; a far date names its year.
+    #[test]
+    fn an_instant_in_another_year_names_its_year() {
+        assert_eq!(
+            local_instant("2098-12-31T22:00:00Z", &now()),
+            "Thu 1 Jan 2099 08:00"
+        );
     }
 
     #[test]
