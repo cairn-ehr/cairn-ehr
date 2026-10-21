@@ -168,7 +168,8 @@ fn a_release_sends_only_the_holds_it_drew() {
 
 /// "Until reviewed" is the default end (the open-ended paper W), and it is sent only when it was
 /// the choice: "until a time" with no time, or a time the browser cannot read, is sent as `""`,
-/// so Rust words the refusal ("choose when the hold ends") — never quietly an open-ended hold.
+/// so Rust words the refusal ("the end time is missing or incomplete …") — never quietly an
+/// open-ended hold.
 #[test]
 fn until_reviewed_is_the_default_and_never_an_empty_time() {
     let controls = js_fn(HOLDS_JS, "holdControls");
@@ -225,8 +226,13 @@ fn both_gestures_re_read_like_cease() {
                 ),
             "{name}: {body}"
         );
-        // Resolves false on a refusal (nothing written: the button comes back), true on a report.
-        assert!(caught.contains("return false;"), "{name}: {body}");
+        // A refusal (nothing written) resolves false — the button comes back — unless it proved
+        // the list stale: `Retry::AfterReread` promises no live retry, so the button stays down
+        // (the re-read draws a fresh one). A report resolves true.
+        assert!(
+            caught.contains("return behindTheRecord(failure) !== null;"),
+            "{name}: {body}"
+        );
         let after = &body[caught_at + caught.len()..];
         let reread = position(
             after,
@@ -272,7 +278,7 @@ fn a_re_read_keeps_the_until_choice_and_time() {
 /// A PARTLY typed time (a date, no hour) is not caught by that listener: the field's value stays
 /// `""` and fires no `input`. So the press itself reads the field: anything in it — a value, or
 /// input the browser cannot read (`validity.badInput`) — makes the kind "time", and a partial
-/// time then goes as `""`, which Rust refuses ("choose when the hold ends").
+/// time then goes as `""`, which Rust refuses ("the end time is missing or incomplete …").
 #[test]
 fn typing_a_time_chooses_until_a_time() {
     let controls = js_fn(HOLDS_JS, "holdControls");
@@ -325,7 +331,8 @@ fn choosing_until_reviewed_clears_the_time() {
 /// disables itself before it sends; the re-read after the gesture rebuilds the line with a fresh,
 /// enabled button. That re-read can fail and keep the old line, so a REFUSED press (nothing was
 /// written) re-enables its own button — else Withhold sat dead with no word why (#838 review). A
-/// press that returned a report keeps it disabled: a recorded W must not be pressable again.
+/// press that returned a report keeps it disabled: a recorded W must not be pressable again; so
+/// does a stale refusal (`withhold`/`release` resolve "spent" for both).
 #[test]
 fn a_gesture_button_disables_itself_before_it_sends() {
     let controls = js_fn(HOLDS_JS, "holdControls");
@@ -343,10 +350,10 @@ fn a_gesture_button_disables_itself_before_it_sends() {
             disabled < pressed + position(&controls[pressed..], send),
             "{button}: {controls}"
         );
-        let resolved = pressed + position(&controls[pressed..], ".then((reported) => {");
+        let resolved = pressed + position(&controls[pressed..], ".then((spent) => {");
         assert!(
             controls[resolved..].starts_with(&format!(
-                ".then((reported) => {{\n        if (!reported) {button}.disabled = false;"
+                ".then((spent) => {{\n        if (!spent) {button}.disabled = false;"
             )),
             "{button}: {controls}"
         );

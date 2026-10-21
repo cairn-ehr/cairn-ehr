@@ -45,7 +45,9 @@ pub struct MedListRowView {
     /// True when the sign-off gesture will sign this row. Derived from the SAME
     /// `sign_off_targets` the orchestrator uses — never recomputed here.
     pub will_be_signed: bool,
-    /// False for an already-ceased drug.
+    /// False for an already-ceased drug. The window narrows it further (#841): on a wrong-chart
+    /// hazard line with no thread on the opened chart there is nothing Stop could write, and
+    /// only the Tauri `chart_pane`, which knows the opened chart, can tell.
     pub can_cease: bool,
     /// Advisory worklist labels (duplicate suspicion, anchor conflict, wrong-chart hazard).
     pub flags: Vec<String>,
@@ -59,7 +61,8 @@ pub struct MedListRowView {
     /// the status: `status_label` words it ("withheld") but `current`, `can_cease` and
     /// `will_be_signed` do not move.
     pub holds: Vec<HoldView>,
-    /// True on a current line: a "W" can be written on it.
+    /// True on a current line: a "W" can be written on it. Narrowed by the window as
+    /// `can_cease` is (#841), to lines `withhold_target` accepts from the opened chart.
     pub can_withhold: bool,
     /// True when there is a hold to release (a release also cancels a pending hold).
     pub can_release: bool,

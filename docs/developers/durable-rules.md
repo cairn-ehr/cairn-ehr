@@ -17,9 +17,28 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   wrote after the clinician last looked, unseen. **Tempting wrong fix:** have `release` re-read the holds "so it
   is never stale". Pins: `a_release_ends_only_the_holds_it_was_shown` (+ `a_hold_that_ended_meanwhile_is_named_gone`),
   and the webview guard `a_release_sends_only_the_holds_it_drew` (the only `invoke("release"` sends the ids it was handed).
-  **And the report SAYS the unseen hold is still in force** ("Released 1" alone reads as "givable"): `ReleasePlan::unseen`
-  counts holds on the line not in `shown` (pending too). Pins: `a_hold_not_shown_is_counted_unseen`,
-  `a_release_says_a_hold_it_was_not_shown_is_still_in_force`.
+  **And the report SAYS the unseen hold is still on the line** ("Released 1" alone reads as "givable"): `ReleasePlan::unseen`
+  counts holds on the line not in `shown` (pending too, so the words are "still on this line", never "in force",
+  #839), and the stale refusal for an all-gone Release says it too (`all_shown_gone`). Pins:
+  `a_hold_not_shown_is_counted_unseen`, `a_release_says_a_hold_it_was_not_shown_is_still_on_the_line`,
+  `a_release_with_nothing_left_to_end_names_an_unseen_hold`.
+- **A cease or release that wrote nothing is a refusal (`Err`), not a report (#840).** When every write failed and
+  none is unknown, `retry_when_nothing_written` gives ONE class — **stale wins** (maintainer's ruling), else the
+  first failure's — and the text is the same outcome sentence. As a report it wiped the typed reason and lost the
+  stale class. A gesture whose threads were all HELD BACK (no write tried) still returns its report. **Tempting
+  wrong fix:** return the report "so the outcome line names every thread" — the `Err` text already does. Pins:
+  `a_gesture_that_wrote_nothing_takes_one_class_and_stale_wins`, `a_gesture_that_wrote_nothing_is_a_refusal_with_its_class`.
+- **Withhold and Stop are drawn only where their command can write (#841)** — `chart_pane` asks `withhold_target`
+  and `cease_plan` with the opened chart, so a hazard line with nothing on this chart offers no press that can only
+  refuse or stop nothing — and SAYS where to go instead (`NOT_ON_OPENED_CHART`): the refused press used to. Hazard
+  lines only: an ordinary line `withhold_target` refuses is an anomaly (a reconcile raced the list's reads), and the
+  press names it where a hidden button says nothing. A cease that can write nothing answers before the key, marked
+  behind the record (as release); one that stopped nothing is no timing sample. **Tempting wrong fixes:** compute
+  either from `status` in `build_row` (it has no opened chart); narrow every row on `.is_ok()`. Pins:
+  `withhold_and_stop_are_offered_only_where_they_can_write`, `the_refusals_come_before_the_key`.
+- **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
+  report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
+  refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.
 - **The W is a BUTTON whose accessible name carries its reason** (symbol + " — " + detail), and a ceased line
   whose cessation gave a reason has its status word as such a button, revealing `"Stopped: <reason>"` (no reason:
   plain text). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin

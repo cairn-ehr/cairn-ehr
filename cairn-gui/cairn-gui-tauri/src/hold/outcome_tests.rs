@@ -70,17 +70,38 @@ fn a_release_names_holds_no_longer_on_the_line() {
 }
 
 /// A hold on the line the clinician never saw (a colleague's W that arrived after the line was
-/// drawn) stays in force (ADR-0081 decision 4) — and the report SAYS so, as information, never
-/// as a failure: "Released 1" alone would read as "this drug is now givable".
+/// drawn) is left as it is (ADR-0081 decision 4) — and the report SAYS so, as information, never
+/// as a failure: "Released 1" alone would read as "this drug is now givable". "Still on this
+/// line", never "in force": the count includes PENDING holds, which have not started (#839).
 #[test]
-fn a_release_says_a_hold_it_was_not_shown_is_still_in_force() {
+fn a_release_says_a_hold_it_was_not_shown_is_still_on_the_line() {
     let text = release_outcome(1, 0, 2, &[], &[]);
     assert_eq!(
         text,
         "Released 1 hold(s) on this drug. 2 hold(s) added since this line was drawn are still \
-         in force (they were not shown, so were not released)."
+         on this line (they were not shown, so were not released)."
     );
     assert!(!text.contains("NOT"), "information, not a failure: {text}");
+    assert!(
+        !text.contains("in force"),
+        "a pending hold is not in force: {text}"
+    );
+}
+
+/// #839: a Release refused because every hold it was shown has gone still names a hold it was
+/// NOT shown — a colleague's W synced in meanwhile. Release is the moment the clinician decides
+/// to give the drug, and if the re-read after this refusal fails, this sentence is all they see.
+#[test]
+fn a_release_with_nothing_left_to_end_names_an_unseen_hold() {
+    assert_eq!(
+        all_shown_gone(0),
+        "the holds shown are no longer on this line — nothing was done"
+    );
+    assert_eq!(
+        all_shown_gone(1),
+        "the holds shown are no longer on this line — nothing was done. 1 hold(s) added since \
+         this line was drawn are still on this line (they were not shown, so were not released)."
+    );
 }
 
 #[test]
@@ -126,7 +147,7 @@ fn a_mixed_release_keeps_every_part_in_order() {
     let order = [
         "Released 2 hold(s) on this drug.",
         "1 hold(s) shown are no longer on this line",
-        "3 hold(s) added since this line was drawn are still in force",
+        "3 hold(s) added since this line was drawn are still on this line",
         "1 item(s) were NOT released and are still on this line: thread x: refused",
         "Whether the holds on 2 thread(s) of this drug were released is NOT known",
     ];

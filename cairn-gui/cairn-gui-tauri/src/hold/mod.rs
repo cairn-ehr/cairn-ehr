@@ -19,10 +19,11 @@ use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now};
 use crate::write_failure::{
-    chart_read_failed, key_locked, node_cannot_write, node_failure, UnknownThread,
+    chart_read_failed, key_locked, node_cannot_write, node_failure, retry_when_nothing_written,
+    UnknownThread,
 };
 use cairn_event::medication::HoldUntil;
-use outcome::{release_outcome, withhold_outcome};
+use outcome::{all_shown_gone, release_outcome, withhold_outcome};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -53,13 +54,17 @@ pub(crate) enum UntilChoice {
 /// Read the webview's end-of-hold field. The end is a clinical fact the clinician must choose:
 /// the webview preselects "until reviewed" ON SCREEN, where it is seen and changed, and sends
 /// `""` for "until a time" with no (or a partly typed) time. That empty end is refused with a
-/// sentence saying what to choose — never turned into "until reviewed" here, which would be a
-/// hold nobody decided on (principle 4). Only the shape is
-/// checked here; that the end is AFTER the start is the floor's rule (db/059).
+/// sentence saying the time is missing or incomplete and what to choose (#841) — never turned
+/// into "until reviewed" here, which would be a hold nobody decided on (principle 4). Only the
+/// shape is checked here; that the end is AFTER the start is the floor's rule (db/059).
 pub(crate) fn parse_until(until: &str) -> Result<UntilChoice, String> {
     match until {
         "reviewed" => Ok(UntilChoice::Reviewed),
-        "" => Err("choose when the hold ends: a time, or until reviewed".to_string()),
+        "" => Err(
+            "the end time is missing or incomplete — choose when the hold ends: a time, \
+                   or until reviewed"
+                .to_string(),
+        ),
         text if chrono::DateTime::parse_from_rfc3339(text).is_ok() => {
             Ok(UntilChoice::At(text.to_string()))
         }
@@ -247,11 +252,10 @@ pub async fn release_impl(
         .ok_or_else(|| stale("that drug is no longer on this chart — nothing was done"))?;
     let plan = plan::release_plan(row, &shown, patient);
     // Nothing to write and nothing deliberately held back: every hold shown has already ended,
-    // so the screen is behind the record — re-read it, nothing was done.
+    // so the screen is behind the record — re-read it, nothing was done. Holds it was not shown
+    // are named even here (#839).
     if plan.write.is_empty() && plan.held_back.is_empty() {
-        return Err(stale(
-            "the holds shown are no longer on this line — nothing was done",
-        ));
+        return Err(stale(all_shown_gone(plan.unseen)));
     }
     // Nothing this chart may write, only holds held back: said now, before the key — a locked
     // key would otherwise hide "release it from its own chart" behind an unlock that writes
@@ -277,6 +281,8 @@ pub async fn release_impl(
     let mut released = 0usize;
     // Held-back holds are reported with the failures: both are holds this gesture did NOT end.
     let mut failed = plan.held_back;
+    // Each ordinary failure's class, for the refusal below when nothing was released (#840).
+    let mut retries = Vec::new();
     let mut unknown = Vec::new();
     for (medication_id, thread_chart, ids) in plan.write {
         // One thread per call, each its own transaction, so one thread failing leaves the
@@ -312,13 +318,25 @@ pub async fn release_impl(
                     event,
                     cause: e.root_cause().to_string(),
                 }),
-                None => failed.push(format!("thread {medication_id}: {e:#}")),
+                None => {
+                    retries.push(node_failure(&e).retry);
+                    failed.push(format!("thread {medication_id}: {e:#}"))
+                }
             },
         }
     }
+    // Every write failed and none is unknown: nothing was released, so this is a refusal, not
+    // a report (#840). As a report it wiped the typed reason and dropped the failure's class,
+    // so a stale refusal left the list unmarked if the re-read after it failed.
+    if let Some(retry) = retry_when_nothing_written(released, &unknown, &retries) {
+        return Err(ErrorView {
+            text: release_outcome(0, plan.gone.len(), plan.unseen, &failed, &[]),
+            retry,
+        });
+    }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    // Timed only when it released something and no outcome is unknown (#818 review): a release
-    // whose every write failed made no gesture worth a sample.
+    // Timed only when no outcome is unknown (#818 review). `released > 0` is belt and braces: a
+    // release that ended nothing has returned above, as a refusal or before the key.
     if unknown.is_empty() && released > 0 {
         record_timing(state, "release", 1, elapsed_ms).await;
     }

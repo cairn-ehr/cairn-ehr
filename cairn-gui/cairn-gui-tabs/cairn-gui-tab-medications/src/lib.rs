@@ -28,7 +28,10 @@ impl MedicationsTab {
     }
 
     /// The view model this tab renders — the Tauri command hands the same value to the
-    /// webview, so the announced contract and the drawn table describe one state.
+    /// webview, so the announced contract and the drawn table describe one state. One
+    /// exception: the window narrows `can_cease`/`can_withhold` by the opened chart (#841),
+    /// which this view has no way to know — so `semantics()` still declares Stop and Withhold
+    /// on such a line. Nothing consumes that tree yet; one that does must take the narrowing.
     pub fn view(&self) -> &MedListView {
         &self.view
     }

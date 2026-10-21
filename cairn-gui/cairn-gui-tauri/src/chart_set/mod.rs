@@ -262,14 +262,23 @@ pub struct ChartPane {
     pub set_change: Option<String>,
 }
 
+/// The row sentence on a hazard line whose Withhold and Stop [`chart_pane`] did not draw (#841):
+/// the remedy the refused press used to give, so the way forward is not hidden with the buttons.
+pub(crate) const NOT_ON_OPENED_CHART: &str = "this line has no record on the chart you opened — \
+     stop or withhold it from its own chart";
+
 /// Assemble the pane from one chart read and the outcome of reading its member names.
 ///
 /// Pure, so the availability rule is tested with no database: whatever happened to the member
 /// read, the list itself always goes to the screen. A failure becomes `members_error`, worded to
 /// say the list is combined, over how many charts, and that each member's identity state is
 /// unknown — the facts the missing header lines would have conveyed.
+///
+/// `opened` is the chart the clinician opened: Withhold and Stop are drawn only on a line their
+/// command could write from there (#841).
 pub fn chart_pane(
     list: &PatientMedicationList,
+    opened: Uuid,
     members: Result<Vec<MemberLine>, String>,
     links: Result<crate::link::record_links::RecordLinks, String>,
     duplicates: crate::duplicates::view::DuplicateSection,
@@ -289,8 +298,28 @@ pub fn chart_pane(
     };
     let (links, links_error) =
         crate::link::record_links::links_section(links, &members, list.charts.is_linked());
+    let mut view = build_view(list);
+    // #841: a hazard line with no thread on the opened chart can only refuse a Withhold and can
+    // stop nothing (a cease holds every thread back), so neither is offered — each asked by its
+    // command's own rule, so they cannot drift. Hazard lines only: on an ordinary line a refusal
+    // is an anomaly (its own thread missing from its members), and the press names it and its
+    // remedy where a hidden button would say nothing. `build_view` keeps `list.rows`' order, so
+    // the rows zip one to one.
+    for (shown, row) in view.rows.iter_mut().zip(&list.rows) {
+        debug_assert_eq!(shown.group_id, row.group_id.to_string());
+        if !row.is_wrong_chart_hazard() {
+            continue;
+        }
+        let offered = (shown.can_withhold, shown.can_cease);
+        shown.can_withhold &= crate::hold::plan::withhold_target(row, opened).is_ok();
+        shown.can_cease &= !cease_plan(row, opened).write.is_empty();
+        // The refused press used to say where to go; with the buttons gone, the line says it.
+        if offered != (shown.can_withhold, shown.can_cease) {
+            shown.flags.push(NOT_ON_OPENED_CHART.to_string());
+        }
+    }
     ChartPane {
-        list: build_view(list),
+        list: view,
         members,
         members_error,
         links,

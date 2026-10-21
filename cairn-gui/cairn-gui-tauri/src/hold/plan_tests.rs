@@ -85,7 +85,7 @@ fn a_release_ends_only_the_holds_it_was_shown() {
 }
 
 /// A hold the clinician was not shown — a colleague's W synced in after the line was drawn, or a
-/// pending one — is never ended, but it is COUNTED, so the report can say it is still in force
+/// pending one — is never ended, but it is COUNTED, so the report can say it is still on this line
 /// (the maintainer's rule: say what changed from another source since the chart was taken).
 #[test]
 fn a_hold_not_shown_is_counted_unseen() {
