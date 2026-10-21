@@ -473,23 +473,23 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   its summary. #826 + #828: every CLI write verb prints its event ids, through pure line builders (the RUNBOOK's
   first-line parse contract pinned by `the_runbook_sed_still_reads_the_chart_id_alone`).
 - **2026-10-21 (#803 slice A, PR #831):** medication **withhold "W"** — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md)
-  (spec v0.83), brainstormed with the maintainer. Two additive born-sealed events (`clinical.medication-withhold.asserted`
-  with a reason and a span: `until` a time or "reviewed"; `…-withhold-release.asserted` naming withholds by event id),
-  `db/059` (SCHEMA_GENERATION 59): structural floor at both doors, state refusals at the local door only; a read-time
-  fold `cairn_medication_group_holds(groups, now)` — expiry writes no event, the default is resume; a release cancels a
-  not-yet-started hold; cessation wins. Holds sit BESIDE `MedicationStatus` (no third status, so a withheld line stays
-  signable); both types join the sign-off commitment (a W after sign-off stales it; expiry does not), shred and thread
-  resolution. CLI `medication-withhold` / `medication-release`; `medication-list` prints W lines and a cessation's
-  reason; "withheld" now means held, "not shown" hidden. The whole-branch review caught a fast PEER clock starting
-  holds hours late (the HLC wall); a hold's start and a release's instant are now the authoring node's physical clock.
-  Filed **#832** (slice B: the window), **#833** (ward-level new-withholds list), **#834** (no marker for an
-  undecryptable event on a line). The PR's second review (fixed in the PR) removed db/059's last HLC-wall fallback:
-  the floor now REFUSES, at both doors, a hold with neither `from` nor `t_effective` and a release without one, since
-  another client could otherwise start a "W from now" hours late. It also put each hold's ids on the `medication-list`
-  line, so anyone can release it. Filed **#835** (a future-dated release is invisible), **#836** (the #192
-  conflict flag is never read, so a wrong-chart W projects), **#837** (test gaps: authorship, double release,
-  shredding a release).
-- **Next:** review and merge PR #831; then **#832** (slice B), **#804** (needs #690), **#825** (a decision); then the
+  (spec v0.83): two additive born-sealed events (withhold with a reason and `until` a time or "reviewed"; release naming
+  withholds by event id), `db/059` (SCHEMA_GENERATION 59), a read-time fold (expiry writes no event; the default is
+  resume), holds BESIDE `MedicationStatus`, both types in the sign-off commitment; CLI `medication-withhold` /
+  `medication-release`. A hold's start and a release's instant are the authoring node's PHYSICAL clock, and the floor
+  refuses a body without one (a fast peer's HLC would start "W from now" hours late). Filed **#832** (slice B),
+  **#833** (ward-level new-withholds list), **#834** (undecryptable-event marker), **#835** (a future-dated release is
+  invisible), **#836** (the #192 conflict flag is never read), **#837** (test gaps).
+  **PR #831 merged 2026-10-21.**
+- **2026-10-21 (#832, PR #838):** the **W in the window** — each hold a button in the status cell, local time
+  ("W until 20:00", a date when not today, a year when not this year), reason revealed on click/focus (hover a
+  convenience; Escape/outside click closes), a ceased line's reason the same way; **Withhold** (reason + "until
+  reviewed" default / a time) and **Release** (sends only the hold ids drawn; says when a hold it never saw is still in
+  force) always visible on the line (maintainer's call, K = 2). New `hold` module (pure `withhold_target`/`release_plan`,
+  `cease`-shaped commands, unknown commits never "failed"), `holds.js`, db/044 times `withhold`/`release` (paired ALTER +
+  a replay-convergence test). RUNBOOK §15 owes the human timing and VoiceOver pass. Filed **#839**; #809 gained item 5.
+  Second review: the list re-reads at a hold's start or end (`next_hold_change`); filed **#840**, **#841**.
+- **Next:** review and merge PR #838, then its RUNBOOK §15; **#804** (needs #690), **#825** (a decision); then the
   open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

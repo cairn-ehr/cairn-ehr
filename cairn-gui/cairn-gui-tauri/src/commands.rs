@@ -28,7 +28,7 @@ use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
     cease_outcome, chart_read_failed, key_locked, node_cannot_write, node_failure,
-    sign_off_outcome, CeaseUnknown,
+    sign_off_outcome, UnknownThread,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
@@ -464,7 +464,7 @@ pub async fn cease_impl(
             Ok(_) => ceased += 1,
             // A commit lost mid-flight may have stopped it (#814): not a failure, not a success.
             Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
-                Some(event) => unknown.push(CeaseUnknown {
+                Some(event) => unknown.push(UnknownThread {
                     thread: medication_id,
                     event,
                     cause: e.root_cause().to_string(),
@@ -512,7 +512,7 @@ pub(crate) async fn read_chart_of(
 /// Timing is observability. A metric that can turn a successful clinical act into a
 /// reported failure is a metric that has been allowed to matter more than the act — so the
 /// error goes to stderr and the caller is never told.
-async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i32) {
+pub(crate) async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i32) {
     let Some(db) = state.db.as_ref() else { return };
     let db = db.lock().await;
     if let Err(e) = cairn_node::ui_timing::record_gesture(&*db, kind, items, elapsed_ms).await {

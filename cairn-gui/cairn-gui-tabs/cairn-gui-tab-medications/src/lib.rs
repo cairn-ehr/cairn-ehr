@@ -5,11 +5,13 @@
 //! reader announced — what is declared here is what the markup is written to produce.
 //! Verifying that the browser really announces it is still an operator act with a live
 //! screen reader; automating the DOM assertions is issue #332.
+mod hold_view;
 mod row_view;
 #[cfg(test)]
 mod test_rows;
 pub mod view;
 
+pub use hold_view::HoldView;
 pub use view::{build_view, MedListRowView, MedListView};
 
 use cairn_gui_tab::context::Context;
@@ -92,6 +94,16 @@ impl Semantic for MedicationsTab {
                 label.push_str(", ");
                 label.push_str(flag);
             }
+            // Holds and a cessation's reason ride the same utterance (short form; each hold's
+            // full detail is its own button below).
+            for hold in &row.holds {
+                label.push_str(", ");
+                label.push_str(&hold.symbol);
+            }
+            if let Some(why) = &row.cessation_detail {
+                label.push_str(", ");
+                label.push_str(why);
+            }
             fields.push(Field {
                 id: format!("row-{}", row.group_id),
                 role: Role::ListItem,
@@ -104,6 +116,38 @@ impl Semantic for MedicationsTab {
                     id: format!("cease-{}", row.group_id),
                     role: Role::Button,
                     label: format!("Stop {}", row.primary),
+                });
+            }
+            // Each hold is a focusable button (its click reveals the detail). Its accessible
+            // name is its visible text then the detail, exactly as holds.js's `statusCell` sets
+            // it, so the reason is announced without opening it. A ceased line that gave a
+            // reason has its status word as the same kind of button.
+            for hold in &row.holds {
+                fields.push(Field {
+                    id: format!("hold-{}", hold.withhold_event_id),
+                    role: Role::Button,
+                    label: format!("{} — {}", hold.symbol, hold.detail),
+                });
+            }
+            if let Some(why) = &row.cessation_detail {
+                fields.push(Field {
+                    id: format!("cessation-{}", row.group_id),
+                    role: Role::Button,
+                    label: format!("{} — {}", row.status_label, why),
+                });
+            }
+            if row.can_withhold {
+                fields.push(Field {
+                    id: format!("withhold-{}", row.group_id),
+                    role: Role::Button,
+                    label: format!("Withhold {}", row.primary),
+                });
+            }
+            if row.can_release {
+                fields.push(Field {
+                    id: format!("release-{}", row.group_id),
+                    role: Role::Button,
+                    label: format!("Release the holds on {}", row.primary),
                 });
             }
         }
@@ -186,6 +230,54 @@ mod semantic_tests {
                 .all(|f| f.label.contains("Stop ")),
             "a bare 'Stop' is ambiguous when read out of table context"
         );
+    }
+
+    /// ADR-0081: every hold, a ceased line's reason, and the controls that write a hold are
+    /// labelled buttons — with the labels holds.js gives them (the contract must not drift:
+    /// this pins the Rust half, the tauri crate's `the_w_is_a_button_whose_label_is_its_reason`
+    /// the JS half).
+    #[test]
+    fn every_hold_and_hold_control_is_a_labelled_button() {
+        let view = crate::view::build_view(&cairn_medication_view::fixtures::sample_chart());
+        let node = MedicationsTab::new(view.clone()).semantics(&ctx());
+        let find = |id: &str| node.fields.iter().find(|f| f.id == id);
+        let mut holds = 0;
+        for row in &view.rows {
+            for h in &row.holds {
+                holds += 1;
+                let f = find(&format!("hold-{}", h.withhold_event_id)).expect("hold button");
+                assert_eq!(f.role, Role::Button);
+                // What holds.js sets: the visible text, then the reason (label in name).
+                assert_eq!(f.label, format!("{} — {}", h.symbol, h.detail));
+            }
+            // A ceased line that gave a reason: its status word is a button, labelled likewise.
+            assert_eq!(
+                find(&format!("cessation-{}", row.group_id)).map(|f| (f.role, f.label.clone())),
+                row.cessation_detail
+                    .as_ref()
+                    .map(|why| (Role::Button, format!("{} — {}", row.status_label, why)))
+            );
+            // The row's one utterance carries each hold's symbol and a cessation's reason.
+            let spoken = &find(&format!("row-{}", row.group_id)).expect("row").label;
+            for h in &row.holds {
+                assert!(spoken.contains(&h.symbol), "{spoken}");
+            }
+            if let Some(why) = &row.cessation_detail {
+                assert!(spoken.contains(why), "{spoken}");
+            }
+            assert_eq!(
+                find(&format!("withhold-{}", row.group_id)).map(|f| f.label.clone()),
+                row.current.then(|| format!("Withhold {}", row.primary))
+            );
+            assert_eq!(
+                find(&format!("release-{}", row.group_id)).map(|f| f.label.clone()),
+                (!row.holds.is_empty()).then(|| format!("Release the holds on {}", row.primary))
+            );
+        }
+        assert!(holds >= 2, "the fixture must carry holds");
+        assert!(view.rows.iter().any(|r| r.cessation_detail.is_some()));
+        node.assert_complete()
+            .expect("a11y contract must be complete");
     }
 
     /// ADR-0060 decision 2 at the accessibility layer. A warning rendered only as a

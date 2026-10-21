@@ -159,6 +159,7 @@ function renderRow(row) {
   // and to a colour-blind clinician. The text says it too — see the signature cell.
   if (row.will_be_signed) tr.setAttribute("data-will-sign", "true");
   if (row.status_label === "ceased") tr.setAttribute("data-ceased", "true");
+  if (row.status_label === "withheld") tr.setAttribute("data-withheld", "true");
 
   tr.append(
     // On a combined list the source chart is part of the drug's name, so a screen reader hears
@@ -169,7 +170,7 @@ function renderRow(row) {
       { scope: "row" },
     ),
     cell("td", row.dose),
-    cell("td", row.status_label),
+    statusCell(row), // the status word and each hold's "W" (holds.js, #832)
     cell(
       "td",
       row.will_be_signed
@@ -201,6 +202,7 @@ function renderRow(row) {
 
     action.append(reason, stop);
   }
+  action.append(...holdControls(row)); // Withhold and Release, beside Stop (holds.js)
   tr.append(action);
 
   const rows = [tr];
@@ -253,6 +255,7 @@ function drawList(pane, patient) {
     body.append(...renderRow(row));
   }
   restoreReasons(typed);
+  rereadAtNextHoldChange(view.next_hold_change, patient); // a W starts and ends with the clock (holds.js)
 
   const button = el("sign-off");
   button.disabled = !view.sign_off_enabled;

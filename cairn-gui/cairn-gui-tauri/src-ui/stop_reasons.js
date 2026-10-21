@@ -11,15 +11,17 @@
 
 /**
  * The stop reasons typed but not yet sent (#799), read just before a re-read rebuilds the rows:
- * each non-empty `#reason-<group_id>` field's id and text, and the one being typed in, with its
- * caret. A re-read (after a link, a sign-off, a judgement, another drug's cease) used to wipe them.
+ * each non-empty `#reason-<group_id>` field's id and text (and a W's `#reason-w-`/`#reason-r-`
+ * reasons and `#until-…` end, #832), and the one being typed in, with its caret. A re-read
+ * (after a link, a sign-off, a judgement, another drug's cease) used to wipe them.
  */
 function typedReasons() {
-  const fields = [...el("med-rows").querySelectorAll('input[id^="reason-"]')];
+  const fields = [...el("med-rows").querySelectorAll('input[id^="reason-"], [id^="until-"]')];
   const active = document.activeElement;
-  const focused = fields.includes(active)
-    ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
-    : null;
+  // Only a text field has a caret: a W's until `<select>` and `datetime-local` field have none.
+  const caret = (field) =>
+    field.type === "text" ? { start: field.selectionStart, end: field.selectionEnd } : {};
+  const focused = fields.includes(active) ? { id: active.id, ...caret(active) } : null;
   const values = fields
     .filter((field) => field.value !== "")
     .map((field) => ({ id: field.id, value: field.value }));
@@ -39,6 +41,9 @@ function restoreReasons(typed) {
   const focused = typed.focused && document.getElementById(typed.focused.id);
   if (focused) {
     focused.focus();
-    focused.setSelectionRange(typed.focused.start, typed.focused.end);
+    // `setSelectionRange` throws on a field with no caret (a select, a datetime-local).
+    if (typeof typed.focused.start === "number") {
+      focused.setSelectionRange(typed.focused.start, typed.focused.end);
+    }
   }
 }

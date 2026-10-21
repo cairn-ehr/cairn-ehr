@@ -15,6 +15,7 @@
 //!    gesture will not sign, and a group the chart cannot display at all, each get a
 //!    message naming the remedy *and its arguments*. Silence would let "signed off 11
 //!    medications" stand over a chart with a twelfth nobody knows about.
+use crate::hold_view::next_hold_change;
 use crate::row_view::build_row;
 pub use crate::row_view::MedListRowView;
 use cairn_medication_view::{
@@ -50,6 +51,9 @@ pub struct MedListView {
     /// Groups the node knows this patient has threads in but cannot display at all — the
     /// chart is INCOMPLETE, not merely sparse. `None` in normal operation.
     pub missing_message: Option<String>,
+    /// When the window must read the chart again because a hold starts or ends
+    /// (`hold_view::next_hold_change`), as RFC 3339 UTC. `None` when no hold is timed.
+    pub next_hold_change: Option<String>,
 }
 
 /// Build the whole window state from one chart read.
@@ -68,10 +72,13 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
     // One row per chart row; what a single line says is `row_view`'s job. Whether rows name
     // their source chart is a property of the whole list, so it is decided here, once.
     let linked = list.charts.is_linked();
+    // The clock is read ONCE per build so every hold on the screen is worded against the
+    // same instant (and the same workstation zone).
+    let now = chrono::Local::now();
     let view_rows: Vec<MedListRowView> = list
         .rows
         .iter()
-        .map(|row| build_row(row, &targets, linked))
+        .map(|row| build_row(row, &targets, linked, &now))
         .collect();
 
     let sign_off_count = targets.len();
@@ -89,6 +96,7 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
         rows: view_rows,
         sign_off_count,
         sign_off_enabled: sign_off_count > 0,
+        next_hold_change: next_hold_change(list.rows.iter().flat_map(|row| &row.holds), &now),
     }
 }
 

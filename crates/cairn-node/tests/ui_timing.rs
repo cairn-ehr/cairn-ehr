@@ -99,3 +99,59 @@ async fn an_unknown_gesture_kind_is_refused_by_the_floor() {
         "an unrecognised gesture kind must be refused by the CHECK constraint"
     );
 }
+
+/// #832: the medication withhold/release gestures are timed too, so the closed CHECK must
+/// list them (and the cell keys must land in the smallest size bucket).
+#[tokio::test]
+async fn the_withhold_gestures_are_timed() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE ui_gesture_timing").await.unwrap();
+
+    record_gesture(&c, "withhold", 1, 800).await.unwrap();
+    record_gesture(&c, "release", 1, 600).await.unwrap();
+
+    let aggregates = read_aggregates(&c).await.unwrap();
+    for kind in ["withhold", "release"] {
+        assert!(
+            aggregates.contains_key(&(kind.to_string(), "1-3".to_string())),
+            "missing cell for {kind}"
+        );
+    }
+}
+
+/// #207 for a widened CHECK: `CREATE TABLE IF NOT EXISTS` skips a table that already exists, so a
+/// node whose `ui_gesture_timing` was created BEFORE #832 keeps the old two-kind CHECK unless
+/// db/044's paired DROP/ADD CONSTRAINT converges it — and every withhold then fails to time.
+/// Simulate that node: put the old CHECK back, force a replay (ADR-0080 replays only when the
+/// schema hash changed), and record a withhold.
+#[tokio::test]
+async fn a_pre_832_table_gains_the_withhold_kinds_on_replay() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    // TRUNCATE first: the old CHECK cannot be added over existing withhold rows.
+    c.batch_execute(
+        "TRUNCATE ui_gesture_timing;
+         ALTER TABLE ui_gesture_timing DROP CONSTRAINT ui_gesture_timing_kind_ck;
+         ALTER TABLE ui_gesture_timing ADD CONSTRAINT ui_gesture_timing_kind_ck
+             CHECK (gesture_kind IN ('signoff', 'cease'));",
+    )
+    .await
+    .unwrap();
+    db::force_schema_replay(&c).await.unwrap();
+    drop(c);
+
+    // Reconnect = replay every migration, exactly what a node does on startup.
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    record_gesture(&c, "withhold", 1, 800)
+        .await
+        .expect("the replayed schema must admit a withhold on a pre-#832 table (#207)");
+}

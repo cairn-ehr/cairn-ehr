@@ -27,6 +27,9 @@ mod chart_view_webview_tests;
 mod commands;
 mod duplicates;
 mod funnel;
+mod hold;
+#[cfg(test)]
+mod holds_webview_tests;
 mod link;
 #[cfg(test)]
 mod read_again_webview_tests;
@@ -101,6 +104,8 @@ fn main() -> anyhow::Result<()> {
             commands::lock_state,
             commands::sign_off,
             commands::cease,
+            hold::withhold,
+            hold::release,
             funnel::commands::funnel_status,
             funnel::commands::form_edited,
             funnel::commands::browse,

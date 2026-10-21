@@ -282,6 +282,7 @@ fn a_note_already_present_is_not_joined_by_a_false_absence_claim() {
         empty_message: None,
         withheld_message: Some("1 line(s) withheld.".into()),
         missing_message: None,
+        next_hold_change: None,
     };
     let (lines, notes) = medication_lines(&list);
     assert!(lines.is_empty());

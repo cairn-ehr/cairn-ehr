@@ -10,6 +10,63 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #832 — THE WINDOW'S WITHHOLD (ADR-0081 slice B) — do not undo** (pins: `cairn-gui-tauri/src/hold/plan_tests.rs`,
+`hold/command_tests.rs`, `src/holds_webview_tests.rs`, `cairn-gui-tab-medications` `hold_view.rs`,
+`crates/cairn-node/tests/ui_timing.rs`):
+- **A Release sends only the hold ids the row DREW.** A fresh read at press time would end a hold a colleague
+  wrote after the clinician last looked, unseen. **Tempting wrong fix:** have `release` re-read the holds "so it
+  is never stale". Pins: `a_release_ends_only_the_holds_it_was_shown` (+ `a_hold_that_ended_meanwhile_is_named_gone`),
+  and the webview guard `a_release_sends_only_the_holds_it_drew` (the only `invoke("release"` sends the ids it was handed).
+  **And the report SAYS the unseen hold is still in force** ("Released 1" alone reads as "givable"): `ReleasePlan::unseen`
+  counts holds on the line not in `shown` (pending too). Pins: `a_hold_not_shown_is_counted_unseen`,
+  `a_release_says_a_hold_it_was_not_shown_is_still_in_force`.
+- **The W is a BUTTON whose accessible name carries its reason** (symbol + " — " + detail), and a ceased line
+  whose cessation gave a reason has its status word as such a button, revealing `"Stopped: <reason>"` (no reason:
+  plain text). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin
+  `every_hold_and_hold_control_is_a_labelled_button`. Hover is never the only way to the reason: WebKit does not
+  focus a clicked button, so click pins it; Escape or an outside click unpins. **Tempting wrong fix:** a `title`
+  tooltip or a hover-only popover. Pins: `the_w_is_a_button_whose_label_is_its_reason`,
+  `escape_or_a_click_elsewhere_unpins_a_detail`.
+- **The revealed detail is out of flow (`position: absolute`).** In flow it re-laid the table out, the button jumped
+  from under a real pointer, `mouseleave` hid it, and the W flickered. Only a real mouse shows it (found walking
+  #832). Pin: `a_revealed_detail_moves_nothing`.
+- **"Until reviewed" is the default, and the select and the time field never disagree silently.** Typing a time
+  picks "until a time"; a partial `datetime-local` is refused by Rust; and choosing "until reviewed" back EMPTIES the
+  time field — `value = ""` plus a type reset, which WebKit needs to drop a PARTLY typed time (else the press
+  still sent the typed time and the W lapsed silently at that hour). **Tempting wrong
+  fix:** treat an empty or unparseable time as open-ended, or let a leftover time win over the select. Pins:
+  `until_reviewed_is_the_default_and_never_an_empty_time`, `typing_a_time_chooses_until_a_time`,
+  `choosing_until_reviewed_clears_the_time`, `a_re_read_keeps_the_until_choice_and_time`.
+- **One press, one W.** The pressed button is disabled before it sends and stays so until the re-read; a returned
+  report clears that line's fields (so the next press cannot repeat the W), a THROWN failure keeps them (the
+  clinician's typing is not lost) and re-enables its own button — nothing was written, and the re-read may have
+  failed and kept the old line. **Tempting wrong fix:** clear on every outcome, or re-enable in `finally` (that
+  makes a recorded W pressable again). Pins: `a_gesture_button_disables_itself_before_it_sends`,
+  `a_returned_report_clears_the_line_before_the_re_read`.
+- **`status_label` "withheld" is wording only; `current` is the fact.** `current`, `can_cease` and sign-off are
+  unchanged by a hold. **Tempting wrong fix:** key behaviour off the label. Pin: `a_withheld_line_stays_current_signable_and_ceasable`.
+  The row's styling (`data-withheld`, `data-ceased`) is the one reader of the words, tied to Rust's by
+  `the_row_draws_the_w_and_its_controls`.
+- **The list is re-read when a hold starts or ends.** A hold changes with the clock, not with an event, so a screen
+  left open kept "withheld · W until 20:00" into the next morning (where the dateless time read as today's) and
+  "current" past a pending W's start. Rust sends `next_hold_change`; `drawList` arms one timer at it, a failed re-read
+  retries each minute. **Tempting wrong fix:** always print the date instead — the status word would still be
+  stale. Pins: `the_next_hold_change_is_the_earliest_instant_still_ahead`,
+  `the_list_is_read_again_when_a_hold_starts_or_ends`.
+- **A Release that can write nothing from this chart says so before the key** (a hazard line's other-chart holds),
+  and only a release that released something is timed. Pin: `the_refusals_come_before_the_key`, which also pins
+  that a withhold's reason and end are refused before the line lookup and the key.
+- **Times on screen are LOCAL; the wire stays UTC.** `local_instant` converts for display only. **Tempting wrong
+  fix:** send the local string. Pins: the `hold_view` display tests (`a_hold_ending_today_shows_the_local_clock_time`
+  and its siblings) for the local half; for the UTC half, the `toISOString()` conversion pinned in
+  `until_reviewed_is_the_default_and_never_an_empty_time` (`holds_webview_tests.rs`).
+- **An unknown commit outcome is "NOT known", never "failed"** (a dropped connection mid-commit may have recorded the
+  event). Pin: `both_gestures_sort_an_interrupted_commit_from_a_failure`. Release writes one event per thread
+  (`a_release_writes_one_event_per_thread`, the plan half), each in its own call — the transaction scope is not
+  pinned in the window.
+- **The two gestures are timed** (`withhold`, `release` in `ui_gesture_timing`, db/044's check constraint).
+  Pin: `the_withhold_gestures_are_timed`.
+
 **⇒ #803 — THE MEDICATION WITHHOLD (ADR-0081) — do not undo** (pins: `tests/medication_withhold.rs`,
 `medication_withhold_fold.rs`, `medication_withhold_signoff.rs`, `medication_withhold_clock.rs`, `medication_read.rs`):
 - **The start of an un-`from`'d hold and a release's instant are the authoring node's PHYSICAL clock, carried as

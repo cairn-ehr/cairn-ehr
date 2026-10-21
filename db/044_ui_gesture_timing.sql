@@ -13,8 +13,9 @@
 -- (principle 12), and here it would additionally turn a site metric into a person-level
 -- record.
 --
--- Replay-safe: CREATE TABLE IF NOT EXISTS, and the loader re-runs every db/*.sql on every
--- connect. Nothing here is widened later without a paired ALTER (see #207).
+-- Replay-safe: CREATE TABLE IF NOT EXISTS, and the loader re-runs every db/*.sql whenever the
+-- embedded schema changed (ADR-0080). Nothing here is widened later without a paired ALTER
+-- (see #207).
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS ui_gesture_timing (
@@ -26,12 +27,19 @@ CREATE TABLE IF NOT EXISTS ui_gesture_timing (
     PRIMARY KEY (gesture_kind, size_bucket),
     -- Closed vocabularies: an unrecognised kind or bucket is a bug in the caller, and a
     -- free-text column here would be an invitation to smuggle an identifier in.
-    CONSTRAINT ui_gesture_timing_kind_ck   CHECK (gesture_kind IN ('signoff', 'cease')),
+    CONSTRAINT ui_gesture_timing_kind_ck   CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release')),
     CONSTRAINT ui_gesture_timing_bucket_ck CHECK (size_bucket IN ('1-3', '4-8', '9+')),
     CONSTRAINT ui_gesture_timing_n_ck      CHECK (n >= 0),
     CONSTRAINT ui_gesture_timing_p50_ck    CHECK (p50_ms IS NULL OR p50_ms >= 0),
     CONSTRAINT ui_gesture_timing_p95_ck    CHECK (p95_ms IS NULL OR p95_ms >= 0)
 );
+
+-- #832: the medication withhold/release gestures are timed too. CREATE TABLE IF NOT EXISTS
+-- skips an existing table, so the widened kind list needs this paired convergence (the
+-- db/007 node_event_role_check idiom; #207): drop and re-add the same-named CHECK.
+ALTER TABLE ui_gesture_timing DROP CONSTRAINT IF EXISTS ui_gesture_timing_kind_ck;
+ALTER TABLE ui_gesture_timing ADD CONSTRAINT ui_gesture_timing_kind_ck
+    CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release'));
 
 -- NO GRANT TO cairn_agent, deliberately. The window writes here as the node role; no
 -- advisory agent has any reason to touch a UI metric, and an agent that could UPDATE this

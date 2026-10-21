@@ -1,4 +1,5 @@
-//! How a failed NODE write is handed to the webview as an `ErrorView` (sign-off, cease).
+//! How a failed NODE write is handed to the webview as an `ErrorView` (sign-off, cease, and the
+//! withhold and release of `hold`, #832).
 //!
 //! Sign-off and cease used to return a bare `String`, so the webview could not tell "the record
 //! moved under you" from "the node refused" from "the node is unreachable" and treated all of
@@ -6,7 +7,8 @@
 //! `data_error_from` classification), so this module only maps it onto the funnel's `Retry`
 //! vocabulary, passing the node's own legible sentence (§9.6) through untouched. One case is
 //! worded here instead: a commit lost mid-flight, which may have written, so it is neither
-//! "failed" nor done (#814, #818: a sign-off's `sign_off_outcome`, a cease's `cease_outcome`).
+//! "failed" nor done (#814, #818: a sign-off's `sign_off_outcome`, a cease's `cease_outcome`, a
+//! withhold's or release's `hold::outcome`).
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use cairn_gui_data::port::DataError;
 
@@ -100,12 +102,13 @@ pub(crate) fn sign_off_outcome(
     (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
-/// A thread of a cease whose commit got no ordinary answer (#814): it may or may not be stopped.
+/// A thread whose write (a cease, a withhold, a release) got no ordinary answer at commit
+/// (#814): the write may or may not have landed, so the thread is neither done nor failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CeaseUnknown {
-    /// The member thread being stopped.
+pub(crate) struct UnknownThread {
+    /// The member thread being written.
     pub thread: uuid::Uuid,
-    /// The cessation event that may have landed.
+    /// The event that may have landed.
     pub event: uuid::Uuid,
     /// The error's root cause, as the clinician reads it.
     pub cause: String,
@@ -116,7 +119,7 @@ pub(crate) struct CeaseUnknown {
 /// those whose commit got no ordinary answer (#814), which may or may not be stopped, so they
 /// are neither. "Stopped 0" is left out when one is unknown: that thread may be stopped, so the
 /// count would be false. Rust, not the webview, so every combination is tested.
-pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[CeaseUnknown]) -> String {
+pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[UnknownThread]) -> String {
     let mut parts = Vec::new();
     if ceased > 0 || unknown.is_empty() {
         parts.push(format!("Stopped {ceased} thread(s) of this drug."));
