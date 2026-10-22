@@ -3,11 +3,13 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)** (#846, branch `fix/846-stray-chart-before-claim`): a stray dose, dose
-> correction or release that arrived BEFORE its thread's claim now makes the line a `patient_conflict` hazard
-> (db/059's `medication_thread_stray_chart` view, read beside db/031's flag; durable rules: the #836 bullet's
-> "Arrival order" sentence). Its review filed **#848** (a later-HLC stray assert re-homes a thread; the drug
-> vanishes from the original chart's list, unflagged there) and pointed db/032's false "no-op" comment at **#185**.
+> **⇒ IN PROGRESS (2026-10-23): #848** on branch `fix/848-rehomed-thread-surfaces` — a thread re-homed to another
+> chart by a later-HLC stray assert must still show on the chart it left (read-side, decided 2026-10-23).
+> **Decided 2026-10-23, not yet built: #843** — the LOCAL door refuses a release naming a hold that is not standing
+> (stale); a cease of an already-ceased line stays admitted and the window says it was already stopped.
+> **Merged 2026-10-22: PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)** (#846): a stray dose, correction
+> or release that arrived BEFORE its thread's claim makes the line a `patient_conflict` hazard (db/059's
+> `medication_thread_stray_chart` view). Its review filed **#848** and pointed db/032's false "no-op" comment at **#185**.
 > **Merged 2026-10-22: PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)** (#844 + #836): Release only where
 > `release_plan` can write; a synced event naming another chart makes its line a hazard (`patient_conflict`).
 > **Merged 2026-10-21: PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)** (#839 + #840 + #841): unseen holds
@@ -33,12 +35,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)** (#846); run #838's RUNBOOK §15. Two decisions are owed: **#843** (should the
->    local door refuse a release of an ended hold? Options explained to the maintainer 2026-10-22 with examples; the
->    recommendation was: refuse a release as stale, keep admitting a stop but SAY it was already stopped, because a
->    refused stop loses its reason, e.g. an adverse reaction, with no allergy stream to put it in), **#825** (where
->    the window's operator diagnostics live) and **#848** (surface a re-homed thread on the original chart, or stop
->    a remote assert moving a thread's chart at all — the latter touches #192's converge contract).
+> 1. **Finish #848** (above); run #838's RUNBOOK §15. Build **#843** as decided. One decision is still owed:
+>    **#825** (where the window's operator diagnostics live).
 >    Buildable hold follow-ups: **#835** (a future-dated release
 >    is invisible) · **#837** (test gaps) · #834 (needs a decision on shape). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with

@@ -507,7 +507,9 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   index on `medication_dose_correction (medication_id)`). No schema-generation change (db/059 edited in place). Its
   review added a runtime-role (`SET ROLE cairn_agent`) read of the list, and filed **#848** (a later-HLC stray
   assert moves a thread to another chart, and the drug vanishes from the original chart's list with nothing said).
-- **Next:** run #838's RUNBOOK §15; **#804** (needs #690), **#825**, **#843** and **#848** (decisions), **#835**, **#807**;
+  **PR #847 merged 2026-10-22.**
+- **Next:** run #838's RUNBOOK §15; **#848** (in progress, decided 2026-10-23: surface on both charts), **#843** (decided: refuse a dead release at the
+  local door), **#804** (needs #690), **#825** (a decision), **#835**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
