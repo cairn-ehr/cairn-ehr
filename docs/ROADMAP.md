@@ -500,7 +500,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
   `patient_conflict` with its own remedy: stop the line and record it again. Review filed **#846** (db/031 flags a
   stray dose or release only if a claim on its thread arrived first). **PR #845 merged 2026-10-22.**
-- **2026-10-22 (#846):** the conflict read no longer depends on arrival order. db/059's `medication_thread_stray_chart`
+- **2026-10-22 (#846, PR #847):** the conflict read no longer depends on arrival order. db/059's `medication_thread_stray_chart`
   view lists every dose, dose correction or release whose chart is not its thread's, so one that arrived BEFORE the
   thread's claim (which db/031's guard can never flag) still makes the line a `patient_conflict` hazard;
   `read_conflict_charts` unions it with the flag table, filtered per thread (a new index on
