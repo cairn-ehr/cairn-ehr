@@ -35,6 +35,7 @@ const ORIGIN: &str = "r1b-test-node";
 const DOUBTED: WrongChartReasons = WrongChartReasons {
     outside_set: false,
     doubted_link: true,
+    patient_conflict: false,
 };
 
 async fn chart(c: &Client, sk: &SigningKey, kid: &str) -> Uuid {
@@ -675,6 +676,7 @@ async fn a_line_can_be_withheld_for_both_reasons_at_once() {
     let both = WrongChartReasons {
         outside_set: true,
         doubted_link: true,
+        patient_conflict: false,
     };
     assert_eq!(row_of(&list, tx).wrong_chart, both, "X+O: both reasons");
     assert_eq!(

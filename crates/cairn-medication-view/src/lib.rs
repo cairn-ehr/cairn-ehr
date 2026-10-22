@@ -17,7 +17,7 @@ pub mod row;
 pub mod targeting;
 
 pub use chart::{
-    format_hazard_groups, PatientMedicationList, DOUBTED_LINK_INSTRUCTION,
+    format_hazard_groups, PatientMedicationList, CONFLICT_INSTRUCTION, DOUBTED_LINK_INSTRUCTION,
     MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 pub use chart_set::ChartSet;

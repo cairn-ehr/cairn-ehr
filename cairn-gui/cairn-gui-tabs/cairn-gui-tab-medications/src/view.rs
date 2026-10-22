@@ -20,8 +20,8 @@ use crate::row_view::build_row;
 pub use crate::row_view::MedListRowView;
 use cairn_medication_view::{
     format_hazard_groups, sign_off_targets, withheld_rows, MedicationStatus, PatientMedicationList,
-    WithheldLine, WrongChartReasons, DOUBTED_LINK_INSTRUCTION, MISSING_GROUP_INSTRUCTION,
-    SEPARATION_INSTRUCTION,
+    WithheldLine, WrongChartReasons, CONFLICT_INSTRUCTION, DOUBTED_LINK_INSTRUCTION,
+    MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -144,6 +144,16 @@ pub fn withheld_report(
             doubted.len(),
             format_hazard_groups(&doubted, separation_targets),
             DOUBTED_LINK_INSTRUCTION
+        ));
+    }
+    let conflict = groups(|r| r.patient_conflict);
+    if !conflict.is_empty() {
+        parts.push(format!(
+            "{} line(s) on this record still need a signature but will NOT be signed: an event \
+             on them was recorded for another patient's chart: {}. {}",
+            conflict.len(),
+            format_hazard_groups(&conflict, separation_targets),
+            CONFLICT_INSTRUCTION
         ));
     }
     (!parts.is_empty()).then(|| parts.join(" "))
@@ -357,6 +367,28 @@ mod tests {
         assert!(!message.contains("from this chart"), "{message}");
     }
 
+    /// #836: a conflict line's report names its own remedy, never separation or the links.
+    #[test]
+    fn a_conflict_report_names_its_own_remedy() {
+        let mut hazard = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        hazard.cross_patient = true;
+        hazard.wrong_chart.patient_conflict = true;
+        let message = build_view(&chart(vec![hazard]))
+            .withheld_message
+            .expect("reported");
+        assert!(
+            message.contains(cairn_medication_view::CONFLICT_INSTRUCTION),
+            "{message}"
+        );
+        assert!(message.contains(&uid(1).to_string()), "{message}");
+        assert!(!message.contains("medication-separate"), "{message}");
+        assert!(!message.contains("unlink-charts"), "{message}");
+    }
+
     /// The report prints one block per reason, so a withheld line with an empty reason set
     /// must still be counted — worded as the pre-#697 outside case — not silently dropped.
     #[test]
@@ -380,6 +412,7 @@ mod tests {
         hazard.wrong_chart = cairn_medication_view::WrongChartReasons {
             outside_set: true,
             doubted_link: true,
+            patient_conflict: false,
         };
         let message = build_view(&chart(vec![hazard]))
             .withheld_message

@@ -494,8 +494,12 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   refusal too) as "still on this line"; a cease or release that wrote nothing returns `Err` with one class (stale
   wins); Withhold and Stop are drawn only where their command can write; an empty end is "missing or incomplete".
   Review filed **#843** (a release of an already-ended hold is admitted, never a stale refusal) and **#844** (Release
-  is not yet offered only where it can write).
-- **Next:** review and merge PR #842, run #838's RUNBOOK §15; **#804** (needs #690), **#825** (a decision), **#807**;
+  is not yet offered only where it can write). **PR #842 merged 2026-10-21.**
+- **2026-10-22 (#844 + #836, PR TBD):** Release is drawn only where `release_plan` can write (the #841 rule, finished;
+  the line then says where to release it). A synced medication event naming another person's chart (db/031's
+  `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
+  `patient_conflict` with its own remedy: stop the line and record it again.
+- **Next:** run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#843** (decisions), **#835**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

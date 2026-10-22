@@ -350,7 +350,8 @@ mod tests {
                 group_id: uid(1),
                 reasons: WrongChartReasons {
                     outside_set: false,
-                    doubted_link: true
+                    doubted_link: true,
+                    patient_conflict: false,
                 },
             }]
         );
@@ -402,6 +403,7 @@ mod tests {
         let reasons = WrongChartReasons {
             outside_set: false,
             doubted_link: true,
+            patient_conflict: false,
         };
         assert_eq!(
             withheld_reasons(&doubted(MedicationStatus::Active, VouchState::Absent)),

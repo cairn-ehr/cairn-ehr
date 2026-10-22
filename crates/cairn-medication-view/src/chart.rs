@@ -91,6 +91,25 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
      two charts may then reach a chart outside the record, and its threads must then be \
      separated — the list will say so. Judge the links before separating any threads.";
 
+/// What to do about a line withheld because an event on it arrived by sync naming another
+/// patient's chart (#836, `WrongChartReasons::patient_conflict`). Worded once, for every
+/// renderer, for the same reason as [`SEPARATION_INSTRUCTION`].
+///
+/// WHY NOT SEPARATION. The line may be one thread, so there is nothing to separate: the stray
+/// event sits ON this patient's thread. It cannot be removed (append-only) and no verb
+/// re-files it. So the line is replaced, as a contaminated line on a paper drug chart is
+/// rewritten: stop it, and record the drug again. The new thread carries none of the stray
+/// events. The old line stays visible, struck, with its warning.
+///
+/// "Dose, stop, hold or release" because db/031's guard flags every medication event type
+/// that names a thread (assert, cessation, dose, coding, withhold, release), not only holds.
+pub const CONFLICT_INSTRUCTION: &str =
+    "Check this drug with the patient and the prescriber before giving or holding it: a dose, \
+     stop, hold (W) or release on this line was recorded for another patient's chart, so the \
+     dose or W shown may not be this patient's, and a W this patient had may have been ended \
+     for someone else. To clear it, stop this line and record the drug again (withhold the new \
+     line if it should be held). The stray event stays on record; it cannot be removed.";
+
 /// What to do about a group the node knows this chart set holds a thread in, but which has
 /// NO line on the list (`PatientMedicationList::groups_missing_from_chart`) — worded ONCE,
 /// for every renderer, for the same reason as [`SEPARATION_INSTRUCTION`].

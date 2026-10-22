@@ -223,6 +223,15 @@ fn flags(row: &MedicationRow) -> Vec<String> {
                 cause.to_string()
             });
         }
+        if why.patient_conflict {
+            // #836: a synced event naming another person's chart landed on this line; the
+            // report beside the list names the remedy (stop it and record it again).
+            out.push(
+                "an event on this line was recorded for another patient's chart — the dose or \
+                 W shown may not be this patient's, so this line cannot be signed"
+                    .to_string(),
+            );
+        }
     }
     out
 }

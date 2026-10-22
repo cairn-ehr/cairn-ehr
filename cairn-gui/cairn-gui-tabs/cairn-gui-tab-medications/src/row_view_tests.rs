@@ -200,6 +200,7 @@ fn a_line_with_both_reasons_says_both() {
     r.wrong_chart = cairn_medication_view::WrongChartReasons {
         outside_set: true,
         doubted_link: true,
+        patient_conflict: false,
     };
     let flags = &build_view(&chart(vec![r])).rows[0].flags;
     assert!(
@@ -322,4 +323,24 @@ fn a_linked_row_with_no_source_charts_says_so_rather_than_going_silent() {
         "an empty source_charts on a linked list must say so explicitly, not render as \
          an empty (falsy) string"
     );
+}
+
+/// #836: a line a synced event naming another patient's chart landed on says so on the row.
+#[test]
+fn a_conflict_line_says_another_patients_event_landed_on_it() {
+    let mut r = row(
+        1,
+        MedicationStatus::Active,
+        vec![member(1, VouchState::Absent)],
+    );
+    r.cross_patient = true;
+    r.wrong_chart.patient_conflict = true;
+    let flags = &build_view(&chart(vec![r])).rows[0].flags;
+    assert!(
+        flags
+            .iter()
+            .any(|f| f.contains("recorded for another patient's chart")),
+        "{flags:?}"
+    );
+    assert!(!flags.iter().any(|f| f.contains("in doubt")), "{flags:?}");
 }

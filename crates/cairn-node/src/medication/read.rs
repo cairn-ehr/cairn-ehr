@@ -102,7 +102,8 @@ pub async fn list_patient_medications(
 ///    chart the group touches, `touched_charts`) —
 ///    reaching another chart of the same person is not a hazard, reaching someone else's is,
 ///    and so is any line not recorded only on the opened chart while the set holds a link the
-///    node doubts (#697 (b)).
+///    node doubts (#697 (b)), and any line a synced event naming another person's chart landed
+///    on (#836, `read_conflict_charts`).
 /// 5. the advisory flags, each scoped to the set, and whether the set holds a doubted link
 ///    (an input to the hazard rule in step 4, read just before it is applied).
 async fn list_chart_set_medications(
@@ -115,6 +116,7 @@ async fn list_chart_set_medications(
 
     let group_charts = read_group_charts(client, &groups).await?;
     let reached = read_cross_patient_charts(client, &groups).await?;
+    let conflicts = read_conflict_charts(client, &groups).await?;
     let reconciliation_flagged = read_reconciliation_flagged_groups(client, charts).await?;
     let coding_conflict = read_coding_conflict_groups(client, charts).await?;
     let doubted = set_has_doubted_link(client, charts).await?;
@@ -122,14 +124,19 @@ async fn list_chart_set_medications(
     let cessation_reasons = read_cessation_reasons(client, &groups).await?;
 
     // Each group's wrong-chart reasons (`medication::hazard`), over EVERY chart it touches
-    // (`touched_charts`: the union of three sources, any one naming a chart is enough).
+    // (`touched_charts`: the union of three sources, any one naming a chart is enough), and
+    // the charts a flagged sync conflict on its threads named (#836).
     // Over-warn, never under-warn.
     let reasons: HashMap<Uuid, WrongChartReasons> = groups
         .iter()
         .copied()
         .map(|g| {
             let touched = touched_charts(g, &group_charts, &reached, &members);
-            (g, wrong_chart_reasons(charts, opened, doubted, &touched))
+            let conflict = conflicts.get(&g).map(Vec::as_slice).unwrap_or_default();
+            (
+                g,
+                wrong_chart_reasons(charts, opened, doubted, &touched, conflict),
+            )
         })
         .collect();
 
@@ -274,7 +281,7 @@ fn touched_charts(
 fn row_reasons(reasons: &HashMap<Uuid, WrongChartReasons>, group: Uuid) -> WrongChartReasons {
     reasons.get(&group).copied().unwrap_or(WrongChartReasons {
         outside_set: true,
-        doubted_link: false,
+        ..WrongChartReasons::default()
     })
 }
 
@@ -524,6 +531,31 @@ async fn read_cross_patient_charts(
     read_group_chart_lists(client, sql, groups).await
 }
 
+/// For each of `groups` with a flagged patient conflict on a member thread (#836): the charts
+/// the flags name, the thread's standing chart and the chart the contradicting event asserted.
+///
+/// db/031's `cairn_guard_medication_patient` writes `medication_patient_conflict_flag` when a
+/// SYNCED medication event names another chart than its thread's, and the event is projected
+/// anyway (converge-and-flag: a node-local veto would fork the event set). Without this read the
+/// flag reached no screen, and another person's W, release, dose or stop sat silently on this
+/// line. Whether a named chart makes the line a hazard is `wrong_chart_reasons`' call (a linked
+/// chart of the same person does not). Empty, at the cost of one indexed query, on a clean node.
+async fn read_conflict_charts(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    groups: &[Uuid],
+) -> anyhow::Result<HashMap<Uuid, Vec<Uuid>>> {
+    // LEFT JOIN + COALESCE: a thread no reconciliation touched has NO `medication_group_member`
+    // row and is its own group (db/033) — an inner join missed every ordinary line.
+    let sql = "SELECT COALESCE(gm.group_id, f.medication_id)::text AS group_id, \
+               array_agg(DISTINCT c::text) AS charts \
+               FROM medication_patient_conflict_flag f \
+               LEFT JOIN medication_group_member gm ON gm.medication_id = f.medication_id \
+               CROSS JOIN LATERAL unnest(ARRAY[f.standing_patient, f.asserted_patient]) AS c \
+               WHERE COALESCE(gm.group_id, f.medication_id) = ANY($1::text[]::uuid[]) \
+               GROUP BY 1";
+    read_group_chart_lists(client, sql, groups).await
+}
+
 /// Run a `(group_id text, charts text[])` query bound to `groups` and parse it into
 /// group → sorted, de-duplicated charts. Shared by the two group-chart readers so they
 /// parse identically.
@@ -656,7 +688,7 @@ mod tests {
             "{touched:?}"
         );
         let set = ChartSet::new([u(1), u(2)]).unwrap();
-        assert!(wrong_chart_reasons(&set, u(1), true, &touched).doubted_link);
+        assert!(wrong_chart_reasons(&set, u(1), true, &touched, &[]).doubted_link);
     }
 
     #[test]
