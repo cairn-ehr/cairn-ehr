@@ -424,6 +424,10 @@ fn release_is_offered_only_where_it_can_write() {
         with_holds(plan_row(true, &[(10, 1), (11, 2)]), &[(90, 11), (91, 10)]),
         // ordinary, hold on another chart's thread: Release (an ordinary line is never narrowed)
         with_holds(plan_row(false, &[(10, 1), (11, 2)]), &[(90, 11)]),
+        // hazard, its hold on a thread that is NOT a member (one on a chart outside the record,
+        // in a mis-reconciled group): no Release, and NOT "release it from its own chart" —
+        // that W may be another person's own; the row's separation remedy speaks instead
+        with_holds(plan_row(true, &[(10, 1)]), &[(92, 99)]),
     ];
     let pane = chart_pane(
         &list,
@@ -436,7 +440,7 @@ fn release_is_offered_only_where_it_can_write() {
     let rows = &pane.list.rows;
     assert_eq!(
         rows.iter().map(|r| r.can_release).collect::<Vec<_>>(),
-        [false, true, true]
+        [false, true, true, false]
     );
     let said = |i: usize| {
         rows[i]
@@ -445,6 +449,10 @@ fn release_is_offered_only_where_it_can_write() {
     };
     assert!(said(0), "{:?}", rows[0].flags);
     assert!(!said(1) && !said(2), "said only where Release was hidden");
+    assert!(
+        !said(3),
+        "never send a clinician to release a non-member's hold"
+    );
     // Withhold and Stop still stand on row 0 (thread 10 is on chart 1), so the #841 sentence —
     // "no record on the chart you opened" — would be false there and is not said.
     assert!(rows[0].can_withhold && rows[0].can_cease);

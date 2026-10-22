@@ -95,7 +95,7 @@ pub struct WrongChartReasons {
 }
 
 impl WrongChartReasons {
-    /// Whether either reason holds.
+    /// Whether any reason holds.
     pub fn any(&self) -> bool {
         self.outside_set || self.doubted_link || self.patient_conflict
     }

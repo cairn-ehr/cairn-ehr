@@ -1,6 +1,7 @@
 //! Tests for `medication/list_text.rs` (moved out of line to keep that file under 500 lines):
 //! the CLI wording of each wrong-chart reason, each with its own remedy.
 use super::*;
+use cairn_medication_view::CONFLICT_CEASED_INSTRUCTION;
 
 fn u(n: u128) -> Uuid {
     Uuid::from_u128(n)
@@ -268,6 +269,7 @@ fn conflict_row(group: u128) -> MedicationRow {
 fn a_conflict_row_names_its_cause_and_remedy() {
     let text = row_hazard_lines(&conflict_row(1), &BTreeMap::new()).join("\n");
     assert!(text.contains("another patient's chart"), "{text}");
+    assert!(text.contains("CANNOT be signed off"), "{text}");
     assert!(text.contains(CONFLICT_INSTRUCTION), "{text}");
     assert!(!text.contains("medication-separate"), "{text}");
     assert!(!text.contains("in doubt"), "{text}");
@@ -290,4 +292,16 @@ fn a_signoff_report_words_a_conflict_with_its_own_remedy() {
         "the line is named: {text}"
     );
     assert!(!text.contains("medication-separate"), "{text}");
+}
+
+/// A CEASED conflict line (a stray stop, or the line the clinician stopped to clear it) neither
+/// claims it "cannot be signed" (nothing on it needs a signature) nor says "stop this line".
+#[test]
+fn a_ceased_conflict_row_says_the_stop_may_be_another_patients() {
+    let mut row = conflict_row(1);
+    row.status = cairn_medication_view::MedicationStatus::Ceased;
+    let text = row_hazard_lines(&row, &BTreeMap::new()).join("\n");
+    assert!(text.contains(CONFLICT_CEASED_INSTRUCTION), "{text}");
+    assert!(!text.contains("CANNOT be signed"), "{text}");
+    assert!(!text.contains(CONFLICT_INSTRUCTION), "{text}");
 }

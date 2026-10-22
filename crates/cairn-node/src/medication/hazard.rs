@@ -174,8 +174,10 @@ mod tests {
     /// one: then it may be someone else's, the direction this module errs in.
     #[test]
     fn a_conflict_naming_a_linked_chart_is_a_hazard_only_under_doubt() {
-        assert!(!wrong_chart_reasons(&set12(), u(1), false, &[u(1)], &[u(2)]).any());
-        assert!(wrong_chart_reasons(&set12(), u(1), true, &[u(1)], &[u(2)]).patient_conflict);
-        assert!(!wrong_chart_reasons(&set12(), u(2), true, &[u(2)], &[u(2)]).any());
+        // The read names both the thread's standing chart and the asserted one, so a conflict
+        // list always holds two different charts.
+        assert!(!wrong_chart_reasons(&set12(), u(1), false, &[u(1)], &[u(1), u(2)]).any());
+        assert!(wrong_chart_reasons(&set12(), u(1), true, &[u(1)], &[u(1), u(2)]).patient_conflict);
+        assert!(wrong_chart_reasons(&set12(), u(2), true, &[u(2)], &[u(1), u(2)]).patient_conflict);
     }
 }

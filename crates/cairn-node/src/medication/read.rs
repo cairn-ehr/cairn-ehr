@@ -225,10 +225,10 @@ async fn list_chart_set_medications(
 
     let groups_missing_from_chart = missing_groups(groups.iter().copied(), &seen_groups);
 
-    // The membership of every group this chart calls hazardous. It is listed for both kinds of
+    // The membership of every group this chart calls hazardous. It is listed for every kind of
     // hazard: separation (`medication-separate`, whose arguments these are) is the remedy only
     // for the outside-the-set case; a doubted-link line's remedy is a judgement of the link
-    // (DOUBTED_LINK_INSTRUCTION). Scoped to the hazardous groups
+    // (DOUBTED_LINK_INSTRUCTION), a conflict line's a new line (CONFLICT_INSTRUCTION). Scoped to the hazardous groups
     // rather than fetched for the whole chart: in normal operation both sets are empty and
     // this costs no query at all (`read_group_member_threads` returns early), whereas
     // whole-chart membership would be a second O(all members) read per chart open for data
@@ -539,7 +539,7 @@ async fn read_cross_patient_charts(
 /// anyway (converge-and-flag: a node-local veto would fork the event set). Without this read the
 /// flag reached no screen, and another person's W, release, dose or stop sat silently on this
 /// line. Whether a named chart makes the line a hazard is `wrong_chart_reasons`' call (a linked
-/// chart of the same person does not). Empty, at the cost of one indexed query, on a clean node.
+/// chart of the same person does not). Empty, at the cost of one query over a near-empty table, on a clean node.
 async fn read_conflict_charts(
     client: &(impl tokio_postgres::GenericClient + Sync),
     groups: &[Uuid],
@@ -557,7 +557,7 @@ async fn read_conflict_charts(
 }
 
 /// Run a `(group_id text, charts text[])` query bound to `groups` and parse it into
-/// group → sorted, de-duplicated charts. Shared by the two group-chart readers so they
+/// group → sorted, de-duplicated charts. Shared by the three group-chart readers so they
 /// parse identically.
 async fn read_group_chart_lists(
     client: &(impl tokio_postgres::GenericClient + Sync),

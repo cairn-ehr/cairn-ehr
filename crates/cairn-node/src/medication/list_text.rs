@@ -26,8 +26,9 @@
 //! without a database.
 use crate::patient::person::ChartIdentity;
 use cairn_medication_view::{
-    format_hazard_groups, withheld_reasons, withheld_rows, ChartSet, MedicationRow, WithheldLine,
-    WrongChartReasons, CONFLICT_INSTRUCTION, DOUBTED_LINK_INSTRUCTION, SEPARATION_INSTRUCTION,
+    conflict_remedy, format_hazard_groups, withheld_reasons, withheld_rows, ChartSet,
+    MedicationRow, WithheldLine, WrongChartReasons, CONFLICT_INSTRUCTION, DOUBTED_LINK_INSTRUCTION,
+    SEPARATION_INSTRUCTION,
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -141,10 +142,18 @@ pub fn row_hazard_lines(row: &MedicationRow, targets: &BTreeMap<Uuid, Vec<Uuid>>
         );
     }
     if why.patient_conflict {
-        // #836: per line, so its remedy goes inline (as the outside case's does).
+        // #836: per line, so its remedy goes inline (as the outside case's does), chosen by
+        // status — a ceased line cannot be "stopped" again — and "CANNOT be signed off" only
+        // where sign-off withholds the line (the PR #717 lesson, as for the doubted link).
+        let signing = if withheld {
+            " — so this line CANNOT be signed off"
+        } else {
+            ""
+        };
         out.push(format!(
-            "    ! an event on this line was recorded for another patient's chart — so this \
-             line CANNOT be signed off (issue #836). {CONFLICT_INSTRUCTION}"
+            "    ! an event on this line was recorded for another patient's chart{signing} \
+             (issue #836). {}",
+            conflict_remedy(row.status)
         ));
     }
     out.push(format!(
@@ -200,7 +209,7 @@ pub fn withheld_signoff_lines(
     targets: &BTreeMap<Uuid, Vec<Uuid>>,
 ) -> Vec<String> {
     // Each line's reasons through `worded`, so a line whose set is empty is still counted
-    // (as the outside case) rather than falling through both blocks below.
+    // (as the outside case) rather than falling through every block below.
     let pick = |f: fn(WrongChartReasons) -> bool| -> Vec<Uuid> {
         withheld
             .iter()

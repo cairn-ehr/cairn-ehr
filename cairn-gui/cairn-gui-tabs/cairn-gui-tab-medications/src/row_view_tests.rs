@@ -335,12 +335,26 @@ fn a_conflict_line_says_another_patients_event_landed_on_it() {
     );
     r.cross_patient = true;
     r.wrong_chart.patient_conflict = true;
-    let flags = &build_view(&chart(vec![r])).rows[0].flags;
+    let flags = &build_view(&chart(vec![r.clone()])).rows[0].flags;
+    let said = |flags: &[String], text: &str| flags.iter().any(|f| f.contains(text));
     assert!(
-        flags
-            .iter()
-            .any(|f| f.contains("recorded for another patient's chart")),
+        said(flags, "recorded for another patient's chart"),
         "{flags:?}"
     );
-    assert!(!flags.iter().any(|f| f.contains("in doubt")), "{flags:?}");
+    assert!(said(flags, "cannot be signed"), "{flags:?}");
+    // The remedy is on the row itself: the report beside the list covers withheld lines only.
+    assert!(
+        said(flags, cairn_medication_view::CONFLICT_INSTRUCTION),
+        "{flags:?}"
+    );
+    assert!(!said(flags, "in doubt"), "{flags:?}");
+
+    // Ceased: no signature is owed and "stop this line" is impossible (the #717 lesson).
+    r.status = MedicationStatus::Ceased;
+    let flags = &build_view(&chart(vec![r])).rows[0].flags;
+    assert!(
+        said(flags, cairn_medication_view::CONFLICT_CEASED_INSTRUCTION),
+        "{flags:?}"
+    );
+    assert!(!said(flags, "cannot be signed"), "{flags:?}");
 }

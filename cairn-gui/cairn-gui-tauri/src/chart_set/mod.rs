@@ -146,7 +146,8 @@ pub struct CeasePlan {
 /// WRONG-CHART HAZARD (`MedicationRow::is_wrong_chart_hazard`) stops only the threads on the opened
 /// chart: the node itself says this line may carry another person's drug — the group reaches
 /// a chart outside the set, or the set holds a link the node doubts and the line is not
-/// recorded only on the opened chart — so "stop this drug" can only
+/// recorded only on the opened chart, or a synced event on it named another chart (#836) —
+/// so "stop this drug" can only
 /// be trusted to mean it for the patient in front of the clinician. The other threads are
 /// held back and NAMED, never skipped in silence (ADR-0060 decision 2); they can be stopped
 /// from their own chart. Without this, Stop on a line spanning a doubted link would write a
@@ -328,7 +329,18 @@ pub fn chart_pane(
         let drawn: Vec<Uuid> = row.holds.iter().map(|h| h.withhold_event_id).collect();
         if shown.can_release && release_plan(row, &drawn, opened).write.is_empty() {
             shown.can_release = false;
-            shown.flags.push(HOLD_NOT_ON_OPENED_CHART.to_string());
+            // Only when every hold is on one of the line's own threads. A hold on a NON-member
+            // thread sits on a chart outside the record (a mis-reconciled group), so it may be
+            // another person's own W: "release it from its own chart" would send the clinician
+            // to end it. The row's separation remedy speaks for that line instead.
+            let on_members = row.holds.iter().all(|h| {
+                row.members
+                    .iter()
+                    .any(|m| m.medication_id == h.medication_id)
+            });
+            if on_members {
+                shown.flags.push(HOLD_NOT_ON_OPENED_CHART.to_string());
+            }
         }
     }
     ChartPane {

@@ -16,7 +16,9 @@ use cairn_medication_view::targeting::withheld_reasons;
 use cairn_medication_view::MedicationRow;
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
-use cairn_node::medication::{build_release_body, build_withhold_body};
+use cairn_node::medication::{
+    build_release_body, build_withhold_body, reconcile_medications, ReconcileInput,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -102,4 +104,51 @@ async fn a_synced_release_naming_another_chart_marks_the_line() {
         .expect("the sync door admits it and flags it");
 
     assert_conflict_hazard(&line_of(&c, p, med).await);
+}
+
+/// In a RECONCILED line the flag is on one member thread while the line is keyed by the group's
+/// min-UUID representative (db/033 `medication_group_member`). Flag the NON-representative
+/// member, so the read's group mapping is what is tested, not the unreconciled fallback.
+#[tokio::test]
+async fn a_conflict_on_a_reconciled_lines_other_member_marks_the_line() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, a) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let b = add_med(&mut c, &sk, &kid, p).await;
+    let edge = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&mut c, &sk, &kid, "test-node", p, a, b, &edge, None, None)
+        .await
+        .unwrap();
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let flagged = a.max(b); // the group is keyed by the smaller id
+    let row = line_of(&c, p, flagged).await;
+    assert_eq!(row.members.len(), 2, "precondition: one reconciled line");
+    assert_ne!(
+        row.group_id, flagged,
+        "precondition: not the representative"
+    );
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let body = effective_at_wall(
+        &c,
+        build_withhold_body(
+            Uuid::now_v7(),
+            flagged,
+            other,
+            &until_reviewed("BP 85/50"),
+            &kid,
+            peer_hlc(wall),
+        ),
+    )
+    .await;
+    apply_remote(&c, &sk, &body)
+        .await
+        .expect("admitted and flagged");
+
+    assert_conflict_hazard(&line_of(&c, p, flagged).await);
 }

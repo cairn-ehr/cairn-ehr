@@ -116,7 +116,7 @@ pub fn withheld_report(
 ) -> Option<String> {
     // The group ids of the lines whose reasons satisfy `pick`, in the order given. Each line's
     // reasons go through `worded`, so a line whose set is empty is still counted (as the
-    // outside case) rather than falling through both blocks below.
+    // outside case) rather than falling through every block below.
     let groups = |pick: fn(WrongChartReasons) -> bool| -> Vec<Uuid> {
         withheld
             .iter()

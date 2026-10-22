@@ -3,14 +3,16 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)** (#839 + #840 + #841,
-> branch `fix/839-840-841-hold-followups`), the three follow-ups from #838's review. A Release names a hold it was
-> not shown, even on its all-gone refusal, and says "still on this line", never "in force" (a pending W has not
-> started). A cease or release whose every write failed returns `Err`, not a report; **stale wins** (maintainer's
-> ruling, 2026-10-22). Withhold and Stop are drawn only where their command can write (hazard lines only, and the
-> line then says where to go); an empty end is "missing or incomplete". Review filed **#843** (the floor admits a
-> release of an ended hold, so "stale wins" cannot yet fire for cease or release — a decision) and **#844** (Release
-> is not yet narrowed the same way). Durable rules: the `#832` block in `developers/durable-rules.md`.
+> **⇒ ONE PR AWAITS THE MAINTAINER: the #844 + #836 PR** (branch `fix/844-836-release-narrowing-wrong-chart`).
+> **#844:** Release is drawn only where `release_plan` can write (the #841 rule, finished); the line then says where
+> to release it. **#836:** a medication event that arrived by sync naming another person's chart (db/031's
+> `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
+> `patient_conflict`, left out of sign-off, with its own remedy (stop the line and record it again). Durable rules:
+> the `#832` block in `developers/durable-rules.md` (#844 and #836 bullets).
+> **Merged 2026-10-21: PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)** (#839 + #840 + #841): unseen holds
+> said, a gesture that wrote nothing refuses (**stale wins**), Withhold and Stop only where they can write. Its review
+> filed **#843** (the floor admits a release of an ended hold, so "stale wins" cannot yet fire for cease or release —
+> a decision).
 > **Merged 2026-10-21: PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)** (#832, #803 slice B): the window
 > draws the **W** and offers **Withhold**/**Release**. **Owed by a human: RUNBOOK §15** (W ≤ 10 s, Release ≤ 5 s,
 > VoiceOver/keyboard; the WebKit time-field reset is confirmed only in headless WebKit). #809 gained item 5.
@@ -30,9 +32,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)**; run #838's RUNBOOK §15.
->    **#825** needs a decision (where the window's operator diagnostics
->    live). An idempotent re-send of a registration
+> 1. **Review and merge the #844 + #836 PR**; run #838's RUNBOOK §15. Two decisions are owed: **#843** (should the
+>    local door refuse a release of an ended hold?) and **#825** (where the window's operator diagnostics live).
+>    Buildable hold follow-ups: **#835** (a future-dated release is invisible) · **#837** (test gaps) · #834 (needs a
+>    decision on shape). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A PR #831, slice B PR #838, both merged; follow-ups #833 ward-level
