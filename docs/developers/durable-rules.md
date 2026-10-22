@@ -57,6 +57,12 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   thread no reconciliation touched, so the read is `LEFT JOIN` + `COALESCE(group_id, medication_id)`; the inner
   join first written missed every ordinary line, and only the DB pin caught it. Pins:
   `tests/medication_wrong_chart_hold.rs`, `hazard.rs` `a_conflict_*`.
+  **Arrival order (#846):** the flag is written only when the thread's chart is ALREADY known, and a dose, dose
+  correction or release never makes it known, so one that arrived first is never flagged. db/059's
+  `medication_thread_stray_chart` view finds it at read time and `read_conflict_charts` unions it in. **Tempting
+  wrong fixes:** "the flag table is the conflict record" (it is order-dependent; reading it alone re-opens the gap);
+  dropping the `WITH t` filter (the view then calls `cairn_medication_thread_patient` on every dose on the node). Pins:
+  the three `a_stray_*_that_arrived_before_its_threads_claim_marks_the_line` tests.
 - **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.

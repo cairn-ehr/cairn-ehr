@@ -411,4 +411,46 @@ $$;
 REVOKE EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) TO cairn_agent;
 
+-- 11. #846 — every dose, dose correction or release whose chart is not its thread's chart.
+--
+--    db/031's guard (`cairn_guard_medication_patient`) flags a synced event that names another
+--    chart, but only when the thread's chart is ALREADY known when the event arrives. These
+--    three event kinds never establish a thread's chart (they are not arms of
+--    `cairn_medication_thread_patient`), so one that arrives FIRST passes unflagged, and the
+--    claim that arrives later never looks back at it: another person's dose or W-ending would
+--    sit on this line with nothing to say so. A release may legitimately arrive before its W
+--    (section 8), and a dose before its assert, so this is a reachable order, not a corrupt one.
+--
+--    A VIEW, read at list time, for the reason db/034's `medication_attestation_misfiled` is
+--    one: a read-time join sees the contradiction whichever event arrived second, and after any
+--    reproject in any order. The medication list reads it beside the flag table (`read.rs`
+--    `read_conflict_charts`). A thread whose chart is unknown here contributes nothing: no data
+--    is never disagreement (principle 4). Columns are named as the flag table's, so the two
+--    union directly. A dose correction row is the one that currently stands for its target (HLC
+--    wins, db/032 section 6), so a stray correction overtaken by a correct one leaves no row here;
+--    the flag table still records it if it arrived after the claim.
+--
+--    Defined here, not in db/031, because it reads db/059's own release table.
+CREATE OR REPLACE VIEW medication_thread_stray_chart AS
+SELECT s.medication_id,
+       tp.patient_id AS standing_patient,
+       s.patient_id  AS asserted_patient
+FROM (
+    SELECT medication_id, patient_id FROM medication_dose_event
+    UNION ALL
+    SELECT medication_id, patient_id FROM medication_dose_correction
+    UNION ALL
+    SELECT medication_id, patient_id FROM medication_withhold_release
+) s
+CROSS JOIN LATERAL (
+    SELECT cairn_medication_thread_patient(s.medication_id) AS patient_id
+) tp
+WHERE tp.patient_id IS NOT NULL
+  AND tp.patient_id <> s.patient_id;
+GRANT SELECT ON medication_thread_stray_chart TO cairn_agent;
+-- The list filters this view by thread; the dose and release tables already index
+-- medication_id, and this gives the correction table the same (otherwise a seq scan per read).
+CREATE INDEX IF NOT EXISTS medication_dose_correction_med_idx
+    ON medication_dose_correction (medication_id);
+
 COMMIT;

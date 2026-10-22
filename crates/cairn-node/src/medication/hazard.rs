@@ -20,8 +20,9 @@
 //!    opened chart is withheld. That over-warns in a set of three or more, the direction this
 //!    module always errs in.
 //! 3. `patient_conflict` (#836) — an event on one of the line's threads arrived by sync naming
-//!    another chart than the thread's own (db/031's `medication_patient_conflict_flag`, read by
-//!    `read.rs`). It is projected anyway, so a W, a release, a dose or a stop written for that
+//!    another chart than the thread's own (db/031's `medication_patient_conflict_flag`, and
+//!    db/059's `medication_thread_stray_chart` for one that arrived before its thread's claim,
+//!    #846; both read by `read.rs`). It is projected anyway, so a W, a release, a dose or a stop written for that
 //!    chart's person sits on this line. A chart outside the set is another person; a linked
 //!    chart is the same person, unless the set holds a doubted link — then ANY conflict is a
 //!    hazard (the same reasoning as reason 2). Not "unless the named chart is the opened one":

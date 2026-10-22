@@ -78,7 +78,9 @@ pub struct MemberVouch {
 ///   someone else. Remedy: a human judges the LINKS (`DOUBTED_LINK_INSTRUCTION`).
 /// - `patient_conflict` (#836): an event on one of this line's threads arrived by SYNC naming
 ///   another person's chart. The sync door admits it and records it in db/031's
-///   `medication_patient_conflict_flag` (refusing it would fork the event set), and it is
+///   `medication_patient_conflict_flag` (refusing it would fork the event set), or, when it
+///   arrived before anything tied its thread to a chart, db/059's
+///   `medication_thread_stray_chart` view finds it at read time (#846); and it is
 ///   projected onto the thread anyway: another person's W can show on this drug, or a release
 ///   written for someone else can end this patient's W. Remedy: `conflict_remedy(status)`
 ///   (a current line: check it with the patient, then stop it and record it again; a ceased

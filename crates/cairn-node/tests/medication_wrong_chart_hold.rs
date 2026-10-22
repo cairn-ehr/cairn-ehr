@@ -18,8 +18,9 @@ use cairn_medication_view::MedicationStatus;
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
-    build_cease_body, build_release_body, build_withhold_body, reconcile_medications,
-    CeaseMedicationInput, ReconcileInput,
+    build_assert_body, build_cease_body, build_dose_change_body, build_dose_correction_body,
+    build_release_body, build_withhold_body, reconcile_medications, CeaseMedicationInput,
+    ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -187,4 +188,139 @@ async fn a_synced_stop_naming_another_chart_marks_the_ceased_line() {
         None,
         "a ceased line needs no signature"
     );
+}
+
+/// #846 — the guard flags an event only when its thread's chart is ALREADY known, so a stray
+/// event that arrives FIRST (before anything ties its thread to a chart) is never flagged, and
+/// the claim that arrives later does not look back at it. A dose (or a release, below) is not a
+/// claim (db/031 `cairn_medication_thread_patient`), so this is the order the guard cannot see.
+/// The list must find the contradiction whichever order the two arrived in.
+#[tokio::test]
+async fn a_stray_dose_that_arrived_before_its_threads_claim_marks_the_line() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let med = Uuid::now_v7();
+
+    // 1. A peer's dose change on thread `med`, written against `other`, arrives first.
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let dose = ChangeDoseInput {
+        dose_amount: Some("50"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-01-01"),
+        effective_precision: Some("day"),
+        info_source: "clinician-observed",
+        reason: None,
+    };
+    let body = build_dose_change_body(Uuid::now_v7(), med, other, &dose, &kid, peer_hlc(wall));
+    apply_remote(&c, &sk, &body)
+        .await
+        .expect("an orphan dose is admitted");
+
+    // 2. The thread's own assert, for p, arrives later.
+    apply_peer_assert(&c, &sk, &kid, p, med, wall + 1).await;
+
+    assert_conflict_hazard(&line_of(&c, p, med).await);
+}
+
+/// #846, the release half: db/059 lets a release arrive before the W it names, so a stray
+/// release can be the first thing on its thread too.
+#[tokio::test]
+async fn a_stray_release_that_arrived_before_its_threads_claim_marks_the_line() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let med = Uuid::now_v7();
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let body = effective_at_wall(
+        &c,
+        build_release_body(
+            Uuid::now_v7(),
+            med,
+            other,
+            &[Uuid::now_v7()],
+            None,
+            &kid,
+            peer_hlc(wall),
+        ),
+    )
+    .await;
+    apply_remote(&c, &sk, &body)
+        .await
+        .expect("an orphan release is admitted");
+
+    apply_peer_assert(&c, &sk, &kid, p, med, wall + 1).await;
+
+    assert_conflict_hazard(&line_of(&c, p, med).await);
+}
+
+/// #846, the dose-correction arm: a correction may arrive before the dose it corrects (db/032
+/// section 6), so it can be the first thing on its thread as well.
+#[tokio::test]
+async fn a_stray_dose_correction_that_arrived_before_its_threads_claim_marks_the_line() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let med = Uuid::now_v7();
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let fix = CorrectDoseInput {
+        dose_amount: Some("50"),
+        dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: Some("transcription error"),
+        strike: &[],
+        note: None,
+        info_source: None,
+    };
+    let body = build_dose_correction_body(
+        Uuid::now_v7(),
+        med,
+        other,
+        Uuid::now_v7(),
+        &fix,
+        &kid,
+        peer_hlc(wall),
+    );
+    apply_remote(&c, &sk, &body)
+        .await
+        .expect("an orphan dose correction is admitted");
+
+    apply_peer_assert(&c, &sk, &kid, p, med, wall + 1).await;
+
+    assert_conflict_hazard(&line_of(&c, p, med).await);
+}
+
+/// A peer's assert of thread `med` on chart `p`, through the sync door.
+async fn apply_peer_assert(
+    c: &Client,
+    sk: &cairn_event::SigningKey,
+    kid: &str,
+    p: Uuid,
+    med: Uuid,
+    wall: i64,
+) {
+    let body = build_assert_body(
+        Uuid::now_v7(),
+        med,
+        p,
+        &sample_input(),
+        kid,
+        peer_hlc(wall),
+        None,
+    );
+    apply_remote(c, sk, &body)
+        .await
+        .expect("the thread's assert is admitted");
 }

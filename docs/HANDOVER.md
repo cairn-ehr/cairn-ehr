@@ -3,15 +3,12 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)** (#844 + #836, branch `fix/844-836-release-narrowing-wrong-chart`).
-> **#844:** Release is drawn only where `release_plan` can write (the #841 rule, finished); the line then says where
-> to release it. **#836:** a medication event that arrived by sync naming another person's chart (db/031's
-> `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
-> `patient_conflict`, left out of sign-off, with its own remedy (stop the line and record it again). Durable rules:
-> the `#832` block in `developers/durable-rules.md` (#844 and #836 bullets). Its review round: the window's
-> outside-set row now carries the separation remedy (a signed line with a hidden Release said nothing), the conflict
-> read also maps flags through member threads (the READ COMMITTED race), and it filed **#846** (db/031 flags a stray
-> dose/release only if a claim arrived first).
+> **⇒ ONE PR AWAITS THE MAINTAINER: #846** (branch `fix/846-stray-chart-before-claim`): a stray dose, dose
+> correction or release that arrived BEFORE its thread's claim now makes the line a `patient_conflict` hazard
+> (db/059's `medication_thread_stray_chart` view, read beside db/031's flag; durable rules: the #836 bullet's
+> "Arrival order" sentence).
+> **Merged 2026-10-22: PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)** (#844 + #836): Release only where
+> `release_plan` can write; a synced event naming another chart makes its line a hazard (`patient_conflict`).
 > **Merged 2026-10-21: PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)** (#839 + #840 + #841): unseen holds
 > said, a gesture that wrote nothing refuses (**stale wins**), Withhold and Stop only where they can write. Its review
 > filed **#843** (the floor admits a release of an ended hold, so "stale wins" cannot yet fire for cease or release —
@@ -35,9 +32,12 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)**; run #838's RUNBOOK §15. Two decisions are owed: **#843** (should the
->    local door refuse a release of an ended hold?) and **#825** (where the window's operator diagnostics live).
->    Buildable hold follow-ups: **#846** (the conflict flag depends on arrival order) · **#835** (a future-dated release
+> 1. **Review and merge the #846 PR**; run #838's RUNBOOK §15. Two decisions are owed: **#843** (should the
+>    local door refuse a release of an ended hold? Options explained to the maintainer 2026-10-22 with examples; the
+>    recommendation was: refuse a release as stale, keep admitting a stop but SAY it was already stopped, because a
+>    refused stop loses its reason, e.g. an adverse reaction, with no allergy stream to put it in) and **#825** (where
+>    the window's operator diagnostics live).
+>    Buildable hold follow-ups: **#835** (a future-dated release
 >    is invisible) · **#837** (test gaps) · #834 (needs a decision on shape). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
@@ -167,7 +167,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-22 (#846) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.83** (newest ADR-0081;
@@ -200,6 +200,14 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-10-22 (third) — #846: the conflict read stops depending on arrival order
+
+- **⇒ A flag written at arrival can only see what had arrived.** The guard compares against the thread's chart AS
+  KNOWN THEN; an event kind that never establishes that chart passes unflagged when it comes first. Where a
+  contradiction can appear from either side, read it at list time (a view), as db/034's misfiled-attestation view
+  already did. Check a new view's plan: the per-thread filter must reach the base tables (it does; `EXPLAIN` showed
+  a seq scan on `medication_dose_correction` until it got a `medication_id` index).
 
 ### 2026-10-22 — #839 + #840 + #841 (PR #842): #838's review follow-ups
 
