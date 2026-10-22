@@ -102,7 +102,8 @@ pub async fn list_patient_medications(
 ///    chart the group touches, `touched_charts`) —
 ///    reaching another chart of the same person is not a hazard, reaching someone else's is,
 ///    and so is any line not recorded only on the opened chart while the set holds a link the
-///    node doubts (#697 (b)).
+///    node doubts (#697 (b)), and any line a synced event naming another person's chart landed
+///    on (#836, `read_conflict_charts`).
 /// 5. the advisory flags, each scoped to the set, and whether the set holds a doubted link
 ///    (an input to the hazard rule in step 4, read just before it is applied).
 async fn list_chart_set_medications(
@@ -115,6 +116,8 @@ async fn list_chart_set_medications(
 
     let group_charts = read_group_charts(client, &groups).await?;
     let reached = read_cross_patient_charts(client, &groups).await?;
+    let (conflicts_by_group, conflicts_by_thread) =
+        read_conflict_charts(client, &groups, &members).await?;
     let reconciliation_flagged = read_reconciliation_flagged_groups(client, charts).await?;
     let coding_conflict = read_coding_conflict_groups(client, charts).await?;
     let doubted = set_has_doubted_link(client, charts).await?;
@@ -122,14 +125,20 @@ async fn list_chart_set_medications(
     let cessation_reasons = read_cessation_reasons(client, &groups).await?;
 
     // Each group's wrong-chart reasons (`medication::hazard`), over EVERY chart it touches
-    // (`touched_charts`: the union of three sources, any one naming a chart is enough).
+    // (`touched_charts`: the union of three sources, any one naming a chart is enough), and
+    // the charts a flagged sync conflict on its threads named (#836).
     // Over-warn, never under-warn.
     let reasons: HashMap<Uuid, WrongChartReasons> = groups
         .iter()
         .copied()
         .map(|g| {
             let touched = touched_charts(g, &group_charts, &reached, &members);
-            (g, wrong_chart_reasons(charts, opened, doubted, &touched))
+            let conflict =
+                group_conflict_charts(g, &conflicts_by_group, &conflicts_by_thread, &members);
+            (
+                g,
+                wrong_chart_reasons(charts, opened, doubted, &touched, &conflict),
+            )
         })
         .collect();
 
@@ -218,10 +227,10 @@ async fn list_chart_set_medications(
 
     let groups_missing_from_chart = missing_groups(groups.iter().copied(), &seen_groups);
 
-    // The membership of every group this chart calls hazardous. It is listed for both kinds of
+    // The membership of every group this chart calls hazardous. It is listed for every kind of
     // hazard: separation (`medication-separate`, whose arguments these are) is the remedy only
     // for the outside-the-set case; a doubted-link line's remedy is a judgement of the link
-    // (DOUBTED_LINK_INSTRUCTION). Scoped to the hazardous groups
+    // (DOUBTED_LINK_INSTRUCTION), a conflict line's a new line (CONFLICT_INSTRUCTION). Scoped to the hazardous groups
     // rather than fetched for the whole chart: in normal operation both sets are empty and
     // this costs no query at all (`read_group_member_threads` returns early), whereas
     // whole-chart membership would be a second O(all members) read per chart open for data
@@ -267,6 +276,38 @@ fn touched_charts(
     sorted_unique(listed.chain(member_charts))
 }
 
+/// Every chart a flagged conflict on group `g`'s threads involves (#836) — sorted,
+/// de-duplicated — from the two keys `read_conflict_charts` files a flag under:
+///
+/// - `by_group`: the group the SQL mapped the flagged thread to. The only key for a flag on a
+///   thread OUTSIDE the set, which has no `members` entry.
+/// - `by_thread`, reached through `g`'s `members`: the threads sign-off WRITES to. The conflict
+///   read is a separate statement (READ COMMITTED), so a reconciliation or separation landing
+///   between it and the member read can file a member's flag under a group this read is not
+///   showing, and a group-only lookup would read the line as clean — the same hardening, and
+///   for the same reason, as `touched_charts` (PR #845 review).
+fn group_conflict_charts(
+    g: Uuid,
+    by_group: &HashMap<Uuid, Vec<Uuid>>,
+    by_thread: &HashMap<Uuid, Vec<Uuid>>,
+    members: &HashMap<Uuid, Vec<MemberVouch>>,
+) -> Vec<Uuid> {
+    let via_members = members
+        .get(&g)
+        .into_iter()
+        .flatten()
+        .filter_map(|m| by_thread.get(&m.medication_id))
+        .flatten();
+    sorted_unique(
+        by_group
+            .get(&g)
+            .into_iter()
+            .flatten()
+            .chain(via_members)
+            .copied(),
+    )
+}
+
 /// A row's wrong-chart reasons, looked up in the map the read built over `groups`. Every row
 /// is bound to those same groups, so a miss cannot happen today; if it ever did, the row's
 /// charts would be unknown, and unknown must not read as safe — so it is withheld, worded as
@@ -274,7 +315,7 @@ fn touched_charts(
 fn row_reasons(reasons: &HashMap<Uuid, WrongChartReasons>, group: Uuid) -> WrongChartReasons {
     reasons.get(&group).copied().unwrap_or(WrongChartReasons {
         outside_set: true,
-        doubted_link: false,
+        ..WrongChartReasons::default()
     })
 }
 
@@ -524,9 +565,59 @@ async fn read_cross_patient_charts(
     read_group_chart_lists(client, sql, groups).await
 }
 
+/// Every flagged patient conflict (#836) on a thread of `groups` or on one of `members`: the
+/// charts each flag names, the thread's standing chart and the chart the contradicting event
+/// asserted. Returned keyed twice, by the group the SQL maps the thread to and by the thread
+/// itself; `group_conflict_charts` unions the two for a line.
+///
+/// db/031's `cairn_guard_medication_patient` writes `medication_patient_conflict_flag` when a
+/// SYNCED medication event names another chart than its thread's, and the event is projected
+/// anyway (converge-and-flag: a node-local veto would fork the event set). Without this read the
+/// flag reached no screen, and another person's W, release, dose or stop sat silently on this
+/// line. Whether a named chart makes the line a hazard is `wrong_chart_reasons`' call (a linked
+/// chart of the same person does not). Empty, at the cost of one query over a near-empty table, on a clean node.
+async fn read_conflict_charts(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    groups: &[Uuid],
+    members: &HashMap<Uuid, Vec<MemberVouch>>,
+) -> anyhow::Result<(HashMap<Uuid, Vec<Uuid>>, HashMap<Uuid, Vec<Uuid>>)> {
+    let mut by_group: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    let mut by_thread: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    if groups.is_empty() {
+        return Ok((by_group, by_thread));
+    }
+    let threads: Vec<Uuid> = members
+        .values()
+        .flatten()
+        .map(|m| m.medication_id)
+        .collect();
+    // LEFT JOIN + COALESCE: a thread no reconciliation touched has NO `medication_group_member`
+    // row and is its own group (db/033) — an inner join would miss every unreconciled line.
+    let sql = "SELECT f.medication_id::text AS medication_id, \
+               COALESCE(gm.group_id, f.medication_id)::text AS group_id, \
+               array_agg(DISTINCT c::text) AS charts \
+               FROM medication_patient_conflict_flag f \
+               LEFT JOIN medication_group_member gm ON gm.medication_id = f.medication_id \
+               CROSS JOIN LATERAL unnest(ARRAY[f.standing_patient, f.asserted_patient]) AS c \
+               WHERE COALESCE(gm.group_id, f.medication_id) = ANY($1::text[]::uuid[]) \
+                  OR f.medication_id = ANY($2::text[]::uuid[]) \
+               GROUP BY 1, 2";
+    for row in client
+        .query(sql, &[&uuid_strings(groups), &uuid_strings(&threads)])
+        .await?
+    {
+        let thread: Uuid = row.get::<_, String>("medication_id").parse()?;
+        let group: Uuid = row.get::<_, String>("group_id").parse()?;
+        let charts = parse_uuid_list(row.get("charts"))?;
+        by_group.entry(group).or_default().extend(&charts);
+        by_thread.entry(thread).or_default().extend(charts);
+    }
+    Ok((by_group, by_thread))
+}
+
 /// Run a `(group_id text, charts text[])` query bound to `groups` and parse it into
-/// group → sorted, de-duplicated charts. Shared by the two group-chart readers so they
-/// parse identically.
+/// group → sorted, de-duplicated charts. Shared by the group-chart readers so they parse
+/// identically.
 async fn read_group_chart_lists(
     client: &(impl tokio_postgres::GenericClient + Sync),
     sql: &str,
@@ -656,7 +747,36 @@ mod tests {
             "{touched:?}"
         );
         let set = ChartSet::new([u(1), u(2)]).unwrap();
-        assert!(wrong_chart_reasons(&set, u(1), true, &touched).doubted_link);
+        assert!(wrong_chart_reasons(&set, u(1), true, &touched, &[]).doubted_link);
+    }
+
+    /// PR #845 review: the conflict read is its own statement (READ COMMITTED), so a
+    /// reconciliation re-keying a flagged thread between it and the member read files the flag
+    /// under a group the read is not showing. The flag must still reach the line through the
+    /// member thread sign-off would write to — else another person's W reads as clean.
+    #[test]
+    fn a_member_threads_conflict_counts_even_when_its_group_was_re_keyed() {
+        let members = HashMap::from([(
+            u(10),
+            vec![MemberVouch {
+                medication_id: u(20),
+                vouch: VouchState::Absent,
+                patient_id: u(1),
+            }],
+        )]);
+        // The SQL mapping filed thread 20's flag under group 11, not the group 10 shown.
+        let by_group = HashMap::from([(u(11), vec![u(1), u(3)])]);
+        let by_thread = HashMap::from([(u(20), vec![u(1), u(3)])]);
+        assert_eq!(
+            group_conflict_charts(u(10), &by_group, &by_thread, &members),
+            vec![u(1), u(3)]
+        );
+        // And the SQL mapping alone is still enough (a flag on a thread outside the set).
+        assert_eq!(
+            group_conflict_charts(u(11), &by_group, &HashMap::new(), &HashMap::new()),
+            vec![u(1), u(3)]
+        );
+        assert!(group_conflict_charts(u(12), &by_group, &by_thread, &members).is_empty());
     }
 
     #[test]

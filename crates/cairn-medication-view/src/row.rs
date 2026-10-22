@@ -65,8 +65,8 @@ pub struct MemberVouch {
     pub patient_id: Uuid,
 }
 
-/// WHY a line is withheld from sign-off as a wrong-chart hazard (#697). Two independent facts,
-/// either of which is enough, and both of which can hold at once:
+/// WHY a line is withheld from sign-off as a wrong-chart hazard (#697). Three independent facts,
+/// any of which is enough, and any combination of which can hold at once:
 ///
 /// - `outside_set`: the group reaches a chart OUTSIDE the set the list was read over, so some
 ///   thread on this line is recorded on another person's chart (issue #334). Remedy: separate
@@ -76,6 +76,13 @@ pub struct MemberVouch {
 ///   set still joins), and this line is not recorded only on the opened chart. A signature is
 ///   a claim about a person, and the node has positive evidence the other member may be
 ///   someone else. Remedy: a human judges the LINKS (`DOUBTED_LINK_INSTRUCTION`).
+/// - `patient_conflict` (#836): an event on one of this line's threads arrived by SYNC naming
+///   another person's chart. The sync door admits it and records it in db/031's
+///   `medication_patient_conflict_flag` (refusing it would fork the event set), and it is
+///   projected onto the thread anyway: another person's W can show on this drug, or a release
+///   written for someone else can end this patient's W. Remedy: `conflict_remedy(status)`
+///   (a current line: check it with the patient, then stop it and record it again; a ceased
+///   line: the stop itself may be the stray event).
 ///
 /// Built by `cairn-node`'s `medication::hazard::wrong_chart_reasons`, the one rule.
 ///
@@ -85,12 +92,13 @@ pub struct MemberVouch {
 pub struct WrongChartReasons {
     pub outside_set: bool,
     pub doubted_link: bool,
+    pub patient_conflict: bool,
 }
 
 impl WrongChartReasons {
-    /// Whether either reason holds.
+    /// Whether any reason holds.
     pub fn any(&self) -> bool {
-        self.outside_set || self.doubted_link
+        self.outside_set || self.doubted_link || self.patient_conflict
     }
 
     /// The reasons a renderer words for a line it knows is a hazard: these, or, when none is
@@ -104,7 +112,7 @@ impl WrongChartReasons {
         } else {
             WrongChartReasons {
                 outside_set: true,
-                doubted_link: false,
+                ..Self::default()
             }
         }
     }
@@ -385,7 +393,8 @@ mod tests {
             r.hazard_reasons(),
             Some(WrongChartReasons {
                 outside_set: true,
-                doubted_link: false
+                doubted_link: false,
+                patient_conflict: false,
             })
         );
     }
@@ -400,7 +409,8 @@ mod tests {
             r.hazard_reasons(),
             Some(WrongChartReasons {
                 outside_set: false,
-                doubted_link: true
+                doubted_link: true,
+                patient_conflict: false,
             })
         );
     }
@@ -425,7 +435,8 @@ mod tests {
             r.hazard_reasons(),
             Some(WrongChartReasons {
                 outside_set: false,
-                doubted_link: true
+                doubted_link: true,
+                patient_conflict: false,
             })
         );
     }
@@ -438,12 +449,14 @@ mod tests {
             WrongChartReasons::default().worded(),
             WrongChartReasons {
                 outside_set: true,
-                doubted_link: false
+                doubted_link: false,
+                patient_conflict: false,
             }
         );
         let doubted = WrongChartReasons {
             outside_set: false,
             doubted_link: true,
+            patient_conflict: false,
         };
         assert_eq!(doubted.worded(), doubted);
     }

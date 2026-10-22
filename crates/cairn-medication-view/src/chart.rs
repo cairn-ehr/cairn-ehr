@@ -91,6 +91,46 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
      two charts may then reach a chart outside the record, and its threads must then be \
      separated — the list will say so. Judge the links before separating any threads.";
 
+/// What to do about a CURRENT line an event on which arrived by sync naming another patient's
+/// chart (#836, `WrongChartReasons::patient_conflict`). Worded once, for every renderer, for the
+/// same reason as [`SEPARATION_INSTRUCTION`]. A ceased line gets [`CONFLICT_CEASED_INSTRUCTION`]:
+/// "stop this line" is impossible there, and after the clinician has followed this remedy the
+/// struck line must not read as though they had not (PR review, the #717 lesson).
+///
+/// WHY NOT SEPARATION. The line may be one thread, so there is nothing to separate: the stray
+/// event sits ON this patient's thread. It cannot be removed (append-only) and no verb
+/// re-files it. So the line is replaced, as a contaminated line on a paper drug chart is
+/// rewritten: stop it, and record the drug again. The new thread carries none of the stray
+/// events. The old line stays visible, struck, with its warning.
+///
+/// "Drug, dose or W" because db/031's guard is called for assert, coding, cessation, dose,
+/// dose-correction, withhold and release — a stray coding changes the drug NAME shown. (A stray
+/// stop is [`CONFLICT_CEASED_INSTRUCTION`]'s case: it leaves the line ceased.) Attestation and
+/// reconciliation do not call it.
+pub const CONFLICT_INSTRUCTION: &str =
+    "Check this drug with the patient and the prescriber before giving or holding it: an event \
+     on this line was recorded for another patient's chart, so the drug, dose or W shown may not \
+     be this patient's, and a W this patient had may have been ended for someone else. To clear \
+     it, stop this line and record the drug again (withhold the new line if it should be held). \
+     The stray event stays on record; it cannot be removed.";
+
+/// [`CONFLICT_INSTRUCTION`] for a CEASED line: the stop itself may be the stray event, and the
+/// line may be the one the clinician stopped to clear the conflict.
+pub const CONFLICT_CEASED_INSTRUCTION: &str =
+    "An event on this stopped line was recorded for another patient's chart, so the stop itself, \
+     or the drug or dose shown, may be another patient's. Check with the patient and the \
+     prescriber whether this patient still takes the drug; if so, record it again. If this line \
+     was stopped to clear that, nothing more is needed here. The stray event stays on record; it \
+     cannot be removed.";
+
+/// The conflict remedy for a line in `status` — the one choice both renderers make (#836).
+pub fn conflict_remedy(status: crate::row::MedicationStatus) -> &'static str {
+    match status {
+        crate::row::MedicationStatus::Active => CONFLICT_INSTRUCTION,
+        crate::row::MedicationStatus::Ceased => CONFLICT_CEASED_INSTRUCTION,
+    }
+}
+
 /// What to do about a group the node knows this chart set holds a thread in, but which has
 /// NO line on the list (`PatientMedicationList::groups_missing_from_chart`) — worded ONCE,
 /// for every renderer, for the same reason as [`SEPARATION_INSTRUCTION`].
@@ -136,13 +176,14 @@ pub struct PatientMedicationList {
     pub rows: Vec<MedicationRow>,
     pub groups_missing_from_chart: Vec<Uuid>,
     /// For each group this chart flags as a wrong-chart hazard — whether it is displayed
-    /// here (`MedicationRow::is_wrong_chart_hazard`, for either reason) or invisible here
+    /// here (`MedicationRow::is_wrong_chart_hazard`, for any reason) or invisible here
     /// (`groups_missing_from_chart`) — the group's FULL member-thread list, including
     /// members belonging to OTHER patients. Sorted, and empty in normal operation.
     ///
     /// The threads are the separation remedy's arguments only for a group reaching OUTSIDE the
     /// set; for a doubted-link line they only say which threads are held, because that remedy
-    /// is a judgement of the links (#697).
+    /// is a judgement of the links (#697); for a patient-conflict line they only name the line,
+    /// because its remedy is `conflict_remedy` (#836).
     ///
     /// WHY THIS EXISTS (#338 review finding 1). Every message about a cross-patient group
     /// points the operator at `medication-separate`, which takes TWO THREAD IDS. Everything

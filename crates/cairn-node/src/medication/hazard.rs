@@ -19,6 +19,13 @@
 //!    The rule does not read the link graph to find WHICH pair is doubted: every line not on the
 //!    opened chart is withheld. That over-warns in a set of three or more, the direction this
 //!    module always errs in.
+//! 3. `patient_conflict` (#836) — an event on one of the line's threads arrived by sync naming
+//!    another chart than the thread's own (db/031's `medication_patient_conflict_flag`, read by
+//!    `read.rs`). It is projected anyway, so a W, a release, a dose or a stop written for that
+//!    chart's person sits on this line. A chart outside the set is another person; a linked
+//!    chart is the same person, unless the set holds a doubted link — then ANY conflict is a
+//!    hazard (the same reasoning as reason 2). Not "unless the named chart is the opened one":
+//!    db/031 flags only two DIFFERENT charts, so one of them is never the opened chart.
 //!
 //! NOT COVERED, deliberately (an under-warn, so stated): an UN-attested unlink between two
 //! charts the set still joins is not a doubt. Only a human's "not the same person" is (design
@@ -41,16 +48,23 @@ fn only_on_opened(opened: Uuid, group_charts: &[Uuid]) -> bool {
 
 /// The reasons a group touching `group_charts` is a wrong-chart hazard, read over `set` from
 /// the `opened` chart. `group_charts` is every chart the group touches, the union of the read's
-/// three sources (`read.rs` `touched_charts`); duplicates are harmless.
+/// three sources (`read.rs` `touched_charts`); duplicates are harmless. `conflict_charts` are
+/// the charts each flagged conflict on the group's threads involves — the thread's standing
+/// chart AND the one the stray event asserted (`read.rs` `read_conflict_charts`); empty for
+/// nearly every line.
 pub(crate) fn wrong_chart_reasons(
     set: &ChartSet,
     opened: Uuid,
     set_has_doubted_link: bool,
     group_charts: &[Uuid],
+    conflict_charts: &[Uuid],
 ) -> WrongChartReasons {
     WrongChartReasons {
         outside_set: reaches_outside(set, group_charts),
         doubted_link: set_has_doubted_link && !only_on_opened(opened, group_charts),
+        patient_conflict: conflict_charts
+            .iter()
+            .any(|c| set_has_doubted_link || !set.contains(c)),
     }
 }
 
@@ -69,18 +83,19 @@ mod tests {
 
     #[test]
     fn a_group_wholly_inside_an_undoubted_set_is_not_a_hazard() {
-        assert!(!wrong_chart_reasons(&set12(), u(1), false, &[u(2), u(1)]).any());
-        assert!(!wrong_chart_reasons(&set12(), u(1), false, &[u(2)]).any());
+        assert!(!wrong_chart_reasons(&set12(), u(1), false, &[u(2), u(1)], &[]).any());
+        assert!(!wrong_chart_reasons(&set12(), u(1), false, &[u(2)], &[]).any());
     }
 
     #[test]
     fn a_group_reaching_one_chart_outside_is_a_hazard() {
-        let r = wrong_chart_reasons(&set12(), u(1), false, &[u(2), u(3)]);
+        let r = wrong_chart_reasons(&set12(), u(1), false, &[u(2), u(3)], &[]);
         assert_eq!(
             r,
             WrongChartReasons {
                 outside_set: true,
-                doubted_link: false
+                doubted_link: false,
+                patient_conflict: false
             }
         );
     }
@@ -90,20 +105,21 @@ mod tests {
     /// overlap) must not read as two charts.
     #[test]
     fn in_a_doubted_set_a_line_only_on_the_opened_chart_is_signable() {
-        assert!(!wrong_chart_reasons(&set12(), u(1), true, &[u(1)]).any());
-        assert!(!wrong_chart_reasons(&set12(), u(1), true, &[u(1), u(1)]).any());
+        assert!(!wrong_chart_reasons(&set12(), u(1), true, &[u(1)], &[]).any());
+        assert!(!wrong_chart_reasons(&set12(), u(1), true, &[u(1), u(1)], &[]).any());
     }
 
     /// #697 (b) itself: the OTHER member's one-chart line is withheld — signing it would vouch
     /// for a possible stranger's medication under this clinician's name.
     #[test]
     fn in_a_doubted_set_a_line_only_on_another_member_is_withheld() {
-        let r = wrong_chart_reasons(&set12(), u(1), true, &[u(2)]);
+        let r = wrong_chart_reasons(&set12(), u(1), true, &[u(2)], &[]);
         assert_eq!(
             r,
             WrongChartReasons {
                 outside_set: false,
-                doubted_link: true
+                doubted_link: true,
+                patient_conflict: false
             }
         );
     }
@@ -112,30 +128,58 @@ mod tests {
     /// is withheld for the DOUBTED reason — it lies inside the set, so it is not the outside case.
     #[test]
     fn in_a_doubted_set_a_line_shared_with_the_opened_chart_is_withheld() {
-        let r = wrong_chart_reasons(&set12(), u(1), true, &[u(1), u(2)]);
+        let r = wrong_chart_reasons(&set12(), u(1), true, &[u(1), u(2)], &[]);
         assert_eq!(
             r,
             WrongChartReasons {
                 outside_set: false,
-                doubted_link: true
+                doubted_link: true,
+                patient_conflict: false
             }
         );
     }
 
     #[test]
     fn in_a_doubted_set_a_line_with_no_known_chart_is_withheld() {
-        assert!(wrong_chart_reasons(&set12(), u(1), true, &[]).doubted_link);
+        assert!(wrong_chart_reasons(&set12(), u(1), true, &[], &[]).doubted_link);
     }
 
     #[test]
     fn a_line_can_carry_both_reasons() {
-        let r = wrong_chart_reasons(&set12(), u(1), true, &[u(2), u(3)]);
+        let r = wrong_chart_reasons(&set12(), u(1), true, &[u(2), u(3)], &[]);
         assert_eq!(
             r,
             WrongChartReasons {
                 outside_set: true,
-                doubted_link: true
+                doubted_link: true,
+                patient_conflict: false
             }
         );
+    }
+
+    /// #836: a synced event on the line names a chart OUTSIDE the set — another person's.
+    #[test]
+    fn a_conflict_naming_a_chart_outside_the_set_is_a_hazard() {
+        let r = wrong_chart_reasons(&set12(), u(1), false, &[u(1)], &[u(3)]);
+        assert_eq!(
+            r,
+            WrongChartReasons {
+                outside_set: false,
+                doubted_link: false,
+                patient_conflict: true
+            }
+        );
+    }
+
+    /// Naming a linked chart of the same person is no conflict between people (ADR-0076
+    /// decision 1) — unless the set holds a doubted link: then any conflict may be someone
+    /// else's, from whichever chart the list was opened, the direction this module errs in.
+    #[test]
+    fn a_conflict_naming_a_linked_chart_is_a_hazard_only_under_doubt() {
+        // The read names both the thread's standing chart and the asserted one, so a conflict
+        // list always holds two different charts.
+        assert!(!wrong_chart_reasons(&set12(), u(1), false, &[u(1)], &[u(1), u(2)]).any());
+        assert!(wrong_chart_reasons(&set12(), u(1), true, &[u(1)], &[u(1), u(2)]).patient_conflict);
+        assert!(wrong_chart_reasons(&set12(), u(2), true, &[u(2)], &[u(1), u(2)]).patient_conflict);
     }
 }

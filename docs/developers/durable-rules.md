@@ -36,6 +36,27 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   behind the record (as release); one that stopped nothing is no timing sample. **Tempting wrong fixes:** compute
   either from `status` in `build_row` (it has no opened chart); narrow every row on `.is_ok()`. Pins:
   `withhold_and_stop_are_offered_only_where_they_can_write`, `the_refusals_come_before_the_key`.
+  **Release too (#844):** `chart_pane` asks `release_plan` with EVERY hold the row drew (the ids the window
+  sends) and hides Release when it would write nothing. Its own sentence (`HOLD_NOT_ON_OPENED_CHART`), because
+  Withhold and Stop may still stand on that line, where "no record on the chart you opened" would be false. Said
+  only when every hold is on a MEMBER thread: a non-member's hold sits on a chart outside the record, may be another
+  person's own W, and "release it from its own chart" would send the clinician to end it. Separation speaks
+  instead, and it speaks ON THE ROW (the window's outside-set sentence carries `SEPARATION_INSTRUCTION`, as the
+  CLI's does): the report covers only withheld lines, so a signed or ceased line would otherwise show a W with no
+  Release and no way forward (PR #845 review). Pin: `release_is_offered_only_where_it_can_write`.
+- **A synced event naming another chart makes its line a hazard (#836)** — `WrongChartReasons::patient_conflict`,
+  read from db/031's `medication_patient_conflict_flag` (`read.rs` `read_conflict_charts`). The sync door
+  converges-and-flags, the event is projected anyway, so another person's W, release, dose or stop sits on the
+  line; the flag reached no screen before. A linked chart is the same person (no hazard) unless the set holds a
+  doubted link, and then ANY conflict is a hazard (db/031 flags only two different charts, so "unless the named
+  chart is the opened one" could never apply). Remedy by STATUS (`conflict_remedy`): a current line is
+  stopped and recorded again (`CONFLICT_INSTRUCTION`) — never separation (the line may be one thread); a ceased
+  line gets `CONFLICT_CEASED_INSTRUCTION` (the stop itself may be the stray event, and it may be the line the
+  clinician stopped to clear it). "Cannot be signed" only where `withheld_reasons` withholds the line (the #717
+  lesson), and the window puts the remedy ON THE ROW, because its report covers withheld lines only. **Trap:** `medication_group_member` has NO row for a
+  thread no reconciliation touched, so the read is `LEFT JOIN` + `COALESCE(group_id, medication_id)`; the inner
+  join first written missed every ordinary line, and only the DB pin caught it. Pins:
+  `tests/medication_wrong_chart_hold.rs`, `hazard.rs` `a_conflict_*`.
 - **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.

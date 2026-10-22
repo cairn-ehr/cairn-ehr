@@ -23,6 +23,7 @@
 //! `commands::cease_impl`).
 pub mod change;
 
+use crate::hold::plan::release_plan;
 use crate::state::AppState;
 use cairn_gui_tab_medications::view::{build_view, MedListView};
 use cairn_medication_view::{ChartSet, MedicationRow, PatientMedicationList};
@@ -145,7 +146,8 @@ pub struct CeasePlan {
 /// WRONG-CHART HAZARD (`MedicationRow::is_wrong_chart_hazard`) stops only the threads on the opened
 /// chart: the node itself says this line may carry another person's drug — the group reaches
 /// a chart outside the set, or the set holds a link the node doubts and the line is not
-/// recorded only on the opened chart — so "stop this drug" can only
+/// recorded only on the opened chart, or a synced event on it named another chart (#836) —
+/// so "stop this drug" can only
 /// be trusted to mean it for the patient in front of the clinician. The other threads are
 /// held back and NAMED, never skipped in silence (ADR-0060 decision 2); they can be stopped
 /// from their own chart. Without this, Stop on a line spanning a doubted link would write a
@@ -267,6 +269,12 @@ pub struct ChartPane {
 pub(crate) const NOT_ON_OPENED_CHART: &str = "this line has no record on the chart you opened — \
      stop or withhold it from its own chart";
 
+/// The row sentence on a hazard line whose Release [`chart_pane`] did not draw (#844): every hold
+/// on it sits on another chart's thread. Its own sentence, because Withhold and Stop may still
+/// stand (the line has a thread here), so [`NOT_ON_OPENED_CHART`] would be false.
+pub(crate) const HOLD_NOT_ON_OPENED_CHART: &str = "this line's hold is not on the chart you \
+     opened — release it from its own chart";
+
 /// Assemble the pane from one chart read and the outcome of reading its member names.
 ///
 /// Pure, so the availability rule is tested with no database: whatever happened to the member
@@ -274,8 +282,8 @@ pub(crate) const NOT_ON_OPENED_CHART: &str = "this line has no record on the cha
 /// say the list is combined, over how many charts, and that each member's identity state is
 /// unknown — the facts the missing header lines would have conveyed.
 ///
-/// `opened` is the chart the clinician opened: Withhold and Stop are drawn only on a line their
-/// command could write from there (#841).
+/// `opened` is the chart the clinician opened: Withhold, Stop and Release are drawn only on a
+/// line their command could write from there (#841, #844).
 pub fn chart_pane(
     list: &PatientMedicationList,
     opened: Uuid,
@@ -316,6 +324,23 @@ pub fn chart_pane(
         // The refused press used to say where to go; with the buttons gone, the line says it.
         if offered != (shown.can_withhold, shown.can_cease) {
             shown.flags.push(NOT_ON_OPENED_CHART.to_string());
+        }
+        // #844: the window releases every hold the row drew, so ask the plan with all of them.
+        let drawn: Vec<Uuid> = row.holds.iter().map(|h| h.withhold_event_id).collect();
+        if shown.can_release && release_plan(row, &drawn, opened).write.is_empty() {
+            shown.can_release = false;
+            // Only when every hold is on one of the line's own threads. A hold on a NON-member
+            // thread sits on a chart outside the record (a mis-reconciled group), so it may be
+            // another person's own W: "release it from its own chart" would send the clinician
+            // to end it. The row's separation remedy speaks for that line instead.
+            let on_members = row.holds.iter().all(|h| {
+                row.members
+                    .iter()
+                    .any(|m| m.medication_id == h.medication_id)
+            });
+            if on_members {
+                shown.flags.push(HOLD_NOT_ON_OPENED_CHART.to_string());
+            }
         }
     }
     ChartPane {

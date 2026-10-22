@@ -200,6 +200,7 @@ fn a_line_with_both_reasons_says_both() {
     r.wrong_chart = cairn_medication_view::WrongChartReasons {
         outside_set: true,
         doubted_link: true,
+        patient_conflict: false,
     };
     let flags = &build_view(&chart(vec![r])).rows[0].flags;
     assert!(
@@ -322,4 +323,68 @@ fn a_linked_row_with_no_source_charts_says_so_rather_than_going_silent() {
         "an empty source_charts on a linked list must say so explicitly, not render as \
          an empty (falsy) string"
     );
+}
+
+/// #836: a line a synced event naming another patient's chart landed on says so on the row.
+#[test]
+fn a_conflict_line_says_another_patients_event_landed_on_it() {
+    let mut r = row(
+        1,
+        MedicationStatus::Active,
+        vec![member(1, VouchState::Absent)],
+    );
+    r.cross_patient = true;
+    r.wrong_chart.patient_conflict = true;
+    let flags = &build_view(&chart(vec![r.clone()])).rows[0].flags;
+    let said = |flags: &[String], text: &str| flags.iter().any(|f| f.contains(text));
+    assert!(
+        said(flags, "recorded for another patient's chart"),
+        "{flags:?}"
+    );
+    assert!(said(flags, "cannot be signed"), "{flags:?}");
+    // The remedy is on the row itself: the report beside the list covers withheld lines only.
+    assert!(
+        said(flags, cairn_medication_view::CONFLICT_INSTRUCTION),
+        "{flags:?}"
+    );
+    assert!(!said(flags, "in doubt"), "{flags:?}");
+
+    // Ceased: no signature is owed and "stop this line" is impossible (the #717 lesson).
+    r.status = MedicationStatus::Ceased;
+    let flags = &build_view(&chart(vec![r])).rows[0].flags;
+    assert!(
+        said(flags, cairn_medication_view::CONFLICT_CEASED_INSTRUCTION),
+        "{flags:?}"
+    );
+    assert!(!said(flags, "cannot be signed"), "{flags:?}");
+}
+
+/// PR #845 review: a hazard line signed before the hazard arose is in no report, so its remedy
+/// must be on the row — for a line reaching outside the record, `chart_pane` may also have
+/// hidden its Release (#844) — and it must not claim it "cannot be signed" (the #717 lesson).
+#[test]
+fn a_signed_hazard_line_carries_its_remedy_on_the_row() {
+    let said = |flags: &[String], text: &str| flags.iter().any(|f| f.contains(text));
+    let signed = |pick: fn(&mut cairn_medication_view::WrongChartReasons)| {
+        let mut r = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Fresh { by: "dr_b".into() })],
+        );
+        r.cross_patient = true;
+        pick(&mut r.wrong_chart);
+        build_view(&chart(vec![r])).rows[0].flags.clone()
+    };
+    let outside = signed(|w| w.outside_set = true);
+    assert!(
+        said(&outside, cairn_medication_view::SEPARATION_INSTRUCTION),
+        "{outside:?}"
+    );
+    assert!(!said(&outside, "cannot be signed"), "{outside:?}");
+    let conflict = signed(|w| w.patient_conflict = true);
+    assert!(
+        said(&conflict, cairn_medication_view::CONFLICT_INSTRUCTION),
+        "{conflict:?}"
+    );
+    assert!(!said(&conflict, "cannot be signed"), "{conflict:?}");
 }

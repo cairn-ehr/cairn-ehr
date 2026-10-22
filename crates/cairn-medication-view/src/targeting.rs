@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 /// Whether a displayed line is one this gesture may sign at all.
 ///
-/// Three exclusions, for different reasons:
+/// Four exclusions, for different reasons:
 ///
 /// - **Ceased.** A struck line on a paper chart is not re-signed. Ceased rows stay visible
 ///   for parity, but they are never targets.
@@ -20,6 +20,12 @@ use uuid::Uuid;
 ///   links still join)
 ///   and this line is not recorded only on the opened chart: a signature is a claim about a
 ///   person, and the node has positive evidence the other member may be someone else.
+///
+/// - **Patient conflict (#836).** An event on one of the line's threads arrived by sync naming
+///   another person's chart and was projected anyway, so the drug, dose or W shown may be
+///   theirs.
+///
+/// The last three arrive together as `MedicationRow::is_wrong_chart_hazard`.
 ///
 /// All of these are line-level. The rest of the chart stays signable — see `withheld_rows`.
 fn is_signable_line(row: &MedicationRow) -> bool {
@@ -350,7 +356,8 @@ mod tests {
                 group_id: uid(1),
                 reasons: WrongChartReasons {
                     outside_set: false,
-                    doubted_link: true
+                    doubted_link: true,
+                    patient_conflict: false,
                 },
             }]
         );
@@ -388,6 +395,20 @@ mod tests {
         assert_eq!(withheld_group_ids(&withheld_rows(&rows)), vec![uid(1)]);
     }
 
+    /// The same guard for #836: a patient-conflict reason alone withholds the line.
+    #[test]
+    fn a_patient_conflict_reason_without_the_flag_is_never_a_target() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        )];
+        rows[0].wrong_chart.patient_conflict = true;
+        assert!(!rows[0].cross_patient, "precondition: the flag is down");
+        assert!(sign_off_targets(&rows).is_empty());
+        assert_eq!(withheld_group_ids(&withheld_rows(&rows)), vec![uid(1)]);
+    }
+
     /// `withheld_reasons` is the per-row form of `withheld_rows`: a hazard line is withheld only
     /// while it is ACTIVE and still needs a signature. A renderer that points at the withheld
     /// report must ask this, not the status-blind `hazard_reasons`.
@@ -402,6 +423,7 @@ mod tests {
         let reasons = WrongChartReasons {
             outside_set: false,
             doubted_link: true,
+            patient_conflict: false,
         };
         assert_eq!(
             withheld_reasons(&doubted(MedicationStatus::Active, VouchState::Absent)),

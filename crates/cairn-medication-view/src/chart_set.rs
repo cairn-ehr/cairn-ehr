@@ -44,7 +44,8 @@ impl ChartSet {
 
     /// Whether every one of `charts` is in this set. The core of the cross-patient test: a
     /// medication group reaching a chart NOT inside the set being read is a hazard (the node's
-    /// read adds one more case — a set holding a doubted link; see `cairn-node`'s
+    /// read adds two more cases — a set holding a doubted link, and a synced event naming another
+    /// chart (#836); see `cairn-node`'s
     /// `medication::hazard::wrong_chart_reasons`).
     pub fn contains_all(&self, charts: &[Uuid]) -> bool {
         charts.iter().all(|c| self.contains(c))

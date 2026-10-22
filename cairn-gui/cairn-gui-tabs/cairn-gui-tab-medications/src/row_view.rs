@@ -13,6 +13,7 @@
 use crate::hold_view::{cessation_detail, hold_view, HoldView};
 use cairn_medication_view::{
     short_kid, withheld_reasons, MedicationRow, MedicationStatus, VouchState,
+    SEPARATION_INSTRUCTION,
 };
 use chrono::{DateTime, Local};
 use serde::Serialize;
@@ -64,7 +65,8 @@ pub struct MedListRowView {
     /// True on a current line: a "W" can be written on it. Narrowed by the window as
     /// `can_cease` is (#841), to lines `withhold_target` accepts from the opened chart.
     pub can_withhold: bool,
-    /// True when there is a hold to release (a release also cancels a pending hold).
+    /// True when there is a hold to release (a release also cancels a pending hold). Narrowed
+    /// by the window on a hazard line to lines `release_plan` can write from the opened chart (#844).
     pub can_release: bool,
     /// `"Stopped: <reason>"` on a ceased line whose cessation gave a reason.
     pub cessation_detail: Option<String>,
@@ -195,12 +197,20 @@ fn flags(row: &MedicationRow) -> Vec<String> {
         // REASON (#697): each names its own cause, and the report names each remedy.
         if why.outside_set {
             // The displayed dose comes from a whole-group pick that ignores patient, so it
-            // may be the other patient's (issue #334).
-            out.push(
+            // may be the other patient's (issue #334). The remedy goes on the row, as the
+            // CLI's does: the report covers only lines sign-off withholds, and `chart_pane`
+            // may hide Release on this line (#844), so a signed or ceased line would otherwise
+            // show a W nobody here can end and no way forward (PR #845 review). "Cannot be
+            // signed" only where sign-off withholds the line (the PR #717 lesson).
+            let signing = if withheld_reasons(row).is_some() {
+                ", so this line cannot be signed"
+            } else {
+                ""
+            };
+            out.push(format!(
                 "shared with another patient's record — the dose shown may not be this \
-                 patient's, so this line cannot be signed"
-                    .to_string(),
-            );
+                 patient's{signing}. {SEPARATION_INSTRUCTION}"
+            ));
         }
         if why.doubted_link {
             // #697 (b): the record's links are in doubt (db/054: an un-attested link the hard
@@ -221,6 +231,22 @@ fn flags(row: &MedicationRow) -> Vec<String> {
             } else {
                 cause.to_string()
             });
+        }
+        if why.patient_conflict {
+            // #836: a synced event naming another person's chart landed on this line. The
+            // remedy goes on the row, chosen by status: the report beside the list covers only
+            // lines sign-off withholds, so a ceased or already-signed conflict line would
+            // otherwise show its warning with no way forward. "Cannot be signed" only where
+            // sign-off withholds the line (the PR #717 lesson, as for the doubted link above).
+            let signing = if withheld_reasons(row).is_some() {
+                ", so this line cannot be signed"
+            } else {
+                ""
+            };
+            out.push(format!(
+                "an event on this line was recorded for another patient's chart{signing}. {}",
+                cairn_medication_view::conflict_remedy(row.status)
+            ));
         }
     }
     out
