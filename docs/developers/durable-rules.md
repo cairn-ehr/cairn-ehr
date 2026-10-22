@@ -57,6 +57,17 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   thread no reconciliation touched, so the read is `LEFT JOIN` + `COALESCE(group_id, medication_id)`; the inner
   join first written missed every ordinary line, and only the DB pin caught it. Pins:
   `tests/medication_wrong_chart_hold.rs`, `hazard.rs` `a_conflict_*`.
+  **Arrival order (#846):** the flag is written only when the thread's chart is ALREADY known, and a dose, dose
+  correction or release never makes it known, so one that arrived first is never flagged. db/059's
+  `medication_thread_stray_chart` view finds it at read time and `read_conflict_charts` unions it in. **Tempting
+  wrong fixes:** "the flag table is the conflict record" (it is order-dependent; reading it alone re-opens the gap);
+  "the view replaces the flag" (the view sees only doses, corrections and releases; a stray CLAIM — assert, stop,
+  coding, W — is only ever in the flag); dropping the `WITH t` filter (the view then calls
+  `cairn_medication_thread_patient` on every dose on the node), or narrowing it to the group ids (a stray on a
+  reconciled line's non-key member is missed). The stray can come first on the LOCAL door too: the dose door does not
+  check that a thread exists. Pins: the `a_stray_*` tests, `the_stray_chart_view_names_only_a_known_chart_that_differs`,
+  and `the_runtime_role_reads_a_list_whose_conflict_comes_from_the_view` (tests run as the owner; only this catches a
+  missing `cairn_agent` grant).
 - **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.

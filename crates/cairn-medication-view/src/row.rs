@@ -76,11 +76,14 @@ pub struct MemberVouch {
 ///   set still joins), and this line is not recorded only on the opened chart. A signature is
 ///   a claim about a person, and the node has positive evidence the other member may be
 ///   someone else. Remedy: a human judges the LINKS (`DOUBTED_LINK_INSTRUCTION`).
-/// - `patient_conflict` (#836): an event on one of this line's threads arrived by SYNC naming
-///   another person's chart. The sync door admits it and records it in db/031's
-///   `medication_patient_conflict_flag` (refusing it would fork the event set), and it is
-///   projected onto the thread anyway: another person's W can show on this drug, or a release
-///   written for someone else can end this patient's W. Remedy: `conflict_remedy(status)`
+/// - `patient_conflict` (#836): an event on one of this line's threads names another person's
+///   chart. It was admitted (a synced one, because refusing it would fork the event set; a
+///   dose or correction written here before its thread's claim, because the local door cannot
+///   compare against a chart nobody has named yet) and projected onto the thread: another
+///   person's W can show on this drug, or a release written for someone else can end this
+///   patient's W. It is found by db/031's `medication_patient_conflict_flag` or, when it
+///   arrived before anything tied its thread to a chart, by db/059's
+///   `medication_thread_stray_chart` view (#846). Remedy: `conflict_remedy(status)`
 ///   (a current line: check it with the patient, then stop it and record it again; a ceased
 ///   line: the stop itself may be the stray event).
 ///
