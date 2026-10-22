@@ -396,3 +396,57 @@ fn withhold_and_stop_are_offered_only_where_they_can_write() {
         assert_eq!(row.flags, built.flags, "{}", row.primary);
     }
 }
+
+/// #844: Release is drawn only where `release_plan` can write — the #841 rule finished. A hazard
+/// line whose holds all sit on another chart's threads offered a press that ended nothing (and,
+/// as a report, wiped the typed reason). The window sends every hold the row drew, so the offer
+/// asks `release_plan` with all of them. The line then says where to release it.
+#[test]
+fn release_is_offered_only_where_it_can_write() {
+    let hold = |id: u128, thread: u128| cairn_medication_view::MedicationHold {
+        withhold_event_id: Uuid::from_u128(id),
+        medication_id: Uuid::from_u128(thread),
+        reason: "r".into(),
+        starts_at: "s".into(),
+        until: "reviewed".into(),
+        withholder: "k".into(),
+        pending: false,
+    };
+    let with_holds = |mut row: cairn_medication_view::MedicationRow, holds: &[(u128, u128)]| {
+        row.holds = holds.iter().map(|(id, t)| hold(*id, *t)).collect();
+        row
+    };
+    let mut list = cairn_medication_view::fixtures::sample_chart();
+    list.rows = vec![
+        // hazard, its hold on chart 2's thread only: no Release, and said
+        with_holds(plan_row(true, &[(10, 1), (11, 2)]), &[(90, 11)]),
+        // hazard, a hold on chart 1's thread: Release
+        with_holds(plan_row(true, &[(10, 1), (11, 2)]), &[(90, 11), (91, 10)]),
+        // ordinary, hold on another chart's thread: Release (an ordinary line is never narrowed)
+        with_holds(plan_row(false, &[(10, 1), (11, 2)]), &[(90, 11)]),
+    ];
+    let pane = chart_pane(
+        &list,
+        Uuid::from_u128(1),
+        Ok(vec![]),
+        Ok(RecordLinks::default()),
+        DuplicateSection::checked_none_open(),
+        None,
+    );
+    let rows = &pane.list.rows;
+    assert_eq!(
+        rows.iter().map(|r| r.can_release).collect::<Vec<_>>(),
+        [false, true, true]
+    );
+    let said = |i: usize| {
+        rows[i]
+            .flags
+            .contains(&HOLD_NOT_ON_OPENED_CHART.to_string())
+    };
+    assert!(said(0), "{:?}", rows[0].flags);
+    assert!(!said(1) && !said(2), "said only where Release was hidden");
+    // Withhold and Stop still stand on row 0 (thread 10 is on chart 1), so the #841 sentence —
+    // "no record on the chart you opened" — would be false there and is not said.
+    assert!(rows[0].can_withhold && rows[0].can_cease);
+    assert!(!rows[0].flags.contains(&NOT_ON_OPENED_CHART.to_string()));
+}

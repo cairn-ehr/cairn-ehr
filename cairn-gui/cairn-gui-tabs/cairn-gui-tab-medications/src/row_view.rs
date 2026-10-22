@@ -64,7 +64,8 @@ pub struct MedListRowView {
     /// True on a current line: a "W" can be written on it. Narrowed by the window as
     /// `can_cease` is (#841), to lines `withhold_target` accepts from the opened chart.
     pub can_withhold: bool,
-    /// True when there is a hold to release (a release also cancels a pending hold).
+    /// True when there is a hold to release (a release also cancels a pending hold). Narrowed
+    /// by the window on a hazard line to lines `release_plan` can write from the opened chart (#844).
     pub can_release: bool,
     /// `"Stopped: <reason>"` on a ceased line whose cessation gave a reason.
     pub cessation_detail: Option<String>,
