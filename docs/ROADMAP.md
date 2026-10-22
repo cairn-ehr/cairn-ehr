@@ -495,7 +495,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   wins); Withhold and Stop are drawn only where their command can write; an empty end is "missing or incomplete".
   Review filed **#843** (a release of an already-ended hold is admitted, never a stale refusal) and **#844** (Release
   is not yet offered only where it can write). **PR #842 merged 2026-10-21.**
-- **2026-10-22 (#844 + #836, PR TBD):** Release is drawn only where `release_plan` can write (the #841 rule, finished;
+- **2026-10-22 (#844 + #836, PR #845):** Release is drawn only where `release_plan` can write (the #841 rule, finished;
   the line then says where to release it). A synced medication event naming another person's chart (db/031's
   `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
   `patient_conflict` with its own remedy: stop the line and record it again.

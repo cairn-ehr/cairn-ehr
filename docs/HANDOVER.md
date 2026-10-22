@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: the #844 + #836 PR** (branch `fix/844-836-release-narrowing-wrong-chart`).
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)** (#844 + #836, branch `fix/844-836-release-narrowing-wrong-chart`).
 > **#844:** Release is drawn only where `release_plan` can write (the #841 rule, finished); the line then says where
 > to release it. **#836:** a medication event that arrived by sync naming another person's chart (db/031's
 > `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
@@ -32,7 +32,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge the #844 + #836 PR**; run #838's RUNBOOK §15. Two decisions are owed: **#843** (should the
+> 1. **Review and merge PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)**; run #838's RUNBOOK §15. Two decisions are owed: **#843** (should the
 >    local door refuse a release of an ended hold?) and **#825** (where the window's operator diagnostics live).
 >    Buildable hold follow-ups: **#835** (a future-dated release is invisible) · **#837** (test gaps) · #834 (needs a
 >    decision on shape). An idempotent re-send of a registration
