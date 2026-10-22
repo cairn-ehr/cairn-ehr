@@ -19,14 +19,16 @@
 //!    The rule does not read the link graph to find WHICH pair is doubted: every line not on the
 //!    opened chart is withheld. That over-warns in a set of three or more, the direction this
 //!    module always errs in.
-//! 3. `patient_conflict` (#836) — an event on one of the line's threads arrived by sync naming
-//!    another chart than the thread's own (db/031's `medication_patient_conflict_flag`, and
-//!    db/059's `medication_thread_stray_chart` for one that arrived before its thread's claim,
-//!    #846; both read by `read.rs`). It is projected anyway, so a W, a release, a dose or a stop written for that
-//!    chart's person sits on this line. A chart outside the set is another person; a linked
-//!    chart is the same person, unless the set holds a doubted link — then ANY conflict is a
-//!    hazard (the same reasoning as reason 2). Not "unless the named chart is the opened one":
-//!    db/031 flags only two DIFFERENT charts, so one of them is never the opened chart.
+//! 3. `patient_conflict` (#836) — an event on one of the line's threads names another chart
+//!    than the thread's own: a synced one, or a dose or correction written here before its
+//!    thread's claim (db/031's `medication_patient_conflict_flag`, and db/059's
+//!    `medication_thread_stray_chart` for one that arrived before the claim, #846; both read
+//!    by `read.rs`). It is projected anyway, so a W, a release, a dose or a stop
+//!    written for that chart's person sits on this line. A chart outside the set is another
+//!    person; a linked chart is the same person, unless the set holds a doubted link — then ANY
+//!    conflict is a hazard (the same reasoning as reason 2). Not "unless the named chart is the
+//!    opened one": db/031's flag and db/059's view name only two DIFFERENT charts, so one of
+//!    them is never the opened chart.
 //!
 //! NOT COVERED, deliberately (an under-warn, so stated): an UN-attested unlink between two
 //! charts the set still joins is not a doubt. Only a human's "not the same person" is (design
@@ -50,9 +52,9 @@ fn only_on_opened(opened: Uuid, group_charts: &[Uuid]) -> bool {
 /// The reasons a group touching `group_charts` is a wrong-chart hazard, read over `set` from
 /// the `opened` chart. `group_charts` is every chart the group touches, the union of the read's
 /// three sources (`read.rs` `touched_charts`); duplicates are harmless. `conflict_charts` are
-/// the charts each flagged conflict on the group's threads involves — the thread's standing
-/// chart AND the one the stray event asserted (`read.rs` `read_conflict_charts`); empty for
-/// nearly every line.
+/// the charts each conflict (flag or stray-view row) on the group's threads involves — the
+/// thread's standing chart AND the one the stray event asserted (`read.rs`
+/// `read_conflict_charts`); empty for nearly every line.
 pub(crate) fn wrong_chart_reasons(
     set: &ChartSet,
     opened: Uuid,

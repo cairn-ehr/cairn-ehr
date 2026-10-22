@@ -276,8 +276,8 @@ fn touched_charts(
     sorted_unique(listed.chain(member_charts))
 }
 
-/// Every chart a flagged conflict on group `g`'s threads involves (#836) — sorted,
-/// de-duplicated — from the two keys `read_conflict_charts` files a flag under:
+/// Every chart a conflict on group `g`'s threads involves (#836, #846) — sorted,
+/// de-duplicated — from the two keys `read_conflict_charts` files a conflict under:
 ///
 /// - `by_group`: the group the SQL mapped the flagged thread to. The only key for a flag on a
 ///   thread OUTSIDE the set, which has no `members` entry.
@@ -566,8 +566,8 @@ async fn read_cross_patient_charts(
 }
 
 /// Every patient conflict (#836, #846) on a thread of `groups` or on one of `members`: the
-/// charts each flag names, the thread's standing chart and the chart the contradicting event
-/// asserted. Returned keyed twice, by the group the SQL maps the thread to and by the thread
+/// charts each conflict names, the thread's standing chart and the chart the contradicting
+/// event asserted. Returned keyed twice, by the group the SQL maps the thread to and by the thread
 /// itself; `group_conflict_charts` unions the two for a line.
 ///
 /// db/031's `cairn_guard_medication_patient` writes `medication_patient_conflict_flag` when a
@@ -575,8 +575,10 @@ async fn read_cross_patient_charts(
 /// anyway (converge-and-flag: a node-local veto would fork the event set). Without this read the
 /// flag reached no screen, and another person's W, release, dose or stop sat silently on this
 /// line. The guard can only compare against a chart already known, so a stray dose, dose
-/// correction or release that arrived BEFORE its thread's claim is never flagged; db/059's
-/// `medication_thread_stray_chart` view finds those at read time, and both feed this read (#846).
+/// correction or release that arrived BEFORE its thread's claim (by sync, or a dose or
+/// correction written here, since the local door does not check that a thread exists) is never
+/// flagged; db/059's `medication_thread_stray_chart` view finds those at read time, and both
+/// feed this read (#846).
 /// Whether a named chart makes the line a hazard is `wrong_chart_reasons`' call (a linked
 /// chart of the same person does not). Empty, at the cost of one query, on a clean node.
 async fn read_conflict_charts(
@@ -595,9 +597,13 @@ async fn read_conflict_charts(
         .map(|m| m.medication_id)
         .collect();
     // A conflict is a flag (written when the stray event arrived AFTER its thread's chart was
-    // known) or a row of db/059's `medication_thread_stray_chart` view (a dose, dose correction
-    // or release that arrived FIRST, which the flag can never see; #846). The view is filtered
-    // to `t`, every thread the outer filter below can accept, so it never scans the whole node.
+    // known) or a row of db/059's `medication_thread_stray_chart` view. The view lists every
+    // stray dose, dose correction or release whatever the arrival order, so it covers the one
+    // that arrived FIRST, which the flag can never see (#846), and repeats most flagged ones;
+    // the repeats collapse in `array_agg(DISTINCT ...)`. The flag still matters for what the
+    // view cannot see: a stray claim (assert, stop, coding, W), and a stray correction since
+    // overtaken by a later one. The view is filtered to `t`, every thread the outer filter
+    // below can accept, so it never scans the whole node.
     // LEFT JOIN + COALESCE: a thread no reconciliation touched has NO `medication_group_member`
     // row and is its own group (db/033) — an inner join would miss every unreconciled line.
     let sql = "WITH t AS ( \

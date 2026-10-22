@@ -181,9 +181,11 @@ $$;
 -- coding in db/042, withhold/release in db/059), so the contract cannot drift between
 -- verbs (principle 12). RAISEs on the local door; flags and returns on remote apply
 -- (db/020 sets the transaction-local cairn.remote_apply marker). It can only compare
--- against a chart that is ALREADY known: a dose or release that arrives before anything
--- claims its thread passes unflagged, which db/059's medication_thread_stray_chart view
--- catches at read time (#846).
+-- against a chart that is ALREADY known: a dose, dose correction or release that arrives
+-- before anything claims its thread passes unflagged, and on EITHER door (the local dose
+-- door does not check that the thread exists, so a later local assert naming another chart
+-- meets no standing chart and does not raise). db/059's medication_thread_stray_chart view
+-- catches it at read time (#846).
 CREATE OR REPLACE FUNCTION cairn_guard_medication_patient(p_med uuid, p_patient uuid, p_ca bytea)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE

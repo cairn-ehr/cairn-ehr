@@ -7,6 +7,10 @@
 //! READS it. The line is a wrong-chart hazard (`WrongChartReasons::patient_conflict`), so it is
 //! left out of sign-off and every renderer says why.
 //!
+//! #846: a dose, dose correction or release that arrived BEFORE its thread's claim is never
+//! flagged (the guard has no chart to compare against yet). The `a_stray_*` tests pin that the
+//! list finds it anyway, through db/059's `medication_thread_stray_chart` view.
+//!
 //! The holds' display is deliberately not asserted: whether a peer-stamped instant is already
 //! in force depends on how far earlier tests pushed the shared HLC (`effective_at_wall`). The
 //! flag does not depend on it.
@@ -194,7 +198,7 @@ async fn a_synced_stop_naming_another_chart_marks_the_ceased_line() {
 /// event that arrives FIRST (before anything ties its thread to a chart) is never flagged, and
 /// the claim that arrives later does not look back at it. A dose (or a release, below) is not a
 /// claim (db/031 `cairn_medication_thread_patient`), so this is the order the guard cannot see.
-/// The list must find the contradiction whichever order the two arrived in.
+/// This pins that order; the after-claim order is the flag path the tests above pin.
 #[tokio::test]
 async fn a_stray_dose_that_arrived_before_its_threads_claim_marks_the_line() {
     let Some(base) = cs() else { return };
@@ -207,18 +211,7 @@ async fn a_stray_dose_that_arrived_before_its_threads_claim_marks_the_line() {
 
     // 1. A peer's dose change on thread `med`, written against `other`, arrives first.
     let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
-    let dose = ChangeDoseInput {
-        dose_amount: Some("50"),
-        dose_unit: Some("mg"),
-        effective: Some("2025-01-01"),
-        effective_precision: Some("day"),
-        info_source: "clinician-observed",
-        reason: None,
-    };
-    let body = build_dose_change_body(Uuid::now_v7(), med, other, &dose, &kid, peer_hlc(wall));
-    apply_remote(&c, &sk, &body)
-        .await
-        .expect("an orphan dose is admitted");
+    apply_peer_dose(&c, &sk, &kid, med, other, wall).await;
 
     // 2. The thread's own assert, for p, arrives later.
     apply_peer_assert(&c, &sk, &kid, p, med, wall + 1).await;
@@ -300,6 +293,179 @@ async fn a_stray_dose_correction_that_arrived_before_its_threads_claim_marks_the
     apply_peer_assert(&c, &sk, &kid, p, med, wall + 1).await;
 
     assert_conflict_hazard(&line_of(&c, p, med).await);
+}
+
+/// #846 on a RECONCILED line: the stray sits on the member that is NOT the group's key, so the
+/// read's thread filter must reach it through the members (`$2`) or the group membership, not
+/// only through the group ids (`$1`). Narrowing that filter to `$1` passes every test above.
+#[tokio::test]
+async fn a_stray_dose_before_the_claim_on_a_reconciled_lines_other_member_marks_the_line() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, a) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let b = Uuid::now_v7(); // minted after `a`, so the larger id: not the group's key
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    apply_peer_dose(&c, &sk, &kid, b, other, wall).await;
+    apply_peer_assert(&c, &sk, &kid, p, b, wall + 1).await;
+    let edge = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&mut c, &sk, &kid, "test-node", p, a, b, &edge, None, None)
+        .await
+        .unwrap();
+
+    let row = line_of(&c, p, b).await;
+    assert_eq!(row.members.len(), 2, "precondition: one reconciled line");
+    assert_ne!(row.group_id, b, "precondition: not the representative");
+    assert_conflict_hazard(&row);
+}
+
+/// #846 review: every test here runs as the schema owner, so a missing grant on the new view
+/// (or on anything else the list reads) would pass them all and fail every medication-list
+/// read in production. Read a list whose conflict comes from the view as the runtime role.
+/// The transaction's rollback on drop restores the role even if an assert panics.
+#[tokio::test]
+async fn the_runtime_role_reads_a_list_whose_conflict_comes_from_the_view() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let med = Uuid::now_v7();
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    apply_peer_dose(&c, &sk, &kid, med, other, wall).await;
+    apply_peer_assert(&c, &sk, &kid, p, med, wall + 1).await;
+
+    let txn = c.transaction().await.unwrap();
+    txn.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    let current: String = txn
+        .query_one("SELECT current_user", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        current, "cairn_agent",
+        "SET ROLE must actually have switched"
+    );
+    let list = list_patient_medications(&txn, p)
+        .await
+        .expect("the runtime role can read every relation the list reads");
+    let row = list
+        .rows
+        .into_iter()
+        .find(|r| r.members.iter().any(|m| m.medication_id == med))
+        .expect("the thread's line is on its own chart's list");
+    assert_conflict_hazard(&row);
+}
+
+/// #846 — the view itself, for what the list read cannot see: the list unnests both charts
+/// into one set, and a thread nobody has claimed has no line at all.
+#[tokio::test]
+async fn the_stray_chart_view_names_only_a_known_chart_that_differs() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+
+    // An unknown chart contributes nothing (principle 4): an orphan dose nobody claims.
+    let orphan = Uuid::now_v7();
+    apply_peer_dose(&c, &sk, &kid, orphan, other, wall).await;
+    assert_eq!(
+        stray_rows(&c, orphan).await,
+        vec![],
+        "no claim, no conflict"
+    );
+
+    // The thread's own chart is no conflict: p's dose, correction and release on p's thread.
+    apply_peer_dose(&c, &sk, &kid, med, p, wall + 1).await;
+    let fix = CorrectDoseInput {
+        dose_amount: Some("25"),
+        dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: Some("transcription error"),
+        strike: &[],
+        note: None,
+        info_source: None,
+    };
+    let body = build_dose_correction_body(
+        Uuid::now_v7(),
+        med,
+        p,
+        Uuid::now_v7(),
+        &fix,
+        &kid,
+        peer_hlc(wall + 2),
+    );
+    apply_remote(&c, &sk, &body).await.unwrap();
+    let body = effective_at_wall(
+        &c,
+        build_release_body(
+            Uuid::now_v7(),
+            med,
+            p,
+            &[Uuid::now_v7()],
+            None,
+            &kid,
+            peer_hlc(wall + 3),
+        ),
+    )
+    .await;
+    apply_remote(&c, &sk, &body).await.unwrap();
+    assert_eq!(stray_rows(&c, med).await, vec![], "same chart, no conflict");
+
+    // A stray is exactly one row, oriented (the thread's chart, the chart the stray named).
+    apply_peer_dose(&c, &sk, &kid, med, other, wall + 4).await;
+    assert_eq!(stray_rows(&c, med).await, vec![(p, other)]);
+}
+
+/// The view's `(standing_patient, asserted_patient)` rows for thread `med`.
+async fn stray_rows(c: &Client, med: Uuid) -> Vec<(Uuid, Uuid)> {
+    c.query(
+        "SELECT standing_patient::text, asserted_patient::text \
+           FROM medication_thread_stray_chart WHERE medication_id = $1::text::uuid",
+        &[&med.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| {
+        let chart = |i| r.get::<_, String>(i).parse::<Uuid>().unwrap();
+        (chart(0), chart(1))
+    })
+    .collect()
+}
+
+/// A peer's dose change on thread `med`, written against `chart`, through the sync door.
+async fn apply_peer_dose(
+    c: &Client,
+    sk: &cairn_event::SigningKey,
+    kid: &str,
+    med: Uuid,
+    chart: Uuid,
+    wall: i64,
+) {
+    let dose = ChangeDoseInput {
+        dose_amount: Some("50"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-01-01"),
+        effective_precision: Some("day"),
+        info_source: "clinician-observed",
+        reason: None,
+    };
+    let body = build_dose_change_body(Uuid::now_v7(), med, chart, &dose, kid, peer_hlc(wall));
+    apply_remote(c, sk, &body)
+        .await
+        .expect("a dose is admitted, claimed thread or not");
 }
 
 /// A peer's assert of thread `med` on chart `p`, through the sync door.

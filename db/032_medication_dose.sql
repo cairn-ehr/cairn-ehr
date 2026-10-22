@@ -259,9 +259,11 @@ REVOKE EXECUTE ON FUNCTION medication_dose_change_apply(event_log) FROM PUBLIC;
 --    cannot bind to a thread (offline-first: the target may not be local at submit time),
 --    so a mistargeted --target (or a hostile raw-SQL client) could otherwise carry
 --    medication_id = thread X while `corrects` points at a point of thread Y — silently
---    overlaying Y's dose with X's correction. Joining on medication_id makes such a
---    cross-thread correction a no-op on the projection (fail-safe: it never corrupts the
---    wrong thread's displayed dose), while the signed event stays auditable in event_log.
+--    overlaying Y's dose with X's correction. Joining on medication_id means such a
+--    cross-thread correction never shows X's values on Y's line, while the signed event
+--    stays auditable in event_log. It is NOT a no-op, though: the correction table is keyed
+--    on the target alone, so a later-HLC cross-thread correction EVICTS Y's own correction of
+--    that point, and Y's line silently falls back to the uncorrected dose (open issue #185).
 CREATE OR REPLACE VIEW medication_current_dose AS
 SELECT DISTINCT ON (de.medication_id)
     de.medication_id, de.patient_id, de.dose_event_id,
