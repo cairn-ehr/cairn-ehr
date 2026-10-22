@@ -305,3 +305,25 @@ fn a_ceased_conflict_row_says_the_stop_may_be_another_patients() {
     assert!(!text.contains("CANNOT be signed"), "{text}");
     assert!(!text.contains(CONFLICT_INSTRUCTION), "{text}");
 }
+
+/// PR #845 review: a conflict line signed before the stray event synced is not withheld, so it
+/// keeps the current-line remedy but must not claim it "CANNOT be signed" (the #717 lesson).
+#[test]
+fn a_signed_conflict_row_keeps_its_remedy_without_a_signing_claim() {
+    let mut row = conflict_row(1);
+    row.members[0].vouch = cairn_medication_view::VouchState::Fresh { by: "dr_b".into() };
+    let text = row_hazard_lines(&row, &BTreeMap::new()).join("\n");
+    assert!(text.contains(CONFLICT_INSTRUCTION), "{text}");
+    assert!(!text.contains("CANNOT be signed"), "{text}");
+}
+
+/// The same for a line reaching outside the set: the separation remedy stays, the signing claim
+/// goes.
+#[test]
+fn a_signed_outside_set_row_keeps_its_remedy_without_a_signing_claim() {
+    let mut row = list_row(1, true, false);
+    row.members[0].vouch = cairn_medication_view::VouchState::Fresh { by: "dr_b".into() };
+    let text = row_hazard_lines(&row, &BTreeMap::new()).join("\n");
+    assert!(text.contains(SEPARATION_INSTRUCTION), "{text}");
+    assert!(!text.contains("CANNOT be signed"), "{text}");
+}

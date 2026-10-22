@@ -106,18 +106,21 @@ pub fn member_lines(members: &[ChartIdentity]) -> Vec<String> {
 /// then the group's member threads once. For a line reaching outside the set those threads are
 /// the separation remedy's arguments (this row lists only this record's half of a cross-patient
 /// group, #338 finding 1); for a doubted-link line they only say which threads are held — that
-/// remedy is a judgement of the links and takes CHART ids, which the list header names.
+/// remedy is a judgement of the links and takes CHART ids, which the list header names; for a
+/// patient-conflict line they only name the line.
 ///
-/// The outside-set warning carries its remedy inline. The doubted-link warning carries its
-/// CAUSE only and points below the list: its remedy ([`DOUBTED_LINK_INSTRUCTION`]) is one
-/// for the whole record, not per line, so [`doubted_link_note`] prints it ONCE — repeating its
-/// ~1000 characters under every withheld row buried the list it was explaining (final review).
+/// The outside-set and patient-conflict warnings carry their remedies inline, the conflict's
+/// chosen by status (`conflict_remedy`). The doubted-link warning carries its CAUSE only and
+/// points below the list: its remedy ([`DOUBTED_LINK_INSTRUCTION`]) is one for the whole record,
+/// not per line, so [`doubted_link_note`] prints it ONCE — repeating its ~1000 characters under
+/// every withheld row buried the list it was explaining (final review).
 ///
-/// Only a row sign-off WITHHOLDS points below the list (`withheld_reasons`, the rule the note
-/// itself is decided by). A doubted row with nothing to sign — ceased, or signed before the
-/// doubt arose — says the doubt without the pointer: no note is printed for it (PR #717
-/// review). Takes the row, not its reasons, so no caller can hand it the raw `wrong_chart`
-/// field and skip the fail-safe reading in `MedicationRow::hazard_reasons`.
+/// Only a row sign-off WITHHOLDS says "CANNOT be signed off" or points below the list
+/// (`withheld_reasons`, the rule the note itself is decided by). A doubted row with nothing to
+/// sign — ceased, or signed before the doubt arose — says the doubt without the pointer: no
+/// note is printed for it (PR #717 review). Takes the row, not its reasons, so no caller can
+/// hand it the raw `wrong_chart` field and skip the fail-safe reading in
+/// `MedicationRow::hazard_reasons`.
 pub fn row_hazard_lines(row: &MedicationRow, targets: &BTreeMap<Uuid, Vec<Uuid>>) -> Vec<String> {
     let Some(why) = row.hazard_reasons() else {
         return Vec::new();
@@ -125,9 +128,15 @@ pub fn row_hazard_lines(row: &MedicationRow, targets: &BTreeMap<Uuid, Vec<Uuid>>
     let withheld = withheld_reasons(row).is_some();
     let mut out = Vec::new();
     if why.outside_set {
+        // "CANNOT be signed off" only where sign-off withholds the line, as below.
+        let signing = if withheld {
+            ", so this line CANNOT be signed off"
+        } else {
+            ""
+        };
         out.push(format!(
             "    ! this group's member threads span more than one patient — the dose shown may \
-             belong to the other patient, so this line CANNOT be signed off (issue #334). {}",
+             belong to the other patient{signing} (issue #334). {}",
             SEPARATION_INSTRUCTION
         ));
     }

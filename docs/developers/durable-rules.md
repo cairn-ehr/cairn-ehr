@@ -40,13 +40,16 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   sends) and hides Release when it would write nothing. Its own sentence (`HOLD_NOT_ON_OPENED_CHART`), because
   Withhold and Stop may still stand on that line, where "no record on the chart you opened" would be false. Said
   only when every hold is on a MEMBER thread: a non-member's hold sits on a chart outside the record, may be another
-  person's own W, and "release it from its own chart" would send the clinician to end it (separation speaks
-  instead). Pin: `release_is_offered_only_where_it_can_write`.
+  person's own W, and "release it from its own chart" would send the clinician to end it. Separation speaks
+  instead, and it speaks ON THE ROW (the window's outside-set sentence carries `SEPARATION_INSTRUCTION`, as the
+  CLI's does): the report covers only withheld lines, so a signed or ceased line would otherwise show a W with no
+  Release and no way forward (PR #845 review). Pin: `release_is_offered_only_where_it_can_write`.
 - **A synced event naming another chart makes its line a hazard (#836)** — `WrongChartReasons::patient_conflict`,
   read from db/031's `medication_patient_conflict_flag` (`read.rs` `read_conflict_charts`). The sync door
   converges-and-flags, the event is projected anyway, so another person's W, release, dose or stop sits on the
   line; the flag reached no screen before. A linked chart is the same person (no hazard) unless the set holds a
-  doubted link and the named chart is not the opened one. Remedy by STATUS (`conflict_remedy`): a current line is
+  doubted link, and then ANY conflict is a hazard (db/031 flags only two different charts, so "unless the named
+  chart is the opened one" could never apply). Remedy by STATUS (`conflict_remedy`): a current line is
   stopped and recorded again (`CONFLICT_INSTRUCTION`) — never separation (the line may be one thread); a ceased
   line gets `CONFLICT_CEASED_INSTRUCTION` (the stop itself may be the stray event, and it may be the line the
   clinician stopped to clear it). "Cannot be signed" only where `withheld_reasons` withholds the line (the #717

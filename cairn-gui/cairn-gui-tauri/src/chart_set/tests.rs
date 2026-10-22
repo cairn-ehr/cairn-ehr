@@ -393,6 +393,7 @@ fn withhold_and_stop_are_offered_only_where_they_can_write() {
     for (row, built) in pane.list.rows.iter().zip(build_view(&sample).rows) {
         assert_eq!(row.can_withhold, built.can_withhold, "{}", row.primary);
         assert_eq!(row.can_cease, built.can_cease, "{}", row.primary);
+        assert_eq!(row.can_release, built.can_release, "{}", row.primary);
         assert_eq!(row.flags, built.flags, "{}", row.primary);
     }
 }
@@ -426,8 +427,16 @@ fn release_is_offered_only_where_it_can_write() {
         with_holds(plan_row(false, &[(10, 1), (11, 2)]), &[(90, 11)]),
         // hazard, its hold on a thread that is NOT a member (one on a chart outside the record,
         // in a mis-reconciled group): no Release, and NOT "release it from its own chart" —
-        // that W may be another person's own; the row's separation remedy speaks instead
-        with_holds(plan_row(true, &[(10, 1)]), &[(92, 99)]),
+        // that W may be another person's own; the row's separation remedy speaks instead.
+        // Signed, so no report beside the list carries that remedy: only the row does.
+        with_holds(
+            {
+                let mut row = plan_row(true, &[(10, 1)]);
+                row.members[0].vouch = cairn_medication_view::VouchState::Fresh { by: "k".into() };
+                row
+            },
+            &[(92, 99)],
+        ),
     ];
     let pane = chart_pane(
         &list,
@@ -452,6 +461,16 @@ fn release_is_offered_only_where_it_can_write() {
     assert!(
         !said(3),
         "never send a clinician to release a non-member's hold"
+    );
+    // ...but never silence either (PR #845 review): with Release gone, the row itself names the
+    // separation remedy, which no report carries for a signed or ceased line.
+    assert!(
+        rows[3]
+            .flags
+            .iter()
+            .any(|f| f.contains(cairn_medication_view::SEPARATION_INSTRUCTION)),
+        "{:?}",
+        rows[3].flags
     );
     // Withhold and Stop still stand on row 0 (thread 10 is on chart 1), so the #841 sentence —
     // "no record on the chart you opened" — would be false there and is not said.

@@ -8,7 +8,10 @@
 > to release it. **#836:** a medication event that arrived by sync naming another person's chart (db/031's
 > `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
 > `patient_conflict`, left out of sign-off, with its own remedy (stop the line and record it again). Durable rules:
-> the `#832` block in `developers/durable-rules.md` (#844 and #836 bullets).
+> the `#832` block in `developers/durable-rules.md` (#844 and #836 bullets). Its review round: the window's
+> outside-set row now carries the separation remedy (a signed line with a hidden Release said nothing), the conflict
+> read also maps flags through member threads (the READ COMMITTED race), and it filed **#846** (db/031 flags a stray
+> dose/release only if a claim arrived first).
 > **Merged 2026-10-21: PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)** (#839 + #840 + #841): unseen holds
 > said, a gesture that wrote nothing refuses (**stale wins**), Withhold and Stop only where they can write. Its review
 > filed **#843** (the floor admits a release of an ended hold, so "stale wins" cannot yet fire for cease or release —
@@ -34,8 +37,8 @@
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Review and merge PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)**; run #838's RUNBOOK §15. Two decisions are owed: **#843** (should the
 >    local door refuse a release of an ended hold?) and **#825** (where the window's operator diagnostics live).
->    Buildable hold follow-ups: **#835** (a future-dated release is invisible) · **#837** (test gaps) · #834 (needs a
->    decision on shape). An idempotent re-send of a registration
+>    Buildable hold follow-ups: **#846** (the conflict flag depends on arrival order) · **#835** (a future-dated release
+>    is invisible) · **#837** (test gaps) · #834 (needs a decision on shape). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A PR #831, slice B PR #838, both merged; follow-ups #833 ward-level

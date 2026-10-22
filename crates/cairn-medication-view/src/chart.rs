@@ -103,9 +103,10 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
 /// rewritten: stop it, and record the drug again. The new thread carries none of the stray
 /// events. The old line stays visible, struck, with its warning.
 ///
-/// "Drug, dose, stop or W" because db/031's guard flags every medication event type that names
-/// a thread (assert, coding, cessation, dose, withhold, release) — a stray coding changes the
-/// drug NAME shown.
+/// "Drug, dose or W" because db/031's guard is called for assert, coding, cessation, dose,
+/// dose-correction, withhold and release — a stray coding changes the drug NAME shown. (A stray
+/// stop is [`CONFLICT_CEASED_INSTRUCTION`]'s case: it leaves the line ceased.) Attestation and
+/// reconciliation do not call it.
 pub const CONFLICT_INSTRUCTION: &str =
     "Check this drug with the patient and the prescriber before giving or holding it: an event \
      on this line was recorded for another patient's chart, so the drug, dose or W shown may not \
@@ -181,7 +182,8 @@ pub struct PatientMedicationList {
     ///
     /// The threads are the separation remedy's arguments only for a group reaching OUTSIDE the
     /// set; for a doubted-link line they only say which threads are held, because that remedy
-    /// is a judgement of the links (#697).
+    /// is a judgement of the links (#697); for a patient-conflict line they only name the line,
+    /// because its remedy is `conflict_remedy` (#836).
     ///
     /// WHY THIS EXISTS (#338 review finding 1). Every message about a cross-patient group
     /// points the operator at `medication-separate`, which takes TWO THREAD IDS. Everything

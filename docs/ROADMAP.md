@@ -498,8 +498,9 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **2026-10-22 (#844 + #836, PR #845):** Release is drawn only where `release_plan` can write (the #841 rule, finished;
   the line then says where to release it). A synced medication event naming another person's chart (db/031's
   `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
-  `patient_conflict` with its own remedy: stop the line and record it again.
-- **Next:** run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#843** (decisions), **#835**, **#807**;
+  `patient_conflict` with its own remedy: stop the line and record it again. Review filed **#846** (db/031 flags a
+  stray dose or release only if a claim on its thread arrived first).
+- **Next:** run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#843** (decisions), **#846**, **#835**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

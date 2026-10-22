@@ -14,10 +14,12 @@
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_medication_view::targeting::withheld_reasons;
 use cairn_medication_view::MedicationRow;
+use cairn_medication_view::MedicationStatus;
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
-    build_release_body, build_withhold_body, reconcile_medications, ReconcileInput,
+    build_cease_body, build_release_body, build_withhold_body, reconcile_medications,
+    CeaseMedicationInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -151,4 +153,38 @@ async fn a_conflict_on_a_reconciled_lines_other_member_marks_the_line() {
         .expect("admitted and flagged");
 
     assert_conflict_hazard(&line_of(&c, p, flagged).await);
+}
+
+/// The most dangerous variant (PR #845 review): another person's STOP lands on this patient's
+/// current drug. The line reads as ceased, so nothing withholds it — the flag is the only thing
+/// left to say the stop may not be this patient's, and the ceased-line remedy is what speaks.
+#[tokio::test]
+async fn a_synced_stop_naming_another_chart_marks_the_ceased_line() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (other, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let input = CeaseMedicationInput {
+        stopped: None,
+        stopped_precision: None,
+        reason: None,
+    };
+    let body = build_cease_body(Uuid::now_v7(), med, other, &input, &kid, peer_hlc(wall));
+    apply_remote(&c, &sk, &body)
+        .await
+        .expect("the sync door admits it and flags it");
+
+    let row = line_of(&c, p, med).await;
+    assert_eq!(row.status, MedicationStatus::Ceased, "the stray stop took");
+    assert!(row.wrong_chart.patient_conflict, "{:?}", row.wrong_chart);
+    assert!(row.is_wrong_chart_hazard());
+    assert_eq!(
+        withheld_reasons(&row),
+        None,
+        "a ceased line needs no signature"
+    );
 }

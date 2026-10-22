@@ -13,6 +13,7 @@
 use crate::hold_view::{cessation_detail, hold_view, HoldView};
 use cairn_medication_view::{
     short_kid, withheld_reasons, MedicationRow, MedicationStatus, VouchState,
+    SEPARATION_INSTRUCTION,
 };
 use chrono::{DateTime, Local};
 use serde::Serialize;
@@ -196,12 +197,20 @@ fn flags(row: &MedicationRow) -> Vec<String> {
         // REASON (#697): each names its own cause, and the report names each remedy.
         if why.outside_set {
             // The displayed dose comes from a whole-group pick that ignores patient, so it
-            // may be the other patient's (issue #334).
-            out.push(
+            // may be the other patient's (issue #334). The remedy goes on the row, as the
+            // CLI's does: the report covers only lines sign-off withholds, and `chart_pane`
+            // may hide Release on this line (#844), so a signed or ceased line would otherwise
+            // show a W nobody here can end and no way forward (PR #845 review). "Cannot be
+            // signed" only where sign-off withholds the line (the PR #717 lesson).
+            let signing = if withheld_reasons(row).is_some() {
+                ", so this line cannot be signed"
+            } else {
+                ""
+            };
+            out.push(format!(
                 "shared with another patient's record — the dose shown may not be this \
-                 patient's, so this line cannot be signed"
-                    .to_string(),
-            );
+                 patient's{signing}. {SEPARATION_INSTRUCTION}"
+            ));
         }
         if why.doubted_link {
             // #697 (b): the record's links are in doubt (db/054: an un-attested link the hard

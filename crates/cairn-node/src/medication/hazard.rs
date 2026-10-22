@@ -23,8 +23,9 @@
 //!    another chart than the thread's own (db/031's `medication_patient_conflict_flag`, read by
 //!    `read.rs`). It is projected anyway, so a W, a release, a dose or a stop written for that
 //!    chart's person sits on this line. A chart outside the set is another person; a linked
-//!    chart is the same person, unless the set holds a doubted link and the named chart is not
-//!    the opened one (the same reasoning as reason 2).
+//!    chart is the same person, unless the set holds a doubted link — then ANY conflict is a
+//!    hazard (the same reasoning as reason 2). Not "unless the named chart is the opened one":
+//!    db/031 flags only two DIFFERENT charts, so one of them is never the opened chart.
 //!
 //! NOT COVERED, deliberately (an under-warn, so stated): an UN-attested unlink between two
 //! charts the set still joins is not a doubt. Only a human's "not the same person" is (design
@@ -48,8 +49,9 @@ fn only_on_opened(opened: Uuid, group_charts: &[Uuid]) -> bool {
 /// The reasons a group touching `group_charts` is a wrong-chart hazard, read over `set` from
 /// the `opened` chart. `group_charts` is every chart the group touches, the union of the read's
 /// three sources (`read.rs` `touched_charts`); duplicates are harmless. `conflict_charts` are
-/// the charts that synced events on the group's threads named instead of the thread's own
-/// (`read.rs` `read_conflict_charts`); empty for nearly every line.
+/// the charts each flagged conflict on the group's threads involves — the thread's standing
+/// chart AND the one the stray event asserted (`read.rs` `read_conflict_charts`); empty for
+/// nearly every line.
 pub(crate) fn wrong_chart_reasons(
     set: &ChartSet,
     opened: Uuid,
@@ -62,7 +64,7 @@ pub(crate) fn wrong_chart_reasons(
         doubted_link: set_has_doubted_link && !only_on_opened(opened, group_charts),
         patient_conflict: conflict_charts
             .iter()
-            .any(|c| !set.contains(c) || (set_has_doubted_link && *c != opened)),
+            .any(|c| set_has_doubted_link || !set.contains(c)),
     }
 }
 
@@ -170,8 +172,8 @@ mod tests {
     }
 
     /// Naming a linked chart of the same person is no conflict between people (ADR-0076
-    /// decision 1) — unless the set holds a doubted link and the named chart is not the opened
-    /// one: then it may be someone else's, the direction this module errs in.
+    /// decision 1) — unless the set holds a doubted link: then any conflict may be someone
+    /// else's, from whichever chart the list was opened, the direction this module errs in.
     #[test]
     fn a_conflict_naming_a_linked_chart_is_a_hazard_only_under_doubt() {
         // The read names both the thread's standing chart and the asserted one, so a conflict

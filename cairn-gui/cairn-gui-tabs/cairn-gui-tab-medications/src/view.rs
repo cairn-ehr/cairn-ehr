@@ -101,8 +101,8 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
 }
 
 /// The withheld-lines report: displayed lines that need a signature and will not get one.
-/// One sentence per reason, each with its own remedy (#697). A line with both reasons is
-/// named in both.
+/// One sentence per reason, each with its own remedy (#697). A line with several reasons is
+/// named in each.
 ///
 /// PUBLIC because two surfaces render it — the chart *before* the gesture ("these lines
 /// will not be signed") and the outcome *after* it ("these lines were not signed"). Those

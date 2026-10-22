@@ -65,8 +65,8 @@ pub struct MemberVouch {
     pub patient_id: Uuid,
 }
 
-/// WHY a line is withheld from sign-off as a wrong-chart hazard (#697). Two independent facts,
-/// either of which is enough, and both of which can hold at once:
+/// WHY a line is withheld from sign-off as a wrong-chart hazard (#697). Three independent facts,
+/// any of which is enough, and any combination of which can hold at once:
 ///
 /// - `outside_set`: the group reaches a chart OUTSIDE the set the list was read over, so some
 ///   thread on this line is recorded on another person's chart (issue #334). Remedy: separate
@@ -80,8 +80,9 @@ pub struct MemberVouch {
 ///   another person's chart. The sync door admits it and records it in db/031's
 ///   `medication_patient_conflict_flag` (refusing it would fork the event set), and it is
 ///   projected onto the thread anyway: another person's W can show on this drug, or a release
-///   written for someone else can end this patient's W. Remedy: `CONFLICT_INSTRUCTION` (check
-///   the line with the patient, then stop it and record it again).
+///   written for someone else can end this patient's W. Remedy: `conflict_remedy(status)`
+///   (a current line: check it with the patient, then stop it and record it again; a ceased
+///   line: the stop itself may be the stray event).
 ///
 /// Built by `cairn-node`'s `medication::hazard::wrong_chart_reasons`, the one rule.
 ///

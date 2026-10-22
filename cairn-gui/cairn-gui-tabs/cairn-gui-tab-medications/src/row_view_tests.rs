@@ -358,3 +358,33 @@ fn a_conflict_line_says_another_patients_event_landed_on_it() {
     );
     assert!(!said(flags, "cannot be signed"), "{flags:?}");
 }
+
+/// PR #845 review: a hazard line signed before the hazard arose is in no report, so its remedy
+/// must be on the row — for a line reaching outside the record, `chart_pane` may also have
+/// hidden its Release (#844) — and it must not claim it "cannot be signed" (the #717 lesson).
+#[test]
+fn a_signed_hazard_line_carries_its_remedy_on_the_row() {
+    let said = |flags: &[String], text: &str| flags.iter().any(|f| f.contains(text));
+    let signed = |pick: fn(&mut cairn_medication_view::WrongChartReasons)| {
+        let mut r = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Fresh { by: "dr_b".into() })],
+        );
+        r.cross_patient = true;
+        pick(&mut r.wrong_chart);
+        build_view(&chart(vec![r])).rows[0].flags.clone()
+    };
+    let outside = signed(|w| w.outside_set = true);
+    assert!(
+        said(&outside, cairn_medication_view::SEPARATION_INSTRUCTION),
+        "{outside:?}"
+    );
+    assert!(!said(&outside, "cannot be signed"), "{outside:?}");
+    let conflict = signed(|w| w.patient_conflict = true);
+    assert!(
+        said(&conflict, cairn_medication_view::CONFLICT_INSTRUCTION),
+        "{conflict:?}"
+    );
+    assert!(!said(&conflict, "cannot be signed"), "{conflict:?}");
+}
