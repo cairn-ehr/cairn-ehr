@@ -488,7 +488,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   scrubs it) → `MedicationRow::other_cessation_reasons` beside the shown reason, said by the CLI list and the window;
   the already-stopped note names every reason and claims only what its list shows. `medication-cease` names the
   threads with no readable stop when the line stays current (#859). Review filed **#861** (a line reading current
-  hides a stopped member's reason — a decision).
+  hides a stopped member's reason — a decision) and **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386).
 - **Next:** review and merge PR #860; run #838's RUNBOOK §15; **#804** (needs #690), **#825**, **#850** and **#861**
   (decisions), **#855**, **#858**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.

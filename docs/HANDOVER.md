@@ -9,8 +9,10 @@
 > backfills; db/037's shred scrubs it) → `MedicationRow::other_cessation_reasons`, said by the CLI list and the
 > window's stop detail; the already-stopped note names every reason. The CLI's `medication-cease` re-reads the line
 > after the stop and names the threads with no readable stop (#859, `still_current_note`). Its review filed
-> **#861** (a line reading CURRENT still hides a stopped member thread's reason — a decision on shape). Durable
-> rules: the #857/#859 bullets.
+> **#861** (a line reading CURRENT still hides a stopped member thread's reason — a decision on shape) and **#862**
+> (`run-db-gated-tests.sh` with the `CAIRN_TEST_PG*` override but no `PGPORT` runs its SQL step against :5432).
+> Also tokio 1.54.1 in all three lockfiles (RUSTSEC-2026-0386). Full local gate green on the final tree (13 CI steps,
+> 2876 tests). Durable rules: the #857/#859 bullets.
 > **Merged 2026-10-23: PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)** (#835 + #854): a release recorded
 > for a later instant is said on its hold; the CLI's `medication-cease` says when the line was already stopped. Its
 > second review filed **#857** · **#858** · **#859**. Durable rules: the #843/#835 bullets.
