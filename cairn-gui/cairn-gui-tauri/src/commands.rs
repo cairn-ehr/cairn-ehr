@@ -27,11 +27,11 @@ use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
-    cease_outcome, chart_read_failed, key_locked, node_cannot_write, node_failure,
-    retry_when_nothing_written, sign_off_outcome, UnknownThread,
+    already_stopped_note, cease_outcome, chart_read_failed, key_locked, node_cannot_write,
+    node_failure, retry_when_nothing_written, sign_off_outcome, UnknownThread,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
-use cairn_medication_view::{short_kid, PatientMedicationList};
+use cairn_medication_view::{elsewhere_report, short_kid, PatientMedicationList};
 use std::time::Instant;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -193,7 +193,7 @@ pub struct SignOffReport {
     pub failed: Vec<String>,
     /// The outcome line the webview says (`write_failure::sign_off_outcome`): signed, NOT signed,
     /// where the gesture stopped early if it did (#818), and the chart's own reports — lines
-    /// withheld, groups it could not display, the linked charts it read across.
+    /// withheld, groups it could not display, lines elsewhere (#849), the linked charts it read across.
     pub text: String,
     /// `Unknown` when the line it stopped at may be signed: the list on screen may be behind the
     /// record, so the webview's re-read marks it "may be out of date" if it fails (#811).
@@ -290,6 +290,7 @@ pub async fn sign_off_impl(
         withheld,
         separation_targets,
         groups_missing_from_chart,
+        elsewhere,
         failed,
         interrupted,
         charts,
@@ -308,6 +309,7 @@ pub async fn sign_off_impl(
     let notes = [
         withheld_report(&withheld, &separation_targets),
         missing_report(&groups_missing_from_chart, &separation_targets),
+        elsewhere_report(&elsewhere),
         signed_across_message(&charts),
     ];
     let failed: Vec<String> = failed
@@ -507,6 +509,12 @@ pub async fn cease_impl(
     }
 
     let text = cease_outcome(ceased, &failed, &unknown);
+    // Said only when every thread of this press stopped for certain (see `already_stopped_note`).
+    let landed_in_full = ceased > 0 && failed.is_empty() && unknown.is_empty();
+    let text = match already_stopped_note(row, landed_in_full) {
+        Some(note) => format!("{text} {note}"),
+        None => text,
+    };
     Ok(CeaseReport {
         ceased,
         failed,

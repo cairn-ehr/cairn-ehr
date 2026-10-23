@@ -513,8 +513,15 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `standing_patient`), or this patient's dose/stop/W on another chart's thread (the flag's `asserted_patient`, db/059's
   stray view). Read-side only, maintainer's decision; CLI, window, semantic tree and compare panel; db/059 indexes
   `patient_id` on the view's three tables. #843 decided (refuse a dead release at the local door). Review filed
-  **#849** (sign-off outcome) and **#850** (a decision: reports never go away).
-- **Next:** run #838's RUNBOOK §15; **#843** (decided), **#849**, **#804** (needs #690), **#825** and **#850**
+  **#849** (sign-off outcome) and **#850** (a decision: reports never go away). **PR #851 merged 2026-10-23.**
+- **2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)):** a release of a hold that already
+  ended is refused at the LOCAL door as a stale picture ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md),
+  spec v0.84; one predicate `cairn_medication_hold_ended` for the read-time fold, the floor and the node's
+  pre-check; sync apply admits it); a Stop on a line already stopped is written and the window says so;
+  `SignOffOutcome::elsewhere` (#849, the union of both reads) reaches the CLI and the window's outcome. db/059 edited
+  in place, no schema-generation change. Second review filed **#854** (the CLI cease does not say "already
+  stopped") and **#855** (two accepted release races).
+- **Next:** merge PR #853; run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
   (decisions), **#835**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 

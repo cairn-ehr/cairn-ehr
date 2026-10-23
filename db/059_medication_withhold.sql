@@ -26,8 +26,9 @@
 --     that is malformed everywhere, so refusing it at sync apply forks nothing.
 --   * CLINICAL STATE — in the apply fns, LOCAL DOOR ONLY (cairn.remote_apply not 'on'): a
 --     withhold on a ceased line, a hold with `from` absent whose `until` is not after the
---     event's time, a release naming something that is not a withhold on this THREAD (plus
---     the shared #192 patient guard). These depend on
+--     event's time, a release naming something that is not a withhold on this THREAD, or a
+--     hold that has already ENDED by the release's instant (#843, ADR-0082) (plus the shared
+--     #192 patient guard). These depend on
 --     what THIS node happens to hold, so at sync apply they would be a node-local veto on a
 --     validly-signed event — the fork ADR-0056 forbids. The fold is defined for every
 --     arrival order instead (e.g. a release that arrives before its withhold).
@@ -289,12 +290,46 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION medication_withhold_apply(event_log) FROM PUBLIC;
 
+-- 7b. #843 — has hold `p_withhold` ENDED by instant `p_at`? NULL when it is still standing
+--     (in force, or not yet started: releasing a pending hold cancels it) or is no withhold
+--     here at all; otherwise the clinician-facing reason it ended, as a sentence fragment
+--     ("was already released at …" / "already ended at …"). The fold's tests (section 10,
+--     which CALLS this, so "ended" here and "not shown" there cannot drift apart) at one hold
+--     and one instant. Three callers: the fold, section 8's local-door refusal, and the
+--     orchestrator's pre-check (`release_medication_holds`), which says the same thing as a
+--     STALE refusal before anything is signed. Thread-blind: section 8 checks the thread
+--     first, and the pre-check only asks it about holds on the release's own thread.
+CREATE OR REPLACE FUNCTION cairn_medication_hold_ended(p_withhold uuid, p_at timestamptz)
+RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT CASE
+        WHEN r.first_release IS NOT NULL THEN
+            'was already released at ' || to_char(r.first_release AT TIME ZONE 'UTC',
+                                                  'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        WHEN NOT w.until_reviewed AND w.until_at <= GREATEST(p_at, w.starts_at) THEN
+            'already ended at ' || to_char(w.until_at AT TIME ZONE 'UTC',
+                                           'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+    END
+    FROM medication_withhold w
+    CROSS JOIN LATERAL (
+        SELECT min(x.released_at) AS first_release
+        FROM medication_withhold_release x
+        WHERE x.medication_id = w.medication_id
+          AND w.event_id = ANY (x.released_event_ids)
+          AND x.released_at <= p_at) r
+    WHERE w.event_id = p_withhold
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_medication_hold_ended(uuid, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_medication_hold_ended(uuid, timestamptz) TO cairn_agent;
+
 -- 8. Fold a release into its row. Local door: every named id must be a withhold on THIS
 --    THREAD (a release can never end another thread's hold, nor one its author did not see).
 --    The list shows holds per LINE (a reconciled group), so when the id IS a withhold but on
---    a sibling thread, the refusal names that thread: "release it there".
+--    a sibling thread, the refusal names that thread: "release it there". And it must still
+--    be STANDING at the release's instant (#843): a release of a hold a colleague already
+--    released, or that ran out, would record a release that released nothing.
 --    At sync apply a release may legitimately arrive before the withhold it names; the
---    fold ends that hold once it arrives (ADR-0081 decision 4).
+--    fold ends that hold once it arrives (ADR-0081 decision 4). A peer's release of an ended
+--    hold is admitted there too: a node-local veto would fork the event set.
 CREATE OR REPLACE FUNCTION medication_withhold_release_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -303,6 +338,7 @@ DECLARE
     v_ids uuid[];
     v_id  uuid;
     v_on  uuid;   -- the thread a named withhold is on; NULL when it is no withhold here
+    v_ended text; -- why a named withhold is no longer standing; NULL while it stands (#843)
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
     v_med := (p ->> 'medication_id')::uuid;
@@ -317,6 +353,10 @@ BEGIN
             ELSIF v_on <> v_med THEN
                 RAISE EXCEPTION 'medication release: % is a withhold on thread %, not %: release it there',
                     v_id, v_on, v_med;
+            END IF;
+            v_ended := cairn_medication_hold_ended(v_id, e.t_effective);
+            IF v_ended IS NOT NULL THEN
+                RAISE EXCEPTION 'medication release: hold % %: nothing to release', v_id, v_ended;
             END IF;
         END LOOP;
     END IF;
@@ -399,13 +439,9 @@ LANGUAGE sql STABLE AS $$
     FROM medication_withhold w
     JOIN medication_thread_group g ON g.medication_id = w.medication_id
     WHERE g.group_id = ANY (p_groups)
-      AND (w.until_reviewed OR w.until_at > p_now)
-      AND (w.until_reviewed OR w.until_at > w.starts_at)
-      AND NOT EXISTS (
-            SELECT 1 FROM medication_withhold_release r
-            WHERE r.medication_id = w.medication_id
-              AND w.event_id = ANY (r.released_event_ids)
-              AND r.released_at <= p_now)
+      -- The tests described above, written ONCE in section 7b (#853 review): a hold the floor
+      -- calls ended must never still be shown, or its release is refused on every re-read.
+      AND cairn_medication_hold_ended(w.event_id, p_now) IS NULL
     ORDER BY g.group_id, w.starts_at DESC, w.event_id
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) FROM PUBLIC;

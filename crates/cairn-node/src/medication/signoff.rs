@@ -112,6 +112,13 @@ pub struct SignOffOutcome {
     /// #334 defence exists to prevent. Union of both reads, so a group that vanished
     /// mid-gesture is reported too. Empty in normal operation.
     pub groups_missing_from_chart: Vec<Uuid>,
+    /// Lines on ANOTHER chart holding something recorded for this chart set (#848, #849),
+    /// from `PatientMedicationList::elsewhere`, the union of both reads (a line re-homed
+    /// mid-gesture is reported too; with nothing to sign there is only the first). None of them
+    /// is on this list, so none was signed. The caller MUST surface it as the list does
+    /// (`elsewhere_report`): without it, a chart whose only drug moved to another chart reports
+    /// "no medications are recorded" after the gesture. Empty in normal operation.
+    pub elsewhere: Vec<cairn_medication_view::ElsewhereLine>,
     /// Lines this gesture tried to sign and could not — each with the reason.
     ///
     /// A failed line never blocks another (ADR-0060): each attestation commits in its OWN
@@ -282,6 +289,7 @@ pub async fn sign_off_medication_list(
             withheld,
             separation_targets: first_read.separation_targets,
             groups_missing_from_chart: first_read.groups_missing_from_chart,
+            elsewhere: first_read.elsewhere,
             failed: vec![],
             interrupted: None,
             charts: first_read.charts,
@@ -443,6 +451,7 @@ pub async fn sign_off_medication_list(
         withheld,
         separation_targets,
         groups_missing_from_chart,
+        elsewhere: union_elsewhere(first_read.elsewhere, second_read.elsewhere),
         failed,
         interrupted,
         charts: first_read.charts,
@@ -472,6 +481,25 @@ fn union_sorted(a: &[Uuid], b: &[Uuid]) -> Vec<Uuid> {
     let mut out: Vec<Uuid> = a.iter().chain(b.iter()).copied().collect();
     out.sort();
     out.dedup();
+    out
+}
+
+/// The lines elsewhere at EITHER read, each once (by line), the first read's copy and order
+/// kept.
+///
+/// The same safe direction as `union_sorted`: a re-home landing between the two reads can move
+/// an already-signed line onto another chart WITHOUT changing the target set, and only the
+/// second read sees it. Dropping it would put back the silence #849 removed. Pure.
+fn union_elsewhere(
+    first: Vec<cairn_medication_view::ElsewhereLine>,
+    second: Vec<cairn_medication_view::ElsewhereLine>,
+) -> Vec<cairn_medication_view::ElsewhereLine> {
+    let mut out = first;
+    for line in second {
+        if !out.iter().any(|l| l.group_id == line.group_id) {
+            out.push(line);
+        }
+    }
     out
 }
 
@@ -551,7 +579,7 @@ fn ensure_same_targets(expected: &[Uuid], actual: &[Uuid]) -> anyhow::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_medication_view::{MemberVouch, VouchState};
+    use cairn_medication_view::{ElsewhereLine, MemberVouch, VouchState};
 
     fn uid(n: u128) -> Uuid {
         Uuid::from_u128(n)
@@ -686,6 +714,25 @@ mod tests {
                 one = uid(1),
                 two = uid(2)
             )
+        );
+    }
+
+    /// #853 review: a line elsewhere at EITHER read is reported, once per line, the first
+    /// read's copy and order kept.
+    #[test]
+    fn union_elsewhere_reports_a_line_from_either_read_once() {
+        let line = |g: u128, name: &str| ElsewhereLine {
+            group_id: uid(g),
+            name: Some(name.into()),
+            status: None,
+            charts: vec![],
+        };
+        assert_eq!(
+            union_elsewhere(
+                vec![line(1, "first"), line(2, "first")],
+                vec![line(2, "second"), line(3, "second")]
+            ),
+            vec![line(1, "first"), line(2, "first"), line(3, "second")]
         );
     }
 }

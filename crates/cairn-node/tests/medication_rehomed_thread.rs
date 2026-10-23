@@ -21,8 +21,9 @@ use cairn_medication_view::{ChartSet, ElsewhereLine, MedicationStatus};
 use cairn_node::db;
 use cairn_node::medication::elsewhere::read_elsewhere;
 use cairn_node::medication::read::list_patient_medications;
+use cairn_node::medication::signoff::sign_off_medication_list;
 use cairn_node::medication::{
-    build_assert_body, build_cease_body, build_dose_change_body, build_withhold_body,
+    build_assert_body, build_cease_body, build_dose_change_body, build_withhold_body, AttestParams,
     CeaseMedicationInput, ChangeDoseInput,
 };
 use tokio_postgres::Client;
@@ -335,6 +336,57 @@ async fn a_thread_moved_within_a_linked_set_is_not_said_elsewhere() {
         );
         assert_eq!(list.elsewhere, vec![], "opened {opened}");
     }
+}
+
+/// #849: the sign-off outcome carries the same elsewhere lines as the list it read, so the CLI and
+/// the window can say them after the gesture. A's only drug moved to B: A has nothing to sign,
+/// and "no medications are recorded" would be the silence #848 removed from the list.
+#[tokio::test]
+async fn a_sign_off_outcome_carries_the_lines_elsewhere() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (a, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (b, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    apply_peer_assert(&c, &sk, &kid, b, med, wall).await;
+
+    let (human_sk, human_kid) = cairn_event::generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\"}', $1)",
+        &[&human_kid],
+    )
+    .await
+    .unwrap();
+    let params = AttestParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+        basis: None,
+        note: None,
+    };
+    let out = sign_off_medication_list(&mut c, &sk, "test-node", &params, a, None)
+        .await
+        .unwrap();
+    assert!(out.attested.is_empty() && out.total_rows == 0, "{out:?}");
+    assert_eq!(out.elsewhere, vec![metoprolol_on(med, b)]);
+
+    // The attesting path too: with a drug of A's own to sign, "signed 1" must still carry the
+    // line elsewhere, or the signer reads it as the whole of A's medications.
+    let own = add_med(&mut c, &sk, &kid, a).await;
+    let out = sign_off_medication_list(&mut c, &sk, "test-node", &params, a, None)
+        .await
+        .unwrap();
+    assert_eq!(out.attested, vec![own], "{out:?}");
+    assert_eq!(out.elsewhere, vec![metoprolol_on(med, b)]);
+}
+
+/// `medication-sign-off` prints the elsewhere report in every outcome, as it prints the missing
+/// groups (#849). No CLI test drives the verb's text, so this pins the call.
+#[test]
+fn the_sign_off_verb_prints_the_report() {
+    let main = include_str!("../src/main.rs");
+    assert_eq!(main.matches("elsewhere_report(elsewhere)").count(), 1);
 }
 
 /// The kit's drug (`sample_input`), current, as an elsewhere line `group` on `chart`.
