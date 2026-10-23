@@ -513,7 +513,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `standing_patient`), or this patient's dose/stop/W on another chart's thread (the flag's `asserted_patient`, db/059's
   stray view). Read-side only, maintainer's decision; CLI, window, semantic tree and compare panel; db/059 indexes
   `patient_id` on the view's three tables. #843 decided (refuse a dead release at the local door). Review filed
-  **#849** (sign-off outcome) and **#850** (a decision: reports never go away).
+  **#849** (sign-off outcome) and **#850** (a decision: reports never go away). **PR #851 merged 2026-10-23.**
 - **Next:** run #838's RUNBOOK §15; **#843** (decided), **#849**, **#804** (needs #690), **#825** and **#850**
   (decisions), **#835**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.

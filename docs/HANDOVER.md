@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)** (#848, branch `fix/848-rehomed-thread-surfaces`): a drug of this
+> **Merged 2026-10-23: PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)** (#848): a drug of this
 > patient's on ANOTHER chart's line (a thread a later-HLC assert moved away, or this patient's dose/stop/W on another
 > chart's thread) is now said on this chart's list — `PatientMedicationList::elsewhere`, read-side only (decided
 > 2026-10-23), in the CLI, the window, its semantic tree and the compare panel. Durable rules: the #848 bullet.
@@ -39,7 +39,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)** (#848); run #838's RUNBOOK §15. Build **#843** as decided, and **#849**. Decisions
+> 1. Run #838's RUNBOOK §15. Build **#843** as decided, and **#849**. Decisions
 >    owed: **#825** (where the window's operator diagnostics live) and **#850** (acknowledging a dealt-with report).
 >    Buildable hold follow-ups: **#835** (a future-dated release
 >    is invisible) · **#837** (test gaps) · #834 (needs a decision on shape). An idempotent re-send of a registration
