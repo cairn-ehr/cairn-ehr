@@ -10,7 +10,10 @@
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_node::db;
-use cairn_node::medication::{already_stopped_note, cease_medication, CeaseMedicationInput};
+use cairn_node::medication::{
+    already_stopped_note, cease_medication, not_known_whether_stopped, reconcile_medications,
+    CeaseMedicationInput, ReconcileInput,
+};
 use uuid::Uuid;
 
 mod common;
@@ -62,10 +65,71 @@ async fn a_thread_on_no_line_here_says_it_cannot_tell() {
         .unwrap()
         .expect("an unseen thread earns a sentence");
     assert!(note.contains("not known"), "{note}");
+    assert!(note.contains("this patient's list"), "{note}");
+}
+
+#[tokio::test]
+async fn a_thread_already_stopped_on_a_line_still_current_says_both() {
+    // PR #856 review: `medication-cease` stops ONE thread, but a reconciled line reads by its
+    // latest-effective member. Thread X stopped (2020) beside thread Y (from 2024) leaves the
+    // line current, so the line-level rule alone said nothing to an operator re-stopping X.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, x) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let y = add_med(&mut c, &sk, &kid, p).await;
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&mut c, &sk, &kid, "test-node", p, x, y, &input, None, None)
+        .await
+        .unwrap();
+    let stop = CeaseMedicationInput {
+        stopped: Some("2020"),
+        stopped_precision: Some("year"),
+        reason: Some("angioedema"),
+    };
+    cease_medication(&mut c, &sk, &kid, "test-node", p, x, &stop, None, None)
+        .await
+        .unwrap();
+
+    let note = already_stopped_note(&c, p, x)
+        .await
+        .unwrap()
+        .expect("a thread already stopped earns the note though its line reads current");
+    assert!(note.contains("already been stopped"), "{note}");
+    assert!(note.contains("angioedema"), "{note}");
+    assert!(note.contains("still reads current"), "{note}");
+    assert_eq!(
+        already_stopped_note(&c, p, y).await.unwrap(),
+        None,
+        "the active sibling says nothing extra"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_read_is_an_error_and_its_note_says_not_known() {
+    // The read must surface its failure (never `Ok(None)`, which would read as "not already
+    // stopped"), and the CLI's sentence for it names the cause. Seam: an aborted transaction.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let tx = c.transaction().await.unwrap();
+    tx.batch_execute("SELECT 1/0").await.unwrap_err();
+    let err = already_stopped_note(&tx, p, med)
+        .await
+        .expect_err("a read in an aborted transaction fails");
+    let note = not_known_whether_stopped(&err);
+    assert!(note.contains("already stopped is not known"), "{note}");
+    assert!(note.contains("aborted"), "the cause is named: {note}");
 }
 
 /// The CLI arm asks BEFORE it ceases (after, its own cease would read as "already stopped")
-/// and prints the note after the success line.
+/// and prints the note after the success line, on stderr beside the CLI's other warnings.
 #[test]
 fn the_cease_verb_reads_the_note_first_and_prints_it_last() {
     let main = include_str!("../src/main.rs");
@@ -77,7 +141,7 @@ fn the_cease_verb_reads_the_note_first_and_prints_it_last() {
     let ceased = arm.find("medication::cease_medication(").unwrap();
     let said = arm.find("println!(\"ceased medication thread").unwrap();
     let noted = arm
-        .find("println!(\"{note}\")")
+        .find("eprintln!(\"warning: {note}\")")
         .expect("the arm prints the note");
     assert!(asked < ceased && ceased < said && said < noted, "{arm}");
     // A display-only read must never block the stop: its failure becomes a sentence, not `?`.

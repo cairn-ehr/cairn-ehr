@@ -478,9 +478,13 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   instant is said on its hold (db/059 section 7c `cairn_medication_hold_release_pending`,
   `MedicationHold::release_pending`, the CLI's `hold_line`, the window's `hold_view`; the window re-reads when it takes
   effect); the CLI's `medication-cease` says when the line was already stopped (one rule,
-  `MedicationRow::already_stopped_note`). db/059 edited in place, no schema-generation change.
+  `MedicationRow::already_stopped_note`, plus the thread's own cessation, since the CLI stops one thread). db/059
+  edited in place, no schema-generation change. Second review: "cancelled" for a release before a pending start,
+  the stop note's false "beside it" corrected, `ctutils` 0.4.5 (RUSTSEC-2026-0385); filed **#857** (a later stop
+  overwrites the earlier reason) · **#858** (a peer release on a sibling thread is shown nowhere) · **#859** (a CLI
+  stop of one thread on a line that stays current says only "ceased").
 - **Next:** review and merge PR #856 (#835 + #854); run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
-  (decisions), **#855**, **#837**, **#807**;
+  (decisions), **#855**, **#857**, **#859**, **#858**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

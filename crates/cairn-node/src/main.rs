@@ -5012,8 +5012,9 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
+            // On stderr, beside the CLI's other warnings (#848): stdout stays the success line.
             if let Some(note) = note {
-                println!("{note}");
+                eprintln!("warning: {note}");
             }
         }
         Cmd::MedicationWithhold {

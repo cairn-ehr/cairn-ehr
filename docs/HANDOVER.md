@@ -6,7 +6,10 @@
 > **⇒ ONE PR AWAITS THE MAINTAINER: PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)** (#835 + #854, branch `fix/835-854-pending-release-cli-cease`): a release
 > recorded for a later instant is said on its hold, in the CLI and the window, and the window re-reads when it takes
 > effect (#835; db/059 section 7c, edited in place, no schema-generation change). The CLI's `medication-cease` says
-> when the line was already stopped, by the window's own rule (#854). Durable rules: the #843/#835 bullets.
+> when the line was already stopped, by the window's own rule plus a thread check (#854). Second review fixed: the
+> CLI stops ONE thread, so a stopped thread on a still-current line is said too; "cancelled" for a release before a
+> pending hold's start; the stop note no longer claims the earlier reason stays "beside" it; `ctutils` 0.4.5
+> (RUSTSEC-2026-0385, all three lockfiles). Filed **#857** · **#858** · **#859**. Durable rules: the #843/#835 bullets.
 > **Merged 2026-10-23: PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)** (#843 + #849): the LOCAL door
 > refuses a release of a hold that already ended as STALE ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md),
 > spec **v0.84**, db/059's `cairn_medication_hold_ended`; sync apply admits it); a Stop on a stopped line is written and
@@ -41,7 +44,9 @@
 > 1. **Review and merge PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)** (#835 + #854); run #838's RUNBOOK §15. Decisions
 >    owed: **#825** (where the window's operator diagnostics live) and **#850** (acknowledging a dealt-with report).
 >    Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
->    ADR-0082) · #834 (needs a decision on shape). An idempotent re-send of a registration
+>    ADR-0082) · #834 (needs a decision on shape). From PR #856's second review: **#857** (a later stop overwrites
+>    the earlier stop's reason — an adverse reaction can vanish from the list) · **#859** (a CLI stop of one thread on a
+>    line that stays current) · **#858** (a peer release on a sibling thread is shown nowhere). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A PR #831, slice B PR #838, both merged; follow-ups #833 ward-level
@@ -214,6 +219,10 @@ Chosen with the maintainer. TDD, then an independent review, one fix wave; full 
   `CREATE OR REPLACE` refuses, and an older binary's replay then fails); ask both at ONE instant read in `FROM`.
 - **⇒ A display-only read must not block a safety write** (the CLI cease's note), and "nothing to say" is not
   "not known": an unseen thread says it cannot tell.
+- **⇒ A rule shared by two surfaces is only shared if they act on the same unit** (second review). The window stops
+  a LINE, the CLI one THREAD; the line rule was silent for a stopped thread on a line kept current by a sibling.
+- **⇒ "Release at 16:00" after "from 08:00" reads as an interval** — a release before a pending start is a cancel and
+  must say so. And a sentence that says what the list keeps must be checked against the projection (it overwrites).
 
 ### 2026-10-23 — #843 + #849 (PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)): a dead release is stale
 

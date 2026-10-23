@@ -15,8 +15,9 @@ use uuid::Uuid;
 /// one the row is keyed by.
 ///
 /// A release recorded for a later instant (#835) is said before the reason, which is free
-/// text and must not seem to contain it: the hold is still in force, but it is not "until
-/// reviewed" any more in fact.
+/// text and must not seem to contain it: the hold still stands, but it ends earlier than its
+/// printed `until`. A release at or before a pending hold's start cancels it instead, and
+/// says so: `from <later> … effective <earlier>` would read as a W between the two.
 pub fn hold_line(h: &MedicationHold) -> String {
     let when = if h.pending {
         format!("from {} until {}", h.starts_at, h.until)
@@ -24,6 +25,9 @@ pub fn hold_line(h: &MedicationHold) -> String {
         format!("withheld until {}", h.until)
     };
     let release = match &h.release_pending {
+        Some(at) if h.release_cancels_it() => {
+            format!(" (cancelled by a release recorded for {at}, before it starts)")
+        }
         Some(at) => format!(" (release recorded, effective {at})"),
         None => String::new(),
     };
@@ -125,6 +129,22 @@ mod tests {
             format!(
                 "W withheld until reviewed (release recorded, effective 2026-10-22T06:00:00Z): \
                  BP 85/50 (by 1a2b3c4d) {}",
+                ids(&h)
+            )
+        );
+    }
+
+    /// A release before a pending hold's start cancels it: "release recorded, effective <t>"
+    /// beside "from <later>" would read as a W from <later> to <t> (PR #856 review).
+    #[test]
+    fn a_release_before_the_start_says_the_hold_never_begins() {
+        let mut h = hold("reviewed", true);
+        h.release_pending = Some("2026-10-21T06:00:00Z".into());
+        assert_eq!(
+            hold_line(&h),
+            format!(
+                "W from 2026-10-21T20:00:00Z until reviewed (cancelled by a release recorded \
+                 for 2026-10-21T06:00:00Z, before it starts): BP 85/50 (by 1a2b3c4d) {}",
                 ids(&h)
             )
         );

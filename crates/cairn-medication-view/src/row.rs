@@ -216,10 +216,44 @@ pub struct MedicationHold {
     /// Not yet started: listed, but the line is not withheld by it.
     pub pending: bool,
     /// When a release already recorded will end this hold, if that instant is still ahead
-    /// (#835): a peer's clock ran fast, or the release was asserted for later. The hold stays
-    /// in force until then, but every surface must say a release exists, or the record holds
-    /// a fact nobody is shown. Same RFC 3339 UTC text as `starts_at`.
+    /// (#835): a peer's clock ran fast, or a writer other than Cairn's release verb (which
+    /// always stamps the real now) set it later. The hold still stands until then (listed, or
+    /// in force once started), but every surface must say a release exists, or the record
+    /// holds a fact nobody is shown. Same RFC 3339 UTC text as `starts_at`.
     pub release_pending: Option<String>,
+}
+
+impl MedicationHold {
+    /// Whether the recorded release (#835) lands at or before this hold's start, so it cancels
+    /// a hold that never begins, rather than ending one. Surfaces must say which: "from 08:00,
+    /// release at 16:00" with the release first reads as a W from 08:00 to 16:00.
+    pub fn release_cancels_it(&self) -> bool {
+        // A hold in force has started: a release can only end it.
+        // shortcut: compares the text, valid because both instants come from the read's one
+        // fixed-width UTC format; parse them if either ever arrives in another form.
+        self.pending
+            && self
+                .release_pending
+                .as_deref()
+                .is_some_and(|at| at <= self.starts_at.as_str())
+    }
+}
+
+/// The sentence a stop says when `what` ("This drug", or the CLI's "This thread") was already
+/// stopped before it reached the record (#843, #854), naming the earlier stop's reason (`None`
+/// when none was recorded). The list keeps ONE reason per thread, the latest stop's (db/031
+/// `medication_cessation`), so the sentence must not promise the earlier reason stays beside
+/// the new one.
+pub fn already_stopped_sentence(what: &str, earlier_reason: Option<&str>) -> String {
+    let earlier = match earlier_reason {
+        Some(reason) => format!("its reason: {reason}"),
+        None => "no reason was recorded".to_string(),
+    };
+    format!(
+        "{what} had already been stopped before this stop reached the record ({earlier}). \
+         Your stop is recorded too; where the list shows a stop's reason, it shows only the \
+         latest, and the earlier one stays in the record's history."
+    )
 }
 
 impl MedicationRow {
@@ -228,18 +262,15 @@ impl MedicationRow {
     /// stop is still written, because the node admits a cease of a ceased line and its reason
     /// (an adverse reaction, say) may be the only record of it while no allergy stream exists.
     /// This sentence keeps "stopped" from being read as "this stop stopped it". `None` for a
-    /// line that is not ceased. Shared by the window and the CLI, so both decide by one rule.
+    /// line that is not ceased. The window stops every thread of a line, so this LINE rule is
+    /// its whole answer; the CLI stops one thread and also asks about that thread.
     pub fn already_stopped_note(&self) -> Option<String> {
         if self.status != MedicationStatus::Ceased {
             return None;
         }
-        let earlier = match self.cessation_reason.as_deref() {
-            Some(reason) => format!("its reason: {reason}"),
-            None => "no reason was recorded".to_string(),
-        };
-        Some(format!(
-            "This drug had already been stopped before this stop reached the record ({earlier}); \
-             your stop and its reason are recorded beside it."
+        Some(already_stopped_sentence(
+            "This drug",
+            self.cessation_reason.as_deref(),
         ))
     }
 
@@ -374,6 +405,51 @@ mod tests {
         assert!(!r.is_withheld());
         r.holds.push(hold(false));
         assert!(r.is_withheld());
+    }
+
+    /// #854: the rule both surfaces share. An active line says nothing; a ceased one names the
+    /// earlier reason, and never claims that reason stays on the list beside the new one (the
+    /// list keeps one reason per thread, the latest stop's — PR #856 review).
+    #[test]
+    fn already_stopped_note_names_the_earlier_reason_and_what_the_list_keeps() {
+        let mut r = row("x", None);
+        assert_eq!(r.already_stopped_note(), None);
+        r.status = MedicationStatus::Ceased;
+        let none = r
+            .already_stopped_note()
+            .expect("a ceased line earns the note");
+        assert!(none.contains("no reason was recorded"), "{none}");
+        r.cessation_reason = Some("angioedema".into());
+        let note = r.already_stopped_note().unwrap();
+        assert!(note.contains("its reason: angioedema"), "{note}");
+        assert!(note.contains("it shows only the latest"), "{note}");
+        assert!(!note.contains("beside it"), "{note}");
+    }
+
+    /// #835 review: a release at or before a pending hold's start cancels it — the hold never
+    /// begins — while one after its start ends it then.
+    #[test]
+    fn a_release_at_or_before_the_start_cancels_the_hold() {
+        let hold = |release: Option<&str>| MedicationHold {
+            withhold_event_id: Uuid::from_u128(1),
+            medication_id: Uuid::from_u128(2),
+            reason: "r".into(),
+            starts_at: "2030-01-02T00:00:00Z".into(),
+            until: "reviewed".into(),
+            withholder: "k".into(),
+            pending: true,
+            release_pending: release.map(Into::into),
+        };
+        assert!(!hold(None).release_cancels_it());
+        assert!(hold(Some("2030-01-01T23:59:59Z")).release_cancels_it());
+        assert!(hold(Some("2030-01-02T00:00:00Z")).release_cancels_it());
+        assert!(!hold(Some("2030-01-02T00:00:01Z")).release_cancels_it());
+        let mut live = hold(Some("2030-01-01T23:59:59Z"));
+        live.pending = false;
+        assert!(
+            !live.release_cancels_it(),
+            "a hold in force is ended, never cancelled"
+        );
     }
 
     #[test]

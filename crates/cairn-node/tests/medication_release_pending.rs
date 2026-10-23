@@ -1,10 +1,10 @@
 //! #835 — a release recorded for a LATER instant is said on the hold it will end.
 //!
 //! The read-time fold (`cairn_medication_group_holds`, db/059) drops a hold once a release
-//! naming it has `released_at <= now`. A release whose instant is still ahead (a peer whose
-//! clock runs fast, or a deliberate "resume from 08:00") left the hold showing "W until
-//! reviewed" with no hint that a release exists: an unknown shown as nothing, which principle
-//! 4 forbids. db/059's `cairn_medication_hold_release_pending` answers "when does a recorded
+//! on its thread naming it has `released_at <= now`. A release whose instant is still ahead
+//! (a peer whose clock runs fast, or a writer other than Cairn's release verb that set its
+//! time later) left the hold showing "W until reviewed" with no hint that a release exists:
+//! an unknown shown as nothing, which principle 4 forbids. db/059's `cairn_medication_hold_release_pending` answers "when does a recorded
 //! release end this hold?" and the list read carries it on `MedicationHold::release_pending`.
 //!
 //! The predicate takes the instant as a parameter, so its tests probe FIXED instants in 2030
@@ -198,4 +198,40 @@ async fn the_list_carries_a_pending_release_on_its_hold() {
     };
     assert_eq!(pending_of(w).as_deref(), Some("2099-01-01T00:00:00Z"));
     assert_eq!(pending_of(kept), None, "an unreleased hold says nothing");
+}
+
+#[tokio::test]
+async fn a_release_before_a_pending_hold_starts_is_said_until_it_cancels_it() {
+    // A hold from 1 Feb and a release for 15 Jan: the fold drops the hold on 15 Jan, before it
+    // ever starts (a cancel), so 7c must say so beforehand — it does not look at `starts_at`
+    // (PR #856 review: a "tightening" to `released_at >= starts_at` would hide it again).
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let w = open_ended(&mut c, &sk, &kid, p, med, "2030-02-01T00:00:00Z").await;
+    peer_release_at(&c, &sk, &kid, p, med, &[w], "2030-01-15T00:00:00Z").await;
+    assert_eq!(
+        pending_at(&c, w, "2030-01-10T00:00:00Z").await.as_deref(),
+        Some("2030-01-15T00:00:00Z")
+    );
+    assert_eq!(pending_at(&c, w, "2030-01-15T00:00:00Z").await, None);
+}
+
+/// `read_group_holds` asks the fold and 7c at ONE instant, read once in FROM. With
+/// `clock_timestamp()` passed to either function, a release landing between the two reads
+/// would be shown by the fold yet not said by 7c (nor re-read at): this pins the shape.
+#[test]
+fn the_list_read_asks_the_fold_and_the_predicate_at_one_instant() {
+    let src = include_str!("../src/medication/read.rs");
+    let body = &src[src.find("async fn read_group_holds(").unwrap()..];
+    let body = &body[..body.find("\n}\n").unwrap()];
+    assert_eq!(body.matches("clock_timestamp()").count(), 1, "{body}");
+    assert!(
+        body.contains("FROM (SELECT clock_timestamp() AS now) n"),
+        "{body}"
+    );
+    assert!(body.contains("cairn_medication_hold_release_pending(withhold_event_id, n.now)"));
+    assert!(body.contains("cairn_medication_group_holds($1::text[]::uuid[], n.now)"));
 }
