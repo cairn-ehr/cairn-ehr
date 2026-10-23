@@ -474,12 +474,12 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   [ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md) (v0.84) — a release of an
   ended hold is a stale refusal at the local door; a Stop on a stopped line is written and said; filed **#854**,
   **#855**. All merged by 2026-10-23.
-- **2026-10-23 (#835 + #854, this branch `fix/835-854-pending-release-cli-cease`):** a release recorded for a later
+- **2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)):** a release recorded for a later
   instant is said on its hold (db/059 section 7c `cairn_medication_hold_release_pending`,
   `MedicationHold::release_pending`, the CLI's `hold_line`, the window's `hold_view`; the window re-reads when it takes
   effect); the CLI's `medication-cease` says when the line was already stopped (one rule,
   `MedicationRow::already_stopped_note`). db/059 edited in place, no schema-generation change.
-- **Next:** review and merge this branch's PR (#835 + #854); run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
+- **Next:** review and merge PR #856 (#835 + #854); run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
   (decisions), **#855**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
