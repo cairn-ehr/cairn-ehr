@@ -137,9 +137,23 @@ where
     }
 }
 
-/// What a ceased line reveals: why it was stopped.
-pub fn cessation_detail(reason: &str) -> String {
-    format!("Stopped: {reason}")
+/// What a ceased line reveals: why it was stopped — the reason the line shows, then every
+/// other stop's reason (#857), one sentence each so a screen reader pauses between them. When
+/// the shown stop gave none but another did, that is said first, so the other reason is not
+/// read as the shown stop's. `None` when no stop gave a reason.
+pub fn cessation_detail(shown: Option<&str>, others: &[String]) -> Option<String> {
+    let first = match shown {
+        Some(reason) => format!("Stopped: {reason}"),
+        None if !others.is_empty() => "Stopped: no reason given".to_string(),
+        None => return None,
+    };
+    let rest = others.iter().map(|r| format!("Another stop's reason: {r}"));
+    Some(
+        std::iter::once(first)
+            .chain(rest)
+            .collect::<Vec<_>>()
+            .join(". "),
+    )
 }
 
 #[cfg(test)]
@@ -296,8 +310,25 @@ mod tests {
     }
 
     #[test]
-    fn a_ceased_line_reveals_its_reason() {
-        assert_eq!(cessation_detail("rash"), "Stopped: rash");
+    fn a_ceased_line_reveals_its_reason_and_every_other_stops() {
+        let others = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            cessation_detail(Some("rash"), &[]).as_deref(),
+            Some("Stopped: rash")
+        );
+        assert_eq!(
+            cessation_detail(Some("patient request"), &others(&["angioedema", "rash"])).as_deref(),
+            Some(
+                "Stopped: patient request. Another stop's reason: angioedema. \
+                 Another stop's reason: rash"
+            )
+        );
+        // #857's worst case: a later stop with no reason must not hide the adverse reaction.
+        assert_eq!(
+            cessation_detail(None, &others(&["angioedema"])).as_deref(),
+            Some("Stopped: no reason given. Another stop's reason: angioedema")
+        );
+        assert_eq!(cessation_detail(None, &[]), None);
     }
 
     // ---- The row: a hold sits BESIDE the status (the durable ADR-0081 rule).
@@ -342,9 +373,13 @@ mod tests {
             vec![member(1, VouchState::Absent)],
         );
         r.cessation_reason = Some("rash".into());
+        r.other_cessation_reasons = vec!["angioedema".into()];
         let view = build_view(&chart(vec![r]));
         let r = &view.rows[0];
-        assert_eq!(r.cessation_detail.as_deref(), Some("Stopped: rash"));
+        assert_eq!(
+            r.cessation_detail.as_deref(),
+            Some("Stopped: rash. Another stop's reason: angioedema")
+        );
         assert!(!r.can_withhold && !r.can_release);
     }
 }

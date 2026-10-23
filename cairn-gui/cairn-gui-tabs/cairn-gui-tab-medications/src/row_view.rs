@@ -119,7 +119,10 @@ pub(crate) fn build_row(
         can_withhold: row.status == MedicationStatus::Active,
         can_release: !holds.is_empty(),
         holds,
-        cessation_detail: row.cessation_reason.as_deref().map(cessation_detail),
+        cessation_detail: cessation_detail(
+            row.cessation_reason.as_deref(),
+            &row.other_cessation_reasons,
+        ),
     }
 }
 

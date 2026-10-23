@@ -40,9 +40,18 @@ pub fn hold_line(h: &MedicationHold) -> String {
     )
 }
 
-/// The line printed under a CEASED row when the cessation gave a reason.
-pub fn ceased_reason_line(reason: &str) -> String {
-    format!("ceased: {reason}")
+/// The lines printed under a CEASED row: the reason the line shows, then every other stop's
+/// reason (#857). When the shown stop gave none but another did, that is said first, so the
+/// other reason is not read as the shown stop's. Empty when no stop gave a reason.
+pub fn ceased_reason_lines(shown: Option<&str>, others: &[String]) -> Vec<String> {
+    let first = match shown {
+        Some(reason) => format!("ceased: {reason}"),
+        None if !others.is_empty() => "ceased: no reason given".to_string(),
+        None => return vec![],
+    };
+    std::iter::once(first)
+        .chain(others.iter().map(|r| format!("another stop's reason: {r}")))
+        .collect()
 }
 
 /// `medication-withhold`'s success line.
@@ -166,8 +175,25 @@ mod tests {
     }
 
     #[test]
-    fn a_ceased_row_shows_its_reason() {
-        assert_eq!(ceased_reason_line("rash"), "ceased: rash");
+    fn a_ceased_row_shows_its_reason_and_every_other_stops() {
+        let others = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(ceased_reason_lines(Some("rash"), &[]), ["ceased: rash"]);
+        assert_eq!(
+            ceased_reason_lines(Some("patient request"), &others(&["angioedema"])),
+            [
+                "ceased: patient request",
+                "another stop's reason: angioedema"
+            ]
+        );
+        // #857's worst case: a later stop with no reason must not hide the adverse reaction.
+        assert_eq!(
+            ceased_reason_lines(None, &others(&["angioedema"])),
+            [
+                "ceased: no reason given",
+                "another stop's reason: angioedema"
+            ]
+        );
+        assert!(ceased_reason_lines(None, &[]).is_empty());
     }
 
     #[test]

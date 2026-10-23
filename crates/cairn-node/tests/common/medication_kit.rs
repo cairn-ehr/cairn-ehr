@@ -67,6 +67,7 @@ pub async fn setup_node(c: &Client) -> (SigningKey, String) {
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
            IF to_regclass('public.medication_cessation') IS NOT NULL THEN TRUNCATE medication_cessation; END IF; \
+           IF to_regclass('public.medication_cessation_reason') IS NOT NULL THEN TRUNCATE medication_cessation_reason; END IF; \
            IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
            IF to_regclass('public.medication_withhold') IS NOT NULL THEN TRUNCATE medication_withhold; END IF; \
            IF to_regclass('public.medication_withhold_release') IS NOT NULL THEN TRUNCATE medication_withhold_release; END IF; \

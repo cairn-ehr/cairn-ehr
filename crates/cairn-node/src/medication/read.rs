@@ -158,6 +158,18 @@ async fn list_chart_set_medications(
     ] {
         for db_row in client.query(&list_sql(view), &[&group_strs]).await? {
             let group_id: Uuid = db_row.get::<_, String>("medication_id").parse()?;
+            // Only a ceased line shows a reason. (A group reads active or ceased by
+            // latest-effective-wins, ADR-0047, so a group with a ceased member may be either;
+            // `status` already says which.)
+            let (cessation_reason, other_cessation_reasons) = if status == MedicationStatus::Ceased
+            {
+                cessation_reasons
+                    .get(&group_id)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Default::default()
+            };
             rows.push(MedicationRow {
                 group_id,
                 // The view's display owner (`medication_group_display`'s winner). For a
@@ -193,14 +205,8 @@ async fn list_chart_set_medications(
                 } else {
                     vec![]
                 },
-                // Only a ceased line shows a reason. (A group reads active or ceased by
-                // latest-effective-wins, ADR-0047, so a group with a ceased member may be
-                // either; `status` already says which.)
-                cessation_reason: if status == MedicationStatus::Ceased {
-                    cessation_reasons.get(&group_id).cloned()
-                } else {
-                    None
-                },
+                cessation_reason,
+                other_cessation_reasons,
             });
         }
     }
@@ -442,18 +448,49 @@ async fn read_group_holds(
     Ok(out)
 }
 
-/// Each ceased group's cessation reason (`medication_group_cessation`), non-empty only.
+/// Each stopped group's reasons: the one its line shows (`medication_group_cessation`'s, the
+/// stop whose date the line shows; `None` when blank) and every OTHER distinct reason any of
+/// its stops gave (db/060's per-stop rows, #857), newest recorded first.
+///
+/// ONE statement, so both come from one snapshot: two reads could each see a different set of
+/// stops, and a stop landing between them would then be said twice or not at all.
 async fn read_cessation_reasons(
     client: &(impl tokio_postgres::GenericClient + Sync),
     groups: &[Uuid],
-) -> anyhow::Result<HashMap<Uuid, String>> {
-    let sql = "SELECT group_id::text AS group_id, reason FROM medication_group_cessation \
-               WHERE group_id = ANY($1::text[]::uuid[]) AND btrim(coalesce(reason, '')) <> ''";
+) -> anyhow::Result<HashMap<Uuid, (Option<String>, Vec<String>)>> {
+    let sql = "SELECT gc.group_id::text AS group_id, gc.reason, \
+                      ARRAY(SELECT r.reason FROM medication_cessation_reason r \
+                            JOIN medication_thread_group g ON g.medication_id = r.medication_id \
+                            WHERE g.group_id = gc.group_id \
+                            ORDER BY r.hlc_wall DESC, r.hlc_counter DESC, \
+                                     r.origin COLLATE \"C\" DESC, r.content_address DESC) \
+                        AS all_reasons \
+               FROM medication_group_cessation gc WHERE gc.group_id = ANY($1::text[]::uuid[])";
     let mut out = HashMap::new();
     for r in client.query(sql, &[&uuid_strings(groups)]).await? {
-        out.insert(r.get::<_, String>("group_id").parse()?, r.get("reason"));
+        let shown = r
+            .get::<_, Option<String>>("reason")
+            .filter(|s| !s.trim().is_empty());
+        let others = other_reasons(shown.as_deref(), r.get("all_reasons"));
+        out.insert(r.get::<_, String>("group_id").parse()?, (shown, others));
     }
     Ok(out)
+}
+
+/// The reasons a line lists beside the one it shows (#857): `all` (every stop's reason,
+/// newest first) without `shown` and without repeats, compared ignoring surrounding space.
+/// **Pure.** Text that differs in any other way is kept: it is a different thing said.
+fn other_reasons(shown: Option<&str>, all: Vec<String>) -> Vec<String> {
+    let mut seen: Vec<String> = shown.map(|s| s.trim().to_string()).into_iter().collect();
+    let mut out = Vec::new();
+    for reason in all {
+        let key = reason.trim().to_string();
+        if !seen.contains(&key) {
+            seen.push(key);
+            out.push(reason);
+        }
+    }
+    out
 }
 
 /// Every member thread of the given groups, regardless of which chart each member
@@ -855,5 +892,29 @@ mod tests {
             missing_groups([Uuid::from_u128(2), Uuid::from_u128(1)].into_iter(), &shown),
             vec![Uuid::from_u128(2)]
         );
+    }
+
+    /// #857: the list keeps every other reason once, newest first, never the one it shows —
+    /// and keeps them all when the line shows none (a later stop that gave no reason).
+    #[test]
+    fn other_reasons_drop_the_shown_one_and_repeats_only() {
+        let all = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            other_reasons(
+                Some("patient request"),
+                all(&["patient request", "angioedema"])
+            ),
+            all(&["angioedema"])
+        );
+        assert_eq!(
+            other_reasons(None, all(&["angioedema", "rash", "angioedema "])),
+            all(&["angioedema", "rash"])
+        );
+        assert_eq!(
+            other_reasons(Some("rash "), all(&["rash", "Rash"])),
+            all(&["Rash"]),
+            "only surrounding space is ignored"
+        );
+        assert!(other_reasons(Some("x"), vec![]).is_empty());
     }
 }

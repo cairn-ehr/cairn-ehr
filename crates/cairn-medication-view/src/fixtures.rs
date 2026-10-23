@@ -51,6 +51,7 @@ fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
         source_charts: vec![uid(1)],
         holds: vec![],
         cessation_reason: None,
+        other_cessation_reasons: vec![],
     }
 }
 

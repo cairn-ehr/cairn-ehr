@@ -192,8 +192,17 @@ pub struct MedicationRow {
     /// empty unless `status` is Active: cessation wins over any hold.
     pub holds: Vec<MedicationHold>,
     /// Why the line was ceased, when the cessation gave a reason (non-empty only). Always
-    /// `None` unless `status` is Ceased.
+    /// `None` unless `status` is Ceased. This is the reason of the stop whose date the line
+    /// shows; a line stopped more than once has its other reasons in
+    /// `other_cessation_reasons`.
     pub cessation_reason: Option<String>,
+    /// Every OTHER distinct reason a stop of this line gave (any member thread), newest
+    /// recorded first, never repeating `cessation_reason` (#857). A second stop is admitted on
+    /// purpose (ADR-0082 decision 4), and the first one's reason may be the only record of an
+    /// adverse reaction, so a renderer that shows `cessation_reason` must show these too —
+    /// including when `cessation_reason` is `None` (a later stop that gave no reason). Always
+    /// empty unless `status` is Ceased.
+    pub other_cessation_reasons: Vec<String>,
 }
 
 /// One hold on a medication line (ADR-0081, #803): the paper drug chart's "W".
@@ -241,9 +250,8 @@ impl MedicationHold {
 
 /// The sentence a stop says when `what` ("This drug", or the CLI's "This thread") was already
 /// stopped before it reached the record (#843, #854), naming the earlier stop's reason (`None`
-/// when none was recorded). The list keeps ONE reason per thread, the latest stop's (db/031
-/// `medication_cessation`), so the sentence must not promise the earlier reason stays beside
-/// the new one.
+/// when none was recorded). Since #857 the list keeps every stop's reason (db/060), which is
+/// what lets this sentence say so.
 pub fn already_stopped_sentence(what: &str, earlier_reason: Option<&str>) -> String {
     let earlier = match earlier_reason {
         Some(reason) => format!("its reason: {reason}"),
@@ -251,8 +259,7 @@ pub fn already_stopped_sentence(what: &str, earlier_reason: Option<&str>) -> Str
     };
     format!(
         "{what} had already been stopped before this stop reached the record ({earlier}). \
-         Your stop is recorded too; where the list shows a stop's reason, it shows only the \
-         latest, and the earlier one stays in the record's history."
+         Your stop is recorded too, and the list keeps every stop's reason."
     )
 }
 
@@ -339,6 +346,7 @@ mod tests {
             source_charts: vec![],
             holds: vec![],
             cessation_reason: None,
+            other_cessation_reasons: vec![],
         }
     }
 
@@ -348,6 +356,7 @@ mod tests {
     fn holds_and_cessation_reason_serialize_with_pinned_keys() {
         let mut r = row("x", None);
         r.cessation_reason = Some("rash".into());
+        r.other_cessation_reasons = vec!["angioedema".into()];
         r.holds = vec![
             MedicationHold {
                 withhold_event_id: Uuid::from_u128(1),
@@ -372,6 +381,10 @@ mod tests {
         ];
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["cessation_reason"], "rash");
+        assert_eq!(
+            v["other_cessation_reasons"],
+            serde_json::json!(["angioedema"])
+        );
         assert_eq!(
             v["holds"],
             serde_json::json!([
@@ -408,8 +421,7 @@ mod tests {
     }
 
     /// #854: the rule both surfaces share. An active line says nothing; a ceased one names the
-    /// earlier reason, and never claims that reason stays on the list beside the new one (the
-    /// list keeps one reason per thread, the latest stop's — PR #856 review).
+    /// earlier reason and says the list keeps every stop's reason (true since #857, db/060).
     #[test]
     fn already_stopped_note_names_the_earlier_reason_and_what_the_list_keeps() {
         let mut r = row("x", None);
@@ -422,8 +434,11 @@ mod tests {
         r.cessation_reason = Some("angioedema".into());
         let note = r.already_stopped_note().unwrap();
         assert!(note.contains("its reason: angioedema"), "{note}");
-        assert!(note.contains("it shows only the latest"), "{note}");
-        assert!(!note.contains("beside it"), "{note}");
+        assert!(
+            note.contains("the list keeps every stop's reason"),
+            "{note}"
+        );
+        assert!(!note.contains("only the latest"), "{note}");
     }
 
     /// #835 review: a release at or before a pending hold's start cancels it — the hold never

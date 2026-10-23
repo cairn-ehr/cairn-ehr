@@ -40,6 +40,7 @@ pub(crate) fn row(
         source_charts: vec![uid(999)],
         holds: vec![],
         cessation_reason: None,
+        other_cessation_reasons: vec![],
     }
 }
 

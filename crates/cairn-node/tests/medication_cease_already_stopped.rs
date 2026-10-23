@@ -11,8 +11,8 @@
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_node::db;
 use cairn_node::medication::{
-    already_stopped_note, cease_medication, not_known_whether_stopped, reconcile_medications,
-    CeaseMedicationInput, ReconcileInput,
+    already_stopped_note, cease_medication, not_known_whether_current, not_known_whether_stopped,
+    reconcile_medications, still_current_note, CeaseMedicationInput, ReconcileInput,
 };
 use uuid::Uuid;
 
@@ -101,7 +101,9 @@ async fn a_thread_already_stopped_on_a_line_still_current_says_both() {
         .expect("a thread already stopped earns the note though its line reads current");
     assert!(note.contains("already been stopped"), "{note}");
     assert!(note.contains("angioedema"), "{note}");
-    assert!(note.contains("still reads current"), "{note}");
+    // That the line still reads current is said AFTER the stop, naming the sibling (#859,
+    // `still_current_note`), so this note does not repeat it.
+    assert!(!note.contains("still reads current"), "{note}");
     assert_eq!(
         already_stopped_note(&c, p, y).await.unwrap(),
         None,
@@ -126,10 +128,18 @@ async fn a_failed_read_is_an_error_and_its_note_says_not_known() {
     let note = not_known_whether_stopped(&err);
     assert!(note.contains("already stopped is not known"), "{note}");
     assert!(note.contains("aborted"), "the cause is named: {note}");
+    // The same holds for the re-read after the stop (#859).
+    let err = still_current_note(&tx, p, med)
+        .await
+        .expect_err("a read in an aborted transaction fails");
+    let note = not_known_whether_current(&err);
+    assert!(note.contains("still reads current is not known"), "{note}");
+    assert!(note.contains("aborted"), "the cause is named: {note}");
 }
 
-/// The CLI arm asks BEFORE it ceases (after, its own cease would read as "already stopped")
-/// and prints the note after the success line, on stderr beside the CLI's other warnings.
+/// The CLI arm asks BEFORE it ceases (after, its own cease would read as "already stopped"),
+/// asks whether the line still reads current AFTER it (#859), and prints both notes after the
+/// success line, on stderr beside the CLI's other warnings.
 #[test]
 fn the_cease_verb_reads_the_note_first_and_prints_it_last() {
     let main = include_str!("../src/main.rs");
@@ -140,10 +150,16 @@ fn the_cease_verb_reads_the_note_first_and_prints_it_last() {
         .expect("the arm reads the note");
     let ceased = arm.find("medication::cease_medication(").unwrap();
     let said = arm.find("println!(\"ceased medication thread").unwrap();
+    let still = arm
+        .find("medication::still_current_note(&db, patient, medication_id)")
+        .expect("the arm re-reads the line after the stop");
     let noted = arm
         .find("eprintln!(\"warning: {note}\")")
-        .expect("the arm prints the note");
-    assert!(asked < ceased && ceased < said && said < noted, "{arm}");
+        .expect("the arm prints the notes");
+    assert!(
+        asked < ceased && ceased < said && said < still && still < noted,
+        "{arm}"
+    );
     // A display-only read must never block the stop: its failure becomes a sentence, not `?`.
     let flat: String = arm.split_whitespace().collect();
     assert!(
@@ -153,5 +169,13 @@ fn the_cease_verb_reads_the_note_first_and_prints_it_last() {
     assert!(
         flat.contains("Err(e)=>Some(cairn_node::medication::not_known_whether_stopped(&e)),"),
         "{arm}"
+    );
+    assert!(
+        flat.contains("Err(e)=>Some(cairn_node::medication::not_known_whether_current(&e)),"),
+        "{arm}"
+    );
+    assert!(
+        flat.contains("fornoteinnote.into_iter().chain(current)"),
+        "both notes are printed: {arm}"
     );
 }

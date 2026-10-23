@@ -615,6 +615,7 @@ mod tests {
             source_charts: vec![],
             holds: vec![],
             cessation_reason: None,
+            other_cessation_reasons: vec![],
         }
     }
 

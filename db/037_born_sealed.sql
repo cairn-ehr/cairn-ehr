@@ -199,6 +199,10 @@ BEGIN
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;
+        -- Every stop's reason (db/060, #857): one row per cessation event, keyed by its CA.
+        IF to_regclass('public.medication_cessation_reason') IS NOT NULL THEN
+            DELETE FROM medication_cessation_reason WHERE content_address = v_ca;
+        END IF;
         -- Withhold / release rows (db/059, ADR-0081): the hold's reason is clinical plaintext
         -- keyed by THIS event's content_address, so the same provenance-precise scrub applies.
         IF to_regclass('public.medication_withhold') IS NOT NULL THEN
