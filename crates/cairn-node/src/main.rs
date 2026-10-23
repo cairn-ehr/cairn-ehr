@@ -5937,8 +5937,9 @@ fn nothing_attested_sentence(
     } else if *active_rows == 0 {
         // A chart of nothing but struck lines. Those lines may well carry NO signature at all —
         // a ceased drug is never re-signed — so "everything already signed" would be false.
-        // "On this chart", and a pointer, when a drug of this patient's sits on another chart's
-        // line (#849): alone, the sentence would read as "this patient takes nothing".
+        // "On this chart", and a pointer, when something recorded for this patient sits on
+        // another chart's line (#849): alone, the sentence would read as "this patient takes
+        // nothing".
         let elsewhere_note = if elsewhere.is_empty() {
             ""
         } else {
@@ -6081,8 +6082,9 @@ mod tests {
     }
 
     /// #849 (PR review): the all-stopped and all-signed sentences are absence claims too. Beside
-    /// a drug of this patient's on another chart's line, "nothing needed a signature" must point
-    /// at it, and "every current drug already carries a current signature" must not be said.
+    /// something recorded for this patient on another chart's line, "nothing needed a signature"
+    /// must point at it, and "every current drug already carries a current signature" must not
+    /// be said.
     #[test]
     fn a_stopped_or_signed_chart_with_a_drug_elsewhere_points_at_it() {
         use cairn_node::medication::signoff::SignOffOutcome;

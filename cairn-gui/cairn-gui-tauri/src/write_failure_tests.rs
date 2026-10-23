@@ -295,8 +295,10 @@ fn cease_sorts_an_interrupted_commit_from_a_failure() {
         "Err(e)=>matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
         "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
         "lettext=cease_outcome(ceased,&failed,&unknown);",
-        // #843: a Stop that landed on a line already stopped says so.
-        "lettext=matchalready_stopped_note(row,ceased){Some(note)=>format!(\"{text}{note}\"),None=>text,};",
+        // #843: a Stop that landed on a line already stopped says so — only when every thread
+        // of this press stopped for certain (#853 review: not beside a failure or an unknown).
+        "letlanded_in_full=ceased>0&&failed.is_empty()&&unknown.is_empty();",
+        "lettext=matchalready_stopped_note(row,landed_in_full){Some(note)=>format!(\"{text}{note}\"),None=>text,};",
         "(!unknown.is_empty()).then_some(Recorded::Unknown)",
     ] {
         assert!(flat.contains(shape), "{shape}\n{body}");
@@ -370,23 +372,24 @@ fn a_stop_of_a_line_already_stopped_says_so() {
         .iter()
         .find(|r| r.status == cairn_medication_view::MedicationStatus::Ceased)
         .expect("the fixture has a ceased line");
-    let note = already_stopped_note(ceased, 1).expect("a ceased line earns the note");
+    let note = already_stopped_note(ceased, true).expect("a ceased line earns the note");
     assert!(note.contains("already been stopped"), "{note}");
     assert!(note.contains("gastric irritation"), "{note}");
     assert!(note.contains("recorded"), "{note}");
 
     let mut no_reason = ceased.clone();
     no_reason.cessation_reason = None;
-    let note = already_stopped_note(&no_reason, 1).unwrap();
+    let note = already_stopped_note(&no_reason, true).unwrap();
     assert!(note.contains("no reason was recorded"), "{note}");
 
     let active = rows
         .iter()
         .find(|r| r.status == cairn_medication_view::MedicationStatus::Active)
         .unwrap();
-    assert_eq!(already_stopped_note(active, 1), None);
+    assert_eq!(already_stopped_note(active, true), None);
 
-    // A press that stopped nothing for certain (its only commit got no answer, #814) must not
-    // say its stop "is recorded": whether it is, is exactly what is not known.
-    assert_eq!(already_stopped_note(ceased, 0), None);
+    // A press that did not land in full — a commit got no answer (#814), or a thread failed —
+    // must not say "your stop is recorded" beside the sentence saying it is NOT known, or NOT
+    // stopped (#853 review).
+    assert_eq!(already_stopped_note(ceased, false), None);
 }

@@ -108,8 +108,9 @@ async fn a_release_of_a_hold_that_ran_out_is_refused_as_stale() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
-    // A hold already over cannot be written at the local door, so it arrives from a peer
-    // (admitted at sync, never shown) — the state a stale screen would be releasing.
+    // Built as a peer's hold so the test pins its instants exactly (a local backdated hold
+    // would be admitted too: the local door refuses only an empty span) — the state a stale
+    // screen would be releasing.
     let from = instant_from_now(&c, -7200).await;
     let until = instant_from_now(&c, -3600).await;
     let w = WithholdMedicationInput {
@@ -139,8 +140,114 @@ async fn a_release_of_a_hold_that_ran_out_is_refused_as_stale() {
     .expect_err("a release of a hold that already ran out is refused");
     assert_eq!(refusal_scope(&err), Some(RefusalScope::Stale), "{err:#}");
     let text = format!("{err:#}");
-    assert!(text.contains("already ended"), "{text}");
+    assert!(
+        text.contains(&wid.to_string()) && text.contains("already ended"),
+        "{text}"
+    );
     assert_eq!(release_rows(&c, med).await, 0, "nothing was written");
+}
+
+#[tokio::test]
+async fn an_ended_hold_on_another_thread_gets_the_floors_thread_sentence_not_stale() {
+    // A copied or mistyped hold id that names an ENDED hold on a sibling thread is a wrong-
+    // thread input, not a stale screen: "re-read and retry" would repeat forever. The pre-check
+    // leaves it to the floor, which names the thread it is on.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let other = add_med(&mut c, &sk, &kid, patient).await;
+    let wid = withhold(&mut c, &sk, &kid, patient, med, "K+ 6.1").await;
+    release_medication_holds(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &[wid],
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let err = release_medication_holds(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        other,
+        &[wid],
+        None,
+        None,
+    )
+    .await
+    .expect_err("a hold on another thread is refused");
+    assert_ne!(refusal_scope(&err), Some(RefusalScope::Stale), "{err:#}");
+    assert!(format!("{err:#}").contains("release it there"), "{err:#}");
+}
+
+#[tokio::test]
+async fn a_release_naming_one_ended_and_one_standing_hold_releases_neither() {
+    // All or nothing: the clinician's picture is behind the record, so the whole press is
+    // stale. The refusal names only the ended hold, and the standing one is still releasable.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (patient, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let ended = withhold(&mut c, &sk, &kid, patient, med, "BP 85/50").await;
+    let standing = withhold(&mut c, &sk, &kid, patient, med, "HR 44").await;
+    release_medication_holds(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &[ended],
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let err = release_medication_holds(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &[standing, ended],
+        None,
+        None,
+    )
+    .await
+    .expect_err("one ended hold makes the whole release stale");
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Stale), "{err:#}");
+    let text = format!("{err:#}");
+    assert!(
+        text.contains(&ended.to_string()) && !text.contains(&standing.to_string()),
+        "{text}"
+    );
+    assert_eq!(release_rows(&c, med).await, 1, "nothing more was written");
+    release_medication_holds(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &[standing],
+        None,
+        None,
+    )
+    .await
+    .expect("the standing hold is still standing");
 }
 
 #[tokio::test]
@@ -232,5 +339,15 @@ async fn the_floor_refuses_a_dead_release_at_the_local_door_and_admits_it_at_syn
     apply_remote(&c, &sk, &remote)
         .await
         .expect("sync apply admits a peer's release of an ended hold");
+    assert_eq!(release_rows(&c, med).await, 2);
+
+    // Replay (rebuild/heal) folds the same log, including the release that only looks dead
+    // in hindsight; it must take sync's lenient posture, or a node could not start.
+    c.execute(
+        "SELECT count(*) FROM cairn_reproject('clinical.medication', true, 'test')",
+        &[],
+    )
+    .await
+    .expect("a replay re-folds a release of an ended hold");
     assert_eq!(release_rows(&c, med).await, 2);
 }

@@ -163,12 +163,15 @@ async fn physical_now(client: &tokio_postgres::Client) -> anyhow::Result<String>
     Ok(row.get(0))
 }
 
-/// The named holds that are no longer standing at instant `at`, each as "hold <id> <why>" —
-/// db/059's `cairn_medication_hold_ended`, the floor's own predicate, so the two never
-/// disagree. A hold that is not a withhold here at all is not in this list: the floor
-/// refuses that one with its own sentence.
+/// The named holds ON THREAD `medication_id` that are no longer standing at instant `at`, each
+/// as "hold <id> <why>" — db/059's `cairn_medication_hold_ended`, the floor's own predicate.
+/// Only this thread's holds: an id that is no withhold, or a withhold on another thread, is a
+/// wrong input, not a stale screen, so it is left to the floor, which checks the thread FIRST
+/// and names it ("release it there"). Called "stale" instead, a mistyped id would ask the
+/// clinician to re-read and retry for ever (#853 review).
 async fn ended_holds(
     client: &tokio_postgres::Client,
+    medication_id: Uuid,
     withholds: &[Uuid],
     at: &str,
 ) -> anyhow::Result<Vec<String>> {
@@ -180,8 +183,10 @@ async fn ended_holds(
         .query(
             "SELECT 'hold ' || w::text || ' ' || why FROM unnest($1::text[]::uuid[]) AS w, \
                     cairn_medication_hold_ended(w, $2::text::timestamptz) AS why \
-              WHERE why IS NOT NULL",
-            &[&ids, &at],
+              WHERE why IS NOT NULL \
+                AND EXISTS (SELECT 1 FROM medication_withhold mw \
+                             WHERE mw.event_id = w AND mw.medication_id = $3::text::uuid)",
+            &[&ids, &at, &medication_id.to_string()],
         )
         .await
         .map_err(|e| {
@@ -239,7 +244,7 @@ pub async fn release_medication_holds(
     // the caller's picture is behind the record — refused as stale, before anything is
     // signed, so a window re-reads. The floor refuses the same release (db/059 section 8);
     // this check exists so the refusal carries its scope, which a floor error cannot.
-    let ended = ended_holds(client, withholds, &released).await?;
+    let ended = ended_holds(client, medication_id, withholds, &released).await?;
     if !ended.is_empty() {
         return Err(crate::db_diagnosis::stale_picture_refusal(format!(
             "{}; nothing was released",

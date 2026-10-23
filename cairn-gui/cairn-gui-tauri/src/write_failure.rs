@@ -178,13 +178,14 @@ pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[Unknown
 /// the node admits a cease of a ceased line, and its reason (an adverse reaction, say) may be
 /// the only record of it while no allergy stream exists — so this does not refuse; it says what
 /// the record already held, so "Stopped 1" is not read as "this press stopped it". `None` for a
-/// line still active, and when this press stopped nothing for certain (`ceased == 0`: its only
-/// commits got no answer, #814, so "your stop is recorded" would be unknown, not true). Pure.
+/// line still active, and unless this press `landed_in_full` (every thread stopped for certain):
+/// beside a commit with no answer (#814) or a failed thread, "your stop is recorded" would sit
+/// next to the outcome's own "NOT known" / "NOT stopped" (#853 review). Pure.
 pub(crate) fn already_stopped_note(
     row: &cairn_medication_view::MedicationRow,
-    ceased: usize,
+    landed_in_full: bool,
 ) -> Option<String> {
-    if ceased == 0 || row.status != cairn_medication_view::MedicationStatus::Ceased {
+    if !landed_in_full || row.status != cairn_medication_view::MedicationStatus::Ceased {
         return None;
     }
     let earlier = match row.cessation_reason.as_deref() {

@@ -370,6 +370,15 @@ async fn a_sign_off_outcome_carries_the_lines_elsewhere() {
         .unwrap();
     assert!(out.attested.is_empty() && out.total_rows == 0, "{out:?}");
     assert_eq!(out.elsewhere, vec![metoprolol_on(med, b)]);
+
+    // The attesting path too: with a drug of A's own to sign, "signed 1" must still carry the
+    // line elsewhere, or the signer reads it as the whole of A's medications.
+    let own = add_med(&mut c, &sk, &kid, a).await;
+    let out = sign_off_medication_list(&mut c, &sk, "test-node", &params, a, None)
+        .await
+        .unwrap();
+    assert_eq!(out.attested, vec![own], "{out:?}");
+    assert_eq!(out.elsewhere, vec![metoprolol_on(med, b)]);
 }
 
 /// `medication-sign-off` prints the elsewhere report in every outcome, as it prints the missing

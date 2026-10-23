@@ -293,10 +293,12 @@ REVOKE EXECUTE ON FUNCTION medication_withhold_apply(event_log) FROM PUBLIC;
 -- 7b. #843 — has hold `p_withhold` ENDED by instant `p_at`? NULL when it is still standing
 --     (in force, or not yet started: releasing a pending hold cancels it) or is no withhold
 --     here at all; otherwise the clinician-facing reason it ended, as a sentence fragment
---     ("was already released at …" / "already ended at …"). The same tests as the read-time
---     fold (section 10), at one hold and one instant. One predicate, two callers: section 8's
---     local-door refusal, and the orchestrator's pre-check (`release_medication_holds`), which
---     says the same thing as a STALE refusal before anything is signed.
+--     ("was already released at …" / "already ended at …"). The fold's tests (section 10,
+--     which CALLS this, so "ended" here and "not shown" there cannot drift apart) at one hold
+--     and one instant. Three callers: the fold, section 8's local-door refusal, and the
+--     orchestrator's pre-check (`release_medication_holds`), which says the same thing as a
+--     STALE refusal before anything is signed. Thread-blind: section 8 checks the thread
+--     first, and the pre-check only asks it about holds on the release's own thread.
 CREATE OR REPLACE FUNCTION cairn_medication_hold_ended(p_withhold uuid, p_at timestamptz)
 RETURNS text LANGUAGE sql STABLE AS $$
     SELECT CASE
@@ -437,13 +439,9 @@ LANGUAGE sql STABLE AS $$
     FROM medication_withhold w
     JOIN medication_thread_group g ON g.medication_id = w.medication_id
     WHERE g.group_id = ANY (p_groups)
-      AND (w.until_reviewed OR w.until_at > p_now)
-      AND (w.until_reviewed OR w.until_at > w.starts_at)
-      AND NOT EXISTS (
-            SELECT 1 FROM medication_withhold_release r
-            WHERE r.medication_id = w.medication_id
-              AND w.event_id = ANY (r.released_event_ids)
-              AND r.released_at <= p_now)
+      -- The tests described above, written ONCE in section 7b (#853 review): a hold the floor
+      -- calls ended must never still be shown, or its release is refused on every re-read.
+      AND cairn_medication_hold_ended(w.event_id, p_now) IS NULL
     ORDER BY g.group_id, w.starts_at DESC, w.event_id
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) FROM PUBLIC;

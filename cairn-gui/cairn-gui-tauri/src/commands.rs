@@ -509,8 +509,9 @@ pub async fn cease_impl(
     }
 
     let text = cease_outcome(ceased, &failed, &unknown);
-    // Said only when this press stopped something for certain (see `already_stopped_note`).
-    let text = match already_stopped_note(row, ceased) {
+    // Said only when every thread of this press stopped for certain (see `already_stopped_note`).
+    let landed_in_full = ceased > 0 && failed.is_empty() && unknown.is_empty();
+    let text = match already_stopped_note(row, landed_in_full) {
         Some(note) => format!("{text} {note}"),
         None => text,
     };

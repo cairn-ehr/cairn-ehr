@@ -8,15 +8,17 @@
 > colleague released it, or it ran out) as a STALE refusal, so the window re-reads ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md),
 > spec **v0.84**, db/059's `cairn_medication_hold_ended`; sync apply admits it). A Stop on a line already stopped is
 > written and the window says so. The sign-off outcome now says the lines elsewhere (#849). Durable rules: the #843
-> bullets. Full DB-gated sweep green locally (before the review fixes; CI covers the final tree).
+> bullets. Full DB-gated sweep green locally (before the review fixes; CI covers the final tree). Its second review
+> made the read-time fold call the same predicate, kept a wrong-thread hold id out of the stale path, and filed
+> **#854** (CLI cease) and **#855** (release races).
 > **Merged 2026-10-22/23 (ROADMAP has each):** PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851) (#848: a
 > drug of this patient's on another chart's line is said on this chart's list; review filed #849, built in #853, and
 > **#850**, a decision) · PR #847 (#846: a stray that arrived before its thread's claim is a hazard; review filed #848,
 > pointed db/032's false "no-op" comment at **#185**) · PR #845 (#844 + #836).
 > **Merged 2026-10-21: PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)** (#839 + #840 + #841): unseen holds
 > said, a gesture that wrote nothing refuses (**stale wins**), Withhold and Stop only where they can write. Its review
-> filed **#843** (the floor admits a release of an ended hold, so "stale wins" cannot yet fire for cease or release —
-> a decision).
+> filed **#843** (the floor admitted a release of an ended hold — decided and built in PR #853: a release now refuses
+> as stale; a cease of a ceased line stays admitted, by ADR-0082 decision 4).
 > **Merged 2026-10-21: PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)** (#832, #803 slice B): the window
 > draws the **W** and offers **Withhold**/**Release**. **Owed by a human: RUNBOOK §15** (W ≤ 10 s, Release ≤ 5 s,
 > VoiceOver/keyboard; the WebKit time-field reset is confirmed only in headless WebKit). #809 gained item 5.
