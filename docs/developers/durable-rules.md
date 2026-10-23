@@ -68,6 +68,26 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   check that a thread exists. Pins: the `a_stray_*` tests, `the_stray_chart_view_names_only_a_known_chart_that_differs`,
   and `the_runtime_role_reads_a_list_whose_conflict_comes_from_the_view` (tests run as the owner; only this catches a
   missing `cairn_agent` grant).
+- **The chart an event was recorded FOR hears about it too (#848)** — `PatientMedicationList::elsewhere`
+  (`medication/elsewhere.rs`), every renderer through `elsewhere_report` (CLI list, the window's `chart-elsewhere`
+  paragraph, the compare panel's notes). The list selects lines by the thread's CURRENT chart, so a thread a later-HLC
+  assert moved to another chart, or this patient's dose/W/stop on another chart's thread, had no line here and the
+  conflict read (#836) never looked: the drug vanished unsaid. Read-side only (maintainer, 2026-10-23); the overlay
+  still moves the thread (#192's converge contract untouched — freezing it only moves the blindness to the other
+  chart). **Tempting wrong fixes:** reading only the flag's `asserted_patient` (the moved-thread case is
+  `standing_patient`; a stop-claimed thread has no point-0 dose row, so the view cannot see it either); reading the
+  stray view's `standing_patient` (that is the thread's chart NOW — a set chart there means the line is listed);
+  dropping the listed-THREAD or listed-GROUP exclusion (the line is then said twice, once as a hazard on the row);
+  showing it as a row (`outside_set` would add the separation remedy, wrong for one moved thread, and a member-less
+  row reaches Withhold/Stop/Release logic that never saw one); dropping the `EXISTS` on `medication_thread_group`
+  (a thread claimed only by this patient's own stop/W/coding is on NO list, and "on another chart" would be false —
+  it stays unsaid until its assert arrives). The remedy is CONDITIONED: if the drug is already on this list, the
+  misfiled dose/stop/W is recorded again on that line, never a second line for the drug (double-dose reading). An
+  empty list with a report makes no absence claim (window `empty_message`, CLI "! but"). The view is filtered by
+  `asserted_patient`, so db/059 indexes `patient_id` on its three source tables. Not yet said by the sign-off
+  outcome (**#849**); the report is permanent (**#850**, a decision). Pins: `tests/medication_rehomed_thread.rs`
+  (each SQL predicate mutation-checked, the three CLI calls source-guarded), the semantic tree's
+  `the_chart_warnings_are_announced_not_merely_displayed`.
 - **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.

@@ -118,6 +118,8 @@ fn name_roles(v: &mut Value, roles: &HashMap<String, String>) {
 /// `wrong_chart` (the reasons behind `cross_patient`), stripped for the same reason.
 fn strip_new_fields(list: &mut Value) {
     list.as_object_mut().unwrap().remove("charts");
+    // #848 added `elsewhere`; pinned by medication_rehomed_thread.rs.
+    list.as_object_mut().unwrap().remove("elsewhere");
     for row in list["rows"].as_array_mut().unwrap() {
         row.as_object_mut().unwrap().remove("source_charts");
         row.as_object_mut().unwrap().remove("wrong_chart");

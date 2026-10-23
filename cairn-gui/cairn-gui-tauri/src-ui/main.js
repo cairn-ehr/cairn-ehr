@@ -101,9 +101,10 @@ function setMessage(node, text) {
 function renderWarnings(view) {
   const incomplete = setMessage(el("chart-incomplete"), view.missing_message);
   const withheld = setMessage(el("chart-withheld"), view.withheld_message);
-  // The section itself is hidden when both are absent, so a healthy chart carries no
+  const elsewhere = setMessage(el("chart-elsewhere"), view.elsewhere_message);
+  // The section itself is hidden when all are absent, so a healthy chart carries no
   // "Warnings about this chart" heading for a screen reader to walk into.
-  el("chart-warnings").hidden = !(incomplete || withheld);
+  el("chart-warnings").hidden = !(incomplete || withheld || elsewhere);
 }
 
 /**
@@ -304,6 +305,7 @@ function clearDrawnList() {
   setMessage(el("chart-stale"), "");
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
+  setMessage(el("chart-elsewhere"), "");
   el("chart-warnings").hidden = true;
   setMessage(el("empty-message"), "");
 }

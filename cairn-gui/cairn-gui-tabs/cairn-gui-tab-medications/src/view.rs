@@ -19,9 +19,9 @@ use crate::hold_view::next_hold_change;
 use crate::row_view::build_row;
 pub use crate::row_view::MedListRowView;
 use cairn_medication_view::{
-    format_hazard_groups, sign_off_targets, withheld_rows, MedicationStatus, PatientMedicationList,
-    WithheldLine, WrongChartReasons, CONFLICT_INSTRUCTION, DOUBTED_LINK_INSTRUCTION,
-    MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
+    elsewhere_report, format_hazard_groups, sign_off_targets, withheld_rows, MedicationStatus,
+    PatientMedicationList, WithheldLine, WrongChartReasons, CONFLICT_INSTRUCTION,
+    DOUBTED_LINK_INSTRUCTION, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -51,6 +51,9 @@ pub struct MedListView {
     /// Groups the node knows this patient has threads in but cannot display at all — the
     /// chart is INCOMPLETE, not merely sparse. `None` in normal operation.
     pub missing_message: Option<String>,
+    /// This patient's entries on ANOTHER chart's line (#848, `elsewhere_report`): no row on this
+    /// list can carry them, so like `missing_message` the report is their only surface.
+    pub elsewhere_message: Option<String>,
     /// When the window must read the chart again because a hold starts or ends
     /// (`hold_view::next_hold_change`), as RFC 3339 UTC. `None` when no hold is timed.
     pub next_hold_change: Option<String>,
@@ -89,9 +92,15 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
         .count();
 
     MedListView {
-        empty_message: empty_message(list.rows.len(), active_rows, sign_off_count),
+        empty_message: empty_message(
+            list.rows.len(),
+            active_rows,
+            sign_off_count,
+            !list.groups_missing_from_chart.is_empty() || !list.elsewhere.is_empty(),
+        ),
         withheld_message: withheld_report(&withheld_rows(&list.rows), &list.separation_targets),
         missing_message: missing_report(&list.groups_missing_from_chart, &list.separation_targets),
+        elsewhere_message: elsewhere_report(&list.elsewhere),
         charts: list.charts.members().iter().map(Uuid::to_string).collect(),
         rows: view_rows,
         sign_off_count,
@@ -185,8 +194,22 @@ pub fn missing_report(
 /// Three distinct states, deliberately not collapsed (#338 review finding 2). Saying
 /// "every drug carries a current signature" about a chart whose only drug is a ceased,
 /// never-signed one is a plain falsehood: that drug carries no signature at all.
-fn empty_message(total_rows: usize, active_rows: usize, sign_off_count: usize) -> Option<String> {
-    if total_rows == 0 {
+///
+/// `warned` (a missing group or an elsewhere line, #848): something recorded for this patient is
+/// not on the list, so an empty list must point at the warning, never say nothing was recorded.
+fn empty_message(
+    total_rows: usize,
+    active_rows: usize,
+    sign_off_count: usize,
+    warned: bool,
+) -> Option<String> {
+    if total_rows == 0 && warned {
+        Some(
+            "No lines on this chart's list — but see the warning above: something recorded for \
+             this patient is not on it."
+                .to_string(),
+        )
+    } else if total_rows == 0 {
         // Deliberately does NOT claim the patient takes nothing: an empty chart means
         // nothing has been recorded here, which is not the same clinical statement.
         // Recording "nil medications, reviewed" is issue #331.
@@ -327,6 +350,7 @@ mod tests {
             groups_missing_from_chart: vec![],
             separation_targets: BTreeMap::from([(uid(1), vec![uid(1), uid(2)])]),
             charts: cairn_medication_view::ChartSet::single(uid(999)),
+            elsewhere: vec![],
         };
         let message = build_view(&list)
             .withheld_message
@@ -436,6 +460,7 @@ mod tests {
             groups_missing_from_chart: vec![uid(70)],
             separation_targets: BTreeMap::from([(uid(70), vec![uid(70), uid(71)])]),
             charts: cairn_medication_view::ChartSet::single(uid(999)),
+            elsewhere: vec![],
         };
         let view = build_view(&list);
         let message = view
@@ -464,6 +489,32 @@ mod tests {
         )]));
         assert!(view.withheld_message.is_none());
         assert!(view.missing_message.is_none());
+        assert!(view.elsewhere_message.is_none());
+    }
+
+    /// #848 review D: a list whose only drug moved away must not ALSO claim nothing was recorded
+    /// here — something was, and the warning above says where it is now.
+    #[test]
+    fn an_empty_list_with_a_drug_elsewhere_makes_no_absence_claim() {
+        let mut list =
+            PatientMedicationList::empty(cairn_medication_view::ChartSet::single(uid(1)));
+        list.elsewhere = cairn_medication_view::fixtures::sample_chart().elsewhere;
+        let empty = build_view(&list)
+            .empty_message
+            .expect("an empty list says why");
+        assert!(!empty.starts_with("No medications recorded"), "{empty}");
+        assert!(empty.contains("warning"), "{empty}");
+    }
+
+    /// #848: the fixture's moved drug reaches the window by its report, named.
+    #[test]
+    fn a_drug_on_another_charts_line_is_reported() {
+        let view = build_view(&cairn_medication_view::fixtures::sample_chart());
+        let message = view.elsewhere_message.expect("reported");
+        assert!(
+            message.contains("apixaban (current, on chart "),
+            "{message}"
+        );
     }
 
     /// A reconciled group is ONE row but several threads, and the button counts THREADS.

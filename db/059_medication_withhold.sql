@@ -459,5 +459,14 @@ GRANT SELECT ON medication_thread_stray_chart TO cairn_agent;
 -- medication_id, and this gives the correction table the same (otherwise a seq scan per read).
 CREATE INDEX IF NOT EXISTS medication_dose_correction_med_idx
     ON medication_dose_correction (medication_id);
+-- The list also reads this view by the chart an event NAMES (#848, `medication/elsewhere.rs`:
+-- this patient's events on other charts' threads), so each source table indexes patient_id too
+-- (otherwise three seq scans per chart open, over every dose on the node).
+CREATE INDEX IF NOT EXISTS medication_dose_event_patient_idx
+    ON medication_dose_event (patient_id);
+CREATE INDEX IF NOT EXISTS medication_dose_correction_patient_idx
+    ON medication_dose_correction (patient_id);
+CREATE INDEX IF NOT EXISTS medication_withhold_release_patient_idx
+    ON medication_withhold_release (patient_id);
 
 COMMIT;

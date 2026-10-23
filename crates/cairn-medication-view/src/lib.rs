@@ -11,6 +11,7 @@
 pub mod chart;
 pub mod chart_set;
 pub mod display;
+pub mod elsewhere;
 #[cfg(feature = "fixtures")]
 pub mod fixtures;
 pub mod row;
@@ -23,6 +24,7 @@ pub use chart::{
 };
 pub use chart_set::ChartSet;
 pub use display::{short_kid, DISPLAYED_KID_CHARS};
+pub use elsewhere::{elsewhere_report, ElsewhereLine, ELSEWHERE_INSTRUCTION};
 pub use row::{
     MedicationHold, MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons,
 };

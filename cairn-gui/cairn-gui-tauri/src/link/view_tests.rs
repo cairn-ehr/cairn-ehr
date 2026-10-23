@@ -256,17 +256,17 @@ fn only_current_medications_are_listed_and_warnings_carry_over() {
         active,
         "ceased drugs are not current medications"
     );
-    // Fix round 1, Minor 5/6: the fixture chart carries a withheld AND a missing message
-    // (cross-patient row, invisible group); both must survive, each prefixed so they read
-    // as about the OTHER record rather than "this chart".
+    // Fix round 1, Minor 5/6: the fixture chart carries a withheld, a missing and (#848) an
+    // elsewhere message (cross-patient row, invisible group, a drug on another chart's line);
+    // all must survive, each prefixed so they read as about the OTHER record, not "this chart".
     assert!(
         notes.iter().all(|n| n.starts_with("On the other record: ")),
         "every carried-over note is prefixed: {notes:?}"
     );
     assert_eq!(
         notes.len(),
-        2,
-        "both the withheld and the missing note carry over: {notes:?}"
+        3,
+        "the withheld, missing and elsewhere notes carry over: {notes:?}"
     );
 }
 
@@ -282,13 +282,18 @@ fn a_note_already_present_is_not_joined_by_a_false_absence_claim() {
         empty_message: None,
         withheld_message: Some("1 line(s) withheld.".into()),
         missing_message: None,
+        // #848: a drug of theirs on another chart's line is a note too, never an absence.
+        elsewhere_message: Some("1 line(s) elsewhere.".into()),
         next_hold_change: None,
     };
     let (lines, notes) = medication_lines(&list);
     assert!(lines.is_empty());
     assert_eq!(
         notes,
-        vec!["On the other record: 1 line(s) withheld.".to_string()]
+        vec![
+            "On the other record: 1 line(s) withheld.".to_string(),
+            "On the other record: 1 line(s) elsewhere.".to_string()
+        ]
     );
     assert!(
         !notes.iter().any(|n| n.contains("No current medications")),

@@ -233,14 +233,15 @@ pub(crate) fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
 }
 
 /// The other record's CURRENT medications as one line each, plus the notes to show before
-/// them (the list's own withheld/missing warnings, prefixed so they read as about the OTHER
-/// record — they are worded for the med-list tab, which speaks of "this chart" — or the named
-/// absence of any drug).
+/// them (the list's own withheld/missing/elsewhere warnings, prefixed so they read as about the
+/// OTHER record — they are worded for the med-list tab, which speaks of "this chart" — or the
+/// named absence of any drug).
 ///
-/// The absence sentence is added ONLY when there are no current lines AND no withheld/missing
-/// note either: a list the system itself calls incomplete (a withheld or missing note present)
-/// must never ALSO claim "no current medications" — that is an absence claim over a list this
-/// same function knows is not the whole picture (controller ruling, principle 4).
+/// The absence sentence is added ONLY when there are no current lines AND no withheld, missing
+/// or elsewhere (#848: a drug of theirs on another chart's line) note either: a list the system
+/// itself calls incomplete must never ALSO claim "no current medications" — that is an absence
+/// claim over a list this same function knows is not the whole picture (controller ruling,
+/// principle 4).
 pub fn medication_lines(list: &MedListView) -> (Vec<String>, Vec<String>) {
     let lines: Vec<String> = list
         .rows
@@ -248,11 +249,15 @@ pub fn medication_lines(list: &MedListView) -> (Vec<String>, Vec<String>) {
         .filter(|r| r.current)
         .map(|r| format!("{} — {} — {}", r.primary, r.dose, r.sig))
         .collect();
-    let mut notes: Vec<String> = [&list.withheld_message, &list.missing_message]
-        .into_iter()
-        .flatten()
-        .map(|n| format!("On the other record: {n}"))
-        .collect();
+    let mut notes: Vec<String> = [
+        &list.withheld_message,
+        &list.missing_message,
+        &list.elsewhere_message,
+    ]
+    .into_iter()
+    .flatten()
+    .map(|n| format!("On the other record: {n}"))
+    .collect();
     if lines.is_empty() && notes.is_empty() {
         notes.push("No current medications recorded on the other record.".into());
     }

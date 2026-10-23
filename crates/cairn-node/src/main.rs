@@ -5399,6 +5399,13 @@ async fn run() -> anyhow::Result<()> {
                         cairn_node::medication::read::MISSING_GROUP_INSTRUCTION
                     );
                 }
+                // In-band in `.elsewhere`, and said on stderr too, as the missing groups are: a
+                // `jq '.rows'` pipeline would otherwise drop it without a word (#848).
+                if let Some(report) =
+                    cairn_node::medication::read::elsewhere_report(&list.elsewhere)
+                {
+                    eprintln!("warning: {report}");
+                }
             } else if list.rows.is_empty() {
                 // Deliberately explicit: an empty chart is a real clinical state, and
                 // silence would read as "the query failed" (issue #331 covers recording
@@ -5429,6 +5436,7 @@ async fn run() -> anyhow::Result<()> {
                         )
                     );
                 }
+                print_elsewhere(&list, "! but ");
             } else {
                 // ADR-0076 decision 1: a combined list must SAY it is combined, not just
                 // carry the chart set silently in `--json`'s `charts` field. Printed once,
@@ -5522,6 +5530,7 @@ async fn run() -> anyhow::Result<()> {
                         )
                     );
                 }
+                print_elsewhere(&list, "! ");
             }
         }
         Cmd::MedicationSignOff { patient, attest } => {
@@ -5864,6 +5873,17 @@ fn print_candidates(list: &cairn_patient_search::CandidateList) {
     // The text itself is built by the pure, golden-tested `candidate_lines` (reason LAST).
     for line in cairn_node::patient::candidate_text::candidate_lines(list) {
         println!("{line}");
+    }
+}
+
+/// `medication-list`'s report of this patient's entries on OTHER charts' lines (#848), after the
+/// rows or after "no medications recorded": the drug has no line here to carry the warning, so
+/// an empty list must not stand alone when this is non-empty. Printed nothing when it is empty.
+/// `lead` is "! but " after "no medications recorded", which would otherwise stand as an absence
+/// claim beside it.
+fn print_elsewhere(list: &cairn_node::medication::read::PatientMedicationList, lead: &str) {
+    if let Some(report) = cairn_node::medication::read::elsewhere_report(&list.elsewhere) {
+        println!("{lead}{report}");
     }
 }
 

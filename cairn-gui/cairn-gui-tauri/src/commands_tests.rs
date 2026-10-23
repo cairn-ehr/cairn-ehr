@@ -299,6 +299,8 @@ fn the_webview_reads_both_partial_completion_reports() {
     let read = fields_read_by_the_webview("view");
     assert!(read.contains("missing_message"), "got: {read:?}");
     assert!(read.contains("withheld_message"), "got: {read:?}");
+    // #848: a drug of this patient's on another chart's line has no row to say it on.
+    assert!(read.contains("elsewhere_message"), "got: {read:?}");
 
     // A sign-off's reports reach the clinician inside Rust's outcome line (#818,
     // `write_failure::sign_off_outcome`, which appends every note it is handed), so the webview

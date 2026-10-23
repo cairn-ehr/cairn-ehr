@@ -14,6 +14,7 @@
 //! something to report.
 use crate::chart::PatientMedicationList;
 use crate::chart_set::ChartSet;
+use crate::elsewhere::ElsewhereLine;
 use crate::row::{
     MedicationHold, MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons,
 };
@@ -163,6 +164,14 @@ pub fn sample_chart() -> PatientMedicationList {
         // Pre-ADR-0076: the fixture chart is read over the one fixture patient alone, not a
         // linked set.
         charts: ChartSet::single(uid(1)),
+        // A drug of this patient's that a later assert moved to another chart (#848): it has
+        // no row here, so, like the invisible group, only its report can say it.
+        elsewhere: vec![ElsewhereLine {
+            group_id: uid(80),
+            name: Some("apixaban".into()),
+            status: Some(MedicationStatus::Active),
+            charts: vec![uid(2)],
+        }],
     }
 }
 
@@ -202,6 +211,7 @@ mod tests {
         assert!(chart.rows.iter().any(|r| r.cessation_reason.is_some()));
         assert!(chart.rows.iter().any(|r| r.cross_patient));
         assert!(!chart.groups_missing_from_chart.is_empty());
+        assert!(!chart.elsewhere.is_empty());
     }
 
     /// Every hazardous group must be able to name its repair arguments — the displayed one

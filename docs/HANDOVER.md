@@ -3,8 +3,12 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ IN PROGRESS (2026-10-23): #848** on branch `fix/848-rehomed-thread-surfaces` — a thread re-homed to another
-> chart by a later-HLC stray assert must still show on the chart it left (read-side, decided 2026-10-23).
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR #PRNUM** (#848, branch `fix/848-rehomed-thread-surfaces`): a drug of this
+> patient's on ANOTHER chart's line (a thread a later-HLC assert moved away, or this patient's dose/stop/W on another
+> chart's thread) is now said on this chart's list — `PatientMedicationList::elsewhere`, read-side only (decided
+> 2026-10-23), in the CLI, the window, its semantic tree and the compare panel. Durable rules: the #848 bullet.
+> Its review filed **#849** (the sign-off outcome does not say it yet) and **#850** (a decision: these reports never
+> go away, even after the clinician acted).
 > **Decided 2026-10-23, not yet built: #843** — the LOCAL door refuses a release naming a hold that is not standing
 > (stale); a cease of an already-ceased line stays admitted and the window says it was already stopped.
 > **Merged 2026-10-22: PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)** (#846): a stray dose, correction
@@ -35,8 +39,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Finish #848** (above); run #838's RUNBOOK §15. Build **#843** as decided. One decision is still owed:
->    **#825** (where the window's operator diagnostics live).
+> 1. **Review and merge PR #PRNUM** (#848); run #838's RUNBOOK §15. Build **#843** as decided, and **#849**. Decisions
+>    owed: **#825** (where the window's operator diagnostics live) and **#850** (acknowledging a dealt-with report).
 >    Buildable hold follow-ups: **#835** (a future-dated release
 >    is invisible) · **#837** (test gaps) · #834 (needs a decision on shape). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
@@ -167,7 +171,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-23 (#848, PR #PRNUM) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.83** (newest ADR-0081;
@@ -200,6 +204,20 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-10-23 — #848 (PR #PRNUM): the chart an event was recorded FOR hears about it
+
+Maintainer decided #848 (read-side, surface on both charts) and #843 (refuse a dead release locally) at the start.
+Reproduced first (the moved thread left A's list with nothing said), then TDD, an independent review, one fix wave.
+- **⇒ A surviving mutation can mean a second witness, not a dead predicate.** Dropping the flag's `standing_patient`
+  side changed nothing because a moved thread's original assert also seeds a point-0 dose row the stray view sees; the
+  flag side matters alone only for a thread claimed by a STOP. Find the case, then pin it.
+- **⇒ A new field on a model breaks its literals, not its readers.** The compiler found the compare panel only because
+  a test built `MedListView` by hand; grep the readers of the SIBLING fields (`missing_message`) for every renderer
+  — the semantic tree was found that way by the review, not by the build.
+- **⇒ Walk a remedy sentence through the case where the drug IS already on the list** ("record it again" would have
+  made a second metoprolol line). **An absence claim beside a warning is still an absence claim** ("No medications
+  recorded" + the report). **"On another chart" must be true of every row** — a thread no chart lists is on none.
 
 ### 2026-10-22 (third) — #846: the conflict read stops depending on arrival order
 
@@ -346,90 +364,39 @@ R7 = #742 + #743 part 2; residuals #787 · #786 · #783 · #782; splits #781 · 
   reproducible headlessly (an `async` stub `invoke`); **zsh does not word-split `$var`** — run loops under `bash -c`;
   a struct literal gaining a field breaks every test that builds it; a fixture-gap RED can show the bug is live.
 
-### 2026-10-13 (fourth) — #775 option A and #556, as decided (cloud session, PR #779, merged)
+### 2026-10-12 → 10-15 — cloud tech-debt passes (PRs #770–#776, #779), R6 (PR #777)
 
-- **⇒ A CASE-MAPPING CHANGE ON ONE SIDE OF A SUBSET INVARIANT BREAKS THE INVARIANT.** Option A was first scoped as
-  "search only, matcher untouched" — wrong: the sweep's blocking SQL must lowercase by the same rule or the drift
-  test's sweep-paired ⊆ search-found fails. Grep every `lower(` over names, in Rust, SQL AND Python, before claiming a
-  change is one-sided.
-- **⇒ A COLLATE moves more than `lower()`.** It changes what `\s` and `[:alnum:]` match for that input. Fixtures for
-  NBSP, Turkish `İ` and Greek capitals now sit in `patient_search_drift.rs`.
-- **⇒ A test that ranks "first" among zero rivals proves nothing.** The raw-capital ranking test first matched only the
-  target; it now has six older same-surname namesakes, and both query sites were mutation-checked.
-- **⇒ Never run matcher pytest while the cargo DB gate runs** — both load the schema into `cairn_test`; the collision
-  surfaced as a 40P01 deadlock in an unrelated restore test. **Disk:** a clean `target/` + `cairn-gui/target` filled
-  the allowance twice; delete both outright when it does (the rebuild is ~20 min).
-- **⇒ COMMITTED IS NOT VOUCHED.** #556 binds the token's bytes into the segment chain so stripping is detected; it does
-  not make an unvouched token (db/020's deferred arm) trustworthy. The sync wire is still unbound: **#778**.
-- Left for a decision: **#780** (`casefold()` for σ/ς and ß/ss, and the Python scorer's agreement); Turkish dotless `ı`
-  vs `YILMAZ` (a capital `I` lowercases to dotted `i` under every Unicode-default mapping — only a Turkish-tailored
-  comparator fixes it, which is the ADR-0014 profile's job, not db/046's).
-
-### 2026-10-14/15 — R6: confirm a doubted link; name the doubt at the front door (PR #777, merged)
-
-Brainstorm (maintainer: one door per line, "Review this link…"; every un-attested link offers Confirm; the bridge is
-listed and re-linkable; #723 is a reworded label, never split rows) → design → plan (nine tasks) → SDD → opus final
-review → one fix wave → docs. No ADR, no schema generation change. Filed #781 · #782 · #783 · #784; commented #738.
-- **⇒ A pinned-count guard can go red where no per-task review looks.** Task 1 gave `edges.rs` a second wrapped call;
-  `db_errors_stay_legible.rs`' pinned count (1) went red, and no per-task review ran it — only the full suite did. A
-  task that adds a DB call, an event type or a helper re-runs the guards that count them (memory: pinned-count guards).
-- **⇒ When you guard one verdict, ask the same question of every verdict on that panel.** The design made the confirm
-  re-check the pair under CARNLK; the final review (I1) found the panel's Unlink had the identical mid-judgement gap
-  (a colleague's confirm landing meanwhile, overruled by our later unlink). Same for R5a's twin: an Outranked verdict
-  had to hide BOTH buttons in `unlink.js` AND `link.js`.
-- **⇒ A prefix inside a fixed-width cell can eat the very name it qualifies.** The designed "↳ linked, in doubt: "
-  (20 chars) left a doubted member's name at ~8 chars of the CLI's 28-char cell ("Mary SM…"); "↳ in doubt: " keeps it
-  legible. Check a label against the width it renders in, not the sentence it reads as.
-- **2026-10-15, a /pr-review-toolkit pass on the PR and a /fixall round (eight commits).** Fixed: the pre-click race
-  (a colleague's confirm between drawing the list and "Review…"), the two-snapshot links read, the tray's "One person"
-  on a doubted side, the Outranked disarm (then widened: any recorded answer), a node-side empty-address refusal,
-  pins for the window's routing to the `_as_shown` doors and the Compare's guard, an isolated #220 clash test, and
-  rustls 0.23.46 (four RUSTSEC advisories failed cargo-deny on every PR). Filed #785 · #786 · #787.
-  **⇒ A fix wave gets its own review.** The fixes' own review found a hole in one of them: the disarm keyed on
-  `reload`, which "Different people" sets even when outranked. **⇒ Two classic `<script>`s share one global scope**:
-  a helper added to both under one name silently becomes the later file's.
-
-### 2026-10-12 → 10-13 — four cloud tech-debt passes (PRs #770–#776)
-
-Picked by blast radius each time. **10-12:** #602 (the strict door pins `cairn.remote_apply` off), #763 (auto-apply
-never links while a re-check is pending), #689 (a misfiled medication attestation refused), #626 (db half: the sync
-door's raw casts go through `cairn_uuid_or_raise`; `do_pull`'s generic non-P0001 arm still open), #726. **10-13:**
-#604, #608, #431, #464, #768 · then #773, #603, #346, #553, #616, #744, #704 · then #708, #713, #569, #560, #682, #509.
+**Cloud passes** (picked by blast radius): #602 · #763 · #689 · #626 (db half; `do_pull`'s non-P0001 arm open) · #726 ·
+#604 · #608 · #431 · #464 · #768 · #773 · #603 · #346 · #553 · #616 · #744 · #704 · #708 · #713 · #569 · #560 · #682 ·
+#509; then #775 option A + #556 (PR #779).
 - **⇒ #726: A CONNECT REPLAYS THE SCHEMA ONLY WHEN IT CHANGED ([ADR-0080](spec/decisions/0080-a-connect-replays-the-schema-only-when-it-changed.md)).**
-  A no-op replay took 97 strong locks; `node_schema` now records the loader + a sha2-256 of the exact file texts (db/058).
-  **Do not "simplify" the gate to the generation number** (strands in-place fixes — R6's db/054 edit relies on it) **or
-  drop the loader check** (cairn-sync's subset stamp would vouch for files it never replayed). `test_serial_guard`
-  clears the stamp; a test reconnecting to repair the schema calls `db::force_schema_replay`
-  (`tests/schema_replay_gate.rs`).
-- **⇒ A judgement made from a comparison carries what was compared** (#708): `RecordsShown`, re-read under CARNLK after
-  the proposal-row lock. **An unknown outcome is its own marker** (#713): only an UNANSWERED commit gets it; the marker
-  is the ROOT error with the cause as `source()` (anyhow's `.context(marker)` is invisible to a `chain()` downcast).
-- **⇒ A race "found by reasoning" can be made deterministic:** hold transaction 1 open, run 2 on another connection
-  until it has FINISHED (the bug) or is PARKED (`pg_stat_activity.wait_event_type = 'Lock'`), then commit 1 — no sleeps
-  (`tests/shred_custody_race.rs`; R2b-2 and R6 use it).
-- **⇒ A per-row lock cannot guard a whole-log scan** (#773: one lock in two modes, every shred SHARED, the heal
-  EXCLUSIVE; order erasure-heal, then custody). **An issue's proposed fix can be wrong about MVCC** (#560: an in-flight
-  lower seq is invisible inside one snapshot too; the export waits out `RowExclusiveLock` holders on `event_log`, read
-  after `MAX(seq)`, CACHE 1 pinned) **or predate a guard** (#608's `USING ERRCODE` vs #633's file-granular guard).
-- **⇒ A "belt and braces" re-check with no test is not braces** (mutate it; one changed nothing and was removed). **A
-  count is not a set** (#553: name, never count). **A "silent" lenient arm can be worse than silent** (#768: a misfiled
-  vouch displayed as a current signature; the predicate also feeds `stale`, #606). **A per-row `BEGIN … EXCEPTION`
-  that WRITES costs a subtransaction XID per row** (`pg_stat_get_backend_subxact`).
-- **⇒ The gate catches house rules:** a new db/tests mirror needs `\ir _scratch_database_guard.sql`; `cargo test` stops
-  at the first failing binary; parallel output hides FAILED lines — read the `failures:` block. A fixture passing a
-  "record" no window could show hides behind a new check.
-- **⇒ Cloud rig** (runs the FULL DB gate): fetch micromamba from `github.com/mamba-org/micromamba-releases`
-  (`micro.mamba.pm` is blocked), conda-forge `postgresql=18`, `cargo install cargo-pgrx --version =0.18.1 --locked`,
-  `cargo pgrx init --pg18 <conda pg_config>` with an `xlocale.h` shim (`#include <locale.h>`) in both `CFLAGS` and
-  `BINDGEN_EXTRA_CLANG_ARGS`, `initdb` as `postgres`, `CREATE ROLE root SUPERUSER`, export `PGHOST/PGPORT/PGUSER`. Do
-  NOT pre-create `cairn_pgx` in `template1`. `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev` builds
-  `cairn-gui-tauri`. `target/` reaches ~23 GB — delete `target/debug/incremental` before a second target dir. Never
-  edit tracked files while the gate compiles.
-- Left for a decision: **#775** (signed tokens' case vs the cluster's `lower()`), **#556** (whether `attestation` /
-  `attester_key` join `segment_commitment` — before the first release shipping a CAIRNB3 writer), #649 (caller-minted
-  patient id vs a cancellation contract), #613 (is INCOMPLETE about records or the recovery?), #628 (the NUL fix needs a
-  `cairn_pgx` bump). #427 is lower than it reads (`safety` is a clear field of `signed_bytes`, which `cairn_agent` reads
-  anyway, #424; ADR-0080 made replays rare).
+  `node_schema` records the loader + a sha2-256 of the file texts (db/058). **Never "simplify" the gate to the generation
+  number** (strands in-place fixes) **or drop the loader check**; a test repairing the schema calls
+  `db::force_schema_replay`.
+- **⇒ A case-mapping change on ONE side of a subset invariant breaks it** (#775: grep every `lower(` over names in Rust,
+  SQL AND Python); **a COLLATE moves `\s` and `[:alnum:]` too** (NBSP/`İ`/Greek fixtures in `patient_search_drift.rs`);
+  **a test ranking "first" among zero rivals proves nothing.** **COMMITTED IS NOT VOUCHED** (#556 detects stripping, not
+  trust; the sync wire is still unbound, **#778**). Left for a decision: **#780** (`casefold()`), Turkish dotless `ı`
+  (the ADR-0014 profile's job).
+- **⇒ A judgement carries what was compared** (#708, `RecordsShown`); **an unknown outcome is its own ROOT marker**
+  (#713; `.context(marker)` is invisible to a `chain()` downcast). **A race found by reasoning can be made
+  deterministic**: park the victim on the lock (`pg_stat_activity`), never sleep (`tests/shred_custody_race.rs`).
+- **⇒ A per-row lock cannot guard a whole-log scan** (#773); **an issue's fix can be wrong about MVCC** (#560) **or
+  predate a guard** (#608 vs #633); **a belt-and-braces re-check with no test is not braces**; **a count is not a set**
+  (#553); a lenient arm can be worse than silent (#768, feeds `stale`, #606); a per-row `BEGIN … EXCEPTION` that WRITES
+  burns a subtransaction XID per row.
+- **R6** (#716 + #723): one door per line, "Review this link…", Confirm on every un-attested link, the bridge
+  re-linkable. **⇒ A pinned-count guard can go red where no per-task review looks** (run the guards that count what a
+  task adds). **⇒ Guard one verdict, ask it of every verdict on the panel** (Unlink had Confirm's gap; an Outranked
+  verdict hides both buttons). **⇒ A prefix in a fixed-width cell can eat the name** ("↳ in doubt: "). **⇒ A fix wave
+  gets its own review**; two classic `<script>`s share one global scope. Filed #781 · #782 · #783 · #784 · #785 · #786
+  · #787; commented #738.
+- **Cloud rig** (runs the FULL DB gate): micromamba from `github.com/mamba-org/micromamba-releases`, conda-forge
+  `postgresql=18`, `cargo install cargo-pgrx --version =0.18.1 --locked`, `cargo pgrx init --pg18 <conda pg_config>` with
+  an `xlocale.h` shim in `CFLAGS` and `BINDGEN_EXTRA_CLANG_ARGS`, `initdb` as `postgres`, `CREATE ROLE root SUPERUSER`;
+  never pre-create `cairn_pgx` in `template1`; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`;
+  `target/` reaches ~23 GB. Mechanics: a new db/tests mirror needs `\ir _scratch_database_guard.sql`; read the
+  `failures:` block. Left for a decision: #649 · #613 · #628; #427 is lower than it reads (#424). #220 gained a test.
 
 ### 2026-10-04 → 10-09 — R4 (PR #724), #725 (PR #733), R5a (PR #735), R5b (PR #749)
 

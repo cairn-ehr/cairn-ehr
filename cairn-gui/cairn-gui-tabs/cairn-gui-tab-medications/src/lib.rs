@@ -63,6 +63,7 @@ impl Semantic for MedicationsTab {
         for (id, message) in [
             ("chart-incomplete", self.view.missing_message.as_ref()),
             ("chart-withheld", self.view.withheld_message.as_ref()),
+            ("chart-elsewhere", self.view.elsewhere_message.as_ref()),
         ] {
             if let Some(message) = message {
                 fields.push(Field {
@@ -299,6 +300,13 @@ mod semantic_tests {
         assert!(
             labels.iter().any(|l| l.contains("will NOT be signed")),
             "the withheld-line warning must be in the a11y tree: {labels:?}"
+        );
+        // #848: a drug of this patient's on another chart's line has no row to be heard on.
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.contains("on another chart hold something")),
+            "the elsewhere warning must be in the a11y tree: {labels:?}"
         );
     }
 
