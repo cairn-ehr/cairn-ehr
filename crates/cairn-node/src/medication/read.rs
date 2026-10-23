@@ -21,11 +21,12 @@
 //! threads spanned two charts displayed on the winner's chart only and silently vanished
 //! from the other. Finding a group through its own members cannot lose it that way.
 //!
-//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. Up to eleven statements — the chart set, the
-//! per-thread vouches, each group's charts, the charts a group reaches, two advisory flags,
-//! whether the set holds a doubted link (skipped for a never-linked chart), the two list
-//! views (one builder), the membership of the groups the hazard flags name, and the lines on
-//! other charts carrying this set's events (`elsewhere.rs`, #848) — answer
+//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. Up to fourteen statements — the chart set, the
+//! per-thread vouches, each group's charts, the charts a group reaches, the patient conflicts
+//! on listed lines (#836), two advisory flags, whether the set holds a doubted link (skipped
+//! for a never-linked chart), the holds, the cessation reasons, the two list views (one
+//! builder), the membership of the groups the hazard flags name, and the lines on other
+//! charts carrying this set's events (`elsewhere.rs`, #848) — answer
 //! different questions over different grains (chart set, group, thread, worklist,
 //! mis-reconciliation, cross-patient hazard). One join would need two levels of
 //! aggregation and would be far harder for a reviewer to check against the view

@@ -1,13 +1,14 @@
 //! Lines on ANOTHER chart that carry something recorded for this one (#848).
 //!
-//! A medication event names the chart it was recorded for, and it is projected onto its thread
-//! whatever chart that thread is on (converge-and-flag, db/031: a node-local veto would fork
-//! the event set). So an event recorded for this patient can sit on a line this chart's list
-//! never shows:
+//! A medication event names the chart it was recorded for. On sync apply it is projected onto
+//! its thread whatever chart that thread is on (converge-and-flag, db/031: a node-local veto
+//! would fork the event set); the local door refuses a mismatch, but only against a chart it
+//! already knows, so an event that arrives before its thread's claim passes either door. So an
+//! event recorded for this patient can sit on a line this chart's list never shows:
 //! - a later-HLC assert of the same thread on another chart MOVED the thread there (the
 //!   statement overlay keeps one chart per thread), and the drug left this list with no word;
-//! - a dose, dose correction, release or W recorded for this patient landed on another chart's
-//!   thread (a mistyped thread id, a buggy client).
+//! - a stop, coding, W, dose, dose correction or release recorded for this patient landed on
+//!   another chart's thread (a mistyped thread id, a buggy client).
 //!
 //! The other chart's list shows that line as a `patient_conflict` hazard (#836). This is the
 //! half that tells THIS chart: one entry per such line, named and placed, with a remedy. A line
@@ -49,8 +50,8 @@ pub const ELSEWHERE_INSTRUCTION: &str =
      recorded on the wrong chart, or another patient's with this patient's entry on it by \
      mistake. Check with the patient and the prescriber whether this patient takes it. If they \
      do and it is not already on this list, record it again on this chart; if it is already on \
-     this list, record the dose, stop or W again on that line here. The entries stay on record; \
-     they cannot be removed.";
+     this list, record the dose, stop, release or W again on that line here. The entries stay \
+     on record; they cannot be removed.";
 
 /// The report every renderer shows for `lines`, or `None` when there are none. **Pure.**
 pub fn elsewhere_report(lines: &[ElsewhereLine]) -> Option<String> {
@@ -68,9 +69,11 @@ pub fn elsewhere_report(lines: &[ElsewhereLine]) -> Option<String> {
 
 /// One line's description: name, status, where it is, and its id (for tracing it).
 fn describe(line: &ElsewhereLine) -> String {
+    // A blank coded display names nothing; say so rather than print a bare parenthesis.
     let name = line
         .name
         .as_deref()
+        .filter(|n| !n.trim().is_empty())
         .unwrap_or("a drug this node cannot name");
     let status = match line.status {
         Some(MedicationStatus::Active) => "current",
@@ -131,6 +134,21 @@ mod tests {
     fn the_remedy_never_asks_for_a_second_line_of_a_listed_drug() {
         assert!(ELSEWHERE_INSTRUCTION.contains("not already on this list"));
         assert!(ELSEWHERE_INSTRUCTION.contains("on that line"));
+    }
+
+    /// Every kind of misfiled entry the first sentence names gets the remedy (#851 review: a
+    /// misfiled release was named but never told where to go).
+    #[test]
+    fn the_remedy_covers_every_entry_it_names() {
+        assert!(ELSEWHERE_INSTRUCTION
+            .contains("record the dose, stop, release or W again on that line"));
+    }
+
+    /// A blank name is no name (#851 review): never a bare " (current, …".
+    #[test]
+    fn a_blank_name_is_said_as_unnamed() {
+        let text = elsewhere_report(&[line(Some("  "), None, &[])]).unwrap();
+        assert!(text.contains("a drug this node cannot name"), "{text}");
     }
 
     /// What the node could not read is said as such, never left blank or guessed.

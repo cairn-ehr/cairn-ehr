@@ -426,11 +426,12 @@ GRANT EXECUTE ON FUNCTION cairn_medication_group_holds(uuid[], timestamptz) TO c
 --
 --    A VIEW, read at list time, for the reason db/034's `medication_attestation_misfiled` is
 --    one: a read-time join sees the contradiction whichever event arrived second, and after any
---    reproject in any order. The medication list reads it beside the flag table (`read.rs`
---    `read_conflict_charts`). A thread whose chart is unknown here contributes nothing: no data
+--    reproject in any order. The medication list reads it beside the flag table, from both ends:
+--    `read.rs` `read_conflict_charts` (a listed line's stray, #846) and `medication/elsewhere.rs`
+--    (this chart's stray on another chart's line, #848). A thread whose chart is unknown here contributes nothing: no data
 --    is never disagreement (principle 4); `<>` against the NULL chart already drops the row, so
 --    no separate IS NOT NULL is needed (it would only call the function a second time per row).
---    Its three columns carry the flag table's names, so `read_conflict_charts` can UNION them.
+--    Its three columns carry the flag table's names, so both readers can UNION them.
 --    `medication_dose_event` also holds each assert's seeded point 0 (db/032), so a contradicting
 --    assert shows here too, beside its flag. A dose correction row is the one that currently
 --    stands for its target (HLC wins, db/032 section 6), so a stray correction overtaken by a

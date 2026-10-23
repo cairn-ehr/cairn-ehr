@@ -211,13 +211,18 @@ Maintainer decided #848 (read-side, surface on both charts) and #843 (refuse a d
 Reproduced first (the moved thread left A's list with nothing said), then TDD, an independent review, one fix wave.
 - **⇒ A surviving mutation can mean a second witness, not a dead predicate.** Dropping the flag's `standing_patient`
   side changed nothing because a moved thread's original assert also seeds a point-0 dose row the stray view sees; the
-  flag side matters alone only for a thread claimed by a STOP. Find the case, then pin it.
+  flag side matters alone only for a thread claimed by a stop, W or coding (anything but an assert). Find the case,
+  then pin it.
 - **⇒ A new field on a model breaks its literals, not its readers.** The compiler found the compare panel only because
   a test built `MedListView` by hand; grep the readers of the SIBLING fields (`missing_message`) for every renderer
   — the semantic tree was found that way by the review, not by the build.
 - **⇒ Walk a remedy sentence through the case where the drug IS already on the list** ("record it again" would have
   made a second metoprolol line). **An absence claim beside a warning is still an absence claim** ("No medications
-  recorded" + the report). **"On another chart" must be true of every row** — a thread no chart lists is on none.
+  recorded" + the report — and "No current medications" over an all-stopped list, PR #851's second review). **"On
+  another chart" must be true of every row** — a thread no chart lists is on none.
+- **⇒ Two statements are two snapshots (PR #851's second review).** "Not already listed" came from the earlier member
+  read, so a line re-homed onto this chart between the reads was said "on chart <own chart>" — reproduced by reading
+  with an empty listed set. A truth the report depends on is re-checked inside the statement that says it.
 
 ### 2026-10-22 (third) — #846: the conflict read stops depending on arrival order
 

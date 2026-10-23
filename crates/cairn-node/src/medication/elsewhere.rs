@@ -11,15 +11,24 @@
 //! - db/059's `medication_thread_stray_chart`, naming a chart of the set as `asserted_patient`:
 //!   this patient's dose, correction or release on another chart's thread, whatever the order
 //!   it arrived in. Its `standing_patient` is the thread's chart NOW, so a set chart there means
-//!   the thread is on this list, never elsewhere: that side is not read.
+//!   the thread is this set's: either listed here, or claimed here by a stop, W or coding and on
+//!   no list at all. Neither is elsewhere, so that side is not read.
 //!
 //! Every thread and line the list already shows is left out, so a line is said once: on the
 //! list (its own `patient_conflict` hazard) or here, never both. And only a line SOME chart
 //! lists (`medication_thread_group`, i.e. one whose assert has arrived) is said to be "on
-//! another chart": a thread claimed only by this patient's own stop, W or coding, with a stray
-//! event from elsewhere on it, is on NO list yet, and calling it "another chart's" would be a
-//! precise untruth. It stays unsaid until its assert arrives — the limit
-//! `PatientMedicationList::groups_missing_from_chart` already documents for unasserted threads.
+//! another chart". A thread no chart lists — claimed only by a stop, W or coding, this
+//! patient's or another chart's — is on NO list yet, and calling it "another chart's" would be
+//! a precise untruth. So this patient's event on such a thread is said on NEITHER chart until
+//! the thread's assert arrives (`a_thread_no_chart_lists_is_not_said_to_be_elsewhere` pins it).
+//!
+//! WHY THE LISTED LINES ARE CHECKED TWICE. `listed_groups` comes from the list's earlier member
+//! read, a separate READ COMMITTED statement. A peer's assert that puts a line on a set chart
+//! between the two reads would otherwise come back here as "on chart <this patient's own
+//! chart>" and ask for a second line. So the query also drops, in its own snapshot, any line a
+//! set chart lists. In that window the line shows in neither place for one read (a gap the
+//! next read closes), never in a false one.
+use anyhow::Context;
 use cairn_medication_view::{ChartSet, ElsewhereLine, MedicationStatus};
 use uuid::Uuid;
 
@@ -29,8 +38,11 @@ use uuid::Uuid;
 ///
 /// The stray view is filtered by `asserted_patient`, which reaches the patient indexes db/059
 /// gives its three source tables; the listed threads are dropped before the view's per-row
-/// chart lookup, so the lookup runs only for a chart's events on other charts' threads.
-pub(crate) async fn read_elsewhere(
+/// chart lookup, so the lookup runs only for this set's events on threads NOT on this list.
+///
+/// Public only so `tests/medication_rehomed_thread.rs` can drive it with a stale listed set (the
+/// race the module doc describes); the list read is its one production caller.
+pub async fn read_elsewhere(
     client: &(impl tokio_postgres::GenericClient + Sync),
     charts: &ChartSet,
     listed_threads: &[Uuid],
@@ -55,7 +67,10 @@ pub(crate) async fn read_elsewhere(
                   WHERE h.medication_id <> ALL($2::text[]::uuid[]) \
                     AND COALESCE(gm.group_id, h.medication_id) <> ALL($3::text[]::uuid[]) \
                     AND EXISTS (SELECT 1 FROM medication_thread_group t \
-                                 WHERE t.group_id = COALESCE(gm.group_id, h.medication_id))) \
+                                 WHERE t.group_id = COALESCE(gm.group_id, h.medication_id)) \
+                    AND NOT EXISTS (SELECT 1 FROM medication_thread_group t \
+                                     WHERE t.group_id = COALESCE(gm.group_id, h.medication_id) \
+                                       AND t.patient_id = ANY($1::text[]::uuid[]))) \
                SELECT l.group_id::text AS group_id, \
                       COALESCE(v.coding_display, v.term) AS name, v.status, \
                       ARRAY(SELECT DISTINCT t.patient_id::text FROM medication_thread_group t \
@@ -79,7 +94,8 @@ pub(crate) async fn read_elsewhere(
                 &strings(listed_groups),
             ],
         )
-        .await?
+        .await
+        .context("reading this chart set's medication lines on other charts (#848)")?
     {
         let status = match row.get::<_, Option<String>>("status").as_deref() {
             Some("active") => Some(MedicationStatus::Active),
@@ -90,10 +106,14 @@ pub(crate) async fn read_elsewhere(
             .get::<_, Vec<String>>("charts")
             .iter()
             .map(|c| c.parse())
-            .collect::<Result<Vec<Uuid>, _>>()?;
+            .collect::<Result<Vec<Uuid>, _>>()
+            .context("an elsewhere line's chart id is not a uuid")?;
         line_charts.sort();
         out.push(ElsewhereLine {
-            group_id: row.get::<_, String>("group_id").parse()?,
+            group_id: row
+                .get::<_, String>("group_id")
+                .parse()
+                .context("an elsewhere line's id is not a uuid")?,
             name: row.get("name"),
             status,
             charts: line_charts,

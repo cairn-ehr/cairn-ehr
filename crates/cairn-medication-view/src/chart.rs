@@ -204,8 +204,9 @@ pub struct PatientMedicationList {
     /// that showed this list passes this set back, and a changed set refuses the gesture.
     pub charts: ChartSet,
     /// Lines on ANOTHER chart that carry something recorded for a chart in `charts` (#848,
-    /// `crate::elsewhere`): a thread a later assert moved away, or this patient's dose or W on
-    /// another chart's thread. Never a line `rows` shows. Empty in normal operation; every
+    /// `crate::elsewhere`): a thread a later assert moved away, or this patient's assert, stop,
+    /// coding, W, dose, correction or release on another chart's thread. Never a line `rows`
+    /// shows. Empty in normal operation; every
     /// renderer must say it (`elsewhere_report`), because the drug has no line here to say it on.
     pub elsewhere: Vec<crate::elsewhere::ElsewhereLine>,
 }

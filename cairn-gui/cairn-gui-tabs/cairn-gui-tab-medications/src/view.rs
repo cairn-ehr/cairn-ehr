@@ -196,26 +196,34 @@ pub fn missing_report(
 /// never-signed one is a plain falsehood: that drug carries no signature at all.
 ///
 /// `warned` (a missing group or an elsewhere line, #848): something recorded for this patient is
-/// not on the list, so an empty list must point at the warning, never say nothing was recorded.
+/// not on the list, so every message here speaks only of the list and points at the warning —
+/// never "nothing recorded", "no current medications" or "every current drug" (#851 review).
 fn empty_message(
     total_rows: usize,
     active_rows: usize,
     sign_off_count: usize,
     warned: bool,
 ) -> Option<String> {
+    const SEE_WARNING: &str =
+        "but see the warning above: something recorded for this patient is not on it.";
     if total_rows == 0 && warned {
-        Some(
-            "No lines on this chart's list — but see the warning above: something recorded for \
-             this patient is not on it."
-                .to_string(),
-        )
+        Some(format!("No lines on this chart's list — {SEE_WARNING}"))
     } else if total_rows == 0 {
         // Deliberately does NOT claim the patient takes nothing: an empty chart means
         // nothing has been recorded here, which is not the same clinical statement.
         // Recording "nil medications, reviewed" is issue #331.
         Some("No medications recorded on this chart.".to_string())
+    } else if active_rows == 0 && warned {
+        Some(format!(
+            "No current lines on this chart's list — every line here has been stopped; \
+             {SEE_WARNING}"
+        ))
     } else if active_rows == 0 {
         Some("No current medications on this chart — every line here has been stopped.".to_string())
+    } else if sign_off_count == 0 && warned {
+        Some(format!(
+            "Every current line on this chart's list carries a current signature — {SEE_WARNING}"
+        ))
     } else if sign_off_count == 0 {
         Some("Every current drug on this chart carries a current signature.".to_string())
     } else {
@@ -504,6 +512,37 @@ mod tests {
             .expect("an empty list says why");
         assert!(!empty.starts_with("No medications recorded"), "{empty}");
         assert!(empty.contains("warning"), "{empty}");
+    }
+
+    /// #851 review: a list of only stopped lines, whose current drug moved away, must not say
+    /// "No current medications" beside the warning naming that current drug — the #848 harm with
+    /// a sentence that seems to confirm it. Same for "every current drug … signed".
+    #[test]
+    fn a_non_empty_list_with_a_drug_elsewhere_points_at_the_warning() {
+        let elsewhere = cairn_medication_view::fixtures::sample_chart().elsewhere;
+        let ceased_only = vec![row(
+            1,
+            MedicationStatus::Ceased,
+            vec![member(1, VouchState::Absent)],
+        )];
+        let all_signed = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(
+                1,
+                VouchState::Fresh {
+                    by: "Dr A".to_string(),
+                },
+            )],
+        )];
+        for rows in [ceased_only, all_signed] {
+            let mut list = chart(rows);
+            list.elsewhere = elsewhere.clone();
+            let message = build_view(&list).empty_message.expect("says why");
+            assert!(!message.starts_with("No current medications"), "{message}");
+            assert!(!message.starts_with("Every current drug"), "{message}");
+            assert!(message.contains("see the warning above"), "{message}");
+        }
     }
 
     /// #848: the fixture's moved drug reaches the window by its report, named.

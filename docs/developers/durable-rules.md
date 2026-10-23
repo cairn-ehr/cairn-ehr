@@ -75,19 +75,24 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   conflict read (#836) never looked: the drug vanished unsaid. Read-side only (maintainer, 2026-10-23); the overlay
   still moves the thread (#192's converge contract untouched — freezing it only moves the blindness to the other
   chart). **Tempting wrong fixes:** reading only the flag's `asserted_patient` (the moved-thread case is
-  `standing_patient`; a stop-claimed thread has no point-0 dose row, so the view cannot see it either); reading the
-  stray view's `standing_patient` (that is the thread's chart NOW — a set chart there means the line is listed);
+  `standing_patient`; a thread claimed by a stop, W or coding — anything but an assert — has no point-0 dose row, so
+  the view cannot see it either); reading the stray view's `standing_patient` (that is the thread's chart NOW — a set
+  chart there means the thread is this set's, listed or claimed here and on no list, never elsewhere);
   dropping the listed-THREAD or listed-GROUP exclusion (the line is then said twice, once as a hazard on the row);
   showing it as a row (`outside_set` would add the separation remedy, wrong for one moved thread, and a member-less
   row reaches Withhold/Stop/Release logic that never saw one); dropping the `EXISTS` on `medication_thread_group`
-  (a thread claimed only by this patient's own stop/W/coding is on NO list, and "on another chart" would be false —
-  it stays unsaid until its assert arrives). The remedy is CONDITIONED: if the drug is already on this list, the
-  misfiled dose/stop/W is recorded again on that line, never a second line for the drug (double-dose reading). An
-  empty list with a report makes no absence claim (window `empty_message`, CLI "! but"). The view is filtered by
+  (a thread claimed only by a stop/W/coding, this patient's or another chart's, is on NO list, and "on another
+  chart" would be false — this patient's event on it is said on NEITHER chart until its assert arrives); trusting
+  the earlier member read alone for "already listed" (a separate READ COMMITTED statement — a line re-homed onto a
+  set chart between the reads came back "on chart <own chart>"; the query re-checks in its own snapshot, PR #851
+  review). The remedy is CONDITIONED: if the drug is already on this list, the
+  misfiled dose/stop/release/W is recorded again on that line, never a second line for the drug (double-dose reading). An
+  empty, all-stopped or all-signed list with a report makes no absence claim (window `empty_message`, CLI "! but"). The view is filtered by
   `asserted_patient`, so db/059 indexes `patient_id` on its three source tables. Not yet said by the sign-off
   outcome (**#849**); the report is permanent (**#850**, a decision). Pins: `tests/medication_rehomed_thread.rs`
-  (each SQL predicate mutation-checked, the three CLI calls source-guarded), the semantic tree's
-  `the_chart_warnings_are_announced_not_merely_displayed`.
+  (each SQL predicate mutation-checked, the three CLI calls source-guarded, a linked set from each side), the
+  semantic tree's `the_chart_warnings_are_announced_not_merely_displayed`, the webview's
+  `a_drug_elsewhere_alone_shows_the_warnings_section`.
 - **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.

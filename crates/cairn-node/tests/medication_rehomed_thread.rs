@@ -17,8 +17,9 @@
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_medication_view::targeting::withheld_reasons;
-use cairn_medication_view::{ElsewhereLine, MedicationStatus};
+use cairn_medication_view::{ChartSet, ElsewhereLine, MedicationStatus};
 use cairn_node::db;
+use cairn_node::medication::elsewhere::read_elsewhere;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
     build_assert_body, build_cease_body, build_dose_change_body, build_withhold_body,
@@ -261,6 +262,79 @@ async fn a_clean_chart_has_nothing_elsewhere() {
         list_patient_medications(&c, b).await.unwrap().elsewhere,
         vec![]
     );
+}
+
+/// #851 review: "on another chart" must hold inside the one statement, not depend on the
+/// earlier member read seeing the same data (the list's reads are separate READ COMMITTED
+/// statements). Here the thread now sits on B; reading B's elsewhere with EMPTY listed
+/// arguments — an earlier read that ran before the move landed — must still not call B's own
+/// line "on chart B", which would tell the clinician to record a second line.
+#[tokio::test]
+async fn a_line_on_this_charts_set_is_never_said_elsewhere_even_from_a_stale_list_read() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (_a, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (b, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    apply_peer_assert(&c, &sk, &kid, b, med, wall).await;
+
+    let stale = read_elsewhere(&c, &ChartSet::single(b), &[], &[])
+        .await
+        .unwrap();
+    assert_eq!(stale, vec![], "B's own line is never B's 'elsewhere'");
+}
+
+/// A linked set opened from its OTHER member (#851 review): A1's drug moved to B must be said on
+/// the combined list opened from A2 too, or the #848 silence comes back through that door.
+#[tokio::test]
+async fn a_moved_thread_is_said_on_a_linked_set_opened_from_the_other_member() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (a1, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (a2, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (b, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    common::submit_link_event(&c, &sk, &kid, a1, a2, 10, true).await;
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    apply_peer_assert(&c, &sk, &kid, b, med, wall).await;
+
+    let list = list_patient_medications(&c, a2).await.unwrap();
+    assert_eq!(
+        list.charts,
+        ChartSet::new([a1, a2]).unwrap(),
+        "precondition"
+    );
+    assert_eq!(list.elsewhere, vec![metoprolol_on(med, b)]);
+}
+
+/// The other half: a thread moved BETWEEN two linked charts never left the combined list, so it
+/// is not "elsewhere" — a false report there would ask for a second line of a listed drug.
+#[tokio::test]
+async fn a_thread_moved_within_a_linked_set_is_not_said_elsewhere() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (a1, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (a2, _) = chart_with_one_med(&mut c, &sk, &kid).await;
+    common::submit_link_event(&c, &sk, &kid, a1, a2, 10, true).await;
+
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    apply_peer_assert(&c, &sk, &kid, a2, med, wall).await;
+
+    for opened in [a1, a2] {
+        let list = list_patient_medications(&c, opened).await.unwrap();
+        assert!(
+            list.rows.iter().any(|r| r.group_id == med),
+            "the line is still on the combined list (opened {opened})"
+        );
+        assert_eq!(list.elsewhere, vec![], "opened {opened}");
+    }
 }
 
 /// The kit's drug (`sample_input`), current, as an elsewhere line `group` on `chart`.
