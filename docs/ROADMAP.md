@@ -520,8 +520,8 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   pre-check; sync apply admits it); a Stop on a line already stopped is written and the window says so;
   `SignOffOutcome::elsewhere` (#849, the union of both reads) reaches the CLI and the window's outcome. db/059 edited
   in place, no schema-generation change. Second review filed **#854** (the CLI cease does not say "already
-  stopped") and **#855** (two accepted release races).
-- **Next:** merge PR #853; run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
+  stopped") and **#855** (two accepted release races). **PR #853 merged 2026-10-23.**
+- **Next:** #835 + #854 (in progress 2026-10-23, branch `fix/835-854-pending-release-cli-cease`); run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
   (decisions), **#835**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 

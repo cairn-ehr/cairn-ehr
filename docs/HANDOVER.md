@@ -3,14 +3,13 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)** (#843 + #849, branch
-> `fix/843-849-stale-release-signoff-elsewhere`): the LOCAL door refuses a release of a hold that already ended (a
-> colleague released it, or it ran out) as a STALE refusal, so the window re-reads ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md),
-> spec **v0.84**, db/059's `cairn_medication_hold_ended`; sync apply admits it). A Stop on a line already stopped is
-> written and the window says so. The sign-off outcome now says the lines elsewhere (#849). Durable rules: the #843
-> bullets. Full DB-gated sweep green locally (before the review fixes; CI covers the final tree). Its second review
-> made the read-time fold call the same predicate, kept a wrong-thread hold id out of the stale path, and filed
-> **#854** (CLI cease) and **#855** (release races).
+> **⇒ IN PROGRESS 2026-10-23: #835 + #854** (branch `fix/835-854-pending-release-cli-cease`): a release recorded
+> with a future instant is said on the hold (#835), and the CLI's `medication-cease` says when the line was already
+> stopped (#854).
+> **Merged 2026-10-23: PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)** (#843 + #849): the LOCAL door
+> refuses a release of a hold that already ended as STALE ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md),
+> spec **v0.84**, db/059's `cairn_medication_hold_ended`; sync apply admits it); a Stop on a stopped line is written and
+> the window says so; the sign-off outcome says the lines elsewhere (#849). Its review filed **#854** and **#855**.
 > **Merged 2026-10-22/23 (ROADMAP has each):** PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851) (#848: a
 > drug of this patient's on another chart's line is said on this chart's list; review filed #849, built in #853, and
 > **#850**, a decision) · PR #847 (#846: a stray that arrived before its thread's claim is a hazard; review filed #848,
@@ -38,10 +37,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)** (#843 + #849); run #838's RUNBOOK §15. Decisions
+> 1. **#835 + #854** (this branch); run #838's RUNBOOK §15. Decisions
 >    owed: **#825** (where the window's operator diagnostics live) and **#850** (acknowledging a dealt-with report).
->    Buildable hold follow-ups: **#835** (a future-dated release
->    is invisible) · **#837** (test gaps) · #834 (needs a decision on shape). An idempotent re-send of a registration
+>    Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
+>    ADR-0082) · #834 (needs a decision on shape). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A PR #831, slice B PR #838, both merged; follow-ups #833 ward-level
