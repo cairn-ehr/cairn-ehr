@@ -60,5 +60,6 @@ pub(crate) fn chart(rows: Vec<MedicationRow>) -> PatientMedicationList {
         groups_missing_from_chart: vec![],
         separation_targets: BTreeMap::new(),
         charts: ChartSet::single(uid(999)),
+        elsewhere: vec![],
     }
 }

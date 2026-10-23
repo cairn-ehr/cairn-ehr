@@ -221,6 +221,8 @@ fn a_list_that_fails_to_draw_leaves_nothing_partial_and_no_live_sign_off() {
         "setMessage(el(\"chart-unshown\"), \"\")",
         // #797: a list taken down takes its out-of-date warning with it.
         "setMessage(el(\"chart-stale\"), \"\")",
+        // #848: another patient's chart must never inherit "this patient's drug is on chart X".
+        "setMessage(el(\"chart-elsewhere\"), \"\")",
     ] {
         assert!(cleared.contains(part), "{part} in {cleared}");
     }
@@ -241,6 +243,28 @@ fn a_list_that_fails_to_draw_leaves_nothing_partial_and_no_live_sign_off() {
     assert!(warnings < unshown, "inside the warnings section");
     assert!(
         unshown < position(INDEX_HTML, "<table id=\"med-table\">"),
+        "above the list"
+    );
+}
+
+/// #848 (PR #851 review): the elsewhere warning is set from its payload and UN-HIDES the warnings
+/// section on its own. A chart whose only warning is a drug moved away typically has no other
+/// message, so dropping `|| elsewhere` would write the text into a hidden section — the drug
+/// gone from the window without a word, every Rust test still green.
+#[test]
+fn a_drug_elsewhere_alone_shows_the_warnings_section() {
+    let render = js_fn(MAIN_JS, "renderWarnings");
+    assert!(
+        render.contains("setMessage(el(\"chart-elsewhere\"), view.elsewhere_message)"),
+        "{render}"
+    );
+    assert!(render.contains("|| elsewhere"), "{render}");
+
+    let warnings = position(INDEX_HTML, "<section id=\"chart-warnings\"");
+    let elsewhere = position(INDEX_HTML, "<p id=\"chart-elsewhere\"");
+    assert!(warnings < elsewhere, "inside the warnings section");
+    assert!(
+        elsewhere < position(INDEX_HTML, "<table id=\"med-table\">"),
         "above the list"
     );
 }

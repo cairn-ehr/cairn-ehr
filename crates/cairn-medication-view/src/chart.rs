@@ -203,6 +203,12 @@ pub struct PatientMedicationList {
     /// read. It is also what a sign-off is held to: a surface
     /// that showed this list passes this set back, and a changed set refuses the gesture.
     pub charts: ChartSet,
+    /// Lines on ANOTHER chart that carry something recorded for a chart in `charts` (#848,
+    /// `crate::elsewhere`): a thread a later assert moved away, or this patient's assert, stop,
+    /// coding, W, dose, correction or release on another chart's thread. Never a line `rows`
+    /// shows. Empty in normal operation; every
+    /// renderer must say it (`elsewhere_report`), because the drug has no line here to say it on.
+    pub elsewhere: Vec<crate::elsewhere::ElsewhereLine>,
 }
 
 impl PatientMedicationList {
@@ -217,6 +223,7 @@ impl PatientMedicationList {
             groups_missing_from_chart: vec![],
             separation_targets: BTreeMap::new(),
             charts,
+            elsewhere: vec![],
         }
     }
 }
@@ -339,6 +346,7 @@ mod tests {
             groups_missing_from_chart: vec![uid(1)],
             separation_targets: BTreeMap::from([(uid(1), vec![uid(1), uid(2)])]),
             charts: ChartSet::single(uid(1)),
+            elsewhere: vec![],
         };
         let json = serde_json::to_string(&list).expect("the read model must serialize");
         assert!(json.contains(&uid(2).to_string()), "{json}");

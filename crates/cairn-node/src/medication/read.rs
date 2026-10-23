@@ -21,10 +21,12 @@
 //! threads spanned two charts displayed on the winner's chart only and silently vanished
 //! from the other. Finding a group through its own members cannot lose it that way.
 //!
-//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. Up to ten statements — the chart set, the
-//! per-thread vouches, each group's charts, the charts a group reaches, two advisory flags,
-//! whether the set holds a doubted link (skipped for a never-linked chart), the two list
-//! views (one builder), and the membership of the groups the hazard flags name — answer
+//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. Up to fourteen statements — the chart set, the
+//! per-thread vouches, each group's charts, the charts a group reaches, the patient conflicts
+//! on listed lines (#836), two advisory flags, whether the set holds a doubted link (skipped
+//! for a never-linked chart), the holds, the cessation reasons, the two list views (one
+//! builder), the membership of the groups the hazard flags name, and the lines on other
+//! charts carrying this set's events (`elsewhere.rs`, #848) — answer
 //! different questions over different grains (chart set, group, thread, worklist,
 //! mis-reconciliation, cross-patient hazard). One join would need two levels of
 //! aggregation and would be far harder for a reviewer to check against the view
@@ -44,6 +46,7 @@
 //! `medication/attestation.rs`, `auto_apply.rs`). So every UUID parameter is bound as text
 //! and cast in SQL (`$1::text::uuid`, or `$1::text[]::uuid[]` for a list), and every UUID
 //! column is cast back to text in the SELECT list and parsed on the Rust side.
+use super::elsewhere::read_elsewhere;
 use super::hazard::wrong_chart_reasons;
 use cairn_medication_view::{
     ChartSet, MedicationHold, MedicationRow, MedicationStatus, MemberVouch, VouchState,
@@ -58,7 +61,8 @@ use uuid::Uuid;
 // and the sign-off orchestrator's, and a mechanical rename across them would have buried
 // the one change that matters in this commit.
 pub use cairn_medication_view::{
-    format_hazard_groups, PatientMedicationList, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
+    elsewhere_report, format_hazard_groups, PatientMedicationList, MISSING_GROUP_INSTRUCTION,
+    SEPARATION_INSTRUCTION,
 };
 
 /// Read the medication list of the person `patient` is a chart of: current drugs AND
@@ -106,6 +110,8 @@ pub async fn list_patient_medications(
 ///    on (#836, `read_conflict_charts`).
 /// 5. the advisory flags, each scoped to the set, and whether the set holds a doubted link
 ///    (an input to the hazard rule in step 4, read just before it is applied).
+/// 6. last, the lines on OTHER charts that carry an event recorded for this set
+///    (`PatientMedicationList::elsewhere`, #848) — every line shown above left out.
 async fn list_chart_set_medications(
     client: &(impl tokio_postgres::GenericClient + Sync),
     charts: &ChartSet,
@@ -244,11 +250,21 @@ async fn list_chart_set_medications(
     );
     let separation_targets = read_group_member_threads(client, &hazardous).await?;
 
+    // What this set's patient has on OTHER charts' lines (#848), read last so it can leave out
+    // every thread and line shown above.
+    let listed_threads: Vec<Uuid> = members
+        .values()
+        .flatten()
+        .map(|m| m.medication_id)
+        .collect();
+    let elsewhere = read_elsewhere(client, charts, &listed_threads, &groups).await?;
+
     Ok(PatientMedicationList {
         rows,
         groups_missing_from_chart,
         separation_targets,
         charts: charts.clone(),
+        elsewhere,
     })
 }
 

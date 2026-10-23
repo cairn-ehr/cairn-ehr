@@ -507,7 +507,15 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   index on `medication_dose_correction (medication_id)`). No schema-generation change (db/059 edited in place). Its
   review added a runtime-role (`SET ROLE cairn_agent`) read of the list, and filed **#848** (a later-HLC stray
   assert moves a thread to another chart, and the drug vanishes from the original chart's list with nothing said).
-- **Next:** run #838's RUNBOOK §15; **#804** (needs #690), **#825**, **#843** and **#848** (decisions), **#835**, **#807**;
+  **PR #847 merged 2026-10-22.**
+- **2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)):** a drug of this patient's on ANOTHER chart's line is said on this chart's list
+  (`PatientMedicationList::elsewhere`, `medication/elsewhere.rs`): a thread a later-HLC assert moved away (db/031's flag,
+  `standing_patient`), or this patient's dose/stop/W on another chart's thread (the flag's `asserted_patient`, db/059's
+  stray view). Read-side only, maintainer's decision; CLI, window, semantic tree and compare panel; db/059 indexes
+  `patient_id` on the view's three tables. #843 decided (refuse a dead release at the local door). Review filed
+  **#849** (sign-off outcome) and **#850** (a decision: reports never go away).
+- **Next:** run #838's RUNBOOK §15; **#843** (decided), **#849**, **#804** (needs #690), **#825** and **#850**
+  (decisions), **#835**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
