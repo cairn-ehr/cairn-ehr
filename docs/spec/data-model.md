@@ -52,7 +52,9 @@ withhold with a required reason and a required `until` (an exact instant, or the
 `"reviewed"`), and a release naming the withhold event ids it ends. Expiry is a read-time fold that
 needs no event and resumes the drug by default; cessation wins over any hold; the hold sits beside the
 active/ceased status, so a withheld line stays current and signable; and both event types join the
-sign-off commitment ([ADR-0081](decisions/0081-medication-withhold-is-a-time-bounded-hold.md)).
+sign-off commitment ([ADR-0081](decisions/0081-medication-withhold-is-a-time-bounded-hold.md)). A release of a
+hold that has already ended is refused at the local door as a stale picture, and admitted from a peer
+([ADR-0082](decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md)).
 
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 

@@ -112,6 +112,12 @@ pub struct SignOffOutcome {
     /// #334 defence exists to prevent. Union of both reads, so a group that vanished
     /// mid-gesture is reported too. Empty in normal operation.
     pub groups_missing_from_chart: Vec<Uuid>,
+    /// Lines on ANOTHER chart holding something recorded for this chart set (#848, #849),
+    /// carried through from the first read's `PatientMedicationList::elsewhere`. None of them
+    /// is on this list, so none was signed. The caller MUST surface it as the list does
+    /// (`elsewhere_report`): without it, a chart whose only drug moved to another chart reports
+    /// "no medications are recorded" after the gesture. Empty in normal operation.
+    pub elsewhere: Vec<cairn_medication_view::ElsewhereLine>,
     /// Lines this gesture tried to sign and could not — each with the reason.
     ///
     /// A failed line never blocks another (ADR-0060): each attestation commits in its OWN
@@ -282,6 +288,7 @@ pub async fn sign_off_medication_list(
             withheld,
             separation_targets: first_read.separation_targets,
             groups_missing_from_chart: first_read.groups_missing_from_chart,
+            elsewhere: first_read.elsewhere,
             failed: vec![],
             interrupted: None,
             charts: first_read.charts,
@@ -443,6 +450,7 @@ pub async fn sign_off_medication_list(
         withheld,
         separation_targets,
         groups_missing_from_chart,
+        elsewhere: first_read.elsewhere,
         failed,
         interrupted,
         charts: first_read.charts,

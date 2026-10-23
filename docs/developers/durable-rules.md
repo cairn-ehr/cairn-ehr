@@ -88,11 +88,31 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   review). The remedy is CONDITIONED: if the drug is already on this list, the
   misfiled dose/stop/release/W is recorded again on that line, never a second line for the drug (double-dose reading). An
   empty, all-stopped or all-signed list with a report makes no absence claim (window `empty_message`, CLI "! but"). The view is filtered by
-  `asserted_patient`, so db/059 indexes `patient_id` on its three source tables. Not yet said by the sign-off
-  outcome (**#849**); the report is permanent (**#850**, a decision). Pins: `tests/medication_rehomed_thread.rs`
+  `asserted_patient`, so db/059 indexes `patient_id` on its three source tables. The sign-off outcome carries it
+  too (`SignOffOutcome::elsewhere`, #849: CLI "! " line in every outcome, the window's outcome notes; the CLI's
+  empty, all-stopped and all-signed sentences make no absence claim beside it; pins
+  `a_stopped_or_signed_chart_with_a_drug_elsewhere_points_at_it`, `a_sign_off_outcome_carries_the_lines_elsewhere`,
+  `the_sign_off_verb_prints_the_report`, `an_empty_chart_with_a_drug_elsewhere_makes_no_absence_claim`); the
+  report is permanent (**#850**, a decision). Pins: `tests/medication_rehomed_thread.rs`
   (each SQL predicate mutation-checked, the three CLI calls source-guarded, a linked set from each side), the
   semantic tree's `the_chart_warnings_are_announced_not_merely_displayed`, the webview's
   `a_drug_elsewhere_alone_shows_the_warnings_section`.
+- **A release of a hold that has ENDED is a stale refusal at the local door (#843, maintainer 2026-10-23)** — a
+  colleague already released it, or it ran out, by the release's `t_effective`. ONE predicate,
+  `cairn_medication_hold_ended` (db/059 section 7b, the fold's own tests at one hold and one instant), with two
+  callers: section 8's local-door `RAISE` (unbypassable, any client) and `release_medication_holds`'s pre-check,
+  which refuses BEFORE signing with `stale_picture_refusal` — a floor `P0001` carries no scope, so without the
+  pre-check the window could not re-read (#840's "stale wins" now fires for a release). A PENDING hold is standing:
+  releasing it cancels it. **Tempting wrong fixes:** match the floor's message text in Rust for the scope (the
+  pre-check reuses the predicate instead); refuse at sync apply or replay (`cairn.remote_apply = 'on'`: a peer's
+  dead release is admitted, the fold makes it a no-op — a local veto forks the event set). Pins:
+  `tests/medication_release_stale.rs`.
+- **A Stop that lands on a line already stopped is WRITTEN, and says so (#843)** — no refusal: its reason (an adverse
+  reaction, say) may be the only record of it while no allergy stream exists. `cease_impl` appends
+  `already_stopped_note` (the earlier stop's reason, or "no reason was recorded") when its press-time read shows the
+  line `Ceased` AND the press stopped at least one thread for certain — a press whose only commits got no answer
+  (#814) is not "recorded beside it" (PR review). **Tempting wrong fix:** refuse it as stale like a release. Pins:
+  `a_stop_of_a_line_already_stopped_says_so`, the `cease_sorts_an_interrupted_commit_from_a_failure` source shape.
 - **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.

@@ -5582,6 +5582,7 @@ async fn run() -> anyhow::Result<()> {
                 withheld,
                 separation_targets,
                 groups_missing_from_chart,
+                elsewhere,
                 failed,
                 interrupted,
                 charts,
@@ -5646,6 +5647,12 @@ async fn run() -> anyhow::Result<()> {
                         separation_targets
                     )
                 );
+            }
+            // In EVERY outcome too (#849): this patient's entries on another chart's line were
+            // on no list here, so nothing above signed them, and an empty chart must not read
+            // as one with nothing recorded.
+            if let Some(report) = cairn_node::medication::read::elsewhere_report(elsewhere) {
+                println!("! {report}");
             }
             if !failed.is_empty() {
                 // Distinct from `withheld` and `groups_missing_from_chart`, which are
@@ -5907,20 +5914,22 @@ fn nothing_attested_sentence(
         withheld,
         separation_targets: _,
         groups_missing_from_chart,
+        elsewhere,
         failed,
         interrupted,
         // Only how many lines needed a signature decides this sentence, not which charts.
         charts: _,
     } = out;
-    if *total_rows == 0 && groups_missing_from_chart.is_empty() {
+    if *total_rows == 0 && groups_missing_from_chart.is_empty() && elsewhere.is_empty() {
         format!(
             "no medications are recorded for {patient}; nothing was signed. Recording \
              \"nil medications, reviewed\" as an act has no home yet (issue #331)."
         )
     } else if *total_rows == 0 {
         // Guarded on the missing set: "no medications are recorded" is a straightforward LIE
-        // when the node holds content for this patient it simply cannot display. The detail
-        // follows in the block the caller prints below.
+        // when the node holds content for this patient it simply cannot display — or holds it
+        // on another chart's line (#849). The detail follows in the block the caller prints
+        // below.
         format!(
             "nothing could be signed for {patient}: this chart displays no medications, but \
              that is NOT the same as having none — see below."
@@ -5928,14 +5937,26 @@ fn nothing_attested_sentence(
     } else if *active_rows == 0 {
         // A chart of nothing but struck lines. Those lines may well carry NO signature at all —
         // a ceased drug is never re-signed — so "everything already signed" would be false.
+        // "On this chart", and a pointer, when a drug of this patient's sits on another chart's
+        // line (#849): alone, the sentence would read as "this patient takes nothing".
+        let elsewhere_note = if elsewhere.is_empty() {
+            ""
+        } else {
+            " Something recorded for this patient sits on another chart's line — see below."
+        };
         format!(
-            "no CURRENT medications for {patient} ({} ceased line(s) on the chart); nothing \
-             needed a signature. A struck line is never re-signed, signed or not.",
+            "no CURRENT medications for {patient} on this chart ({} ceased line(s)); nothing \
+             needed a signature. A struck line is never re-signed, signed or not.{elsewhere_note}",
             total_rows
         )
-    } else if withheld.is_empty() && failed.is_empty() && interrupted.is_none() {
+    } else if withheld.is_empty()
+        && failed.is_empty()
+        && interrupted.is_none()
+        && elsewhere.is_empty()
+    {
         // Also guarded on `failed`/`interrupted` (#818): a gesture whose lines failed or were
-        // cut off has lines that still need a signature.
+        // cut off has lines that still need a signature. And on `elsewhere` (#849): a drug of
+        // this patient's on another chart's line is on no list here, so it is not signed.
         format!(
             "nothing to sign off for {patient}: every current drug already carries a current \
              signature"
@@ -5951,7 +5972,7 @@ fn nothing_attested_sentence(
         format!("whether anything was signed off for {patient} is NOT known — see below.")
     } else {
         // Guard on `withheld`: without it this would claim every drug is signed while the ONLY
-        // outstanding lines were ones the node refused to sign.
+        // outstanding lines were ones the node refused to sign (or, #849, lines elsewhere).
         format!("nothing was signed off for {patient}.")
     }
 }
@@ -6002,6 +6023,7 @@ mod tests {
             withheld: vec![],
             separation_targets: Default::default(),
             groups_missing_from_chart: vec![],
+            elsewhere: vec![],
             failed: vec![],
             interrupted: Some(SignOffInterrupted {
                 medication_id: t(1),
@@ -6021,6 +6043,73 @@ mod tests {
 
         let not_signed = super::nothing_attested_sentence(&stopped(StoppedLine::NotSigned), t(9));
         assert_eq!(not_signed, format!("nothing was signed off for {}.", t(9)));
+    }
+
+    /// #849: a chart whose only drug sits on another chart's line has nothing to sign, and
+    /// "no medications are recorded" beside the elsewhere report would be an absence claim.
+    #[test]
+    fn an_empty_chart_with_a_drug_elsewhere_makes_no_absence_claim() {
+        use cairn_node::medication::signoff::SignOffOutcome;
+        let t = uuid::Uuid::from_u128;
+        let out = SignOffOutcome {
+            attested: vec![],
+            event_ids: vec![],
+            total_rows: 0,
+            active_rows: 0,
+            withheld: vec![],
+            separation_targets: Default::default(),
+            groups_missing_from_chart: vec![],
+            elsewhere: vec![cairn_medication_view::ElsewhereLine {
+                group_id: t(1),
+                name: Some("apixaban".into()),
+                status: Some(cairn_medication_view::MedicationStatus::Active),
+                charts: vec![t(2)],
+            }],
+            failed: vec![],
+            interrupted: None,
+            charts: cairn_medication_view::ChartSet::single(t(9)),
+        };
+        let sentence = super::nothing_attested_sentence(&out, t(9));
+        assert!(
+            !sentence.contains("no medications are recorded"),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains("NOT the same as having none"),
+            "{sentence}"
+        );
+    }
+
+    /// #849 (PR review): the all-stopped and all-signed sentences are absence claims too. Beside
+    /// a drug of this patient's on another chart's line, "nothing needed a signature" must point
+    /// at it, and "every current drug already carries a current signature" must not be said.
+    #[test]
+    fn a_stopped_or_signed_chart_with_a_drug_elsewhere_points_at_it() {
+        use cairn_node::medication::signoff::SignOffOutcome;
+        let t = uuid::Uuid::from_u128;
+        let outcome = |total_rows, active_rows| SignOffOutcome {
+            attested: vec![],
+            event_ids: vec![],
+            total_rows,
+            active_rows,
+            withheld: vec![],
+            separation_targets: Default::default(),
+            groups_missing_from_chart: vec![],
+            elsewhere: vec![cairn_medication_view::ElsewhereLine {
+                group_id: t(1),
+                name: Some("apixaban".into()),
+                status: Some(cairn_medication_view::MedicationStatus::Active),
+                charts: vec![t(2)],
+            }],
+            failed: vec![],
+            interrupted: None,
+            charts: cairn_medication_view::ChartSet::single(t(9)),
+        };
+        let stopped = super::nothing_attested_sentence(&outcome(1, 0), t(9));
+        assert!(stopped.contains("on this chart"), "{stopped}");
+        assert!(stopped.contains("another chart's line"), "{stopped}");
+        let signed = super::nothing_attested_sentence(&outcome(1, 1), t(9));
+        assert!(!signed.contains("already carries"), "{signed}");
     }
 
     /// **ABSENT AND UNREADABLE ARE DIFFERENT ANSWERS** (PR #566 review).

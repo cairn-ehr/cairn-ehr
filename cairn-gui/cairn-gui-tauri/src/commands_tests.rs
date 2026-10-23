@@ -313,6 +313,8 @@ fn the_webview_reads_both_partial_completion_reports() {
         "withheld_report(&withheld,",
         "missing_report(",
         "&groups_missing_from_chart,",
+        // #849: this patient's entries on another chart's line, said after the gesture too.
+        "elsewhere_report(&elsewhere)",
         "&notes)",
     ] {
         assert!(sign_off.contains(fed), "{fed} not in sign_off_impl");

@@ -4,7 +4,8 @@
 //! offline-first like cessation: no local-presence check here. The in-DB floor (db/059)
 //! is the real enforcement — it refuses a malformed span at both doors and, at the local
 //! door only, a withhold on a ceased line or a release of something that is not a hold on
-//! this thread.
+//! this thread, or of a hold that has already ended (#843, ADR-0082 — refused here first, as a
+//! stale picture, so the caller re-reads).
 use cairn_event::medication::{
     medication_withhold_body, medication_withhold_release_body,
     render_medication_withhold_release_twin, render_medication_withhold_twin, HoldUntil,
@@ -162,6 +163,36 @@ async fn physical_now(client: &tokio_postgres::Client) -> anyhow::Result<String>
     Ok(row.get(0))
 }
 
+/// The named holds that are no longer standing at instant `at`, each as "hold <id> <why>" —
+/// db/059's `cairn_medication_hold_ended`, the floor's own predicate, so the two never
+/// disagree. A hold that is not a withhold here at all is not in this list: the floor
+/// refuses that one with its own sentence.
+async fn ended_holds(
+    client: &tokio_postgres::Client,
+    withholds: &[Uuid],
+    at: &str,
+) -> anyhow::Result<Vec<String>> {
+    let ids: Vec<String> = distinct_holds(withholds)
+        .iter()
+        .map(Uuid::to_string)
+        .collect();
+    let rows = client
+        .query(
+            "SELECT 'hold ' || w::text || ' ' || why FROM unnest($1::text[]::uuid[]) AS w, \
+                    cairn_medication_hold_ended(w, $2::text::timestamptz) AS why \
+              WHERE why IS NOT NULL",
+            &[&ids, &at],
+        )
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "checking that the holds to release are still standing: {}",
+                crate::db_diagnosis::legible_db_error(&e)
+            )
+        })?;
+    Ok(rows.iter().map(|r| r.get(0)).collect())
+}
+
 /// Withhold a medication thread — write a "W". Returns the withhold's event id, which is
 /// what a later release names. `author` is ADR-0053's human-authorship overlay (`None` ⇒
 /// the node signs alone). Sealed, signed and submitted through the one strict door.
@@ -204,6 +235,17 @@ pub async fn release_medication_holds(
 ) -> anyhow::Result<Uuid> {
     // A release ends its holds at the physical now, carried as t_effective (`physical_now`).
     let released = physical_now(client).await?;
+    // #843: a hold that ended before `released` (a colleague released it, or it ran out) means
+    // the caller's picture is behind the record — refused as stale, before anything is
+    // signed, so a window re-reads. The floor refuses the same release (db/059 section 8);
+    // this check exists so the refusal carries its scope, which a floor error cannot.
+    let ended = ended_holds(client, withholds, &released).await?;
+    if !ended.is_empty() {
+        return Err(crate::db_diagnosis::stale_picture_refusal(format!(
+            "{}; nothing was released",
+            ended.join("; ")
+        )));
+    }
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let mut body = build_release_body(

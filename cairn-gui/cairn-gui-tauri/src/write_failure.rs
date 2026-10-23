@@ -71,7 +71,7 @@ pub(crate) fn retry_when_nothing_written(
 /// the gesture stopped early (#818) — the line it stopped at and the lines it never tried. A line
 /// whose commit got no ordinary answer (#814) may be signed, so it is neither, and "Signed 0" is
 /// left out beside it (the count would claim that line is not signed). `notes` are the chart's
-/// own reports (withheld, missing, linked charts), appended as given. Rust, not the webview, so
+/// own reports (withheld, missing, elsewhere, linked charts), appended as given. Rust, not the webview, so
 /// every combination is tested.
 ///
 /// Returns the sentence AND the report's `behind_the_record` (`Unknown` exactly when the sentence
@@ -171,6 +171,30 @@ pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[Unknown
         ));
     }
     parts.join(" ")
+}
+
+/// The note a cease outcome carries when the press-time read shows the line ALREADY stopped
+/// (#843): a colleague's cease landed after this screen was drawn. The stop is still written —
+/// the node admits a cease of a ceased line, and its reason (an adverse reaction, say) may be
+/// the only record of it while no allergy stream exists — so this does not refuse; it says what
+/// the record already held, so "Stopped 1" is not read as "this press stopped it". `None` for a
+/// line still active, and when this press stopped nothing for certain (`ceased == 0`: its only
+/// commits got no answer, #814, so "your stop is recorded" would be unknown, not true). Pure.
+pub(crate) fn already_stopped_note(
+    row: &cairn_medication_view::MedicationRow,
+    ceased: usize,
+) -> Option<String> {
+    if ceased == 0 || row.status != cairn_medication_view::MedicationStatus::Ceased {
+        return None;
+    }
+    let earlier = match row.cessation_reason.as_deref() {
+        Some(reason) => format!("its reason: {reason}"),
+        None => "no reason was recorded".to_string(),
+    };
+    Some(format!(
+        "This drug had already been stopped before this Stop reached the record ({earlier}); \
+         your stop and its reason are recorded beside it."
+    ))
 }
 
 /// The chart read a write starts with failed (sign-off's set check, cease's line lookup): an

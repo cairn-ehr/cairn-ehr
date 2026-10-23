@@ -295,6 +295,8 @@ fn cease_sorts_an_interrupted_commit_from_a_failure() {
         "Err(e)=>matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
         "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
         "lettext=cease_outcome(ceased,&failed,&unknown);",
+        // #843: a Stop that landed on a line already stopped says so.
+        "lettext=matchalready_stopped_note(row,ceased){Some(note)=>format!(\"{text}{note}\"),None=>text,};",
         "(!unknown.is_empty()).then_some(Recorded::Unknown)",
     ] {
         assert!(flat.contains(shape), "{shape}\n{body}");
@@ -354,4 +356,37 @@ fn a_gesture_that_wrote_or_may_have_written_is_a_report() {
         None,
         "one may have been written"
     );
+}
+
+/// #843 (maintainer's decision): a Stop that reaches a line the record already shows as stopped
+/// (a colleague's cease landed after this screen was drawn) is still written — its reason may be
+/// the only record of, say, an adverse reaction — and the outcome SAYS the line was already
+/// stopped, with the earlier stop's reason, so "Stopped 1" is not read as "I stopped it". A line
+/// still active says nothing extra.
+#[test]
+fn a_stop_of_a_line_already_stopped_says_so() {
+    let rows = cairn_medication_view::fixtures::sample_rows();
+    let ceased = rows
+        .iter()
+        .find(|r| r.status == cairn_medication_view::MedicationStatus::Ceased)
+        .expect("the fixture has a ceased line");
+    let note = already_stopped_note(ceased, 1).expect("a ceased line earns the note");
+    assert!(note.contains("already been stopped"), "{note}");
+    assert!(note.contains("gastric irritation"), "{note}");
+    assert!(note.contains("recorded"), "{note}");
+
+    let mut no_reason = ceased.clone();
+    no_reason.cessation_reason = None;
+    let note = already_stopped_note(&no_reason, 1).unwrap();
+    assert!(note.contains("no reason was recorded"), "{note}");
+
+    let active = rows
+        .iter()
+        .find(|r| r.status == cairn_medication_view::MedicationStatus::Active)
+        .unwrap();
+    assert_eq!(already_stopped_note(active, 1), None);
+
+    // A press that stopped nothing for certain (its only commit got no answer, #814) must not
+    // say its stop "is recorded": whether it is, is exactly what is not known.
+    assert_eq!(already_stopped_note(ceased, 0), None);
 }
