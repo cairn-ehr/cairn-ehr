@@ -93,6 +93,7 @@ pub fn sample_rows() -> Vec<MedicationRow> {
         until: "reviewed".into(),
         withholder: other.clone(),
         pending: false,
+        release_pending: None,
     }];
     // Not started yet: the line still reads current, the hold says when it begins.
     signed_by_other.holds = vec![MedicationHold {
@@ -103,6 +104,7 @@ pub fn sample_rows() -> Vec<MedicationRow> {
         until: "reviewed".into(),
         withholder: other.clone(),
         pending: true,
+        release_pending: None,
     }];
 
     let mut ceased = base(40, "ibuprofen", "400", "mg");

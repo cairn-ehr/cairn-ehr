@@ -4990,6 +4990,15 @@ async fn run() -> anyhow::Result<()> {
             let params = attest_params(&resolved, &attest);
             let resolved_author = resolve_author(&db, &author).await?;
             let a_params = author_params(&resolved_author);
+            // #854: read the line BEFORE ceasing, so a stop of a drug already stopped says so.
+            // Display-only: a failed read becomes a sentence and never blocks the stop.
+            let note =
+                match cairn_node::medication::already_stopped_note(&db, patient, medication_id)
+                    .await
+                {
+                    Ok(note) => note,
+                    Err(e) => Some(cairn_node::medication::not_known_whether_stopped(&e)),
+                };
             let event_id = cairn_node::medication::cease_medication(
                 &mut db,
                 &node_sk,
@@ -5003,6 +5012,10 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
+            // On stderr, beside the CLI's other warnings (#848): stdout stays the success line.
+            if let Some(note) = note {
+                eprintln!("warning: {note}");
+            }
         }
         Cmd::MedicationWithhold {
             patient,

@@ -54,7 +54,10 @@ needs no event and resumes the drug by default; cessation wins over any hold; th
 active/ceased status, so a withheld line stays current and signable; and both event types join the
 sign-off commitment ([ADR-0081](decisions/0081-medication-withhold-is-a-time-bounded-hold.md)). A release of a
 hold that has already ended is refused at the local door as a stale picture, and admitted from a peer
-([ADR-0082](decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md)).
+([ADR-0082](decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md)). A release recorded for an instant
+still ahead, and before the hold's own end, leaves the hold standing until then, and the hold says that a
+release is coming and when, or that it cancels a hold not yet started (principle 4: a release that will take
+effect is never shown as nothing).
 
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 

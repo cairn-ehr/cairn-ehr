@@ -412,6 +412,7 @@ fn release_is_offered_only_where_it_can_write() {
         until: "reviewed".into(),
         withholder: "k".into(),
         pending: false,
+        release_pending: None,
     };
     let with_holds = |mut row: cairn_medication_view::MedicationRow, holds: &[(u128, u128)]| {
         row.holds = holds.iter().map(|(id, t)| hold(*id, *t)).collect();

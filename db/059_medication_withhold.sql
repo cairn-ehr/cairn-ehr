@@ -321,6 +321,34 @@ $$;
 REVOKE EXECUTE ON FUNCTION cairn_medication_hold_ended(uuid, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_medication_hold_ended(uuid, timestamptz) TO cairn_agent;
 
+-- 7c. #835 — the instant a RECORDED release will end hold `p_withhold`, when that is still
+--     after `p_at`: the earliest such `released_at` among the releases 7b would count (same
+--     thread, naming the hold); NULL when none is pending. A release can lie ahead (a peer
+--     whose clock runs fast, or a writer other than Cairn's release verb — which always
+--     stamps the real now — that set its time later), and until then the fold still shows
+--     the hold; without this the list gave no hint a release exists, an unknown shown as
+--     nothing (principle 4). The list read (`read_group_holds`) asks it of every hold the
+--     fold returns, at the fold's own instant. A separate function, not a fold column, so the
+--     fold's return type (and an older binary's replay of this file) is untouched.
+--     Only a release that lands BEFORE a timed hold's own `until` counts: one at or after it
+--     ends nothing (the hold is already over, the fold's strict `>`), and "release at <t>"
+--     would then be a false sentence. The local door refuses such a release (section 8, via
+--     7b); a peer's arrives through the sync door. `starts_at` is deliberately NOT consulted:
+--     a release before a pending hold's start cancels it (7b), and that is said beforehand too.
+CREATE OR REPLACE FUNCTION cairn_medication_hold_release_pending(p_withhold uuid, p_at timestamptz)
+RETURNS timestamptz LANGUAGE sql STABLE AS $$
+    SELECT min(x.released_at)
+    FROM medication_withhold w
+    JOIN medication_withhold_release x
+      ON x.medication_id = w.medication_id
+     AND w.event_id = ANY (x.released_event_ids)
+    WHERE w.event_id = p_withhold
+      AND x.released_at > p_at
+      AND (w.until_reviewed OR x.released_at < w.until_at)
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_medication_hold_release_pending(uuid, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_medication_hold_release_pending(uuid, timestamptz) TO cairn_agent;
+
 -- 8. Fold a release into its row. Local door: every named id must be a withhold on THIS
 --    THREAD (a release can never end another thread's hold, nor one its author did not see).
 --    The list shows holds per LINE (a reconciled group), so when the id IS a withhold but on

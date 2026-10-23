@@ -36,7 +36,10 @@ pub use attestation::{
     attest_medication_thread, attest_thread_in_tx, build_attestation_body, thread_commitment,
     AttestParams,
 };
-pub use cessation::{build_cease_body, cease_medication, CeaseMedicationInput};
+pub use cessation::{
+    already_stopped_note, build_cease_body, cease_medication, not_known_whether_stopped,
+    CeaseMedicationInput,
+};
 pub use coding::{
     build_coding_body, build_coding_correction_body, code_medication, coding_claim_from_parts,
     correct_medication_coding, CodeMedicationInput, CorrectCodingInput,

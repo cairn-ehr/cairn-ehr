@@ -453,76 +453,38 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   survives a failed read and hides only on Rust's `silent`; a decided refusal re-reads the banner, not the chart; the
   tray's reads ordered) and #802 (#799 · #800 · #801: a re-read keeps typed stop reasons, drops overtaken answers, and
   never leaves a partial list under a live sign-off). Filed #797 from #798.
-- **2026-10-17 (#797, PR #805, merged 2026-10-18):** a refusal because the record changed under the clinician
-  is typed (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); the window re-reads the whole chart,
-  never retries, and names only changes from ANOTHER source (the maintainer's rule; a held chart set moved only by
-  being shown or by the clinician's own act, `charts_after` read inside the act's transaction); an always-visible
-  "Read this chart again" replaces every "reload the chart". RUNBOOK §14 owes the human timing. Filed #806–#810.
-  **2026-10-18:** a second five-reviewer pass, every finding fixed on the branch — sign-off's target-set mismatch
-  typed `Stale` (`ensure_same_targets`), "the list is behind the record" made window state (`behindAfter`), a
-  partly-recorded "Different people" carries its stale pair (`behind_the_record`), the CLI prints a remedy line after
-  a stale refusal, a node-side guard against sentences naming window acts — closing **#806** too. Filed #811 (a
-  decision: `AfterReread` lumps "not recorded" with "may have been", #713) and #812 (type/test tightening).
-- **2026-10-18 → 10-20 (PRs #813 · #816 · #819 · #821 · #824 · #827 · #829 · #830, all merged): an interrupted commit
-  says only what is known.** #811 option (b): `Retry::AfterReread(Recorded::{No, Unknown})`, window state with its own
-  end conditions. #814: the medication writes' commits go through one `commit_failure` marker; only an ERROR answer
-  proves a rollback; a tree inventory guards every commit. #815 + #818 (maintainer: mark + search): registration and
-  sign-off marked, a maybe-recorded outcome settles like a success. #817: every identity-side commit marked, autocommits
-  detected; the window never reconnects after a lost connection (**#807**). #820: a real lost COMMIT driven end to end (`tests/identity_commit_lost.rs`); filed **#825** (window
-  operator diagnostics — a decision). #822 + #823: `cairn-node event <id>`; auto-apply stops at an unknown outcome with
-  its summary. #826 + #828: every CLI write verb prints its event ids, through pure line builders (the RUNBOOK's
-  first-line parse contract pinned by `the_runbook_sed_still_reads_the_chart_id_alone`).
-- **2026-10-21 (#803 slice A, PR #831):** medication **withhold "W"** — [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md)
-  (spec v0.83): two additive born-sealed events (withhold with a reason and `until` a time or "reviewed"; release naming
-  withholds by event id), `db/059` (SCHEMA_GENERATION 59), a read-time fold (expiry writes no event; the default is
-  resume), holds BESIDE `MedicationStatus`, both types in the sign-off commitment; CLI `medication-withhold` /
-  `medication-release`. A hold's start and a release's instant are the authoring node's PHYSICAL clock, and the floor
-  refuses a body without one (a fast peer's HLC would start "W from now" hours late). Filed **#832** (slice B),
-  **#833** (ward-level new-withholds list), **#834** (undecryptable-event marker), **#835** (a future-dated release is
-  invisible), **#836** (the #192 conflict flag is never read), **#837** (test gaps).
-  **PR #831 merged 2026-10-21.**
-- **2026-10-21 (#832, PR #838):** the **W in the window** — each hold a button in the status cell, local time
-  ("W until 20:00", a date when not today, a year when not this year), reason revealed on click/focus (hover a
-  convenience; Escape/outside click closes), a ceased line's reason the same way; **Withhold** (reason + "until
-  reviewed" default / a time) and **Release** (sends only the hold ids drawn; says when a hold it never saw is still in
-  force) always visible on the line (maintainer's call, K = 2). New `hold` module (pure `withhold_target`/`release_plan`,
-  `cease`-shaped commands, unknown commits never "failed"), `holds.js`, db/044 times `withhold`/`release` (paired ALTER +
-  a replay-convergence test). RUNBOOK §15 owes the human timing and VoiceOver pass. Filed **#839**; #809 gained item 5.
-  Second review: the list re-reads at a hold's start or end (`next_hold_change`); filed **#840**, **#841**.
-  **PR #838 merged 2026-10-21.**
-- **2026-10-22 (#839 + #840 + #841, PR #842):** #838's follow-ups. A Release names unseen holds (on its all-gone
-  refusal too) as "still on this line"; a cease or release that wrote nothing returns `Err` with one class (stale
-  wins); Withhold and Stop are drawn only where their command can write; an empty end is "missing or incomplete".
-  Review filed **#843** (a release of an already-ended hold is admitted, never a stale refusal) and **#844** (Release
-  is not yet offered only where it can write). **PR #842 merged 2026-10-21.**
-- **2026-10-22 (#844 + #836, PR #845):** Release is drawn only where `release_plan` can write (the #841 rule, finished;
-  the line then says where to release it). A synced medication event naming another person's chart (db/031's
-  `medication_patient_conflict_flag`, never read before) makes its line a wrong-chart hazard, a third reason
-  `patient_conflict` with its own remedy: stop the line and record it again. Review filed **#846** (db/031 flags a
-  stray dose or release only if a claim on its thread arrived first). **PR #845 merged 2026-10-22.**
-- **2026-10-22 (#846, PR #847):** the conflict read no longer depends on arrival order. db/059's
-  `medication_thread_stray_chart` view lists every dose, dose correction or release whose chart is not its thread's,
-  so one that arrived BEFORE the thread's claim (which db/031's guard can never flag, on either door) still makes the
-  line a `patient_conflict` hazard; `read_conflict_charts` unions it with the flag table, filtered per thread (a new
-  index on `medication_dose_correction (medication_id)`). No schema-generation change (db/059 edited in place). Its
-  review added a runtime-role (`SET ROLE cairn_agent`) read of the list, and filed **#848** (a later-HLC stray
-  assert moves a thread to another chart, and the drug vanishes from the original chart's list with nothing said).
-  **PR #847 merged 2026-10-22.**
-- **2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)):** a drug of this patient's on ANOTHER chart's line is said on this chart's list
-  (`PatientMedicationList::elsewhere`, `medication/elsewhere.rs`): a thread a later-HLC assert moved away (db/031's flag,
-  `standing_patient`), or this patient's dose/stop/W on another chart's thread (the flag's `asserted_patient`, db/059's
-  stray view). Read-side only, maintainer's decision; CLI, window, semantic tree and compare panel; db/059 indexes
-  `patient_id` on the view's three tables. #843 decided (refuse a dead release at the local door). Review filed
-  **#849** (sign-off outcome) and **#850** (a decision: reports never go away). **PR #851 merged 2026-10-23.**
-- **2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)):** a release of a hold that already
-  ended is refused at the LOCAL door as a stale picture ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md),
-  spec v0.84; one predicate `cairn_medication_hold_ended` for the read-time fold, the floor and the node's
-  pre-check; sync apply admits it); a Stop on a line already stopped is written and the window says so;
-  `SignOffOutcome::elsewhere` (#849, the union of both reads) reaches the CLI and the window's outcome. db/059 edited
-  in place, no schema-generation change. Second review filed **#854** (the CLI cease does not say "already
-  stopped") and **#855** (two accepted release races).
-- **Next:** merge PR #853; run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
-  (decisions), **#835**, **#807**;
+- **2026-10-17 → 10-20 (#797 PR #805; PRs #813 · #816 · #819 · #821 · #824 · #827 · #829 · #830): a changed record
+  and an interrupted commit say only what is known.** A refusal because the record changed is typed
+  (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); the window re-reads, names only changes from
+  ANOTHER source (the maintainer's rule), and offers "Read this chart again" (RUNBOOK §14 owed). Its second review
+  closed **#806**; filed #807–#810, #811 (built: `Recorded::{No, Unknown}`) and #812. #814/#815/#817/#818: every commit
+  marked through one `commit_failure`, a maybe-recorded outcome settles like a success, autocommits detected (#713
+  first stated it); #820: a real lost COMMIT end to end, filed **#825** (a decision); #822 + #823: `cairn-node event
+  <id>`, auto-apply stops at an unknown outcome; #826 + #828: every CLI write verb prints its event ids.
+- **2026-10-21 → 10-23 — the medication withhold "W" and its follow-ups (#803).** Slice A, PR #831:
+  [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md) (v0.83), two additive born-sealed
+  events, `db/059` (gen 59), a read-time fold, holds BESIDE `MedicationStatus`, the PHYSICAL clock for "now"; filed
+  #832 · #833 (a ward-level list) · #834 (no marker for an undecryptable event) · #835 · #836 · #837. Slice B, PR #838 (#832): the W in the window, Withhold/Release always on the line (K = 2), re-read at a
+  hold's start or end; RUNBOOK §15 owed; #809 gained item 5. PR #842 (#839 · #840 · #841): unseen holds said, a
+  gesture that wrote nothing refuses (stale wins), Withhold/Stop only where they can write. PR #845 (#844 + #836):
+  Release likewise; a synced event naming another person's chart (#192's flag, never read before) makes its line a
+  `patient_conflict` hazard. PR #847 (#846): the conflict read no longer depends on arrival order (db/059's
+  `medication_thread_stray_chart`; db/032's false comment pointed at #185). PR #851 (#848): a drug of this patient's
+  on another chart's line is said on this chart's list; filed #849, **#850** (a decision). PR #853 (#843 + #849):
+  [ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md) (v0.84) — a release of an
+  ended hold is a stale refusal at the local door; a Stop on a stopped line is written and said; filed **#854**,
+  **#855**. All merged by 2026-10-23.
+- **2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)):** a release recorded for a later
+  instant is said on its hold (db/059 section 7c `cairn_medication_hold_release_pending`,
+  `MedicationHold::release_pending`, the CLI's `hold_line`, the window's `hold_view`; the window re-reads when it takes
+  effect); the CLI's `medication-cease` says when the line was already stopped (one rule,
+  `MedicationRow::already_stopped_note`, plus the thread's own cessation, since the CLI stops one thread). db/059
+  edited in place, no schema-generation change. Second review: "cancelled" for a release before a pending start,
+  the stop note's false "beside it" corrected, `ctutils` 0.4.5 (RUSTSEC-2026-0385); filed **#857** (a later stop
+  overwrites the earlier reason) · **#858** (a peer release on a sibling thread is shown nowhere) · **#859** (a CLI
+  stop of one thread on a line that stays current says only "ceased").
+- **Next:** review and merge PR #856 (#835 + #854); run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
+  (decisions), **#855**, **#857**, **#859**, **#858**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

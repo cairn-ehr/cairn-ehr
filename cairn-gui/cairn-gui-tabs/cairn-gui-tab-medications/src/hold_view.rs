@@ -55,14 +55,19 @@ where
 /// (or "W from 22:00" on a line reading "current") on screen long after it stopped being so,
 /// and a same-day time, printed without its date, read as today's (#838 review). The window
 /// re-reads at this instant. Every time printed without a date is such an instant (a pending
-/// hold's start, a live hold's end, both later today), so it is never on screen past midnight.
+/// hold's start or end, a live hold's end, a recorded release taking effect (#835), all
+/// later today), so it is never on screen past midnight.
 /// An unparseable instant is no boundary (it is shown as recorded).
 pub fn next_hold_change<'a, Tz: TimeZone>(
     holds: impl Iterator<Item = &'a MedicationHold>,
     now: &DateTime<Tz>,
 ) -> Option<String> {
     holds
-        .flat_map(|h| [h.starts_at.as_str(), h.until.as_str()])
+        .flat_map(|h| {
+            [h.starts_at.as_str(), h.until.as_str()]
+                .into_iter()
+                .chain(h.release_pending.as_deref())
+        })
         .filter_map(|t| DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&Utc))
         .filter(|t| *t > now.with_timezone(&Utc))
@@ -93,14 +98,37 @@ where
         let start = local_instant(&h.starts_at, now);
         (
             format!("W from {start}"),
-            format!("Withheld from {start} until {until} by {by}: {}", h.reason),
+            format!("Withheld from {start} until {until} by {by}"),
         )
     } else {
         (
             format!("W until {until}"),
-            format!("Withheld until {until} by {by}: {}", h.reason),
+            format!("Withheld until {until} by {by}"),
         )
     };
+    // #835: a release already recorded for a later instant, before the hold would end by
+    // itself (db/059 7c), is said on the button itself and in the detail, ahead of the
+    // free-text reason so it never reads as part of it. It ends the hold then; one at or
+    // before a pending hold's start cancels it, and must say so — "W from 08:00, release at
+    // 16:00" would read as a W from 08:00 to 16:00 (PR #856 review).
+    let (symbol, detail) = match &h.release_pending {
+        Some(at) if h.release_cancels_it() => {
+            let at = local_instant(at, now);
+            (
+                format!("{symbol}, cancelled at {at}"),
+                format!("{detail} (cancelled by a release recorded for {at}, before it starts)"),
+            )
+        }
+        Some(at) => {
+            let at = local_instant(at, now);
+            (
+                format!("{symbol}, release at {at}"),
+                format!("{detail} (a release is recorded, taking effect at {at})"),
+            )
+        }
+        None => (symbol, detail),
+    };
+    let detail = format!("{detail}: {}", h.reason);
     HoldView {
         withhold_event_id: h.withhold_event_id.to_string(),
         symbol,
@@ -137,6 +165,7 @@ mod tests {
             until: until.into(),
             withholder: "1a2b3c4d5e6f".into(),
             pending,
+            release_pending: None,
         }
     }
 
@@ -175,6 +204,64 @@ mod tests {
         assert!(v.pending);
         assert!(v.symbol.starts_with("W from "), "{}", v.symbol);
         assert!(v.detail.starts_with("Withheld from "), "{}", v.detail);
+    }
+
+    /// #835: a release recorded for later is said on the button and in the detail, ahead of
+    /// the free-text reason. 06:00 UTC is 16:00 at the test's UTC+10.
+    #[test]
+    fn a_pending_release_is_said_on_the_hold() {
+        let mut h = hold("reviewed", false);
+        h.release_pending = Some("2026-10-21T06:00:00Z".into());
+        let v = hold_view(&h, &now());
+        assert_eq!(v.symbol, "W until reviewed, release at 16:00");
+        assert_eq!(
+            v.detail,
+            "Withheld until reviewed by 1a2b3c4d (a release is recorded, taking effect at \
+             16:00): BP 85/50"
+        );
+        // A pending hold whose release falls after its start: it begins, then ends at the release.
+        let mut p = hold("reviewed", true);
+        p.release_pending = Some("2026-10-22T06:00:00Z".into());
+        let v = hold_view(&p, &now());
+        assert_eq!(
+            v.symbol,
+            "W from Thu 22 Oct 08:00, release at Thu 22 Oct 16:00"
+        );
+    }
+
+    /// A release before a pending hold's start cancels it: "W from Thu 08:00, release at 16:00"
+    /// reads as a W from 08:00 to 16:00, but this hold never begins (PR #856 review).
+    #[test]
+    fn a_release_before_the_start_says_the_hold_is_cancelled() {
+        let mut p = hold("reviewed", true);
+        p.release_pending = Some("2026-10-21T06:00:00Z".into());
+        let v = hold_view(&p, &now());
+        assert_eq!(v.symbol, "W from Thu 22 Oct 08:00, cancelled at 16:00");
+        assert_eq!(
+            v.detail,
+            "Withheld from Thu 22 Oct 08:00 until reviewed by 1a2b3c4d (cancelled by a release \
+             recorded for 16:00, before it starts): BP 85/50"
+        );
+    }
+
+    /// The window must re-read when a recorded release takes effect, or the W stays on screen
+    /// past it (#835): the release's instant is a hold change like a start or an end.
+    #[test]
+    fn a_pending_release_is_a_hold_change() {
+        let mut h = hold("reviewed", false);
+        h.starts_at = "2026-10-20T00:00:00Z".into(); // past
+        h.release_pending = Some("2026-10-21T06:00:00Z".into());
+        assert_eq!(
+            next_hold_change([h].iter(), &now()).as_deref(),
+            Some("2026-10-21T06:00:00+00:00")
+        );
+        // A pending hold's release, before its later start, is the one counted (the cancel).
+        let mut p = hold("reviewed", true);
+        p.release_pending = Some("2026-10-21T06:00:00Z".into());
+        assert_eq!(
+            next_hold_change([p].iter(), &now()).as_deref(),
+            Some("2026-10-21T06:00:00+00:00")
+        );
     }
 
     #[test]
