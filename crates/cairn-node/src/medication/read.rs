@@ -479,13 +479,15 @@ async fn read_cessation_reasons(
 
 /// The reasons a line lists beside the one it shows (#857): `all` (every stop's reason,
 /// newest first) without `shown` and without repeats, compared ignoring surrounding space.
-/// **Pure.** Text that differs in any other way is kept: it is a different thing said.
-fn other_reasons(shown: Option<&str>, all: Vec<String>) -> Vec<String> {
+/// **Pure.** Text that differs in any other way is kept: it is a different thing said. A reason
+/// that is only whitespace says nothing and is dropped (db/060's CHECK strips only spaces).
+/// Shared with the CLI cease's thread note (`medication::cessation`).
+pub(crate) fn other_reasons(shown: Option<&str>, all: Vec<String>) -> Vec<String> {
     let mut seen: Vec<String> = shown.map(|s| s.trim().to_string()).into_iter().collect();
     let mut out = Vec::new();
     for reason in all {
         let key = reason.trim().to_string();
-        if !seen.contains(&key) {
+        if !key.is_empty() && !seen.contains(&key) {
             seen.push(key);
             out.push(reason);
         }
@@ -916,5 +918,9 @@ mod tests {
             "only surrounding space is ignored"
         );
         assert!(other_reasons(Some("x"), vec![]).is_empty());
+        assert!(
+            other_reasons(None, all(&["\n"])).is_empty(),
+            "whitespace says nothing"
+        );
     }
 }

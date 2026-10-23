@@ -104,6 +104,13 @@ async fn a_thread_already_stopped_on_a_line_still_current_says_both() {
     // That the line still reads current is said AFTER the stop, naming the sibling (#859,
     // `still_current_note`), so this note does not repeat it.
     assert!(!note.contains("still reads current"), "{note}");
+    // The line reads current, so the list shows no stop reason: the note must not promise it
+    // keeps them (PR #860 review; #861).
+    assert!(
+        note.contains("the list shows stop reasons only on a line that reads stopped"),
+        "{note}"
+    );
+    assert!(!note.contains("keeps every stop's reason"), "{note}");
     assert_eq!(
         already_stopped_note(&c, p, y).await.unwrap(),
         None,
@@ -135,6 +142,41 @@ async fn a_failed_read_is_an_error_and_its_note_says_not_known() {
     let note = not_known_whether_current(&err);
     assert!(note.contains("still reads current is not known"), "{note}");
     assert!(note.contains("aborted"), "the cause is named: {note}");
+}
+
+#[tokio::test]
+async fn a_thread_whose_latest_stop_gave_no_reason_still_names_the_earlier_one() {
+    // PR #860 review: the thread's newest stop gave no reason, an earlier one did. "no reason
+    // was recorded" would hide the adverse reaction #857 exists for.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, x) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let y = add_med(&mut c, &sk, &kid, p).await;
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&mut c, &sk, &kid, "test-node", p, x, y, &input, None, None)
+        .await
+        .unwrap();
+    for reason in [Some("angioedema"), None] {
+        let stop = CeaseMedicationInput {
+            stopped: Some("2020"),
+            stopped_precision: Some("year"),
+            reason,
+        };
+        cease_medication(&mut c, &sk, &kid, "test-node", p, x, &stop, None, None)
+            .await
+            .unwrap();
+    }
+    let note = already_stopped_note(&c, p, x).await.unwrap().unwrap();
+    assert!(!note.contains("no reason was recorded"), "{note}");
+    assert!(
+        note.contains("one stop gave no reason; another stop's reason: angioedema"),
+        "{note}"
+    );
 }
 
 /// The CLI arm asks BEFORE it ceases (after, its own cease would read as "already stopped"),

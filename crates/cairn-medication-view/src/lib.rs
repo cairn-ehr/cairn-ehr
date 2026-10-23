@@ -27,7 +27,7 @@ pub use display::{short_kid, DISPLAYED_KID_CHARS};
 pub use elsewhere::{elsewhere_report, ElsewhereLine, ELSEWHERE_INSTRUCTION};
 pub use row::{
     already_stopped_sentence, MedicationHold, MedicationRow, MedicationStatus, MemberVouch,
-    VouchState, WrongChartReasons,
+    VouchState, WrongChartReasons, LIST_KEEPS_EVERY_REASON, LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED,
 };
 pub use targeting::{
     sign_off_targets, withheld_group_ids, withheld_reasons, withheld_rows, WithheldLine,

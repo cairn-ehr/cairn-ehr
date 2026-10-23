@@ -116,16 +116,35 @@ pub async fn already_stopped_note(
     if let Some(note) = row.already_stopped_note() {
         return Ok(Some(note));
     }
-    // The line reads current. Was this one thread stopped already? (A row here is a stop;
-    // its reason may be NULL.)
+    // The line reads current. Was this one thread stopped already? (A row in
+    // medication_cessation is a stop; its reason, the newest stop's, may be NULL.) Every other
+    // reason the thread's stops gave comes from db/060 in the same statement (#857), so a
+    // reasonless later stop is never said as "no reason was recorded" (PR #860 review).
     let thread_stop = client
         .query_opt(
-            "SELECT reason FROM medication_cessation WHERE medication_id = $1::text::uuid",
+            "SELECT c.reason, \
+                    ARRAY(SELECT r.reason FROM medication_cessation_reason r \
+                          WHERE r.medication_id = c.medication_id \
+                          ORDER BY r.hlc_wall DESC, r.hlc_counter DESC, \
+                                   r.origin COLLATE \"C\" DESC, r.content_address DESC) \
+                      AS all_reasons \
+             FROM medication_cessation c WHERE c.medication_id = $1::text::uuid",
             &[&medication_id.to_string()],
         )
         .await?;
     Ok(thread_stop.map(|r| {
-        cairn_medication_view::already_stopped_sentence("This thread", r.get::<_, Option<&str>>(0))
+        let shown = r
+            .get::<_, Option<String>>("reason")
+            .filter(|s| !s.trim().is_empty());
+        let others = crate::medication::read::other_reasons(shown.as_deref(), r.get("all_reasons"));
+        // The line reads current, so the list shows none of these reasons: the sentence must
+        // not promise it keeps them (PR #860 review; showing them is #861).
+        cairn_medication_view::already_stopped_sentence(
+            "This thread",
+            shown.as_deref(),
+            &others,
+            cairn_medication_view::LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED,
+        )
     }))
 }
 
@@ -136,8 +155,10 @@ pub async fn already_stopped_note(
 /// current. Call it after `cease_medication`.
 ///
 /// The line can only read current after this stop through a member thread with no stop of its
-/// own (db/033 counts only unstopped threads' doses as active), so the note names those
-/// threads, for the operator to stop too or to leave current on purpose.
+/// own in `medication_cessation` (db/033 counts only those threads' doses as active), so the
+/// note names those threads, for the operator to stop too or to leave current on purpose. It
+/// says "readable here", not "recorded": a stop sealed without custody on this node, or a
+/// shredded winning stop, leaves no row though a stop exists (PR #860 review).
 ///
 /// `None` when the line now reads stopped, and for a thread on no line here: the note read
 /// before the stop already said that case cannot be told (`already_stopped_note`). A failed
@@ -184,12 +205,12 @@ pub fn still_current_sentence(unstopped: &[String]) -> String {
     match unstopped {
         [] => format!("{head}. {tail}."),
         [one] => format!(
-            "{head}: no stop is recorded on thread {one}. {tail}; stop that one too if the \
-             drug is to stop."
+            "{head}: no stop of thread {one} is readable here. {tail}; stop that one too if \
+             the drug is to stop."
         ),
         many => format!(
-            "{head}: no stop is recorded on threads {}. {tail}; stop those too if the drug is \
-             to stop.",
+            "{head}: no stop of threads {} is readable here. {tail}; stop those too if the \
+             drug is to stop.",
             many.join(", ")
         ),
     }
@@ -224,11 +245,11 @@ mod tests {
         let one = still_current_sentence(&["y".into()]);
         assert_eq!(
             one,
-            "This drug's line still reads current: no stop is recorded on thread y. This \
+            "This drug's line still reads current: no stop of thread y is readable here. This \
              command stops one thread; stop that one too if the drug is to stop."
         );
         let many = still_current_sentence(&["y".into(), "z".into()]);
-        assert!(many.contains("on threads y, z."), "{many}");
+        assert!(many.contains("of threads y, z is readable here."), "{many}");
         assert!(many.contains("stop those too"), "{many}");
         assert_eq!(
             still_current_sentence(&[]),

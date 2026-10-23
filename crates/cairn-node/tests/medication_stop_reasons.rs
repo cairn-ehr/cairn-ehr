@@ -249,3 +249,64 @@ async fn a_stop_of_a_lone_thread_says_nothing_extra() {
         "a thread on no line here: the note read before the stop already said so"
     );
 }
+
+#[tokio::test]
+async fn other_reasons_come_newest_recorded_first() {
+    // Pins the read's ORDER BY: with one "other" reason, ascending order passes too.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    for reason in ["rash", "angioedema", "patient request"] {
+        stop(&mut c, &sk, &kid, p, med, Some(reason)).await;
+    }
+    assert_eq!(
+        reasons(&c, p).await,
+        (
+            Some("patient request".into()),
+            vec!["angioedema".into(), "rash".into()]
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_sibling_already_stopped_is_not_named_as_unstopped() {
+    // Pins still_current_note's filter: of X, Y and Z, Y was stopped before, Z keeps the line
+    // current, and X is stopped now. Only Z has no stop.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, x) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let y = add_med(&mut c, &sk, &kid, p).await;
+    let z = add_med(&mut c, &sk, &kid, p).await;
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    for other in [y, z] {
+        reconcile_medications(
+            &mut c,
+            &sk,
+            &kid,
+            "test-node",
+            p,
+            x,
+            other,
+            &input,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    cease(&mut c, &sk, &kid, p, y, Some("2020")).await;
+    cease(&mut c, &sk, &kid, p, x, Some("2020")).await;
+    let note = still_current_note(&c, p, x).await.unwrap().unwrap();
+    assert!(note.contains(&z.to_string()), "names Z: {note}");
+    assert!(
+        !note.contains(&y.to_string()),
+        "never the stopped Y: {note}"
+    );
+}
