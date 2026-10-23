@@ -402,6 +402,12 @@ fn list_sql(view: &str) -> String {
 /// is not a caller guarantee. Instants come back as RFC 3339 UTC text to the second (a hold
 /// until 08:00:45 is still in force at 08:00:30, so minutes would mislead), and an open
 /// hold's end as the wire's own `"reviewed"`, never null.
+///
+/// Each hold also carries the instant a recorded release will end it, when that is still
+/// ahead (#835, db/059 `cairn_medication_hold_release_pending`). Both functions are asked at
+/// ONE instant, `n.now`, read once in the FROM clause: `clock_timestamp()` in the select list
+/// would be re-evaluated per row, and a release could then be both "not yet" for the fold and
+/// "not pending" for the predicate, so said nowhere.
 async fn read_group_holds(
     client: &(impl tokio_postgres::GenericClient + Sync),
     groups: &[Uuid],
@@ -412,8 +418,11 @@ async fn read_group_holds(
          withhold_event_id::text AS withhold_event_id, reason, withholder_kid, pending, \
          to_char(starts_at AT TIME ZONE 'UTC', {FMT}) AS starts_at_txt, \
          CASE WHEN until_reviewed THEN 'reviewed' \
-              ELSE to_char(until_at AT TIME ZONE 'UTC', {FMT}) END AS until_at \
-         FROM cairn_medication_group_holds($1::text[]::uuid[], clock_timestamp()) \
+              ELSE to_char(until_at AT TIME ZONE 'UTC', {FMT}) END AS until_at, \
+         to_char(cairn_medication_hold_release_pending(withhold_event_id, n.now) \
+                 AT TIME ZONE 'UTC', {FMT}) AS release_pending \
+         FROM (SELECT clock_timestamp() AS now) n, \
+              cairn_medication_group_holds($1::text[]::uuid[], n.now) \
          ORDER BY group_id, starts_at DESC, withhold_event_id"
     );
     let mut out: HashMap<Uuid, Vec<MedicationHold>> = HashMap::new();
@@ -427,6 +436,7 @@ async fn read_group_holds(
             until: r.get("until_at"),
             withholder: r.get("withholder_kid"),
             pending: r.get("pending"),
+            release_pending: r.get("release_pending"),
         });
     }
     Ok(out)

@@ -3,9 +3,10 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ IN PROGRESS 2026-10-23: #835 + #854** (branch `fix/835-854-pending-release-cli-cease`): a release recorded
-> with a future instant is said on the hold (#835), and the CLI's `medication-cease` says when the line was already
-> stopped (#854).
+> **⇒ ONE PR AWAITS THE MAINTAINER: #835 + #854** (branch `fix/835-854-pending-release-cli-cease`): a release
+> recorded for a later instant is said on its hold, in the CLI and the window, and the window re-reads when it takes
+> effect (#835; db/059 section 7c, edited in place, no schema-generation change). The CLI's `medication-cease` says
+> when the line was already stopped, by the window's own rule (#854). Durable rules: the #843/#835 bullets.
 > **Merged 2026-10-23: PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)** (#843 + #849): the LOCAL door
 > refuses a release of a hold that already ended as STALE ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md),
 > spec **v0.84**, db/059's `cairn_medication_hold_ended`; sync apply admits it); a Stop on a stopped line is written and
@@ -37,7 +38,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **#835 + #854** (this branch); run #838's RUNBOOK §15. Decisions
+> 1. **Review and merge the #835 + #854 PR**; run #838's RUNBOOK §15. Decisions
 >    owed: **#825** (where the window's operator diagnostics live) and **#850** (acknowledging a dealt-with report).
 >    Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
 >    ADR-0082) · #834 (needs a decision on shape). An idempotent re-send of a registration
@@ -169,7 +170,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-23 (#835 + #854, this branch) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.84** (newest ADR-0082;
@@ -202,6 +203,17 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-10-23 (third) — #835 + #854: a release still ahead is said; the CLI cease says "already stopped"
+
+Chosen with the maintainer. TDD, then an independent review, one fix wave.
+- **⇒ A sentence about a FUTURE event must check that the event will still act.** "Release at 16:00" on a hold that
+  ends by its own `until` at 14:00 announces something that ends nothing (the review caught it; 7c now requires
+  `released_at < until_at`). Walk a "will happen" sentence through every way the thing can be over first.
+- **⇒ Widen a read with a sibling predicate, not a new column on a set-returning function** (a return-type change
+  `CREATE OR REPLACE` refuses, and an older binary's replay then fails); ask both at ONE instant read in `FROM`.
+- **⇒ A display-only read must not block a safety write** (the CLI cease's note), and "nothing to say" is not
+  "not known": an unseen thread says it cannot tell.
 
 ### 2026-10-23 — #843 + #849 (PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)): a dead release is stale
 
@@ -239,80 +251,24 @@ Reproduced first (the moved thread left A's list with nothing said), then TDD, a
   already did. Check a new view's plan: the per-thread filter must reach the base tables (it does; `EXPLAIN` showed
   a seq scan on `medication_dose_correction` until it got a `medication_id` index).
 
-### 2026-10-22 — #839 + #840 + #841 (PR #842): #838's review follow-ups
+### 2026-10-18 → 10-22 — interrupted commits (PRs #813–#830), the W (PRs #831, #838), its follow-ups (PR #842)
 
-Chosen with the maintainer over #807 and the #690/#825 decisions; #840's open ruling decided there (stale wins).
-- **⇒ Read the code before the issue's fix list**: half of #841 item 2 (the select switching to "until a time" on a
-  partial time) had already landed in #838's second review; only the refusal's wording was left.
-- **⇒ A view that cannot see a rule's input must not guess the rule.** `build_row` has no opened chart, so the
-  Withhold and Stop offers are tightened in `chart_pane` by the commands' own rules, not re-derived from status.
-- **⇒ Hiding a button hides what its refusal said.** The PR's review: the hidden Stop took "stop it from its own
-  chart" with it, so the line now says it; and an `.is_ok()` over every row hid buttons on a non-hazard anomaly.
-  Also fixed: a stale refusal no longer re-enables Withhold/Release; a cease that can write nothing answers before
-  the key; the nothing-written decision is one pure function (`retry_when_nothing_written`), not two copies.
-
-### 2026-10-21 (second) — #832 (PR #838): the W in the window, plan → SDD
-
-Maintainer's layout call: Withhold controls always visible on the line (K = 2). Six SDD tasks, each reviewed, then an
-opus whole-branch review and one fix wave; a headless walk in Chromium AND WebKit (Playwright's webkit, served through
-`context.route` — WebKit could not reach a local http server).
-- **⇒ A real mouse finds what `element.click()` cannot.** The revealed reason re-laid the table, the W jumped from under
-  the pointer and flickered for ever; the detail is now out of flow (`position: absolute`, pinned).
-- **⇒ One press, one W needs the button disabled, not only the fields cleared**: a second press while the first is in
-  flight reads the same fields, and nothing downstream refuses an overlapping hold (cease is safe only because the
-  second meets a ceased line).
-- **⇒ A control that overrides another must be undone by it.** Making a filled time win over the select (to catch a
-  partial time) made "until reviewed" unreachable after typing — a timed W that lapses silently. Choosing "until
-  reviewed" now clears the time. A ruling is only as true as the code after the NEXT fix.
-- **⇒ Decision 4 needs a sentence, not only a filter**: a release correctly leaves an unseen hold alone, and must SAY
-  it is still in force (the chart-held rule).
-- **⇒ `cargo doc -D warnings` again** (`<reason>` in a pub doc); clippy and tests are blind to it.
-
-### 2026-10-21 — #803 slice A (PR #831): the medication withhold, brainstorm → ADR-0081 → SDD
-
-Brainstormed with the maintainer (paper W: per slot, written by doctor or nurse, ends by itself; pro tem "until
-reviewed"), design + builder check, plan, eight SDD tasks each reviewed, an opus whole-branch review, one fix wave.
-- **⇒ The logical clock is not a wall clock.** A peer may push `hlc_state` up to 24 h ahead (db/020), so any
-  clinically-meaningful "now" stamped from the HLC wall can land hours in the future: a "W from now" read as not yet in
-  force. Use the node's physical clock as `t_effective` (`medication_withhold_clock.rs`). The suite had hit this and
-  worked around it in the TESTS — a test-side workaround for product behaviour is a finding, not a fix.
-- **⇒ A new value for an enum other code reads as "on the list" is a silent filter.** `status == Active` gates
-  sign-off and Stop; a `Withheld` variant would have dropped held drugs out of sign-off with every test green. Put a
-  new state beside the enum.
-- **⇒ An `IF NOT EXISTS` index never picks up an edited predicate** — rename it (db/034 `_idx2`).
-- **⇒ A guard probing "one table per source file" needs a probe per new file**, and the crash-window test needs a window
-  per probe, or a probe goes unpinned (db/048, the cairn-sync test).
-- **⇒ A fallback in the floor is a bypass of the rule the client follows** (second review). The orchestrator never
-  stamped the HLC wall, but db/059 still fell back to it for a body with no `t_effective`, so any other client could
-  produce the hazard the client-side fix removed. ADR-0021: the floor, not the reference client, is the guarantee.
-  The floor now refuses such a body. Its fixtures stamp `effective_at_wall`, and a hold that must be in force at the
-  real now gets a fixed past start instead, because earlier tests push the shared HLC ahead of the clock (that
-  flaked one new test 2 runs in 6).
-
-### 2026-10-19 → 10-20 — #822 + #823 (PR #827), #826 (PR #829), #828 (PR #830): the CLI after an unknown commit; event ids
-
-- **⇒ An issue's survey is a claim** (#826: six of seven verbs already printed their ids). **⇒ A printed line can be a
-  parse contract** (#828: the RUNBOOK `sed`s `registered patient <id>`) — grep docs and scripts for a line's text first.
-  **⇒ Widen a return without touching its callers** (a `*_returning_event` sibling, the old name a wrapper).
-- **⇒ A sentence telling an operator to CHECK something needs a command to check with** — run it. **⇒ A loop that
-  catches per-item errors must ask whether the error killed the session** (`is_closed`, not one marker). **⇒ Two true
-  sentences can contradict each other on one screen** — read a run's whole output.
-
-### 2026-10-18 — #811 (b), #814, #815 + #818, #817, #820: interrupted commits say only what is known (PRs #813–#824)
-
-- **⇒ An outcome that MAY have written settles like a success, not a failure**; only an ERROR-severity answer proves a
-  rollback (a PANIC flushing WAL is replayed by recovery). One `commit_failure` marks every commit; a tree inventory
-  guard counts commits per file and detects AUTOCOMMITS (an autocommit statement IS a commit; a hand-declared count in a
-  guard is a hole in it). A port that flattens an error loses its marker (`DataError::OutcomeUnknown`, #815).
-- **⇒ To learn an id a rolled-back transaction minted, have the kill switch SAY it** (a WARNING before the FATAL;
-  `tests/identity_commit_lost.rs`, #820). A real unanswered error: `pg_terminate_backend` from a second connection, then
-  wait for `is_closed()`; a test-only trigger goes on a projection table, session-gated (`cairn.test_kill_thread`).
-- **⇒ A flag or sentence carried by ONE async call dies with that call** — window state with its own end condition
-  (`behindAfter`, `unknownLeads`, #811); word a sentence where the ACT is known. A guard that pins a call's arguments but
-  not the `if` passes the inverted condition; a rustfmt pass can break a one-line pin.
-- **⇒ "Stopped 0" is a claim too**; CI's GUI clippy runs `--tests` only (run `--all-targets`); chaining a second
-  `.map_err` keeps a count-pinned shape (#477) honest. Not done (optional in #820): one renderer for the CLI's and the
-  window's interruption sentence. The window never reconnects (#807); nothing reads Postgres notices (#585); #812 items
+- **⇒ The logical clock is not a wall clock** (#803): a peer may push `hlc_state` 24 h ahead (db/020), so a clinical
+  "now" comes from the node's PHYSICAL clock (`medication_withhold_clock.rs`); a test-side workaround for product
+  behaviour is a finding, not a fix. **A fallback in the floor is a bypass of the rule the client follows** (ADR-0021).
+- **⇒ A new value for an enum other code reads as "on the list" is a silent filter** — put a new state BESIDE the enum
+  (`Withheld` would have dropped held drugs from sign-off). **An `IF NOT EXISTS` index never picks up an edited
+  predicate** (rename it). **A guard probing one table per source file needs a probe per new file.**
+- **⇒ A real mouse finds what `element.click()` cannot** (#832: a reflowing W flickered under the pointer). **One press,
+  one W needs the button disabled.** **A control that overrides another must be undone by it.** **Hiding a button
+  hides what its refusal said** (#841) — say it on the line. **A view that cannot see a rule's input must not guess
+  the rule.** **Read the code before the issue's fix list.** `cargo doc -D warnings` catches what clippy cannot.
+- **⇒ An outcome that MAY have written settles like a success**; only an ERROR answer proves a rollback; one
+  `commit_failure` marks every commit, a tree inventory counts them and detects autocommits; a port that flattens an
+  error loses its marker (#815). To learn a rolled-back id, have the kill switch SAY it (#820). A flag carried by one
+  async call dies with it — make it window state (#811). **An issue's survey is a claim** (#826); **a printed line can
+  be a parse contract** (#828); widen a return with a `*_returning_event` sibling. Not done (optional in #820): one
+  renderer for the CLI's and the window's interruption sentence; nothing reads Postgres notices (#585); #812 items
   7–10 and #814 came from the reviews; #713 first stated "unanswered ⇒ unknown" inline.
 
 ### 2026-10-17 (third) — #797 brainstormed, planned, built SDD (PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805))

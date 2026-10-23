@@ -35,6 +35,7 @@ fn row(
             until: "reviewed".into(),
             withholder: "k".into(),
             pending: false,
+            release_pending: None,
         })
         .collect();
     row

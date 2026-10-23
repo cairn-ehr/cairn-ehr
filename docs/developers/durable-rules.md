@@ -115,8 +115,23 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `already_stopped_note` (the earlier stop's reason, or "no reason was recorded") when its press-time read shows the
   line `Ceased` AND the press landed in full — every thread stopped for certain. Beside a commit with no answer
   (#814) or a failed thread, "recorded beside it" would contradict the outcome's own "NOT known" / "NOT stopped"
-  (PR #853 review). The CLI's `medication-cease` does not say it yet (#854). **Tempting wrong fix:** refuse it as stale like a release. Pins:
-  `a_stop_of_a_line_already_stopped_says_so`, the `cease_sorts_an_interrupted_commit_from_a_failure` source shape.
+  (PR #853 review). The CLI's `medication-cease` says it too (#854): the sentence and the "already stopped" rule are
+  ONE method, `MedicationRow::already_stopped_note` (`cairn-medication-view`), and the CLI asks it through
+  `medication::already_stopped_note` BEFORE it ceases (after, its own stop would read as "already"). That read is
+  display-only: its failure becomes a sentence (`not_known_whether_stopped`), never `?` — a stop is a safety write —
+  and a thread on no line this node reads says it cannot tell (silence would read as "not stopped"). **Tempting wrong
+  fix:** refuse it as stale like a release. Pins: `a_stop_of_a_line_already_stopped_says_so`, the
+  `cease_sorts_an_interrupted_commit_from_a_failure` source shape, `tests/medication_cease_already_stopped.rs`.
+- **A release recorded for a LATER instant is said on its hold (#835)** — the hold stays in force until then (the
+  fold is unchanged), and `MedicationHold::release_pending` carries the instant from db/059 section 7c's
+  `cairn_medication_hold_release_pending` (the same thread-and-name match as 7b, and only a release BEFORE a timed
+  hold's own `until`: one at or after it ends nothing, so "release at <t>" would be false — PR review). The CLI's `hold_line` and the
+  window's `hold_view` say it BEFORE the free-text reason, and `next_hold_change` counts it, so the window re-reads
+  when it takes effect. `read_group_holds` asks the fold and 7c at ONE instant (`n.now` in FROM); **tempting wrong
+  fixes:** `clock_timestamp()` in the select list (re-evaluated per row), or a new fold column (a return-type change
+  `CREATE OR REPLACE` refuses, and an older binary's replay of db/059 then fails). Pins:
+  `tests/medication_release_pending.rs`, `a_pending_release_is_said_on_the_hold` (both surfaces),
+  `a_pending_release_is_a_hold_change`.
 - **A stale refusal keeps the gesture's button down (PR #842 review)** — `withhold`/`release` resolve "spent" for a
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.

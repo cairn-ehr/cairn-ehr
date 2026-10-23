@@ -215,9 +215,34 @@ pub struct MedicationHold {
     pub withholder: String,
     /// Not yet started: listed, but the line is not withheld by it.
     pub pending: bool,
+    /// When a release already recorded will end this hold, if that instant is still ahead
+    /// (#835): a peer's clock ran fast, or the release was asserted for later. The hold stays
+    /// in force until then, but every surface must say a release exists, or the record holds
+    /// a fact nobody is shown. Same RFC 3339 UTC text as `starts_at`.
+    pub release_pending: Option<String>,
 }
 
 impl MedicationRow {
+    /// What a stop of this line says when the line, read BEFORE the stop was written, was
+    /// already stopped (#843, #854; ADR-0082 decision 4): a colleague's stop landed first. The
+    /// stop is still written, because the node admits a cease of a ceased line and its reason
+    /// (an adverse reaction, say) may be the only record of it while no allergy stream exists.
+    /// This sentence keeps "stopped" from being read as "this stop stopped it". `None` for a
+    /// line that is not ceased. Shared by the window and the CLI, so both decide by one rule.
+    pub fn already_stopped_note(&self) -> Option<String> {
+        if self.status != MedicationStatus::Ceased {
+            return None;
+        }
+        let earlier = match self.cessation_reason.as_deref() {
+            Some(reason) => format!("its reason: {reason}"),
+            None => "no reason was recorded".to_string(),
+        };
+        Some(format!(
+            "This drug had already been stopped before this stop reached the record ({earlier}); \
+             your stop and its reason are recorded beside it."
+        ))
+    }
+
     /// Whether any hold on this line was in force at the instant the row was READ (pending
     /// ones do not count). A kept row goes stale as holds start and end: re-read it.
     pub fn is_withheld(&self) -> bool {
@@ -286,7 +311,8 @@ mod tests {
         }
     }
 
-    /// The `--json` contract for #803: exact key names, `until: "reviewed"` for an open hold.
+    /// The `--json` contract for #803: exact key names, `until: "reviewed"` for an open hold, and
+    /// (#835) `release_pending` as an instant or `null`, never absent.
     #[test]
     fn holds_and_cessation_reason_serialize_with_pinned_keys() {
         let mut r = row("x", None);
@@ -300,6 +326,7 @@ mod tests {
                 until: "2026-10-22T08:00:45Z".into(),
                 withholder: "k1".into(),
                 pending: false,
+                release_pending: Some("2026-10-22T06:00:00Z".into()),
             },
             MedicationHold {
                 withhold_event_id: Uuid::from_u128(3),
@@ -309,6 +336,7 @@ mod tests {
                 until: "reviewed".into(),
                 withholder: "k2".into(),
                 pending: true,
+                release_pending: None,
             },
         ];
         let v = serde_json::to_value(&r).unwrap();
@@ -318,10 +346,12 @@ mod tests {
             serde_json::json!([
                 {"withhold_event_id": Uuid::from_u128(1), "medication_id": Uuid::from_u128(2),
                  "reason": "BP", "starts_at": "2026-10-21T20:00:00Z",
-                 "until": "2026-10-22T08:00:45Z", "withholder": "k1", "pending": false},
+                 "until": "2026-10-22T08:00:45Z", "withholder": "k1", "pending": false,
+                 "release_pending": "2026-10-22T06:00:00Z"},
                 {"withhold_event_id": Uuid::from_u128(3), "medication_id": Uuid::from_u128(2),
                  "reason": "GP", "starts_at": "2026-10-21T21:00:00Z",
-                 "until": "reviewed", "withholder": "k2", "pending": true}
+                 "until": "reviewed", "withholder": "k2", "pending": true,
+                 "release_pending": null}
             ])
         );
     }
@@ -336,6 +366,7 @@ mod tests {
             until: "reviewed".into(),
             withholder: "k".into(),
             pending,
+            release_pending: None,
         };
         let mut r = row("x", None);
         assert!(!r.is_withheld());
