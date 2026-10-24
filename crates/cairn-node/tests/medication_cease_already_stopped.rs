@@ -188,12 +188,12 @@ fn the_cease_verb_reads_the_note_first_and_prints_it_last() {
     let arm = &main[main.find("Cmd::MedicationCease {").unwrap()..];
     let arm = &arm[..arm.find("Cmd::MedicationWithhold {").unwrap()];
     let asked = arm
-        .find("medication::already_stopped_note(&db, patient, medication_id)")
+        .find("medication::already_stopped_note(tx, patient, medication_id)")
         .expect("the arm reads the note");
     let ceased = arm.find("medication::cease_medication(").unwrap();
     let said = arm.find("println!(\"ceased medication thread").unwrap();
     let still = arm
-        .find("medication::still_current_note(&db, patient, medication_id)")
+        .find("medication::still_current_note(tx, patient, medication_id)")
         .expect("the arm re-reads the line after the stop");
     let noted = arm
         .find("eprintln!(\"warning: {note}\")")
@@ -204,8 +204,11 @@ fn the_cease_verb_reads_the_note_first_and_prints_it_last() {
     );
     // A display-only read must never block the stop: its failure becomes a sentence, not `?`.
     let flat: String = arm.split_whitespace().collect();
+    // (Each read runs in its own snapshot, #864: the snapshot's result is MATCHED, never `?`.)
     assert!(
-        !flat.contains("already_stopped_note(&db,patient,medication_id).await?"),
+        flat.contains(
+            "already_stopped_note(tx,patient,medication_id).await}).await{Ok(note)=>note,"
+        ),
         "{arm}"
     );
     assert!(

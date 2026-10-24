@@ -536,10 +536,13 @@ pub(crate) async fn read_chart_of(
             .medications(&patient.to_string())
             .map_err(|e| format!("{e:?}"));
     };
-    let db = db.lock().await;
-    cairn_node::medication::read::list_patient_medications(&*db, patient)
-        .await
-        .map_err(|e| format!("{e:#}"))
+    let mut db = db.lock().await;
+    // One snapshot for the whole read (#864): no line stopped without its reason.
+    cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+        cairn_node::medication::read::list_patient_medications(tx, patient).await
+    })
+    .await
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Record what a gesture cost, and never let that recording fail the gesture.

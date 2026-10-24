@@ -4992,13 +4992,15 @@ async fn run() -> anyhow::Result<()> {
             let a_params = author_params(&resolved_author);
             // #854: read the line BEFORE ceasing, so a stop of a drug already stopped says so.
             // Display-only: a failed read becomes a sentence and never blocks the stop.
-            let note =
-                match cairn_node::medication::already_stopped_note(&db, patient, medication_id)
-                    .await
-                {
-                    Ok(note) => note,
-                    Err(e) => Some(cairn_node::medication::not_known_whether_stopped(&e)),
-                };
+            // One snapshot for the whole read (#864), as for every list read.
+            let note = match cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+                cairn_node::medication::already_stopped_note(tx, patient, medication_id).await
+            })
+            .await
+            {
+                Ok(note) => note,
+                Err(e) => Some(cairn_node::medication::not_known_whether_stopped(&e)),
+            };
             let event_id = cairn_node::medication::cease_medication(
                 &mut db,
                 &node_sk,
@@ -5014,12 +5016,14 @@ async fn run() -> anyhow::Result<()> {
             println!("ceased medication thread {medication_id}; event {event_id}");
             // #859: this verb stops ONE thread; re-read the line, and say so if it still reads
             // current. Display-only like the note above: the stop is already written.
-            let current =
-                match cairn_node::medication::still_current_note(&db, patient, medication_id).await
-                {
-                    Ok(current) => current,
-                    Err(e) => Some(cairn_node::medication::not_known_whether_current(&e)),
-                };
+            let current = match cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+                cairn_node::medication::still_current_note(tx, patient, medication_id).await
+            })
+            .await
+            {
+                Ok(current) => current,
+                Err(e) => Some(cairn_node::medication::not_known_whether_current(&e)),
+            };
             // On stderr, beside the CLI's other warnings (#848): stdout stays the success line.
             for note in note.into_iter().chain(current) {
                 eprintln!("warning: {note}");
@@ -5398,8 +5402,11 @@ async fn run() -> anyhow::Result<()> {
             println!("attested medication thread {medication_id} (event {event_id})");
         }
         Cmd::MedicationList { patient, json } => {
-            let db = cairn_node::db::connect(&cli.conn).await?;
-            let list = cairn_node::medication::read::list_patient_medications(&db, patient).await?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let list = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+                cairn_node::medication::read::list_patient_medications(tx, patient).await
+            })
+            .await?;
             if json {
                 // The payload is the WHOLE `PatientMedicationList`, not a bare row array. A
                 // machine reader must be able to see the incompleteness signal in-band: a

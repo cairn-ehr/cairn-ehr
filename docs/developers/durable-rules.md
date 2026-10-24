@@ -10,6 +10,43 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #863 + #864 — A SHRED HANDS ITS ROWS ON; A LIST IS ONE SNAPSHOT — do not undo** (pins:
+`crates/cairn-node/tests/shred_refolds_overlay_winner.rs`, `tests/medication_list_one_snapshot.rs`):
+- **A shred ends by re-folding the threads its event named (#863)** — `cairn_execute_shred` (db/037) deletes only
+  the rows its event produced; for a one-winner projection whose winner that was, the key was left EMPTY (shred the
+  newer of two stops: the drug read current). `cairn_refold_after_shred` then re-runs the heal-safe appliers of the
+  other eligible events that can win the same rows: same threads (`cairn_medication_threads_named`: `medication_id`,
+  `subject_a`, `subject_b`, CANONICALISED — the floor admits any uuid spelling) and a type sharing a non-`*_flag`
+  projection table with the shredded type (the registry's `projection_tables` — exhaustive by CONVENTION only, which
+  db/039's narrow rebuild also relies on). A NEW medication event type naming a thread under another key must be added
+  to the helper. The TARGET is excluded by id: a sealed target names no thread once its clear view is deleted, but the
+  sync door also shreds a peer's PLAINTEXT event, whose body still names its thread (PR #865 review). An EARLIER-shredded
+  plaintext sibling is still replayed, as `cairn_reproject`'s heal does — **#866** (filtering it needs the shred log,
+  whose predicate `shred_predicate_has_one_home.rs` keeps in one place). A sibling whose replay raises aborts the shred;
+  the error names the sibling and keeps its SQLSTATE (whether it should block the erasure at all: **#867**). It runs lenient
+  (`cairn.remote_apply = on`) and puts the caller's posture back — left `on`, a later write in the strict door's
+  transaction skips its raise-not-clamp checks. It WAITS on each sibling's custody lock; shreds are serialized first
+  (`cairn_lock_shred_refold`, before the custody lock) so two never wait on each other; a door meeting a shred in a
+  cycle gets a transient 40P01 (db/005's deadlock note). Cost: a scan of medication events' clear payloads per shred
+  (`shortcut:`). **Tempting wrong fixes:** "never over-erase" read as "nothing to restore"; TRY the sibling's lock and
+  skip it (a holder that rolls back or only re-receives the event writes nothing — PR #865 review); compare thread
+  ids as raw text; run the whole-log `cairn_reproject` from a shred. Pins:
+  `shredding_the_newest_stop_leaves_the_earlier_stop_in_force`, `shredding_the_winning_coding_restores_the_earlier_coding`,
+  `shredding_a_separation_restores_the_reconciliation_it_overrode`, `the_refold_puts_the_callers_apply_posture_back`,
+  `a_thread_is_matched_however_its_uuid_is_spelt`, `a_shred_waits_for_a_sibling_whose_holder_rolls_back_then_folds_it`,
+  `a_peers_shred_of_a_plaintext_stop_stays_scrubbed`, `a_deferred_sibling_is_not_promoted_by_a_shred`,
+  `a_peers_flagged_stop_is_replayed_lenient_so_the_shred_goes_through`,
+  `a_sibling_that_fails_to_replay_is_named_and_keeps_its_class`.
+- **Every production medication-list read runs in ONE snapshot (#864)** — `medication::snapshot::in_snapshot`
+  (`REPEATABLE READ READ ONLY`): the CLI's `medication-list` and both cease notes, sign-off's two reads, the
+  window's `read_chart_of`. The readers keep `GenericClient` so tests can still pass a bare client or an aborted
+  transaction (the notes' failure seam). Sign-off's two reads are two snapshots ON PURPOSE (comparing them is the
+  point, #335), and its writes stay READ COMMITTED: a door write at REPEATABLE READ reopens the custody/shred race
+  (db/005's `cairn_lock_custody` note). **Tempting wrong fix:** one snapshot spanning sign-off's reads AND writes.
+  Pins: `a_stop_committed_after_the_read_began_is_not_seen`, `production_list_reads_run_in_one_snapshot` (counts six call
+  sites — a new production reader is added there), and `snapshot.rs` in `db_errors_stay_legible.rs`'s
+  `UNMARKED_COMMITS` (a read-only commit).
+
 **⇒ #832 — THE WINDOW'S WITHHOLD (ADR-0081 slice B) — do not undo** (pins: `cairn-gui-tauri/src/hold/plan_tests.rs`,
 `hold/command_tests.rs`, `src/holds_webview_tests.rs`, `cairn-gui-tab-medications` `hold_view.rs`,
 `crates/cairn-node/tests/ui_timing.rs`):
@@ -140,16 +177,15 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   given"), so the other reason is not read as the shown stop's (`ceased_reason_lines`, `cessation_detail`). db/060
   bumped the generation so the loader's heal backfills; db/037's shred scrubs the row. **Tempting wrong fixes:**
   `COALESCE` the old reason into `medication_cessation` (still loses a reasoned earlier stop and a sibling's);
-  reading the two parts in two statements. Open: #863 (shredding the newest stop un-stops the line), #864 (the list
-  read spans several statements). Pins: `tests/medication_stop_reasons.rs`, `other_reasons_drop_the_shown_one_and_repeats_only`, the
+  reading the two parts in two statements. (#863 and #864 are fixed: the block above.) Pins: `tests/medication_stop_reasons.rs`, `other_reasons_drop_the_shown_one_and_repeats_only`, the
   renderers' unit tests, `registry_row_count_is_pinned` (30) and db/tests/039 (32).
 - **A CLI stop of one thread says when the line still reads current (#859)** — `medication-cease` re-reads the line
   AFTER the stop (`still_current_note`) and names its threads with no stop: under latest-effective-wins (db/033)
   only an unstopped thread's dose can keep a line current. They are read from the whole group
   (`medication_thread_group`), not `row.members` (this patient's charts only): a thread on a chart not linked to this
   patient is counted, never named, and the note then drops "stop that one too". It says "no
-  stop … is readable here", never "recorded": a stop sealed without custody, or a shredded winning stop, leaves no
-  `medication_cessation` row though a stop exists (PR #860 review). Display-only:
+  stop … is readable here", never "recorded": a stop sealed without custody, or a thread's only stop shredded, leaves no
+  `medication_cessation` row though a stop was recorded (PR #860 review; #863 re-folds an earlier stop). Display-only:
   a failed re-read becomes `not_known_whether_current`, never `?`, since the stop is already written. Both notes go
   to stderr after the success line. Pins: `a_stop_of_one_thread_on_a_line_kept_current_names_the_sibling`,
   `a_sibling_already_stopped_is_not_named_as_unstopped`, `a_sibling_on_an_unlinked_chart_is_counted_never_named`,

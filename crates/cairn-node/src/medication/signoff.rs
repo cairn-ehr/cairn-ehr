@@ -11,7 +11,7 @@
 //! transaction. Each attestation commits in its OWN transaction (ADR-0060): these are N
 //! independent clinical acts, and a failure on one must not un-write the others. An earlier
 //! version bundled all N into one transaction and had exactly that defect.
-use crate::medication::{read::list_patient_medications, AttestParams};
+use crate::medication::{read::list_patient_medications, snapshot::in_snapshot, AttestParams};
 use cairn_medication_view::{sign_off_targets, ChartSet, MedicationRow, MedicationStatus};
 use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
@@ -209,24 +209,20 @@ pub struct SignOffOutcome {
 ///
 /// HLCs must be minted BEFORE the transaction opens: `node_hlc_tick()` advances node state,
 /// and minting inside a transaction that later aborts would roll the tick back. So the list
-/// is read once before the mint (to size it) and once after (to decide what to sign) — both
-/// on the client, outside any transaction, since each line then commits in its own — and the
-/// two computed target SETS must agree before anything is written.
+/// is read once before the mint (to size it) and once after (to decide what to sign) — each in
+/// its own read-only snapshot (`snapshot::in_snapshot`, #864), never in a transaction with the
+/// writes, since each line then commits in its own — and the two computed target SETS must agree
+/// before anything is written.
 ///
-/// WHAT THIS DOES NOT GUARANTEE (issue #335). The connection runs at Postgres's default
-/// READ COMMITTED — a fresh snapshot PER STATEMENT. `list_patient_medications` issues up to
-/// TEN statements (the chart-set read, the per-thread vouch read, the two group-chart reads,
-/// two advisory-flag reads, the vetoed-link read, the current/past list reads, and the
-/// hazardous-group membership read — see `read.rs`), so even one read alone spans up to ten
-/// snapshots, and
-/// neither read is atomic with the other or with itself. The
-/// `actual != expected` compare below is therefore a best-effort check, not an isolation
-/// guarantee: it catches a race that happens to move the computed TARGET SET between the
-/// two reads, but a narrower race, or one that leaves the target set unchanged while still
-/// mutating what gets signed, could slip through undetected. Issue #335 tracks the
-/// isolation-level decision (e.g. upgrading to REPEATABLE READ) and binding the compare to
-/// the human's actual on-screen review window rather than just the gap between these two
-/// reads.
+/// WHAT THIS DOES NOT GUARANTEE (issue #335). Each read is consistent with ITSELF (one
+/// `REPEATABLE READ READ ONLY` snapshot over every statement `read.rs` issues), but the two reads
+/// are two snapshots, and the writes run at READ COMMITTED (a door write must never run at
+/// REPEATABLE READ — db/005's custody note). The `actual != expected` compare below is therefore
+/// a best-effort check, not an isolation guarantee: it catches a race that moves the computed
+/// TARGET SET between the two reads, but one that leaves the target set unchanged while still
+/// mutating what gets signed could slip through undetected. Issue #335 tracks binding the
+/// compare to the human's actual on-screen review window rather than just the gap between these
+/// two reads.
 ///
 /// If the two target sets disagree — a medication arrived, or someone else signed a
 /// thread, in the milliseconds between — the gesture is REFUSED rather than silently
@@ -253,7 +249,10 @@ pub async fn sign_off_medication_list(
     // before any signature is minted (ADR-0066 decision 6).
     crate::medication::sealed_submit::ensure_unwrap_key(client).await?;
 
-    let first_read = list_patient_medications(&*client, patient).await?;
+    let first_read = in_snapshot(client, async |tx| {
+        list_patient_medications(tx, patient).await
+    })
+    .await?;
 
     // ADR-0076 decision 3, the on-screen half: is this the chart set the clinician saw?
     // Checked FIRST — before the empty-list early return and before any HLC is minted — so
@@ -304,23 +303,26 @@ pub async fn sign_off_medication_list(
         hlcs.push(crate::db::next_hlc(client, node_origin).await?);
     }
 
-    // The second read, on the client directly rather than inside a transaction. Wrapping it
-    // in one bought no isolation — READ COMMITTED takes a fresh snapshot per statement
-    // either way (issue #335) — and it can no longer share a transaction with the writes,
-    // because the writes are now per line (see below).
+    // The second read, in its OWN read-only snapshot (#864: one consistent list, never a line
+    // stopped without its reason), not in a transaction with the writes: those are per line
+    // (see below), and a door write must never run at REPEATABLE READ (db/005's custody note).
+    // The two reads are two snapshots; comparing them is the point (issue #335).
     //
     // SAFETY NOTE (untested, issue #333): the race that triggers the mismatch refusal below has
     // no DB coverage (the refusal itself — wording and `Stale` scope — is unit-tested on
     // `ensure_same_targets`). Forcing it needs a second connection writing a medication event
     // for this patient in the narrow window between the two reads.
-    let second_read = list_patient_medications(&*client, patient).await?;
+    let second_read = in_snapshot(client, async |tx| {
+        list_patient_medications(tx, patient).await
+    })
+    .await?;
 
     // ADR-0076 decision 3, the between-reads half: a link or unlink landing in the gap
     // changes whose drugs are on the list. Checked before the target compare because it is
     // the more specific diagnosis — such a change usually moves the targets too, and "the
     // linked charts changed" tells the clinician WHY the list is different. Same best-effort
-    // caveat as the target compare below (READ COMMITTED, issue #335), and the same #333
-    // coverage gap: forcing it needs a second connection writing a link in that window.
+    // caveat as the target compare below (two reads, two snapshots, issue #335), and the same
+    // #333 coverage gap: forcing it needs a second connection writing a link in that window.
     ensure_same_charts(
         &first_read.charts,
         &second_read.charts,
