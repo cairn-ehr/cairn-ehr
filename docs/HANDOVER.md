@@ -7,7 +7,9 @@
 > a shred ends by re-folding the threads its event named (`cairn_refold_after_shred`, serialized by
 > `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops no longer makes the drug read current; every production medication-list
 > read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`). In-place SQL, no
-> generation change. Independent review fixed in-PR; full local gate green on the final tree (2888 tests). Durable rules: the #863 + #864 block. **#861 was decided 2026-10-24** (show a stopped member's
+> generation change. Two review rounds fixed in-PR (the second: the re-fold never replays its own target, a failing
+> sibling is named; filed #866, #867). Full local gate was green before round two (2888 tests); after it, the 26
+> touched DB-gated binaries (231 tests), fmt, clippy and `cargo doc -D warnings` are green — CI gates the full sweep. Durable rules: the #863 + #864 block. **#861 was decided 2026-10-24** (show a stopped member's
 > reason on a line that reads current, worded apart — now buildable; the decision is on the issue).
 > **Merged 2026-10-23: PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)** (#857 + #859): db/060
 > `medication_cessation_reason`, every stop's reason on the list (gen **60**); the CLI stop says when the line stays
@@ -37,7 +39,9 @@
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Review and merge PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864); run #838's RUNBOOK §15. **Build #861** (decided 2026-10-24:
 >    "A stopped record of this drug gave: …" on a line that reads current; both renderers + the semantic tree;
->    `read_cessation_reasons` stops discarding them for an Active line). Decisions owed: **#825** (where the window's
+>    `read_cessation_reasons` stops discarding them for an Active line). From PR #865's second review: **#866** (an
+>    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
+>    re-fold block the erasure — a decision). Decisions owed: **#825** (where the window's
 >    operator diagnostics live), **#850** (acknowledging a dealt-with report). Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
 >    ADR-0082) · #834 (needs a decision on shape). From PR #856's second review: **#858** (a peer release on a
 >    sibling thread is shown nowhere). An idempotent re-send of a registration
@@ -206,7 +210,7 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 ### 2026-10-24 — #863 + #864 (PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)): a shred hands its rows on; a list is one snapshot
 
 Maintainer chose #863 + #864 and decided #861's shape. TDD (red first on both one-winner keys), each pin
-mutation-checked, an independent review.
+mutation-checked, an independent review, then a second four-agent review (fixed in-PR; filed **#866**, **#867**).
 - **⇒ "Never over-erase" is half a rule.** Deleting only your own rows is right; leaving a one-winner key EMPTY is
   under-statement. Any scrub of a winner-takes-all projection owes a re-fold of what remains.
 - **⇒ Never SKIP a locked sibling on the theory that its holder will write it** — a holder that rolls back, or
@@ -215,6 +219,13 @@ mutation-checked, an independent review.
 - **⇒ Raise isolation only for reads.** A door write at REPEATABLE READ reopens the custody/shred race; the snapshot
   lives at the callers that own a bare connection, and the readers keep `GenericClient` (tests' failure seam).
 - **⇒ A source-guard slice at `at - N` bytes panics on an em dash** — use `floor_char_boundary`.
+- **⇒ "Its clear view is gone" is true only of a SEALED event.** `cairn_clear_payload` returns a plaintext body
+  straight from the log, and the sync door shreds a peer's plaintext event — so the re-fold re-inserted its own
+  target's rows (second review; three reviewers found it independently). Now excluded by id; an EARLIER-shredded
+  plaintext sibling still comes back on a heal or re-fold (**#866**). A sibling whose replay raises aborts the
+  shred, now naming the sibling under its own SQLSTATE; whether that should block the erasure is **#867**.
+- **⇒ zsh does not word-split `$T`** — `cargo test $T` with `T="--test a --test b"` passes ONE filter and runs
+  every binary with all tests filtered out, exit 0. Use an array (`T+=(--test a)`, `"${T[@]}"`).
 
 ### 2026-10-23/24 — #857 + #859 (PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)): every stop's reason; a one-thread stop says the line stays current
 

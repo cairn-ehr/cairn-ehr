@@ -24,8 +24,8 @@
 //!
 //! WHY THE LISTED LINES ARE CHECKED TWICE. `listed_groups` comes from the list's earlier member
 //! read, a separate statement (READ COMMITTED on a bare client; production reads share one
-//! snapshot, #864, so there this is belt and braces). A peer's assert that puts a line on a set chart
-//! between the two reads would otherwise come back here as "on chart <this patient's own
+//! snapshot, #864, so there this is belt and braces). A peer's assert that puts a line on a set
+//! chart between the two reads would otherwise come back here as "on chart <this patient's own
 //! chart>" and ask for a second line. So the query also drops, in its own snapshot, any line a
 //! set chart lists. In that window the line shows in neither place for one read (a gap the
 //! next read closes), never in a false one.

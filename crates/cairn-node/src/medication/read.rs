@@ -197,8 +197,9 @@ async fn list_chart_set_medications(
                 // Every group here came from `members`, which reads the same
                 // `medication_thread_group` view as `read_group_charts`, so an entry exists
                 // unless a concurrent separation re-keyed the group between the two
-                // statements (on a bare client at READ COMMITTED; production reads share one snapshot, #864) — in which case the
-                // group's row is normally gone too and `groups_missing_from_chart` reports it.
+                // statements (on a bare client at READ COMMITTED; production reads share one
+                // snapshot, #864) — in which case the group's row is normally gone too and
+                // `groups_missing_from_chart` reports it.
                 source_charts: group_charts.get(&group_id).cloned().unwrap_or_default(),
                 // A hold rides BESIDE the status (ADR-0081): a withheld line is still Active.
                 // Cessation wins over any hold (decision 5): a ceased row carries none.
@@ -282,10 +283,10 @@ async fn list_chart_set_medications(
 /// - `reached` (`medication_group_cross_patient.patients`), which ALSO sees a thread known only
 ///   through an orphan cessation (db/033, PR #219 finding 3) — the reason it is read at all.
 /// - the charts of the group's `members` (`MemberVouch::patient_id`): the charts sign-off
-///   WRITES to. Read in a separate statement (READ COMMITTED on a bare client; production reads share one
-///   snapshot, #864), so a separation landing between
-///   two statements can leave a member on a chart the first two no longer name — the rule must
-///   judge the very charts a signature would go to (PR #717 review).
+///   WRITES to. Read in a separate statement (READ COMMITTED on a bare client; production
+///   reads share one snapshot, #864), so a separation landing between two statements can leave
+///   a member on a chart the first two no longer name — the rule must judge the very charts a
+///   signature would go to (PR #717 review).
 fn touched_charts(
     g: Uuid,
     group_charts: &HashMap<Uuid, Vec<Uuid>>,
@@ -308,9 +309,8 @@ fn touched_charts(
 ///   thread OUTSIDE the set, which has no `members` entry.
 /// - `by_thread`, reached through `g`'s `members`: the threads sign-off WRITES to. The conflict
 ///   read is a separate statement (READ COMMITTED on a bare client; #864 gives production one
-///   snapshot), so a reconciliation or separation landing
-///   between it and the member read can file a member's flag under a group this read is not
-///   showing, and a group-only lookup would read the line as clean — the same hardening, and
+///   snapshot), so a reconciliation or separation landing between it and the member read can
+///   file a member's flag under a group this read is not showing, and a group-only lookup would read the line as clean — the same hardening, and
 ///   for the same reason, as `touched_charts` (PR #845 review).
 fn group_conflict_charts(
     g: Uuid,
@@ -853,10 +853,10 @@ mod tests {
         assert!(wrong_chart_reasons(&set, u(1), true, &touched, &[]).doubted_link);
     }
 
-    /// PR #845 review: the conflict read is its own statement (READ COMMITTED on a bare client; production
-    /// reads share one snapshot, #864), so a
-    /// reconciliation re-keying a flagged thread between it and the member read files the flag
-    /// under a group the read is not showing. The flag must still reach the line through the
+    /// PR #845 review: the conflict read is its own statement (READ COMMITTED on a bare
+    /// client; production reads share one snapshot, #864), so a reconciliation re-keying a
+    /// flagged thread between it and the member read files the flag under a group the read is
+    /// not showing. The flag must still reach the line through the
     /// member thread sign-off would write to — else another person's W reads as clean.
     #[test]
     fn a_member_threads_conflict_counts_even_when_its_group_was_re_keyed() {

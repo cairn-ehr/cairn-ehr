@@ -11,6 +11,7 @@
 //! transaction that writes through a door: db/005's `cairn_lock_custody` note explains why a
 //! REPEATABLE READ door caller reopens the custody/shred race. Read-only also makes Postgres
 //! refuse any write slipped inside.
+use anyhow::Context;
 use tokio_postgres::{Client, IsolationLevel, Transaction};
 
 /// Run `read` against a `REPEATABLE READ READ ONLY` transaction opened on `client`, then end it.
@@ -27,10 +28,13 @@ pub async fn in_snapshot<T>(
         .isolation_level(IsolationLevel::RepeatableRead)
         .read_only(true)
         .start()
-        .await?;
+        .await
+        .context("could not open a consistent read of the medication list")?;
     let out = read(&tx).await?;
     // Nothing was written; COMMIT just ends the transaction (an Err path drops `tx`, which
     // rolls back the same nothing).
-    tx.commit().await?;
+    tx.commit()
+        .await
+        .context("could not finish the read of the medication list")?;
     Ok(out)
 }

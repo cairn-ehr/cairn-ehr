@@ -17,9 +17,13 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   newer of two stops: the drug read current). `cairn_refold_after_shred` then re-runs the heal-safe appliers of the
   other eligible events that can win the same rows: same threads (`cairn_medication_threads_named`: `medication_id`,
   `subject_a`, `subject_b`, CANONICALISED — the floor admits any uuid spelling) and a type sharing a non-`*_flag`
-  projection table with the shredded type (the registry's `projection_tables`, exhaustive by rule). A NEW medication
-  event type naming a thread under another key must be added to the helper. Shredded siblings need no filter (no
-  clear view → no thread; `shred_predicate_has_one_home.rs` keeps that predicate in one place). It runs lenient
+  projection table with the shredded type (the registry's `projection_tables` — exhaustive by CONVENTION only, which
+  db/039's narrow rebuild also relies on). A NEW medication event type naming a thread under another key must be added
+  to the helper. The TARGET is excluded by id: a sealed target names no thread once its clear view is deleted, but the
+  sync door also shreds a peer's PLAINTEXT event, whose body still names its thread (PR #865 review). An EARLIER-shredded
+  plaintext sibling is still replayed, as `cairn_reproject`'s heal does — **#866** (filtering it needs the shred log,
+  whose predicate `shred_predicate_has_one_home.rs` keeps in one place). A sibling whose replay raises aborts the shred;
+  the error names the sibling and keeps its SQLSTATE (whether it should block the erasure at all: **#867**). It runs lenient
   (`cairn.remote_apply = on`) and puts the caller's posture back — left `on`, a later write in the strict door's
   transaction skips its raise-not-clamp checks. It WAITS on each sibling's custody lock; shreds are serialized first
   (`cairn_lock_shred_refold`, before the custody lock) so two never wait on each other; a door meeting a shred in a
@@ -29,7 +33,10 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   ids as raw text; run the whole-log `cairn_reproject` from a shred. Pins:
   `shredding_the_newest_stop_leaves_the_earlier_stop_in_force`, `shredding_the_winning_coding_restores_the_earlier_coding`,
   `shredding_a_separation_restores_the_reconciliation_it_overrode`, `the_refold_puts_the_callers_apply_posture_back`,
-  `a_thread_is_matched_however_its_uuid_is_spelt`, `a_shred_waits_for_a_sibling_whose_holder_rolls_back_then_folds_it`.
+  `a_thread_is_matched_however_its_uuid_is_spelt`, `a_shred_waits_for_a_sibling_whose_holder_rolls_back_then_folds_it`,
+  `a_peers_shred_of_a_plaintext_stop_stays_scrubbed`, `a_deferred_sibling_is_not_promoted_by_a_shred`,
+  `a_peers_flagged_stop_is_replayed_lenient_so_the_shred_goes_through`,
+  `a_sibling_that_fails_to_replay_is_named_and_keeps_its_class`.
 - **Every production medication-list read runs in ONE snapshot (#864)** — `medication::snapshot::in_snapshot`
   (`REPEATABLE READ READ ONLY`): the CLI's `medication-list` and both cease notes, sign-off's two reads, the
   window's `read_chart_of`. The readers keep `GenericClient` so tests can still pass a bare client or an aborted

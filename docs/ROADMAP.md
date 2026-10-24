@@ -485,7 +485,10 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   gate run filed **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386). Merged 2026-10-23.
 - **2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)):** a shred ends by re-folding the threads its event named
   (`cairn_refold_after_shred`, serialized by `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops leaves
-  the earlier one in force, and the same for a coding, a dose correction, a reconciliation. Every production
+  the earlier one in force, and the same for a coding and a reconciliation (tested; a dose correction rides the same
+  generic path). The shred never replays its own target (a peer's plaintext target would re-insert its rows); the
+  review filed **#866** (an earlier-shredded plaintext event comes back on a heal or re-fold) and **#867** (should a
+  failed re-fold block the erasure). Every production
   medication-list read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`).
   In-place SQL edits, no schema-generation change. **#861 decided** by the maintainer 2026-10-24: show a stopped
   member thread's reason on a line that reads current, worded apart from "Stopped: …" — now buildable.

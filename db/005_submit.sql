@@ -443,31 +443,32 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- read/write cycle and one aborts with 40001). A caller that raises the isolation level to
 -- REPEATABLE READ around a door reopens this race.
 --
--- DEADLOCK SHAPE (accepted, unreachable today). Within one event the order is always this lock,
--- then any projection lock (CARNMR, db/033), then the hlc_state row the sync door merges into last.
+-- DEADLOCK SHAPES (accepted). Within one event the order is always this lock, then any projection
+-- lock (CARNMR, db/033), then the hlc_state row the sync door merges into last.
 -- A transaction that applied SEVERAL events would hold hlc_state (or CARNMR) from an earlier one
 -- when it takes E's lock for a later one, and could meet a single-event shred of E that holds E's
 -- lock and wants hlc_state — the hot one. Postgres aborts one side with 40P01, a retryable failure
 -- that writes nothing. Every product DOOR caller (pull, requeue, restore) applies one event per
 -- statement, so a caller that starts batching events into one transaction must revisit this.
--- The one multi-event holder is connect-time re-adjudication (db/043, #603/#773): it takes each
--- sealed candidate's lock at the top of its row and keeps it to the end of the pass, along with any
--- CARNMR lock or projection row lock an earlier event's appliers took. Two shapes can therefore
+-- There are two multi-event holders. The first is connect-time re-adjudication (db/043,
+-- #603/#773): it takes each sealed candidate's lock at the top of its row and keeps it to the end
+-- of the pass, along with any CARNMR lock or projection row lock an earlier event's appliers took. Two shapes can therefore
 -- deadlock with it: a late-key door holding a later event's lock from step 9 whose applier wants a
 -- CARNMR lock re-adjudication holds, and a shred holding a later event's lock that blocks on a
--- medication_reconciliation / medication_group_member row an earlier gate-4 applier wrote. Whichever side Postgres aborts loses nothing: the row runs in
--- a per-row subtransaction, so a 40P01 there is recorded on the marker and retried at the next
--- connect, and a 40P01 at the door is a retryable failure that wrote nothing. The deferred set is
--- empty on a healthy node, so the pass is short and rare.
--- A SHRED is the other multi-event holder since #863: after its scrub it re-folds the siblings
--- that can win the rows it emptied (cairn_refold_after_shred, db/037), taking each sealed
--- sibling's lock in turn while it holds its target's, plus CARNMR when the shredded event was a
--- reconciliation or separation. Shreds are serialized against each other first
+-- medication_reconciliation / medication_group_member row an earlier gate-4 applier wrote.
+-- Whichever side Postgres aborts loses nothing: the row runs in a per-row subtransaction, so a
+-- 40P01 there is recorded on the marker and retried at the next connect, and a 40P01 at the door
+-- is a retryable failure that wrote nothing. The deferred set is empty on a healthy node, so the
+-- pass is short and rare.
+-- The second, since #863, is a SHRED: after its scrub it re-folds the siblings that can win the
+-- rows it emptied (cairn_refold_after_shred, db/037), taking each sealed sibling's lock in turn
+-- while it holds its target's, plus CARNMR when the shredded event was a reconciliation or
+-- separation. Shreds are serialized against each other first
 -- (cairn_lock_shred_refold), so two shreds never wait on each other's siblings. What remains: a
 -- door holding a sibling's lock that then waits on a projection row (or CARNMR) the shred holds.
--- Postgres aborts one side with 40P01, which writes nothing and is retried (both doors class
--- 40P01 as transient, never a refusal). Before #863 that door simply waited; the trade buys a
--- record that never under-states after a shred.
+-- Postgres aborts one side with 40P01, which writes nothing: the sync pullers class it transient
+-- and retry it; at the local door it is a failed write the clinician repeats. Before #863 that
+-- door simply waited; the trade buys a record that no longer under-states because of a shred.
 CREATE OR REPLACE FUNCTION cairn_lock_custody(p_event_id uuid)
 RETURNS void LANGUAGE sql
 SET search_path = public, pg_temp
@@ -477,7 +478,6 @@ $$;
 -- Called only by the SECURITY DEFINER doors, the shred executor and the heal-safe dispatch (which
 -- only those doors and the owner-only re-adjudication call), all running as the owner.
 REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
-
 
 -- #773 — a crypto-shred and a whole-log heal/rebuild never interleave.
 --
@@ -492,10 +492,11 @@ REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 --      DELETE cannot see that row, removes nothing, and commits; the heal then commits the row.
 -- Custody stays gone, but ADR-0005 / ADR-0052 promise the projection is scrubbed too.
 --
--- HOW. One lock, two modes. Every shred takes it SHARED, so shreds of different events never wait
--- for each other; the heal takes it EXCLUSIVE, before it reads anything. The heal therefore waits
--- for every shred already open to commit, and every shred that starts during the heal waits for
--- the heal to commit; whichever comes second runs on a fresh snapshot of the first's committed rows.
+-- HOW. One lock, two modes. Every shred takes it SHARED, so this lock never makes one shred wait for
+-- another (since #863 cairn_lock_shred_refold, db/037, serializes shreds; that is a separate lock);
+-- the heal takes it EXCLUSIVE, before it reads anything. The heal therefore waits for every shred
+-- already open to commit, and every shred that starts during the heal waits for the heal to
+-- commit; whichever comes second runs on a fresh snapshot of the first's committed rows.
 -- (A per-event lock — cairn_lock_custody — cannot do this here: the heal would hold one per event.)
 --
 -- WHAT IT COSTS. A shred waits out a heal in progress. A heal runs only at a connect after a schema

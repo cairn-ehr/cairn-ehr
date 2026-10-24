@@ -321,8 +321,8 @@ pub async fn sign_off_medication_list(
     // changes whose drugs are on the list. Checked before the target compare because it is
     // the more specific diagnosis — such a change usually moves the targets too, and "the
     // linked charts changed" tells the clinician WHY the list is different. Same best-effort
-    // caveat as the target compare below (READ COMMITTED, issue #335), and the same #333
-    // coverage gap: forcing it needs a second connection writing a link in that window.
+    // caveat as the target compare below (two reads, two snapshots, issue #335), and the same
+    // #333 coverage gap: forcing it needs a second connection writing a link in that window.
     ensure_same_charts(
         &first_read.charts,
         &second_read.charts,
