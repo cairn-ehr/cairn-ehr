@@ -11,7 +11,7 @@
 //! transaction. Each attestation commits in its OWN transaction (ADR-0060): these are N
 //! independent clinical acts, and a failure on one must not un-write the others. An earlier
 //! version bundled all N into one transaction and had exactly that defect.
-use crate::medication::{read::list_patient_medications, AttestParams};
+use crate::medication::{read::list_patient_medications, snapshot::in_snapshot, AttestParams};
 use cairn_medication_view::{sign_off_targets, ChartSet, MedicationRow, MedicationStatus};
 use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
@@ -253,7 +253,10 @@ pub async fn sign_off_medication_list(
     // before any signature is minted (ADR-0066 decision 6).
     crate::medication::sealed_submit::ensure_unwrap_key(client).await?;
 
-    let first_read = list_patient_medications(&*client, patient).await?;
+    let first_read = in_snapshot(client, async |tx| {
+        list_patient_medications(tx, patient).await
+    })
+    .await?;
 
     // ADR-0076 decision 3, the on-screen half: is this the chart set the clinician saw?
     // Checked FIRST — before the empty-list early return and before any HLC is minted — so
@@ -304,16 +307,19 @@ pub async fn sign_off_medication_list(
         hlcs.push(crate::db::next_hlc(client, node_origin).await?);
     }
 
-    // The second read, on the client directly rather than inside a transaction. Wrapping it
-    // in one bought no isolation — READ COMMITTED takes a fresh snapshot per statement
-    // either way (issue #335) — and it can no longer share a transaction with the writes,
-    // because the writes are now per line (see below).
+    // The second read, in its OWN read-only snapshot (#864: one consistent list, never a line
+    // stopped without its reason), not in a transaction with the writes: those are per line
+    // (see below), and a door write must never run at REPEATABLE READ (db/005's custody note).
+    // The two reads are two snapshots; comparing them is the point (issue #335).
     //
     // SAFETY NOTE (untested, issue #333): the race that triggers the mismatch refusal below has
     // no DB coverage (the refusal itself — wording and `Stale` scope — is unit-tested on
     // `ensure_same_targets`). Forcing it needs a second connection writing a medication event
     // for this patient in the narrow window between the two reads.
-    let second_read = list_patient_medications(&*client, patient).await?;
+    let second_read = in_snapshot(client, async |tx| {
+        list_patient_medications(tx, patient).await
+    })
+    .await?;
 
     // ADR-0076 decision 3, the between-reads half: a link or unlink landing in the gap
     // changes whose drugs are on the list. Checked before the target compare because it is

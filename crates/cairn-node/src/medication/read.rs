@@ -35,10 +35,12 @@
 //! checkable against its view.
 //!
 //! Generic over `GenericClient` so a caller can read through an open transaction as well
-//! as a plain client. The sign-off orchestrator (`signoff.rs`) reads the list twice to
-//! re-check it before writing. That re-read is a best-effort compare, NOT an isolation
-//! guarantee: the connection runs at READ COMMITTED, so each of these statements takes a
-//! fresh snapshot. See `signoff.rs` and issue #335 before relying on it for atomicity.
+//! as a plain client. ONE SNAPSHOT (#864): on a plain client at READ COMMITTED each of these
+//! statements takes a fresh snapshot, so a stop landing mid-read gave a line stopped with no
+//! reason. Every production caller therefore reads through `snapshot::in_snapshot` (one
+//! `REPEATABLE READ READ ONLY` transaction). The sign-off orchestrator (`signoff.rs`) reads the
+//! list twice to re-check it before writing: two snapshots, a best-effort compare, NOT an
+//! isolation guarantee for its writes. See `signoff.rs` and issue #335.
 //!
 //! UUID BINDING. `tokio-postgres` has no `ToSql`/`FromSql` impl for `uuid::Uuid` without the
 //! `with-uuid-1` feature, which this crate deliberately does not enable (mirrors the

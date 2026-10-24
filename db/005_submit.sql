@@ -470,6 +470,19 @@ $$;
 -- only those doors and the owner-only re-adjudication call), all running as the owner.
 REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 
+-- #863 — the same lock, but never WAIT for it: true if taken (or already held by this
+-- transaction), false if another transaction holds it. For the shred's re-fold (db/037), which
+-- already holds its own target's lock and must not block on a sibling's: two shreds of sibling
+-- events, each re-folding the other, would otherwise deadlock. A held lock means its holder is
+-- granting, projecting or shredding that event, and each of those writes its rows itself.
+CREATE OR REPLACE FUNCTION cairn_try_lock_custody(p_event_id uuid)
+RETURNS boolean LANGUAGE sql
+SET search_path = public, pg_temp
+AS $$
+    SELECT pg_try_advisory_xact_lock(hashtextextended('cairn.custody:' || p_event_id::text, 0));
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_try_lock_custody(uuid) FROM PUBLIC;
+
 -- #773 — a crypto-shred and a whole-log heal/rebuild never interleave.
 --
 -- WHY THIS EXISTS. cairn_reproject (db/039) re-runs the appliers over every event in the log: they

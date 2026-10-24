@@ -146,12 +146,81 @@ ON CONFLICT (event_type) DO NOTHING;
 --    AND recompute the affected component so the erased merge stops grouping the two threads.
 --    Overlay winners from OTHER, unshredded events survive (never over-erase).
 -- ---------------------------------------------------------------------------
+-- #863 — the medication threads an event's clear payload names: the keys of every one-winner
+-- medication projection it can win (a thread's statement, coding, stop and dose correction carry
+-- `medication_id`; a reconciliation or separation names its pair as `subject_a`/`subject_b`).
+-- Text, not uuid: a malformed id must make this match nothing, never raise inside a shred.
+CREATE OR REPLACE FUNCTION cairn_medication_threads_named(p jsonb)
+RETURNS text[] LANGUAGE sql IMMUTABLE AS $$
+    SELECT array_remove(ARRAY[p ->> 'medication_id', p ->> 'subject_a', p ->> 'subject_b'], NULL)
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_medication_threads_named(jsonb) FROM PUBLIC;
+
+-- #863 — after a shred's scrub, hand the shredded event's rows back to the next event in line.
+--
+-- WHY. A one-winner projection (medication_statement, medication_coding, medication_cessation,
+-- medication_dose_correction, medication_reconciliation) keeps ONE row per key: the winner's. The
+-- scrub deletes the rows the shredded event produced; when that event WAS the winner, the key was
+-- left with no row at all and nothing re-applied the runner-up. Stop a drug for "angioedema", stop
+-- it again, shred the second stop: the thread had no medication_cessation row, so the line read
+-- CURRENT until the next whole-log heal. The record under-stated, and in the unsafe direction.
+--
+-- HOW. A heal scoped to the threads the shredded event named. Every applier is insert-or-better
+-- and arrival-order-independent, the property cairn_reproject's heal mode (db/039) already rests
+-- on, so re-running the heal-safe appliers of every OTHER medication event on those threads
+-- converges each key to its true winner among the events that remain. Events already shredded
+-- (the target included: its shred-log row is written first) and deferred events are skipped.
+--
+-- COST. Finding a thread's events reads the clear payload of every medication event on the node:
+-- no index names a thread. Shreds are rare, deliberate acts.
+-- shortcut: a whole-node scan of medication events per shred; add a thread index on event_log if
+-- shreds become frequent or a node's medication log grows large enough to make one slow.
+--
+-- LOCKS. A sealed sibling is replayed only under its custody lock (cairn_projection_dispatch_heal_safe
+-- would wait for it), so first TRY it: a sibling whose lock another transaction holds is skipped,
+-- because that holder is granting, projecting or shredding it and writes (or erases) its rows
+-- itself. Waiting instead would let two shreds of sibling events deadlock, each holding its own
+-- target's lock and wanting the other's.
+--
+-- POSTURE. The replay runs lenient (cairn.remote_apply = on), like cairn_reproject: a replayed
+-- event may have been admitted by the sync door with a clamped-and-flagged conflict that the strict
+-- posture would now RAISE on, aborting the shred. The caller's setting is put back afterwards, so
+-- the rest of its transaction keeps the posture it chose.
+CREATE OR REPLACE FUNCTION cairn_refold_after_shred(p_threads text[])
+RETURNS void LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+DECLARE
+    v_posture text := current_setting('cairn.remote_apply', true);
+    v_ev      event_log;
+BEGIN
+    IF cardinality(p_threads) = 0 THEN
+        RETURN;
+    END IF;
+    PERFORM set_config('cairn.remote_apply', 'on', true);
+    FOR v_ev IN
+        SELECT e.* FROM event_log e
+        WHERE e.event_type LIKE 'clinical.medication%'
+          AND NOT EXISTS (SELECT 1 FROM erasure_shred_log s WHERE s.target_event_id = e.event_id)
+          AND cairn_replay_eligible(e)
+          AND cairn_medication_threads_named(cairn_clear_payload(e)) && p_threads
+        ORDER BY e.hlc_wall, e.hlc_counter, e.node_origin, e.event_id
+    LOOP
+        IF v_ev.sealed AND NOT cairn_try_lock_custody(v_ev.event_id) THEN
+            CONTINUE;
+        END IF;
+        PERFORM cairn_projection_dispatch_heal_safe(v_ev);
+    END LOOP;
+    PERFORM set_config('cairn.remote_apply', COALESCE(v_posture, ''), true);
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_refold_after_shred(text[]) FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION cairn_execute_shred(p_target uuid, p_shred_event uuid, p_basis text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_ca BYTEA;
     v_lo uuid;
     v_hi uuid;
+    v_threads text[];
 BEGIN
     -- #773: wait for any whole-log heal/rebuild in progress, and make one that starts now wait for
     -- this shred (db/005's cairn_lock_erasure_heal says why). SHARED, so shreds of different
@@ -171,8 +240,12 @@ BEGIN
     ON CONFLICT (target_event_id) DO NOTHING;
 
     -- Provenance-precise projection scrub: only rows THIS event produced.
-    -- (Overlay winners from other, unshredded events survive — never over-erase.)
-    SELECT content_address INTO v_ca FROM event_log WHERE event_id = p_target;
+    -- (Overlay winners from other, unshredded events survive — never over-erase; and a key whose
+    -- winner THIS event was is re-folded from the others at the end — #863.)
+    -- The threads are read now, while the target's clear view still exists (deleted below).
+    SELECT e.content_address, cairn_medication_threads_named(cairn_clear_payload(e))
+      INTO v_ca, v_threads
+      FROM event_log e WHERE e.event_id = p_target;
     -- Subset-node degradation (final review): on a cairn-sync subset-only node the medication
     -- projection tables (db/031-035) are ABSENT, so an unconditional DELETE would raise
     -- "relation does not exist" and WEDGE the shred — and, via the apply door, freeze the sync
@@ -254,6 +327,9 @@ BEGIN
     -- them, so order is safety, not correctness).
     DELETE FROM event_clear WHERE event_id = p_target;
     DELETE FROM event_dek   WHERE event_id = p_target;
+
+    -- #863: re-fold the keys the scrub may have emptied. Last, so it reads the target as gone.
+    PERFORM cairn_refold_after_shred(COALESCE(v_threads, '{}'));
 END;
 $$;
 
