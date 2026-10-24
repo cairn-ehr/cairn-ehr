@@ -158,7 +158,8 @@ pub async fn already_stopped_note(
 /// own in `medication_cessation` (db/033 counts only those threads' doses as active), so the
 /// note names those threads, for the operator to stop too or to leave current on purpose. It
 /// says "readable here", not "recorded": a stop sealed without custody on this node, or a
-/// shredded winning stop, leaves no row though a stop exists (PR #860 review).
+/// thread's only stop shredded, leaves no row though a stop was recorded (PR #860 review; a
+/// shredded stop with an earlier one left is re-folded to it, #863).
 ///
 /// Those threads are read from the whole group (`medication_thread_group`), as db/033 reads
 /// it, NOT from `row.members`, which holds only this patient's charts: a peer's reconciliation
