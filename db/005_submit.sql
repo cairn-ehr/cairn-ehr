@@ -455,11 +455,19 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- CARNMR lock or projection row lock an earlier event's appliers took. Two shapes can therefore
 -- deadlock with it: a late-key door holding a later event's lock from step 9 whose applier wants a
 -- CARNMR lock re-adjudication holds, and a shred holding a later event's lock that blocks on a
--- medication_reconciliation / medication_group_member row an earlier gate-4 applier wrote (the
--- shred itself takes no CARNMR lock). Whichever side Postgres aborts loses nothing: the row runs in
+-- medication_reconciliation / medication_group_member row an earlier gate-4 applier wrote. Whichever side Postgres aborts loses nothing: the row runs in
 -- a per-row subtransaction, so a 40P01 there is recorded on the marker and retried at the next
 -- connect, and a 40P01 at the door is a retryable failure that wrote nothing. The deferred set is
 -- empty on a healthy node, so the pass is short and rare.
+-- A SHRED is the other multi-event holder since #863: after its scrub it re-folds the siblings
+-- that can win the rows it emptied (cairn_refold_after_shred, db/037), taking each sealed
+-- sibling's lock in turn while it holds its target's, plus CARNMR when the shredded event was a
+-- reconciliation or separation. Shreds are serialized against each other first
+-- (cairn_lock_shred_refold), so two shreds never wait on each other's siblings. What remains: a
+-- door holding a sibling's lock that then waits on a projection row (or CARNMR) the shred holds.
+-- Postgres aborts one side with 40P01, which writes nothing and is retried (both doors class
+-- 40P01 as transient, never a refusal). Before #863 that door simply waited; the trade buys a
+-- record that never under-states after a shred.
 CREATE OR REPLACE FUNCTION cairn_lock_custody(p_event_id uuid)
 RETURNS void LANGUAGE sql
 SET search_path = public, pg_temp
@@ -470,18 +478,6 @@ $$;
 -- only those doors and the owner-only re-adjudication call), all running as the owner.
 REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 
--- #863 — the same lock, but never WAIT for it: true if taken (or already held by this
--- transaction), false if another transaction holds it. For the shred's re-fold (db/037), which
--- already holds its own target's lock and must not block on a sibling's: two shreds of sibling
--- events, each re-folding the other, would otherwise deadlock. A held lock means its holder is
--- granting, projecting or shredding that event, and each of those writes its rows itself.
-CREATE OR REPLACE FUNCTION cairn_try_lock_custody(p_event_id uuid)
-RETURNS boolean LANGUAGE sql
-SET search_path = public, pg_temp
-AS $$
-    SELECT pg_try_advisory_xact_lock(hashtextextended('cairn.custody:' || p_event_id::text, 0));
-$$;
-REVOKE EXECUTE ON FUNCTION cairn_try_lock_custody(uuid) FROM PUBLIC;
 
 -- #773 — a crypto-shred and a whole-log heal/rebuild never interleave.
 --

@@ -18,7 +18,7 @@ mod medication_kit;
 use medication_kit::*;
 
 #[tokio::test]
-async fn a_stop_committed_mid_read_is_not_half_seen() {
+async fn a_stop_committed_after_the_read_began_is_not_seen() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();

@@ -209,24 +209,20 @@ pub struct SignOffOutcome {
 ///
 /// HLCs must be minted BEFORE the transaction opens: `node_hlc_tick()` advances node state,
 /// and minting inside a transaction that later aborts would roll the tick back. So the list
-/// is read once before the mint (to size it) and once after (to decide what to sign) — both
-/// on the client, outside any transaction, since each line then commits in its own — and the
-/// two computed target SETS must agree before anything is written.
+/// is read once before the mint (to size it) and once after (to decide what to sign) — each in
+/// its own read-only snapshot (`snapshot::in_snapshot`, #864), never in a transaction with the
+/// writes, since each line then commits in its own — and the two computed target SETS must agree
+/// before anything is written.
 ///
-/// WHAT THIS DOES NOT GUARANTEE (issue #335). The connection runs at Postgres's default
-/// READ COMMITTED — a fresh snapshot PER STATEMENT. `list_patient_medications` issues up to
-/// TEN statements (the chart-set read, the per-thread vouch read, the two group-chart reads,
-/// two advisory-flag reads, the vetoed-link read, the current/past list reads, and the
-/// hazardous-group membership read — see `read.rs`), so even one read alone spans up to ten
-/// snapshots, and
-/// neither read is atomic with the other or with itself. The
-/// `actual != expected` compare below is therefore a best-effort check, not an isolation
-/// guarantee: it catches a race that happens to move the computed TARGET SET between the
-/// two reads, but a narrower race, or one that leaves the target set unchanged while still
-/// mutating what gets signed, could slip through undetected. Issue #335 tracks the
-/// isolation-level decision (e.g. upgrading to REPEATABLE READ) and binding the compare to
-/// the human's actual on-screen review window rather than just the gap between these two
-/// reads.
+/// WHAT THIS DOES NOT GUARANTEE (issue #335). Each read is consistent with ITSELF (one
+/// `REPEATABLE READ READ ONLY` snapshot over every statement `read.rs` issues), but the two reads
+/// are two snapshots, and the writes run at READ COMMITTED (a door write must never run at
+/// REPEATABLE READ — db/005's custody note). The `actual != expected` compare below is therefore
+/// a best-effort check, not an isolation guarantee: it catches a race that moves the computed
+/// TARGET SET between the two reads, but one that leaves the target set unchanged while still
+/// mutating what gets signed could slip through undetected. Issue #335 tracks binding the
+/// compare to the human's actual on-screen review window rather than just the gap between these
+/// two reads.
 ///
 /// If the two target sets disagree — a medication arrived, or someone else signed a
 /// thread, in the milliseconds between — the gesture is REFUSED rather than silently

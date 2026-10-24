@@ -17,7 +17,8 @@ use cairn_medication_view::MedicationStatus;
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
-    cease_medication, code_medication, CeaseMedicationInput, CodeMedicationInput,
+    cease_medication, code_medication, reconcile_medications, separate_medications,
+    CeaseMedicationInput, CodeMedicationInput, ReconcileInput,
 };
 use cairn_node::shred::shred_event;
 use tokio_postgres::Client;
@@ -166,31 +167,73 @@ async fn shredding_a_lone_stop_leaves_the_drug_current() {
     assert_eq!(left, 0);
 }
 
-#[tokio::test]
-async fn the_refold_puts_the_callers_apply_posture_back() {
-    // The re-fold replays lenient. Left 'on', it would make every later write in the shred's
-    // transaction skip the strict door's raise-not-clamp checks — a floor bypass.
-    let Some(base) = cs() else { return };
-    let _guard = db::test_serial_guard(&base).await.unwrap();
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+/// The posture the re-fold leaves behind when the caller's was `before`.
+async fn posture_after_refold(c: &mut Client, before: &str) -> Option<String> {
     let tx = c.transaction().await.unwrap();
-    let posture: Option<String> = tx
-        .query_one(
-            "SELECT cairn_refold_after_shred(ARRAY[gen_random_uuid()::text]), \
-                    current_setting('cairn.remote_apply', true)",
-            &[],
-        )
-        .await
-        .unwrap()
-        .get(1);
-    assert_ne!(posture.as_deref(), Some("on"));
+    tx.execute(
+        "SELECT set_config('cairn.remote_apply', $1, true)",
+        &[&before],
+    )
+    .await
+    .unwrap();
+    tx.query_one(
+        "SELECT cairn_refold_after_shred('clinical.medication-cessation.asserted', \
+                                          ARRAY[gen_random_uuid()::text]), \
+                current_setting('cairn.remote_apply', true)",
+        &[],
+    )
+    .await
+    .unwrap()
+    .get(1)
 }
 
 #[tokio::test]
-async fn a_shred_never_waits_on_a_siblings_custody_lock() {
-    // Two shreds of sibling events each re-fold the other; if the re-fold WAITED on a sibling's
-    // custody lock they could deadlock. It tries the lock and skips a sibling another
-    // transaction is busy with.
+async fn the_refold_puts_the_callers_apply_posture_back() {
+    // The re-fold replays lenient. Left 'on', every later write in the strict door's
+    // transaction would skip its raise-not-clamp checks — a floor bypass. And the sync door
+    // (db/020) calls the shred with it 'on', which must stay 'on'.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    assert_eq!(
+        posture_after_refold(&mut c, "off").await.as_deref(),
+        Some("off")
+    );
+    assert_eq!(
+        posture_after_refold(&mut c, "on").await.as_deref(),
+        Some("on")
+    );
+}
+
+#[tokio::test]
+async fn a_thread_is_matched_however_its_uuid_is_spelt() {
+    // The floor admits any spelling Postgres casts to uuid and the appliers key on the cast; a
+    // foreign client's upper-case id must still name the same thread (PR #865 review).
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let id = Uuid::now_v7();
+    let named: Vec<String> = c
+        .query_one(
+            "SELECT cairn_medication_threads_named(jsonb_build_object( \
+                 'medication_id', upper($1), 'subject_a', 'not-a-uuid'))",
+            &[&id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        named,
+        vec![id.to_string()],
+        "canonical, and a malformed id names nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_shred_waits_for_a_sibling_whose_holder_rolls_back_then_folds_it() {
+    // PR #865 review: the re-fold used to SKIP a sibling whose custody lock another transaction
+    // held, trusting the holder to write it. A holder that rolls back (or only re-receives the
+    // event) writes nothing, and the drug read current. Now the shred waits and folds it.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
@@ -207,10 +250,50 @@ async fn a_shred_never_waits_on_a_siblings_custody_lock() {
     )
     .await
     .unwrap();
-    // A wait would hit this timeout and fail the shred.
-    c.batch_execute("SET statement_timeout = '5s'")
+    let shredder = tokio::spawn(async move {
+        shred(&mut c, &sk, &kid, second).await;
+        c
+    });
+    // Long enough for the shred to reach the held lock; it must still be waiting there.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(
+        !shredder.is_finished(),
+        "the shred waits for the sibling's lock"
+    );
+    held.rollback().await.unwrap();
+    let c = shredder.await.unwrap();
+
+    let list = list_patient_medications(&c, p).await.unwrap();
+    assert_eq!(list.rows[0].status, MedicationStatus::Ceased);
+    assert_eq!(list.rows[0].cessation_reason.as_deref(), Some("angioedema"));
+}
+
+#[tokio::test]
+async fn shredding_a_separation_restores_the_reconciliation_it_overrode() {
+    // The `subject_a`/`subject_b` key: a reconciliation edge is a one-winner row per pair.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, x) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let y = add_med(&mut c, &sk, &kid, p).await;
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&mut c, &sk, &kid, "test-node", p, x, y, &input, None, None)
         .await
         .unwrap();
-    shred(&mut c, &sk, &kid, second).await;
-    held.rollback().await.unwrap();
+    let apart = separate_medications(&mut c, &sk, &kid, "test-node", p, x, y, &input, None, None)
+        .await
+        .unwrap();
+    assert_eq!(list_patient_medications(&c, p).await.unwrap().rows.len(), 2);
+
+    shred(&mut c, &sk, &kid, apart).await;
+
+    assert_eq!(
+        list_patient_medications(&c, p).await.unwrap().rows.len(),
+        1,
+        "the earlier reconciliation stands again: one line"
+    );
 }

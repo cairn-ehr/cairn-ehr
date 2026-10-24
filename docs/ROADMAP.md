@@ -484,7 +484,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   threads with no readable stop when the line stays current (#859). Reviews filed **#861**, #863 and #864; the
   gate run filed **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386). Merged 2026-10-23.
 - **2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)):** a shred ends by re-folding the threads its event named
-  (`cairn_refold_after_shred`, db/037; `cairn_try_lock_custody`, db/005), so shredding the newer of two stops leaves
+  (`cairn_refold_after_shred`, serialized by `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops leaves
   the earlier one in force, and the same for a coding, a dose correction, a reconciliation. Every production
   medication-list read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`).
   In-place SQL edits, no schema-generation change. **#861 decided** by the maintainer 2026-10-24: show a stopped

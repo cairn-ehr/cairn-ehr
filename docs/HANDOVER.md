@@ -4,8 +4,8 @@
 
 > [!NOTE]
 > **⇒ ONE PR AWAITS THE MAINTAINER: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864, branch `fix/863-864-shred-refold-snapshot-read`):
-> a shred ends by re-folding the threads its event named (`cairn_refold_after_shred`, db/037; `cairn_try_lock_custody`,
-> db/005), so shredding the newer of two stops no longer makes the drug read current; every production medication-list
+> a shred ends by re-folding the threads its event named (`cairn_refold_after_shred`, serialized by
+> `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops no longer makes the drug read current; every production medication-list
 > read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`). In-place SQL, no
 > generation change. Durable rules: the #863 + #864 block. **#861 was decided 2026-10-24** (show a stopped member's
 > reason on a line that reads current, worded apart — now buildable; the decision is on the issue).
@@ -209,8 +209,9 @@ Maintainer chose #863 + #864 and decided #861's shape. TDD (red first on both on
 mutation-checked, an independent review.
 - **⇒ "Never over-erase" is half a rule.** Deleting only your own rows is right; leaving a one-winner key EMPTY is
   under-statement. Any scrub of a winner-takes-all projection owes a re-fold of what remains.
-- **⇒ A re-fold that takes other events' locks must TRY them** — the shred already holds its own, so a waiting
-  re-fold is a new deadlock shape between two sibling shreds.
+- **⇒ Never SKIP a locked sibling on the theory that its holder will write it** — a holder that rolls back, or
+  only re-receives the event, writes nothing (the review's catch; my first cut try-locked). Serialize the shreds and
+  wait instead; a door cycle is a transient 40P01. **Compare ids canonically** — the floor admits any uuid spelling.
 - **⇒ Raise isolation only for reads.** A door write at REPEATABLE READ reopens the custody/shred race; the snapshot
   lives at the callers that own a bare connection, and the readers keep `GenericClient` (tests' failure seam).
 - **⇒ A source-guard slice at `at - N` bytes panics on an em dash** — use `floor_char_boundary`.

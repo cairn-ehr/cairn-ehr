@@ -14,26 +14,29 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 `crates/cairn-node/tests/shred_refolds_overlay_winner.rs`, `tests/medication_list_one_snapshot.rs`):
 - **A shred ends by re-folding the threads its event named (#863)** — `cairn_execute_shred` (db/037) deletes only
   the rows its event produced; for a one-winner projection whose winner that was, the key was left EMPTY (shred the
-  newer of two stops: the drug read current). `cairn_refold_after_shred` then re-runs the heal-safe appliers of
-  every OTHER unshredded, eligible `clinical.medication%` event naming the same threads
-  (`cairn_medication_threads_named`: `medication_id`, `subject_a`, `subject_b`). A NEW medication event type whose
-  payload names a thread under another key must be added there. It runs lenient (`cairn.remote_apply = on`) and
-  puts the caller's posture back — left `on`, a later write in the shred's transaction would skip the strict
-  door's raise-not-clamp checks. It only TRIES a sibling's custody lock (`cairn_try_lock_custody`, db/005) and
-  skips one another transaction holds: waiting would let two shreds of sibling events deadlock. Its cost is a scan
-  of every medication event's clear payload per shred (a `shortcut:`; no thread index exists). **Tempting wrong
-  fixes:** "never over-erase" read as "nothing to restore"; call `cairn_projection_dispatch_heal_safe` directly
-  (it WAITS on the lock); run the whole-log `cairn_reproject` from a shred (EXCLUSIVE heal lock, whole log).
-  Pins: `shredding_the_newest_stop_leaves_the_earlier_stop_in_force`,
-  `shredding_the_winning_coding_restores_the_earlier_coding`, `the_refold_puts_the_callers_apply_posture_back`,
-  `a_shred_never_waits_on_a_siblings_custody_lock`.
+  newer of two stops: the drug read current). `cairn_refold_after_shred` then re-runs the heal-safe appliers of the
+  other eligible events that can win the same rows: same threads (`cairn_medication_threads_named`: `medication_id`,
+  `subject_a`, `subject_b`, CANONICALISED — the floor admits any uuid spelling) and a type sharing a non-`*_flag`
+  projection table with the shredded type (the registry's `projection_tables`, exhaustive by rule). A NEW medication
+  event type naming a thread under another key must be added to the helper. Shredded siblings need no filter (no
+  clear view → no thread; `shred_predicate_has_one_home.rs` keeps that predicate in one place). It runs lenient
+  (`cairn.remote_apply = on`) and puts the caller's posture back — left `on`, a later write in the strict door's
+  transaction skips its raise-not-clamp checks. It WAITS on each sibling's custody lock; shreds are serialized first
+  (`cairn_lock_shred_refold`, before the custody lock) so two never wait on each other; a door meeting a shred in a
+  cycle gets a transient 40P01 (db/005's deadlock note). Cost: a scan of medication events' clear payloads per shred
+  (`shortcut:`). **Tempting wrong fixes:** "never over-erase" read as "nothing to restore"; TRY the sibling's lock and
+  skip it (a holder that rolls back or only re-receives the event writes nothing — PR #865 review); compare thread
+  ids as raw text; run the whole-log `cairn_reproject` from a shred. Pins:
+  `shredding_the_newest_stop_leaves_the_earlier_stop_in_force`, `shredding_the_winning_coding_restores_the_earlier_coding`,
+  `shredding_a_separation_restores_the_reconciliation_it_overrode`, `the_refold_puts_the_callers_apply_posture_back`,
+  `a_thread_is_matched_however_its_uuid_is_spelt`, `a_shred_waits_for_a_sibling_whose_holder_rolls_back_then_folds_it`.
 - **Every production medication-list read runs in ONE snapshot (#864)** — `medication::snapshot::in_snapshot`
   (`REPEATABLE READ READ ONLY`): the CLI's `medication-list` and both cease notes, sign-off's two reads, the
   window's `read_chart_of`. The readers keep `GenericClient` so tests can still pass a bare client or an aborted
   transaction (the notes' failure seam). Sign-off's two reads are two snapshots ON PURPOSE (comparing them is the
   point, #335), and its writes stay READ COMMITTED: a door write at REPEATABLE READ reopens the custody/shred race
   (db/005's `cairn_lock_custody` note). **Tempting wrong fix:** one snapshot spanning sign-off's reads AND writes.
-  Pins: `a_stop_committed_mid_read_is_not_half_seen`, `production_list_reads_run_in_one_snapshot` (counts six call
+  Pins: `a_stop_committed_after_the_read_began_is_not_seen`, `production_list_reads_run_in_one_snapshot` (counts six call
   sites — a new production reader is added there), and `snapshot.rs` in `db_errors_stay_legible.rs`'s
   `UNMARKED_COMMITS` (a read-only commit).
 
