@@ -223,7 +223,8 @@ mutation-checked, an independent review, then a second four-agent review (fixed 
   straight from the log, and the sync door shreds a peer's plaintext event — so the re-fold re-inserted its own
   target's rows (second review; three reviewers found it independently). Now excluded by id; an EARLIER-shredded
   plaintext sibling still comes back on a heal or re-fold (**#866**). A sibling whose replay raises aborts the
-  shred, now naming the sibling under its own SQLSTATE; whether that should block the erasure is **#867**.
+  shred; a P0001 is re-raised bare naming the sibling, any other code propagates untouched (a first cut used
+  `USING ERRCODE = v_state`, and CI's `floor_refusals_carry_no_errcode.rs` — not in my targeted run — refused it); whether that should block the erasure is **#867**.
 - **⇒ zsh does not word-split `$T`** — `cargo test $T` with `T="--test a --test b"` passes ONE filter and runs
   every binary with all tests filtered out, exit 0. Use an array (`T+=(--test a)`, `"${T[@]}"`).
 

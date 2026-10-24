@@ -23,7 +23,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   sync door also shreds a peer's PLAINTEXT event, whose body still names its thread (PR #865 review). An EARLIER-shredded
   plaintext sibling is still replayed, as `cairn_reproject`'s heal does — **#866** (filtering it needs the shred log,
   whose predicate `shred_predicate_has_one_home.rs` keeps in one place). A sibling whose replay raises aborts the shred;
-  the error names the sibling and keeps its SQLSTATE (whether it should block the erasure at all: **#867**). It runs lenient
+  a sibling's refusal is re-raised BARE (still P0001 — `USING ERRCODE` is forbidden in db/ by
+  `floor_refusals_carry_no_errcode.rs`) naming the sibling; any other code propagates untouched (whether it should block the erasure at all: **#867**). It runs lenient
   (`cairn.remote_apply = on`) and puts the caller's posture back — left `on`, a later write in the strict door's
   transaction skips its raise-not-clamp checks. It WAITS on each sibling's custody lock; shreds are serialized first
   (`cairn_lock_shred_refold`, before the custody lock) so two never wait on each other; a door meeting a shred in a

@@ -456,8 +456,8 @@ async fn refold_failure(c: &mut Client, med: Uuid, code: &str) -> tokio_postgres
 #[tokio::test]
 async fn a_sibling_that_fails_to_replay_is_named_and_keeps_its_class() {
     // PR #865 review: a sibling's applier error used to surface bare, as if the shred itself
-    // were refused. It now names the sibling and the re-fold, and keeps its SQLSTATE so a
-    // deadlock (class 40) is still classed transient by the sync pullers.
+    // were refused. A refusal (P0001) now names the sibling and the re-fold and stays P0001; any
+    // other code passes through untouched, so a deadlock (class 40) is still transient.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
@@ -465,16 +465,23 @@ async fn a_sibling_that_fails_to_replay_is_named_and_keeps_its_class() {
     let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
     let sibling = stop(&mut c, &sk, &kid, p, med, "boom").await;
 
-    for code in ["P0001", "40P01"] {
-        let err = refold_failure(&mut c, med, code).await;
-        let db_err = err.as_db_error().expect("a database error");
-        assert_eq!(db_err.code().code(), code, "the sibling's SQLSTATE is kept");
-        let msg = db_err.message();
-        assert!(
-            msg.contains("#863")
-                && msg.contains(&sibling.to_string())
-                && msg.contains("applier blew up"),
-            "the error names the re-fold and the sibling, and keeps the cause: {msg}"
-        );
-    }
+    let err = refold_failure(&mut c, med, "P0001").await;
+    let db_err = err.as_db_error().expect("a database error");
+    assert_eq!(db_err.code().code(), "P0001", "a refusal stays a refusal");
+    let msg = db_err.message();
+    assert!(
+        msg.contains("#863")
+            && msg.contains(&sibling.to_string())
+            && msg.contains("applier blew up"),
+        "the refusal names the re-fold and the sibling, and keeps the cause: {msg}"
+    );
+
+    let err = refold_failure(&mut c, med, "40P01").await;
+    let db_err = err.as_db_error().expect("a database error");
+    assert_eq!(
+        db_err.code().code(),
+        "40P01",
+        "a deadlock passes through unchanged"
+    );
+    assert_eq!(db_err.message(), "applier blew up");
 }

@@ -213,11 +213,13 @@ REVOKE EXECUTE ON FUNCTION cairn_medication_threads_named(jsonb) FROM PUBLIC;
 -- retryable failure that wrote nothing (db/005's deadlock-shape note).
 --
 -- ERRORS. A sibling whose replay raises aborts the whole shred: the erasure is refused rather than
--- leave a key under-stated. The error is re-raised under its own SQLSTATE (so a 40P01 stays
--- transient to the sync pullers) with the sibling's id and type in the message, so whoever reads
--- it (the clinician, an operator reading the sync pen) sees which sibling failed rather than a
--- bare refusal of the shred. A P0001 at the sync door is still classed a refusal and pens the
--- shred; whether a failed re-fold should block an erasure at all is issue #867.
+-- leave a key under-stated. A sibling's REFUSAL (P0001, the code every classifier reads as a
+-- verdict) is re-raised bare, still P0001, with the sibling's id and type in the message, so whoever
+-- reads it (the clinician, an operator reading the sync pen) sees which sibling failed rather than
+-- a bare refusal of the shred. Any other code (a 40P01, an outage) is not caught and propagates
+-- unchanged, so its class is untouched — re-raising it under a named code would need USING ERRCODE,
+-- which floor_refusals_carry_no_errcode.rs forbids in db/. A P0001 at the sync door is still classed
+-- a refusal and pens the shred; whether a failed re-fold should block an erasure at all is #867.
 --
 -- POSTURE. The replay runs lenient (cairn.remote_apply = on), like cairn_reproject: a replayed
 -- event may have been admitted by the sync door with a clamped-and-flagged conflict that the strict
@@ -230,7 +232,6 @@ RETURNS void LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE
     v_posture text := current_setting('cairn.remote_apply', true);
     v_ev      event_log;
-    v_state   text;
     v_msg     text;
 BEGIN
     IF cardinality(p_threads) = 0 THEN
@@ -253,11 +254,11 @@ BEGIN
     LOOP
         BEGIN
             PERFORM cairn_projection_dispatch_heal_safe(v_ev);
-        EXCEPTION WHEN OTHERS THEN
-            GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
-            RAISE EXCEPTION USING ERRCODE = v_state, MESSAGE = format(
-                '#863 shred re-fold: replaying sibling event %s (%s) failed: %s',
-                v_ev.event_id, v_ev.event_type, v_msg);
+        EXCEPTION WHEN raise_exception THEN
+            -- P0001 only, re-raised BARE so it stays P0001 (floor_refusals_carry_no_errcode.rs).
+            GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+            RAISE EXCEPTION '#863 shred re-fold: replaying sibling event % (%) failed: %',
+                v_ev.event_id, v_ev.event_type, v_msg;
         END;
     END LOOP;
     PERFORM set_config('cairn.remote_apply', COALESCE(v_posture, ''), true);
