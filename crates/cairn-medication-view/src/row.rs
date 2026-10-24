@@ -192,8 +192,17 @@ pub struct MedicationRow {
     /// empty unless `status` is Active: cessation wins over any hold.
     pub holds: Vec<MedicationHold>,
     /// Why the line was ceased, when the cessation gave a reason (non-empty only). Always
-    /// `None` unless `status` is Ceased.
+    /// `None` unless `status` is Ceased. This is the reason of the stop whose date the line
+    /// shows; a line stopped more than once has its other reasons in
+    /// `other_cessation_reasons`.
     pub cessation_reason: Option<String>,
+    /// Every OTHER distinct reason a stop of this line gave (any member thread), newest
+    /// recorded first, never repeating `cessation_reason` (#857). A second stop is admitted on
+    /// purpose (ADR-0082 decision 4), and the first one's reason may be the only record of an
+    /// adverse reaction, so a renderer that shows `cessation_reason` must show these too —
+    /// including when `cessation_reason` is `None` (a later stop that gave no reason). Always
+    /// empty unless `status` is Ceased.
+    pub other_cessation_reasons: Vec<String>,
 }
 
 /// One hold on a medication line (ADR-0081, #803): the paper drug chart's "W".
@@ -239,20 +248,42 @@ impl MedicationHold {
     }
 }
 
+/// What the already-stopped sentence says about the list when it is said of a LINE that reads
+/// stopped: true since #857, because the list then shows every stop's reason readable on this
+/// node (db/060; a stop sealed without custody here has no row until its key arrives).
+pub const LIST_KEEPS_EVERY_REASON: &str = "the list keeps every stop's reason";
+
+/// What it says instead of a THREAD whose line still reads current (the CLI, #854): the list
+/// shows stop reasons only on a line that reads stopped, so promising them would be false in
+/// exactly the state where the drug reads current (PR #860 review).
+pub const LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED: &str =
+    "the list shows stop reasons only on a line that reads stopped";
+
 /// The sentence a stop says when `what` ("This drug", or the CLI's "This thread") was already
-/// stopped before it reached the record (#843, #854), naming the earlier stop's reason (`None`
-/// when none was recorded). The list keeps ONE reason per thread, the latest stop's (db/031
-/// `medication_cessation`), so the sentence must not promise the earlier reason stays beside
-/// the new one.
-pub fn already_stopped_sentence(what: &str, earlier_reason: Option<&str>) -> String {
-    let earlier = match earlier_reason {
-        Some(reason) => format!("its reason: {reason}"),
-        None => "no reason was recorded".to_string(),
+/// stopped before it reached the record (#843, #854). It names the earlier stops' reasons —
+/// `shown` (the stop the list shows) and every `other` (#857) — and ends with `list`, the claim
+/// about the list that is true for the caller's surface (one of the two constants above).
+pub fn already_stopped_sentence(
+    what: &str,
+    shown: Option<&str>,
+    others: &[String],
+    list: &str,
+) -> String {
+    let others_said: Vec<String> = others
+        .iter()
+        .map(|r| format!("another stop's reason: {r}"))
+        .collect();
+    // A shown stop with no reason beside another stop's reason must not read as "no reason
+    // was recorded": that is #857's own worst case (PR #860 review).
+    let earlier = match (shown, others_said.is_empty()) {
+        (Some(reason), true) => format!("its reason: {reason}"),
+        (Some(reason), false) => format!("its reason: {reason}; {}", others_said.join("; ")),
+        (None, false) => format!("one stop gave no reason; {}", others_said.join("; ")),
+        (None, true) => "no reason was recorded".to_string(),
     };
     format!(
         "{what} had already been stopped before this stop reached the record ({earlier}). \
-         Your stop is recorded too; where the list shows a stop's reason, it shows only the \
-         latest, and the earlier one stays in the record's history."
+         Your stop is recorded too, and {list}."
     )
 }
 
@@ -271,6 +302,8 @@ impl MedicationRow {
         Some(already_stopped_sentence(
             "This drug",
             self.cessation_reason.as_deref(),
+            &self.other_cessation_reasons,
+            LIST_KEEPS_EVERY_REASON,
         ))
     }
 
@@ -339,6 +372,7 @@ mod tests {
             source_charts: vec![],
             holds: vec![],
             cessation_reason: None,
+            other_cessation_reasons: vec![],
         }
     }
 
@@ -348,6 +382,7 @@ mod tests {
     fn holds_and_cessation_reason_serialize_with_pinned_keys() {
         let mut r = row("x", None);
         r.cessation_reason = Some("rash".into());
+        r.other_cessation_reasons = vec!["angioedema".into()];
         r.holds = vec![
             MedicationHold {
                 withhold_event_id: Uuid::from_u128(1),
@@ -372,6 +407,10 @@ mod tests {
         ];
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["cessation_reason"], "rash");
+        assert_eq!(
+            v["other_cessation_reasons"],
+            serde_json::json!(["angioedema"])
+        );
         assert_eq!(
             v["holds"],
             serde_json::json!([
@@ -408,8 +447,7 @@ mod tests {
     }
 
     /// #854: the rule both surfaces share. An active line says nothing; a ceased one names the
-    /// earlier reason, and never claims that reason stays on the list beside the new one (the
-    /// list keeps one reason per thread, the latest stop's — PR #856 review).
+    /// earlier reason and says the list keeps every stop's reason (true since #857, db/060).
     #[test]
     fn already_stopped_note_names_the_earlier_reason_and_what_the_list_keeps() {
         let mut r = row("x", None);
@@ -422,8 +460,35 @@ mod tests {
         r.cessation_reason = Some("angioedema".into());
         let note = r.already_stopped_note().unwrap();
         assert!(note.contains("its reason: angioedema"), "{note}");
-        assert!(note.contains("it shows only the latest"), "{note}");
-        assert!(!note.contains("beside it"), "{note}");
+        assert!(
+            note.contains("the list keeps every stop's reason"),
+            "{note}"
+        );
+        assert!(!note.contains("only the latest"), "{note}");
+    }
+
+    /// PR #860 review: the shown stop gave no reason but another stop did — the note must name
+    /// that reason, never say "no reason was recorded" while the list two lines down shows it.
+    #[test]
+    fn already_stopped_note_names_another_stops_reason_when_the_shown_one_gave_none() {
+        let mut r = row("x", None);
+        r.status = MedicationStatus::Ceased;
+        r.other_cessation_reasons = vec!["angioedema".into(), "rash".into()];
+        let note = r.already_stopped_note().unwrap();
+        assert!(!note.contains("no reason was recorded"), "{note}");
+        assert!(
+            note.contains(
+                "one stop gave no reason; another stop's reason: angioedema; another stop's \
+                 reason: rash"
+            ),
+            "{note}"
+        );
+        r.cessation_reason = Some("patient request".into());
+        let note = r.already_stopped_note().unwrap();
+        assert!(
+            note.contains("its reason: patient request; another stop's reason: angioedema"),
+            "{note}"
+        );
     }
 
     /// #835 review: a release at or before a pending hold's start cancels it — the hold never

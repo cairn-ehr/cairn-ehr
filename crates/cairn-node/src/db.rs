@@ -384,6 +384,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "059_medication_withhold",
         include_str!("../../../db/059_medication_withhold.sql"),
     ),
+    // db/060 (#857): one row per stop that gave a reason, so a later stop never hides an
+    // earlier stop's reason on the list. Node-only like every medication file (#284).
+    (
+        "060_medication_cessation_reason",
+        include_str!("../../../db/060_medication_cessation_reason.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

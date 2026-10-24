@@ -5012,8 +5012,16 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
+            // #859: this verb stops ONE thread; re-read the line, and say so if it still reads
+            // current. Display-only like the note above: the stop is already written.
+            let current =
+                match cairn_node::medication::still_current_note(&db, patient, medication_id).await
+                {
+                    Ok(current) => current,
+                    Err(e) => Some(cairn_node::medication::not_known_whether_current(&e)),
+                };
             // On stderr, beside the CLI's other warnings (#848): stdout stays the success line.
-            if let Some(note) = note {
+            for note in note.into_iter().chain(current) {
                 eprintln!("warning: {note}");
             }
         }
@@ -5518,11 +5526,11 @@ async fn run() -> anyhow::Result<()> {
                     for h in &row.holds {
                         println!("    {}", cairn_node::medication::hold_text::hold_line(h));
                     }
-                    if let Some(reason) = &row.cessation_reason {
-                        println!(
-                            "    {}",
-                            cairn_node::medication::hold_text::ceased_reason_line(reason)
-                        );
+                    for line in cairn_node::medication::hold_text::ceased_reason_lines(
+                        row.cessation_reason.as_deref(),
+                        &row.other_cessation_reasons,
+                    ) {
+                        println!("    {line}");
                     }
                 }
                 // The doubted-link remedy, ONCE for the whole list: each withheld row above

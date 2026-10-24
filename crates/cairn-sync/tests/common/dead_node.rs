@@ -82,7 +82,7 @@ pub struct DeadNodeRecord {
 pub async fn reset(c: &Client) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, medication_statement, \
-         medication_cessation, medication_withhold, medication_withhold_release, \
+         medication_cessation, medication_cessation_reason, medication_withhold, medication_withhold_release, \
          medication_dose_event, medication_dose_correction, \
          medication_reconciliation, medication_group_member, medication_projection_flag, \
          medication_attestation, medication_patient_conflict_flag, \

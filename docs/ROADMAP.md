@@ -482,9 +482,16 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   edited in place, no schema-generation change. Second review: "cancelled" for a release before a pending start,
   the stop note's false "beside it" corrected, `ctutils` 0.4.5 (RUSTSEC-2026-0385); filed **#857** (a later stop
   overwrites the earlier reason) · **#858** (a peer release on a sibling thread is shown nowhere) · **#859** (a CLI
-  stop of one thread on a line that stays current says only "ceased").
-- **Next:** review and merge PR #856 (#835 + #854); run #838's RUNBOOK §15; **#804** (needs #690), **#825** and **#850**
-  (decisions), **#855**, **#857**, **#859**, **#858**, **#837**, **#807**;
+  stop of one thread on a line that stays current says only "ceased"). Merged 2026-10-23.
+- **2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)):** db/060
+  `medication_cessation_reason` (one row per stop that gave a reason; gen **60**, the loader's heal backfills; shred
+  scrubs it) → `MedicationRow::other_cessation_reasons` beside the shown reason, said by the CLI list and the window;
+  the already-stopped note names every reason and claims only what its list shows. `medication-cease` names the
+  threads with no readable stop when the line stays current (#859). Reviews filed **#861** (a line reading current
+  hides a stopped member's reason — a decision), **#863** (a shredded newest stop un-stops the line) and **#864** (the
+  list read spans several statements); the gate run filed **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386).
+- **Next:** review and merge PR #860; run #838's RUNBOOK §15; **#863** (clinical safety), **#804** (needs #690), **#825**, **#850** and
+  **#861** (decisions), **#864**, **#855**, **#858**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

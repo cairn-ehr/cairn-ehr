@@ -115,18 +115,45 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `already_stopped_note` (the earlier stop's reason, or "no reason was recorded") when its press-time read shows the
   line `Ceased` AND the press landed in full — every thread stopped for certain. Beside a commit with no answer
   (#814) or a failed thread, "your stop is recorded" would contradict the outcome's own "NOT known" / "NOT stopped"
-  (PR #853 review). The note never says the earlier reason stays "beside" the new one: `medication_cessation` keeps
-  ONE reason per thread, the latest stop's (PR #856 review; showing every reason is #857). The CLI's
+  (PR #853 review). The note names the shown stop's reason AND every other stop's (#857): "no reason was recorded"
+  only when no stop gave one, never beside a reasonless latest stop (PR #860 review). Its closing claim about the list
+  is the CALLER's (`LIST_KEEPS_EVERY_REASON` for a line that reads stopped; the CLI's thread note on a line still
+  current says `LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED`, since the list shows no reason there — #861). The CLI's
   `medication-cease` says it too (#854), from the same sentence (`already_stopped_sentence`) and line rule
   (`MedicationRow::already_stopped_note`, `cairn-medication-view`), asked through `medication::already_stopped_note`
   BEFORE it ceases (after, its own stop would read as "already"). The window stops every thread of a line, the CLI
   ONE: so the CLI also asks the thread's own cessation, because a thread stopped beside a later active sibling leaves
-  the line current and the line rule silent (PR #856 review). That read is display-only: its failure becomes a
+  the line current and the line rule silent (PR #856 review). That the line still reads current is said AFTER the
+  stop by `still_current_note` (#859, next bullet), never by this note. That read is display-only: its failure becomes a
   sentence (`not_known_whether_stopped`), never `?` — a stop is a safety write — and a thread on no line of the
   patient's list here says it cannot tell (silence would read as "not stopped"). The note goes to stderr, beside the
   CLI's other warnings. **Tempting wrong fix:** refuse it as stale like a release. Pins:
   `a_stop_of_a_line_already_stopped_says_so`, the `cease_sorts_an_interrupted_commit_from_a_failure` source shape,
   `tests/medication_cease_already_stopped.rs`.
+- **Every stop's reason stays on the list (#857, maintainer 2026-10-23: "every stop's reason")** — `medication_cessation`
+  (per thread, through db/033's `medication_group_status`) still decides the status, and db/033's
+  `medication_group_cessation` view picks the SHOWN stop (`cessation_reason`, the one whose date the line shows); db/060's `medication_cessation_reason`, one
+  row per stop that gave a reason, keyed by content address, supplies `other_cessation_reasons` — every OTHER
+  distinct reason (surrounding whitespace ignored), newest recorded first, read in the SAME statement as the shown one
+  (`read_cessation_reasons`, members resolved once and aggregated — a per-line subquery re-scans
+  `medication_statement` for every stopped line). A line that reads current shows none of them (#861). A shown stop with no reason beside another stop's reason is said first ("no reason
+  given"), so the other reason is not read as the shown stop's (`ceased_reason_lines`, `cessation_detail`). db/060
+  bumped the generation so the loader's heal backfills; db/037's shred scrubs the row. **Tempting wrong fixes:**
+  `COALESCE` the old reason into `medication_cessation` (still loses a reasoned earlier stop and a sibling's);
+  reading the two parts in two statements. Open: #863 (shredding the newest stop un-stops the line), #864 (the list
+  read spans several statements). Pins: `tests/medication_stop_reasons.rs`, `other_reasons_drop_the_shown_one_and_repeats_only`, the
+  renderers' unit tests, `registry_row_count_is_pinned` (30) and db/tests/039 (32).
+- **A CLI stop of one thread says when the line still reads current (#859)** — `medication-cease` re-reads the line
+  AFTER the stop (`still_current_note`) and names its threads with no stop: under latest-effective-wins (db/033)
+  only an unstopped thread's dose can keep a line current. They are read from the whole group
+  (`medication_thread_group`), not `row.members` (this patient's charts only): a thread on a chart not linked to this
+  patient is counted, never named, and the note then drops "stop that one too". It says "no
+  stop … is readable here", never "recorded": a stop sealed without custody, or a shredded winning stop, leaves no
+  `medication_cessation` row though a stop exists (PR #860 review). Display-only:
+  a failed re-read becomes `not_known_whether_current`, never `?`, since the stop is already written. Both notes go
+  to stderr after the success line. Pins: `a_stop_of_one_thread_on_a_line_kept_current_names_the_sibling`,
+  `a_sibling_already_stopped_is_not_named_as_unstopped`, `a_sibling_on_an_unlinked_chart_is_counted_never_named`,
+  `the_cease_verb_reads_the_note_first_and_prints_it_last`.
 - **A release recorded for a LATER instant is said on its hold (#835)** — the hold still stands until then (the
   fold is unchanged), and `MedicationHold::release_pending` carries the instant from db/059 section 7c's
   `cairn_medication_hold_release_pending` (the same thread-and-name match as 7b, and only a release BEFORE a timed
@@ -144,8 +171,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   report AND for a refusal whose retry is `after_reread` (`Retry::AfterReread` promises no live retry); any other
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.
 - **The W is a BUTTON whose accessible name carries its reason** (symbol + " — " + detail), and a ceased line
-  whose cessation gave a reason has its status word as such a button, revealing `"Stopped: <reason>"` (no reason:
-  plain text). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin
+  whose stops gave a reason has its status word as such a button, revealing `cessation_detail`'s text ("Stopped:
+  <reason>", then "Another stop's reason: <reason>" per other stop, #857; no reason on any stop: plain text). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin
   `every_hold_and_hold_control_is_a_labelled_button`. Hover is never the only way to the reason: WebKit does not
   focus a clicked button, so click pins it; Escape or an outside click unpins. **Tempting wrong fix:** a `title`
   tooltip or a hover-only popover. Pins: `the_w_is_a_button_whose_label_is_its_reason`,
