@@ -7,7 +7,7 @@
 > a shred ends by re-folding the threads its event named (`cairn_refold_after_shred`, serialized by
 > `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops no longer makes the drug read current; every production medication-list
 > read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`). In-place SQL, no
-> generation change. Durable rules: the #863 + #864 block. **#861 was decided 2026-10-24** (show a stopped member's
+> generation change. Independent review fixed in-PR; full local gate green on the final tree (2888 tests). Durable rules: the #863 + #864 block. **#861 was decided 2026-10-24** (show a stopped member's
 > reason on a line that reads current, worded apart — now buildable; the decision is on the issue).
 > **Merged 2026-10-23: PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)** (#857 + #859): db/060
 > `medication_cessation_reason`, every stop's reason on the list (gen **60**); the CLI stop says when the line stays
