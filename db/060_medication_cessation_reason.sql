@@ -13,9 +13,13 @@
 --
 -- WHAT IS STORED. One row per cessation event that gave a non-blank reason, keyed by that
 -- event's content_address (no overlay, no winner: every stop's reason is its own fact, like
--- db/059's holds). The two winner projections above are untouched: they still decide whether
--- a line is stopped and which stop's date and reason the line SHOWS; this table supplies the
--- OTHER reasons the reader (cairn-node `medication/read.rs`) lists beside it.
+-- db/059's holds). Nothing above changes: medication_cessation (through db/033's
+-- medication_group_status) still decides whether a line is stopped, and db/033's
+-- medication_group_cessation view still picks which stop's date and reason the line SHOWS;
+-- this table supplies the OTHER reasons the reader (cairn-node `medication/read.rs`) lists
+-- beside it. Like that view, the read joins through medication_thread_group with no patient
+-- filter, so a line holding another chart's thread (a flagged wrong-chart hazard) lists that
+-- thread's reasons too: flagged, never suppressed.
 --
 -- HOW EXISTING NODES GET THEIR ROWS. This file bumps SCHEMA_GENERATION to 60, and a
 -- generation change makes the loader run a full heal (`cairn_reproject('', false, 'loader')`,
@@ -40,9 +44,12 @@ GRANT SELECT ON medication_cessation_reason TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_cessation_reason_medication_idx
     ON medication_cessation_reason (medication_id);
 
--- Insert-or-nothing: a replay (heal, late custody) re-runs this for the same event, and the
--- per-thread patient guard is already run by medication_cessation_apply (db/031) for the same
--- event in the same dispatch, so it is not repeated here.
+-- Insert-or-nothing: a replay (heal, late custody) re-runs this for the same event. The
+-- patient guard is not repeated here: every path that runs this fn (the dispatcher trigger,
+-- db/039's heal, late custody) runs db/031's medication_cessation_apply for the same event too
+-- (both heal_safe, same event type). The guard RAISEs at the local door, aborting this row
+-- with the event; on remote apply it only FLAGS and the event projects anyway, so this row is
+-- written exactly when medication_cessation's is.
 CREATE OR REPLACE FUNCTION medication_cessation_reason_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE

@@ -8,9 +8,11 @@
 > `medication_cessation_reason` (one row per stop that gave a reason; **SCHEMA_GENERATION 60**, the loader's heal
 > backfills; db/037's shred scrubs it) → `MedicationRow::other_cessation_reasons`, said by the CLI list and the
 > window's stop detail; the already-stopped note names every reason. The CLI's `medication-cease` re-reads the line
-> after the stop and names the threads with no readable stop (#859, `still_current_note`). Its review filed
-> **#861** (a line reading CURRENT still hides a stopped member thread's reason — a decision on shape) and **#862**
-> (`run-db-gated-tests.sh` with the `CAIRN_TEST_PG*` override but no `PGPORT` runs its SQL step against :5432).
+> after the stop and names the threads with no readable stop (#859, `still_current_note`). Its reviews filed
+> **#861** (a line reading CURRENT still hides a stopped member thread's reason — a decision on shape), **#863**
+> (shredding a thread's newest stop leaves no row; the earlier stop is not re-folded, so the line reads current) and
+> **#864** (the list read spans several statements); the gate run filed **#862** (`run-db-gated-tests.sh` with the
+> `CAIRN_TEST_PG*` override but no `PGPORT` runs its SQL step against :5432).
 > Also tokio 1.54.1 in all three lockfiles (RUSTSEC-2026-0386). Full local gate green on the final tree (13 CI steps,
 > 2876 tests). Durable rules: the #857/#859 bullets.
 > **Merged 2026-10-23: PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)** (#835 + #854): a release recorded
@@ -171,7 +173,7 @@ through one — include it next.
 **Session date:** 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
-ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 needed no ADR — a read-side fix;
+ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
 wording only) · **`SCHEMA_GENERATION`:** **60** (`db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
@@ -204,7 +206,7 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 
 ### 2026-10-23/24 — #857 + #859 (PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)): every stop's reason; a one-thread stop says the line stays current
 
-Maintainer chose the shape ("every stop's reason"). TDD, an independent review (3 critical, 2 important — all fixed),
+Maintainer chose the shape ("every stop's reason"). TDD, two independent reviews (all findings fixed or filed: #861, #863, #864),
 mutation-checked pins.
 - **⇒ A new projection beside a one-winner one is the cheap honest fix**: register a SECOND apply fn for the same
   event type (the dispatcher runs every fn by `run_order, apply_fn`), bump the generation so the loader's heal

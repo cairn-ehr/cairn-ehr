@@ -249,7 +249,8 @@ impl MedicationHold {
 }
 
 /// What the already-stopped sentence says about the list when it is said of a LINE that reads
-/// stopped: true since #857, because the list then shows every stop's reason (db/060).
+/// stopped: true since #857, because the list then shows every stop's reason readable on this
+/// node (db/060; a stop sealed without custody here has no row until its key arrives).
 pub const LIST_KEEPS_EVERY_REASON: &str = "the list keeps every stop's reason";
 
 /// What it says instead of a THREAD whose line still reads current (the CLI, #854): the list

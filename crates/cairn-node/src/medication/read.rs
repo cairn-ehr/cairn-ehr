@@ -458,14 +458,22 @@ async fn read_cessation_reasons(
     client: &(impl tokio_postgres::GenericClient + Sync),
     groups: &[Uuid],
 ) -> anyhow::Result<HashMap<Uuid, (Option<String>, Vec<String>)>> {
-    let sql = "SELECT gc.group_id::text AS group_id, gc.reason, \
-                      ARRAY(SELECT r.reason FROM medication_cessation_reason r \
-                            JOIN medication_thread_group g ON g.medication_id = r.medication_id \
-                            WHERE g.group_id = gc.group_id \
-                            ORDER BY r.hlc_wall DESC, r.hlc_counter DESC, \
-                                     r.origin COLLATE \"C\" DESC, r.content_address DESC) \
-                        AS all_reasons \
-               FROM medication_group_cessation gc WHERE gc.group_id = ANY($1::text[]::uuid[])";
+    // The groups' members are resolved ONCE (`g`), then every reason aggregated per group
+    // (`rs`). A per-line ARRAY(...) subquery instead re-scans medication_statement for every
+    // stopped line: `medication_thread_group.group_id` is a COALESCE no index serves (PR #860
+    // review measured 56 ms -> 1 s on a 50-stopped-line chart).
+    let sql = "WITH g AS (SELECT medication_id, group_id FROM medication_thread_group \
+                         WHERE group_id = ANY($1::text[]::uuid[])), \
+                    rs AS (SELECT g.group_id, \
+                                  array_agg(r.reason ORDER BY r.hlc_wall DESC, \
+                                            r.hlc_counter DESC, r.origin COLLATE \"C\" DESC, \
+                                            r.content_address DESC) AS all_reasons \
+                           FROM medication_cessation_reason r JOIN g USING (medication_id) \
+                           GROUP BY g.group_id) \
+               SELECT gc.group_id::text AS group_id, gc.reason, \
+                      coalesce(rs.all_reasons, '{}') AS all_reasons \
+               FROM medication_group_cessation gc LEFT JOIN rs USING (group_id) \
+               WHERE gc.group_id = ANY($1::text[]::uuid[])";
     let mut out = HashMap::new();
     for r in client.query(sql, &[&uuid_strings(groups)]).await? {
         let shown = r
@@ -478,9 +486,10 @@ async fn read_cessation_reasons(
 }
 
 /// The reasons a line lists beside the one it shows (#857): `all` (every stop's reason,
-/// newest first) without `shown` and without repeats, compared ignoring surrounding space.
-/// **Pure.** Text that differs in any other way is kept: it is a different thing said. A reason
-/// that is only whitespace says nothing and is dropped (db/060's CHECK strips only spaces).
+/// newest first) without `shown` and without repeats, compared ignoring surrounding whitespace
+/// (Rust `trim`). **Pure.** Text that differs in any other way is kept: it is a different thing
+/// said. A reason that is only whitespace says nothing and is dropped: db/060's CHECK uses
+/// `btrim`, which strips only spaces, so a newline-only reason can reach here.
 /// Shared with the CLI cease's thread note (`medication::cessation`).
 pub(crate) fn other_reasons(shown: Option<&str>, all: Vec<String>) -> Vec<String> {
     let mut seen: Vec<String> = shown.map(|s| s.trim().to_string()).into_iter().collect();

@@ -199,7 +199,8 @@ BEGIN
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;
-        -- Every stop's reason (db/060, #857): one row per cessation event, keyed by its CA.
+        -- Every stop's reason (db/060, #857): one row per cessation event that gave a reason,
+        -- keyed by its CA.
         IF to_regclass('public.medication_cessation_reason') IS NOT NULL THEN
             DELETE FROM medication_cessation_reason WHERE content_address = v_ca;
         END IF;

@@ -130,25 +130,29 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   CLI's other warnings. **Tempting wrong fix:** refuse it as stale like a release. Pins:
   `a_stop_of_a_line_already_stopped_says_so`, the `cease_sorts_an_interrupted_commit_from_a_failure` source shape,
   `tests/medication_cease_already_stopped.rs`.
-- **Every stop's reason stays on the list (#857, maintainer 2026-10-23: "every stop's reason")** — the two winner
-  projections (`medication_cessation` per thread, `medication_group_cessation` per line) still decide the status and
-  the SHOWN stop (`cessation_reason`, the one whose date the line shows); db/060's `medication_cessation_reason`, one
+- **Every stop's reason stays on the list (#857, maintainer 2026-10-23: "every stop's reason")** — `medication_cessation`
+  (per thread, through db/033's `medication_group_status`) still decides the status, and db/033's
+  `medication_group_cessation` view picks the SHOWN stop (`cessation_reason`, the one whose date the line shows); db/060's `medication_cessation_reason`, one
   row per stop that gave a reason, keyed by content address, supplies `other_cessation_reasons` — every OTHER
-  distinct reason (surrounding space ignored), newest recorded first, read in the SAME statement as the shown one
-  (`read_cessation_reasons`). A shown stop with no reason beside another stop's reason is said first ("no reason
+  distinct reason (surrounding whitespace ignored), newest recorded first, read in the SAME statement as the shown one
+  (`read_cessation_reasons`, members resolved once and aggregated — a per-line subquery re-scans
+  `medication_statement` for every stopped line). A line that reads current shows none of them (#861). A shown stop with no reason beside another stop's reason is said first ("no reason
   given"), so the other reason is not read as the shown stop's (`ceased_reason_lines`, `cessation_detail`). db/060
   bumped the generation so the loader's heal backfills; db/037's shred scrubs the row. **Tempting wrong fixes:**
   `COALESCE` the old reason into `medication_cessation` (still loses a reasoned earlier stop and a sibling's);
-  reading the two parts in two statements. Pins: `tests/medication_stop_reasons.rs`, `other_reasons_drop_the_shown_one_and_repeats_only`, the
+  reading the two parts in two statements. Open: #863 (shredding the newest stop un-stops the line), #864 (the list
+  read spans several statements). Pins: `tests/medication_stop_reasons.rs`, `other_reasons_drop_the_shown_one_and_repeats_only`, the
   renderers' unit tests, `registry_row_count_is_pinned` (30) and db/tests/039 (32).
 - **A CLI stop of one thread says when the line still reads current (#859)** — `medication-cease` re-reads the line
   AFTER the stop (`still_current_note`) and names its threads with no stop: under latest-effective-wins (db/033)
-  only an unstopped thread's dose can keep a line current, so the named threads are the whole cause. It says "no
+  only an unstopped thread's dose can keep a line current. They are read from the whole group
+  (`medication_thread_group`), not `row.members` (this patient's charts only): a thread on a chart not linked to this
+  patient is counted, never named, and the note then drops "stop that one too". It says "no
   stop … is readable here", never "recorded": a stop sealed without custody, or a shredded winning stop, leaves no
   `medication_cessation` row though a stop exists (PR #860 review). Display-only:
   a failed re-read becomes `not_known_whether_current`, never `?`, since the stop is already written. Both notes go
   to stderr after the success line. Pins: `a_stop_of_one_thread_on_a_line_kept_current_names_the_sibling`,
-  `a_sibling_already_stopped_is_not_named_as_unstopped`,
+  `a_sibling_already_stopped_is_not_named_as_unstopped`, `a_sibling_on_an_unlinked_chart_is_counted_never_named`,
   `the_cease_verb_reads_the_note_first_and_prints_it_last`.
 - **A release recorded for a LATER instant is said on its hold (#835)** — the hold still stands until then (the
   fold is unchanged), and `MedicationHold::release_pending` carries the instant from db/059 section 7c's

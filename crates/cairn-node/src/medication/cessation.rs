@@ -160,9 +160,16 @@ pub async fn already_stopped_note(
 /// says "readable here", not "recorded": a stop sealed without custody on this node, or a
 /// shredded winning stop, leaves no row though a stop exists (PR #860 review).
 ///
+/// Those threads are read from the whole group (`medication_thread_group`), as db/033 reads
+/// it, NOT from `row.members`, which holds only this patient's charts: a peer's reconciliation
+/// can put a thread from a chart not linked to this patient on the line, and that thread can
+/// keep it current too. It is counted, never named: it is another chart's record (PR #860
+/// review).
+///
 /// `None` when the line now reads stopped, and for a thread on no line here: the note read
-/// before the stop already said that case cannot be told (`already_stopped_note`). A failed
-/// read is an `Err`; the caller turns it into `not_known_whether_current`.
+/// before the stop already said that case cannot be told, or that it could not read the line
+/// (`already_stopped_note`). A failed read is an `Err`; the caller turns it into
+/// `not_known_whether_current`.
 pub async fn still_current_note(
     client: &(impl tokio_postgres::GenericClient + Sync),
     patient: Uuid,
@@ -175,45 +182,57 @@ pub async fn still_current_note(
     }) else {
         return Ok(None);
     };
-    let members: Vec<String> = row
-        .members
-        .iter()
-        .map(|m| m.medication_id)
-        .filter(|&m| m != medication_id)
-        .map(|m| m.to_string())
-        .collect();
-    let unstopped: Vec<String> = client
+    let unstopped: Vec<Uuid> = client
         .query(
-            "SELECT m::text FROM unnest($1::text[]::uuid[]) AS m \
-             WHERE NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = m) \
-             ORDER BY m::text",
-            &[&members],
+            "SELECT g.medication_id::text FROM medication_thread_group g \
+             WHERE g.group_id = $1::text::uuid AND g.medication_id <> $2::text::uuid \
+               AND NOT EXISTS (SELECT 1 FROM medication_cessation c \
+                               WHERE c.medication_id = g.medication_id) \
+             ORDER BY 1",
+            &[&row.group_id.to_string(), &medication_id.to_string()],
         )
         .await?
         .iter()
-        .map(|r| r.get(0))
-        .collect();
-    Ok(Some(still_current_sentence(&unstopped)))
+        .map(|r| r.get::<_, String>(0).parse())
+        .collect::<Result<_, _>>()?;
+    let (here, unlinked): (Vec<Uuid>, Vec<Uuid>) = unstopped
+        .into_iter()
+        .partition(|t| row.members.iter().any(|m| m.medication_id == *t));
+    let here: Vec<String> = here.iter().map(Uuid::to_string).collect();
+    Ok(Some(still_current_sentence(&here, unlinked.len())))
 }
 
-/// `still_current_note`'s sentence, naming the line's threads that have no stop. **Pure.** The
-/// list is empty only in a race (a sibling stopped between the two reads); the sentence then
-/// says only what was read.
-pub fn still_current_sentence(unstopped: &[String]) -> String {
+/// `still_current_note`'s sentence: names this patient's threads that have no stop
+/// (`unstopped`) and counts the ones on charts not linked to this patient (`unlinked`).
+/// **Pure.** Both are empty only in a race (a sibling stopped between the two reads); the
+/// sentence then says only what was read. With an unlinked thread it never says "stop that
+/// one too if the drug is to stop": stopping this chart's threads may not stop the line.
+pub fn still_current_sentence(unstopped: &[String], unlinked: usize) -> String {
     let head = "This drug's line still reads current";
     let tail = "This command stops one thread";
+    let mut said = Vec::new();
     match unstopped {
-        [] => format!("{head}. {tail}."),
-        [one] => format!(
-            "{head}: no stop of thread {one} is readable here. {tail}; stop that one too if \
-             the drug is to stop."
-        ),
-        many => format!(
-            "{head}: no stop of threads {} is readable here. {tail}; stop those too if the \
-             drug is to stop.",
+        [] => {}
+        [one] => said.push(format!("no stop of thread {one} is readable here")),
+        many => said.push(format!(
+            "no stop of threads {} is readable here",
             many.join(", ")
-        ),
+        )),
     }
+    if unlinked > 0 {
+        let threads = if unlinked == 1 { "thread" } else { "threads" };
+        said.push(format!(
+            "no stop of {unlinked} {threads} on a chart not linked to this patient is readable \
+             here"
+        ));
+    }
+    let advice = match (unstopped.len(), unlinked) {
+        (0, 0) => return format!("{head}. {tail}."),
+        (_, 1..) => "stopping this patient's threads alone may not stop the line",
+        (1, 0) => "stop that one too if the drug is to stop",
+        _ => "stop those too if the drug is to stop",
+    };
+    format!("{head}: {}. {tail}; {advice}.", said.join("; "))
 }
 
 /// The note `medication-cease` prints when its read of the line AFTER the stop failed: the stop
@@ -242,18 +261,36 @@ mod tests {
     /// #859: the sentence names every unstopped thread, and fits one, many, or (a race) none.
     #[test]
     fn still_current_sentence_names_the_threads_with_no_stop() {
-        let one = still_current_sentence(&["y".into()]);
+        let one = still_current_sentence(&["y".into()], 0);
         assert_eq!(
             one,
             "This drug's line still reads current: no stop of thread y is readable here. This \
              command stops one thread; stop that one too if the drug is to stop."
         );
-        let many = still_current_sentence(&["y".into(), "z".into()]);
+        let many = still_current_sentence(&["y".into(), "z".into()], 0);
         assert!(many.contains("of threads y, z is readable here."), "{many}");
         assert!(many.contains("stop those too"), "{many}");
         assert_eq!(
-            still_current_sentence(&[]),
+            still_current_sentence(&[], 0),
             "This drug's line still reads current. This command stops one thread."
         );
+    }
+
+    /// PR #860 review: a thread on a chart not linked to this patient is counted, never named,
+    /// and the sentence no longer promises that stopping this chart's threads stops the drug.
+    #[test]
+    fn still_current_sentence_counts_threads_on_unlinked_charts() {
+        assert_eq!(
+            still_current_sentence(&[], 1),
+            "This drug's line still reads current: no stop of 1 thread on a chart not linked \
+             to this patient is readable here. This command stops one thread; stopping this \
+             patient's threads alone may not stop the line."
+        );
+        let both = still_current_sentence(&["y".into()], 2);
+        assert!(
+            both.contains("thread y is readable here; no stop of 2 threads on a chart"),
+            "{both}"
+        );
+        assert!(!both.contains("stop that one too"), "{both}");
     }
 }

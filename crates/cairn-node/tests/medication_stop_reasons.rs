@@ -8,11 +8,12 @@
 //! (`MedicationRow::other_cessation_reasons`).
 //!
 //! #859 — `medication-cease` stops ONE thread; a line kept current by a sibling (one whose dose
-//! is effective after this stop's date) now says so after the stop
+//! is effective at or after the line's latest stop date) now says so after the stop
 //! (`medication::still_current_note`).
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::SigningKey;
+use cairn_medication_view::MedicationStatus;
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
@@ -309,4 +310,75 @@ async fn a_sibling_already_stopped_is_not_named_as_unstopped() {
         !note.contains(&y.to_string()),
         "never the stopped Y: {note}"
     );
+}
+
+#[tokio::test]
+async fn a_line_that_reads_current_shows_no_stop_reason() {
+    // PR #860 review: the `status == Ceased` gate in the list read is the only thing keeping a
+    // member thread's "angioedema" off a line that reads current (whether to show it there is
+    // #861). Every other current-line test stops without a reason, so pin the gate here.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, x) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let y = add_med(&mut c, &sk, &kid, p).await;
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&mut c, &sk, &kid, "test-node", p, x, y, &input, None, None)
+        .await
+        .unwrap();
+    // Backdated so Y's dose keeps the line current (see the #859 test above).
+    let dated = CeaseMedicationInput {
+        stopped: Some("2020"),
+        stopped_precision: Some("year"),
+        reason: Some("angioedema"),
+    };
+    cease_medication(&mut c, &sk, &kid, "test-node", p, x, &dated, None, None)
+        .await
+        .unwrap();
+    let list = list_patient_medications(&c, p).await.unwrap();
+    assert_eq!(list.rows[0].status, MedicationStatus::Active);
+    assert_eq!(reasons(&c, p).await, (None, vec![]));
+
+    stop(&mut c, &sk, &kid, p, y, Some("patient request")).await;
+    assert_eq!(
+        reasons(&c, p).await,
+        (Some("patient request".into()), vec!["angioedema".into()]),
+        "once the line reads stopped, both reasons show"
+    );
+}
+
+#[tokio::test]
+async fn a_sibling_on_an_unlinked_chart_is_counted_never_named() {
+    // PR #860 review: `row.members` holds only this patient's threads, but db/033 reads a line
+    // current from EVERY member. A peer's reconciliation can join another person's thread to
+    // this line (the local door refuses it; sync-apply does not), reproduced here as
+    // medication_read.rs does, by writing medication_group_member directly.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, x) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let (_q, z) = chart_with_one_med(&mut c, &sk, &kid).await;
+    c.execute(
+        "INSERT INTO medication_group_member (medication_id, group_id) VALUES \
+         ($1::text::uuid, $1::text::uuid), ($2::text::uuid, $1::text::uuid)",
+        &[&x.to_string(), &z.to_string()],
+    )
+    .await
+    .unwrap();
+    cease(&mut c, &sk, &kid, p, x, Some("2020")).await;
+    let note = still_current_note(&c, p, x).await.unwrap().unwrap();
+    assert!(
+        note.contains("1 thread on a chart not linked to this patient"),
+        "{note}"
+    );
+    assert!(
+        !note.contains(&z.to_string()),
+        "another person's thread is never named: {note}"
+    );
+    assert!(!note.contains("stop that one too"), "{note}");
 }
