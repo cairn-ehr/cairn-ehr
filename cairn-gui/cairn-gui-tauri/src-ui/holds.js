@@ -1,6 +1,7 @@
 // The paper chart's "W" on a medication line (#832, ADR-0081): the hold drawn beside the line's
 // status, the reason it reveals, and the two gestures — Withhold (write a W) and Release (end the
-// W early). A ceased line's reason is revealed the same way, on its status word.
+// W early). A ceased line's reason, or a current line's stopped member's reason (#861), is revealed
+// the same way, on its status word.
 //
 // Like main.js, this file WORDS nothing. Every sentence — the W's symbol ("W until reviewed"), its
 // detail ("Withheld until reviewed by … : BP 85/50"), whether a line may be held or released, the
@@ -35,7 +36,8 @@ let holdChangeTimer = null;
  * is also revealed beside it on focus or hover, and stays open once clicked ("pinned", kept on
  * the button as `data-pinned`) until clicked again, Escape, or a click elsewhere (`unpinDetails`).
  * Click must work alone: WebKit (Tauri's webview on macOS) does not focus a button a mouse
- * clicks. On a ceased line that gave a reason, the word "ceased" is such a button.
+ * clicks. On a line with a stop reason to reveal (`row.cessation_detail`: a ceased line's, or a
+ * current line's stopped member's, #861), the status word is such a button.
  */
 function statusCell(row) {
   const td = document.createElement("td");

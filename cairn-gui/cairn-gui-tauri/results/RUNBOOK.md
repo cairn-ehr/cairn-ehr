@@ -894,6 +894,9 @@ above were checked): `$NODE medication-withhold "$PATIENT" <thread> --reason "NB
 - [ ] The reason field of the W announces which drug it belongs to.
 - [ ] A ceased line whose cessation gave a reason has its status word as a button; its reason
       (`Stopped: <reason>`) reads on focus. A cessation with no reason leaves the word as plain text.
+- [ ] A **current** line with a stopped member thread that gave a reason (the fixture's metformin, #861) has
+      its status word as a button too; it reads `A stopped record of this drug gave: <reason>` on focus — never
+      "Stopped".
 - [ ] A pinned reason (click or Enter on a W) closes on **Escape**, and on a click elsewhere.
 - [ ] A withheld line is identifiable without colour (the W text itself).
 

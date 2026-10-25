@@ -124,8 +124,9 @@ impl Semantic for MedicationsTab {
             }
             // Each hold is a focusable button (its click reveals the detail). Its accessible
             // name is its visible text then the detail, exactly as holds.js's `statusCell` sets
-            // it, so the reason is announced without opening it. A ceased line that gave a
-            // reason has its status word as the same kind of button.
+            // it, so the reason is announced without opening it. A line with a stop reason to
+            // reveal (a ceased line's, or a current line's stopped member's, #861) has its status
+            // word as the same kind of button.
             for hold in &row.holds {
                 fields.push(Field {
                     id: format!("hold-{}", hold.withhold_event_id),
@@ -254,7 +255,8 @@ mod semantic_tests {
                 // What holds.js sets: the visible text, then the reason (label in name).
                 assert_eq!(f.label, format!("{} — {}", h.symbol, h.detail));
             }
-            // A ceased line that gave a reason: its status word is a button, labelled likewise.
+            // A line with a stop reason (ceased, or current with a stopped member, #861): its
+            // status word is a button, labelled likewise.
             assert_eq!(
                 find(&format!("cessation-{}", row.group_id)).map(|f| (f.role, f.label.clone())),
                 row.cessation_detail

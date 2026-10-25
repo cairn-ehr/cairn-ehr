@@ -154,9 +154,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   line `Ceased` AND the press landed in full — every thread stopped for certain. Beside a commit with no answer
   (#814) or a failed thread, "your stop is recorded" would contradict the outcome's own "NOT known" / "NOT stopped"
   (PR #853 review). The note names the shown stop's reason AND every other stop's (#857): "no reason was recorded"
-  only when no stop gave one, never beside a reasonless latest stop (PR #860 review). Its closing claim about the list
-  is the CALLER's (`LIST_KEEPS_EVERY_REASON` for a line that reads stopped; the CLI's thread note on a line still
-  current says `LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED`, since the list shows no reason there — #861). The CLI's
+  only when no stop gave one, never beside a reasonless latest stop (PR #860 review). It closes with "the list keeps every
+  stop's reason", true of a line that reads stopped (#857) and, since #861, of a stopped thread on a line still current
+  (`stopped_member_reasons`) — so the PR #860 caller-chosen claim and its second constant are gone. The CLI's
   `medication-cease` says it too (#854), from the same sentence (`already_stopped_sentence`) and line rule
   (`MedicationRow::already_stopped_note`, `cairn-medication-view`), asked through `medication::already_stopped_note`
   BEFORE it ceases (after, its own stop would read as "already"). The window stops every thread of a line, the CLI
@@ -174,11 +174,16 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   row per stop that gave a reason, keyed by content address, supplies `other_cessation_reasons` — every OTHER
   distinct reason (surrounding whitespace ignored), newest recorded first, read in the SAME statement as the shown one
   (`read_cessation_reasons`, members resolved once and aggregated — a per-line subquery re-scans
-  `medication_statement` for every stopped line). A line that reads current shows none of them (#861). A shown stop with no reason beside another stop's reason is said first ("no reason
+  `medication_statement` for every stopped line). A line that reads CURRENT (a sibling's later dose wins) carries every stopped member's reason in
+  `stopped_member_reasons` instead (#861, maintainer 2026-10-24: "show it, worded apart"), in a stopped line's order,
+  said "a stopped record of this drug gave: …" (`stopped_record_lines`, `stopped_record_detail`) — never "Stopped",
+  since the drug is not. **Tempting wrong fix:** fill `cessation_reason`/`other_cessation_reasons` on a current line
+  (every renderer would then say "Stopped"/"ceased" of a current drug); keep the ceased fields ceased-only. A shown stop with no reason beside another stop's reason is said first ("no reason
   given"), so the other reason is not read as the shown stop's (`ceased_reason_lines`, `cessation_detail`). db/060
   bumped the generation so the loader's heal backfills; db/037's shred scrubs the row. **Tempting wrong fixes:**
   `COALESCE` the old reason into `medication_cessation` (still loses a reasoned earlier stop and a sibling's);
-  reading the two parts in two statements. (#863 and #864 are fixed: the block above.) Pins: `tests/medication_stop_reasons.rs`, `other_reasons_drop_the_shown_one_and_repeats_only`, the
+  reading the two parts in two statements. (#863 and #864 are fixed: the block above.) Pins: `tests/medication_stop_reasons.rs` (incl.
+  `a_line_kept_current_by_a_sibling_still_shows_the_stopped_threads_reasons`), `other_reasons_drop_the_shown_one_and_repeats_only`, the
   renderers' unit tests, `registry_row_count_is_pinned` (30) and db/tests/039 (32).
 - **A CLI stop of one thread says when the line still reads current (#859)** — `medication-cease` re-reads the line
   AFTER the stop (`still_current_note`) and names its threads with no stop: under latest-effective-wins (db/033)
@@ -209,7 +214,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   refusal re-enables it. Pin: `both_gestures_re_read_like_cease`.
 - **The W is a BUTTON whose accessible name carries its reason** (symbol + " — " + detail), and a ceased line
   whose stops gave a reason has its status word as such a button, revealing `cessation_detail`'s text ("Stopped:
-  <reason>", then "Another stop's reason: <reason>" per other stop, #857; no reason on any stop: plain text). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin
+  <reason>", then "Another stop's reason: <reason>" per other stop, #857; no reason on any stop: plain text) — and so does a CURRENT
+  line with a stopped member's reason ("A stopped record of this drug gave: <reason>", #861). The semantic tree (`cairn-gui-tab-medications` `lib.rs`) declares the same labels — pin
   `every_hold_and_hold_control_is_a_labelled_button`. Hover is never the only way to the reason: WebKit does not
   focus a clicked button, so click pins it; Escape or an outside click unpins. **Tempting wrong fix:** a `title`
   tooltip or a hover-only popover. Pins: `the_w_is_a_button_whose_label_is_its_reason`,
