@@ -62,7 +62,7 @@ pub fn combined_list_header(charts: &ChartSet) -> Option<String> {
 /// On a linked list this is always `Some`, even when `source_charts` is empty. That case is
 /// reachable only through a race documented on `MedicationRow::source_charts` itself (a
 /// group-chart read landing between two of `list_patient_medications`'s several
-/// statements), and an empty suffix here would render as though the row had nothing to
+/// statements, on a read outside the #864 one-snapshot path), and an empty suffix here would render as though the row had nothing to
 /// say — exactly the silent loss of provenance this function exists to prevent. Principle 4:
 /// an unknown provenance is a recordable state, not a blank.
 pub fn row_source_suffix(source_charts: &[Uuid], linked: bool) -> Option<String> {

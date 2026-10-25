@@ -782,6 +782,10 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
         "a read-only snapshot: it writes nothing",
     ),
     (
+        "crates/cairn-node/src/medication/snapshot.rs",
+        "a read-only snapshot for the medication list reads: it writes nothing (#864)",
+    ),
+    (
         "crates/cairn-sync/src/main.rs",
         "the sync harness's `write`/`gen` load generator and its content-addressed blob store",
     ),

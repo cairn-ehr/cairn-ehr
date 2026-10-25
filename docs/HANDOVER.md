@@ -3,18 +3,18 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)** (#857 + #859,
-> branch `fix/857-859-stop-reasons-cease-current`; maintainer chose "every stop's reason"): db/060
-> `medication_cessation_reason` (one row per stop that gave a reason; **SCHEMA_GENERATION 60**, the loader's heal
-> backfills; db/037's shred scrubs it) → `MedicationRow::other_cessation_reasons`, said by the CLI list and the
-> window's stop detail; the already-stopped note names every reason. The CLI's `medication-cease` re-reads the line
-> after the stop and names the threads with no readable stop (#859, `still_current_note`). Its reviews filed
-> **#861** (a line reading CURRENT still hides a stopped member thread's reason — a decision on shape), **#863**
-> (shredding a thread's newest stop leaves no row; the earlier stop is not re-folded, so the line reads current) and
-> **#864** (the list read spans several statements); the gate run filed **#862** (`run-db-gated-tests.sh` with the
-> `CAIRN_TEST_PG*` override but no `PGPORT` runs its SQL step against :5432).
-> Also tokio 1.54.1 in all three lockfiles (RUSTSEC-2026-0386). Full local gate green on the final tree (13 CI steps,
-> 2876 tests). Durable rules: the #857/#859 bullets.
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864, branch `fix/863-864-shred-refold-snapshot-read`):
+> a shred ends by re-folding the threads its event named (`cairn_refold_after_shred`, serialized by
+> `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops no longer makes the drug read current; every production medication-list
+> read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`). In-place SQL, no
+> generation change. Two review rounds fixed in-PR (the second: the re-fold never replays its own target, a failing
+> sibling is named; filed #866, #867). Full local gate was green before round two (2888 tests); after it, the 26
+> touched DB-gated binaries (231 tests), fmt, clippy and `cargo doc -D warnings` are green — CI gates the full sweep. Durable rules: the #863 + #864 block. **#861 was decided 2026-10-24** (show a stopped member's
+> reason on a line that reads current, worded apart — now buildable; the decision is on the issue).
+> **Merged 2026-10-23: PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)** (#857 + #859): db/060
+> `medication_cessation_reason`, every stop's reason on the list (gen **60**); the CLI stop says when the line stays
+> current. Its reviews filed **#861**, #863, #864 and **#862** (`run-db-gated-tests.sh` with `CAIRN_TEST_PG*` but no
+> `PGPORT` runs its SQL step against :5432 — pass `PGHOST=127.0.0.1 PGPORT=5532`).
 > **Merged 2026-10-23: PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)** (#835 + #854): a release recorded
 > for a later instant is said on its hold; the CLI's `medication-cease` says when the line was already stopped. Its
 > second review filed **#857** · **#858** · **#859**. Durable rules: the #843/#835 bullets.
@@ -37,9 +37,12 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)** (#857 + #859); run #838's RUNBOOK §15. Decisions
->    owed: **#825** (where the window's operator diagnostics live), **#850** (acknowledging a dealt-with report) and
->    **#861** (a stopped thread's reason on a line that reads current — clinically the sharpest). Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
+> 1. **Review and merge PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864); run #838's RUNBOOK §15. **Build #861** (decided 2026-10-24:
+>    "A stopped record of this drug gave: …" on a line that reads current; both renderers + the semantic tree;
+>    `read_cessation_reasons` stops discarding them for an Active line). From PR #865's second review: **#866** (an
+>    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
+>    re-fold block the erasure — a decision). Decisions owed: **#825** (where the window's
+>    operator diagnostics live), **#850** (acknowledging a dealt-with report). Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
 >    ADR-0082) · #834 (needs a decision on shape). From PR #856's second review: **#858** (a peer release on a
 >    sibling thread is shown nowhere). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
@@ -170,7 +173,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 needed no ADR — a projection-side fix, no wire change;
@@ -203,6 +206,27 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-10-24 — #863 + #864 (PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)): a shred hands its rows on; a list is one snapshot
+
+Maintainer chose #863 + #864 and decided #861's shape. TDD (red first on both one-winner keys), each pin
+mutation-checked, an independent review, then a second four-agent review (fixed in-PR; filed **#866**, **#867**).
+- **⇒ "Never over-erase" is half a rule.** Deleting only your own rows is right; leaving a one-winner key EMPTY is
+  under-statement. Any scrub of a winner-takes-all projection owes a re-fold of what remains.
+- **⇒ Never SKIP a locked sibling on the theory that its holder will write it** — a holder that rolls back, or
+  only re-receives the event, writes nothing (the review's catch; my first cut try-locked). Serialize the shreds and
+  wait instead; a door cycle is a transient 40P01. **Compare ids canonically** — the floor admits any uuid spelling.
+- **⇒ Raise isolation only for reads.** A door write at REPEATABLE READ reopens the custody/shred race; the snapshot
+  lives at the callers that own a bare connection, and the readers keep `GenericClient` (tests' failure seam).
+- **⇒ A source-guard slice at `at - N` bytes panics on an em dash** — use `floor_char_boundary`.
+- **⇒ "Its clear view is gone" is true only of a SEALED event.** `cairn_clear_payload` returns a plaintext body
+  straight from the log, and the sync door shreds a peer's plaintext event — so the re-fold re-inserted its own
+  target's rows (second review; three reviewers found it independently). Now excluded by id; an EARLIER-shredded
+  plaintext sibling still comes back on a heal or re-fold (**#866**). A sibling whose replay raises aborts the
+  shred; a P0001 is re-raised bare naming the sibling, any other code propagates untouched (a first cut used
+  `USING ERRCODE = v_state`, and CI's `floor_refusals_carry_no_errcode.rs` — not in my targeted run — refused it); whether that should block the erasure is **#867**.
+- **⇒ zsh does not word-split `$T`** — `cargo test $T` with `T="--test a --test b"` passes ONE filter and runs
+  every binary with all tests filtered out, exit 0. Use an array (`T+=(--test a)`, `"${T[@]}"`).
 
 ### 2026-10-23/24 — #857 + #859 (PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)): every stop's reason; a one-thread stop says the line stays current
 
@@ -311,46 +335,35 @@ or, commonly, the two charts never meet; so the refused press is not an `M > N` 
 - **⇒ An operator procedure is a claim too:** RUNBOOK §14 first told testers to stop Postgres and recover with the
   button — the window never reconnects (#807); a REVOKE cannot fail a superuser; the fault is a renamed function now.
 
-### 2026-10-16 → 10-17 — #745 · #752 · #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)), its second review, #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
+### 2026-10-16 → 10-17 — #745 · #752 · #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) and #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
 
-TDD by source guards, mutation-checked, then a
-headless walk against BOTH the branch and `main`.
-- **⇒ Walk the old code with the same script.** A walk that passes only on the fix proves the rig; on `main` the same
-  script showed every defect, which is what makes the branch's green evidence.
-- **⇒ The webview's JS CAN be pinned without a JS runner:** `source_guard::js_fn` / `js_const`; pin the ORDER or
-  CHOICE each fix is. **A guard that looks for both halves of `a && b` passes `a || b`**: pin the exact expression.
-- **⇒ "Newest STARTED" is the wrong rule for drawing**: draw unless something newer is DRAWN; say a failure only if
-  newest STARTED — two predicates. **A per-step lock is not a per-read lock** (`med_list_impl` locks per step).
-- **⇒ A sentence the window words itself must be true of EVERY state that reaches it** (`renderedPatient === null` is
-  "failed" AND "in flight"). **Emptying a list is not cancelling its read** (bump the revision).
-- **⇒ An issue's points can already be absorbed by a later fix** (#740's by #713's `judgement_error_view`) — read the
-  code first. **A fix that SHOWS something in a new state reaches code that state never reached**: walk every button
-  it carries. **A fix can falsify OTHER files' rationale** (after #799, six comments) — grep the claim, not the diff.
-- **⇒ Re-read the narrowest stale thing, and only when THAT is the stale thing** (a set-changed refusal: the list,
-  not the banner). **A rule change can make a "belt and braces" line load-bearing** (`clearChart`'s floor).
-- Mechanics: a walk's stub picks its answer at CALL time; dump stub payloads from Rust, never hand-write them; a
-  test assert must never echo identity-built text (CodeQL failed #795 after merge); keep the `view` binding the
-  payload guard reads; zsh does not word-split `$step` (use `bash -c`); `stop_reasons.js` split out of `main.js`.
+- **⇒ Walk the old code with the same script** — a walk that passes only on the fix proves the rig. **Webview JS can
+  be pinned without a JS runner** (`source_guard::js_fn` / `js_const`); a guard for both halves of `a && b` passes
+  `a || b` — pin the exact expression.
+- **⇒ Draw unless something newer is DRAWN; say a failure only if newest STARTED** (two predicates). A per-step lock
+  is not a per-read lock. A window sentence must be true of EVERY state reaching it; emptying a list is not
+  cancelling its read (bump the revision).
+- **⇒ Read the code before the issue** (#740 was absorbed by #713's `judgement_error_view`); a fix that SHOWS
+  something in a new state reaches code that state never reached; a fix can falsify other files' rationale (after
+  #799, six comments). Re-read the narrowest stale thing; a rule change can make a "belt and braces" line
+  load-bearing (`clearChart`'s floor).
+- Mechanics: stub payloads dumped from Rust, never hand-written; a test assert must never echo identity-built text
+  (CodeQL failed #795 after merge); zsh does not word-split `$step` (use `bash -c`).
 
 ### 2026-10-15 → 10-16 — R7 (PR #788), R6's residuals (PR #792), file splits (PRs #794, #795)
 
 R7 = #742 + #743 part 2; residuals #787 · #786 · #783 · #782; splits #781 · #789 · #732 · #793 + #712 item 3 · #737 ·
-#796. Filed #789 · #790 · #791; commented #718. 
-- **⇒ A remedy that names a command is a claim: run it, and name the LIGHTEST that works** (#787: a plain
-  `reproject --prefix identity.` heal first, `--rebuild` only as fallback; `--prefix identity. --rebuild` is refused).
-- **⇒ Keep one in-memory truth and project it at the boundary** (#786: serde `try_from`/`into` via a private wire struct).
-- **⇒ Prove a pure move by the test LIST** (diff sorted `cargo test -- --list` names); move code by slicing exact line
-  ranges with a script; `#[cfg(test)] #[path = "x_tests.rs"] mod tests;` keeps the module path.
-- **⇒ A heading must tell entries apart on the input the list exists for** (exact namesakes); **punctuation is not
-  speech** (VoiceOver reads "—" as a pause — join two records by words).
-- **⇒ Read the side that proves completeness FIRST** when two autocommit reads race a process that clears notices
-  only after its proposals commit (status before pairs). **⇒ Keep a soft signal out of a predicate a hold is
-  `EXISTS` over** (`cairn_chart_set_unverified_links` is separate so the R1b hold cannot see it).
+#796. Filed #789 · #790 · #791; commented #718.
+- **⇒ A remedy that names a command is a claim: run it, and name the LIGHTEST that works** (#787). **Keep one
+  in-memory truth, project it at the boundary** (#786). **Prove a pure move by the test LIST** (diff sorted
+  `cargo test -- --list`); `#[cfg(test)] #[path = "x_tests.rs"] mod tests;` keeps the module path.
+- **⇒ A heading must tell entries apart on the input the list exists for; punctuation is not speech** (VoiceOver
+  reads "—" as a pause). **Read the side that proves completeness FIRST** when two autocommit reads race. **Keep a
+  soft signal out of a predicate a hold is `EXISTS` over** (`cairn_chart_set_unverified_links`).
 - **⇒ ROLLBACK HAZARD:** with `SCHEMA_GENERATION` unchanged, an OLDER binary on a database this branch loaded fails
   "cannot change return type" on db/056 — `DROP FUNCTION cairn_duplicate_check_status();` before switching back.
-- Mechanics: `cargo doc -D warnings` reads `<date>` as an unclosed HTML tag (backtick it); a first-load race is
-  reproducible headlessly (an `async` stub `invoke`); **zsh does not word-split `$var`** — run loops under `bash -c`;
-  a struct literal gaining a field breaks every test that builds it; a fixture-gap RED can show the bug is live.
+- Mechanics: `cargo doc -D warnings` reads `<date>` as an unclosed HTML tag (backtick it); a struct literal gaining a
+  field breaks every test that builds it.
 
 ### 2026-10-12 → 10-15 — cloud tech-debt passes (PRs #770–#776, #779), R6 (PR #777)
 

@@ -182,8 +182,9 @@ pub struct MedicationRow {
     /// having to infer it from which patient happened to be open.
     ///
     /// Empty only in a race: a concurrent reconciliation or separation re-keyed the group
-    /// between two of the read's statements (READ COMMITTED, one snapshot per statement —
-    /// see `cairn-node`'s `medication/read.rs`). Renderers name that state ("not read")
+    /// between two of the read's statements (a read on a bare client at READ COMMITTED, one
+    /// snapshot per statement — see `cairn-node`'s `medication/read.rs`; production reads share
+    /// one snapshot since #864, so there it does not arise). Renderers name that state ("not read")
     /// rather than printing an empty label.
     pub source_charts: Vec<Uuid>,
     /// The holds on this line that are in force or not yet started, latest start first

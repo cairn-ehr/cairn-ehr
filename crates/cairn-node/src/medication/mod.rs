@@ -26,6 +26,8 @@ mod reconciliation;
 // `signoff` are already public, for the CLI's benefit.)
 pub mod sealed_submit;
 pub mod signoff;
+// Public for the CLI and the window: every production list read runs in one snapshot (#864).
+pub mod snapshot;
 mod withhold;
 
 pub use assert::{

@@ -475,23 +475,25 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   ended hold is a stale refusal at the local door; a Stop on a stopped line is written and said; filed **#854**,
   **#855**. All merged by 2026-10-23.
 - **2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)):** a release recorded for a later
-  instant is said on its hold (db/059 section 7c `cairn_medication_hold_release_pending`,
-  `MedicationHold::release_pending`, the CLI's `hold_line`, the window's `hold_view`; the window re-reads when it takes
-  effect); the CLI's `medication-cease` says when the line was already stopped (one rule,
-  `MedicationRow::already_stopped_note`, plus the thread's own cessation, since the CLI stops one thread). db/059
-  edited in place, no schema-generation change. Second review: "cancelled" for a release before a pending start,
-  the stop note's false "beside it" corrected, `ctutils` 0.4.5 (RUSTSEC-2026-0385); filed **#857** (a later stop
-  overwrites the earlier reason) · **#858** (a peer release on a sibling thread is shown nowhere) · **#859** (a CLI
-  stop of one thread on a line that stays current says only "ceased"). Merged 2026-10-23.
+  instant is said on its hold (db/059 7c); the CLI's `medication-cease` says when the line was already stopped. Second
+  review filed **#857** · **#858** · **#859**. Merged 2026-10-23.
 - **2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)):** db/060
   `medication_cessation_reason` (one row per stop that gave a reason; gen **60**, the loader's heal backfills; shred
   scrubs it) → `MedicationRow::other_cessation_reasons` beside the shown reason, said by the CLI list and the window;
   the already-stopped note names every reason and claims only what its list shows. `medication-cease` names the
-  threads with no readable stop when the line stays current (#859). Reviews filed **#861** (a line reading current
-  hides a stopped member's reason — a decision), **#863** (a shredded newest stop un-stops the line) and **#864** (the
-  list read spans several statements); the gate run filed **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386).
-- **Next:** review and merge PR #860; run #838's RUNBOOK §15; **#863** (clinical safety), **#804** (needs #690), **#825**, **#850** and
-  **#861** (decisions), **#864**, **#855**, **#858**, **#837**, **#807**;
+  threads with no readable stop when the line stays current (#859). Reviews filed **#861**, #863 and #864; the
+  gate run filed **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386). Merged 2026-10-23.
+- **2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)):** a shred ends by re-folding the threads its event named
+  (`cairn_refold_after_shred`, serialized by `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops leaves
+  the earlier one in force, and the same for a coding and a reconciliation (tested; a dose correction rides the same
+  generic path). The shred never replays its own target (a peer's plaintext target would re-insert its rows); the
+  review filed **#866** (an earlier-shredded plaintext event comes back on a heal or re-fold) and **#867** (should a
+  failed re-fold block the erasure). Every production
+  medication-list read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`).
+  In-place SQL edits, no schema-generation change. **#861 decided** by the maintainer 2026-10-24: show a stopped
+  member thread's reason on a line that reads current, worded apart from "Stopped: …" — now buildable.
+- **Next:** run #838's RUNBOOK §15; **#861** (decided, buildable), **#804** (needs #690), **#825** and **#850**
+  (decisions), **#855**, **#858**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
