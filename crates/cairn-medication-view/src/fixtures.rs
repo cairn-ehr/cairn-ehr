@@ -52,6 +52,7 @@ fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
         holds: vec![],
         cessation_reason: None,
         other_cessation_reasons: vec![],
+        stopped_member_reasons: vec![],
     }
 }
 
@@ -67,7 +68,8 @@ fn member(id: u128, vouch: VouchState) -> MemberVouch {
 /// SOMEONE ELSE, stale, ceased, a reconciled group whose two members disagree, and a
 /// cross-patient line that must be shown but never signed — plus, for the withhold "W"
 /// (ADR-0081, #832): an in-force open hold (sertraline), a pending hold (amlodipine, starting
-/// in 2098 so it stays pending whenever the demo runs) and a ceased line with its reason.
+/// in 2098 so it stays pending whenever the demo runs) and a ceased line with its reason — plus
+/// a current line with a stopped member thread's reason (metformin, #861).
 pub fn sample_rows() -> Vec<MedicationRow> {
     // A deliberately NON-hex label. A fixture attester id never needs to look like a real
     // key id, and a hex-shaped literal in a key-id field trips CodeQL's
@@ -122,6 +124,8 @@ pub fn sample_rows() -> Vec<MedicationRow> {
         member(51, VouchState::Absent),
     ];
     reconciled.reconciliation_flagged = true;
+    // One of its threads was stopped with a reason; the other keeps the line current (#861).
+    reconciled.stopped_member_reasons = vec!["GI upset".into()];
 
     // The wrong-chart hazard (#334): this line's group holds a thread belonging to ANOTHER
     // patient, so the dose shown may be that patient's. It is displayed — hiding a drug is
@@ -212,6 +216,10 @@ mod tests {
             .iter()
             .any(|r| r.holds.iter().all(|h| h.pending) && !r.holds.is_empty()));
         assert!(chart.rows.iter().any(|r| r.cessation_reason.is_some()));
+        assert!(chart
+            .rows
+            .iter()
+            .any(|r| r.status == MedicationStatus::Active && !r.stopped_member_reasons.is_empty()));
         assert!(chart.rows.iter().any(|r| r.cross_patient));
         assert!(!chart.groups_missing_from_chart.is_empty());
         assert!(!chart.elsewhere.is_empty());

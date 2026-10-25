@@ -54,6 +54,19 @@ pub fn ceased_reason_lines(shown: Option<&str>, others: &[String]) -> Vec<String
         .collect()
 }
 
+/// The lines printed under a CURRENT row for its stopped member threads' reasons (#861): a
+/// sibling keeps the line current, so none of them may read "ceased". Empty when none gave one.
+pub fn stopped_record_lines(reasons: &[String]) -> Vec<String> {
+    reasons
+        .iter()
+        .enumerate()
+        .map(|(i, r)| match i {
+            0 => format!("a stopped record of this drug gave: {r}"),
+            _ => format!("another stopped record gave: {r}"),
+        })
+        .collect()
+}
+
 /// `medication-withhold`'s success line.
 pub fn withheld_line(event_id: Uuid, medication_id: Uuid) -> String {
     format!("withheld medication thread {medication_id}; event {event_id}")
@@ -194,6 +207,19 @@ mod tests {
             ]
         );
         assert!(ceased_reason_lines(None, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_current_line_says_its_stopped_records_reasons_without_saying_ceased() {
+        let others = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            stopped_record_lines(&others(&["angioedema", "rash"])),
+            [
+                "a stopped record of this drug gave: angioedema",
+                "another stopped record gave: rash"
+            ]
+        );
+        assert!(stopped_record_lines(&[]).is_empty());
     }
 
     #[test]

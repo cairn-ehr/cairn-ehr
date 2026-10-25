@@ -137,14 +137,8 @@ pub async fn already_stopped_note(
             .get::<_, Option<String>>("reason")
             .filter(|s| !s.trim().is_empty());
         let others = crate::medication::read::other_reasons(shown.as_deref(), r.get("all_reasons"));
-        // The line reads current, so the list shows none of these reasons: the sentence must
-        // not promise it keeps them (PR #860 review; showing them is #861).
-        cairn_medication_view::already_stopped_sentence(
-            "This thread",
-            shown.as_deref(),
-            &others,
-            cairn_medication_view::LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED,
-        )
+        // The line reads current; it shows these reasons as a stopped record's (#861).
+        cairn_medication_view::already_stopped_sentence("This thread", shown.as_deref(), &others)
     }))
 }
 

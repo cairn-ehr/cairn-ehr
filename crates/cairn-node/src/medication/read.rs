@@ -160,18 +160,20 @@ async fn list_chart_set_medications(
     ] {
         for db_row in client.query(&list_sql(view), &[&group_strs]).await? {
             let group_id: Uuid = db_row.get::<_, String>("medication_id").parse()?;
-            // Only a ceased line shows a reason. (A group reads active or ceased by
-            // latest-effective-wins, ADR-0047, so a group with a ceased member may be either;
-            // `status` already says which.)
-            let (cessation_reason, other_cessation_reasons) = if status == MedicationStatus::Ceased
-            {
-                cessation_reasons
-                    .get(&group_id)
-                    .cloned()
-                    .unwrap_or_default()
-            } else {
-                Default::default()
-            };
+            // A group reads active or ceased by latest-effective-wins (ADR-0047), so a group
+            // with a stopped member may be either; `status` says which. A ceased line shows its
+            // stop's reason and the others beside it; a current line carries every stopped
+            // member's reason in a field of its own (#861), so no renderer words it "Stopped".
+            let (shown, others) = cessation_reasons
+                .get(&group_id)
+                .cloned()
+                .unwrap_or_default();
+            let (cessation_reason, other_cessation_reasons, stopped_member_reasons) =
+                if status == MedicationStatus::Ceased {
+                    (shown, others, vec![])
+                } else {
+                    (None, vec![], shown.into_iter().chain(others).collect())
+                };
             rows.push(MedicationRow {
                 group_id,
                 // The view's display owner (`medication_group_display`'s winner). For a
@@ -210,6 +212,7 @@ async fn list_chart_set_medications(
                 },
                 cessation_reason,
                 other_cessation_reasons,
+                stopped_member_reasons,
             });
         }
     }
@@ -452,7 +455,8 @@ async fn read_group_holds(
     Ok(out)
 }
 
-/// Each stopped group's reasons: the one its line shows (`medication_group_cessation`'s, the
+/// Each group with a stopped member's reasons (whether its line reads stopped or, kept current
+/// by a sibling, current — #861): the one a stopped line shows (`medication_group_cessation`'s, the
 /// stop whose date the line shows; `None` when blank) and every OTHER distinct reason any of
 /// its stops gave (db/060's per-stop rows, #857), newest recorded first.
 ///

@@ -156,6 +156,22 @@ pub fn cessation_detail(shown: Option<&str>, others: &[String]) -> Option<String
     )
 }
 
+/// What a CURRENT line reveals when a stopped member thread gave a reason (#861): a sibling
+/// keeps the line current, so it is worded as a stopped record's, never "Stopped". One
+/// sentence each, as `cessation_detail`. `None` when none gave one.
+pub fn stopped_record_detail(reasons: &[String]) -> Option<String> {
+    let (first, rest) = reasons.split_first()?;
+    let rest = rest
+        .iter()
+        .map(|r| format!("Another stopped record gave: {r}"));
+    Some(
+        std::iter::once(format!("A stopped record of this drug gave: {first}"))
+            .chain(rest)
+            .collect::<Vec<_>>()
+            .join(". "),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +347,18 @@ mod tests {
         assert_eq!(cessation_detail(None, &[]), None);
     }
 
+    #[test]
+    fn a_current_line_reveals_its_stopped_records_reasons_without_saying_stopped() {
+        let others = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            stopped_record_detail(&others(&["angioedema", "rash"])).as_deref(),
+            Some(
+                "A stopped record of this drug gave: angioedema. Another stopped record gave: rash"
+            )
+        );
+        assert_eq!(stopped_record_detail(&[]), None);
+    }
+
     // ---- The row: a hold sits BESIDE the status (the durable ADR-0081 rule).
 
     fn active_row_with(holds: Vec<MedicationHold>) -> cairn_medication_view::MedicationRow {
@@ -381,5 +409,24 @@ mod tests {
             Some("Stopped: rash. Another stop's reason: angioedema")
         );
         assert!(!r.can_withhold && !r.can_release);
+    }
+
+    #[test]
+    fn a_current_line_carries_its_stopped_records_reasons_and_keeps_its_controls() {
+        // #861: a sibling keeps the line current, but a stopped member gave a reason.
+        let mut r = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        r.stopped_member_reasons = vec!["angioedema".into()];
+        let view = build_view(&chart(vec![r]));
+        let r = &view.rows[0];
+        assert_eq!(r.status_label, "current");
+        assert_eq!(
+            r.cessation_detail.as_deref(),
+            Some("A stopped record of this drug gave: angioedema")
+        );
+        assert!(r.can_cease && r.can_withhold);
     }
 }

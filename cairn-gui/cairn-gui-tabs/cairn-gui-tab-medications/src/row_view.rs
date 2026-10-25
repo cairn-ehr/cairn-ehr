@@ -10,7 +10,7 @@
 //! comes in as `targets`, the set `view::build_view` computed with ONE call to the shared
 //! `sign_off_targets` rule — the rule the node's orchestrator uses — so the badge on a row and
 //! the count on the button can never disagree (see the `view` module doc).
-use crate::hold_view::{cessation_detail, hold_view, HoldView};
+use crate::hold_view::{cessation_detail, hold_view, stopped_record_detail, HoldView};
 use cairn_medication_view::{
     short_kid, withheld_reasons, MedicationRow, MedicationStatus, VouchState,
     SEPARATION_INSTRUCTION,
@@ -68,7 +68,9 @@ pub struct MedListRowView {
     /// True when there is a hold to release (a release also cancels a pending hold). Narrowed
     /// by the window on a hazard line to lines `release_plan` can write from the opened chart (#844).
     pub can_release: bool,
-    /// `"Stopped: <reason>"` on a ceased line whose cessation gave a reason.
+    /// `"Stopped: <reason>"` on a ceased line whose cessation gave a reason; on a current line,
+    /// `"A stopped record of this drug gave: <reason>"` when a stopped member thread gave one
+    /// (#861). The status word reveals it either way.
     pub cessation_detail: Option<String>,
 }
 
@@ -119,10 +121,13 @@ pub(crate) fn build_row(
         can_withhold: row.status == MedicationStatus::Active,
         can_release: !holds.is_empty(),
         holds,
+        // At most one of the two is non-empty: the read fills the ceased fields only on a
+        // ceased line and `stopped_member_reasons` only on a current one.
         cessation_detail: cessation_detail(
             row.cessation_reason.as_deref(),
             &row.other_cessation_reasons,
-        ),
+        )
+        .or_else(|| stopped_record_detail(&row.stopped_member_reasons)),
     }
 }
 

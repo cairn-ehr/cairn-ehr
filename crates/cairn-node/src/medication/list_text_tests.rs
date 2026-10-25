@@ -141,6 +141,7 @@ fn list_row(group: u128, outside_set: bool, doubted_link: bool) -> MedicationRow
         holds: vec![],
         cessation_reason: None,
         other_cessation_reasons: vec![],
+        stopped_member_reasons: vec![],
     }
 }
 

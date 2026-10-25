@@ -104,13 +104,16 @@ async fn a_thread_already_stopped_on_a_line_still_current_says_both() {
     // That the line still reads current is said AFTER the stop, naming the sibling (#859,
     // `still_current_note`), so this note does not repeat it.
     assert!(!note.contains("still reads current"), "{note}");
-    // The line reads current, so the list shows no stop reason: the note must not promise it
-    // keeps them (PR #860 review; #861).
+    // The line reads current, and since #861 it still shows this thread's stop reason (as a
+    // stopped record's), so the note's claim about the list is the same as on a stopped line.
     assert!(
-        note.contains("the list shows stop reasons only on a line that reads stopped"),
+        note.contains("the list keeps every stop's reason"),
         "{note}"
     );
-    assert!(!note.contains("keeps every stop's reason"), "{note}");
+    let list = cairn_node::medication::read::list_patient_medications(&c, p)
+        .await
+        .unwrap();
+    assert_eq!(list.rows[0].stopped_member_reasons, ["angioedema"]);
     assert_eq!(
         already_stopped_note(&c, p, y).await.unwrap(),
         None,

@@ -151,6 +151,7 @@ mod tests {
             holds: vec![],
             cessation_reason: None,
             other_cessation_reasons: vec![],
+            stopped_member_reasons: vec![],
         }
     }
 
