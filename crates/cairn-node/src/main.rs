@@ -5529,21 +5529,9 @@ async fn run() -> anyhow::Result<()> {
                     ) {
                         println!("{line}");
                     }
-                    // #803: the paper chart's "W" lines, then a ceased line's reason, or a
-                    // current line's stopped members' reasons (#861; at most one is non-empty).
-                    for h in &row.holds {
-                        println!("    {}", cairn_node::medication::hold_text::hold_line(h));
-                    }
-                    for line in cairn_node::medication::hold_text::ceased_reason_lines(
-                        row.cessation_reason.as_deref(),
-                        &row.other_cessation_reasons,
-                    ) {
-                        println!("    {line}");
-                    }
-                    for line in cairn_node::medication::hold_text::stopped_record_lines(
-                        &row.stopped_member_reasons,
-                    ) {
-                        println!("    {line}");
+                    // #803/#857/#861: the row's "W" lines and every stop reason it carries.
+                    for line in cairn_node::medication::hold_text::row_hold_and_stop_lines(row) {
+                        println!("{line}");
                     }
                 }
                 // The doubted-link remedy, ONCE for the whole list: each withheld row above
