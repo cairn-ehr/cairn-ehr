@@ -160,18 +160,12 @@ async fn list_chart_set_medications(
     ] {
         for db_row in client.query(&list_sql(view), &[&group_strs]).await? {
             let group_id: Uuid = db_row.get::<_, String>("medication_id").parse()?;
-            // Only a ceased line shows a reason. (A group reads active or ceased by
-            // latest-effective-wins, ADR-0047, so a group with a ceased member may be either;
-            // `status` already says which.)
-            let (cessation_reason, other_cessation_reasons) = if status == MedicationStatus::Ceased
-            {
-                cessation_reasons
-                    .get(&group_id)
-                    .cloned()
-                    .unwrap_or_default()
-            } else {
-                Default::default()
-            };
+            let (shown, others) = cessation_reasons
+                .get(&group_id)
+                .cloned()
+                .unwrap_or_default();
+            let (cessation_reason, other_cessation_reasons, stopped_member_reasons) =
+                reasons_for_status(status, shown, others);
             rows.push(MedicationRow {
                 group_id,
                 // The view's display owner (`medication_group_display`'s winner). For a
@@ -210,6 +204,7 @@ async fn list_chart_set_medications(
                 },
                 cessation_reason,
                 other_cessation_reasons,
+                stopped_member_reasons,
             });
         }
     }
@@ -452,9 +447,11 @@ async fn read_group_holds(
     Ok(out)
 }
 
-/// Each stopped group's reasons: the one its line shows (`medication_group_cessation`'s, the
-/// stop whose date the line shows; `None` when blank) and every OTHER distinct reason any of
-/// its stops gave (db/060's per-stop rows, #857), newest recorded first.
+/// For each group with at least one stopped member — whether its line reads stopped or, kept
+/// current by a sibling, still current (#861) — its stop reasons: the one a stopped line shows
+/// (`medication_group_cessation`'s, the stop whose date it shows; `None` when blank) and every
+/// OTHER distinct reason any of its stops gave (db/060's per-stop rows, #857), newest recorded
+/// first. A group with no stop has no entry.
 ///
 /// ONE statement, so both come from one snapshot: two reads could each see a different set of
 /// stops, and a stop landing between them would then be said twice or not at all.
@@ -506,6 +503,23 @@ pub(crate) fn other_reasons(shown: Option<&str>, all: Vec<String>) -> Vec<String
         }
     }
     out
+}
+
+/// Where a line's stop reasons go, as `(cessation_reason, other_cessation_reasons,
+/// stopped_member_reasons)` (#861). **Pure.** A group reads active or ceased by
+/// latest-effective-wins (ADR-0047), so a group with a stopped member may be either. A ceased
+/// line shows its stop's reason and the others beside it; a current line carries EVERY reason,
+/// the one a stopped line would show first, in a field of its own, so no renderer words it
+/// "Stopped".
+fn reasons_for_status(
+    status: MedicationStatus,
+    shown: Option<String>,
+    others: Vec<String>,
+) -> (Option<String>, Vec<String>, Vec<String>) {
+    match status {
+        MedicationStatus::Ceased => (shown, others, vec![]),
+        MedicationStatus::Active => (None, vec![], shown.into_iter().chain(others).collect()),
+    }
 }
 
 /// Every member thread of the given groups, regardless of which chart each member
@@ -935,6 +949,35 @@ mod tests {
         assert!(
             other_reasons(None, all(&["\n"])).is_empty(),
             "whitespace says nothing"
+        );
+    }
+
+    /// #861: a ceased line's reasons go to the ceased fields; a current line's ALL go to
+    /// `stopped_member_reasons` — including when the stop it would show gave none, so an
+    /// earlier stop's "angioedema" is never dropped with it.
+    #[test]
+    fn reasons_split_by_status_and_a_current_line_keeps_every_one() {
+        let all = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            reasons_for_status(
+                MedicationStatus::Ceased,
+                Some("rash".into()),
+                all(&["angioedema"])
+            ),
+            (Some("rash".into()), all(&["angioedema"]), vec![])
+        );
+        assert_eq!(
+            reasons_for_status(
+                MedicationStatus::Active,
+                Some("rash".into()),
+                all(&["angioedema"])
+            ),
+            (None, vec![], all(&["rash", "angioedema"]))
+        );
+        assert_eq!(
+            reasons_for_status(MedicationStatus::Active, None, all(&["angioedema"])),
+            (None, vec![], all(&["angioedema"])),
+            "the shown stop gave no reason; an earlier one did"
         );
     }
 }

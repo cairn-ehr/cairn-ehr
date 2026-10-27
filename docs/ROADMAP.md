@@ -474,26 +474,23 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   [ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md) (v0.84) — a release of an
   ended hold is a stale refusal at the local door; a Stop on a stopped line is written and said; filed **#854**,
   **#855**. All merged by 2026-10-23.
-- **2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)):** a release recorded for a later
-  instant is said on its hold (db/059 7c); the CLI's `medication-cease` says when the line was already stopped. Second
-  review filed **#857** · **#858** · **#859**. Merged 2026-10-23.
-- **2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)):** db/060
-  `medication_cessation_reason` (one row per stop that gave a reason; gen **60**, the loader's heal backfills; shred
-  scrubs it) → `MedicationRow::other_cessation_reasons` beside the shown reason, said by the CLI list and the window;
-  the already-stopped note names every reason and claims only what its list shows. `medication-cease` names the
-  threads with no readable stop when the line stays current (#859). Reviews filed **#861**, #863 and #864; the
-  gate run filed **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386). Merged 2026-10-23.
-- **2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)):** a shred ends by re-folding the threads its event named
-  (`cairn_refold_after_shred`, serialized by `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops leaves
-  the earlier one in force, and the same for a coding and a reconciliation (tested; a dose correction rides the same
-  generic path). The shred never replays its own target (a peer's plaintext target would re-insert its rows); the
-  review filed **#866** (an earlier-shredded plaintext event comes back on a heal or re-fold) and **#867** (should a
-  failed re-fold block the erasure). Every production
-  medication-list read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`).
-  In-place SQL edits, no schema-generation change. **#861 decided** by the maintainer 2026-10-24: show a stopped
-  member thread's reason on a line that reads current, worded apart from "Stopped: …" — now buildable.
-- **Next:** run #838's RUNBOOK §15; **#861** (decided, buildable), **#804** (needs #690), **#825** and **#850**
-  (decisions), **#855**, **#858**, **#837**, **#807**;
+- **2026-10-23 → 10-26 — every stop's reason, and a shred that hands its rows on.** PR
+  [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856) (#835 + #854): a release recorded for a later instant is said
+  on its hold (db/059 7c); `medication-cease` says when the line was already stopped; filed **#857** · **#858** ·
+  **#859**. PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860) (#857 + #859): db/060
+  `medication_cessation_reason` (one row per stop that gave a reason; gen **60**, healed by the loader, scrubbed by
+  shred) → `other_cessation_reasons` beside the shown reason; `medication-cease` names the threads with no readable
+  stop when the line stays current; filed #861, #863, #864, **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386).
+  PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865) (#863 + #864): a shred re-folds the threads its event
+  named (`cairn_refold_after_shred`, serialized by `cairn_lock_shred_refold`, db/037; never its own target), and every
+  production medication-list read is one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`);
+  in-place SQL; filed **#866** (an earlier-shredded plaintext event returns on a heal or re-fold) and **#867** (should
+  a failed re-fold block the erasure). All merged by 2026-10-24. PR
+  [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868) (#861, 2026-10-26): a line that reads current carries its
+  stopped member threads' reasons (`stopped_member_reasons`), said "a stopped record of this drug gave: …" by the CLI
+  list and the window, never "Stopped"; the cease note's list claim is now one sentence everywhere. Read-side only.
+- **Next:** run #838's RUNBOOK §15; **#804** (needs #690), **#866** and **#867**, **#825**, **#850**, **#870** and
+  **#871** (decisions), **#855**, **#858**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

@@ -3,27 +3,25 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864, branch `fix/863-864-shred-refold-snapshot-read`):
-> a shred ends by re-folding the threads its event named (`cairn_refold_after_shred`, serialized by
-> `cairn_lock_shred_refold`, db/037), so shredding the newer of two stops no longer makes the drug read current; every production medication-list
-> read runs in one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`). In-place SQL, no
-> generation change. Two review rounds fixed in-PR (the second: the re-fold never replays its own target, a failing
-> sibling is named; filed #866, #867). Full local gate was green before round two (2888 tests); after it, the 26
-> touched DB-gated binaries (231 tests), fmt, clippy and `cargo doc -D warnings` are green — CI gates the full sweep. Durable rules: the #863 + #864 block. **#861 was decided 2026-10-24** (show a stopped member's
-> reason on a line that reads current, worded apart — now buildable; the decision is on the issue).
-> **Merged 2026-10-23: PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)** (#857 + #859): db/060
-> `medication_cessation_reason`, every stop's reason on the list (gen **60**); the CLI stop says when the line stays
-> current. Its reviews filed **#861**, #863, #864 and **#862** (`run-db-gated-tests.sh` with `CAIRN_TEST_PG*` but no
-> `PGPORT` runs its SQL step against :5432 — pass `PGHOST=127.0.0.1 PGPORT=5532`).
-> **Merged 2026-10-23: PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)** (#835 + #854): a release recorded
-> for a later instant is said on its hold; the CLI's `medication-cease` says when the line was already stopped. Its
-> second review filed **#857** · **#858** · **#859**. Durable rules: the #843/#835 bullets.
-> **Merged 2026-10-21/23 (ROADMAP has each; the hold block is in `developers/durable-rules.md`):** PR #853 (#843 +
-> #849: [ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md), spec **v0.84**, a
-> release of an ended hold is a STALE local refusal; review filed **#854**, **#855**) · PR #851 (#848; filed #849 and
-> **#850**, a decision) · PR #847 (#846; db/032's false comment points at **#185**) · PR #845 (#844 + #836) · PR #842
-> (#839–#841; filed #843) · PR #838 (#832, the window's **W**; **owed by a human: RUNBOOK §15** — W ≤ 10 s, Release ≤
-> 5 s, VoiceOver/keyboard; #809 gained item 5) · PR #831 (#803 slice A,
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861, branch
+> `fix/861-stopped-member-reason-on-current-line`): a line that reads current carries its stopped member threads'
+> reasons (`MedicationRow::stopped_member_reasons`), said "a stopped record of this drug gave: …" by the CLI list and
+> the window, never "Stopped"; the cease note's list claim is one sentence everywhere. Read-side only. Two reviews,
+> no code defect (stale comments and a stale test fixed in-PR, the status split made a pure tested fn; filed **#869**,
+> the CLI list's reason loops are untested, and the decisions **#870** and **#871**). Touched
+> DB-gated binaries, the full cairn-gui tree, fmt, clippy and `cargo doc -D warnings` on both trees green; CI gates the
+> full sweep. RUNBOOK §15 gained the current-line check.
+> **Merged 2026-10-24: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864): a shred re-folds the
+> threads its event named (`cairn_refold_after_shred`, db/037); every production medication-list read is one
+> `REPEATABLE READ READ ONLY` snapshot. Filed **#866**, **#867** (both decisions).
+> **Merged 2026-10-21/23 (ROADMAP has each; the hold and stop-reason blocks are in `developers/durable-rules.md`):**
+> PR #860 (#857 + #859: db/060, gen **60**; filed #861, #863, #864, **#862** — `run-db-gated-tests.sh` with
+> `CAIRN_TEST_PG*` but no `PGPORT` runs its SQL step against :5432, pass `PGHOST=127.0.0.1 PGPORT=5532`) · PR #856
+> (#835 + #854; filed #857 · **#858** · #859) · PR #853 (#843 + #849:
+> [ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md), spec **v0.84**; filed
+> **#854**, **#855**) · PR #851 (#848; filed #849, **#850**) · PR #847 (#846; db/032's false comment → **#185**) · PR
+> #845 (#844 + #836) · PR #842 (#839–#841) · PR #838 (#832, the window's **W**; **owed by a human: RUNBOOK §15** — W ≤
+> 10 s, Release ≤ 5 s, VoiceOver/keyboard; #809 gained item 5) · PR #831 (#803 slice A,
 > [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md), `db/059`; filed #835 · #836 · **#837**).
 > **Merged 2026-10-18/20 (ROADMAP has each):** PR #830 (#828) · PR #829 (#826: `assert-observed-evidence` prints its event ids) · PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
 > `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
@@ -37,9 +35,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864); run #838's RUNBOOK §15. **Build #861** (decided 2026-10-24:
->    "A stopped record of this drug gave: …" on a line that reads current; both renderers + the semantic tree;
->    `read_cessation_reasons` stops discarding them for an Active line). From PR #865's second review: **#866** (an
+> 1. **Review and merge PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861); run #838's RUNBOOK §15
+>    (now incl. #861's current-line check); **#869** (cheap: test the CLI list's reason lines). From PR #868's second
+>    review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
+>    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
 >    re-fold block the erasure — a decision). Decisions owed: **#825** (where the window's
 >    operator diagnostics live), **#850** (acknowledging a dealt-with report). Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
@@ -173,10 +172,10 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
-ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 needed no ADR — a projection-side fix, no wire change;
+ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
 wording only) · **`SCHEMA_GENERATION`:** **60** (`db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
@@ -206,6 +205,20 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-10-26 — #861 (PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)): a current line shows its stopped members' reasons
+
+Built to the maintainer's 2026-10-24 decision. TDD, two reviews (no code defect; filed #869; the second renamed a
+test the PR had made false, pinned holds.js's reveal gate, made the status split the pure `reasons_for_status` with
+the shown-stop-gave-none case tested, and filed the decisions #870 and #871).
+- **⇒ A new meaning gets a new field, not a status-dependent reading of an old one.** Filling `cessation_reason` on a
+  current line would have made every renderer that does not know the change say "Stopped" of a current drug; a field
+  of its own fails safe (a renderer that ignores it shows nothing, as before).
+- **⇒ "The shown stop" is the thread's NEWEST RECORDED stop** (db/031 keeps one row per thread), not its
+  latest-effective one — my first test assumed the latter. Read the projection before writing an order assertion.
+- **⇒ When a fix makes a caller-chosen claim true everywhere, delete the choice** (both `LIST_*`
+  constants and `already_stopped_sentence`'s `list` parameter), then grep docs and comments for the old claim (the review found
+  three in durable-rules, four in comments, one in RUNBOOK).
 
 ### 2026-10-24 — #863 + #864 (PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)): a shred hands its rows on; a list is one snapshot
 
@@ -259,41 +272,21 @@ Chosen with the maintainer. TDD, then an independent review, one fix wave; full 
 - **⇒ "Release at 16:00" after "from 08:00" reads as an interval** — a release before a pending start is a cancel and
   must say so. And a sentence that says what the list keeps must be checked against the projection (it overwrites).
 
-### 2026-10-23 — #843 + #849 (PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)): a dead release is stale
+### 2026-10-22 → 10-23 — #846 (PR #847), #848 (PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)), #843 + #849 (PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853))
 
-- **⇒ A maintainer decision in an issue can still reverse an ADR sentence.** #843 never said ADR-0081 decision 4 called
-  this release "a no-op, not an error"; grep the ADR for the behaviour before building, and write the amending ADR.
-- **⇒ A floor `P0001` carries no scope.** To make a floor refusal STALE, reuse the floor's own predicate as a Rust
-  pre-check (`cairn_medication_hold_ended`) — never match the message text.
-- **⇒ "returned above" comments lie about the unknown-outcome path:** `retry_when_nothing_written` returns `None`
-  whenever a commit's outcome is unknown, so code after it can run with nothing written for certain (review caught it).
-
-### 2026-10-23 — #848 (PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)): the chart an event was recorded FOR hears about it
-
-Maintainer decided #848 (read-side, surface on both charts) and #843 (refuse a dead release locally) at the start.
-Reproduced first (the moved thread left A's list with nothing said), then TDD, an independent review, one fix wave.
-- **⇒ A surviving mutation can mean a second witness, not a dead predicate.** Dropping the flag's `standing_patient`
-  side changed nothing because a moved thread's original assert also seeds a point-0 dose row the stray view sees; the
-  flag side matters alone only for a thread claimed by a stop, W or coding (anything but an assert). Find the case,
-  then pin it.
-- **⇒ A new field on a model breaks its literals, not its readers.** The compiler found the compare panel only because
-  a test built `MedListView` by hand; grep the readers of the SIBLING fields (`missing_message`) for every renderer
-  — the semantic tree was found that way by the review, not by the build.
-- **⇒ Walk a remedy sentence through the case where the drug IS already on the list** ("record it again" would have
-  made a second metoprolol line). **An absence claim beside a warning is still an absence claim** ("No medications
-  recorded" + the report — and "No current medications" over an all-stopped list, PR #851's second review). **"On
-  another chart" must be true of every row** — a thread no chart lists is on none.
-- **⇒ Two statements are two snapshots (PR #851's second review).** "Not already listed" came from the earlier member
-  read, so a line re-homed onto this chart between the reads was said "on chart <own chart>" — reproduced by reading
-  with an empty listed set. A truth the report depends on is re-checked inside the statement that says it.
-
-### 2026-10-22 (third) — #846: the conflict read stops depending on arrival order
-
-- **⇒ A flag written at arrival can only see what had arrived.** The guard compares against the thread's chart AS
-  KNOWN THEN; an event kind that never establishes that chart passes unflagged when it comes first. Where a
-  contradiction can appear from either side, read it at list time (a view), as db/034's misfiled-attestation view
-  already did. Check a new view's plan: the per-thread filter must reach the base tables (it does; `EXPLAIN` showed
-  a seq scan on `medication_dose_correction` until it got a `medication_id` index).
+- **⇒ A maintainer decision in an issue can still reverse an ADR sentence** — grep the ADR before building and write
+  the amending ADR (#843 → ADR-0082). **A floor `P0001` carries no scope**: reuse the floor's predicate as a Rust
+  pre-check (`cairn_medication_hold_ended`), never match message text. **`retry_when_nothing_written` returns `None`
+  whenever an outcome is unknown**, so "returned above" comments lie about that path.
+- **⇒ A surviving mutation can mean a second witness, not a dead predicate** (#848's `standing_patient`: a moved
+  thread's assert also seeds a point-0 dose row) — find the case, then pin it. **A new model field breaks its literals,
+  not its readers**: grep the readers of the SIBLING fields (the semantic tree was found that way, by the review).
+- **⇒ Walk a remedy or absence sentence through every state** ("record it again" beside a drug already listed; "No
+  medications recorded" beside the report; "on another chart" of a thread no chart lists). **Two statements are two
+  snapshots**: a truth the report depends on is re-checked inside the statement that says it.
+- **⇒ A flag written at arrival can only see what had arrived** (#846): where a contradiction can appear from either
+  side, read it at list time (a view), and check the plan reaches the base tables (`EXPLAIN`; it needed a
+  `medication_id` index).
 
 ### 2026-10-18 → 10-22 — interrupted commits (PRs #813–#830), the W (PRs #831, #838), its follow-ups (PR #842)
 

@@ -5,7 +5,8 @@
 //! ADR-0082 decision 4 — used to replace "angioedema" with "patient request", or with nothing.
 //! db/060 keeps one row per stop that gave a reason (`medication_cessation_reason`), and the
 //! list carries every OTHER distinct reason beside the one it shows
-//! (`MedicationRow::other_cessation_reasons`).
+//! (`MedicationRow::other_cessation_reasons`). A line that still reads CURRENT carries its
+//! stopped member threads' reasons in `MedicationRow::stopped_member_reasons` (#861).
 //!
 //! #859 — `medication-cease` stops ONE thread; a line kept current by a sibling (one whose dose
 //! is effective at or after the line's latest stop date) now says so after the stop
@@ -130,6 +131,62 @@ async fn a_sibling_threads_stop_reason_reaches_the_line() {
         reasons(&c, p).await,
         (Some("patient request".into()), vec!["angioedema".into()])
     );
+}
+
+#[tokio::test]
+async fn a_line_kept_current_by_a_sibling_still_shows_the_stopped_threads_reasons() {
+    // #861: X stopped (2020, "angioedema"; then again, 2019, "rash") beside a sibling Y whose
+    // dose keeps the line current. The line used to show no reason anywhere, so an adverse
+    // reaction read as nothing. The reasons ride a field of their own, so no renderer can say
+    // "Stopped" of a drug that reads current.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (p, x) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let y = add_med(&mut c, &sk, &kid, p).await;
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&mut c, &sk, &kid, "test-node", p, x, y, &input, None, None)
+        .await
+        .unwrap();
+    // Backdated, so Y's dose outranks them (an undated stop is effective now).
+    for (year, reason) in [("2020", "angioedema"), ("2019", "rash")] {
+        let stop = CeaseMedicationInput {
+            stopped: Some(year),
+            stopped_precision: Some("year"),
+            reason: Some(reason),
+        };
+        cease_medication(&mut c, &sk, &kid, "test-node", p, x, &stop, None, None)
+            .await
+            .unwrap();
+    }
+    let list = list_patient_medications(&c, p).await.unwrap();
+    let row = &list.rows[0];
+    assert_eq!(row.status, MedicationStatus::Active);
+    assert_eq!(
+        row.stopped_member_reasons,
+        ["rash", "angioedema"],
+        "in a stopped line's order: the stop it would show (db/033 picks the latest-effective \
+         thread stop; db/031 keeps each thread's newest recorded, so 2019 \"rash\" over 2020 \
+         \"angioedema\"), then the others"
+    );
+    assert_eq!(
+        row.cessation_reason, None,
+        "a current line has no stop of its own: the reasons ride stopped_member_reasons"
+    );
+    assert!(row.other_cessation_reasons.is_empty());
+
+    // Once Y is stopped too the line reads stopped, and the reasons move to the ceased fields.
+    stop(&mut c, &sk, &kid, p, y, None).await;
+    let list = list_patient_medications(&c, p).await.unwrap();
+    let row = &list.rows[0];
+    assert_eq!(row.status, MedicationStatus::Ceased);
+    assert!(row.stopped_member_reasons.is_empty());
+    assert_eq!(row.cessation_reason, None, "Y's stop gave no reason");
+    assert_eq!(row.other_cessation_reasons, ["rash", "angioedema"]);
 }
 
 #[tokio::test]
@@ -313,10 +370,11 @@ async fn a_sibling_already_stopped_is_not_named_as_unstopped() {
 }
 
 #[tokio::test]
-async fn a_line_that_reads_current_shows_no_stop_reason() {
-    // PR #860 review: the `status == Ceased` gate in the list read is the only thing keeping a
-    // member thread's "angioedema" off a line that reads current (whether to show it there is
-    // #861). Every other current-line test stops without a reason, so pin the gate here.
+async fn a_line_that_reads_current_keeps_its_stop_reasons_out_of_the_ceased_fields() {
+    // PR #860 review, #861: the list read's split by status keeps a member thread's
+    // "angioedema" out of `cessation_reason` / `other_cessation_reasons` on a line that reads
+    // current, so no renderer says "Stopped" of it; the reason rides `stopped_member_reasons`
+    // instead, and moves to the ceased fields once the line reads stopped.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
@@ -342,6 +400,7 @@ async fn a_line_that_reads_current_shows_no_stop_reason() {
     let list = list_patient_medications(&c, p).await.unwrap();
     assert_eq!(list.rows[0].status, MedicationStatus::Active);
     assert_eq!(reasons(&c, p).await, (None, vec![]));
+    assert_eq!(list.rows[0].stopped_member_reasons, ["angioedema"]);
 
     stop(&mut c, &sk, &kid, p, y, Some("patient request")).await;
     assert_eq!(

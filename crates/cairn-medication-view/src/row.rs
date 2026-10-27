@@ -204,6 +204,15 @@ pub struct MedicationRow {
     /// including when `cessation_reason` is `None` (a later stop that gave no reason). Always
     /// empty unless `status` is Ceased.
     pub other_cessation_reasons: Vec<String>,
+    /// On a line that reads CURRENT: every distinct reason a stopped member thread gave, in the
+    /// order a stopped line would show them — first the reason of the stop
+    /// `medication_group_cessation` picks, when it gave one, then the others, newest recorded
+    /// first (#861). A reconciled line reads by latest-effective-wins across its threads
+    /// (ADR-0047), so a sibling's later dose keeps it current beside a thread stopped for, say,
+    /// angioedema, and while no allergy stream exists that reason may be the only record of the
+    /// reaction. A field of its own, not `cessation_reason`, so no renderer can word it
+    /// "Stopped": the drug is not. Always empty unless `status` is Active.
+    pub stopped_member_reasons: Vec<String>,
 }
 
 /// One hold on a medication line (ADR-0081, #803): the paper drug chart's "W".
@@ -249,27 +258,14 @@ impl MedicationHold {
     }
 }
 
-/// What the already-stopped sentence says about the list when it is said of a LINE that reads
-/// stopped: true since #857, because the list then shows every stop's reason readable on this
-/// node (db/060; a stop sealed without custody here has no row until its key arrives).
-pub const LIST_KEEPS_EVERY_REASON: &str = "the list keeps every stop's reason";
-
-/// What it says instead of a THREAD whose line still reads current (the CLI, #854): the list
-/// shows stop reasons only on a line that reads stopped, so promising them would be false in
-/// exactly the state where the drug reads current (PR #860 review).
-pub const LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED: &str =
-    "the list shows stop reasons only on a line that reads stopped";
-
 /// The sentence a stop says when `what` ("This drug", or the CLI's "This thread") was already
 /// stopped before it reached the record (#843, #854). It names the earlier stops' reasons —
-/// `shown` (the stop the list shows) and every `other` (#857) — and ends with `list`, the claim
-/// about the list that is true for the caller's surface (one of the two constants above).
-pub fn already_stopped_sentence(
-    what: &str,
-    shown: Option<&str>,
-    others: &[String],
-    list: &str,
-) -> String {
+/// `shown` (the stop the list shows) and every `other` (#857) — and says the list keeps every
+/// stop's reason: true of a line that reads stopped since #857 (db/060), and of a stopped
+/// thread on a line still current since #861 (`stopped_member_reasons`). "Every" means every
+/// one readable on this node: a stop sealed without custody here has no row until its key
+/// arrives.
+pub fn already_stopped_sentence(what: &str, shown: Option<&str>, others: &[String]) -> String {
     let others_said: Vec<String> = others
         .iter()
         .map(|r| format!("another stop's reason: {r}"))
@@ -284,7 +280,7 @@ pub fn already_stopped_sentence(
     };
     format!(
         "{what} had already been stopped before this stop reached the record ({earlier}). \
-         Your stop is recorded too, and {list}."
+         Your stop is recorded too, and the list keeps every stop's reason."
     )
 }
 
@@ -304,7 +300,6 @@ impl MedicationRow {
             "This drug",
             self.cessation_reason.as_deref(),
             &self.other_cessation_reasons,
-            LIST_KEEPS_EVERY_REASON,
         ))
     }
 
@@ -374,6 +369,7 @@ mod tests {
             holds: vec![],
             cessation_reason: None,
             other_cessation_reasons: vec![],
+            stopped_member_reasons: vec![],
         }
     }
 
@@ -384,6 +380,7 @@ mod tests {
         let mut r = row("x", None);
         r.cessation_reason = Some("rash".into());
         r.other_cessation_reasons = vec!["angioedema".into()];
+        r.stopped_member_reasons = vec!["hives".into()];
         r.holds = vec![
             MedicationHold {
                 withhold_event_id: Uuid::from_u128(1),
@@ -412,6 +409,7 @@ mod tests {
             v["other_cessation_reasons"],
             serde_json::json!(["angioedema"])
         );
+        assert_eq!(v["stopped_member_reasons"], serde_json::json!(["hives"]));
         assert_eq!(
             v["holds"],
             serde_json::json!([
