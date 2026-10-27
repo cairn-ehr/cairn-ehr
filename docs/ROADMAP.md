@@ -493,7 +493,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   list's per-row "W" and stop-reason lines are one pure, tested `hold_text::row_hold_and_stop_lines`, so dropping
   any of them now fails a unit test. Merged 2026-10-27.
 - **2026-10-28 — the release races closed (#855) and the cross-author W pinned (#837 item 1).** PR
-  [#TBD](https://github.com/cairn-ehr/cairn-ehr/pull/TBD): db/059 section 8 takes a per-hold advisory lock (sorted)
+  [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873): db/059 section 8 takes a per-hold advisory lock (sorted)
   before its "still standing" check, so two local releases of one hold serialize and the second is refused; a floor
   refusal of a release the pre-check passed is re-asked through `cairn_medication_hold_ended` and reported STALE
   (ADR-0082 erratum E1; `tests/medication_release_race.rs`). `tests/medication_withhold_authorship.rs` pins a nurse's W
