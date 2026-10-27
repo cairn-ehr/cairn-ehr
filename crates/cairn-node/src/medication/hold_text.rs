@@ -2,7 +2,7 @@
 //! builders, kept out of `main.rs` so each output form is unit-tested and the two-`Uuid`
 //! success lines cannot swap their ids unnoticed (the #828 lesson: `withheld_line` puts a
 //! thread id and an event id on one line, and a swap would still compile).
-use cairn_medication_view::{short_kid, MedicationHold};
+use cairn_medication_view::{short_kid, MedicationHold, MedicationRow};
 use uuid::Uuid;
 
 /// The line printed under a `medication-list` row for one hold: the paper chart's "W".
@@ -67,6 +67,22 @@ pub fn stopped_record_lines(reasons: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Every line `medication-list` prints under a row, indented: the paper chart's "W" lines, then
+/// a ceased line's reasons or a current line's stopped members' reasons (#861; at most one of
+/// the two is non-empty). One function so a test sees exactly what the CLI prints (#869).
+pub fn row_hold_and_stop_lines(row: &MedicationRow) -> Vec<String> {
+    row.holds
+        .iter()
+        .map(hold_line)
+        .chain(ceased_reason_lines(
+            row.cessation_reason.as_deref(),
+            &row.other_cessation_reasons,
+        ))
+        .chain(stopped_record_lines(&row.stopped_member_reasons))
+        .map(|line| format!("    {line}"))
+        .collect()
+}
+
 /// `medication-withhold`'s success line.
 pub fn withheld_line(event_id: Uuid, medication_id: Uuid) -> String {
     format!("withheld medication thread {medication_id}; event {event_id}")
@@ -81,6 +97,7 @@ pub fn released_line(event_id: Uuid, medication_id: Uuid, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cairn_medication_view::MedicationStatus;
 
     fn hold(until: &str, pending: bool) -> MedicationHold {
         MedicationHold {
@@ -220,6 +237,64 @@ mod tests {
             ]
         );
         assert!(stopped_record_lines(&[]).is_empty());
+    }
+
+    /// A list row with only the fields `row_hold_and_stop_lines` reads set by the caller.
+    fn row(status: MedicationStatus) -> MedicationRow {
+        MedicationRow {
+            group_id: Uuid::from_u128(1),
+            display_chart: Uuid::from_u128(1),
+            term: "metformin".into(),
+            coding_display: None,
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            started_value: None,
+            started_precision: None,
+            status,
+            members: vec![],
+            reconciliation_flagged: false,
+            coding_conflict: false,
+            cross_patient: false,
+            wrong_chart: Default::default(),
+            source_charts: vec![],
+            holds: vec![],
+            cessation_reason: None,
+            other_cessation_reasons: vec![],
+            stopped_member_reasons: vec![],
+        }
+    }
+
+    /// #869: `medication-list` prints exactly these lines under a row, so dropping any of the
+    /// three sources (a hold, a ceased line's reasons, a current line's stopped records) fails
+    /// here — each is where an adverse-reaction reason can reach the operator.
+    #[test]
+    fn a_row_prints_its_holds_and_every_stop_reason_indented() {
+        let mut ceased = row(MedicationStatus::Ceased);
+        ceased.cessation_reason = Some("patient request".into());
+        ceased.other_cessation_reasons = vec!["angioedema".into()];
+        assert_eq!(
+            row_hold_and_stop_lines(&ceased),
+            [
+                "    ceased: patient request",
+                "    another stop's reason: angioedema"
+            ]
+        );
+
+        let mut current = row(MedicationStatus::Active);
+        let h = hold("reviewed", false);
+        current.holds = vec![h.clone()];
+        current.stopped_member_reasons = vec!["angioedema".into()];
+        assert_eq!(
+            row_hold_and_stop_lines(&current),
+            [
+                format!("    {}", hold_line(&h)),
+                "    a stopped record of this drug gave: angioedema".to_string()
+            ]
+        );
+
+        assert!(row_hold_and_stop_lines(&row(MedicationStatus::Active)).is_empty());
     }
 
     #[test]

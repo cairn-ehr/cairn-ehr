@@ -489,7 +489,10 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868) (#861, 2026-10-26): a line that reads current carries its
   stopped member threads' reasons (`stopped_member_reasons`), said "a stopped record of this drug gave: …" by the CLI
   list and the window, never "Stopped"; the cease note's list claim is now one sentence everywhere. Read-side only.
-- **Next:** run #838's RUNBOOK §15; **#804** (needs #690), **#866** and **#867**, **#825**, **#850**, **#870** and
+  Merged 2026-10-27. PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872) (#869, 2026-10-27): the CLI
+  list's per-row "W" and stop-reason lines are one pure, tested `hold_text::row_hold_and_stop_lines`, so dropping
+  any of them now fails a unit test.
+- **Next:** run #838's RUNBOOK §15 (incl. #861's current-line check); **#804** (needs #690), **#866** and **#867**, **#825**, **#850**, **#870** and
   **#871** (decisions), **#855**, **#858**, **#837**, **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
