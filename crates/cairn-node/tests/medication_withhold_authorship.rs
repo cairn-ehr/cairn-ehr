@@ -6,14 +6,14 @@
 //!     node is `recorded` and keeps custody of the DEK;
 //!   * a W written by someone OTHER than the prescriber. ADR-0081 promises "anyone may
 //!     withhold" (the bedside nurse holding a doctor's antihypertensive for a low BP), and the
-//!     doctor then releases the nurse's hold. Both depend on db/059 registering the two types
-//!     `targets_other_author FALSE` (ADR-0043): flip that flag, or tighten ADR-0043, and the
-//!     bedside W is refused at the door — this test is what goes red.
+//!     doctor then releases the nurse's hold. Nothing at the door looks at WHO prescribed today
+//!     (db/059 registers both types `targets_other_author FALSE`, so ADR-0043's owner-gate never
+//!     runs); this is the only test with two humans, so it is what goes red if a later check
+//!     starts refusing a W, or its release, written by someone other than the prescriber.
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`. Key material is
 //! generated at runtime.
 
-use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
     assert_medication, release_medication_holds, withhold_medication, AuthorParams,
@@ -25,19 +25,6 @@ mod common;
 #[path = "common/medication_kit.rs"]
 mod medication_kit;
 use medication_kit::*;
-
-/// Enroll a human actor in `role`; returns its signing key and key id. The role is a pinned
-/// determinant, so two humans need two roles: the same one would be the same actor (#152).
-async fn enroll_human(c: &Client, role: &str) -> (SigningKey, String) {
-    let (sk, kid) = generate_key().unwrap();
-    c.execute(
-        "SELECT enroll_actor('human', jsonb_build_object('role', $2::text), $1)",
-        &[&kid, &role],
-    )
-    .await
-    .unwrap();
-    (sk, kid)
-}
 
 /// Assert that event `event_id` was signed by `human_kid`, names the human `authored` and the
 /// node `recorded`, and that the NODE holds its DEK (ADR-0053: authorship never moves custody).
@@ -71,8 +58,8 @@ async fn a_nurse_withholds_a_doctors_prescription_and_the_doctor_releases_it() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
-    let (doctor_sk, doctor_kid) = enroll_human(&c, "prescriber").await;
-    let (nurse_sk, nurse_kid) = enroll_human(&c, "ward-nurse").await;
+    let (doctor_sk, doctor_kid) = common::enroll_human_with_role(&c, "prescriber").await;
+    let (nurse_sk, nurse_kid) = common::enroll_human_with_role(&c, "ward-nurse").await;
     let doctor = AuthorParams {
         human_sk: &doctor_sk,
         human_kid: &doctor_kid,

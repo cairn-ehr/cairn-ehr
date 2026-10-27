@@ -266,37 +266,35 @@ pub async fn release_medication_holds(
     let submitted =
         crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, None)
             .await;
-    match submitted {
-        Ok(_) => Ok(event_id),
-        // #855: a colleague's release can commit between the check above and this submit, and
-        // the floor (which waits for it, then sees it) refuses with a bare P0001 that carries no
-        // scope. Ask the same predicate again: if a hold has ended by `released`, that is what
-        // the floor refused, and it is the same stale picture the check above reports. Only an
-        // ANSWERED refusal is re-asked — a P0001 means the server said no, so nothing was
-        // written; an unknown commit outcome carries no SQLSTATE and is passed through as is.
-        Err(e) if floor_refused(&e) => {
-            match ended_holds(client, medication_id, withholds, &released).await {
-                Ok(ended) if !ended.is_empty() => Err(crate::db_diagnosis::stale_picture_refusal(
-                    format!("{}; nothing was released", ended.join("; ")),
-                )),
-                // Still standing, or the re-check itself failed: the floor's own words stand.
-                _ => Err(e),
-            }
+    let Err(e) = submitted else {
+        return Ok(event_id);
+    };
+    // #855: a colleague's release can commit between the check above and this submit, and the
+    // floor (which waits for it, then sees it) refuses with a bare P0001 that carries no scope.
+    // Ask the same predicate again: if a hold has ended by `released`, the caller's picture is
+    // stale, exactly as the check above would have reported. Only an ANSWERED refusal is
+    // re-asked: a P0001 means the server said no, so nothing was written. An unknown commit
+    // outcome is never an answered P0001 and passes through as is — the write may be our own.
+    let Some(floor_said) = crate::db_diagnosis::floor_refusal_message(&e) else {
+        return Err(e);
+    };
+    match ended_holds(client, medication_id, withholds, &released).await {
+        // The floor's own words ride along: it refuses at the FIRST bad hold in the caller's
+        // order, which may be another fault (a hold on another thread) that "re-read" alone
+        // would hide.
+        Ok(ended) if !ended.is_empty() => Err(crate::db_diagnosis::stale_picture_refusal(format!(
+            "{}; nothing was released (the node said: {floor_said})",
+            ended.join("; ")
+        ))),
+        Ok(_) => Err(e),
+        Err(recheck) => {
+            // The floor's refusal is still the true answer; only its scope is lost.
+            eprintln!(
+                "release: the stale re-check failed ({recheck:#}); reporting the node's refusal as is (#855)"
+            );
+            Err(e)
         }
-        Err(e) => Err(e),
     }
-}
-
-/// Did the floor refuse this write? A floor refusal is a bare `RAISE EXCEPTION`, SQLSTATE
-/// `P0001` (db/001's contract, `tests/floor_refusals_carry_no_errcode.rs`). Walks the whole
-/// chain, because callers add `.context(…)` layers above the database error.
-fn floor_refused(e: &anyhow::Error) -> bool {
-    e.chain().any(|cause| {
-        cause
-            .downcast_ref::<tokio_postgres::Error>()
-            .and_then(tokio_postgres::Error::code)
-            == Some(&tokio_postgres::error::SqlState::RAISE_EXCEPTION)
-    })
 }
 
 #[cfg(test)]

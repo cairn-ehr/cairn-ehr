@@ -210,10 +210,12 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 ### 2026-10-28 — #855 + #837 item 1 (PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)): release races closed; cross-author W pinned
 
 No decision had landed on #870/#871/#866/#867/#825/#850, so the buildable pair. TDD (both race tests red first;
-the authorship test mutation-checked by flipping `targets_other_author`).
+the authorship test is the only one with two humans; its first comment wrongly claimed a `targets_other_author`
+mutation check, which refuses every W and so discriminates nothing — reworded in review).
 - **⇒ A floor `P0001` that may be stale is re-asked, never parsed**: after an ANSWERED refusal, call the floor's
-  own predicate again (`ended_holds`); an unknown commit outcome carries no SQLSTATE and must pass through, since
-  the write may be our own. Durable rule updated (#855).
+  own predicate again (`ended_holds`), and keep the floor's sentence in the stale refusal (it refuses at the FIRST
+  bad hold, which may be another fault). An unknown commit outcome is never an answered `P0001` and must pass
+  through, since the write may be our own. Durable rule updated (#855).
 - **⇒ Before a park-on-the-lock race test, check nothing ELSE can park the victim** — db/005's lock order (event
   lock → projection locks → `hlc_state`, sync door only) showed the strict door takes no `hlc_state` row lock.
 - **⇒ Two humans with the same determinants are ONE actor** (#152 refuses the second enrol): give each a role.

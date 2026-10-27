@@ -17,8 +17,9 @@
 //! Each test opens the colleague's release on one connection and leaves it UNCOMMITTED, runs the
 //! second release on another connection in a spawned task, waits until that task has either
 //! finished (no lock: the unfixed floor) or is provably parked on a lock
-//! (`pg_stat_activity`, never a guessed sleep), and only then commits the first. Both outcomes
-//! are deterministic, so each assertion is red before its fix and green after it.
+//! (`pg_stat_activity`, never a guessed sleep), insists that the lock is section 8's advisory
+//! one, and only then commits the first. Both outcomes are deterministic, so each assertion is
+//! red before its fix and green after it.
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`. Key material is derived
 //! at runtime.
@@ -101,6 +102,34 @@ async fn open_colleagues_release(
         .expect("the colleague's release is admitted");
 }
 
+/// Wait until `second` is parked, then insist it is parked on an ADVISORY lock — section 8's
+/// per-hold lock — not merely on some lock. A row lock taken earlier would make the second
+/// release wait and then be refused with or without that lock, and the test would prove nothing.
+async fn parked_on_the_hold_lock<T>(
+    observer: &Client,
+    second_pid: i32,
+    second: &tokio::task::JoinHandle<T>,
+) {
+    until_finished_or_parked(observer, second_pid, second).await;
+    assert!(
+        !second.is_finished(),
+        "THE SECOND RELEASE MUST WAIT FOR THE FIRST (#855): it ran while the first was uncommitted"
+    );
+    let wait: Option<String> = observer
+        .query_one(
+            "SELECT wait_event FROM pg_stat_activity WHERE pid = $1",
+            &[&second_pid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        wait.as_deref(),
+        Some("advisory"),
+        "parked on the wrong lock"
+    );
+}
+
 #[tokio::test]
 async fn two_local_releases_of_one_hold_in_flight_admit_only_one() {
     let Some(base) = cs() else { return };
@@ -120,7 +149,7 @@ async fn two_local_releases_of_one_hold_in_flight_admit_only_one() {
     let sk2 = sk.clone();
     let second = tokio::spawn(async move { seal_and_submit(&c2, &sk2, body).await });
     let (observer, _) = second_connection(&base).await;
-    until_finished_or_parked(&observer, pid2, &second).await;
+    parked_on_the_hold_lock(&observer, pid2, &second).await;
 
     c.batch_execute("COMMIT").await.unwrap();
     let err = second.await.unwrap().expect_err(
@@ -169,7 +198,7 @@ async fn a_release_overtaken_after_its_precheck_is_refused_as_stale() {
         .await
     });
     let (observer, _) = second_connection(&base).await;
-    until_finished_or_parked(&observer, pid2, &second).await;
+    parked_on_the_hold_lock(&observer, pid2, &second).await;
 
     c.batch_execute("COMMIT").await.unwrap();
     let err = second
@@ -188,5 +217,9 @@ async fn a_release_overtaken_after_its_precheck_is_refused_as_stale() {
         "{text}"
     );
     assert!(text.contains("nothing was released"), "{text}");
+    assert!(
+        text.contains("the node said: medication release:"),
+        "the floor's own refusal rides along, so a different fault is never hidden: {text}"
+    );
     assert_eq!(release_rows(&c, med).await, 1);
 }

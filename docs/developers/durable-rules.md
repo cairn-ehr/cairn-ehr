@@ -148,7 +148,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   instead); re-inline the fold's tests (they drift); refuse at sync apply or replay (`cairn.remote_apply = 'on'`: a
   peer's dead release is admitted, the fold makes it a no-op — a local veto forks the event set, and a strict replay
   could not start the node). **#855:** section 8 locks each named hold (sorted) before it checks, and a floor
-  refusal of a release the pre-check passed re-asks the predicate, so an overtaken release is STALE too — never
+  refusal of a release the pre-check passed re-asks the predicate, so an overtaken release is STALE too, carrying the
+  floor's own sentence (it names the FIRST bad hold, which may be another fault) — never
   drop the lock to "simplify" (two local releases are admitted together again) and never re-ask on an UNKNOWN commit
   outcome (the release may be our own). Pins: `tests/medication_release_stale.rs`, `tests/medication_release_race.rs`.
 - **A Stop that lands on a line already stopped is WRITTEN, and the window says so (#843)** — no refusal: its reason

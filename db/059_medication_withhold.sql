@@ -379,7 +379,8 @@ BEGIN
         -- both pass the "still standing" check below, and both are admitted. Each waits here
         -- for the other to finish instead; this statement's next read then sees a committed
         -- release (READ COMMITTED: every plpgsql statement takes a fresh snapshot). Sorted
-        -- order, so two releases naming the same holds in a different order cannot deadlock.
+        -- order, so two releases naming the same holds in a different order cannot deadlock
+        -- (Postgres evaluates a volatile select-list call AFTER the ORDER BY, since 9.6).
         -- Local door only: a peer's release is admitted whatever this node holds, so
         -- serializing it would change nothing.
         PERFORM pg_advisory_xact_lock(hashtextextended('cairn.medication-hold:' || h::text, 0))
