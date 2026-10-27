@@ -6,7 +6,7 @@
 > **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872) (#869, branch `fix/869-test-cli-list-reason-lines`): `medication-list`'s
 > per-row "W", ceased-reason and stopped-record lines are now one pure `hold_text::row_hold_and_stop_lines`, called
 > by `main.rs` and unit-tested, so deleting any of the three no longer goes unnoticed. No behaviour change.
-> **Merged 2026-10-25: PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861): a line that reads current
+> **Merged 2026-10-27: PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861): a line that reads current
 > carries its stopped member threads' reasons (`stopped_member_reasons`), never "Stopped"; filed #869 (fixed by the
 > PR above), **#870**, **#871** (decisions). RUNBOOK §15 gained the current-line check.
 > **Merged 2026-10-24: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864): a shred re-folds the
