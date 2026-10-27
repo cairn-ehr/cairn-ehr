@@ -205,11 +205,13 @@ pub struct MedicationRow {
     /// empty unless `status` is Ceased.
     pub other_cessation_reasons: Vec<String>,
     /// On a line that reads CURRENT: every distinct reason a stopped member thread gave, in the
-    /// order a stopped line shows them (`cessation_reason`'s stop first, then the others) (#861). A reconciled line reads by latest-effective-wins
-    /// across its threads (ADR-0047), so a sibling's later dose keeps it current beside a
-    /// thread stopped for, say, angioedema, and while no allergy stream exists that reason may
-    /// be the only record of the reaction. A field of its own, not `cessation_reason`, so no
-    /// renderer can word it "Stopped": the drug is not. Always empty unless `status` is Active.
+    /// order a stopped line would show them — first the reason of the stop
+    /// `medication_group_cessation` picks, when it gave one, then the others, newest recorded
+    /// first (#861). A reconciled line reads by latest-effective-wins across its threads
+    /// (ADR-0047), so a sibling's later dose keeps it current beside a thread stopped for, say,
+    /// angioedema, and while no allergy stream exists that reason may be the only record of the
+    /// reaction. A field of its own, not `cessation_reason`, so no renderer can word it
+    /// "Stopped": the drug is not. Always empty unless `status` is Active.
     pub stopped_member_reasons: Vec<String>,
 }
 

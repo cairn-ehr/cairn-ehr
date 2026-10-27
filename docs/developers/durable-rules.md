@@ -156,7 +156,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   (PR #853 review). The note names the shown stop's reason AND every other stop's (#857): "no reason was recorded"
   only when no stop gave one, never beside a reasonless latest stop (PR #860 review). It closes with "the list keeps every
   stop's reason", true of a line that reads stopped (#857) and, since #861, of a stopped thread on a line still current
-  (`stopped_member_reasons`) — so the PR #860 caller-chosen claim and its second constant are gone. The CLI's
+  (`stopped_member_reasons`) — so the sentence takes no `list` argument: the PR #860 caller-chosen claim and both its
+  constants (`LIST_KEEPS_EVERY_REASON`, `LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED`) are gone. The CLI's
   `medication-cease` says it too (#854), from the same sentence (`already_stopped_sentence`) and line rule
   (`MedicationRow::already_stopped_note`, `cairn-medication-view`), asked through `medication::already_stopped_note`
   BEFORE it ceases (after, its own stop would read as "already"). The window stops every thread of a line, the CLI

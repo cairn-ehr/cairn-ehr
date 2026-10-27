@@ -6,8 +6,9 @@
 > **⇒ ONE PR AWAITS THE MAINTAINER: PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861, branch
 > `fix/861-stopped-member-reason-on-current-line`): a line that reads current carries its stopped member threads'
 > reasons (`MedicationRow::stopped_member_reasons`), said "a stopped record of this drug gave: …" by the CLI list and
-> the window, never "Stopped"; the cease note's list claim is one sentence everywhere. Read-side only. One independent
-> review (no code defect; stale comments fixed in-PR; filed **#869**, the CLI list's reason loops are untested). Touched
+> the window, never "Stopped"; the cease note's list claim is one sentence everywhere. Read-side only. Two reviews,
+> no code defect (stale comments and a stale test fixed in-PR, the status split made a pure tested fn; filed **#869**,
+> the CLI list's reason loops are untested, and the decisions **#870** and **#871**). Touched
 > DB-gated binaries, the full cairn-gui tree, fmt, clippy and `cargo doc -D warnings` on both trees green; CI gates the
 > full sweep. RUNBOOK §15 gained the current-line check.
 > **Merged 2026-10-24: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864): a shred re-folds the
@@ -35,7 +36,9 @@
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Review and merge PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861); run #838's RUNBOOK §15
->    (now incl. #861's current-line check); **#869** (cheap: test the CLI list's reason lines). From PR #865's second review: **#866** (an
+>    (now incl. #861's current-line check); **#869** (cheap: test the CLI list's reason lines). From PR #868's second
+>    review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
+>    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
 >    re-fold block the erasure — a decision). Decisions owed: **#825** (where the window's
 >    operator diagnostics live), **#850** (acknowledging a dealt-with report). Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
@@ -205,14 +208,16 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 
 ### 2026-10-26 — #861 (PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)): a current line shows its stopped members' reasons
 
-Built to the maintainer's 2026-10-24 decision. TDD, one independent review (no code defect; filed #869).
+Built to the maintainer's 2026-10-24 decision. TDD, two reviews (no code defect; filed #869; the second renamed a
+test the PR had made false, pinned holds.js's reveal gate, made the status split the pure `reasons_for_status` with
+the shown-stop-gave-none case tested, and filed the decisions #870 and #871).
 - **⇒ A new meaning gets a new field, not a status-dependent reading of an old one.** Filling `cessation_reason` on a
   current line would have made every renderer that does not know the change say "Stopped" of a current drug; a field
   of its own fails safe (a renderer that ignores it shows nothing, as before).
 - **⇒ "The shown stop" is the thread's NEWEST RECORDED stop** (db/031 keeps one row per thread), not its
   latest-effective one — my first test assumed the latter. Read the projection before writing an order assertion.
-- **⇒ When a fix makes a caller-chosen claim true everywhere, delete the choice** (`LIST_SHOWS_REASONS_ONLY_WHEN_STOPPED`
-  and `already_stopped_sentence`'s `list` parameter), then grep docs and comments for the old claim (the review found
+- **⇒ When a fix makes a caller-chosen claim true everywhere, delete the choice** (both `LIST_*`
+  constants and `already_stopped_sentence`'s `list` parameter), then grep docs and comments for the old claim (the review found
   three in durable-rules, four in comments, one in RUNBOOK).
 
 ### 2026-10-24 — #863 + #864 (PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)): a shred hands its rows on; a list is one snapshot

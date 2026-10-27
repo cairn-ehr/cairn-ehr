@@ -169,10 +169,14 @@ async fn a_line_kept_current_by_a_sibling_still_shows_the_stopped_threads_reason
     assert_eq!(
         row.stopped_member_reasons,
         ["rash", "angioedema"],
-        "in a stopped line's order: the stop it would show (a thread keeps its newest recorded, \
-         db/031), then the others"
+        "in a stopped line's order: the stop it would show (db/033 picks the latest-effective \
+         thread stop; db/031 keeps each thread's newest recorded, so 2019 \"rash\" over 2020 \
+         \"angioedema\"), then the others"
     );
-    assert_eq!(row.cessation_reason, None, "a current line shows no stop");
+    assert_eq!(
+        row.cessation_reason, None,
+        "a current line has no stop of its own: the reasons ride stopped_member_reasons"
+    );
     assert!(row.other_cessation_reasons.is_empty());
 
     // Once Y is stopped too the line reads stopped, and the reasons move to the ceased fields.
@@ -366,10 +370,11 @@ async fn a_sibling_already_stopped_is_not_named_as_unstopped() {
 }
 
 #[tokio::test]
-async fn a_line_that_reads_current_shows_no_stop_reason() {
-    // PR #860 review: the `status == Ceased` gate in the list read is the only thing keeping a
-    // member thread's "angioedema" off a line that reads current (whether to show it there is
-    // #861). Every other current-line test stops without a reason, so pin the gate here.
+async fn a_line_that_reads_current_keeps_its_stop_reasons_out_of_the_ceased_fields() {
+    // PR #860 review, #861: the list read's split by status keeps a member thread's
+    // "angioedema" out of `cessation_reason` / `other_cessation_reasons` on a line that reads
+    // current, so no renderer says "Stopped" of it; the reason rides `stopped_member_reasons`
+    // instead, and moves to the ceased fields once the line reads stopped.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
@@ -395,6 +400,7 @@ async fn a_line_that_reads_current_shows_no_stop_reason() {
     let list = list_patient_medications(&c, p).await.unwrap();
     assert_eq!(list.rows[0].status, MedicationStatus::Active);
     assert_eq!(reasons(&c, p).await, (None, vec![]));
+    assert_eq!(list.rows[0].stopped_member_reasons, ["angioedema"]);
 
     stop(&mut c, &sk, &kid, p, y, Some("patient request")).await;
     assert_eq!(

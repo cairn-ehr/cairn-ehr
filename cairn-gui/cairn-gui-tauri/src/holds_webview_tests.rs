@@ -40,6 +40,9 @@ fn the_w_is_a_button_whose_label_is_its_reason() {
         // The label is the visible text first, then the reason; the reveal is the reason alone.
         "reveal(hold.symbol, hold.symbol + \" — \" + hold.detail, hold.detail, \"hold-detail-\" + hold.withhold_event_id)",
         "row.status_label + \" — \" + row.cessation_detail",
+        // The status word reveals ANY stop reason the row carries, current line included (#861):
+        // a gate on status would leave it in the a11y tree but never on screen.
+        "if (row.cessation_detail) {",
     ] {
         assert!(status.contains(part), "{part} in {status}");
     }

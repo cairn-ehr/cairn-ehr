@@ -121,8 +121,9 @@ pub(crate) fn build_row(
         can_withhold: row.status == MedicationStatus::Active,
         can_release: !holds.is_empty(),
         holds,
-        // At most one of the two is non-empty: the read fills the ceased fields only on a
-        // ceased line and `stopped_member_reasons` only on a current one.
+        // At most one of the two sources is non-empty: the read fills the ceased fields only on
+        // a ceased line and `stopped_member_reasons` only on a current one. Were both ever
+        // filled, the ceased wording would win.
         cessation_detail: cessation_detail(
             row.cessation_reason.as_deref(),
             &row.other_cessation_reasons,

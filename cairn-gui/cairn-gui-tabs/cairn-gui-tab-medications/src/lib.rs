@@ -98,8 +98,9 @@ impl Semantic for MedicationsTab {
                 label.push_str(", ");
                 label.push_str(flag);
             }
-            // Holds and a cessation's reason ride the same utterance (short form; each hold's
-            // full detail is its own button below).
+            // Holds and a stop reason (a ceased line's, or a current line's stopped member's,
+            // #861) ride the same utterance (short form; each hold's full detail is its own
+            // button below).
             for hold in &row.holds {
                 label.push_str(", ");
                 label.push_str(&hold.symbol);
