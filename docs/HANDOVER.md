@@ -3,10 +3,14 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872) (#869, branch `fix/869-test-cli-list-reason-lines`): `medication-list`'s
-> per-row "W", ceased-reason and stopped-record lines are now one pure `hold_text::row_hold_and_stop_lines`, called
-> by `main.rs` and unit-tested, so deleting any of the three no longer goes unnoticed. No behaviour change.
-> **Merged 2026-10-27: PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861): a line that reads current
+> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#TBD](https://github.com/cairn-ehr/cairn-ehr/pull/TBD) (#855 + #837 item 1, branch
+> `fix/855-837-release-races-authorship-tests`): db/059 section 8 locks each named hold before it checks, so two
+> local releases of one hold can no longer both be admitted; a floor refusal of a release the pre-check passed is
+> re-asked and reported STALE ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md)
+> erratum E1); a nurse's W on a doctor's prescription, and the doctor's release of it, are pinned on the ADR-0053
+> human-authorship path. #837 stays open for item 3 (a decision).
+> **Merged 2026-10-27: PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)** (#869: the CLI list's hold and
+> stop-reason lines are one tested fn) and **PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861): a line that reads current
 > carries its stopped member threads' reasons (`stopped_member_reasons`), never "Stopped"; filed #869 (fixed by the
 > PR above), **#870**, **#871** (decisions). RUNBOOK §15 gained the current-line check.
 > **Merged 2026-10-24: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864): a shred re-folds the
@@ -33,13 +37,13 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)** (#869); run #838's RUNBOOK §15 (now incl. #861's current-line check). From PR #868's
+> 1. **Review and merge PR [#TBD](https://github.com/cairn-ehr/cairn-ehr/pull/TBD)** (#855 + #837 item 1); run #838's RUNBOOK §15 (now incl. #861's current-line check). From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
 >    re-fold block the erasure — a decision). Decisions owed: **#825** (where the window's
->    operator diagnostics live), **#850** (acknowledging a dealt-with report). Buildable hold follow-ups: **#855** (two release races) · **#837** (test gaps; item 2 settled by
->    ADR-0082) · #834 (needs a decision on shape). From PR #856's second review: **#858** (a peer release on a
+>    operator diagnostics live), **#850** (acknowledging a dealt-with report). Hold follow-ups: **#837** item 3 (shredding a release brings its hold back — a decision;
+>    items 1–2 done) · #834 (needs a decision on shape). From PR #856's second review: **#858** (a peer release on a
 >    sibling thread is shown nowhere). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
@@ -169,7 +173,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-28 (#855 + #837 item 1, PR [#TBD](https://github.com/cairn-ehr/cairn-ehr/pull/TBD)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 and #861 needed no ADR — a projection-side fix, no wire change;
@@ -202,6 +206,19 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-10-28 — #855 + #837 item 1 (PR [#TBD](https://github.com/cairn-ehr/cairn-ehr/pull/TBD)): release races closed; cross-author W pinned
+
+No decision had landed on #870/#871/#866/#867/#825/#850, so the buildable pair. TDD (both race tests red first;
+the authorship test mutation-checked by flipping `targets_other_author`).
+- **⇒ A floor `P0001` that may be stale is re-asked, never parsed**: after an ANSWERED refusal, call the floor's
+  own predicate again (`ended_holds`); an unknown commit outcome carries no SQLSTATE and must pass through, since
+  the write may be our own. Durable rule updated (#855).
+- **⇒ Before a park-on-the-lock race test, check nothing ELSE can park the victim** — db/005's lock order (event
+  lock → projection locks → `hlc_state`, sync door only) showed the strict door takes no `hlc_state` row lock.
+- **⇒ Two humans with the same determinants are ONE actor** (#152 refuses the second enrol): give each a role.
+- **⇒ An ADR consequence "accepted for now" that a later fix closes gets a dated erratum**, not an edit
+  (decisions/README's errata rule; ADR-0082 E1).
 
 ### 2026-10-26 — #861 (PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)): a current line shows its stopped members' reasons
 
@@ -287,23 +304,18 @@ Chosen with the maintainer. TDD, then an independent review, one fix wave; full 
 
 ### 2026-10-18 → 10-22 — interrupted commits (PRs #813–#830), the W (PRs #831, #838), its follow-ups (PR #842)
 
-- **⇒ The logical clock is not a wall clock** (#803): a peer may push `hlc_state` 24 h ahead (db/020), so a clinical
-  "now" comes from the node's PHYSICAL clock (`medication_withhold_clock.rs`); a test-side workaround for product
-  behaviour is a finding, not a fix. **A fallback in the floor is a bypass of the rule the client follows** (ADR-0021).
-- **⇒ A new value for an enum other code reads as "on the list" is a silent filter** — put a new state BESIDE the enum
-  (`Withheld` would have dropped held drugs from sign-off). **An `IF NOT EXISTS` index never picks up an edited
-  predicate** (rename it). **A guard probing one table per source file needs a probe per new file.**
-- **⇒ A real mouse finds what `element.click()` cannot** (#832: a reflowing W flickered under the pointer). **One press,
-  one W needs the button disabled.** **A control that overrides another must be undone by it.** **Hiding a button
-  hides what its refusal said** (#841) — say it on the line. **A view that cannot see a rule's input must not guess
-  the rule.** **Read the code before the issue's fix list.** `cargo doc -D warnings` catches what clippy cannot.
+- **⇒ The logical clock is not a wall clock** (#803): a clinical "now" comes from the node's PHYSICAL clock. **A
+  fallback in the floor is a bypass of the rule the client follows** (ADR-0021). **A new enum value other code reads
+  as "on the list" is a silent filter** — put a new state BESIDE the enum. **An `IF NOT EXISTS` index never picks up an
+  edited predicate** (rename it).
+- **⇒ A real mouse finds what `element.click()` cannot** (#832). **Hiding a button hides what its refusal said**
+  (#841) — say it on the line. **Read the code before the issue's fix list.** `cargo doc -D warnings` catches what
+  clippy cannot.
 - **⇒ An outcome that MAY have written settles like a success**; only an ERROR answer proves a rollback; one
-  `commit_failure` marks every commit, a tree inventory counts them and detects autocommits; a port that flattens an
-  error loses its marker (#815). To learn a rolled-back id, have the kill switch SAY it (#820). A flag carried by one
-  async call dies with it — make it window state (#811). **An issue's survey is a claim** (#826); **a printed line can
-  be a parse contract** (#828); widen a return with a `*_returning_event` sibling. Not done (optional in #820): one
-  renderer for the CLI's and the window's interruption sentence; nothing reads Postgres notices (#585); #812 items
-  7–10 and #814 came from the reviews; #713 first stated "unanswered ⇒ unknown" inline.
+  `commit_failure` marks every commit (#815). To learn a rolled-back id, have the kill switch SAY it (#820). A flag
+  carried by one async call dies with it — make it window state (#811). **An issue's survey is a claim** (#826); **a
+  printed line can be a parse contract** (#828). Not done (optional in #820): one renderer for the CLI's and the
+  window's interruption sentence; nothing reads Postgres notices (#585); #812 items 7–10 and #814.
 
 ### 2026-10-17 (third) — #797 brainstormed, planned, built SDD (PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805))
 
@@ -361,33 +373,25 @@ R7 = #742 + #743 part 2; residuals #787 · #786 · #783 · #782; splits #781 · 
 #604 · #608 · #431 · #464 · #768 · #773 · #603 · #346 · #553 · #616 · #744 · #704 · #708 · #713 · #569 · #560 · #682 ·
 #509; then #775 option A + #556 (PR #779).
 - **⇒ #726: A CONNECT REPLAYS THE SCHEMA ONLY WHEN IT CHANGED ([ADR-0080](spec/decisions/0080-a-connect-replays-the-schema-only-when-it-changed.md)).**
-  `node_schema` records the loader + a sha2-256 of the file texts (db/058). **Never "simplify" the gate to the generation
-  number** (strands in-place fixes) **or drop the loader check**; a test repairing the schema calls
+  **Never "simplify" the gate to the generation number or drop the loader check**; a test repairing the schema calls
   `db::force_schema_replay`.
-- **⇒ A case-mapping change on ONE side of a subset invariant breaks it** (#775: grep every `lower(` over names in Rust,
-  SQL AND Python); **a COLLATE moves `\s` and `[:alnum:]` too** (NBSP/`İ`/Greek fixtures in `patient_search_drift.rs`);
-  **a test ranking "first" among zero rivals proves nothing.** **COMMITTED IS NOT VOUCHED** (#556 detects stripping, not
-  trust; the sync wire is still unbound, **#778**). Left for a decision: **#780** (`casefold()`), Turkish dotless `ı`
-  (the ADR-0014 profile's job).
-- **⇒ A judgement carries what was compared** (#708, `RecordsShown`); **an unknown outcome is its own ROOT marker**
-  (#713; `.context(marker)` is invisible to a `chain()` downcast). **A race found by reasoning can be made
-  deterministic**: park the victim on the lock (`pg_stat_activity`), never sleep (`tests/shred_custody_race.rs`).
+- **⇒ A case-mapping change on ONE side of a subset invariant breaks it** (#775: grep every `lower(` in Rust, SQL AND
+  Python); **a COLLATE moves `\s` and `[:alnum:]` too**. **COMMITTED IS NOT VOUCHED** (#556; the sync wire is still
+  unbound, **#778**). Left for a decision: **#780** (`casefold()`), Turkish dotless `ı` (the ADR-0014 profile's job).
+- **⇒ A judgement carries what was compared** (#708); **an unknown outcome is its own ROOT marker** (#713). **A race
+  found by reasoning can be made deterministic**: park the victim on the lock (`pg_stat_activity`), never sleep.
 - **⇒ A per-row lock cannot guard a whole-log scan** (#773); **an issue's fix can be wrong about MVCC** (#560) **or
-  predate a guard** (#608 vs #633); **a belt-and-braces re-check with no test is not braces**; **a count is not a set**
-  (#553); a lenient arm can be worse than silent (#768, feeds `stale`, #606); a per-row `BEGIN … EXCEPTION` that WRITES
-  burns a subtransaction XID per row.
-- **R6** (#716 + #723): one door per line, "Review this link…", Confirm on every un-attested link, the bridge
-  re-linkable. **⇒ A pinned-count guard can go red where no per-task review looks** (run the guards that count what a
-  task adds). **⇒ Guard one verdict, ask it of every verdict on the panel** (Unlink had Confirm's gap; an Outranked
-  verdict hides both buttons). **⇒ A prefix in a fixed-width cell can eat the name** ("↳ in doubt: "). **⇒ A fix wave
-  gets its own review**; two classic `<script>`s share one global scope. Filed #781 · #782 · #783 · #784 · #785 · #786
-  · #787; commented #738.
-- **Cloud rig** (runs the FULL DB gate): micromamba from `github.com/mamba-org/micromamba-releases`, conda-forge
-  `postgresql=18`, `cargo install cargo-pgrx --version =0.18.1 --locked`, `cargo pgrx init --pg18 <conda pg_config>` with
-  an `xlocale.h` shim in `CFLAGS` and `BINDGEN_EXTRA_CLANG_ARGS`, `initdb` as `postgres`, `CREATE ROLE root SUPERUSER`;
-  never pre-create `cairn_pgx` in `template1`; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`;
-  `target/` reaches ~23 GB. Mechanics: a new db/tests mirror needs `\ir _scratch_database_guard.sql`; read the
-  `failures:` block. Left for a decision: #649 · #613 · #628; #427 is lower than it reads (#424). #220 gained a test.
+  predate a guard** (#608 vs #633); **a count is not a set** (#553); a lenient arm can be worse than silent (#768, #606);
+  a per-row `BEGIN … EXCEPTION` that WRITES burns a subtransaction XID per row.
+- **R6** (#716 + #723): one door per line, Confirm on every un-attested link, the bridge re-linkable. **⇒ A pinned-count
+  guard can go red where no per-task review looks.** **⇒ Guard one verdict, ask it of every verdict on the panel.**
+  **⇒ A fix wave gets its own review.** Filed #781 · #782 · #783 · #784 · #785 · #786 · #787; commented #738.
+- **Cloud rig** (runs the FULL DB gate): micromamba + conda-forge `postgresql=18`, `cargo install cargo-pgrx --version
+  =0.18.1 --locked`, `cargo pgrx init --pg18 <conda pg_config>` with an `xlocale.h` shim in `CFLAGS` and
+  `BINDGEN_EXTRA_CLANG_ARGS`, `initdb` as `postgres`, `CREATE ROLE root SUPERUSER`; never pre-create `cairn_pgx` in
+  `template1`; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`; `target/` ~23 GB. A new db/tests
+  mirror needs `\ir _scratch_database_guard.sql`. Left for a decision: #649 · #613 · #628; #427 is lower than it reads
+  (#424). #220 gained a test.
 
 ### 2026-10-04 → 10-09 — R4 (PR #724), #725 (PR #733), R5a (PR #735), R5b (PR #749)
 

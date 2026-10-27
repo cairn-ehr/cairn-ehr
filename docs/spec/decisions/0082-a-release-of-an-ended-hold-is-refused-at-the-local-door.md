@@ -8,6 +8,7 @@
 - **Amends:** [ADR-0081](0081-medication-withhold-is-a-time-bounded-hold.md) decision 4's sentence *"A named hold
   whose span already ended is a no-op, not an error"*, at the LOCAL door only, and adds one entry to decision 8's
   list of clinical-state refusals. Everything else in ADR-0081 stands, including that sentence at sync apply.
+- **Errata:** **E1**, appended 2026-10-28 when #855 closed the two races the Consequences accepted.
 
 ## Context
 
@@ -46,6 +47,13 @@ it.
   ([#855](https://github.com/cairn-ehr/cairn-ehr/issues/855)): a colleague's release landing between the node's
   pre-check and the floor gets an unscoped refusal for that one press, and two local releases of one hold at the
   same moment can both be admitted, which leaves the same harmless no-op a peer's double release does.
+
+  > **Erratum E1 (2026-10-28) — factual; the decision is unchanged.** Both races are closed
+  > ([#855](https://github.com/cairn-ehr/cairn-ehr/issues/855)). The floor (db/059 section 8) now takes a
+  > per-hold advisory lock before it checks, so a second local release of the same hold waits for the first and
+  > is then refused; and when the floor refuses a release the pre-check passed, `release_medication_holds` asks
+  > the same predicate again, so a hold that ended in between is reported as a STALE refusal. Pinned by
+  > `tests/medication_release_race.rs`.
 - A release that raced a colleague's now fails, and the window re-reads instead of writing an empty event. The
   record no longer gains releases that released nothing from this node's own door; it can still receive them from
   peers, which is correct.

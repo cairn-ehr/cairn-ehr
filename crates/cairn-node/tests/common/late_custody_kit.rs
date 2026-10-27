@@ -349,10 +349,10 @@ pub async fn custody(c: &Client, event_id: Uuid) -> (i64, i64) {
 ///
 /// Returns nothing: BOTH outcomes are legitimate here. An unfixed door finishes without waiting;
 /// a fixed one parks. What the test asserts is the end state after the first transaction commits.
-pub async fn until_finished_or_parked(
+pub async fn until_finished_or_parked<T>(
     observer: &Client,
     second_pid: i32,
-    second: &JoinHandle<Result<u64, tokio_postgres::Error>>,
+    second: &JoinHandle<T>,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {

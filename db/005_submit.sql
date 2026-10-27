@@ -444,7 +444,7 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- REPEATABLE READ around a door reopens this race.
 --
 -- DEADLOCK SHAPES (accepted). Within one event the order is always this lock, then any projection
--- lock (CARNMR, db/033), then the hlc_state row the sync door merges into last.
+-- lock (CARNMR, db/033; a local release's per-hold locks, db/059), then the hlc_state row the sync door merges into last.
 -- A transaction that applied SEVERAL events would hold hlc_state (or CARNMR) from an earlier one
 -- when it takes E's lock for a later one, and could meet a single-event shred of E that holds E's
 -- lock and wants hlc_state — the hot one. Postgres aborts one side with 40P01, a retryable failure
