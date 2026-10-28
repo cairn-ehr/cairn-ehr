@@ -491,8 +491,8 @@ never brings this line onto a checked chart.
       section 14, Measurement 2 (rename `cairn_person_charts`), and press **Sign off**. The outcome line
       says "Could not read the chart"; the banner does **not** vanish and offers no **Review** on a
       stale pair — it says "Could not check for possible duplicates: …". Rename the function back and
-      press **Read this chart again**: the banner is back as before. (Do not stop Postgres for this:
-      the window holds one connection, opened at launch, and does not reconnect — see section 14.)
+      press **Read this chart again**: the banner is back as before. (The rename keeps the fault to
+      the read; a restarted Postgres is section 14's check (c).)
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to the **Review** that opened it
       (to "Same person as…" if the banner has been redrawn since).
 
@@ -734,11 +734,8 @@ stop it when the outcome line has finished saying "Now part of it: B.".
    then "This record changed while it was on screen. Now part of it: <B's identity line>." The list now shows B's lines and the link line.
 5. Press **Sign off** again; it succeeds.
 
-**Measurement 2 — Read this chart again.** (a) A read that fails and then recovers. The window opens ONE
-database connection at launch and never reconnects, so stopping Postgres cannot be undone from the window:
-after a restart every press fails again until the window itself is restarted. **The button recovers a failed
-READ, not a lost CONNECTION**; a lost connection needs a window restart until reconnection exists. So the
-fault is injected into the read instead. The chart read starts with `cairn_person_charts` (the record's chart
+**Measurement 2 — Read this chart again.** (a) A read that fails and then recovers, while the node keeps
+running: the fault is injected into the read itself. The chart read starts with `cairn_person_charts` (the record's chart
 set; `cairn_node::patient::person::person_charts`), resolved by name on every read. With the chart open and
 its list drawn, in a second terminal.
 
@@ -770,6 +767,13 @@ replay did run meanwhile (a cleared stamp, a different build, `cairn-sync init`)
 (b) The "This list is out of date …" notice with Sign off disabled fires only when a stale refusal succeeded and the re-read right after it failed, a one-round-trip
 window: it is observable only with fault injection or the headless mock walk, never by hand. Do not look
 for it in this pass.
+
+(c) A lost CONNECTION (#807). The window reopens its one connection when it is lost. With the chart open,
+restart the node's Postgres (`pg_ctl restart -D <data dir>`, or the Postgres app's Stop then Start), then
+press **Read this chart again**: the list draws, with no window restart. The window's terminal shows "the
+database connection was lost; reopened it". Pressed while Postgres is still down, it fails and says so; a
+press about two seconds later tries again. A list that never comes back without a window restart is a
+finding.
 
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
 them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a

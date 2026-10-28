@@ -147,8 +147,12 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         &cli.key,
         std::env::var("CAIRN_KEY_PASSPHRASE").ok().as_deref(),
     )?;
-    // ONE connection, shared by the chart commands and the funnel's live port.
-    let db = std::sync::Arc::new(tokio::sync::Mutex::new(db));
+    // ONE connection, shared by the chart commands and the funnel's live port, and reopened
+    // from the same string if it is lost (#807).
+    let db = std::sync::Arc::new(cairn_gui_live::NodeConnection::reopening(
+        db,
+        cli.conn.clone(),
+    ));
     let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);
     let provisioning = match live.standing().await {
         Ok(standing) => funnel::view::standing_sentence(standing, live.node_kid()),

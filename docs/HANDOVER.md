@@ -3,12 +3,13 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873) (#855 + #837 item 1, branch
-> `fix/855-837-release-races-authorship-tests`): db/059 section 8 locks each named hold before it checks, so two
-> local releases of one hold can no longer both be admitted; a floor refusal of a release the pre-check passed is
-> re-asked and reported STALE ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md)
-> erratum E1); a nurse's W on a doctor's prescription, and the doctor's release of it, are pinned on the ADR-0053
-> human-authorship path. #837 stays open for item 3 (a decision).
+> **⇒ ONE PR AWAITS THE MAINTAINER:** the #807 PR (branch `fix/807-window-reconnect`): the window's one connection is
+> now a `cairn_gui_live::NodeConnection` that reopens itself on the next lock after it has CLOSED — never on a
+> refusal, never mid-command, 2 s backoff, 5 s cap. The sentences #807/#814 flagged ("Read this chart again", "once
+> the window can reach the node again") were false only for want of this, so they stay. RUNBOOK §14 gained check (c),
+> a Postgres restart with the chart open (human-owed). Durable rule block added.
+> **Merged 2026-10-27: PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)** (#855 + #837 item 1: two local
+> releases of one hold serialize; an overtaken release is STALE, ADR-0082 E1; cross-author W pinned).
 > **Merged 2026-10-27: PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)** (#869: the CLI list's hold and
 > stop-reason lines are one tested fn) and **PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861): a line that reads current
 > carries its stopped member threads' reasons (`stopped_member_reasons`), never "Stopped"; filed #869 (fixed by the
@@ -37,7 +38,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)** (#855 + #837 item 1); run #838's RUNBOOK §15 (now incl. #861's current-line check). From PR #868's
+> 1. **Review and merge the #807 PR**; run #838's RUNBOOK §15 (now incl. #861's current-line check) and §14 check (c). From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
@@ -45,13 +46,12 @@
 >    operator diagnostics live), **#850** (acknowledging a dealt-with report). Hold follow-ups: **#837** item 3 (shredding a release brings its hold back — a decision;
 >    items 1–2 done) · #834 (needs a decision on shape). From PR #856's second review: **#858** (a peer release on a
 >    sibling thread is shown nowhere). An idempotent re-send of a registration
->    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
->    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
+>    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible now that the window
+>    reopens a lost connection (#807), with #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17):** #803 (slice A PR #831, slice B PR #838, both merged; follow-ups #833 ward-level
 >    list, #834 no marker for an undecryptable event) → **#804** (on link, show only where the two charts' medication
 >    lists DIFFER, with continue / discontinue / withhold per line; needs #803 and **#690**). From #797's reviews:
->    **#812** (window type/test tightening) · **#807** (the window never
->    reconnects after a lost connection) · **#808** (two outcome-line races) · **#809** (window tech debt) · **#810**
+>    **#812** (window type/test tightening) · **#808** (two outcome-line races) · **#809** (window tech debt) · **#810**
 >    (cairn-node files over 500 lines).
 >    **Open repair-path issues:** #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
 >    from R6 **#784** · **#785** · from R5b **#750** · **#751** · **#753** · **#755** · **#756** · **#757** · from R5a
@@ -173,7 +173,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-28 (#807, the window reopens a lost connection, branch `fix/807-window-reconnect`) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 and #861 needed no ADR — a projection-side fix, no wire change;
@@ -207,6 +207,18 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
+### 2026-10-28 — #807: the window reopens a lost connection
+
+No decision had landed, so the maintainer chose #807. TDD (red on a missing type; each pin mutation-checked:
+disabling the reopen fails `a_lost_connection_is_reopened_on_the_next_lock`, reopening on every lock fails
+`a_refusal_keeps_the_same_connection`).
+- **⇒ Give a wrapper the method name its callers already use.** `NodeConnection::lock` returns the same
+  `MutexGuard<Client>`, so ~25 call sites in two crates changed not at all; only the four lines naming the type did.
+- **⇒ A `std` guard bound across an `.await` makes the whole future `!Send`** (Tauri commands need `Send`) — take it
+  per statement through a helper, never in a `let`.
+- **⇒ A sentence that is false only because a mechanism is missing is fixed by the mechanism**, not by rewording:
+  "once the window can reach the node again" became true, so it stays.
+
 ### 2026-10-28 — #855 + #837 item 1 (PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)): release races closed; cross-author W pinned
 
 No decision had landed on #870/#871/#866/#867/#825/#850, so the buildable pair. TDD (both race tests red first;
@@ -238,55 +250,34 @@ the shown-stop-gave-none case tested, and filed the decisions #870 and #871).
 
 ### 2026-10-24 — #863 + #864 (PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)): a shred hands its rows on; a list is one snapshot
 
-Maintainer chose #863 + #864 and decided #861's shape. TDD (red first on both one-winner keys), each pin
-mutation-checked, an independent review, then a second four-agent review (fixed in-PR; filed **#866**, **#867**).
-- **⇒ "Never over-erase" is half a rule.** Deleting only your own rows is right; leaving a one-winner key EMPTY is
-  under-statement. Any scrub of a winner-takes-all projection owes a re-fold of what remains.
-- **⇒ Never SKIP a locked sibling on the theory that its holder will write it** — a holder that rolls back, or
-  only re-receives the event, writes nothing (the review's catch; my first cut try-locked). Serialize the shreds and
-  wait instead; a door cycle is a transient 40P01. **Compare ids canonically** — the floor admits any uuid spelling.
-- **⇒ Raise isolation only for reads.** A door write at REPEATABLE READ reopens the custody/shred race; the snapshot
-  lives at the callers that own a bare connection, and the readers keep `GenericClient` (tests' failure seam).
-- **⇒ A source-guard slice at `at - N` bytes panics on an em dash** — use `floor_char_boundary`.
-- **⇒ "Its clear view is gone" is true only of a SEALED event.** `cairn_clear_payload` returns a plaintext body
-  straight from the log, and the sync door shreds a peer's plaintext event — so the re-fold re-inserted its own
-  target's rows (second review; three reviewers found it independently). Now excluded by id; an EARLIER-shredded
-  plaintext sibling still comes back on a heal or re-fold (**#866**). A sibling whose replay raises aborts the
-  shred; a P0001 is re-raised bare naming the sibling, any other code propagates untouched (a first cut used
-  `USING ERRCODE = v_state`, and CI's `floor_refusals_carry_no_errcode.rs` — not in my targeted run — refused it); whether that should block the erasure is **#867**.
-- **⇒ zsh does not word-split `$T`** — `cargo test $T` with `T="--test a --test b"` passes ONE filter and runs
-  every binary with all tests filtered out, exit 0. Use an array (`T+=(--test a)`, `"${T[@]}"`).
+TDD, each pin mutation-checked, two reviews (filed **#866**, **#867**).
+- **⇒ "Never over-erase" is half a rule**: leaving a one-winner key EMPTY is under-statement, so any scrub of a
+  winner-takes-all projection owes a re-fold of what remains. **Never SKIP a locked sibling** on the theory its holder
+  writes it (a rollback writes nothing) — serialize and wait; a door cycle is a transient 40P01. **Compare ids
+  canonically** (the floor admits any uuid spelling).
+- **⇒ Raise isolation only for reads** (a door write at REPEATABLE READ reopens the custody/shred race); the snapshot
+  lives at the callers that own a bare connection.
+- **⇒ "Its clear view is gone" is true only of a SEALED event** — the sync door shreds a peer's plaintext event too,
+  so the re-fold excludes its own target by id (an earlier-shredded sibling: **#866**). Never `USING ERRCODE` in db/
+  (`floor_refusals_carry_no_errcode.rs`); whether a failed sibling should block the erasure: **#867**.
+- **⇒ A source-guard slice at `at - N` bytes panics on an em dash** (`floor_char_boundary`). **zsh does not
+  word-split `$T`** — use an array, `"${T[@]}"` (bit again 2026-10-28 with `--manifest-path`).
 
-### 2026-10-23/24 — #857 + #859 (PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)): every stop's reason; a one-thread stop says the line stays current
+### 2026-10-23 → 10-24 — #835 + #854 (PR #856), #857 + #859 (PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860))
 
-Maintainer chose the shape ("every stop's reason"). TDD, two independent reviews (all findings fixed or filed: #861, #863, #864),
-mutation-checked pins.
-- **⇒ A new projection beside a one-winner one is the cheap honest fix**: register a SECOND apply fn for the same
-  event type (the dispatcher runs every fn by `run_order, apply_fn`), bump the generation so the loader's heal
-  backfills, add the shred delete, and bump BOTH registry counts. Fixture truncate lists (three `tests/common` files,
-  two cairn-sync lists) and `combined_read.rs`'s golden strip are the places a new table/field also reaches.
-- **⇒ Fixing what a list SHOWS changes what every sentence ABOUT the list may claim.** "The list keeps every stop's
-  reason" was true for a stopped LINE and false for the CLI's thread note on a line still current; "no reason was
-  recorded" became false beside a reasonless latest stop. Grep the sentences, not only the renderers.
-- **⇒ An undated stop is effective NOW**: under latest-effective-wins it outranks a sibling's older dose, so a test of
-  "a sibling keeps the line current" must backdate the stop.
-- **⇒ Env exports do not survive between tool calls**: a DB suite "ok" in 0.00 s was a self-skip. Source an env file
-  in the same call.
-
-### 2026-10-23 (third) — #835 + #854 (PR #856): a release still ahead is said; the CLI cease says "already stopped"
-
-Chosen with the maintainer. TDD, then an independent review, one fix wave; full local gate green on the final tree.
-- **⇒ A sentence about a FUTURE event must check that the event will still act.** "Release at 16:00" on a hold that
-  ends by its own `until` at 14:00 announces something that ends nothing (the review caught it; 7c now requires
-  `released_at < until_at`). Walk a "will happen" sentence through every way the thing can be over first.
-- **⇒ Widen a read with a sibling predicate, not a new column on a set-returning function** (a return-type change
-  `CREATE OR REPLACE` refuses, and an older binary's replay then fails); ask both at ONE instant read in `FROM`.
-- **⇒ A display-only read must not block a safety write** (the CLI cease's note), and "nothing to say" is not
-  "not known": an unseen thread says it cannot tell.
-- **⇒ A rule shared by two surfaces is only shared if they act on the same unit** (second review). The window stops
-  a LINE, the CLI one THREAD; the line rule was silent for a stopped thread on a line kept current by a sibling.
-- **⇒ "Release at 16:00" after "from 08:00" reads as an interval** — a release before a pending start is a cancel and
-  must say so. And a sentence that says what the list keeps must be checked against the projection (it overwrites).
+Both TDD with independent reviews (#860's filed #861, #863, #864).
+- **⇒ A new projection beside a one-winner one is the cheap honest fix**: a SECOND apply fn for the same event type,
+  a generation bump so the loader's heal backfills, the shred delete, BOTH registry counts; fixture truncate lists
+  (three `tests/common` files, two cairn-sync lists) and `combined_read.rs`'s golden strip reach it too.
+- **⇒ Fixing what a list SHOWS changes what every sentence ABOUT it may claim** — grep the sentences, not only the
+  renderers; and check a sentence about what the list keeps against the projection (it overwrites).
+- **⇒ A sentence about a FUTURE event must check the event will still act** ("Release at 16:00" on a hold whose
+  `until` is 14:00 ends nothing; 7c requires `released_at < until_at`). A release before a pending start is a cancel.
+- **⇒ Widen a set-returning read with a sibling predicate, not a new column** (`CREATE OR REPLACE` refuses a
+  return-type change; an older binary's replay then fails). A display-only read must not block a safety write.
+- **⇒ A rule shared by two surfaces is shared only if they act on the same unit** (the window stops a LINE, the CLI
+  a THREAD). An undated stop is effective NOW, so a "sibling keeps it current" test must backdate the stop.
+- **⇒ Env exports do not survive between tool calls**: a DB suite "ok" in 0.00 s was a self-skip.
 
 ### 2026-10-22 → 10-23 — #846 (PR #847), #848 (PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)), #843 + #849 (PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853))
 
@@ -337,7 +328,7 @@ or, commonly, the two charts never meet; so the refused press is not an `M > N` 
 - **⇒ "After apply, before commit" must be pinned on BOTH sides** — a DB test caught only "after apply"; a source
   guard now pins the commit side (`judge_tests.rs`).
 - **⇒ An operator procedure is a claim too:** RUNBOOK §14 first told testers to stop Postgres and recover with the
-  button — the window never reconnects (#807); a REVOKE cannot fail a superuser; the fault is a renamed function now.
+  button — the window then never reconnected (#807, fixed since); a REVOKE cannot fail a superuser; the fault is a renamed function now.
 
 ### 2026-10-16 → 10-17 — #745 · #752 · #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) and #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
 
