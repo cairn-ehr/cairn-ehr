@@ -86,6 +86,8 @@ fn main() -> anyhow::Result<()> {
     // the `tokio::spawn`ed tokio_postgres connection task that `connect_and_load_schema`
     // starts. Drop this runtime and that task stops being polled, so every query for the rest
     // of the session hangs or fails. Keeping it alive until `main` returns is the point.
+    // (A connection REOPENED after a loss, #807, spawns its task on Tauri's runtime instead,
+    // because the reopen runs inside a command; that runtime lives as long as the app.)
     let runtime = tokio::runtime::Runtime::new()?;
 
     let app_state = if cli.mock {

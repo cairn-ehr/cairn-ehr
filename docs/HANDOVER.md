@@ -7,10 +7,12 @@
 > now a `cairn_gui_live::NodeConnection` that reopens itself on the next lock after it has CLOSED — never on a
 > refusal, never mid-command, 2 s backoff, 5 s cap. The sentences #807/#814 flagged ("Read this chart again", "once
 > the window can reach the node again") were false only for want of this, so they stay. RUNBOOK §14 gained check (c),
-> a Postgres restart with the chart open (human-owed). Durable rule block added.
-> **Merged 2026-10-27: PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)** (#855 + #837 item 1: two local
+> a Postgres restart with the chart open (human-owed). Durable rule block added. Its review round is fixed in-PR
+> (backoff and timeout now tested against a stand-in node; filed **#875**, a silently dead socket hangs the window, and
+> **#876**, a failed reopen's cause never reaches the screen).
+> **Merged 2026-10-28: PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)** (#855 + #837 item 1: two local
 > releases of one hold serialize; an overtaken release is STALE, ADR-0082 E1; cross-author W pinned).
-> **Merged 2026-10-27: PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)** (#869: the CLI list's hold and
+> **Merged 2026-10-28: PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)** (#869: the CLI list's hold and
 > stop-reason lines are one tested fn) and **PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861): a line that reads current
 > carries its stopped member threads' reasons (`stopped_member_reasons`), never "Stopped"; filed #869 (fixed by the
 > PR above), **#870**, **#871** (decisions). RUNBOOK §15 gained the current-line check.
@@ -38,7 +40,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)** (#807); run #838's RUNBOOK §15 (now incl. #861's current-line check) and §14 check (c). From PR #868's
+> 1. **Review and merge PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)** (#807); run #838's RUNBOOK §15 (now incl. #861's current-line check) and §14 check (c). From its review: **#875** ·
+   **#876**. From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
@@ -211,11 +214,14 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 
 No decision had landed, so the maintainer chose #807. TDD (red on a missing type; each pin mutation-checked:
 disabling the reopen fails `a_lost_connection_is_reopened_on_the_next_lock`, reopening on every lock fails
-`a_refusal_keeps_the_same_connection`).
-- **⇒ Give a wrapper the method name its callers already use.** `NodeConnection::lock` returns the same
-  `MutexGuard<Client>`, so ~25 call sites in two crates changed not at all; only the four lines naming the type did.
-- **⇒ A `std` guard bound across an `.await` makes the whole future `!Send`** (Tauri commands need `Send`) — take it
-  per statement through a helper, never in a `let`.
+`an_answered_error_keeps_the_same_connection`; the review round's backoff and timeout tests fail when the
+failure stamp or the `timeout` is removed).
+- **⇒ Give a wrapper the method name its callers already use.** `NodeConnection::lock`'s guard derefs to `Client`,
+  so the ~14 call sites in two crates changed not at all; only the lines naming the type did.
+- **⇒ State touched only under a lock lives INSIDE that lock** (`Held` + `MutexGuard::map`). The first cut kept the
+  failure stamp in a second, `std` mutex, whose guard bound across an `.await` makes the future `!Send`.
+- **⇒ A node that is DOWN is a `TcpListener` on `127.0.0.1:0`**: drop the socket for "refused", hold it for "no
+  answer". That made the backoff and the timeout testable with no production seam.
 - **⇒ A sentence that is false only because a mechanism is missing is fixed by the mechanism**, not by rewording:
   "once the window can reach the node again" became true, so it stays.
 

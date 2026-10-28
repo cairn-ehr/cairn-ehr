@@ -477,18 +477,20 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **2026-10-23 → 10-28 — every stop's reason, a shred that hands its rows on, the release races.** PR #856 (#835 +
   #854: a release for a later instant is said on its hold, db/059 7c; filed **#857** · **#858** · **#859**) · PR #860
   (#857 + #859: db/060 `medication_cessation_reason`, gen **60**, `other_cessation_reasons`; filed #861, #863, #864,
-  **#862**) · PR #865 (#863 + #864: a shred re-folds the threads its event named, `cairn_refold_after_shred`; every
+  **#862**; tokio 1.54.1, RUSTSEC-2026-0386) · PR #865 (#863 + #864: a shred re-folds the threads its event named, `cairn_refold_after_shred`; every
   medication-list read is one `REPEATABLE READ READ ONLY` snapshot; filed **#866**, **#867**) · PR #868 (#861: a
   current line carries its stopped members' reasons, `stopped_member_reasons`) · PR #872 (#869:
   `hold_text::row_hold_and_stop_lines`, tested) · PR #873 (#855 + #837 item 1: db/059 section 8 locks each hold
   before its check, so a second local release is refused and reported STALE, ADR-0082 erratum E1; a nurse's W on a
-  doctor's prescription pinned). All merged by 2026-10-27.
+  doctor's prescription pinned). All merged by 2026-10-28.
 - **2026-10-28 — the window reopens a lost connection (#807).** PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874): the shared connection is a
   `cairn_gui_live::NodeConnection` whose `lock` swaps in a fresh client when the old one has closed — never on a
   refusal, never mid-command, 2 s backoff, 5 s attempt cap (`tests/reconnect.rs`). The sentences that pointed at
   "Read this chart again" or "once the window can reach the node again" are now true. RUNBOOK §14 check (c) owed.
+  Review: filed **#875** (a silently dead socket hangs the window) and **#876** (a failed reopen's cause reaches only
+  the log).
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
-  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**; then HANDOVER's ⇒ NEXT. #699 stays open.
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875**, **#876**; then HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 

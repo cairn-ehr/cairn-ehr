@@ -41,7 +41,7 @@ pub use connection::NodeConnection;
 
 /// One node connection, plus the identity every write is signed under.
 ///
-/// # Why `tokio::sync::Mutex` and not `std::sync::Mutex`
+/// # Why [`NodeConnection`]'s mutex is `tokio::sync::Mutex` and not `std::sync::Mutex`
 ///
 /// `register_patient` takes `&mut Client`, while `PatientRegistration::register` takes `&self`
 /// and must return a `Send` future. A `std::sync::MutexGuard` is not `Send`, so holding one
@@ -156,11 +156,11 @@ mod tests {
     /// A compile-time claim 2c depends on and nothing else here would catch.
     ///
     /// Tauri's `manage`/`State` require `Send + Sync + 'static`, and so does holding this across
-    /// an `.await` in a command. Both hold today — `NodeConnection` is `Sync` because its mutex
-    /// is, and `SigningKey` is plain data — but neither is written down anywhere, and the
-    /// obvious "simplification" of swapping the tokio mutex for a `std` one takes `Send` away
-    /// from the guard rather than from the struct, so the failure would land in 2c as a wall of
-    /// lifetime errors inside a command body rather than here.
+    /// an `.await` in a command. Both hold today — `NodeConnection` is `Sync` because its one
+    /// (tokio) mutex is, and `SigningKey` is plain data. The obvious "simplification" of
+    /// swapping that mutex for a `std` one in `connection.rs` takes `Send` away from the guard
+    /// rather than from the struct, so this test would stay green; the guard's own pin is
+    /// `connection.rs`'s `the_guard_may_be_held_across_an_await`.
     ///
     /// A static assertion rather than a dependency on `static_assertions`: one function that is
     /// never called is cheaper than a crate, and the error message names the bound directly.

@@ -11,17 +11,22 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 ## Per-slice rules (the repair path, the funnel)
 
 **⇒ #807 — THE WINDOW'S CONNECTION IS REOPENED WHEN LOST — do not undo** (pins:
-`cairn-gui/cairn-gui-live/tests/reconnect.rs`, `connection.rs`'s backoff unit test):
+`cairn-gui/cairn-gui-live/tests/reconnect.rs`, `connection.rs`'s backoff unit test and `Send` pin):
 - **Reopen only when the client `is_closed()`, and only when the lock is taken** (`NodeConnection::lock`,
   `cairn-gui-live/src/connection.rs`). Never on an error: a refusal is an answer on a live connection. Never
   mid-command, and never a retried write: a commit with no answer stays unknown, and the next command just gets a
-  working connection for the re-read.
+  working connection for the re-read once the node answers. A failed or unanswered attempt (5 s cap) starts a 2 s
+  backoff, kept in the same lock as the client.
+- **Known limits, filed:** a silently dead socket never closes the client, so its query hangs holding the lock
+  (#875); a failed reopen's cause reaches only the log, the screen says "connection closed" (#876).
 - **The reopen is `cairn_node::db::connect`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
-  replay takes DDL locks a read never needs (#726). Unpinned — the tempting "keep it the same as launch" fix.
+  replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication; a restart
+  still runs it. Unpinned — the tempting "keep it the same as launch" fix.
 - **`LiveData::new` is `NodeConnection::fixed`**: a caller-made client may carry session state (`lost_commit.rs`'s
   kill switch is a `SET`) that a fresh one would silently lack. Only the window's launch uses `reopening`.
-- Not checked on reopen: that the database is still the SAME node. A different node's floor refuses this window's
-  key, and a launch against the wrong database has the same exposure.
+- Not checked on reopen: that the database is still the SAME node. Writes there are expected to be refused if this
+  window's key is not enrolled; reads are not checked at all. A launch against the wrong database has the same
+  exposure.
 
 **⇒ #863 + #864 — A SHRED HANDS ITS ROWS ON; A LIST IS ONE SNAPSHOT — do not undo** (pins:
 `crates/cairn-node/tests/shred_refolds_overlay_winner.rs`, `tests/medication_list_one_snapshot.rs`):
