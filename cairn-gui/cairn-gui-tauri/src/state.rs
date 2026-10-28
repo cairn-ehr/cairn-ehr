@@ -162,8 +162,9 @@ pub struct AppState {
     /// the operator accessibility pass and the timing runbook possible on a laptop.
     ///
     /// `Arc` because the funnel's live port reads and writes through the SAME connection
-    /// (`cairn_gui_live::LiveData::sharing`), so the window describes one node.
-    pub db: Option<std::sync::Arc<tokio::sync::Mutex<tokio_postgres::Client>>>,
+    /// (`cairn_gui_live::LiveData::sharing`), so the window describes one node. Reopened when
+    /// it is lost (#807), so a Postgres restart no longer needs a window restart.
+    pub db: Option<std::sync::Arc<cairn_gui_live::NodeConnection>>,
     /// The NODE's key — holds custody of every sealed body (ADR-0052) regardless of who
     /// signed the content. Distinct from the clinician's key in `session`. `None` in
     /// fixture mode.

@@ -27,6 +27,7 @@
 //! names neither a DEK nor custody, and `db/045`'s projection opens with `IF e.sealed THEN
 //! RETURN;`. ADR-0052's born-sealed bodies and the custody question they raise belong to
 //! clinical content, not to this path.
+mod connection;
 pub mod error;
 mod funnel;
 pub mod node;
@@ -34,12 +35,13 @@ pub mod node;
 use cairn_event::SigningKey;
 use cairn_node::identity::Identity;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio_postgres::Client;
+
+pub use connection::NodeConnection;
 
 /// One node connection, plus the identity every write is signed under.
 ///
-/// # Why `tokio::sync::Mutex` and not `std::sync::Mutex`
+/// # Why [`NodeConnection`]'s mutex is `tokio::sync::Mutex` and not `std::sync::Mutex`
 ///
 /// `register_patient` takes `&mut Client`, while `PatientRegistration::register` takes `&self`
 /// and must return a `Send` future. A `std::sync::MutexGuard` is not `Send`, so holding one
@@ -56,9 +58,12 @@ use tokio_postgres::Client;
 /// on one `LiveData`, the second one waits — which is correct rather than merely acceptable:
 /// `register_patient` ticks this node's HLC, and two registrations interleaving inside one
 /// connection is not a thing to be clever about.
+///
+/// The window's connection is reopened when it is lost (#807, [`NodeConnection::reopening`]);
+/// one made by [`LiveData::new`] is not ([`NodeConnection::fixed`]).
 pub struct LiveData {
     /// `Arc` so the window's chart commands can hold the same connection (see above).
-    db: Arc<Mutex<Client>>,
+    db: Arc<NodeConnection>,
     node_sk: SigningKey,
     /// Hex of `node_sk`'s verifying key. Derived ONCE, here, rather than per call, so the kid
     /// a registration is signed under cannot drift from the key that signed it.
@@ -70,7 +75,8 @@ pub struct LiveData {
 }
 
 impl LiveData {
-    /// Take ownership of a connection whose schema is already loaded.
+    /// Take ownership of a connection whose schema is already loaded. It is never reopened
+    /// ([`NodeConnection::fixed`]): the caller made it and may have set session state on it.
     ///
     /// The caller connects (`cairn_node::db::connect_and_load_schema`) and reads the node
     /// identity (`cairn_node::identity::load_local`), exactly as the window's
@@ -109,7 +115,7 @@ impl LiveData {
     /// asks [`LiveData::require_provisioned`] before each registration, which refuses as
     /// `NotProvisioned` naming the remedy (#654 option 2, #665; see `node.rs`).
     pub fn new(db: Client, node_sk: SigningKey, identity: &Identity) -> Self {
-        Self::sharing(Arc::new(Mutex::new(db)), node_sk, identity)
+        Self::sharing(Arc::new(NodeConnection::fixed(db)), node_sk, identity)
     }
 
     /// As [`LiveData::new`], over a connection the caller also holds.
@@ -117,7 +123,7 @@ impl LiveData {
     /// The reference window uses this: its medication commands read through the same
     /// connection the funnel writes through, so one window describes one node. Everything
     /// [`LiveData::new`]'s doc says about `identity` and enrolment applies unchanged.
-    pub fn sharing(db: Arc<Mutex<Client>>, node_sk: SigningKey, identity: &Identity) -> Self {
+    pub fn sharing(db: Arc<NodeConnection>, node_sk: SigningKey, identity: &Identity) -> Self {
         let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
         Self {
             db,
@@ -131,7 +137,7 @@ impl LiveData {
     ///
     /// A production accessor, not a test convenience: tests read rows back on a connection
     /// of their own (`tests/common`'s `connect`), as that helper's doc asks.
-    pub fn connection(&self) -> Arc<Mutex<Client>> {
+    pub fn connection(&self) -> Arc<NodeConnection> {
         self.db.clone()
     }
 
@@ -150,11 +156,11 @@ mod tests {
     /// A compile-time claim 2c depends on and nothing else here would catch.
     ///
     /// Tauri's `manage`/`State` require `Send + Sync + 'static`, and so does holding this across
-    /// an `.await` in a command. Both hold today — `Mutex<Client>` is `Sync` because the mutex
-    /// is, and `SigningKey` is plain data — but neither is written down anywhere, and the
-    /// obvious "simplification" of swapping the tokio mutex for a `std` one takes `Send` away
-    /// from the guard rather than from the struct, so the failure would land in 2c as a wall of
-    /// lifetime errors inside a command body rather than here.
+    /// an `.await` in a command. Both hold today — `NodeConnection` is `Sync` because its one
+    /// (tokio) mutex is, and `SigningKey` is plain data. The obvious "simplification" of
+    /// swapping that mutex for a `std` one in `connection.rs` takes `Send` away from the guard
+    /// rather than from the struct, so this test would stay green; the guard's own pin is
+    /// `connection.rs`'s `the_guard_may_be_held_across_an_await`.
     ///
     /// A static assertion rather than a dependency on `static_assertions`: one function that is
     /// never called is cheaper than a crate, and the error message names the bound directly.

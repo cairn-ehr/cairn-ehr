@@ -474,34 +474,23 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   [ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md) (v0.84) — a release of an
   ended hold is a stale refusal at the local door; a Stop on a stopped line is written and said; filed **#854**,
   **#855**. All merged by 2026-10-23.
-- **2026-10-23 → 10-26 — every stop's reason, and a shred that hands its rows on.** PR
-  [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856) (#835 + #854): a release recorded for a later instant is said
-  on its hold (db/059 7c); `medication-cease` says when the line was already stopped; filed **#857** · **#858** ·
-  **#859**. PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860) (#857 + #859): db/060
-  `medication_cessation_reason` (one row per stop that gave a reason; gen **60**, healed by the loader, scrubbed by
-  shred) → `other_cessation_reasons` beside the shown reason; `medication-cease` names the threads with no readable
-  stop when the line stays current; filed #861, #863, #864, **#862** (gate script); tokio 1.54.1 (RUSTSEC-2026-0386).
-  PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865) (#863 + #864): a shred re-folds the threads its event
-  named (`cairn_refold_after_shred`, serialized by `cairn_lock_shred_refold`, db/037; never its own target), and every
-  production medication-list read is one `REPEATABLE READ READ ONLY` snapshot (`medication::snapshot::in_snapshot`);
-  in-place SQL; filed **#866** (an earlier-shredded plaintext event returns on a heal or re-fold) and **#867** (should
-  a failed re-fold block the erasure). All merged by 2026-10-24. PR
-  [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868) (#861, 2026-10-26): a line that reads current carries its
-  stopped member threads' reasons (`stopped_member_reasons`), said "a stopped record of this drug gave: …" by the CLI
-  list and the window, never "Stopped"; the cease note's list claim is now one sentence everywhere. Read-side only.
-  Merged 2026-10-27. PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872) (#869, 2026-10-27): the CLI
-  list's per-row "W" and stop-reason lines are one pure, tested `hold_text::row_hold_and_stop_lines`, so dropping
-  any of them now fails a unit test. Merged 2026-10-27.
-- **2026-10-28 — the release races closed (#855) and the cross-author W pinned (#837 item 1).** PR
-  [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873): db/059 section 8 takes a per-hold advisory lock (sorted)
-  before its "still standing" check, so two local releases of one hold serialize and the second is refused; a floor
-  refusal of a release the pre-check passed is re-asked through `cairn_medication_hold_ended` and reported STALE
-  (ADR-0082 erratum E1; `tests/medication_release_race.rs`). `tests/medication_withhold_authorship.rs` pins a nurse's W
-  on a doctor's prescription and the doctor's release, both human-signed with node custody. In-place SQL, no
-  generation bump.
-- **Next:** run #838's RUNBOOK §15 (incl. #861's current-line check); **#804** (needs #690), **#866** and **#867**, **#825**, **#850**, **#870** and
-  **#871** (decisions), **#858**, **#837** item 3 (a decision), **#807**;
-  then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
+- **2026-10-23 → 10-28 — every stop's reason, a shred that hands its rows on, the release races.** PR #856 (#835 +
+  #854: a release for a later instant is said on its hold, db/059 7c; filed **#857** · **#858** · **#859**) · PR #860
+  (#857 + #859: db/060 `medication_cessation_reason`, gen **60**, `other_cessation_reasons`; filed #861, #863, #864,
+  **#862**; tokio 1.54.1, RUSTSEC-2026-0386) · PR #865 (#863 + #864: a shred re-folds the threads its event named, `cairn_refold_after_shred`; every
+  medication-list read is one `REPEATABLE READ READ ONLY` snapshot; filed **#866**, **#867**) · PR #868 (#861: a
+  current line carries its stopped members' reasons, `stopped_member_reasons`) · PR #872 (#869:
+  `hold_text::row_hold_and_stop_lines`, tested) · PR #873 (#855 + #837 item 1: db/059 section 8 locks each hold
+  before its check, so a second local release is refused and reported STALE, ADR-0082 erratum E1; a nurse's W on a
+  doctor's prescription pinned). All merged by 2026-10-28.
+- **2026-10-28 — the window reopens a lost connection (#807).** PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874): the shared connection is a
+  `cairn_gui_live::NodeConnection` whose `lock` swaps in a fresh client when the old one has closed — never on a
+  refusal, never mid-command, 2 s backoff, 5 s attempt cap (`tests/reconnect.rs`). The sentences that pointed at
+  "Read this chart again" or "once the window can reach the node again" are now true. RUNBOOK §14 check (c) owed.
+  Review: filed **#875** (a silently dead socket hangs the window) and **#876** (a failed reopen's cause reaches only
+  the log).
+- **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875**, **#876**; then HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 

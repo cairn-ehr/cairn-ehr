@@ -86,6 +86,8 @@ fn main() -> anyhow::Result<()> {
     // the `tokio::spawn`ed tokio_postgres connection task that `connect_and_load_schema`
     // starts. Drop this runtime and that task stops being polled, so every query for the rest
     // of the session hangs or fails. Keeping it alive until `main` returns is the point.
+    // (A connection REOPENED after a loss, #807, spawns its task on Tauri's runtime instead,
+    // because the reopen runs inside a command; that runtime lives as long as the app.)
     let runtime = tokio::runtime::Runtime::new()?;
 
     let app_state = if cli.mock {
@@ -147,8 +149,12 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         &cli.key,
         std::env::var("CAIRN_KEY_PASSPHRASE").ok().as_deref(),
     )?;
-    // ONE connection, shared by the chart commands and the funnel's live port.
-    let db = std::sync::Arc::new(tokio::sync::Mutex::new(db));
+    // ONE connection, shared by the chart commands and the funnel's live port, and reopened
+    // from the same string if it is lost (#807).
+    let db = std::sync::Arc::new(cairn_gui_live::NodeConnection::reopening(
+        db,
+        cli.conn.clone(),
+    ));
     let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);
     let provisioning = match live.standing().await {
         Ok(standing) => funnel::view::standing_sentence(standing, live.node_kid()),

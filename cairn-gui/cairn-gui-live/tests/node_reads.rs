@@ -81,7 +81,9 @@ async fn the_connection_is_shared_not_copied() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let (sk, _kid) = common::setup(&reader).await;
-    let shared = std::sync::Arc::new(tokio::sync::Mutex::new(common::connect_for_live(&cs).await));
+    let shared = std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
+        common::connect_for_live(&cs).await,
+    ));
     let live = LiveData::sharing(shared.clone(), sk, &common::identity(ORIGIN));
     assert!(std::sync::Arc::ptr_eq(&shared, &live.connection()));
 }
