@@ -45,7 +45,9 @@ async fn terminate(reader: &Client, pid: i32) {
 
 /// Kill `db`'s backend, then lock until the client has noticed. A lock that notices also makes
 /// the first reopen attempt (if `db` reopens at all), so this returns after that attempt: its
-/// error if the reopen failed (#876), `None` for a closed client handed back unreopened.
+/// error if the reopen failed (#876), `None` for a closed client handed back unreopened. Only
+/// for a `db` that CANNOT reopen (its node down, or `fixed`): a reopen that succeeds hands back
+/// an open client, and this loops until it panics with "never noticed".
 async fn lose(db: &NodeConnection, reader: &Client) -> Option<String> {
     let pid = backend_pid(db).await.expect("the first read works");
     terminate(reader, pid).await;

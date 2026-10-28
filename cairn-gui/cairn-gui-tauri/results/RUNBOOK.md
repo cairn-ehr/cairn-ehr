@@ -773,8 +773,8 @@ restart the node's Postgres (`pg_ctl restart -D <data dir>`, or the Postgres app
 press **Read this chart again**: the list draws, with no window restart. The window's terminal shows "the
 database connection was lost; reopened it". Pressed while Postgres is still down, it fails and the screen
 says why: "…could not be reopened: connecting to the database: …" with the cause (#876). A press within
-two seconds of that tries nothing and says so ("reopening it failed 0.8 s ago and is tried again in 1.2 s");
-a later press tries again. A list that never comes back without a window restart is a finding, and so is a
+two seconds of that tries nothing and says so ("reopening it failed 0.8 s ago, so this press tried
+nothing (press again in 1.2 s to retry)"); a later press tries again. Nothing retries on its own. A list that never comes back without a window restart is a finding, and so is a
 failure that says only "connection closed".
 
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link

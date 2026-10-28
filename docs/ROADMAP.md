@@ -493,8 +493,10 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   the in-flight hang off Linux. Review: filed **#878** (the `cairn-sync` binary's own connections lack them).
   Merged 2026-10-28. Then #876 (PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)): a reopen that fails is an
   error naming its cause on screen, not "connection closed"; gesture timing never spends the reopen attempt.
+  Review: filed **#880** (a reconnect the server refused still offers Retry) and **#881** (a departed chart's
+  unread line drops its cause).
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
-  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#878**; then HANDOVER's ⇒ NEXT. #699 stays open.
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#878**, **#880**, **#881**; then HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 

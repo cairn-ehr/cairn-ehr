@@ -139,7 +139,9 @@ pub async fn unlock(
         .ok_or("no database connection")?
         .lock()
         .await
-        .map_err(|e| e.to_string())?;
+        // The key is unsealed by now: say so, or a rejected DATABASE password ("password
+        // authentication failed") reads as a wrong passphrase.
+        .map_err(|e| format!("Your passphrase was right, but the key was not unlocked: the {e}"))?;
     if !cairn_node::identify::attester_is_enrolled_human(&db, &kid)
         .await
         .map_err(|e| e.to_string())?

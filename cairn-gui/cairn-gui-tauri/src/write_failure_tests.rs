@@ -305,6 +305,36 @@ fn cease_sorts_an_interrupted_commit_from_a_failure() {
     }
 }
 
+/// #876: in cease and release a lost connection fails THAT thread, reported with the others, so
+/// an earlier thread already written is never covered by "Nothing was done". A plain `?` on the
+/// lock would compile (`ErrorView: From<ConnectionLost>`) and pass every behavioural test: only
+/// a backend killed BETWEEN two threads reaches it, and the window has no DB-backed tests (#738).
+/// Gesture timing, after the act, must never spend the reopen the act's re-read needs.
+#[test]
+fn a_lost_connection_fails_one_thread_and_timing_never_reopens() {
+    for (src, name) in [
+        (include_str!("commands.rs"), "cease_impl"),
+        (include_str!("hold/mod.rs"), "release_impl"),
+    ] {
+        let flat: String = crate::source_guard::rust_fn(src, name)
+            .split_whitespace()
+            .collect();
+        assert!(
+            flat.contains(
+                "letresult=matchdb.lock().await{Err(lost)=>Err(anyhow::Error::from(lost)),"
+            ),
+            "{name}: a lost connection is this thread's failure"
+        );
+        assert!(
+            !flat.contains(".lock().await?"),
+            "{name}: never `?` on the lock"
+        );
+    }
+    let timing = crate::source_guard::rust_fn(include_str!("commands.rs"), "record_timing");
+    assert!(timing.contains(".lock_if_open()"), "{timing}");
+    assert!(!timing.contains(".lock()"), "{timing}");
+}
+
 /// A chart read that failed before anything was written is an OUTAGE: nothing was decided, so
 /// the act may be retried (`Retry::Now`), as `link::chart_set_of` words the same fault. Its text
 /// passes through untouched.

@@ -7,11 +7,12 @@
 //!
 //! # How it works
 //!
-//! Every command takes the connection through [`NodeConnection::lock`], exactly as it took the
-//! old mutex. `lock` checks whether the client has CLOSED: its connection task ended because
-//! the server hung up (a restart's FATAL) or the socket was reset. Only then does it open a
-//! fresh connection and put it in the old one's place, so every holder of the shared `Arc` gets
-//! the new one.
+//! Every command takes the connection through [`NodeConnection::lock`], which returns
+//! `Err(`[`ConnectionLost`]`)` when a closed connection cannot be reopened (below); gesture
+//! timing alone uses [`NodeConnection::lock_if_open`]. `lock` checks whether the client has
+//! CLOSED: its connection task ended because the server hung up (a restart's FATAL) or the
+//! socket was reset. Only then does it open a fresh connection and put it in the old one's
+//! place, so every holder of the shared `Arc` gets the new one.
 //!
 //! - **Never on a refusal.** A floor refusal, a constraint, a syntax error: each is an ANSWER on
 //!   a live connection, which stays open, so `lock` never reopens for one.
@@ -46,7 +47,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use tokio_postgres::Client;
 
-/// The connection was lost and could not be reopened; the text says why (#876).
+/// The connection was lost and could not be reopened, either by this press or, inside the
+/// backoff, by the press that last tried; the text says why (#876). The text is a lowercase
+/// clause ("connection to the node was lost…"): the window's `ErrorView` puts it after
+/// "Nothing was done: the ".
 #[derive(Debug, Clone)]
 pub struct ConnectionLost(String);
 
@@ -107,8 +111,11 @@ impl NodeConnection {
         }
     }
 
-    /// Take the connection, reopening it first if it has closed (see the module doc). A
-    /// [`fixed`](Self::fixed) connection that closed is handed back closed, never an error.
+    /// Take the connection, reopening it first if it has closed (see the module doc). Returns
+    /// `Err` when the reopen failed, or was skipped because the last attempt failed within
+    /// [`RETRY_AFTER`](Self::RETRY_AFTER); the closed client stays, so a later press tries
+    /// again. A [`fixed`](Self::fixed) connection that closed is handed back closed, never an
+    /// error.
     pub async fn lock(&self) -> Result<MappedMutexGuard<'_, Client>, ConnectionLost> {
         let mut held = self.held.lock().await;
         if held.client.is_closed() {
@@ -128,8 +135,9 @@ impl NodeConnection {
 
 impl Held {
     /// Put a fresh connection in the closed client's place, unless an attempt failed too
-    /// recently. On failure the closed client stays and the cause is returned. Logged either
-    /// way: the loss itself is logged by `db::connect`'s connection task, reopening only here.
+    /// recently. On failure the closed client stays and the cause is returned. An attempt is
+    /// logged either way (the loss itself by `db::connect`'s connection task); a press the
+    /// backoff skips is not, its error goes to the caller only.
     async fn reopen(&mut self, conn: &str) -> Result<(), ConnectionLost> {
         let now = Instant::now();
         if let Some((failed, cause)) = &self.last_failed {
@@ -157,19 +165,23 @@ impl Held {
 }
 
 /// What a failed reopen says (#876). `skipped` is how long ago the last attempt failed, when
-/// this press was inside the backoff and tried nothing. Pure.
+/// this press was inside the backoff and tried nothing. Nothing retries on a timer, so the text
+/// names the press that will. Pure.
 fn lost_text(cause: &str, skipped: Option<Duration>) -> String {
-    match skipped {
-        None => format!("connection to the node was lost and could not be reopened: {cause}"),
-        Some(ago) => format!(
-            "connection to the node was lost; reopening it failed {:.1} s ago and is tried \
-             again in {:.1} s: {cause}",
-            ago.as_secs_f32(),
-            NodeConnection::RETRY_AFTER
-                .saturating_sub(ago)
-                .as_secs_f32(),
-        ),
-    }
+    let Some(ago) = skipped else {
+        return format!("connection to the node was lost and could not be reopened: {cause}");
+    };
+    // In whole tenths, the age rounded down: the two figures add up to the backoff, and the
+    // wait inside it is never "0.0 s".
+    let ago = ago.as_millis() / 100;
+    let wait = (NodeConnection::RETRY_AFTER.as_millis() / 100).saturating_sub(ago);
+    let tenths = |t: u128| format!("{}.{}", t / 10, t % 10);
+    format!(
+        "connection to the node was lost; reopening it failed {} s ago, so this press tried \
+         nothing (press again in {} s to retry): {cause}",
+        tenths(ago),
+        tenths(wait),
+    )
 }
 
 /// May a reopen be attempted `now`, given when the last attempt failed? Pure.
@@ -190,10 +202,24 @@ mod tests {
         assert!(now.contains("could not be reopened"), "{now}");
         assert!(now.ends_with(cause), "the cause, verbatim: {now}");
 
+        // Nothing retries on a timer: the text names the PRESS that will try, never "is tried".
         let skipped = lost_text(cause, Some(Duration::from_millis(500)));
-        assert!(skipped.contains("0.5 s ago"), "{skipped}");
-        assert!(skipped.contains("again in 1.5 s"), "{skipped}");
+        assert!(skipped.contains("failed 0.5 s ago"), "{skipped}");
+        assert!(skipped.contains("press again in 1.5 s"), "{skipped}");
         assert!(skipped.ends_with(cause), "{skipped}");
+
+        // Near the end of the backoff the two figures still add up, and the wait is never 0.0.
+        let late = lost_text(cause, Some(Duration::from_millis(1960)));
+        assert!(late.contains("failed 1.9 s ago"), "{late}");
+        assert!(late.contains("press again in 0.1 s"), "{late}");
+    }
+
+    /// A lost connection is an outage: `Unavailable`, which the window offers to retry, with
+    /// the cause as its whole text.
+    #[test]
+    fn a_lost_connection_is_an_outage_that_keeps_its_cause() {
+        let lost = ConnectionLost("the cause".into());
+        assert!(matches!(DataError::from(lost), DataError::Unavailable(t) if t == "the cause"));
     }
 
     #[test]
