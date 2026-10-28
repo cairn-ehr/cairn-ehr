@@ -491,8 +491,10 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   the log). Merged 2026-10-28. Then #875 option 1 (PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)): `db::connect` sets TCP
   keepalives and a Linux-only `tcp_user_timeout` for every `db::connect` caller (`cairn_node::db_keepalive`); #875 stays open for
   the in-flight hang off Linux. Review: filed **#878** (the `cairn-sync` binary's own connections lack them).
+  Merged 2026-10-28. Then #876 (PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)): a reopen that fails is an
+  error naming its cause on screen, not "connection closed"; gesture timing never spends the reopen attempt.
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
-  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#876**, **#878**; then HANDOVER's ⇒ NEXT. #699 stays open.
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#878**; then HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 
