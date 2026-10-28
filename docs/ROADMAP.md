@@ -483,7 +483,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `hold_text::row_hold_and_stop_lines`, tested) · PR #873 (#855 + #837 item 1: db/059 section 8 locks each hold
   before its check, so a second local release is refused and reported STALE, ADR-0082 erratum E1; a nurse's W on a
   doctor's prescription pinned). All merged by 2026-10-27.
-- **2026-10-28 — the window reopens a lost connection (#807).** PR (this session): the shared connection is a
+- **2026-10-28 — the window reopens a lost connection (#807).** PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874): the shared connection is a
   `cairn_gui_live::NodeConnection` whose `lock` swaps in a fresh client when the old one has closed — never on a
   refusal, never mid-command, 2 s backoff, 5 s attempt cap (`tests/reconnect.rs`). The sentences that pointed at
   "Read this chart again" or "once the window can reach the node again" are now true. RUNBOOK §14 check (c) owed.
