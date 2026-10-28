@@ -27,8 +27,10 @@
 //!   "connection closed", which every caller already reports as an outage it may retry. The
 //!   CAUSE (a refused socket, a rejected password) reaches only the log, not the screen (#876).
 //!
-//! Not detected: a socket that dies SILENTLY (a pulled cable, a powered-off remote host) never
-//! closes the client, so the next query hangs, holding the lock, until TCP gives up (#875).
+//! A socket that dies SILENTLY (a pulled cable, a powered-off remote host) sends nothing, so the
+//! client closes only once `db::connect`'s TCP keepalives give up on it, about a minute idle
+//! (`cairn_node::db_keepalive`). A query sent on it before then hangs, holding the lock: on Linux
+//! for at most `tcp_user_timeout` (30 s), elsewhere until the OS gives up (#875, still open).
 //!
 //! The reopen uses `cairn_node::db::connect`, not `connect_and_load_schema`: the schema was loaded
 //! at launch, and replaying every `db/*.sql` file takes locks a read never needs (#726). It also

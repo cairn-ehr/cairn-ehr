@@ -3,13 +3,16 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874) (#807, branch `fix/807-window-reconnect`): the window's one connection is
-> now a `cairn_gui_live::NodeConnection` that reopens itself on the next lock after it has CLOSED — never on a
-> refusal, never mid-command, 2 s backoff, 5 s cap. The sentences #807/#814 flagged ("Read this chart again", "once
-> the window can reach the node again") were false only for want of this, so they stay. RUNBOOK §14 gained check (c),
-> a Postgres restart with the chart open (human-owed). Durable rule block added. Its review round is fixed in-PR
-> (backoff and timeout now tested against a stand-in node; filed **#875**, a silently dead socket hangs the window, and
-> **#876**, a failed reopen's cause never reaches the screen).
+> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877) (branch `fix/875-db-keepalives`, part of #875, the maintainer's pick of option
+> 1): `db::connect` now sets TCP keepalives (idle 30 s, 3 probes 10 s apart) and `tcp_user_timeout` 30 s
+> (`cairn_node::db_keepalive`), for the window, the CLI and `cairn-node sync` (NOT the `cairn-sync` binary, which
+> opens its own local connections: filed **#878**); a positive value the connection string names wins. An idle socket
+> that died silently now closes within about a minute, and #874's reopen takes over. **#875 stays open**: a query sent
+> on a dead socket before then still hangs, bounded only on Linux (option 2, a window-side timeout, overlaps #649's
+> cancellation question). Its review round is fixed in-PR (the false `cairn-sync` claim, two stale `db.rs` comments).
+> **Merged 2026-10-28: PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)** (#807: the window's one
+> connection is a `cairn_gui_live::NodeConnection` that reopens itself after it CLOSED — never on a refusal, never
+> mid-command, 2 s backoff, 5 s cap; RUNBOOK §14 check (c) human-owed; filed #875, **#876**).
 > **Merged 2026-10-28: PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)** (#855 + #837 item 1: two local
 > releases of one hold serialize; an overtaken release is STALE, ADR-0082 E1; cross-author W pinned).
 > **Merged 2026-10-28: PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)** (#869: the CLI list's hold and
@@ -40,8 +43,9 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)** (#807); run #838's RUNBOOK §15 (now incl. #861's current-line check) and §14 check (c). From its review: **#875** ·
-   **#876**. From PR #868's
+> 1. **Review and merge PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)** (#875 option 1); run #838's RUNBOOK §15 (now incl. #861's current-line check) and
+>    §14 check (c). Then **#876** (a failed reopen's cause on screen — a design choice: `lock` returns a `Result`, or
+>    the error mappers consult the connection) and #875's remaining option 2, and **#878** (`cairn-sync`'s own connections). From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
@@ -176,7 +180,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-28 (#875 option 1, PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)) · 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 and #861 needed no ADR — a projection-side fix, no wire change;
@@ -209,6 +213,17 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-10-28 (third) — #875 option 1: keepalives in `db::connect`
+
+Found HANDOVER stale on arrival again (#874 merged, listed as awaiting). No decision had landed; the maintainer picked
+#875 option 1 over #876. TDD (red on `todo!()`, then a source-guard pin mutation-checked: dropping the call from
+`db::connect` fails `db_connect_applies_the_settings`).
+- **⇒ A setting no test can read back is pinned at its call site by source.** A client's socket options are not
+  observable from outside (tokio-postgres hides the socket; the server sees only its own), so the pure fn's tests
+  prove the values and a source guard proves `connect` applies them.
+- **⇒ Check a library option's platform reach before promising it**: tokio-postgres applies `tcp_user_timeout` on
+  Linux only (`connect_socket.rs`), so the macOS in-flight hang stays open on #875.
 
 ### 2026-10-28 — #807 (PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)): the window reopens a lost connection
 

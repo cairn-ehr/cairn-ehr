@@ -459,9 +459,14 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // covers both, the second by walking `source()` for the errno (issue #467; the second
     // half added by the PR #472 review, which caught that this door — where the
     // no-`DbError` failures overwhelmingly live — was the one it served worst).
-    let (client, connection) = tokio_postgres::connect(conn, NoTls)
-        .await
-        .map_err(|e| anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e)))?;
+    let legible = |e: tokio_postgres::Error| {
+        anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e))
+    };
+    // #875: probe for a peer that vanished silently, so a dead socket closes the client
+    // instead of hanging the next query (see `db_keepalive`).
+    let mut cfg: tokio_postgres::Config = conn.parse().map_err(legible)?;
+    crate::db_keepalive::detect_dead_peers(&mut cfg);
+    let (client, connection) = cfg.connect(NoTls).await.map_err(legible)?;
     // #474 item 4: this task is the ONLY place a mid-session connection death is ever
     // reported, and `let _ = connection.await;` hid every one of them. The deaths that
     // arrive as an `ErrorResponse` carry a real SQLSTATE — `FATAL: terminating connection
@@ -471,12 +476,14 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // `connection closed`: `Kind::Closed`'s `source()` is genuinely `None`. No amount of
     // work in `legible_db_error` can recover it; it has to be logged where it arrives.
     //
-    // An ABRUPT death (OOM-kill, SIGKILL, a pulled cable) carries no reason at all: the
+    // An ABRUPT death (OOM-kill, SIGKILL) carries no reason at all: the
     // socket simply EOFs and this line says `connection closed` too. That is still more
     // than the label-less silence it replaces — it names WHICH connection and WHEN — but
     // an operator told "the reason arrives here" would be puzzled by it otherwise.
+    // A SILENT death (a pulled cable, a powered-off host) sends not even an EOF: it
+    // arrives here only once the keepalives above give up, as a timed-out I/O error (#875).
     // (Not listed among the causes: a TLS teardown. This connection is opened `NoTls`
-    // on the `tokio_postgres::connect` call above; PR #478 review, finding 11.)
+    // on the `cfg.connect(NoTls)` call above; PR #478 review, finding 11.)
     //
     // A clean close returns `Ok(())` — it happens whenever the client is dropped — so a
     // healthy node logs nothing here and the line is never noise.
