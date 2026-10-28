@@ -17,8 +17,13 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   mid-command, and never a retried write: a commit with no answer stays unknown, and the next command just gets a
   working connection for the re-read once the node answers. A failed or unanswered attempt (5 s cap) starts a 2 s
   backoff, kept in the same lock as the client.
-- **Known limits, filed:** a silently dead socket never closes the client, so its query hangs holding the lock
-  (#875); a failed reopen's cause reaches only the log, the screen says "connection closed" (#876).
+- **A silently dead socket is noticed by TCP keepalives, set in `db::connect` for every caller** (#875,
+  `cairn_node::db_keepalive`: idle 30 s, 3 probes 10 s apart, `tcp_user_timeout` 30 s on Linux only). A setting
+  the connection string names wins. Pin: `db_connect_applies_the_settings`. **Tempting wrong fix:** setting them in
+  the window only — the CLI and `cairn-sync` hang on the same dead socket.
+- **Known limits, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
+  bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649); a failed reopen's cause
+  reaches only the log, the screen says "connection closed" (#876).
 - **The reopen is `cairn_node::db::connect`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
   replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication; a restart
   still runs it. Unpinned — the tempting "keep it the same as launch" fix.

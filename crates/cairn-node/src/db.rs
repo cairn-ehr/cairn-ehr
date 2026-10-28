@@ -459,9 +459,14 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // covers both, the second by walking `source()` for the errno (issue #467; the second
     // half added by the PR #472 review, which caught that this door — where the
     // no-`DbError` failures overwhelmingly live — was the one it served worst).
-    let (client, connection) = tokio_postgres::connect(conn, NoTls)
-        .await
-        .map_err(|e| anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e)))?;
+    let legible = |e: tokio_postgres::Error| {
+        anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e))
+    };
+    // #875: probe for a peer that vanished silently, so a dead socket closes the client
+    // instead of hanging the next query (see `db_keepalive`).
+    let mut cfg: tokio_postgres::Config = conn.parse().map_err(legible)?;
+    crate::db_keepalive::detect_dead_peers(&mut cfg);
+    let (client, connection) = cfg.connect(NoTls).await.map_err(legible)?;
     // #474 item 4: this task is the ONLY place a mid-session connection death is ever
     // reported, and `let _ = connection.await;` hid every one of them. The deaths that
     // arrive as an `ErrorResponse` carry a real SQLSTATE — `FATAL: terminating connection
