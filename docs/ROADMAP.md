@@ -491,9 +491,16 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   list and the window, never "Stopped"; the cease note's list claim is now one sentence everywhere. Read-side only.
   Merged 2026-10-27. PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872) (#869, 2026-10-27): the CLI
   list's per-row "W" and stop-reason lines are one pure, tested `hold_text::row_hold_and_stop_lines`, so dropping
-  any of them now fails a unit test.
+  any of them now fails a unit test. Merged 2026-10-27.
+- **2026-10-28 — the release races closed (#855) and the cross-author W pinned (#837 item 1).** PR
+  [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873): db/059 section 8 takes a per-hold advisory lock (sorted)
+  before its "still standing" check, so two local releases of one hold serialize and the second is refused; a floor
+  refusal of a release the pre-check passed is re-asked through `cairn_medication_hold_ended` and reported STALE
+  (ADR-0082 erratum E1; `tests/medication_release_race.rs`). `tests/medication_withhold_authorship.rs` pins a nurse's W
+  on a doctor's prescription and the doctor's release, both human-signed with node custody. In-place SQL, no
+  generation bump.
 - **Next:** run #838's RUNBOOK §15 (incl. #861's current-line check); **#804** (needs #690), **#866** and **#867**, **#825**, **#850**, **#870** and
-  **#871** (decisions), **#855**, **#858**, **#837**, **#807**;
+  **#871** (decisions), **#858**, **#837** item 3 (a decision), **#807**;
   then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

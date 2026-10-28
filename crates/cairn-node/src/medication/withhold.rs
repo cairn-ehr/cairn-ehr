@@ -262,9 +262,39 @@ pub async fn release_medication_holds(
         node_kid,
         hlc,
     );
-    body.t_effective = Some(released);
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, None).await?;
-    Ok(event_id)
+    body.t_effective = Some(released.clone());
+    let submitted =
+        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, None)
+            .await;
+    let Err(e) = submitted else {
+        return Ok(event_id);
+    };
+    // #855: a colleague's release can commit between the check above and this submit, and the
+    // floor (which waits for it, then sees it) refuses with a bare P0001 that carries no scope.
+    // Ask the same predicate again: if a hold has ended by `released`, the caller's picture is
+    // stale, exactly as the check above would have reported. Only an ANSWERED refusal is
+    // re-asked: a P0001 means the server said no, so nothing was written. An unknown commit
+    // outcome is never an answered P0001 and passes through as is — the write may be our own.
+    let Some(floor_said) = crate::db_diagnosis::floor_refusal_message(&e) else {
+        return Err(e);
+    };
+    match ended_holds(client, medication_id, withholds, &released).await {
+        // The floor's own words ride along: it refuses at the FIRST bad hold in the caller's
+        // order, which may be another fault (a hold on another thread) that "re-read" alone
+        // would hide.
+        Ok(ended) if !ended.is_empty() => Err(crate::db_diagnosis::stale_picture_refusal(format!(
+            "{}; nothing was released (the node said: {floor_said})",
+            ended.join("; ")
+        ))),
+        Ok(_) => Err(e),
+        Err(recheck) => {
+            // The floor's refusal is still the true answer; only its scope is lost.
+            eprintln!(
+                "release: the stale re-check failed ({recheck:#}); reporting the node's refusal as is (#855)"
+            );
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -665,6 +665,21 @@ pub fn commit_failure(event_id: uuid::Uuid, fault: anyhow::Error) -> anyhow::Err
     }
 }
 
+/// The floor's own sentence, if this chain is a floor refusal: a bare `RAISE EXCEPTION`, SQLSTATE
+/// `P0001` (db/001's contract, `tests/floor_refusals_carry_no_errcode.rs`). The server sends that
+/// only as an ANSWERED error, so `Some` also means nothing was written; an unknown commit outcome
+/// (see [`commit_failure`]) is never one. Walks the whole chain, because callers add `.context(…)`
+/// layers above the database error. **Pure.**
+///
+/// The restore's `refusal_is_deliberate` asks the same question of an already-extracted SQLSTATE,
+/// as a mirror of `cairn-sync`'s across a crate wall; this one starts from the error itself.
+pub(crate) fn floor_refusal_message(e: &anyhow::Error) -> Option<&str> {
+    e.chain()
+        .filter_map(|cause| cause.downcast_ref::<tokio_postgres::Error>()?.as_db_error())
+        .find(|db| db.code() == &tokio_postgres::error::SqlState::RAISE_EXCEPTION)
+        .map(|db| db.message())
+}
+
 /// What a write returned (`value`), plus the id of the event a lost commit of that same write
 /// would have named instead through [`commit_failure`] (#828). A success line that prints
 /// `event_id` therefore names the same KIND of id a "commit outcome unknown" names, so the
