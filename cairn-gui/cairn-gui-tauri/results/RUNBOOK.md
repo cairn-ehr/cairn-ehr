@@ -771,9 +771,11 @@ for it in this pass.
 (c) A lost CONNECTION (#807). The window reopens its one connection when it is lost. With the chart open,
 restart the node's Postgres (`pg_ctl restart -D <data dir>`, or the Postgres app's Stop then Start), then
 press **Read this chart again**: the list draws, with no window restart. The window's terminal shows "the
-database connection was lost; reopened it". Pressed while Postgres is still down, it fails and says so; a
-press about two seconds later tries again. A list that never comes back without a window restart is a
-finding.
+database connection was lost; reopened it". Pressed while Postgres is still down, it fails and the screen
+says why: "…could not be reopened: connecting to the database: …" with the cause (#876). A press within
+two seconds of that tries nothing and says so ("reopening it failed 0.8 s ago and is tried again in 1.2 s");
+a later press tries again. A list that never comes back without a window restart is a finding, and so is a
+failure that says only "connection closed".
 
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
 them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a

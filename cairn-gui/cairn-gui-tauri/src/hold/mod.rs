@@ -148,7 +148,7 @@ pub async fn withhold_impl(
             .as_ref()
             .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
-            .await;
+            .await?;
         let input = cairn_node::medication::WithholdMedicationInput {
             reason,
             // "From now": the node stamps the physical now (ADR-0081).
@@ -287,29 +287,34 @@ pub async fn release_impl(
     for (medication_id, thread_chart, ids) in plan.write {
         // One thread per call, each its own transaction, so one thread failing leaves the
         // others released rather than rolling them back (ADR-0060 decision 7).
-        let mut db = state
+        let db = state
             .db
             .as_ref()
-            .ok_or_else(|| node_cannot_write("no database connection"))?
-            .lock()
-            .await;
+            .ok_or_else(|| node_cannot_write("no database connection"))?;
         let author = cairn_node::medication::AuthorParams {
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        match cairn_node::medication::release_medication_holds(
-            &mut db,
-            node_sk,
-            &node_kid,
-            &state.node_origin,
-            thread_chart,
-            medication_id,
-            &ids,
-            reason,
-            Some(&author),
-        )
-        .await
-        {
+        // A lost connection fails THIS thread only: an earlier one may already be written, so
+        // it is reported with the others, never as "nothing was done" (#876).
+        let result = match db.lock().await {
+            Err(lost) => Err(anyhow::Error::from(lost)),
+            Ok(mut db) => {
+                cairn_node::medication::release_medication_holds(
+                    &mut db,
+                    node_sk,
+                    &node_kid,
+                    &state.node_origin,
+                    thread_chart,
+                    medication_id,
+                    &ids,
+                    reason,
+                    Some(&author),
+                )
+                .await
+            }
+        };
+        match result {
             Ok(_) => released += ids.len(),
             // A commit lost mid-flight may have released them (#814): neither done nor failed.
             Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {

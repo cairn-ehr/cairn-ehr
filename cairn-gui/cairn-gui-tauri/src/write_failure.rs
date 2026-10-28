@@ -212,6 +212,17 @@ pub(crate) fn key_locked(text: &str) -> ErrorView {
     }
 }
 
+/// The window's connection was lost and could not be reopened (#876): nothing was done, and
+/// the node may be back by the next press, so `Retry::Now`. The text carries the cause.
+impl From<cairn_gui_live::ConnectionLost> for ErrorView {
+    fn from(lost: cairn_gui_live::ConnectionLost) -> Self {
+        ErrorView {
+            text: format!("Nothing was done: the {lost}"),
+            retry: Retry::Now,
+        }
+    }
+}
+
 /// This node cannot write at all (no node key, no database connection): only the operator can
 /// mend that, so `Retry::AfterOperator`.
 pub(crate) fn node_cannot_write(text: &str) -> ErrorView {

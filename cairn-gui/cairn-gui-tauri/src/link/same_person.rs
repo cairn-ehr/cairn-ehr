@@ -111,7 +111,7 @@ pub async fn compare_impl(
             }
         }
         Some(db) => {
-            let db = db.lock().await;
+            let db = db.lock().await?;
             ComparisonParts {
                 left: as_text(cairn_node::patient::compare::chart_facts(&*db, &left).await),
                 right: as_text(cairn_node::patient::compare::chart_facts(&*db, &right).await),
@@ -167,7 +167,7 @@ pub async fn link_impl(
         .as_ref()
         .ok_or_else(|| refused("no database connection"))?
         .lock()
-        .await;
+        .await?;
     let reviewer = cairn_node::chart_link::Reviewer {
         human_sk: &human_sk,
         human_kid: &human_kid,

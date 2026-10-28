@@ -23,9 +23,15 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `db_connect_applies_the_settings`. **Tempting wrong fix:** setting them in the window only — the CLI and
   `cairn-node sync` hang on the same dead socket. **Not covered:** the `cairn-sync` binary opens its own
   `postgres::Client` connections (#878).
-- **Known limits, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
-  bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649); a failed reopen's cause
-  reaches only the log, the screen says "connection closed" (#876).
+- **A failed reopen is an ERROR that says why** (#876): `lock()` returns `Err(ConnectionLost)` naming the cause;
+  a press inside the backoff tries nothing and says when the last attempt failed. It is an outage (`Retry::Now`:
+  `From` into `DataError::Unavailable` and into the window's `ErrorView`, "Nothing was done: …"). **Tempting wrong
+  fixes:** `?` inside a per-thread write loop (cease, release) — an earlier thread may be written, so the lock
+  failure becomes THAT thread's `Err` and is reported with the others; and gesture timing taking `lock()` — it uses
+  `lock_if_open`, so it cannot spend the reopen attempt the act's re-read needs. Pins: `reconnect.rs`'s
+  `lose_then_press_five_times` assertions and `lock_if_open_never_spends_a_reopen_attempt`.
+- **Known limit, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
+  bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649).
 - **The reopen is `cairn_node::db::connect`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
   replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication; a restart
   still runs it. Unpinned — the tempting "keep it the same as launch" fix.

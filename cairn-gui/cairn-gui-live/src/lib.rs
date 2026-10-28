@@ -37,7 +37,7 @@ use cairn_node::identity::Identity;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
-pub use connection::NodeConnection;
+pub use connection::{ConnectionLost, NodeConnection};
 
 /// One node connection, plus the identity every write is signed under.
 ///

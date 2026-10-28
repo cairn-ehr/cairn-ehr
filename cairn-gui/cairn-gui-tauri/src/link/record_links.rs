@@ -218,7 +218,7 @@ pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<Re
     let Some(db) = state.db.as_ref() else {
         return Err("there is no database to read the links from".into());
     };
-    let mut db = db.lock().await;
+    let mut db = db.lock().await.map_err(|e| e.to_string())?;
     let snapshot = db
         .build_transaction()
         .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)

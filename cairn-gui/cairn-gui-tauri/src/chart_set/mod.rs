@@ -389,7 +389,7 @@ pub async fn chart_identities(state: &AppState, ids: &[Uuid]) -> Result<Vec<Memb
     let Some(db) = state.db.as_ref() else {
         return Err("there is no database to read the linked charts' identities from".into());
     };
-    let db = db.lock().await;
+    let db = db.lock().await.map_err(|e| e.to_string())?;
     let identities = cairn_node::patient::person::chart_identities(&*db, &charts)
         .await
         .map_err(|e| format!("{e:#}"))?;
