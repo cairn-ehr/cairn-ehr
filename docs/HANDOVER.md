@@ -5,10 +5,11 @@
 > [!NOTE]
 > **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877) (branch `fix/875-db-keepalives`, part of #875, the maintainer's pick of option
 > 1): `db::connect` now sets TCP keepalives (idle 30 s, 3 probes 10 s apart) and `tcp_user_timeout` 30 s
-> (`cairn_node::db_keepalive`), for the window, the CLI and `cairn-sync` alike; a value the connection string names
-> wins. An idle socket that died silently now closes within about a minute, and #874's reopen takes over. **#875 stays
-> open**: a query sent on a dead socket before then still hangs, bounded only on Linux (option 2, a window-side
-> timeout, overlaps #649's cancellation question).
+> (`cairn_node::db_keepalive`), for the window, the CLI and `cairn-node sync` (NOT the `cairn-sync` binary, which
+> opens its own local connections: filed **#878**); a positive value the connection string names wins. An idle socket
+> that died silently now closes within about a minute, and #874's reopen takes over. **#875 stays open**: a query sent
+> on a dead socket before then still hangs, bounded only on Linux (option 2, a window-side timeout, overlaps #649's
+> cancellation question). Its review round is fixed in-PR (the false `cairn-sync` claim, two stale `db.rs` comments).
 > **Merged 2026-10-28: PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)** (#807: the window's one
 > connection is a `cairn_gui_live::NodeConnection` that reopens itself after it CLOSED — never on a refusal, never
 > mid-command, 2 s backoff, 5 s cap; RUNBOOK §14 check (c) human-owed; filed #875, **#876**).
@@ -44,7 +45,7 @@
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Review and merge PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)** (#875 option 1); run #838's RUNBOOK §15 (now incl. #861's current-line check) and
 >    §14 check (c). Then **#876** (a failed reopen's cause on screen — a design choice: `lock` returns a `Result`, or
->    the error mappers consult the connection) and #875's remaining option 2. From PR #868's
+>    the error mappers consult the connection) and #875's remaining option 2, and **#878** (`cairn-sync`'s own connections). From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed

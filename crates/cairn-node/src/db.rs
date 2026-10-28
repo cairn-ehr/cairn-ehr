@@ -476,12 +476,14 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // `connection closed`: `Kind::Closed`'s `source()` is genuinely `None`. No amount of
     // work in `legible_db_error` can recover it; it has to be logged where it arrives.
     //
-    // An ABRUPT death (OOM-kill, SIGKILL, a pulled cable) carries no reason at all: the
+    // An ABRUPT death (OOM-kill, SIGKILL) carries no reason at all: the
     // socket simply EOFs and this line says `connection closed` too. That is still more
     // than the label-less silence it replaces — it names WHICH connection and WHEN — but
     // an operator told "the reason arrives here" would be puzzled by it otherwise.
+    // A SILENT death (a pulled cable, a powered-off host) sends not even an EOF: it
+    // arrives here only once the keepalives above give up, as a timed-out I/O error (#875).
     // (Not listed among the causes: a TLS teardown. This connection is opened `NoTls`
-    // on the `tokio_postgres::connect` call above; PR #478 review, finding 11.)
+    // on the `cfg.connect(NoTls)` call above; PR #478 review, finding 11.)
     //
     // A clean close returns `Ok(())` — it happens whenever the client is dropped — so a
     // healthy node logs nothing here and the line is never noise.

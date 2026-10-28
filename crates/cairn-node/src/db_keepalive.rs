@@ -9,12 +9,14 @@
 //! minutes on Linux). The window holds its one connection lock that whole time, so every other
 //! chart and funnel action queues behind the hang.
 //!
-//! [`detect_dead_peers`] shortens both waits for every caller of `db::connect` (the window, the
-//! CLI, `cairn-sync`):
+//! [`detect_dead_peers`] shortens both waits for every caller of `db::connect`: the window, the
+//! CLI, and `cairn-node sync`. NOT the `cairn-sync` binary, which opens its own blocking
+//! `postgres::Client` connections to its local database (#878).
 //!
 //! - **TCP keepalives** probe a socket idle for [`KEEPALIVE_IDLE`], every [`KEEPALIVE_INTERVAL`],
 //!   [`KEEPALIVE_RETRIES`] times. A silent death on an idle connection is noticed within about a
-//!   minute on every platform. The client then reads as closed, and the window reopens it.
+//!   minute on Linux and macOS (Windows ignores the retry count and sends its fixed 10 probes,
+//!   so about two minutes there). The client then reads as closed, and the window reopens it.
 //! - **`tcp_user_timeout`** ([`TCP_USER_TIMEOUT`]) ends a connection whose sent data goes
 //!   unacknowledged that long. It bounds a query sent on an already-dead socket. **Linux only**:
 //!   tokio-postgres applies it nowhere else, so on macOS that query still waits for the OS (#875
@@ -23,8 +25,11 @@
 //! Neither touches a live connection running a long query: a live server acknowledges both the
 //! probes and the data. Neither applies to a Unix-domain socket, which cannot die silently.
 //!
-//! **The connection string wins.** An operator who sets any of these keys keeps that value, as
-//! libpq users expect; `keepalives=0` still turns probing off.
+//! **The connection string wins**, with one gap. An operator who sets any of these keys to a
+//! positive value keeps it, as libpq users expect; `keepalives=0` still turns probing off (the
+//! Linux `tcp_user_timeout` stays). The gap: tokio-postgres drops a ZERO `keepalives_idle`,
+//! `keepalives_interval` or `tcp_user_timeout` while parsing (libpq reads zero as "the system
+//! default"), so a zero gets ours instead. To loosen a bound, write a large value, not zero.
 use std::time::Duration;
 use tokio_postgres::Config;
 
@@ -89,6 +94,15 @@ mod tests {
         assert_eq!(cfg.get_keepalives_interval(), Some(Duration::from_secs(5)));
         assert_eq!(cfg.get_keepalives_retries(), Some(9));
         assert_eq!(cfg.get_tcp_user_timeout(), Some(&Duration::from_secs(90)));
+    }
+
+    /// The module doc's "gap": tokio-postgres drops a zero while parsing, so ours applies. If an
+    /// upgrade starts keeping zeros, this fails and the doc (and durable-rules) must change.
+    #[test]
+    fn a_zero_in_the_connection_string_gets_ours() {
+        let cfg = configured("host=127.0.0.1 keepalives_idle=0 tcp_user_timeout=0");
+        assert_eq!(cfg.get_keepalives_idle(), KEEPALIVE_IDLE);
+        assert_eq!(cfg.get_tcp_user_timeout(), Some(&TCP_USER_TIMEOUT));
     }
 
     #[test]

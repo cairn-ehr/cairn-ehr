@@ -19,8 +19,10 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   backoff, kept in the same lock as the client.
 - **A silently dead socket is noticed by TCP keepalives, set in `db::connect` for every caller** (#875,
   `cairn_node::db_keepalive`: idle 30 s, 3 probes 10 s apart, `tcp_user_timeout` 30 s on Linux only). A setting
-  the connection string names wins. Pin: `db_connect_applies_the_settings`. **Tempting wrong fix:** setting them in
-  the window only — the CLI and `cairn-sync` hang on the same dead socket.
+  the connection string names wins, unless it is zero (tokio-postgres drops a zero, so ours applies). Pin:
+  `db_connect_applies_the_settings`. **Tempting wrong fix:** setting them in the window only — the CLI and
+  `cairn-node sync` hang on the same dead socket. **Not covered:** the `cairn-sync` binary opens its own
+  `postgres::Client` connections (#878).
 - **Known limits, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
   bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649); a failed reopen's cause
   reaches only the log, the screen says "connection closed" (#876).
