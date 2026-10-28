@@ -488,7 +488,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   refusal, never mid-command, 2 s backoff, 5 s attempt cap (`tests/reconnect.rs`). The sentences that pointed at
   "Read this chart again" or "once the window can reach the node again" are now true. RUNBOOK §14 check (c) owed.
   Review: filed **#875** (a silently dead socket hangs the window) and **#876** (a failed reopen's cause reaches only
-  the log). Merged 2026-10-28. Then #875 option 1 (branch `fix/875-db-keepalives`): `db::connect` sets TCP
+  the log). Merged 2026-10-28. Then #875 option 1 (PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)): `db::connect` sets TCP
   keepalives and a Linux-only `tcp_user_timeout` for every caller (`cairn_node::db_keepalive`); #875 stays open for
   the in-flight hang off Linux.
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
