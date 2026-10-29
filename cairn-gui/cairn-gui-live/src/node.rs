@@ -30,7 +30,8 @@ impl LiveData {
             .map_err(|e| data_error_from(&e))
     }
 
-    /// Where this node's signing key stands — the window's launch probe (#654 option 2).
+    /// Where this node's signing key stands — the window's provisioning line, asked on every
+    /// `funnel_status` (#654 option 2, #882).
     ///
     /// All four answers, never a boolean: a `Retired` key told to run `enroll-device-actor`
     /// would meet db/004's resurrection refusal while following the advice (#152).

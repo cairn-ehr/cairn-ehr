@@ -134,6 +134,59 @@ fn funnel_js_reads_both_incompleteness_reports_and_the_retry_advice() {
     assert!(fields_read_in(js, "status").contains("provisioning"));
 }
 
+/// #882: a search clears an operator's line ("an operator must act") only by asking the node
+/// again once it has answered. (A registration that succeeded clears it too: that is the node's
+/// answer as well.) Both tempting shortcuts are refused here: clearing it on any successful
+/// search would wipe a TRUE enrolment warning (an unenrolled node searches fine), and never
+/// re-asking leaves a mended fault on screen until a registration happens to succeed.
+#[test]
+fn a_search_clears_the_provisioning_line_only_by_asking_the_node_again() {
+    use crate::source_guard::{js_fn, position};
+    let js = include_str!("../../src-ui/funnel.js");
+    let recheck = js_fn(js, "recheckProvisioning");
+    let ask = position(recheck, "invoke(\"funnel_status\")");
+    let set = position(recheck, "setMessage(line, provisioningLine(status))");
+    assert!(ask < set);
+    // A line said while the probe was on its way (a Register refusal) is newer: kept.
+    assert!(position(recheck, "if (line.textContent === shown)") < set);
+    assert_eq!(
+        recheck.matches("setMessage(").count(),
+        1,
+        "set from the node's answer only:\n{recheck}"
+    );
+    // Only the answer of a search that SUCCEEDED for the form on screen asks again.
+    for (f, after) in [
+        ("runBrowse", "browseView.summary;"),
+        ("runPrompt", "renderPrompt(prompt);"),
+    ] {
+        let body = js_fn(js, f);
+        let said = position(body, after);
+        let asked = position(body, "void recheckProvisioning();");
+        assert!(
+            said < asked && asked < position(body, "catch (failure)"),
+            "{body}"
+        );
+    }
+}
+
+/// #882: `funnel_status` asks the node afresh, bounded — never a copy kept from launch. Every
+/// `funnel_status_impl` test runs the mock, whose answer is always `None` (#738), so the live
+/// path is pinned by its source.
+#[test]
+fn funnel_status_probes_the_live_node_afresh_and_bounded() {
+    use crate::source_guard::rust_fn;
+    let status = rust_fn(include_str!("commands.rs"), "funnel_status_impl");
+    assert!(
+        status.contains("provisioning: state.funnel_backend.provisioning().await"),
+        "{status}"
+    );
+    let probe = rust_fn(include_str!("backend.rs"), "provisioning");
+    assert!(
+        probe.contains("probe_within(live.standing(), PROBE_WITHIN)"),
+        "{probe}"
+    );
+}
+
 /// A form snapshot at revision `rev` (shared with `register_tests`).
 pub(super) fn f(rev: u64, name: &str, dob: &str) -> FormSnapshot {
     FormSnapshot {

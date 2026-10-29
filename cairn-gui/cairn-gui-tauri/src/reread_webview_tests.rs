@@ -601,7 +601,8 @@ fn a_recorded_judgement_re_reads_flagged_with_its_report() {
 
 /// The two sentences this slice words itself, verbatim. The out-of-date one names the control
 /// that is the way out — "Read this chart again" — rather than "reload", which this window has
-/// no control for.
+/// no control for. Not an order to press it NOW (#885): beside a reconnect the server refused,
+/// the failed read's own line says pressing again fails until an operator acts.
 #[test]
 fn the_list_out_of_date_sentence_names_the_control() {
     assert_eq!(
@@ -616,7 +617,7 @@ fn the_list_out_of_date_sentence_names_the_control() {
     assert_eq!(
         stale,
         "This list is out of date: the record changed while it was on screen, and reading it \
-         again failed. Press \"Read this chart again\"."
+         again failed. \"Read this chart again\" brings it up to date once the node can be read."
     );
     // #811: after an interrupted commit, neither "the record changed" nor a colleague is known.
     let start = position(CHART_STALE_JS, "const LIST_MAY_BE_OUT_OF_DATE =");
@@ -625,7 +626,8 @@ fn the_list_out_of_date_sentence_names_the_control() {
     assert_eq!(
         maybe,
         "This list may be out of date: whether your last act was recorded is not known, and \
-         reading it again failed. Press \"Read this chart again\"."
+         reading it again failed. \"Read this chart again\" brings it up to date once the node \
+         can be read."
     );
     assert!(
         !CHART_STALE_JS.contains("your own"),

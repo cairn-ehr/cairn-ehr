@@ -84,6 +84,15 @@ fn every_data_error_arm_is_worded_for_a_link() {
         "the not-held arm resolves by sync, not by an operator"
     );
 
+    // #885: a refused reconnect shares this arm, and "yet" would promise it mends by itself.
+    let refused_reopen = crate::funnel::view::tests::REFUSED_REOPEN;
+    let reopen = judgement_error_from("link", DataError::NotProvisioned(refused_reopen.into()));
+    assert_eq!(reopen.retry, Retry::AfterOperator);
+    assert_eq!(
+        reopen.text,
+        format!("This node cannot record the link: {refused_reopen}")
+    );
+
     let outage = judgement_error_from("link", DataError::Unavailable("connection reset".into()));
     assert_eq!(outage.retry, Retry::Now);
     assert!(outage.text.contains("not confirmed"), "{}", outage.text);

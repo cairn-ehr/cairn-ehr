@@ -784,10 +784,16 @@ the same way until an operator acts"; a press within two seconds says the same. 
 shown, so it is not the retry to look for.) Press **Sign off** (or Stop on a line): it says "Nothing was
 done: the connection …", names `[3D000]` and says "until an operator acts" — a write that says "press
 again in … s to retry" here is a finding. Close the chart and search at the front door: it says "The
-search FAILED — this is NOT a "no match"", names `[3D000]`, and says "Try again" nowhere. Rename it back
-(`… RENAME TO <db>`), wait two seconds (a press inside the backoff tries nothing and repeats the refusal),
-and search again: the results draw. A front-door search failure that reads like an empty result, or
-says "Try again", is a finding.
+search FAILED — this is NOT a "no match"", names `[3D000]`, says "until an operator acts" once (#885), and
+says "Try again" nowhere. Rename it back (`… RENAME TO <db>`), wait two seconds (a press inside the backoff
+tries nothing and repeats the refusal), and search again: the results draw. A front-door search failure
+that reads like an empty result, or says "Try again", is a finding. Then the front door's top line (#882):
+fill the register form until its search result shows, restart Postgres, rename the database away again as
+above, and press **Register**. It refuses, the line at the top of the front door says an operator must
+act, and neither line says "until an operator acts" twice (#885). Rename it back, wait two seconds, and
+search: the results draw and the top line clears. A top line still warning after the results draw is a
+finding — on an enrolled node; an unenrolled one rightly keeps its enrolment warning, so enrol the rig's
+node first.
 
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
 them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a

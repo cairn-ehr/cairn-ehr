@@ -269,12 +269,22 @@ fn lost_text(cause: &str, refused: bool, skipped: Option<Duration>) -> String {
     };
     if refused {
         format!(
-            "{head}: {cause}. The node answered and refused the connection, so pressing again \
-             fails the same way until an operator acts."
+            "{head}: {cause}. The node answered and refused the connection, so {OPERATOR_REMEDY}"
         )
     } else {
         format!("{head}: {cause}")
     }
+}
+
+/// How a refused reopen's text ends. It must say its own remedy, because several panes show the
+/// text with no renderer of their own; a renderer that DOES wrap it asks
+/// [`says_operator_remedy`] so the clerk is not told twice (#885).
+const OPERATOR_REMEDY: &str = "pressing again fails the same way until an operator acts.";
+
+/// Does `text` already end by telling the clerk that only an operator can mend this (a refused
+/// reopen's text does; an enrolment refusal or an outage does not)? Pure.
+pub fn says_operator_remedy(text: &str) -> bool {
+    text.ends_with(OPERATOR_REMEDY)
 }
 
 /// May a reopen be attempted `now`, given when the last attempt failed? Pure.
@@ -285,6 +295,19 @@ fn may_retry(last_failed: Option<Instant>, now: Instant) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #885: a refused reopen's text ENDS in its remedy, so a renderer that wraps it can tell and
+    /// not say the remedy twice; an outage's text never does, so its wrapper still offers the press.
+    #[test]
+    fn only_a_refused_reopen_says_the_operator_remedy() {
+        for skipped in [None, Some(Duration::from_millis(500))] {
+            assert!(says_operator_remedy(&lost_text("c", true, skipped)));
+            assert!(!says_operator_remedy(&lost_text("c", false, skipped)));
+        }
+        assert!(!says_operator_remedy(
+            "this node's signing key k is not enrolled"
+        ));
+    }
 
     /// #876: the cause reaches the screen, and a press the backoff skipped says so instead of
     /// reading like a fresh failure.

@@ -1,5 +1,5 @@
 //! DB-gated: the three node reads the window makes beside the two funnel ports — where this
-//! node's signing key stands (the launch probe, #654 option 2), the remedy-naming refusal a
+//! node's signing key stands (the provisioning line's probe, #654 option 2), the remedy-naming refusal a
 //! registration meets before it takes its attestation (#665), and the DATABASE's date — plus
 //! the one connection the funnel shares with the chart commands.
 //!

@@ -7,6 +7,7 @@
 //! whose outcome is unknown (#713).
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use cairn_gui_data::port::DataError;
+use cairn_gui_live::says_operator_remedy;
 use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::LinkEffect;
 use serde::Serialize;
@@ -260,7 +261,8 @@ pub fn judgement_error_view(act: &str, charts: Charts, e: &anyhow::Error) -> Err
 /// `cairn-node` raises are `pub(crate)` to it, so this crate cannot build them.
 ///
 /// `NotProvisioned` says "yet", not "until an operator acts": one of its causes (a chart this
-/// node does not hold yet) resolves by sync, with no operator involved (final review M4).
+/// node does not hold yet) resolves by sync, with no operator involved (final review M4). A
+/// refused reconnect shares the arm and says its own remedy, so it drops the "yet" (#885).
 pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
     match error {
         DataError::Refused(t) => ErrorView {
@@ -268,7 +270,11 @@ pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
             retry: Retry::Never,
         },
         DataError::NotProvisioned(t) => ErrorView {
-            text: format!("This node cannot record the {act} yet: {t}"),
+            text: if says_operator_remedy(&t) {
+                format!("This node cannot record the {act}: {t}")
+            } else {
+                format!("This node cannot record the {act} yet: {t}")
+            },
             retry: Retry::AfterOperator,
         },
         // The record changed under the clinician: nothing was recorded, and the window re-reads

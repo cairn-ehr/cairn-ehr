@@ -22,6 +22,7 @@ use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::{
     MissingPart, PromptCounts, Restored, TokenError, TriggerState, MIN_NAME_TOKENS,
 };
+use cairn_gui_live::says_operator_remedy;
 use cairn_node::actor_enrolment::{
     ambiguous_actor_refusal, not_enrolled_refusal, retired_actor_refusal, ActorStanding,
 };
@@ -98,6 +99,30 @@ pub fn standing_sentence(standing: ActorStanding, kid: &str) -> Option<String> {
     ))
 }
 
+/// The front door's provisioning line, from a standing probe's outcome — `None` when it has
+/// nothing to say. A probe that FAILED is said too: the line must not read as "this node may
+/// write" when nobody could check. Asked afresh by every `funnel_status` (#882), so an
+/// operator's mend clears the line without a restart.
+pub fn provisioning_sentence(probe: Result<ActorStanding, DataError>, kid: &str) -> Option<String> {
+    let why = match probe {
+        Ok(standing) => return standing_sentence(standing, kid),
+        Err(
+            DataError::Unavailable(t)
+            | DataError::Refused(t)
+            | DataError::NotProvisioned(t)
+            // Only the words matter here: a standing probe that reports a changed record is
+            // still "could not check", so `Stale` reads like `Refused`.
+            | DataError::Stale(t)
+            // A read commits nothing; listed so a new cause is never silently dropped.
+            | DataError::OutcomeUnknown(t),
+        ) => t,
+        Err(DataError::NotFound) => "no answer".to_string(),
+    };
+    Some(format!(
+        "Could not check whether this node may write ({why}), so registering may be refused."
+    ))
+}
+
 /// A search that failed — browse or step 3.
 ///
 /// The outage sentence says NOT in capitals on purpose: an empty-looking list after a failure
@@ -116,11 +141,16 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
             retry: Retry::Never,
         },
         // Still a FAILED search (a refused reconnect lands here, #880), so the same warning;
-        // only the way forward differs.
+        // only the way forward differs — said once (#885): a refused reconnect says it itself.
         DataError::NotProvisioned(t) => ErrorView {
             text: format!(
                 "The search FAILED — this is NOT a \"no match\". Do not register on the strength \
-                 of it. ({t}) An operator must act before it can work."
+                 of it. ({t}){}",
+                if says_operator_remedy(t) {
+                    ""
+                } else {
+                    " An operator must act before it can work."
+                }
             ),
             retry: Retry::AfterOperator,
         },
@@ -161,6 +191,10 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
         ),
         // Enrolment, or a reconnect the server refused (#880): either way only an operator
         // mends it, so the sentence says that and claims nothing about what the node may do.
+        // Said once (#885): a refused reconnect's own text already ends in that remedy.
+        DataError::NotProvisioned(t) if says_operator_remedy(t) => {
+            (format!("Nothing was saved: {t}"), Retry::AfterOperator)
+        }
         DataError::NotProvisioned(t) => (
             format!(
                 "Nothing was saved, and pressing Register again fails the same way until an \
