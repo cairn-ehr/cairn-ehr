@@ -49,7 +49,10 @@ pub async fn tray_count_impl(state: &AppState) -> TrayCountView {
     let Some(db) = state.db.as_ref() else {
         return tray_count_view(Ok(1), Ok(CheckState::NeverRun { waiting: 0 }));
     };
-    let db = db.lock().await;
+    let db = match db.lock().await {
+        Ok(db) => db,
+        Err(lost) => return tray_count_view(Err(lost.to_string()), Err(lost.to_string())),
+    };
     // Status BEFORE count (PR #788 review; pinned by duplicates/read_order_tests.rs): the worker,
     // from its own process, never deletes a notice before the proposals it caused are committed.
     // Counted first, a pair can fall between the reads — a count of none, then "nothing waiting".
@@ -81,7 +84,10 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
         );
         return worklist_view(Ok((vec![entry], 1)));
     };
-    let db = db.lock().await;
+    let db = match db.lock().await {
+        Ok(db) => db,
+        Err(lost) => return worklist_view(Err(lost.to_string())),
+    };
     let read = async {
         let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
         let list = worklist(&*db, MAX_SHOWN).await?;

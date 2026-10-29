@@ -43,7 +43,7 @@ pub(crate) async fn chart_set_of(state: &AppState, patient: Uuid) -> Result<Char
     let Some(db) = state.db.as_ref() else {
         return Ok(ChartSet::single(patient));
     };
-    let db = db.lock().await;
+    let db = db.lock().await?;
     cairn_node::patient::person::person_charts(&*db, patient)
         .await
         .map_err(|e| ErrorView {

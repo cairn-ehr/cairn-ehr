@@ -25,6 +25,7 @@ const NOTICE_WITHIN: Duration = Duration::from_secs(5);
 async fn backend_pid(db: &NodeConnection) -> Option<i32> {
     db.lock()
         .await
+        .ok()?
         .query_one("SELECT pg_backend_pid()", &[])
         .await
         .ok()
@@ -43,12 +44,20 @@ async fn terminate(reader: &Client, pid: i32) {
 }
 
 /// Kill `db`'s backend, then lock until the client has noticed. A lock that notices also makes
-/// the first reopen attempt (if `db` reopens at all), so this returns after that attempt.
-async fn lose(db: &NodeConnection, reader: &Client) {
+/// the first reopen attempt (if `db` reopens at all), so this returns after that attempt: its
+/// error if the reopen failed (#876), `None` for a closed client handed back unreopened. Only
+/// for a `db` that CANNOT reopen (its node down, or `fixed`): a reopen that succeeds hands back
+/// an open client, and this loops until it panics with "never noticed".
+async fn lose(db: &NodeConnection, reader: &Client) -> Option<String> {
     let pid = backend_pid(db).await.expect("the first read works");
     terminate(reader, pid).await;
     let deadline = tokio::time::Instant::now() + NOTICE_WITHIN;
-    while !db.lock().await.is_closed() {
+    loop {
+        match db.lock().await {
+            Err(lost) => return Some(lost.to_string()),
+            Ok(client) if client.is_closed() => return None,
+            Ok(_) => {}
+        }
         assert!(
             tokio::time::Instant::now() < deadline,
             "the client never noticed its backend died"
@@ -82,17 +91,35 @@ async fn unreachable_node(hang_up: bool) -> (String, Arc<AtomicUsize>) {
 
 /// Lose the connection of a `db` that reopens towards a node still down, then press five times
 /// at once. Returns the connection and how many reopen attempts the node was offered.
+///
+/// #876: every press is an error that says WHY, never a closed client whose query can only say
+/// "connection closed". The first names the failed attempt; the five inside the backoff say
+/// when it failed, so a press nothing was tried for does not read like a fresh failure.
 async fn lose_then_press_five_times(hang_up: bool) -> Option<(NodeConnection, Arc<AtomicUsize>)> {
     let cs = common::cs()?;
     let (reader, _guard) = common::connect(&cs).await;
     let (down, offered) = unreachable_node(hang_up).await;
     let db = NodeConnection::reopening(common::connect_for_live(&cs).await, down);
-    lose(&db, &reader).await;
+    let first = lose(&db, &reader)
+        .await
+        .expect("a reopen towards a node that is down fails");
+    assert!(first.contains("could not be reopened"), "{first}");
+    let cause = if hang_up {
+        "connecting to the database"
+    } else {
+        "no answer within"
+    };
+    assert!(
+        first.contains(cause),
+        "the cause reaches the caller: {first}"
+    );
     for _ in 0..5 {
-        assert!(
-            db.lock().await.is_closed(),
-            "the node is down: nothing to reopen"
-        );
+        let Err(lost) = db.lock().await else {
+            panic!("the node is down: nothing to reopen");
+        };
+        let lost = lost.to_string();
+        assert!(lost.contains(" s ago"), "a press in the backoff: {lost}");
+        assert!(lost.contains(cause), "{lost}");
     }
     Some((db, offered))
 }
@@ -138,7 +165,13 @@ async fn a_failed_reopen_is_not_retried_until_the_backoff_ends() {
     );
 
     tokio::time::sleep(NodeConnection::RETRY_AFTER).await;
-    assert!(db.lock().await.is_closed());
+    let again = db
+        .lock()
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .expect("still down");
+    assert!(!again.contains(" s ago"), "this press tried: {again}");
     assert_eq!(
         offered.load(Ordering::SeqCst),
         2,
@@ -174,7 +207,12 @@ async fn an_answered_error_keeps_the_same_connection() {
     let db = NodeConnection::reopening(common::connect_for_live(&cs).await, cs.clone());
     let before = backend_pid(&db).await.expect("the first read works");
 
-    let refused = db.lock().await.execute("SELECT 1/0", &[]).await;
+    let refused = db
+        .lock()
+        .await
+        .expect("open")
+        .execute("SELECT 1/0", &[])
+        .await;
     assert!(refused.is_err(), "division by zero is refused");
 
     assert_eq!(backend_pid(&db).await, Some(before));
@@ -189,7 +227,36 @@ async fn a_fixed_connection_is_never_reopened() {
     let (reader, _guard) = common::connect(&cs).await;
     let db = NodeConnection::fixed(common::connect_for_live(&cs).await);
 
-    lose(&db, &reader).await;
+    assert_eq!(
+        lose(&db, &reader).await,
+        None,
+        "handed back closed, not an error"
+    );
 
     assert_eq!(backend_pid(&db).await, None, "still the lost connection");
+}
+
+/// #876: gesture timing, written just after an act, takes the connection with `lock_if_open`.
+/// It must not spend the reopen attempt (and start the backoff) that the act's re-read needs.
+#[tokio::test]
+async fn lock_if_open_never_spends_a_reopen_attempt() {
+    let Some(cs) = common::cs() else { return };
+    let (reader, _guard) = common::connect(&cs).await;
+    let (down, offered) = unreachable_node(true).await;
+    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, down);
+    let pid = backend_pid(&db).await.expect("the first read works");
+    terminate(&reader, pid).await;
+
+    let deadline = tokio::time::Instant::now() + NOTICE_WITHIN;
+    while db.lock_if_open().await.is_some() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the client never noticed its backend died"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(offered.load(Ordering::SeqCst), 0, "nothing was tried");
+
+    assert!(db.lock().await.is_err(), "the node is still down");
+    assert_eq!(offered.load(Ordering::SeqCst), 1, "the next lock tries");
 }

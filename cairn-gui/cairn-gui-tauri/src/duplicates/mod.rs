@@ -59,38 +59,43 @@ pub async fn duplicate_section(
     // committed — and either can land between any two of these autocommit reads. Read the proposals first and such a pair falls
     // between them: no entry, and a status of "nothing waiting" — a silent "checked, none open".
     // Read the check state first and "nothing waiting" proves every proposal was already in.
-    let (found, checks, status) = {
-        let db = db.lock().await;
-        let mut checks = vec![];
-        for chart in charts.members() {
-            checks.push(ChartCheck {
-                chart: *chart,
-                pending: chart_check_pending(&db, *chart)
-                    .await
-                    .map_err(|e| operator_chain(&e)),
-            });
-        }
-        let status = read_snapshot(&db)
-            .await
-            .map(|s| classify(&s, STALLED_AFTER_SECS))
-            .map_err(|e| operator_chain(&e));
-        let found = match duplicate_review::possible_duplicates(&*db, charts).await {
-            Err(e) => Err(operator_chain(&e)),
-            Ok(entries) => {
-                let total = entries.len();
-                let mut shown = vec![];
-                for entry in entries.into_iter().take(MAX_SHOWN) {
-                    let ids =
-                        cairn_node::patient::person::chart_identities(&*db, &entry.other_record)
-                            .await
-                            .map(|ids| ids.iter().map(member_line).collect::<Vec<_>>())
-                            .map_err(|e| operator_chain(&e));
-                    shown.push((entry, ids));
-                }
-                Ok((total, shown))
+    let (found, checks, status) = match db.lock().await {
+        // Nothing could be read: say why on both lines, never an empty "none open" (#876).
+        Err(lost) => (Err(lost.to_string()), vec![], Err(lost.to_string())),
+        Ok(db) => {
+            let mut checks = vec![];
+            for chart in charts.members() {
+                checks.push(ChartCheck {
+                    chart: *chart,
+                    pending: chart_check_pending(&db, *chart)
+                        .await
+                        .map_err(|e| operator_chain(&e)),
+                });
             }
-        };
-        (found, checks, status)
+            let status = read_snapshot(&db)
+                .await
+                .map(|s| classify(&s, STALLED_AFTER_SECS))
+                .map_err(|e| operator_chain(&e));
+            let found = match duplicate_review::possible_duplicates(&*db, charts).await {
+                Err(e) => Err(operator_chain(&e)),
+                Ok(entries) => {
+                    let total = entries.len();
+                    let mut shown = vec![];
+                    for entry in entries.into_iter().take(MAX_SHOWN) {
+                        let ids = cairn_node::patient::person::chart_identities(
+                            &*db,
+                            &entry.other_record,
+                        )
+                        .await
+                        .map(|ids| ids.iter().map(member_line).collect::<Vec<_>>())
+                        .map_err(|e| operator_chain(&e));
+                        shown.push((entry, ids));
+                    }
+                    Ok((total, shown))
+                }
+            };
+            (found, checks, status)
+        }
     };
     // The lock is released here: `read_chart_of` below takes it again.
     // Phase 2: each shown entry's medications through the SAME read opening that chart gives
@@ -165,7 +170,7 @@ async fn record_charts(state: &AppState, patient: Uuid) -> Result<ChartSet, Stri
     let Some(db) = state.db.as_ref() else {
         return Ok(ChartSet::single(patient));
     };
-    let db = db.lock().await;
+    let db = db.lock().await.map_err(|e| e.to_string())?;
     cairn_node::patient::person::person_charts(&*db, patient)
         .await
         .map_err(|e| operator_chain(&e))
@@ -203,7 +208,7 @@ pub(crate) async fn admit_other(
         return Err(refused(NOT_ON_SCREEN)); // fixture mode has no proposals
     };
     let right = chart_set_of(state, other).await?; // takes the lock itself — not held here
-    let db = db.lock().await;
+    let db = db.lock().await?;
     let pairs = duplicate_review::open_pairs_between(&*db, left, &right)
         .await
         .map_err(|e| ErrorView {
@@ -279,7 +284,7 @@ pub async fn different_people_impl(
         .as_ref()
         .ok_or_else(|| refused("no database connection"))?
         .lock()
-        .await;
+        .await?;
     let reviewer = cairn_node::chart_link::Reviewer {
         human_sk: &human_sk,
         human_kid: &human_kid,

@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 impl PatientSearch for LiveData {
     async fn search(&self, query: &SearchQuery, today: &str) -> Result<CandidateList, DataError> {
-        let db = self.db.lock().await;
+        let db = self.db.lock().await?;
         // `today` is passed STRAIGHT THROUGH. The port's doc forbids an implementation from
         // substituting its own clock: the age beside a patient's name would then depend on
         // which clock won, with nothing on screen saying which.
@@ -41,7 +41,11 @@ impl PatientRegistration for LiveData {
         attested: AttestedSearch,
         name: Option<&str>,
     ) -> Result<Uuid, (DataError, AttestedSearch)> {
-        let mut db = self.db.lock().await;
+        // A lost connection hands the attestation back too, for the reason given below.
+        let mut db = match self.db.lock().await {
+            Ok(db) => db,
+            Err(lost) => return Err((lost.into(), attested)),
+        };
         // The query and the list come out of ONE value that has no public constructor, so this
         // call cannot be handed a pair that were never together — which is the whole reason
         // `AttestedSearch` exists (see `cairn_gui_funnel::token`).

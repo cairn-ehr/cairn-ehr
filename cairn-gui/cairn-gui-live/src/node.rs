@@ -24,7 +24,7 @@ impl LiveData {
     /// stop them reaching it and leave those proofs green and empty. The floor still refuses an
     /// unenrolled signer whoever skips this (principle 12); this only makes the refusal legible.
     pub async fn require_provisioned(&self) -> Result<(), DataError> {
-        let db = self.db.lock().await;
+        let db = self.db.lock().await?;
         require_device_actor(&db, &self.node_kid)
             .await
             .map_err(|e| data_error_from(&e))
@@ -35,7 +35,7 @@ impl LiveData {
     /// All four answers, never a boolean: a `Retired` key told to run `enroll-device-actor`
     /// would meet db/004's resurrection refusal while following the advice (#152).
     pub async fn standing(&self) -> Result<ActorStanding, DataError> {
-        let db = self.db.lock().await;
+        let db = self.db.lock().await?;
         device_actor_standing(&db, &self.node_kid)
             .await
             .map_err(|e| data_error_from(&e))
@@ -47,7 +47,7 @@ impl LiveData {
     /// which machine's clock won. Asked per search rather than cached at launch: a window left
     /// open past midnight must not show every patient a day younger than they are.
     pub async fn today(&self) -> Result<String, DataError> {
-        let db = self.db.lock().await;
+        let db = self.db.lock().await?;
         let row = db
             .query_one("SELECT current_date::text", &[])
             .await

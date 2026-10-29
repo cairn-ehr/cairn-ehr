@@ -138,7 +138,10 @@ pub async fn unlock(
         .as_ref()
         .ok_or("no database connection")?
         .lock()
-        .await;
+        .await
+        // The key is unsealed by now: say so, or a rejected DATABASE password ("password
+        // authentication failed") reads as a wrong passphrase.
+        .map_err(|e| format!("Your passphrase was right, but the key was not unlocked: the {e}"))?;
     if !cairn_node::identify::attester_is_enrolled_human(&db, &kid)
         .await
         .map_err(|e| e.to_string())?
@@ -257,7 +260,7 @@ pub async fn sign_off_impl(
             .as_ref()
             .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
-            .await;
+            .await?;
         let params = cairn_node::medication::AttestParams {
             human_sk: &human_sk,
             human_kid: &human_kid,
@@ -449,12 +452,10 @@ pub async fn cease_impl(
         // One member per call, and `cease_medication` opens its own transaction — so a
         // failure on one thread of a reconciled pair leaves the other one stopped rather
         // than rolling both back (ADR-0060 decision 7).
-        let mut db = state
+        let db = state
             .db
             .as_ref()
-            .ok_or_else(|| node_cannot_write("no database connection"))?
-            .lock()
-            .await;
+            .ok_or_else(|| node_cannot_write("no database connection"))?;
         let input = cairn_node::medication::CeaseMedicationInput {
             stopped: None,
             stopped_precision: None,
@@ -464,19 +465,26 @@ pub async fn cease_impl(
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        match cairn_node::medication::cease_medication(
-            &mut db,
-            node_sk,
-            &node_kid,
-            &state.node_origin,
-            thread_chart,
-            medication_id,
-            &input,
-            Some(&author),
-            None,
-        )
-        .await
-        {
+        // A lost connection fails THIS thread only: an earlier one may already be written, so
+        // it is reported with the others, never as "nothing was done" (#876).
+        let result = match db.lock().await {
+            Err(lost) => Err(anyhow::Error::from(lost)),
+            Ok(mut db) => {
+                cairn_node::medication::cease_medication(
+                    &mut db,
+                    node_sk,
+                    &node_kid,
+                    &state.node_origin,
+                    thread_chart,
+                    medication_id,
+                    &input,
+                    Some(&author),
+                    None,
+                )
+                .await
+            }
+        };
+        match result {
             Ok(_) => ceased += 1,
             // A commit lost mid-flight may have stopped it (#814): not a failure, not a success.
             Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
@@ -536,7 +544,7 @@ pub(crate) async fn read_chart_of(
             .medications(&patient.to_string())
             .map_err(|e| format!("{e:?}"));
     };
-    let mut db = db.lock().await;
+    let mut db = db.lock().await.map_err(|e| e.to_string())?;
     // One snapshot for the whole read (#864): no line stopped without its reason.
     cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
         cairn_node::medication::read::list_patient_medications(tx, patient).await
@@ -552,7 +560,11 @@ pub(crate) async fn read_chart_of(
 /// error goes to stderr and the caller is never told.
 pub(crate) async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i32) {
     let Some(db) = state.db.as_ref() else { return };
-    let db = db.lock().await;
+    // Never reopens: a reopen here would spend the attempt the act's own re-read needs (#876).
+    let Some(db) = db.lock_if_open().await else {
+        eprintln!("gesture timing not recorded: the connection is closed");
+        return;
+    };
     if let Err(e) = cairn_node::ui_timing::record_gesture(&*db, kind, items, elapsed_ms).await {
         // Not "the act succeeded": a gesture whose every line failed is timed too, and its
         // connection may be the very thing that failed it. The act reports its own outcome.

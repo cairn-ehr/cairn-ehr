@@ -85,7 +85,7 @@ pub async fn confirm_link_impl(
         .as_ref()
         .ok_or_else(|| refused("no database connection"))?
         .lock()
-        .await;
+        .await?;
     let reviewer = cairn_node::chart_link::Reviewer {
         human_sk: &human_sk,
         human_kid: &human_kid,

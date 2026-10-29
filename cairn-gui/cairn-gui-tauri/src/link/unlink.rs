@@ -220,7 +220,7 @@ pub async fn compare_linked_impl(
     let Some(db) = state.db.as_ref() else {
         return Err(refused(LINK_GONE));
     };
-    let db = db.lock().await;
+    let db = db.lock().await?;
     let (l, h) = (ChartSet::single(edge.low), ChartSet::single(edge.high));
     let standing = cairn_node::chart_link::standing_link(&*db, edge.low, edge.high).await;
     let parts = UnlinkParts {
@@ -280,7 +280,7 @@ pub async fn unlink_impl(
         .as_ref()
         .ok_or_else(|| refused("no database connection"))?
         .lock()
-        .await;
+        .await?;
     let reviewer = cairn_node::chart_link::Reviewer {
         human_sk: &human_sk,
         human_kid: &human_kid,

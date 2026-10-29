@@ -3,25 +3,17 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877) (branch `fix/875-db-keepalives`, part of #875, the maintainer's pick of option
-> 1): `db::connect` now sets TCP keepalives (idle 30 s, 3 probes 10 s apart) and `tcp_user_timeout` 30 s
-> (`cairn_node::db_keepalive`), for the window, the CLI and `cairn-node sync` (NOT the `cairn-sync` binary, which
-> opens its own local connections: filed **#878**); a positive value the connection string names wins. An idle socket
-> that died silently now closes within about a minute, and #874's reopen takes over. **#875 stays open**: a query sent
-> on a dead socket before then still hangs, bounded only on Linux (option 2, a window-side timeout, overlaps #649's
-> cancellation question). Its review round is fixed in-PR (the false `cairn-sync` claim, two stale `db.rs` comments).
-> **Merged 2026-10-28: PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)** (#807: the window's one
-> connection is a `cairn_gui_live::NodeConnection` that reopens itself after it CLOSED — never on a refusal, never
-> mid-command, 2 s backoff, 5 s cap; RUNBOOK §14 check (c) human-owed; filed #875, **#876**).
-> **Merged 2026-10-28: PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)** (#855 + #837 item 1: two local
-> releases of one hold serialize; an overtaken release is STALE, ADR-0082 E1; cross-author W pinned).
-> **Merged 2026-10-28: PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)** (#869: the CLI list's hold and
-> stop-reason lines are one tested fn) and **PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)** (#861): a line that reads current
-> carries its stopped member threads' reasons (`stopped_member_reasons`), never "Stopped"; filed #869 (fixed by the
-> PR above), **#870**, **#871** (decisions). RUNBOOK §15 gained the current-line check.
-> **Merged 2026-10-24: PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)** (#863 + #864): a shred re-folds the
-> threads its event named (`cairn_refold_after_shred`, db/037); every production medication-list read is one
-> `REPEATABLE READ READ ONLY` snapshot. Filed **#866**, **#867** (both decisions).
+> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879) (branch
+> `fix/876-reopen-cause-on-screen`, closes #876): `NodeConnection::lock()` returns `Err(ConnectionLost)` naming why a
+> reopen failed (a press inside the 2 s backoff says when the attempt failed); every lock site maps it into its own
+> outage (`Retry::Now`); cease and release count it as that THREAD's failure; gesture timing takes `lock_if_open`.
+> Reviewed 2026-10-29 and fixed in the PR (wording names the press, not a timer; source guard for both wrong fixes);
+> filed **#880** (a reconnect the server refused still offers Retry: the SQLSTATE dies in `db::connect`) and **#881**.
+> **Merged 2026-10-24/28 (ROADMAP has each):** PR #877 (#875 option 1, `cairn_node::db_keepalive`; #875 open for
+> option 2; filed **#878**) · PR #874 (#807, the window reopens a lost connection; RUNBOOK §14 (c) human-owed; filed
+> #875, #876) · PR #873 (#855 + #837 item 1, ADR-0082 E1) · PR #872 (#869) · PR #868 (#861: a current line carries its
+> stopped members' reasons; filed **#870**, **#871**, decisions) · PR #865 (#863 + #864: a shred re-folds its threads,
+> db/037; one-snapshot list reads; filed **#866**, **#867**, decisions).
 > **Merged 2026-10-21/23 (ROADMAP has each; the hold and stop-reason blocks are in `developers/durable-rules.md`):**
 > PR #860 (#857 + #859: db/060, gen **60**; filed #861, #863, #864, **#862** — `run-db-gated-tests.sh` with
 > `CAIRN_TEST_PG*` but no `PGPORT` runs its SQL step against :5432, pass `PGHOST=127.0.0.1 PGPORT=5532`) · PR #856
@@ -43,9 +35,9 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)** (#875 option 1); run #838's RUNBOOK §15 (now incl. #861's current-line check) and
->    §14 check (c). Then **#876** (a failed reopen's cause on screen — a design choice: `lock` returns a `Result`, or
->    the error mappers consult the connection) and #875's remaining option 2, and **#878** (`cairn-sync`'s own connections). From PR #868's
+> 1. **Review and merge PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)** (#876); run #838's RUNBOOK §15 (now incl. #861's current-line check) and
+>    §14 check (c) (now also: the cause is on screen). Then #875's remaining option 2, and **#878** (`cairn-sync`'s own
+>    connections: move `detect_dead_peers` to a shared crate, or document local-only). From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed
@@ -180,7 +172,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-28 (#875 option 1, PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)) · 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-29 (#876, PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)) · 2026-10-28 (#875 option 1, PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)) · 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 and #861 needed no ADR — a projection-side fix, no wire change;
@@ -214,6 +206,14 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
+### 2026-10-29 — #876 (PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)): a failed reopen says why
+- **⇒ A `From` impl makes `?` compile everywhere, including where it is wrong.** `ErrorView: From<ConnectionLost>`
+  let a plain `?` on the lock inside cease/release's per-thread loop compile and pass every test, though it would
+  say "Nothing was done" after a drug was stopped. Where a convenience conversion exists, pin the sites that must
+  NOT use it (`a_lost_connection_fails_one_thread_and_timing_never_reopens`, a source guard), and mutation-check it.
+- **⇒ Say what the USER must do, not what the machine will.** "is tried again in 1.2 s" read as an automatic retry;
+  nothing retries on a timer. Four reviewers flagged it independently.
+
 ### 2026-10-28 (third) — #875 option 1: keepalives in `db::connect`
 
 Found HANDOVER stale on arrival again (#874 merged, listed as awaiting). No decision had landed; the maintainer picked
@@ -232,7 +232,8 @@ disabling the reopen fails `a_lost_connection_is_reopened_on_the_next_lock`, reo
 `an_answered_error_keeps_the_same_connection`; the review round's backoff and timeout tests fail when the
 failure stamp or the `timeout` is removed).
 - **⇒ Give a wrapper the method name its callers already use.** `NodeConnection::lock`'s guard derefs to `Client`,
-  so the ~14 call sites in two crates changed not at all; only the lines naming the type did.
+  so the ~14 call sites in two crates changed not at all; only the lines naming the type did. (#876 later made
+  `lock` return a `Result`, so each site now handles `ConnectionLost`.)
 - **⇒ State touched only under a lock lives INSIDE that lock** (`Held` + `MutexGuard::map`). The first cut kept the
   failure stamp in a second, `std` mutex, whose guard bound across an `.await` makes the future `!Send`.
 - **⇒ A node that is DOWN is a `TcpListener` on `127.0.0.1:0`**: drop the socket for "refused", hold it for "no
