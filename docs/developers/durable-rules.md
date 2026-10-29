@@ -22,7 +22,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `cairn_node::db::connect` applies them for the window, the CLI and `cairn-node sync`; `cairn-sync` builds every
   production connection from `db_config(conn)`. A setting the connection string names wins, unless it is zero
   (tokio-postgres drops a zero, so ours applies). Pins: `db_connect_applies_the_dead_peer_settings` (db.rs, by
-  source), cairn-sync's `keepalive_tests` (the config read back; no production `Client::connect(` left).
+  source), cairn-sync's `keepalive_tests` (the config read back; every production `NoTls` connect in `src/*.rs`
+  matched by a `db_config(` call).
   **Tempting wrong fixes:** setting them in the window only — the CLI and `cairn-node sync` hang on the same dead
   socket; a new `postgres::Client::connect(conn, NoTls)` in `cairn-sync` — it compiles and silently drops them.
 - **A failed reopen is an ERROR that says why** (#876): `lock()` returns `Err(ConnectionLost)` naming the cause;

@@ -504,8 +504,9 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   SQLSTATE), **#885** (the remedy said twice).
 - **2026-10-29 — cairn-sync's own connections notice a dead peer (#878).** PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886): #875's settings move to a new
   crate `cairn-db-keepalive` (was `cairn_node::db_keepalive`); every production connection the `cairn-sync` binary
-  opens is built from `db_config(conn)`, which applies them (`keepalive_tests` pins the config and that no production
-  `Client::connect(` remains). Both binaries now bound a silently dead remote Postgres the same way.
+  opens is built from `db_config(conn)`, which applies them (`keepalive_tests` pins the config and that every
+  production `NoTls` connect in `src/*.rs` is matched by a `db_config(` call). Both binaries now bound a silently
+  dead remote Postgres the same way.
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
   **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#882**, **#884**, **#885**; then HANDOVER's ⇒ NEXT. #699 stays open.
 

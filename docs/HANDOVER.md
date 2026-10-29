@@ -5,9 +5,10 @@
 > [!NOTE]
 > **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886) (branch `fix/878-shared-keepalive`, closes #878): #875's dead-peer
 > settings move from `cairn_node::db_keepalive` to a new crate **`cairn-db-keepalive`** (tokio-postgres only), and the
-> `cairn-sync` binary's three production connects (`connect_db`, the blob workers, `blobd`) are built from one
-> `db_config(conn)` that applies them. Pins: `keepalive_tests` (the config read back; no production
-> `Client::connect(` left, mutation-checked) and `db_connect_applies_the_dead_peer_settings` (moved into db.rs).
+> `cairn-sync` binary's three production connects (`connect_db`, `do_blobd`'s fetch workers, `cmd_run`'s blob
+> thread) are built from one `db_config(conn)` that applies them. Pins: `keepalive_tests` (the config read back; every
+> production `NoTls` connect in `src/*.rs` matched by a `db_config(` call, mutation-checked) and
+> `db_connect_applies_the_dead_peer_settings` (moved into db.rs).
 > **Merged 2026-10-29:** PR #883 (#880 + #881: a reopen the server REFUSED is `NotProvisioned` →
 > `Retry::AfterOperator`; `cairn_node::db::ConnectFailed` keeps the SQLSTATE; a departed chart's unread line says why;
 > filed **#882**, **#884**, **#885**) · PR #879 (#876: a failed reopen says why on screen; filed #880, #881).
@@ -217,6 +218,10 @@ crate; no existing crate both binaries share carries a postgres dependency). TDD
   line. Print the mutated line by number; a mutation that cannot compile (an unused `mut`) is not a red either.
 - **⇒ A root crate add moves `cairn-gui/Cargo.lock` too** (not `cairn_pgx`'s here: it does not depend on cairn-node);
   `cargo metadata --locked` in all three trees proves it.
+- **⇒ A counting source guard needs fixtures of its own.** The second review got four raw connects past
+  `keepalive_tests`' first tally (rustfmt's `NoTls,\n)`, a comment naming `db_config(`, a `#[cfg(test)]` helper above
+  the cut, a sibling module). Fixed in place: comments dropped, whitespace removed, cut at the first test MODULE, every
+  `src/*.rs` read at run time, and `the_tally_sees_every_spelling_of_a_raw_connect` keeps each case red.
 
 ### 2026-10-29 (second) — #880 + #881 (PR [#883](https://github.com/cairn-ehr/cairn-ehr/pull/883)): a refused reopen asks for an operator
 Found HANDOVER stale on arrival again (#879 merged, listed as awaiting); the maintainer picked #880 + #881. TDD; each

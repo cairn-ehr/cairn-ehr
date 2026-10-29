@@ -8518,24 +8518,76 @@ mod keepalive_tests {
         assert!(db_config("host=127.0.0.1 port=notaport").is_err());
     }
 
+    /// `(NoTls connects, db_config calls)` in one source file's production code: everything
+    /// above its first test module (a `#[cfg(test)]` helper higher up does not end it). Comment
+    /// lines are dropped, so a comment naming `db_config(` cannot cover for a raw connect, and
+    /// whitespace is removed, so a connect rustfmt wrapped (`NoTls,\n)`) still reads `NoTls)`.
+    fn connect_tally(src: &str) -> (usize, usize) {
+        let production = src
+            .find("#[cfg(test)]\nmod ")
+            .map_or(src, |end| &src[..end]);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .flat_map(str::split_whitespace)
+            .collect::<String>()
+            .replace(",)", ")");
+        let calls = code.matches("db_config(").count() - code.matches("fndb_config(").count();
+        (code.matches("NoTls)").count(), calls)
+    }
+
     /// The test above pins `db_config`, not that every connection uses it. A connect that
     /// skips it (`Client::connect(conn, NoTls)`, `conn.parse::<postgres::Config>()`,
     /// `Config::new()`) compiles and silently loses the settings. However it is spelled, a
-    /// connection is opened with a `NoTls)` argument, so each of those in the production code
-    /// (above the first test module; the tests' own connects stay below it) must be matched
-    /// by a `db_config(` call. shortcut: a TLS connector would need adding here.
+    /// connection is opened with a `NoTls` argument, so each one in the production code of
+    /// every `.rs` file in `src/` must be matched by a `db_config(` call. Read at run time, so a
+    /// new module is checked too. shortcut: a TLS connector would need adding here.
     #[test]
     fn every_production_connection_goes_through_db_config() {
-        let src = include_str!("main.rs");
-        let production = &src[..src.find("#[cfg(test)]").expect("a test module exists")];
-        let connects = production.matches("NoTls)").count();
-        let through_db_config =
-            production.matches("db_config(").count() - production.matches("fn db_config(").count();
+        let src_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+        let (mut connects, mut through_db_config) = (0, 0);
+        for entry in std::fs::read_dir(src_dir).expect("the crate's src/ is readable") {
+            let path = entry.expect("a src/ entry").path();
+            if path.extension().is_some_and(|ext| ext == "rs") {
+                let (c, d) = connect_tally(&std::fs::read_to_string(&path).expect("readable"));
+                connects += c;
+                through_db_config += d;
+            }
+        }
         assert!(connects > 0, "the guard found no connection to check");
         assert_eq!(
             connects, through_db_config,
-            "every connection must be opened as db_config(conn)?.connect(NoTls) (#878)"
+            "every connection must be opened as db_config(conn).and_then(|cfg| cfg.connect(NoTls)) (#878)"
         );
+    }
+
+    /// The guard's own blind spots, closed (PR #886 review): each case below is a raw connect
+    /// the first version of `connect_tally` counted as covered, or missed.
+    #[test]
+    fn the_tally_sees_every_spelling_of_a_raw_connect() {
+        let wrapped = "let c = postgres::Client::connect(\n    &conn,\n    postgres::NoTls,\n);\n";
+        assert_eq!(connect_tally(wrapped), (1, 0), "a connect rustfmt wrapped");
+        let commented = "// opened like db_config(conn)\nlet c = Client::connect(conn, NoTls);\n";
+        assert_eq!(
+            connect_tally(commented),
+            (1, 0),
+            "a comment naming db_config("
+        );
+        let helper_above = "#[cfg(test)]\nfn helper() {}\nlet c = Client::connect(conn, NoTls);\n";
+        assert_eq!(
+            connect_tally(helper_above),
+            (1, 0),
+            "a test-only helper above it"
+        );
+        let tests_below = "fn f() {}\n#[cfg(test)]\nmod tests { fn g() { connect(c, NoTls); } }\n";
+        assert_eq!(
+            connect_tally(tests_below),
+            (0, 0),
+            "a test module's own connect"
+        );
+        let routed =
+            "fn db_config(conn: &str) {}\ndb_config(conn).and_then(|cfg| cfg.connect(NoTls))";
+        assert_eq!(connect_tally(routed), (1, 1), "the sanctioned shape");
     }
 }
 
