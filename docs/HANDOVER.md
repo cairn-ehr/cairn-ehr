@@ -3,34 +3,28 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887) (branch `fix/882-885-front-door-operator-line`, closes #882 and
-> #885): `funnel_status` probes the node's standing on every call (no launch-time copy), and the front door asks again
-> after a successful search while its top line warns, so a mended fault clears and a true enrolment warning stays
-> (#882); a refused reopen's remedy is said once (`cairn_gui_live::says_operator_remedy`), the judgement arm drops its
-> "yet" for it, and the stale-list banners stop ordering a press (#885). RUNBOOK §14 (c) gained both checks. Its
-> second review: the probe is bounded (`PROBE_WITHIN`, so a hung lock cannot blank `boot()`); filed **#888** (wording).
-> **Merged 2026-10-29:** PR #886 (#878: the `cairn-db-keepalive` crate; every `cairn-sync` connect via `db_config`) · PR #883 (#880 + #881: a reopen the server REFUSED is `NotProvisioned` →
-> `Retry::AfterOperator`; `cairn_node::db::ConnectFailed` keeps the SQLSTATE; a departed chart's unread line says why;
-> filed **#882**, **#884**, **#885**) · PR #879 (#876: a failed reopen says why on screen; filed #880, #881).
+> **⇒ ONE PR AWAITS THE MAINTAINER:** branch `fix/884-888-client-refusal-and-provisioning-line` (closes #884 and #888):
+> `cairn_node::db::ConnectFailed::refused_by_client()` marks a refusal tokio-postgres raises itself ("password
+> missing", an unsupported auth method, a SCRAM failure — no SQLSTATE), and the window's reopen ORs it with
+> `server_refused`, so such a reopen asks for an operator instead of offering a retry forever (#884; a fake node that
+> asks for a password pins the library's wording, `db_diagnosis.rs` + `reconnect.rs`, no scram cluster needed). The
+> front door's provisioning line says a refused reopen as certain and without "pressing again"
+> (`cairn_gui_live::refused_reopen_cause`, #888).
+> **Merged 2026-10-29:** PR #887 (#882 + #885: the standing is probed on every `funnel_status`, bounded by
+> `PROBE_WITHIN`; a refused reopen's remedy is said once) · PR #886 (#878: the `cairn-db-keepalive` crate) · PR #883
+> (#880 + #881: a reopen the server REFUSED is `NotProvisioned` → `Retry::AfterOperator`) · PR #879 (#876).
 > **Merged 2026-10-24/28 (ROADMAP has each):** PR #877 (#875 option 1, `cairn_node::db_keepalive`; #875 open for
 > option 2; filed **#878**) · PR #874 (#807, the window reopens a lost connection; RUNBOOK §14 (c) human-owed; filed
 > #875, #876) · PR #873 (#855 + #837 item 1, ADR-0082 E1) · PR #872 (#869) · PR #868 (#861: a current line carries its
 > stopped members' reasons; filed **#870**, **#871**, decisions) · PR #865 (#863 + #864: a shred re-folds its threads,
 > db/037; one-snapshot list reads; filed **#866**, **#867**, decisions).
-> **Merged 2026-10-21/23 (ROADMAP has each; the hold and stop-reason blocks are in `developers/durable-rules.md`):**
-> PR #860 (#857 + #859: db/060, gen **60**; filed #861, #863, #864, **#862** — `run-db-gated-tests.sh` with
-> `CAIRN_TEST_PG*` but no `PGPORT` runs its SQL step against :5432, pass `PGHOST=127.0.0.1 PGPORT=5532`) · PR #856
-> (#835 + #854; filed #857 · **#858** · #859) · PR #853 (#843 + #849:
-> [ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md), spec **v0.84**; filed
-> **#854**, **#855**) · PR #851 (#848; filed #849, **#850**) · PR #847 (#846; db/032's false comment → **#185**) · PR
-> #845 (#844 + #836) · PR #842 (#839–#841) · PR #838 (#832, the window's **W**; **owed by a human: RUNBOOK §15** — W ≤
-> 10 s, Release ≤ 5 s, VoiceOver/keyboard; #809 gained item 5) · PR #831 (#803 slice A,
-> [ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md), `db/059`; filed #835 · #836 · **#837**).
-> **Merged 2026-10-18/20 (ROADMAP has each):** PR #830 (#828) · PR #829 (#826: `assert-observed-evidence` prints its event ids) · PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
-> `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
-> COMMIT driven end to end; review filed **#825**, the window drops an unknown outcome's error chain — a decision on
-> where operator diagnostics live) · PR #821 (#817) · PR #819 (#815 + #818) · PR #816 (#814) · PR #813 (#811) · PR #805
-> (#797, "Read this chart again"; RUNBOOK §14 is its owed human timing) · PR #802. The repair path (#679 · #680 · #681)
+> **Merged 2026-10-18/23 (ROADMAP has each; the hold and stop-reason blocks are in `developers/durable-rules.md`):**
+> PRs #860 · #856 · #853 ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md), spec **v0.84**) · #851 · #847 · #845 · #842 ·
+> #838 (the window's **W**; **owed by a human: RUNBOOK §15** — W ≤ 10 s, Release ≤ 5 s, VoiceOver/keyboard) · #831
+> ([ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md), `db/059`) · #830 · #829 · #827 · #824 · #821 · #819 · #816 · #813 · #805 (#797, "Read this
+> chart again"; RUNBOOK §14 is its owed timing) · #802. Still open from them: **#858** · **#850** · **#837** · **#825**
+> · **#185** · **#862** (`run-db-gated-tests.sh` with `CAIRN_TEST_PG*` but no `PGPORT` runs its SQL step against
+> :5432 — pass `PGHOST=127.0.0.1 PGPORT=5532`). The repair path (#679 · #680 · #681)
 > is built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's
 > runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.84** (newest
 > ADR-0082). DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate
@@ -38,10 +32,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887)** (#882 + #885); run #838's RUNBOOK §15 (now incl. #861's current-line check) and
+> 1. **Review and merge the #884 + #888 PR**; run #838's RUNBOOK §15 (now incl. #861's current-line check) and
 >    §14 check (c) (the cause on screen; a refused reopen offers no retry; the front door's top line clears). Then #875's remaining option 2 (a
 >    window-side statement timeout: brainstorm first — a timeout during a COMMIT is an UNKNOWN outcome, never "Nothing
->    was done"; overlaps #649, #825), and from PR #883's reviews **#884** (needs a scram fixture). From PR #868's
+>    was done"; overlaps #649, #825). From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
 >    earlier-shredded plaintext event comes back on a heal or re-fold — a decision) · **#867** (should a failed

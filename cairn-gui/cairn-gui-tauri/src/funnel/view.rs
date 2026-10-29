@@ -22,7 +22,7 @@ use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::{
     MissingPart, PromptCounts, Restored, TokenError, TriggerState, MIN_NAME_TOKENS,
 };
-use cairn_gui_live::says_operator_remedy;
+use cairn_gui_live::{refused_reopen_cause, says_operator_remedy};
 use cairn_node::actor_enrolment::{
     ambiguous_actor_refusal, not_enrolled_refusal, retired_actor_refusal, ActorStanding,
 };
@@ -118,6 +118,13 @@ pub fn provisioning_sentence(probe: Result<ActorStanding, DataError>, kid: &str)
         ) => t,
         Err(DataError::NotFound) => "no answer".to_string(),
     };
+    // #888: a refused reopen's own text is worded for a press, and this line is not one.
+    if let Some(cause) = refused_reopen_cause(&why) {
+        return Some(format!(
+            "Registering is unavailable at this workstation until an operator acts: the node \
+             refused the connection ({cause})."
+        ));
+    }
     Some(format!(
         "Could not check whether this node may write ({why}), so registering may be refused."
     ))

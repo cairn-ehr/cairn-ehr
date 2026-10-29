@@ -295,3 +295,58 @@ async fn a_reopen_the_server_refuses_asks_for_an_operator_on_every_press() {
         other => panic!("a refused reopen offers no retry-now: {other:?}"),
     }
 }
+
+/// A node that asks for a password and then waits: it reads the startup packet and answers
+/// `AuthenticationCleartextPassword`. The same fake as cairn-node's `db_diagnosis.rs` (another
+/// Cargo tree, so not shared). Returns a connection string naming it, with no password.
+async fn node_asking_for_a_password() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a free port");
+    let port = listener.local_addr().expect("a bound port").port();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let Ok(len) = socket.read_i32().await else {
+                    return;
+                };
+                let mut rest = vec![0; usize::try_from(len - 4).unwrap_or(0)];
+                if socket.read_exact(&mut rest).await.is_err() {
+                    return;
+                }
+                // 'R', the length of what follows it (8, itself included), then 3: a password.
+                let mut ask = vec![b'R'];
+                ask.extend_from_slice(&8i32.to_be_bytes());
+                ask.extend_from_slice(&3i32.to_be_bytes());
+                let _ = socket.write_all(&ask).await;
+                let _ = socket.read(&mut [0; 1]).await;
+            });
+        }
+    });
+    format!("host=127.0.0.1 port={port} user=nobody dbname=nowhere")
+}
+
+/// #884: a refusal tokio-postgres raises itself (here "password missing": the role was given a
+/// password and `pg_hba` moved to scram, but the window's connection string has none) carries
+/// no SQLSTATE. It must still ask for an operator, never offer a press that keeps failing.
+#[tokio::test]
+async fn a_reopen_the_client_cannot_authenticate_asks_for_an_operator() {
+    use cairn_gui_data::port::DataError;
+    let Some(cs) = common::cs() else { return };
+    let (reader, _guard) = common::connect(&cs).await;
+    let asking = node_asking_for_a_password().await;
+    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, asking);
+    let first = lose(&db, &reader)
+        .await
+        .expect("a reopen without the password the node asks for fails");
+    assert!(first.contains("password missing"), "{first}");
+    assert!(first.contains("until an operator acts"), "{first}");
+    assert!(!first.contains("press again in"), "{first}");
+
+    let Err(lost) = db.lock().await else {
+        panic!("inside the backoff: nothing is tried, so still lost");
+    };
+    assert!(
+        matches!(DataError::from(lost), DataError::NotProvisioned(_)),
+        "a client-side refusal offers no retry-now"
+    );
+}

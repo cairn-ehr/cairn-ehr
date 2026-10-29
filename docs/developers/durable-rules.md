@@ -47,7 +47,12 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   Pins: `a_reopen_the_server_refuses_asks_for_an_operator_on_every_press` (reconnect.rs, a real `3D000`),
   `a_refused_reopen_names_the_operator_by_every_route`, `only_a_refusing_server_needs_an_operator`,
   `a_chart_read_lost_to_a_refused_reopen_needs_an_operator` (also a source guard: no `to_string` in `read_chart_of`).
-  **Known limits** (`server_refused`'s doc): a refusal tokio-postgres raises itself has no code (#884). **Every
+  **A refusal tokio-postgres raises itself** ("password missing", an unsupported auth method, a SCRAM failure) has
+  no code: `ConnectFailed::refused_by_client()` marks it from the error's rendered category (`Kind` is private), and
+  the reopen ORs it with `server_refused` (#884). **Tempting wrong fix:** adding the words of `Connect`, `Io`, `Timeout` or
+  `Closed` to `client_refusal` — those are outages the next press may get past. Pins: `a_refusal_the_client_raises_itself_is_marked_as_one`
+  (db_diagnosis.rs, a fake node driving the real library, so an upgrade that rewords a kind fails it),
+  `a_reopen_the_client_cannot_authenticate_asks_for_an_operator` (reconnect.rs). **Every
   `NotProvisioned` renderer must be true of a refused reconnect too**: the front door's search arm keeps "The search
   FAILED — this is NOT a "no match"" (`a_search_that_needs_an_operator_still_never_reads_as_nothing_found`), and
   the register arm claims nothing about the node's enrolment. Before #880 the search arm was bare text — safe only

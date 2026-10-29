@@ -406,3 +406,16 @@ fn the_provisioning_line_says_the_standing_or_why_it_could_not_be_checked() {
     let none = provisioning_sentence(Err(DataError::NotFound), "k").unwrap();
     assert!(none.contains("(no answer)"), "{none}");
 }
+
+/// #888: after a webview reload, a refused reopen on this line is said as certain, and without
+/// the press-worded framing ("pressing again", "this press tried nothing") — nobody pressed here.
+#[test]
+fn the_provisioning_line_says_a_refused_reopen_without_a_press() {
+    let refused = DataError::NotProvisioned(REFUSED_REOPEN.into());
+    let line = provisioning_sentence(Err(refused), "k").unwrap();
+    assert_eq!(
+        line,
+        "Registering is unavailable at this workstation until an operator acts: the node refused \
+         the connection (password authentication failed [28P01])."
+    );
+}

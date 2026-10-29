@@ -38,8 +38,9 @@ hex = "0.4"
 # Builds a `ChartSet` for the stale-record classifier test (a public domain producer).
 cairn-medication-view = { path = "../../crates/cairn-medication-view" }
 # The suites are async and talk to a real node, so they need a runtime with a reactor.
-# `net`: `tests/reconnect.rs` stands a TCP listener in for a node that is still down.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net"] }
+# `net`: `tests/reconnect.rs` stands a TCP listener in for a node that is still down;
+# `io-util`: and for one that asks for a password the window lacks (#884).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "io-util"] }
 # The signed body's `search.displayed` array is read back through `::text` + serde_json: this
 # tree does not enable tokio-postgres's `with-serde_json-1` feature, the same convention the
 # root tree's `patient_register.rs` follows.

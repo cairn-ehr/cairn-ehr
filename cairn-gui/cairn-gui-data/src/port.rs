@@ -60,7 +60,8 @@ pub struct NoteRef {
 ///   rendering it as `Unavailable` hides the remedy behind a retry that will keep failing.
 ///   Carried by `cairn_node::db_diagnosis::RefusalScope::NodeState` (PR #661 review). A SECOND
 ///   producer has the same shape but a different decider (#880): a lost connection whose reopen
-///   the database SERVER answered and refused (a rejected password, a dropped database). Its
+///   the database SERVER answered and refused (a rejected password, a dropped database), or the
+///   client library refused on its own (a password it was not given, #884). Its
 ///   payload is the refusal's cause, not a command, and it blocks reads as well as writes —
 ///   so a consumer must never assume `NotProvisioned` means "enrol this node".
 /// - `OutcomeUnknown` — **the write's COMMIT got no ordinary answer, so it MAY have been

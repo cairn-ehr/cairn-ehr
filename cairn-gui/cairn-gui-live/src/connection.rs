@@ -57,7 +57,8 @@ use tokio_postgres::Client;
 #[derive(Debug, Clone)]
 pub struct ConnectionLost {
     text: String,
-    /// The server answered the reopen and refused it ([`server_refused`], #880).
+    /// The reopen was refused: by the server ([`server_refused`], #880) or by the client library
+    /// itself (#884). Retrying cannot help until an operator acts.
     refused: bool,
 }
 
@@ -191,11 +192,12 @@ impl Held {
                     return Ok(());
                 }
                 Ok(Err(e)) => {
-                    // `db::connect`'s own error keeps the server's code beside its text (#880).
-                    let code = e
+                    // `db::connect`'s own error keeps the server's code beside its text (#880),
+                    // and marks a refusal the client library raised itself, which has none (#884).
+                    let refused = e
                         .downcast_ref::<cairn_node::db::ConnectFailed>()
-                        .and_then(cairn_node::db::ConnectFailed::sqlstate);
-                    (format!("{e:#}"), server_refused(code))
+                        .is_some_and(|f| server_refused(f.sqlstate()) || f.refused_by_client());
+                    (format!("{e:#}"), refused)
                 }
                 Err(_) => (
                     format!("no answer within {:?}", NodeConnection::REOPEN_WITHIN),
@@ -229,9 +231,11 @@ fn lost(cause: &str, refused: bool, skipped: Option<Duration>) -> ConnectionLost
 /// may get past: `53300` (too many connections) and `57P03` (starting up) are the server saying
 /// "not now", not "never". Pure.
 ///
-/// Known limits, each erring towards "press again" (filed as #884 where not inherent):
-/// - A refusal the CLIENT library raises carries no code: a password the server asks for but
-///   the connection string lacks, a SCRAM or SASL failure. Those read as an outage (#884).
+/// A refusal the CLIENT library raises carries no code (a password the server asks for but the
+/// connection string lacks, a SCRAM or SASL failure); `ConnectFailed::refused_by_client` marks
+/// those, beside this, at the one call site (#884).
+///
+/// Known limits, each erring towards "press again":
 /// - Against several hosts, or a name resolving to several addresses, only the LAST attempt's
 ///   error comes back, so an earlier host's refusal can hide behind a later one's outage.
 /// - `CONNECTION LIMIT 0` answers `53300`, the same as a full server.
@@ -248,7 +252,7 @@ fn server_refused(sqlstate: Option<&str>) -> bool {
 /// timer, so an outage's text names the press that will. Pure.
 fn lost_text(cause: &str, refused: bool, skipped: Option<Duration>) -> String {
     let head = match skipped {
-        None => "connection to the node was lost and could not be reopened".to_string(),
+        None => format!("{LOST_HEAD} and could not be reopened"),
         Some(ago) => {
             // In whole tenths, the age rounded down: the two figures add up to the backoff,
             // and the wait inside it is never "0.0 s".
@@ -261,16 +265,13 @@ fn lost_text(cause: &str, refused: bool, skipped: Option<Duration>) -> String {
                 format!(" (press again in {} s to retry)", tenths(wait))
             };
             format!(
-                "connection to the node was lost; reopening it failed {} s ago, so this press \
-                 tried nothing{next}",
+                "{LOST_HEAD}; reopening it failed {} s ago, so this press tried nothing{next}",
                 tenths(ago),
             )
         }
     };
     if refused {
-        format!(
-            "{head}: {cause}. The node answered and refused the connection, so {OPERATOR_REMEDY}"
-        )
+        format!("{head}: {cause}{REFUSED_BY}{OPERATOR_REMEDY}")
     } else {
         format!("{head}: {cause}")
     }
@@ -285,6 +286,23 @@ const OPERATOR_REMEDY: &str = "pressing again fails the same way until an operat
 /// reopen's text does; an enrolment refusal or an outage does not)? Pure.
 pub fn says_operator_remedy(text: &str) -> bool {
     text.ends_with(OPERATOR_REMEDY)
+}
+
+/// How every failed reopen's text begins, and what a refused one says before its remedy. Shared
+/// by [`lost_text`], which writes them, and [`refused_reopen_cause`], which reads them back.
+const LOST_HEAD: &str = "connection to the node was lost";
+const REFUSED_BY: &str = ". The node answered and refused the connection, so ";
+
+/// The bare cause inside a refused reopen's text, or `None` for any other text. For a line that
+/// is not a press (the front door's provisioning line after a reload, #888), where "pressing
+/// again" and "this press tried nothing" would be untrue. The heads `lost_text` writes contain no
+/// ": ", so the first one ends the head. Pure.
+pub fn refused_reopen_cause(text: &str) -> Option<&str> {
+    let body = text
+        .strip_suffix(OPERATOR_REMEDY)?
+        .strip_suffix(REFUSED_BY)?;
+    let (_head, cause) = body.strip_prefix(LOST_HEAD)?.split_once(": ")?;
+    Some(cause)
 }
 
 /// May a reopen be attempted `now`, given when the last attempt failed? Pure.
@@ -307,6 +325,27 @@ mod tests {
         assert!(!says_operator_remedy(
             "this node's signing key k is not enrolled"
         ));
+    }
+
+    /// #888: a line that is not a press (the front door's provisioning line) gets back the bare
+    /// cause of a refused reopen, from both texts `lost_text` writes for one, and of nothing else.
+    #[test]
+    fn a_refused_reopen_gives_back_its_bare_cause() {
+        let cause = "connecting to the database: password authentication failed [28P01]";
+        for skipped in [None, Some(Duration::from_millis(500))] {
+            assert_eq!(
+                refused_reopen_cause(&lost_text(cause, true, skipped)),
+                Some(cause)
+            );
+            assert_eq!(
+                refused_reopen_cause(&lost_text(cause, false, skipped)),
+                None
+            );
+        }
+        assert_eq!(
+            refused_reopen_cause("this node's key k is not enrolled"),
+            None
+        );
     }
 
     /// #876: the cause reaches the screen, and a press the backoff skipped says so instead of
