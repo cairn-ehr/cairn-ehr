@@ -8488,12 +8488,6 @@ mod tests {
     }
 }
 
-/// Issue #475: `cairn-sync init` must name the migration that failed.
-///
-/// A tiny DB-gated module of its own rather than a lodger in `quarantine_tests`, because
-/// it shares none of that suite's fixture: it takes no advisory lock, loads no schema and
-/// truncates nothing. The whole fixture is a bare connection and a statement the server
-/// refuses, so it can run beside anything.
 /// #878: cairn-sync's own connections notice a peer that vanished silently, as
 /// `cairn_node::db::connect`'s do (#875). No database needed: the settings are read back
 /// from the config every production connection is built from.
@@ -8524,21 +8518,33 @@ mod keepalive_tests {
         assert!(db_config("host=127.0.0.1 port=notaport").is_err());
     }
 
-    /// The test above pins `db_config`, not that every connection uses it. A production
-    /// `Client::connect(` would bypass it and silently lose the settings, so none may remain
-    /// above the first test module (the tests' own connects stay below it).
+    /// The test above pins `db_config`, not that every connection uses it. A connect that
+    /// skips it (`Client::connect(conn, NoTls)`, `conn.parse::<postgres::Config>()`,
+    /// `Config::new()`) compiles and silently loses the settings. However it is spelled, a
+    /// connection is opened with a `NoTls)` argument, so each of those in the production code
+    /// (above the first test module; the tests' own connects stay below it) must be matched
+    /// by a `db_config(` call. shortcut: a TLS connector would need adding here.
     #[test]
     fn every_production_connection_goes_through_db_config() {
         let src = include_str!("main.rs");
         let production = &src[..src.find("#[cfg(test)]").expect("a test module exists")];
+        let connects = production.matches("NoTls)").count();
+        let through_db_config =
+            production.matches("db_config(").count() - production.matches("fn db_config(").count();
+        assert!(connects > 0, "the guard found no connection to check");
         assert_eq!(
-            production.matches("Client::connect(").count(),
-            0,
-            "connect through db_config(conn)?.connect(NoTls) instead (#878)"
+            connects, through_db_config,
+            "every connection must be opened as db_config(conn)?.connect(NoTls) (#878)"
         );
     }
 }
 
+/// Issue #475: `cairn-sync init` must name the migration that failed.
+///
+/// A tiny DB-gated module of its own rather than a lodger in `quarantine_tests`, because
+/// it shares none of that suite's fixture: it takes no advisory lock, loads no schema and
+/// truncates nothing. The whole fixture is a bare connection and a statement the server
+/// refuses, so it can run beside anything.
 #[cfg(test)]
 mod schema_load_diagnosis_tests {
     use super::*;
