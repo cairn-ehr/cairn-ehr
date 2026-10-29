@@ -17,12 +17,14 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   mid-command, and never a retried write: a commit with no answer stays unknown, and the next command just gets a
   working connection for the re-read once the node answers. A failed or unanswered attempt (5 s cap) starts a 2 s
   backoff, kept in the same lock as the client.
-- **A silently dead socket is noticed by TCP keepalives, set in `db::connect` for every caller** (#875,
-  `cairn_node::db_keepalive`: idle 30 s, 3 probes 10 s apart, `tcp_user_timeout` 30 s on Linux only). A setting
-  the connection string names wins, unless it is zero (tokio-postgres drops a zero, so ours applies). Pin:
-  `db_connect_applies_the_settings`. **Tempting wrong fix:** setting them in the window only — the CLI and
-  `cairn-node sync` hang on the same dead socket. **Not covered:** the `cairn-sync` binary opens its own
-  `postgres::Client` connections (#878).
+- **A silently dead socket is noticed by TCP keepalives, set for every connection either binary opens** (#875,
+  #878; the `cairn-db-keepalive` crate: idle 30 s, 3 probes 10 s apart, `tcp_user_timeout` 30 s on Linux only).
+  `cairn_node::db::connect` applies them for the window, the CLI and `cairn-node sync`; `cairn-sync` builds every
+  production connection from `db_config(conn)`. A setting the connection string names wins, unless it is zero
+  (tokio-postgres drops a zero, so ours applies). Pins: `db_connect_applies_the_dead_peer_settings` (db.rs, by
+  source), cairn-sync's `keepalive_tests` (the config read back; no production `Client::connect(` left).
+  **Tempting wrong fixes:** setting them in the window only — the CLI and `cairn-node sync` hang on the same dead
+  socket; a new `postgres::Client::connect(conn, NoTls)` in `cairn-sync` — it compiles and silently drops them.
 - **A failed reopen is an ERROR that says why** (#876): `lock()` returns `Err(ConnectionLost)` naming the cause;
   a press inside the backoff tries nothing and says when the last attempt failed. It is an outage (`Retry::Now`:
   `From` into `DataError::Unavailable` and into the window's `ErrorView`, "Nothing was done: …") unless the server

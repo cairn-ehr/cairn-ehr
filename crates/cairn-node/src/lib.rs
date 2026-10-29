@@ -6,7 +6,6 @@ pub mod capture;
 pub mod chart_link;
 pub mod db;
 pub mod db_diagnosis;
-pub mod db_keepalive;
 pub mod duplicate_check;
 pub mod duplicate_review;
 pub mod enroll;

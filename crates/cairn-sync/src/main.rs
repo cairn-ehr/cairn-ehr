@@ -2113,8 +2113,21 @@ fn load_migration(client: &mut postgres::Client, name: &str, sql: &str) -> R<()>
 /// and an error line is exactly the text that ends up pasted into an issue. This is
 /// `cairn-node`'s `db::connect` rule, which these sites did not have.
 fn connect_db(conn: &str) -> R<postgres::Client> {
-    postgres::Client::connect(conn, postgres::NoTls)
+    db_config(conn)
+        .and_then(|cfg| cfg.connect(postgres::NoTls))
         .map_err(|e| format!("connecting to the database: {}", legible_db_error(&e)).into())
+}
+
+/// The config EVERY production connection in this binary is opened from (#878): `conn` with
+/// the dead-peer settings `cairn_node::db::connect` also applies (`cairn-db-keepalive`, #875)
+/// filled in where the string left them unset. Without them a remote Postgres whose host
+/// vanished silently is probed only after two idle hours, and a query sent to it waits for
+/// the OS (~15 min on Linux). A source guard (`keepalive_tests`) keeps every connect on it.
+/// A bad string is the library's own `Error`, as `Client::connect` returned before.
+fn db_config(conn: &str) -> Result<postgres::Config, postgres::Error> {
+    let mut cfg: tokio_postgres::Config = conn.parse()?;
+    cairn_db_keepalive::detect_dead_peers(&mut cfg);
+    Ok(postgres::Config::from(cfg))
 }
 
 fn load_schema(client: &mut postgres::Client) -> R<()> {
@@ -5186,7 +5199,8 @@ fn do_blobd(
                     // Worker returns (); DB/link errors are logged and the worker moves on
                     // (the index stays missing and is retried next pass). A Box<dyn Error>
                     // return would not be Send across the thread boundary.
-                    let mut wc = match postgres::Client::connect(&conn, postgres::NoTls) {
+                    let mut wc = match db_config(&conn).and_then(|cfg| cfg.connect(postgres::NoTls))
+                    {
                         Ok(c) => c,
                         // #475's species: `postgres::Error`'s `Display` renders a refused
                         // socket, an unresolvable host and a TLS timeout all as `error
@@ -5478,8 +5492,8 @@ fn cmd_run(
             blob_peers.clone()
         };
         let counter = Arc::clone(&blobs_fetched);
-        std::thread::spawn(
-            move || match postgres::Client::connect(&conn, postgres::NoTls) {
+        std::thread::spawn(move || {
+            match db_config(&conn).and_then(|cfg| cfg.connect(postgres::NoTls)) {
                 Ok(mut bclient) => loop {
                     match do_blobd(&mut bclient, &conn, &peers, window, budget_ms) {
                         Ok(m) => {
@@ -5499,8 +5513,8 @@ fn cmd_run(
                 },
                 // Same as the worker above: name the errno, not the layer.
                 Err(e) => eprintln!("blob thread could not connect: {}", legible_db_error(&e)),
-            },
-        );
+            }
+        });
     }
 
     // Built ONCE, outside the cycle loop: `do_pull` is transport-agnostic (slice 2b,
@@ -8480,6 +8494,51 @@ mod tests {
 /// it shares none of that suite's fixture: it takes no advisory lock, loads no schema and
 /// truncates nothing. The whole fixture is a bare connection and a statement the server
 /// refuses, so it can run beside anything.
+/// #878: cairn-sync's own connections notice a peer that vanished silently, as
+/// `cairn_node::db::connect`'s do (#875). No database needed: the settings are read back
+/// from the config every production connection is built from.
+#[cfg(test)]
+mod keepalive_tests {
+    use super::*;
+    use cairn_db_keepalive::{KEEPALIVE_IDLE, KEEPALIVE_INTERVAL, KEEPALIVE_RETRIES};
+
+    #[test]
+    fn a_sync_connection_gets_dead_peer_detection() {
+        let cfg = db_config("host=127.0.0.1 dbname=cairn").expect("a valid connection string");
+        assert!(cfg.get_keepalives());
+        assert_eq!(cfg.get_keepalives_idle(), KEEPALIVE_IDLE);
+        assert_eq!(cfg.get_keepalives_interval(), Some(KEEPALIVE_INTERVAL));
+        assert_eq!(cfg.get_keepalives_retries(), Some(KEEPALIVE_RETRIES));
+        assert_eq!(
+            cfg.get_tcp_user_timeout(),
+            Some(&cairn_db_keepalive::TCP_USER_TIMEOUT)
+        );
+        // The conversion to `postgres::Config` keeps the rest of the string too.
+        assert_eq!(cfg.get_dbname(), Some("cairn"));
+    }
+
+    /// A bad string fails here, before any socket, with the library's own error, so
+    /// `legible_db_error` renders it as before.
+    #[test]
+    fn a_bad_connection_string_is_an_error_not_a_panic() {
+        assert!(db_config("host=127.0.0.1 port=notaport").is_err());
+    }
+
+    /// The test above pins `db_config`, not that every connection uses it. A production
+    /// `Client::connect(` would bypass it and silently lose the settings, so none may remain
+    /// above the first test module (the tests' own connects stay below it).
+    #[test]
+    fn every_production_connection_goes_through_db_config() {
+        let src = include_str!("main.rs");
+        let production = &src[..src.find("#[cfg(test)]").expect("a test module exists")];
+        assert_eq!(
+            production.matches("Client::connect(").count(),
+            0,
+            "connect through db_config(conn)?.connect(NoTls) instead (#878)"
+        );
+    }
+}
+
 #[cfg(test)]
 mod schema_load_diagnosis_tests {
     use super::*;

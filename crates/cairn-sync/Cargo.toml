@@ -16,6 +16,9 @@ workspace = true
 
 [dependencies]
 cairn-event = { path = "../cairn-event" }
+# The dead-peer settings cairn-node's db::connect applies, for cairn-sync's own connections (#878).
+cairn-db-keepalive = { path = "../cairn-db-keepalive" }
+tokio-postgres = "0.7" # names the Config cairn-db-keepalive fills in; already in the tree via postgres
 # The node's at-rest key files: cairn-sync LOADS the unwrap secret cairn-node
 # provisioned, rather than deriving one that cannot match (issue #503, ADR-0066).
 cairn-keystore = { path = "../cairn-keystore" }
@@ -39,7 +42,6 @@ chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 # nodes' projections are identical. Both are workspace-internal / already-vetted deps.
 cairn-node = { path = "../cairn-node" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tokio-postgres = "0.7"
 # Per-node key files for the ADR-0052 custody wire: each test writes its serve/pull
 # key into a TempDir that auto-cleans on drop (no node.key litter in the crate cwd).
 tempfile = "3"

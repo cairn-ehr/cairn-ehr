@@ -1,0 +1,20 @@
+[package]
+name = "cairn-db-keepalive"
+version = "0.0.0"
+description = "Cairn's dead-peer settings for a Postgres connection (TCP keepalives, tcp_user_timeout), shared by cairn-node and cairn-sync (#875, #878)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# A workspace-internal library, not a crates.io crate: never published. Also lets the
+# internal path dependencies omit a version without tripping the cargo-deny wildcard gate.
+publish = false
+
+# Inherit the central workspace lint policy (#144).
+[lints]
+workspace = true
+
+[dependencies]
+# Its own crate, not a cairn-node module, because cairn-sync must apply the same settings
+# and depends on cairn-node only for tests: the crates stay separable (#878).
+tokio-postgres = "0.7"

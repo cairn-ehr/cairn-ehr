@@ -9,9 +9,12 @@
 //! minutes on Linux). The window holds its one connection lock that whole time, so every other
 //! chart and funnel action queues behind the hang.
 //!
-//! [`detect_dead_peers`] shortens both waits for every caller of `db::connect`: the window, the
-//! CLI, and `cairn-node sync`. NOT the `cairn-sync` binary, which opens its own blocking
-//! `postgres::Client` connections to its local database (#878).
+//! [`detect_dead_peers`] shortens both waits for every caller of `cairn_node::db::connect` (the
+//! window, the CLI, `cairn-node sync`) and for the `cairn-sync` binary's own blocking
+//! connections (`db_config` in its `main.rs`, #878). It lives in its own crate because
+//! `cairn-sync` depends on `cairn-node` only for tests. Each caller pins its own call site.
+//! `cairn-sync` connects through `postgres::Config`, which converts from the
+//! `tokio_postgres::Config` this function fills in and keeps every setting.
 //!
 //! - **TCP keepalives** probe a socket idle for [`KEEPALIVE_IDLE`], every [`KEEPALIVE_INTERVAL`],
 //!   [`KEEPALIVE_RETRIES`] times. A silent death on an idle connection is noticed within about a
@@ -108,20 +111,5 @@ mod tests {
     #[test]
     fn keepalives_turned_off_stay_off() {
         assert!(!configured("host=127.0.0.1 keepalives=0").get_keepalives());
-    }
-
-    /// The tests above pin the settings, not that anyone applies them: a client's socket
-    /// options cannot be read back from outside. So pin the one call site by source.
-    #[test]
-    fn db_connect_applies_the_settings() {
-        let src = include_str!("db.rs");
-        let start = src
-            .find("pub async fn connect(conn: &str)")
-            .expect("db::connect exists");
-        let body = &src[start..start + src[start..].find("\n}\n").expect("its body ends")];
-        assert!(
-            body.contains("detect_dead_peers(&mut cfg)"),
-            "db::connect must apply the dead-peer settings (#875)"
-        );
     }
 }

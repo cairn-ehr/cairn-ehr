@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/cairn-db-keepalive", # dead-peer settings shared by cairn-node and cairn-sync (#878)
     "crates/cairn-event",
     "crates/cairn-keystore", # the shared at-rest key-file layer (#503)
     "crates/cairn-medication-view",

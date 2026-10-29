@@ -398,6 +398,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-db-keepalive"
+version = "0.0.0"
+dependencies = [
+ "tokio-postgres",
+]
+
+[[package]]
 name = "cairn-event"
 version = "0.0.0"
 dependencies = [
@@ -578,6 +585,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "base64 0.22.1",
+ "cairn-db-keepalive",
  "cairn-event",
  "cairn-keystore",
  "cairn-medication-view",

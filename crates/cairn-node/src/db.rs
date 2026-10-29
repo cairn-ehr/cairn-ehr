@@ -508,9 +508,9 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // no-`DbError` failures overwhelmingly live — was the one it served worst).
     let legible = |e: tokio_postgres::Error| anyhow::Error::new(ConnectFailed::from(&e));
     // #875: probe for a peer that vanished silently, so a dead socket closes the client
-    // instead of hanging the next query (see `db_keepalive`).
+    // instead of hanging the next query (see the `cairn-db-keepalive` crate).
     let mut cfg: tokio_postgres::Config = conn.parse().map_err(legible)?;
-    crate::db_keepalive::detect_dead_peers(&mut cfg);
+    cairn_db_keepalive::detect_dead_peers(&mut cfg);
     let (client, connection) = cfg.connect(NoTls).await.map_err(legible)?;
     // #474 item 4: this task is the ONLY place a mid-session connection death is ever
     // reported, and `let _ = connection.await;` hid every one of them. The deaths that
@@ -1018,6 +1018,21 @@ pub async fn test_serial_guard(conn: &str) -> anyhow::Result<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `cairn-db-keepalive`'s tests pin the settings, not that anyone applies them: a client's
+    /// socket options cannot be read back from outside. So pin this call site by source (#875).
+    #[test]
+    fn db_connect_applies_the_dead_peer_settings() {
+        let src = include_str!("db.rs");
+        let start = src
+            .find("pub async fn connect(conn: &str)")
+            .expect("db::connect exists");
+        let body = &src[start..start + src[start..].find("\n}\n").expect("its body ends")];
+        assert!(
+            body.contains("cairn_db_keepalive::detect_dead_peers(&mut cfg)"),
+            "db::connect must apply the dead-peer settings (#875)"
+        );
+    }
 
     // ----- replay_can_be_skipped (#726) -----
 
