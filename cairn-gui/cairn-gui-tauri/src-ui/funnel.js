@@ -183,8 +183,10 @@ function provisioningLine(status) {
  * #882: a search just answered, so ask the node again whether it may write, if the line says it
  * may not. `funnel_status` probes afresh: a mended fault (a refused reconnect, an enrolment done
  * after launch) clears, and a true warning stays — an unenrolled node searches fine, so a search
- * that succeeded proves nothing about writing. A failed probe leaves the line as it was; so does a
- * Register refusal said while this one was on its way (it is newer).
+ * that succeeded proves nothing about writing. A probe the node could not answer comes back as a
+ * "Could not check…" sentence and is shown; only a call that never reached the backend leaves the
+ * line as it was. So does a different line said while this one was on its way (a Register
+ * refusal: it is newer).
  */
 async function recheckProvisioning() {
   const line = el("provisioning");

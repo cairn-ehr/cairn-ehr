@@ -7,7 +7,8 @@
 > #885): `funnel_status` probes the node's standing on every call (no launch-time copy), and the front door asks again
 > after a successful search while its top line warns, so a mended fault clears and a true enrolment warning stays
 > (#882); a refused reopen's remedy is said once (`cairn_gui_live::says_operator_remedy`), the judgement arm drops its
-> "yet" for it, and the stale-list banners stop ordering a press (#885). RUNBOOK §14 (c) gained both checks.
+> "yet" for it, and the stale-list banners stop ordering a press (#885). RUNBOOK §14 (c) gained both checks. Its
+> second review: the probe is bounded (`PROBE_WITHIN`, so a hung lock cannot blank `boot()`); filed **#888** (wording).
 > **Merged 2026-10-29:** PR #886 (#878: the `cairn-db-keepalive` crate; every `cairn-sync` connect via `db_config`) · PR #883 (#880 + #881: a reopen the server REFUSED is `NotProvisioned` →
 > `Retry::AfterOperator`; `cairn_node::db::ConnectFailed` keeps the SQLSTATE; a departed chart's unread line says why;
 > filed **#882**, **#884**, **#885**) · PR #879 (#876: a failed reopen says why on screen; filed #880, #881).
@@ -215,6 +216,8 @@ Found HANDOVER stale on arrival again (#886 merged, listed as awaiting); the mai
 - **⇒ An operator procedure is a claim (third time):** my first RUNBOOK step pressed Register with the database
   already renamed, but a failed search leaves no token, so Register only searches again and the line under test never
   appears. Walk each step against the JS state it needs (here `heldToken`) before writing it down.
+- **⇒ A new timeout around a call that has its own must be LONGER than it.** The second review's bound first equalled
+  `REOPEN_WITHIN`, so it would cancel a reopen before the reopen recorded its failure (no backoff, no log line).
 
 ### 2026-10-29 (third) — #878 (PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886)): cairn-sync's own connections get the dead-peer settings
 Found HANDOVER stale on arrival again (#883 merged, listed as awaiting); the maintainer picked #878 option 1 (a shared

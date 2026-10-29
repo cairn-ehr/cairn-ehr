@@ -59,11 +59,13 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   (`chart_stale.js`) name "Read this chart again" but never order a press: they cannot tell a refused reopen from an
   outage. Pins: `only_a_refused_reopen_says_the_operator_remedy`, `a_refused_reopen_s_remedy_is_said_once_at_the_front_door`,
   `every_data_error_arm_is_worded_for_a_link`.
-- **The front door's provisioning line is cleared only by asking the node again** (#882): `funnel_status` probes the
+- **A search clears the front door's provisioning line only by asking the node again** (#882): `funnel_status` probes the
   standing on EVERY call (`FunnelBackend::provisioning`; there is no launch-time copy), and `funnel.js`'s
   `recheckProvisioning` asks after a search that succeeded while the line shows a warning. **Tempting wrong fix:**
   clearing the line on any successful search — an unenrolled node searches fine, so that wipes a true warning. Pin:
-  `the_provisioning_line_is_cleared_only_by_asking_the_node_again`.
+  `a_search_clears_the_provisioning_line_only_by_asking_the_node_again`. A registration that succeeded clears it too: that is the
+  node's answer as well. The probe is bounded (`probe_within`, `PROBE_WITHIN`, twice a reopen's wait) because `boot()` shows the front door only
+  after it answers: pin `funnel_status_probes_the_live_node_afresh_and_bounded`.
 - **Known limit, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
   bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649).
 - **The reopen is `cairn_node::db::connect`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
@@ -877,7 +879,7 @@ unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift g
   private to `funnel` — **never let a new chart command resolve `open_patient()` alone.** A registration never
   writes, or switches charts, behind an open chart (`register_impl` + `open_after_registering`).
 - **A click within 800 ms of a prompt landing is "show me", never "register"** (`PROMPT_READ_GUARD_MS`, SOFT POLICY
-  in `funnel.js`, #677). **The launch probe matches all four `ActorStanding` arms** (a `Retired` key meets db/004's
+  in `funnel.js`, #677). **The standing probe matches all four `ActorStanding` arms** (`provisioning_sentence` → `standing_sentence`) (a `Retired` key meets db/004's
   resurrection refusal, #152), paired with the key it probed (#670).
 - **Every sentence and its retry advice lives in `funnel/view.rs`** (`Retry::{Now, AfterOperator, Never}`; person-row
   wording in `funnel/rows.rs`). A refusal (`P0001`, `DeliberateRefusal`) is not an outage; the remainder is #655.

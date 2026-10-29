@@ -130,18 +130,16 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))
 }
 
-/// Connect, load the schema, read this node's identity, and ask whether it may write —
-/// everything a writing window needs before it shows anything.
+/// Connect, load the schema, and read this node's identity — everything a writing window needs
+/// before it shows anything.
 ///
 /// The node key is loaded UP FRONT and fails the launch if it cannot be: a window that
 /// opens and only discovers at sign-off time that it can never seal anything has wasted
 /// the clinician's review.
 ///
-/// Whether that key may AUTHOR is probed up front for the same reason (#654 option 2) — but a
-/// "no" does NOT fail the launch. Reading a chart needs no actor, so the window opens and says,
-/// in the chrome, what an operator must do; the probe matches all four standings, because the
-/// remedy for a retired key is not the remedy for a never-enrolled one. A probe that could not
-/// run at all is said too, never swallowed.
+/// Whether that key may AUTHOR is NOT asked here, and a "no" never fails the launch: reading a
+/// chart needs no actor. The front door asks on every `funnel_status` and says, in the chrome,
+/// what an operator must do (`FunnelBackend::provisioning`, #654 option 2, #882).
 async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
     let identity = cairn_node::identity::load_local(&db).await?;

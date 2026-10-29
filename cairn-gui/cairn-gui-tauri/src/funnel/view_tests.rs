@@ -56,6 +56,8 @@ fn a_search_that_needs_an_operator_still_never_reads_as_nothing_found() {
     let v = search_error_view(&DataError::NotProvisioned("refused [28P01]".into()));
     assert!(v.text.contains("NOT a \"no match\""), "{}", v.text);
     assert!(v.text.contains("refused [28P01]"), "{}", v.text);
+    // A cause that does not say its own remedy gets the wrapper's (#885 skips it only for one that does).
+    assert!(v.text.contains("An operator must act"), "{}", v.text);
     assert!(!v.text.contains("Try again"), "{}", v.text);
     assert_eq!(v.retry, Retry::AfterOperator);
 }
@@ -354,7 +356,8 @@ pub(crate) fn sample_candidate() -> Candidate {
 }
 
 /// A refused reopen's text as `cairn-gui-live` words it (#880), shared with the judgement tests.
-/// The assert in each test that uses it keeps it honest: if the live wording moves, they fail.
+/// Only its ending is checked against the live crate (`says_operator_remedy`), which is all the
+/// renderers read: if the live remedy's wording moves, the tests that use it fail.
 pub(crate) const REFUSED_REOPEN: &str = "connection to the node was lost and could not be \
     reopened: password authentication failed [28P01]. The node answered and refused the \
     connection, so pressing again fails the same way until an operator acts.";

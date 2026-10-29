@@ -8,9 +8,10 @@ use crate::funnel::view::provisioning_sentence;
 use cairn_gui_data::mock::MockData;
 use cairn_gui_data::port::{DataError, PatientRegistration, PatientSearch};
 use cairn_gui_funnel::{AttestedSearch, NamedAttestation};
-use cairn_gui_live::LiveData;
+use cairn_gui_live::{LiveData, NodeConnection};
+use cairn_node::actor_enrolment::ActorStanding;
 use cairn_patient_search::{CandidateList, SearchQuery};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 /// Where the funnel's searches and its one write go.
@@ -66,17 +67,43 @@ impl FunnelBackend {
         }
     }
 
-    /// The provisioning line's sentence, probed NOW (#882): an operator's mend, or an enrolment
-    /// done after launch, clears it without a restart. The mock writes to nothing, so it never
-    /// has one.
+    /// The provisioning line's sentence, probed NOW (#882): once an operator mends the fault, or
+    /// enrols the node after launch, the webview's next ask (boot, or a search that succeeded
+    /// while the line warned) clears it without a restart. The mock writes to nothing, so it
+    /// never has one.
+    ///
+    /// Bounded by `PROBE_WITHIN`: the webview's `boot()` shows the front door only after this
+    /// answers, and a connection lock held by a command stuck on a dead socket (#875) must not
+    /// blank the window.
     pub async fn provisioning(&self) -> Option<String> {
         match self {
             FunnelBackend::Mock(_) => None,
-            FunnelBackend::Live(live) => {
-                provisioning_sentence(live.standing().await, live.node_kid())
-            }
+            FunnelBackend::Live(live) => provisioning_sentence(
+                probe_within(live.standing(), PROBE_WITHIN).await,
+                live.node_kid(),
+            ),
         }
     }
+}
+
+/// How long the provisioning probe waits: a whole reopen's wait, then as long again for the
+/// query. Longer than the reopen's own bound on purpose: a reopen cut off by this timer would
+/// record no failure, so its backoff and its log line would be lost.
+const PROBE_WITHIN: Duration = NodeConnection::REOPEN_WITHIN.saturating_mul(2);
+
+/// `probe`'s answer, or an outage naming the wait if none came `within` — which
+/// `provisioning_sentence` then says as "could not check".
+async fn probe_within(
+    probe: impl std::future::Future<Output = Result<ActorStanding, DataError>>,
+    within: Duration,
+) -> Result<ActorStanding, DataError> {
+    tokio::time::timeout(within, probe)
+        .await
+        .unwrap_or_else(|_| {
+            Err(DataError::Unavailable(format!(
+                "no answer within {within:?}"
+            )))
+        })
 }
 
 /// `now` as a UTC calendar date, `YYYY-MM-DD` — the mock's `today`.
@@ -110,7 +137,7 @@ pub fn utc_today(now: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, UNIX_EPOCH};
+    use std::time::UNIX_EPOCH;
 
     #[test]
     fn utc_today_is_the_civil_date() {
@@ -130,6 +157,20 @@ mod tests {
             utc_today(UNIX_EPOCH + Duration::from_secs(20_720 * 86_400 - 1)),
             "2026-09-23"
         );
+    }
+
+    /// PR #887 review: `boot()` shows the front door only after `funnel_status` answers, so a
+    /// probe stuck behind a hung connection lock must give up and say so, not blank the window.
+    #[tokio::test]
+    async fn a_probe_with_no_answer_gives_up_and_says_so() {
+        let within = Duration::from_millis(20);
+        let outcome = probe_within(std::future::pending(), within).await;
+        assert_eq!(
+            outcome,
+            Err(DataError::Unavailable("no answer within 20ms".into()))
+        );
+        let answered = probe_within(async { Ok(ActorStanding::Enrolled) }, within).await;
+        assert_eq!(answered, Ok(ActorStanding::Enrolled));
     }
 
     #[test]

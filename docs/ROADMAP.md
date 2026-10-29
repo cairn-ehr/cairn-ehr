@@ -512,9 +512,11 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   gone), and `funnel.js` asks again after a successful search while its top line warns — never "clear on success",
   which would wipe a true enrolment warning (#882). A refused reopen's text ends in one exported remedy
   (`says_operator_remedy`); the register, search and judgement wrappers do not restate it, and the stale-list banners
-  name "Read this chart again" without ordering a press (#885). RUNBOOK §14 (c) gained both checks.
+  name "Read this chart again" without ordering a press (#885). RUNBOOK §14 (c) gained both checks. Second review:
+  the probe is bounded at twice a reopen's wait, since `boot()` shows the front door only after it answers; filed
+  **#888** (the line's wording around a refused reopen).
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
-  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#884**; then HANDOVER's ⇒ NEXT. #699 stays open.
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#884**, **#888**; then HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 

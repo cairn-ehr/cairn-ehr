@@ -792,7 +792,8 @@ fill the register form until its search result shows, restart Postgres, rename t
 above, and press **Register**. It refuses, the line at the top of the front door says an operator must
 act, and neither line says "until an operator acts" twice (#885). Rename it back, wait two seconds, and
 search: the results draw and the top line clears. A top line still warning after the results draw is a
-finding.
+finding — on an enrolled node; an unenrolled one rightly keeps its enrolment warning, so enrol the rig's
+node first.
 
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
 them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a

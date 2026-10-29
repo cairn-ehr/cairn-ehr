@@ -31,11 +31,13 @@ use cairn_gui_funnel::{
 use cairn_patient_search::CandidateList;
 use serde::Serialize;
 
-/// What the front door needs at launch, and after any reload.
+/// What the front door needs at launch, after any reload, and after a search that succeeded while
+/// the provisioning line warned (`recheckProvisioning`, #882).
 #[derive(Debug, Serialize)]
 pub struct FunnelStatus {
     pub mock: bool,
-    /// Why this node may not write, probed afresh on every call (#654 option 2, #882).
+    /// Why this node may not write, or that nobody could check; `None` when it may. Probed
+    /// afresh on every call (#654 option 2, #882).
     pub provisioning: Option<String>,
     /// The chart already open (`--patient`), if any.
     pub chart: Option<ChartHeaderView>,
