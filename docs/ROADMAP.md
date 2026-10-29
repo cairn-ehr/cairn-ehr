@@ -507,7 +507,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   opens is built from `db_config(conn)`, which applies them (`keepalive_tests` pins the config and that every
   production `NoTls` connect in `src/*.rs` is matched by a `db_config(` call). Both binaries now bound a silently
   dead remote Postgres the same way.
-- **2026-10-30 — the front door's operator line clears once mended; a remedy is said once (#882 + #885).** PR #PRNUM:
+- **2026-10-30 — the front door's operator line clears once mended; a remedy is said once (#882 + #885).** PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887):
   `funnel_status` probes the node's standing on every call (the launch-only probe and `AppState.provisioning` are
   gone), and `funnel.js` asks again after a successful search while its top line warns — never "clear on success",
   which would wipe a true enrolment warning (#882). A refused reopen's text ends in one exported remedy
