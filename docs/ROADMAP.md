@@ -502,7 +502,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   for an operator's failure. RUNBOOK §14 (c) gained the refused case. The write gestures' first read (`read_chart_of`)
   keeps the class too. Review: filed **#882** (sticky provisioning line), **#884** (client-side auth refusals carry no
   SQLSTATE), **#885** (the remedy said twice).
-- **2026-10-29 — cairn-sync's own connections notice a dead peer (#878).** PR #PRNUM: #875's settings move to a new
+- **2026-10-29 — cairn-sync's own connections notice a dead peer (#878).** PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886): #875's settings move to a new
   crate `cairn-db-keepalive` (was `cairn_node::db_keepalive`); every production connection the `cairn-sync` binary
   opens is built from `db_config(conn)`, which applies them (`keepalive_tests` pins the config and that no production
   `Client::connect(` remains). Both binaries now bound a silently dead remote Postgres the same way.
