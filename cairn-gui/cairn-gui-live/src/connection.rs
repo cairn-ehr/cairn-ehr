@@ -27,8 +27,11 @@
 //! - **If reopening fails**, `lock` returns [`ConnectionLost`] carrying the CAUSE (a refused
 //!   socket, a rejected password), so the screen says why, not merely "connection closed"
 //!   (#876). A press inside the backoff tries nothing, and its error says when the last attempt
-//!   failed, so it does not read like a fresh failure. Callers report it as an outage they may
-//!   retry: a `DataError::Unavailable` (`From`), or their own error type's outage.
+//!   failed, so it does not read like a fresh failure. A caller that decides a retry classifies
+//!   it through `From` into a `DataError`: an outage they may retry (`Unavailable`), unless the
+//!   server ANSWERED and refused the reopen (a rejected password, a dropped database), which
+//!   only an operator can mend (`NotProvisioned`, #880). A caller that only shows the error
+//!   shows its text, which names the remedy either way.
 //! - **Gesture timing uses [`NodeConnection::lock_if_open`]**, which never reopens: the write
 //!   that follows an act must not spend the reopen attempt (and start the backoff) the act's own
 //!   re-read needs.
@@ -52,20 +55,44 @@ use tokio_postgres::Client;
 /// clause ("connection to the node was lost…"): the window's `ErrorView` puts it after
 /// "Nothing was done: the ".
 #[derive(Debug, Clone)]
-pub struct ConnectionLost(String);
+pub struct ConnectionLost {
+    text: String,
+    /// The server answered the reopen and refused it ([`server_refused`], #880).
+    refused: bool,
+}
 
 impl std::fmt::Display for ConnectionLost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.text)
     }
 }
 
 impl std::error::Error for ConnectionLost {}
 
-/// An outage, retried by pressing again: the node may be back by then.
+impl ConnectionLost {
+    /// For OTHER crates' tests only (the window classifies one without a database to lose).
+    /// Production builds a `ConnectionLost` in `Held::reopen` alone, through `lost`.
+    #[doc(hidden)]
+    pub fn for_tests(text: &str, refused: bool) -> Self {
+        Self {
+            text: text.into(),
+            refused,
+        }
+    }
+}
+
+/// The ONE place a lost connection is classified into a `DataError` (`data_error_from` and the
+/// window's `ErrorView` conversion both defer to it). An outage,
+/// retried by pressing again: the node may be back by then. A reopen the server REFUSED fails
+/// every press the same way until an operator acts, so it is `NotProvisioned`: a retry-now
+/// would hide the remedy (#880).
 impl From<ConnectionLost> for DataError {
     fn from(lost: ConnectionLost) -> Self {
-        DataError::Unavailable(lost.0)
+        if lost.refused {
+            DataError::NotProvisioned(lost.text)
+        } else {
+            DataError::Unavailable(lost.text)
+        }
     }
 }
 
@@ -80,7 +107,15 @@ pub struct NodeConnection {
 /// under ONE tokio mutex, so the failure stamp needs no lock of its own.
 struct Held {
     client: Client,
-    last_failed: Option<(Instant, String)>,
+    last_failed: Option<Failed>,
+}
+
+/// The last failed reopen. `refused` is stored WITH the cause, so a press inside the backoff
+/// classifies the same way as the press that tried (#880).
+struct Failed {
+    at: Instant,
+    cause: String,
+    refused: bool,
 }
 
 impl NodeConnection {
@@ -140,48 +175,106 @@ impl Held {
     /// backoff skips is not, its error goes to the caller only.
     async fn reopen(&mut self, conn: &str) -> Result<(), ConnectionLost> {
         let now = Instant::now();
-        if let Some((failed, cause)) = &self.last_failed {
-            if !may_retry(Some(*failed), now) {
-                let ago = now.saturating_duration_since(*failed);
-                return Err(ConnectionLost(lost_text(cause, Some(ago))));
+        if let Some(last) = &self.last_failed {
+            if !may_retry(Some(last.at), now) {
+                let ago = now.saturating_duration_since(last.at);
+                return Err(lost(&last.cause, last.refused, Some(ago)));
             }
         }
         let attempt = cairn_node::db::connect(conn);
-        let cause = match tokio::time::timeout(NodeConnection::REOPEN_WITHIN, attempt).await {
-            Ok(Ok(fresh)) => {
-                self.client = fresh;
-                self.last_failed = None;
-                eprintln!("the database connection was lost; reopened it");
-                return Ok(());
-            }
-            Ok(Err(e)) => format!("{e:#}"),
-            Err(_) => format!("no answer within {:?}", NodeConnection::REOPEN_WITHIN),
-        };
-        let text = lost_text(&cause, None);
-        eprintln!("the database {text}");
-        self.last_failed = Some((Instant::now(), cause));
-        Err(ConnectionLost(text))
+        let (cause, refused) =
+            match tokio::time::timeout(NodeConnection::REOPEN_WITHIN, attempt).await {
+                Ok(Ok(fresh)) => {
+                    self.client = fresh;
+                    self.last_failed = None;
+                    eprintln!("the database connection was lost; reopened it");
+                    return Ok(());
+                }
+                Ok(Err(e)) => {
+                    // `db::connect`'s own error keeps the server's code beside its text (#880).
+                    let code = e
+                        .downcast_ref::<cairn_node::db::ConnectFailed>()
+                        .and_then(cairn_node::db::ConnectFailed::sqlstate);
+                    (format!("{e:#}"), server_refused(code))
+                }
+                Err(_) => (
+                    format!("no answer within {:?}", NodeConnection::REOPEN_WITHIN),
+                    false,
+                ),
+            };
+        let failure = lost(&cause, refused, None);
+        eprintln!("the database {failure}");
+        self.last_failed = Some(Failed {
+            at: Instant::now(),
+            cause,
+            refused,
+        });
+        Err(failure)
     }
 }
 
-/// What a failed reopen says (#876). `skipped` is how long ago the last attempt failed, when
-/// this press was inside the backoff and tried nothing. Nothing retries on a timer, so the text
-/// names the press that will. Pure.
-fn lost_text(cause: &str, skipped: Option<Duration>) -> String {
-    let Some(ago) = skipped else {
-        return format!("connection to the node was lost and could not be reopened: {cause}");
+/// A failed reopen, its text derived from the same `refused` it carries, so the words and the
+/// class can never disagree. The only way production builds a [`ConnectionLost`]. Pure.
+fn lost(cause: &str, refused: bool, skipped: Option<Duration>) -> ConnectionLost {
+    ConnectionLost {
+        text: lost_text(cause, refused, skipped),
+        refused,
+    }
+}
+
+/// Did the server ANSWER a connect and refuse it, so that every retry fails the same way until
+/// an operator acts (#880)? Class `28` (a rejected password, no `pg_hba.conf` entry), `3D000`
+/// (the database is gone), `42501` (no CONNECT privilege) and `55000` (the database does not
+/// allow connections). Everything else, no answer at all included, is an outage the next press
+/// may get past: `53300` (too many connections) and `57P03` (starting up) are the server saying
+/// "not now", not "never". Pure.
+///
+/// Known limits, each erring towards "press again" (filed as #884 where not inherent):
+/// - A refusal the CLIENT library raises carries no code: a password the server asks for but
+///   the connection string lacks, a SCRAM or SASL failure. Those read as an outage (#884).
+/// - Against several hosts, or a name resolving to several addresses, only the LAST attempt's
+///   error comes back, so an earlier host's refusal can hide behind a later one's outage.
+/// - `CONNECTION LIMIT 0` answers `53300`, the same as a full server.
+/// - Erring the other way: class `28` from an LDAP, RADIUS or PAM backend that is itself
+///   unreachable clears when it returns, without an operator.
+fn server_refused(sqlstate: Option<&str>) -> bool {
+    sqlstate
+        .is_some_and(|code| code.starts_with("28") || ["3D000", "42501", "55000"].contains(&code))
+}
+
+/// What a failed reopen says (#876). `refused` is [`server_refused`]'s answer: the text then
+/// names the operator instead of the next press. `skipped` is how long ago the last attempt
+/// failed, when this press was inside the backoff and tried nothing. Nothing retries on a
+/// timer, so an outage's text names the press that will. Pure.
+fn lost_text(cause: &str, refused: bool, skipped: Option<Duration>) -> String {
+    let head = match skipped {
+        None => "connection to the node was lost and could not be reopened".to_string(),
+        Some(ago) => {
+            // In whole tenths, the age rounded down: the two figures add up to the backoff,
+            // and the wait inside it is never "0.0 s".
+            let ago = ago.as_millis() / 100;
+            let wait = (NodeConnection::RETRY_AFTER.as_millis() / 100).saturating_sub(ago);
+            let tenths = |t: u128| format!("{}.{}", t / 10, t % 10);
+            let next = if refused {
+                String::new()
+            } else {
+                format!(" (press again in {} s to retry)", tenths(wait))
+            };
+            format!(
+                "connection to the node was lost; reopening it failed {} s ago, so this press \
+                 tried nothing{next}",
+                tenths(ago),
+            )
+        }
     };
-    // In whole tenths, the age rounded down: the two figures add up to the backoff, and the
-    // wait inside it is never "0.0 s".
-    let ago = ago.as_millis() / 100;
-    let wait = (NodeConnection::RETRY_AFTER.as_millis() / 100).saturating_sub(ago);
-    let tenths = |t: u128| format!("{}.{}", t / 10, t % 10);
-    format!(
-        "connection to the node was lost; reopening it failed {} s ago, so this press tried \
-         nothing (press again in {} s to retry): {cause}",
-        tenths(ago),
-        tenths(wait),
-    )
+    if refused {
+        format!(
+            "{head}: {cause}. The node answered and refused the connection, so pressing again \
+             fails the same way until an operator acts."
+        )
+    } else {
+        format!("{head}: {cause}")
+    }
 }
 
 /// May a reopen be attempted `now`, given when the last attempt failed? Pure.
@@ -197,29 +290,84 @@ mod tests {
     /// reading like a fresh failure.
     #[test]
     fn a_failed_reopen_names_its_cause_and_whether_this_press_tried() {
-        let cause = "connecting to the database: password authentication failed [28P01]";
-        let now = lost_text(cause, None);
+        let cause = "connecting to the database: connection refused (os error 61)";
+        let now = lost_text(cause, false, None);
         assert!(now.contains("could not be reopened"), "{now}");
         assert!(now.ends_with(cause), "the cause, verbatim: {now}");
 
         // Nothing retries on a timer: the text names the PRESS that will try, never "is tried".
-        let skipped = lost_text(cause, Some(Duration::from_millis(500)));
+        let skipped = lost_text(cause, false, Some(Duration::from_millis(500)));
         assert!(skipped.contains("failed 0.5 s ago"), "{skipped}");
         assert!(skipped.contains("press again in 1.5 s"), "{skipped}");
         assert!(skipped.ends_with(cause), "{skipped}");
 
         // Near the end of the backoff the two figures still add up, and the wait is never 0.0.
-        let late = lost_text(cause, Some(Duration::from_millis(1960)));
+        let late = lost_text(cause, false, Some(Duration::from_millis(1960)));
         assert!(late.contains("failed 1.9 s ago"), "{late}");
         assert!(late.contains("press again in 0.1 s"), "{late}");
     }
 
-    /// A lost connection is an outage: `Unavailable`, which the window offers to retry, with
-    /// the cause as its whole text.
+    /// A lost connection the server did not refuse is an outage: `Unavailable`, which the
+    /// window offers to retry, with the cause as its whole text.
     #[test]
     fn a_lost_connection_is_an_outage_that_keeps_its_cause() {
-        let lost = ConnectionLost("the cause".into());
+        let lost = ConnectionLost {
+            text: "the cause".into(),
+            refused: false,
+        };
         assert!(matches!(DataError::from(lost), DataError::Unavailable(t) if t == "the cause"));
+    }
+
+    /// #880: a server that ANSWERED and refused (credentials, `pg_hba.conf`, a dropped database,
+    /// no CONNECT privilege) refuses every press the same way; only an operator mends it. A
+    /// server that is busy or starting up may take the next press, so those stay outages.
+    #[test]
+    fn only_a_refusing_server_needs_an_operator() {
+        // 55000: `ALTER DATABASE … ALLOW_CONNECTIONS false`, an operator's act (#883 review).
+        for code in ["28P01", "28000", "3D000", "42501", "55000"] {
+            assert!(server_refused(Some(code)), "{code}");
+        }
+        for code in [
+            None,
+            Some("53300"),
+            Some("57P03"),
+            Some("08006"),
+            Some("XX000"),
+        ] {
+            assert!(!server_refused(code), "{code:?}");
+        }
+    }
+
+    /// #880: a refused reopen tells the clerk to get an operator, never to press again, and so
+    /// does a press inside the backoff after one. Both routes a window classifies by (`From`, and
+    /// `data_error_from` for cease and release, which wrap it in `anyhow`) say operator.
+    #[test]
+    fn a_refused_reopen_names_the_operator_by_every_route() {
+        let cause = "connecting to the database: password authentication failed [28P01]";
+        for skipped in [None, Some(Duration::from_millis(500))] {
+            let text = lost_text(cause, true, skipped);
+            assert!(text.contains(cause), "{text}");
+            assert!(text.contains("until an operator acts"), "{text}");
+            assert!(!text.contains("press again in"), "{text}");
+        }
+        let lost = ConnectionLost {
+            text: "t".into(),
+            refused: true,
+        };
+        assert!(matches!(DataError::from(lost.clone()), DataError::NotProvisioned(t) if t == "t"));
+        let wrapped = anyhow::Error::from(lost);
+        assert!(matches!(
+            crate::error::data_error_from(&wrapped),
+            DataError::NotProvisioned(t) if t == "t"
+        ));
+        let outage = anyhow::Error::from(ConnectionLost {
+            text: "t".into(),
+            refused: false,
+        });
+        assert!(matches!(
+            crate::error::data_error_from(&outage),
+            DataError::Unavailable(_)
+        ));
     }
 
     #[test]

@@ -32,7 +32,8 @@ pub(crate) fn retry_for(error: &DataError) -> Retry {
 /// classification earns. A failure that is not a classified node verdict is an outage
 /// (`Retry::Now`), which is what `data_error_from` makes of it — except a commit the node marked
 /// outcome-unknown (#713): `data_error_from` classifies that as `OutcomeUnknown` (#815), so it
-/// re-reads (`Unknown`), never `Now`, whether or not the caller words it first.
+/// re-reads (`Unknown`), never `Now`, whether or not the caller words it first. And except a
+/// lost connection the server refused to reopen, which needs an operator (`AfterOperator`, #880).
 pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
     ErrorView {
         text: format!("{e:#}"),
@@ -195,10 +196,16 @@ pub(crate) fn already_stopped_note(
 /// OUTAGE — nothing was decided, let alone written — so the act may be retried (`Retry::Now`), the
 /// retry `link::chart_set_of` gives the same fault. Never `refused`, whose `Never` would claim a
 /// verdict that does not exist (#797 review). The read's own text passes through unprefixed.
-pub(crate) fn chart_read_failed(text: String) -> ErrorView {
-    ErrorView {
-        text,
-        retry: Retry::Now,
+/// Except a lost connection, which keeps its own class and wording ("Nothing was done: the …",
+/// `ErrorView: From<ConnectionLost>`): this read is where a write gesture reopens it, and a
+/// reopen the server refused needs an operator, not a retry-now (#880).
+pub(crate) fn chart_read_failed(e: anyhow::Error) -> ErrorView {
+    match e.downcast::<cairn_gui_live::ConnectionLost>() {
+        Ok(lost) => lost.into(),
+        Err(e) => ErrorView {
+            text: format!("{e:#}"),
+            retry: Retry::Now,
+        },
     }
 }
 
@@ -212,9 +219,9 @@ pub(crate) fn key_locked(text: &str) -> ErrorView {
     }
 }
 
-/// The window's connection was lost and could not be reopened (#876): nothing was done, and
-/// the node may be back by the next press. The retry is `DataError`'s, so ONE place classifies
-/// a lost connection; the text carries the cause.
+/// The window's connection was lost and could not be reopened (#876): nothing was done. The
+/// retry is `DataError`'s, so ONE place classifies a lost connection into a retry: the next
+/// press, or an operator when the server refused the reopen (#880). The text carries the cause.
 impl From<cairn_gui_live::ConnectionLost> for ErrorView {
     fn from(lost: cairn_gui_live::ConnectionLost) -> Self {
         ErrorView {

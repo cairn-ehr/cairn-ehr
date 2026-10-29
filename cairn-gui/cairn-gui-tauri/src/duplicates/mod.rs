@@ -107,7 +107,9 @@ pub async fn duplicate_section(
             for (entry, ids) in found {
                 let meds = medications_of(
                     &entry.other_record,
-                    read_chart_of(state, entry.review_chart).await,
+                    read_chart_of(state, entry.review_chart)
+                        .await
+                        .map_err(|e| format!("{e:#}")),
                 );
                 shown.push(entry_view(
                     entry.review_chart,

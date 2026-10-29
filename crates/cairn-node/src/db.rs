@@ -448,6 +448,53 @@ pub fn connection_ended_line(label: &str, e: &tokio_postgres::Error) -> String {
     )
 }
 
+/// Why [`connect`] failed: the legible line an operator reads, plus the SQLSTATE the server
+/// answered with, if it answered at all (#880).
+///
+/// The code is kept so a caller can tell a server that REFUSED the connection (a rejected
+/// password, a dropped database: retrying cannot help until an operator acts) from one that
+/// could not be reached (an outage: the next try may work). Reach it with
+/// `err.downcast_ref::<ConnectFailed>()`.
+///
+/// It deliberately has no `source()`. The text has already rendered the whole
+/// `tokio_postgres::Error`, and a source would make anyhow's `{:?}` (what `main` prints) list
+/// the server's message a second time, without its `[SQLSTATE]`.
+#[derive(Debug)]
+pub struct ConnectFailed {
+    text: String,
+    sqlstate: Option<String>,
+}
+
+impl ConnectFailed {
+    /// The SQLSTATE the server answered with; `None` when no server answered (a refused
+    /// socket, an unresolvable host) or the connection string did not parse.
+    pub fn sqlstate(&self) -> Option<&str> {
+        self.sqlstate.as_deref()
+    }
+}
+
+impl From<&tokio_postgres::Error> for ConnectFailed {
+    fn from(e: &tokio_postgres::Error) -> Self {
+        Self {
+            text: format!("connecting to the database: {}", legible_db_error(e)),
+            sqlstate: e.as_db_error().map(|db| db.code().code().to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for ConnectFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for ConnectFailed {}
+
+/// Open a connection to the node's database.
+///
+/// Every error is a [`ConnectFailed`] (reach it with `downcast_ref`), and must stay one: the
+/// window's reopen reads its SQLSTATE to tell a refusal from an outage (#880). Re-wrapping it as
+/// text, or as another error's `source`, would quietly make every refusal read as an outage.
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // The connection string is NEVER echoed into the error — it can carry a password.
     // What the operator needs is the reason, and it arrives by two different routes.
@@ -459,9 +506,7 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // covers both, the second by walking `source()` for the errno (issue #467; the second
     // half added by the PR #472 review, which caught that this door — where the
     // no-`DbError` failures overwhelmingly live — was the one it served worst).
-    let legible = |e: tokio_postgres::Error| {
-        anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e))
-    };
+    let legible = |e: tokio_postgres::Error| anyhow::Error::new(ConnectFailed::from(&e));
     // #875: probe for a peer that vanished silently, so a dead socket closes the client
     // instead of hanging the next query (see `db_keepalive`).
     let mut cfg: tokio_postgres::Config = conn.parse().map_err(legible)?;

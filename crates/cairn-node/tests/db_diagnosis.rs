@@ -162,6 +162,14 @@ async fn a_failed_connect_names_the_reason_and_never_the_connection_string() {
         "invalid_catalog_name — the operator needs to know it is the DATABASE, not the \
          credentials or the network: {text}"
     );
+    // #880: the code itself survives too, not only its rendering, so a caller can tell a
+    // server that REFUSED (only an operator mends it) from one it could not reach.
+    assert_eq!(
+        err.downcast_ref::<db::ConnectFailed>()
+            .and_then(db::ConnectFailed::sqlstate),
+        Some("3D000"),
+        "{text}"
+    );
     // The database NAME appearing is fine and useful — it is the server's own message.
     // What must never appear is the connection string we were handed.
     assert!(
@@ -241,6 +249,11 @@ async fn a_refused_socket_names_the_errno_not_just_the_layer() {
         "naming the layer and stopping is the same silent failure #467 was filed for, \
          one kind over: {text}"
     );
+    // #880: no server answered, so there is no code to read: an outage, never a refusal.
+    let failed = err
+        .downcast_ref::<db::ConnectFailed>()
+        .expect("db::connect fails with its own type");
+    assert_eq!(failed.sqlstate(), None, "{text}");
 }
 
 /// The label a dying connection names itself by (issue #474 item 4). Pure: no database, no

@@ -72,12 +72,41 @@ fn a_joined_chart_without_a_line_is_said_unread() {
 #[test]
 fn a_departed_chart_is_named_and_an_unread_one_is_said_unread() {
     // Seen {1, 2, 3}, read {1}: chart 2's identity was read, chart 3's could not be — it is
-    // still said, never dropped. ChartSet order (2 before 3).
-    let departed = [DepartedLine::Unread(id(3)), DepartedLine::Read(line(2))];
+    // still said, never dropped, and WHY it could not be read is said too (#881): an outage
+    // must not read like any other unread name. ChartSet order (2 before 3).
+    let why = "connection to the node was lost and could not be reopened: no answer";
+    let departed = [
+        DepartedLine::Unread(id(3), why.into()),
+        DepartedLine::Read(line(2)),
+    ];
     let said = set_change_sentence(&set(&[1, 2, 3]), &set(&[1]), &[], &departed);
     let expected = format!(
-        "This record changed while it was on screen. No longer part of it: {}; {}.",
+        "This record changed while it was on screen. No longer part of it: {}; {}. Why the \
+         name could not be read: {why}.",
         line(2).text,
+        unread(3)
+    );
+    assert!(
+        said.as_deref() == Some(expected.as_str()),
+        "departed sentence differs"
+    );
+}
+
+/// #881 review: one failed read leaves every departed chart unread for ONE reason; it is said
+/// once, not inside each chart's parentheses, and a reason already ending in a full stop does
+/// not get a second.
+#[test]
+fn a_failed_read_is_said_once_for_every_unread_departed_chart() {
+    let why = "the node refused it. An operator must act.";
+    let departed = [
+        DepartedLine::Unread(id(2), why.into()),
+        DepartedLine::Unread(id(3), why.into()),
+    ];
+    let said = set_change_sentence(&set(&[1, 2, 3]), &set(&[1]), &[], &departed);
+    let expected = format!(
+        "This record changed while it was on screen. No longer part of it: {}; {}. Why the \
+         names could not be read: {why}",
+        unread(2),
         unread(3)
     );
     assert!(

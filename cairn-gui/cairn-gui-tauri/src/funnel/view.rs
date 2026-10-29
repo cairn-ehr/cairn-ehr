@@ -16,7 +16,7 @@
 //! nothing, so the same act may succeed now. A verdict (`Refused`) will decide the same way
 //! every time, so a retry button would be a precise untruth — the clerk's way forward is to
 //! change what was typed. A node-state verdict (`NotProvisioned`) is pointless to retry until
-//! an operator has acted, and then succeeds.
+//! an operator has acted, and then succeeds; so is a reconnect the server refused (#880).
 use crate::funnel::rows::people_phrase;
 use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::{
@@ -36,7 +36,8 @@ pub enum Retry {
     /// Nothing was decided; the same act may succeed now. Keep the button live.
     Now,
     /// This node may not write until its state changes — an operator acts, or sync delivers what
-    /// is missing (a link over a chart not held here yet) — and then the same act succeeds.
+    /// is missing (a link over a chart not held here yet) — and then the same act succeeds. Also
+    /// a reconnect the server refused (#880), which blocks reads as well as writes.
     AfterOperator,
     /// A verdict, or nothing left to retry with. The way forward is to change the form or wait
     /// for the next search, never to press the same button again. The judgement surfaces also
@@ -114,8 +115,13 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
             text: format!("The record refused this search as typed: {t}"),
             retry: Retry::Never,
         },
+        // Still a FAILED search (a refused reconnect lands here, #880), so the same warning;
+        // only the way forward differs.
         DataError::NotProvisioned(t) => ErrorView {
-            text: t.clone(),
+            text: format!(
+                "The search FAILED — this is NOT a \"no match\". Do not register on the strength \
+                 of it. ({t}) An operator must act before it can work."
+            ),
             retry: Retry::AfterOperator,
         },
         // Search never raises `Stale`, but a match must not hide a new cause. `Never`, not
@@ -153,10 +159,12 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
             ),
             Retry::Never,
         ),
+        // Enrolment, or a reconnect the server refused (#880): either way only an operator
+        // mends it, so the sentence says that and claims nothing about what the node may do.
         DataError::NotProvisioned(t) => (
             format!(
-                "This workstation's node may not write yet: {t} Nothing was saved; an operator \
-                 must act before registering."
+                "Nothing was saved, and pressing Register again fails the same way until an \
+                 operator acts: {t}"
             ),
             Retry::AfterOperator,
         ),

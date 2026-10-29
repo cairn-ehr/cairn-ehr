@@ -64,7 +64,9 @@ pub async fn med_list_impl(
     let patient = state.displayed_patient(patient_id).await?;
     // The node resolves the chart SET itself; `list.charts` is what the view hands the webview
     // to send back with every write.
-    let list = read_chart_of(state, patient).await?;
+    let list = read_chart_of(state, patient)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
     // NOT `?`: a failed read of the member identities must never hide the medication list
     // itself (availability over consistency). `chart_pane` turns it into a warning instead.
     let members = linked_members(state, &list.charts).await;
@@ -534,23 +536,26 @@ pub async fn cease_impl(
 /// Read one named chart, from the node or from fixtures. Callers resolve WHICH chart first —
 /// `AppState::displayed_patient` for the open chart, `AppState::shown` for one being compared
 /// (`link::same_person::compare_impl`); this only reads.
+///
+/// The error stays an `anyhow::Error`, not text: a write gesture starts with this read, so it
+/// is where a dead connection is reopened, and a reopen the server refused must keep its class
+/// for `chart_read_failed` (#880). A reader that only shows the error renders it with `{e:#}`.
 pub(crate) async fn read_chart_of(
     state: &AppState,
     patient: Uuid,
-) -> Result<PatientMedicationList, String> {
+) -> anyhow::Result<PatientMedicationList> {
     let Some(db) = state.db.as_ref() else {
         use cairn_gui_data::port::ClinicalData;
         return cairn_gui_data::mock::MockData::with_fixtures()
             .medications(&patient.to_string())
-            .map_err(|e| format!("{e:?}"));
+            .map_err(|e| anyhow::anyhow!("{e:?}"));
     };
-    let mut db = db.lock().await.map_err(|e| e.to_string())?;
+    let mut db = db.lock().await?;
     // One snapshot for the whole read (#864): no line stopped without its reason.
     cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
         cairn_node::medication::read::list_patient_medications(tx, patient).await
     })
     .await
-    .map_err(|e| format!("{e:#}"))
 }
 
 /// Record what a gesture cost, and never let that recording fail the gesture.

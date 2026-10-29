@@ -49,6 +49,27 @@ fn a_failed_search_never_reads_as_nothing_found() {
     assert_eq!(v.retry, Retry::Now);
 }
 
+/// #880: a search can fail for an operator's reason too (the server refused the window's
+/// reopen). It is still a FAILED search, never a no-match: the same warning, and no retry-now.
+#[test]
+fn a_search_that_needs_an_operator_still_never_reads_as_nothing_found() {
+    let v = search_error_view(&DataError::NotProvisioned("refused [28P01]".into()));
+    assert!(v.text.contains("NOT a \"no match\""), "{}", v.text);
+    assert!(v.text.contains("refused [28P01]"), "{}", v.text);
+    assert!(!v.text.contains("Try again"), "{}", v.text);
+    assert_eq!(v.retry, Retry::AfterOperator);
+}
+
+/// #880: the operator's case is not always enrolment — a refused reconnect reaches this arm too,
+/// so the sentence claims nothing about what the node may do, only what pressing again does.
+#[test]
+fn an_operator_case_registration_claims_nothing_about_the_node() {
+    let p = register_error_view(&DataError::NotProvisioned("cause".into()), Restored::Kept);
+    assert!(!p.text.contains("may not write"), "{}", p.text);
+    assert!(p.text.contains("until an operator acts"), "{}", p.text);
+    assert!(p.text.contains("Nothing was saved"), "{}", p.text);
+}
+
 #[test]
 fn a_refusal_withholds_the_retry_and_an_outage_offers_it() {
     let r = register_error_view(&DataError::Refused("bad dob".into()), Restored::Kept);
