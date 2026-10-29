@@ -775,7 +775,15 @@ database connection was lost; reopened it". Pressed while Postgres is still down
 says why: "…could not be reopened: connecting to the database: …" with the cause (#876). A press within
 two seconds of that tries nothing and says so ("reopening it failed 0.8 s ago, so this press tried
 nothing (press again in 1.2 s to retry)"); a later press tries again. Nothing retries on its own. A list that never comes back without a window restart is a finding, and so is a
-failure that says only "connection closed".
+failure that says only "connection closed". A node that ANSWERS and refuses (#880): restart Postgres,
+and before pressing, rename the window's database from another one, `psql -d postgres -c 'ALTER DATABASE
+<db> RENAME TO <db>_away'` (it works under any auth method, a superuser's included; stop any other node
+process on that database first, or the rename is refused). Press **Read this chart again**: the screen
+names `[3D000]` and says "pressing again fails the same way until an operator acts"; a press within two
+seconds says the same. (That button is always shown, so it is not the retry to look for.) Close the
+chart and search at the front door: it says "The search FAILED — this is NOT a "no match"", names
+`[3D000]`, and says "Try again" nowhere. Rename it back (`… RENAME TO <db>`), press again: the list
+draws. A front-door search failure that reads like an empty result, or says "Try again", is a finding.
 
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
 them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a

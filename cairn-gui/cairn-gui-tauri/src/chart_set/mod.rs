@@ -402,9 +402,9 @@ pub async fn chart_identities(state: &AppState, ids: &[Uuid]) -> Result<Vec<Memb
 ///
 /// `members` are the pane's own member lines (read over `now`), reused for the charts that
 /// JOINED; only the charts that LEFT are read here, by id ([`chart_identities`]), and a failed
-/// read words each of them unread ([`change::DepartedLine::Unread`]) — the change is still
-/// said, never dropped. Nothing is read when there is nothing to compare ([`change::seen_set`])
-/// or nothing left.
+/// read words each of them unread, with its error ([`change::DepartedLine::Unread`], #881) —
+/// the change is still said, never dropped. Nothing is read when there is nothing to compare
+/// ([`change::seen_set`]) or nothing left.
 pub async fn set_change(
     state: &AppState,
     seen_charts: Option<&[String]>,
@@ -419,7 +419,10 @@ pub async fn set_change(
     } else {
         match chart_identities(state, &gone).await {
             Ok(lines) => lines.into_iter().map(change::DepartedLine::Read).collect(),
-            Err(_) => gone.into_iter().map(change::DepartedLine::Unread).collect(),
+            Err(why) => gone
+                .into_iter()
+                .map(|id| change::DepartedLine::Unread(id, why.clone()))
+                .collect(),
         }
     };
     change::set_change_sentence(&seen, now, members, &departed)

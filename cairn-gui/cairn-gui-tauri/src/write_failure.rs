@@ -212,9 +212,9 @@ pub(crate) fn key_locked(text: &str) -> ErrorView {
     }
 }
 
-/// The window's connection was lost and could not be reopened (#876): nothing was done, and
-/// the node may be back by the next press. The retry is `DataError`'s, so ONE place classifies
-/// a lost connection; the text carries the cause.
+/// The window's connection was lost and could not be reopened (#876): nothing was done. The
+/// retry is `DataError`'s, so ONE place classifies a lost connection: the next press, or an
+/// operator when the server refused the reopen (#880). The text carries the cause.
 impl From<cairn_gui_live::ConnectionLost> for ErrorView {
     fn from(lost: cairn_gui_live::ConnectionLost) -> Self {
         ErrorView {

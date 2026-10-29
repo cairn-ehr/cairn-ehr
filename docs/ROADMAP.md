@@ -494,9 +494,15 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   Merged 2026-10-28. Then #876 (PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)): a reopen that fails is an
   error naming its cause on screen, not "connection closed"; gesture timing never spends the reopen attempt.
   Review: filed **#880** (a reconnect the server refused still offers Retry) and **#881** (a departed chart's
-  unread line drops its cause).
+  unread line drops its cause). Merged 2026-10-28.
+- **2026-10-29 — a reopen the server refused asks for an operator (#880 + #881).** PR (this branch,
+  `fix/880-881-refused-reconnect-cause`): `db::connect` fails with `cairn_node::db::ConnectFailed` (text unchanged,
+  SQLSTATE kept beside it); a reopen refused with class `28`, `3D000` or `42501` is `NotProvisioned` →
+  `Retry::AfterOperator` on every press, the backoff's included (`tests/reconnect.rs` drives a real `3D000`); a
+  departed chart's unread line names why its read failed, once (#881); the front door's search keeps "NOT a no match"
+  for an operator's failure. RUNBOOK §14 (c) gained the refused case. Review: filed **#882** (sticky provisioning line).
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
-  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#878**, **#880**, **#881**; then HANDOVER's ⇒ NEXT. #699 stays open.
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#878**, **#882**; then HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 

@@ -149,6 +149,12 @@ pub fn sqlstate_of(e: &anyhow::Error) -> Option<&str> {
 /// suites reach that floor with an unenrolled signer because the pre-check lives in the window,
 /// not in the port — see `node.rs`, #665.)
 pub fn data_error_from(e: &anyhow::Error) -> DataError {
+    // A lost connection carries its own class (cease and release wrap it in `anyhow`): it has no
+    // SQLSTATE here to read, so it would always fall to `Unavailable`, a retry even when the
+    // server refused the reopen (#880). Its `From` is the one place that classifies it.
+    if let Some(lost) = e.downcast_ref::<crate::ConnectionLost>() {
+        return lost.clone().into();
+    }
     let text = cairn_node::db_diagnosis::operator_chain(e);
     // TWO discriminators, complementary rather than alternative, because a verdict can be
     // reached in two places. The floor's own refusals carry `P0001`; a refusal `cairn-node`

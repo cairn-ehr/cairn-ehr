@@ -114,8 +114,13 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
             text: format!("The record refused this search as typed: {t}"),
             retry: Retry::Never,
         },
+        // Still a FAILED search (a refused reconnect lands here, #880), so the same warning;
+        // only the way forward differs.
         DataError::NotProvisioned(t) => ErrorView {
-            text: t.clone(),
+            text: format!(
+                "The search FAILED — this is NOT a \"no match\". Do not register on the strength \
+                 of it. ({t}) An operator must act before it can work."
+            ),
             retry: Retry::AfterOperator,
         },
         // Search never raises `Stale`, but a match must not hide a new cause. `Never`, not
@@ -153,10 +158,12 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
             ),
             Retry::Never,
         ),
+        // Enrolment, or a reconnect the server refused (#880): either way only an operator
+        // mends it, so the sentence says that and claims nothing about what the node may do.
         DataError::NotProvisioned(t) => (
             format!(
-                "This workstation's node may not write yet: {t} Nothing was saved; an operator \
-                 must act before registering."
+                "Nothing was saved, and pressing Register again fails the same way until an \
+                 operator acts: {t}"
             ),
             Retry::AfterOperator,
         ),

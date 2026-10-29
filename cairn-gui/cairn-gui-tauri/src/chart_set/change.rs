@@ -35,12 +35,13 @@ use uuid::Uuid;
 /// A chart that left is not in the pane's member lines (those are read over the NEW set), so
 /// its line is read separately — and that read can fail. A failed read is `Unread`, never a
 /// dropped chart: a sentence that silently omitted a departed chart would understate what left.
+/// It keeps the read's error, so an outage reads as one (#881).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DepartedLine {
     /// Its own identity line, read by id.
     Read(MemberLine),
-    /// Its identity could not be read here; the sentence names it by id.
-    Unread(Uuid),
+    /// Its identity could not be read here, and why; the sentence names it by id.
+    Unread(Uuid, String),
 }
 
 /// The set the window says it had on screen, or `None` when there is nothing honest to compare.
@@ -91,7 +92,8 @@ fn joined_text(id: Uuid, lines: &[MemberLine]) -> String {
 }
 
 /// The line for a departed chart: its `Read` line from `lines`, else worded unread (an
-/// explicit `Unread`, or no entry at all — both mean its name was not read).
+/// explicit `Unread`, or no entry at all — both mean its name was not read). An `Unread`'s
+/// error is said once for all of them, by [`unread_reasons`].
 fn departed_text(id: Uuid, lines: &[DepartedLine]) -> String {
     let wanted = id.to_string();
     lines
@@ -101,6 +103,21 @@ fn departed_text(id: Uuid, lines: &[DepartedLine]) -> String {
             _ => None,
         })
         .unwrap_or_else(|| unread_line(id))
+}
+
+/// Why the departed charts' names could not be read, each distinct error once, in table order
+/// (#881): one failed read leaves every departed chart unread for the same reason, and saying
+/// it inside each chart's line would repeat it. Only charts in `gone` count.
+fn unread_reasons(gone: &[Uuid], lines: &[DepartedLine]) -> Vec<String> {
+    let mut reasons: Vec<String> = vec![];
+    for line in lines {
+        if let DepartedLine::Unread(id, why) = line {
+            if gone.contains(id) && !reasons.contains(why) {
+                reasons.push(why.clone());
+            }
+        }
+    }
+    reasons
 }
 
 /// The one sentence saying what changed between the set on screen (`seen`) and the set just
@@ -128,16 +145,26 @@ pub fn set_change_sentence(
         .into_iter()
         .map(|id| joined_text(id, joined))
         .collect();
-    let went: Vec<String> = departed_ids(seen, now)
-        .into_iter()
-        .map(|id| departed_text(id, departed))
-        .collect();
+    let gone = departed_ids(seen, now);
+    let went: Vec<String> = gone.iter().map(|id| departed_text(*id, departed)).collect();
+    let reasons = unread_reasons(&gone, departed);
     let mut sentence = String::from("This record changed while it was on screen.");
     if !came.is_empty() {
         sentence.push_str(&format!(" Now part of it: {}.", came.join("; ")));
     }
     if !went.is_empty() {
         sentence.push_str(&format!(" No longer part of it: {}.", went.join("; ")));
+    }
+    if !reasons.is_empty() {
+        let unread = departed
+            .iter()
+            .filter(|line| matches!(line, DepartedLine::Unread(id, _) if gone.contains(id)))
+            .count();
+        let names = if unread == 1 { "name" } else { "names" };
+        let why = reasons.join("; ");
+        // A reason that is already a sentence keeps its own full stop, and gets no second.
+        let stop = if why.ends_with('.') { "" } else { "." };
+        sentence.push_str(&format!(" Why the {names} could not be read: {why}{stop}"));
     }
     Some(sentence)
 }

@@ -214,7 +214,7 @@ async fn med_list_says_nothing_without_a_seen_set() {
 
 /// A re-read whose seen set held a chart the record no longer holds names it (#797). The
 /// mock has no database to read the departed chart's identity, so it is named by id — said
-/// unread, never dropped.
+/// unread, never dropped, and with why (#881).
 #[tokio::test]
 async fn med_list_names_a_change_from_the_seen_set() {
     let (state, on_screen) = open_on_the_fixture_chart();
@@ -230,7 +230,8 @@ async fn med_list_names_a_change_from_the_seen_set() {
         pane.set_change,
         Some(format!(
             "This record changed while it was on screen. No longer part of it: chart {gone} \
-             (its name could not be read here)."
+             (its name could not be read here). Why the name could not be read: there is no \
+             database to read the linked charts' identities from."
         ))
     );
 }

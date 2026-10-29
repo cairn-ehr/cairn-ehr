@@ -260,3 +260,38 @@ async fn lock_if_open_never_spends_a_reopen_attempt() {
     assert!(db.lock().await.is_err(), "the node is still down");
     assert_eq!(offered.load(Ordering::SeqCst), 1, "the next lock tries");
 }
+
+/// #880: a node that ANSWERS and refuses the reopen (here a database that does not exist,
+/// `3D000`, the same class of answer as a rotated password) is not an outage. Every press says
+/// an operator must act, the press that tried and the one inside the backoff alike, so the
+/// window never offers a retry that keeps failing. This is the end-to-end proof that the code
+/// survives `db::connect` and is stored with the cause.
+#[tokio::test]
+async fn a_reopen_the_server_refuses_asks_for_an_operator_on_every_press() {
+    use cairn_gui_data::port::DataError;
+    let Some(cs) = common::cs() else { return };
+    // The ` dbname=` append is keyword-form syntax (as in cairn-node's db_diagnosis.rs).
+    if cs.starts_with("postgres://") || cs.starts_with("postgresql://") {
+        eprintln!("skipped: CAIRN_TEST_PG is URI-form; this test appends keyword-form options");
+        return;
+    }
+    let (reader, _guard) = common::connect(&cs).await;
+    let refusing = format!("{cs} dbname=cairn_no_such_database_880");
+    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, refusing);
+    let first = lose(&db, &reader)
+        .await
+        .expect("a reopen towards a database that does not exist fails");
+    assert!(first.contains("[3D000]"), "{first}");
+    assert!(first.contains("until an operator acts"), "{first}");
+
+    let Err(lost) = db.lock().await else {
+        panic!("inside the backoff: nothing is tried, so still lost");
+    };
+    match DataError::from(lost) {
+        DataError::NotProvisioned(text) => {
+            assert!(text.contains(" s ago"), "a press in the backoff: {text}");
+            assert!(text.contains("until an operator acts"), "{text}");
+        }
+        other => panic!("a refused reopen offers no retry-now: {other:?}"),
+    }
+}
