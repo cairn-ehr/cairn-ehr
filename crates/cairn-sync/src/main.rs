@@ -2113,8 +2113,21 @@ fn load_migration(client: &mut postgres::Client, name: &str, sql: &str) -> R<()>
 /// and an error line is exactly the text that ends up pasted into an issue. This is
 /// `cairn-node`'s `db::connect` rule, which these sites did not have.
 fn connect_db(conn: &str) -> R<postgres::Client> {
-    postgres::Client::connect(conn, postgres::NoTls)
+    db_config(conn)
+        .and_then(|cfg| cfg.connect(postgres::NoTls))
         .map_err(|e| format!("connecting to the database: {}", legible_db_error(&e)).into())
+}
+
+/// The config EVERY production connection in this binary is opened from (#878): `conn` with
+/// the dead-peer settings `cairn_node::db::connect` also applies (`cairn-db-keepalive`, #875)
+/// filled in where the string left them unset. Without them a remote Postgres whose host
+/// vanished silently is probed only after two idle hours, and a query sent to it waits for
+/// the OS (~15 min on Linux). A source guard (`keepalive_tests`) keeps every connect on it.
+/// A bad string is the library's own `Error`, as `Client::connect` returned before.
+fn db_config(conn: &str) -> Result<postgres::Config, postgres::Error> {
+    let mut cfg: tokio_postgres::Config = conn.parse()?;
+    cairn_db_keepalive::detect_dead_peers(&mut cfg);
+    Ok(postgres::Config::from(cfg))
 }
 
 fn load_schema(client: &mut postgres::Client) -> R<()> {
@@ -5186,7 +5199,8 @@ fn do_blobd(
                     // Worker returns (); DB/link errors are logged and the worker moves on
                     // (the index stays missing and is retried next pass). A Box<dyn Error>
                     // return would not be Send across the thread boundary.
-                    let mut wc = match postgres::Client::connect(&conn, postgres::NoTls) {
+                    let mut wc = match db_config(&conn).and_then(|cfg| cfg.connect(postgres::NoTls))
+                    {
                         Ok(c) => c,
                         // #475's species: `postgres::Error`'s `Display` renders a refused
                         // socket, an unresolvable host and a TLS timeout all as `error
@@ -5478,8 +5492,8 @@ fn cmd_run(
             blob_peers.clone()
         };
         let counter = Arc::clone(&blobs_fetched);
-        std::thread::spawn(
-            move || match postgres::Client::connect(&conn, postgres::NoTls) {
+        std::thread::spawn(move || {
+            match db_config(&conn).and_then(|cfg| cfg.connect(postgres::NoTls)) {
                 Ok(mut bclient) => loop {
                     match do_blobd(&mut bclient, &conn, &peers, window, budget_ms) {
                         Ok(m) => {
@@ -5499,8 +5513,8 @@ fn cmd_run(
                 },
                 // Same as the worker above: name the errno, not the layer.
                 Err(e) => eprintln!("blob thread could not connect: {}", legible_db_error(&e)),
-            },
-        );
+            }
+        });
     }
 
     // Built ONCE, outside the cycle loop: `do_pull` is transport-agnostic (slice 2b,
@@ -8471,6 +8485,109 @@ mod tests {
             kid, kid2,
             "a second start must reuse the key, not replace it"
         );
+    }
+}
+
+/// #878: cairn-sync's own connections notice a peer that vanished silently, as
+/// `cairn_node::db::connect`'s do (#875). No database needed: the settings are read back
+/// from the config every production connection is built from.
+#[cfg(test)]
+mod keepalive_tests {
+    use super::*;
+    use cairn_db_keepalive::{KEEPALIVE_IDLE, KEEPALIVE_INTERVAL, KEEPALIVE_RETRIES};
+
+    #[test]
+    fn a_sync_connection_gets_dead_peer_detection() {
+        let cfg = db_config("host=127.0.0.1 dbname=cairn").expect("a valid connection string");
+        assert!(cfg.get_keepalives());
+        assert_eq!(cfg.get_keepalives_idle(), KEEPALIVE_IDLE);
+        assert_eq!(cfg.get_keepalives_interval(), Some(KEEPALIVE_INTERVAL));
+        assert_eq!(cfg.get_keepalives_retries(), Some(KEEPALIVE_RETRIES));
+        assert_eq!(
+            cfg.get_tcp_user_timeout(),
+            Some(&cairn_db_keepalive::TCP_USER_TIMEOUT)
+        );
+        // The conversion to `postgres::Config` keeps the rest of the string too.
+        assert_eq!(cfg.get_dbname(), Some("cairn"));
+    }
+
+    /// A bad string fails here, before any socket, with the library's own error, so
+    /// `legible_db_error` renders it as before.
+    #[test]
+    fn a_bad_connection_string_is_an_error_not_a_panic() {
+        assert!(db_config("host=127.0.0.1 port=notaport").is_err());
+    }
+
+    /// `(NoTls connects, db_config calls)` in one source file's production code: everything
+    /// above its first test module (a `#[cfg(test)]` helper higher up does not end it). Comment
+    /// lines are dropped, so a comment naming `db_config(` cannot cover for a raw connect, and
+    /// whitespace is removed, so a connect rustfmt wrapped (`NoTls,\n)`) still reads `NoTls)`.
+    fn connect_tally(src: &str) -> (usize, usize) {
+        let production = src
+            .find("#[cfg(test)]\nmod ")
+            .map_or(src, |end| &src[..end]);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .flat_map(str::split_whitespace)
+            .collect::<String>()
+            .replace(",)", ")");
+        let calls = code.matches("db_config(").count() - code.matches("fndb_config(").count();
+        (code.matches("NoTls)").count(), calls)
+    }
+
+    /// The test above pins `db_config`, not that every connection uses it. A connect that
+    /// skips it (`Client::connect(conn, NoTls)`, `conn.parse::<postgres::Config>()`,
+    /// `Config::new()`) compiles and silently loses the settings. However it is spelled, a
+    /// connection is opened with a `NoTls` argument, so each one in the production code of
+    /// every `.rs` file in `src/` must be matched by a `db_config(` call. Read at run time, so a
+    /// new module is checked too. shortcut: a TLS connector would need adding here.
+    #[test]
+    fn every_production_connection_goes_through_db_config() {
+        let src_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+        let (mut connects, mut through_db_config) = (0, 0);
+        for entry in std::fs::read_dir(src_dir).expect("the crate's src/ is readable") {
+            let path = entry.expect("a src/ entry").path();
+            if path.extension().is_some_and(|ext| ext == "rs") {
+                let (c, d) = connect_tally(&std::fs::read_to_string(&path).expect("readable"));
+                connects += c;
+                through_db_config += d;
+            }
+        }
+        assert!(connects > 0, "the guard found no connection to check");
+        assert_eq!(
+            connects, through_db_config,
+            "every connection must be opened as db_config(conn).and_then(|cfg| cfg.connect(NoTls)) (#878)"
+        );
+    }
+
+    /// The guard's own blind spots, closed (PR #886 review): each case below is a raw connect
+    /// the first version of `connect_tally` counted as covered, or missed.
+    #[test]
+    fn the_tally_sees_every_spelling_of_a_raw_connect() {
+        let wrapped = "let c = postgres::Client::connect(\n    &conn,\n    postgres::NoTls,\n);\n";
+        assert_eq!(connect_tally(wrapped), (1, 0), "a connect rustfmt wrapped");
+        let commented = "// opened like db_config(conn)\nlet c = Client::connect(conn, NoTls);\n";
+        assert_eq!(
+            connect_tally(commented),
+            (1, 0),
+            "a comment naming db_config("
+        );
+        let helper_above = "#[cfg(test)]\nfn helper() {}\nlet c = Client::connect(conn, NoTls);\n";
+        assert_eq!(
+            connect_tally(helper_above),
+            (1, 0),
+            "a test-only helper above it"
+        );
+        let tests_below = "fn f() {}\n#[cfg(test)]\nmod tests { fn g() { connect(c, NoTls); } }\n";
+        assert_eq!(
+            connect_tally(tests_below),
+            (0, 0),
+            "a test module's own connect"
+        );
+        let routed =
+            "fn db_config(conn: &str) {}\ndb_config(conn).and_then(|cfg| cfg.connect(NoTls))";
+        assert_eq!(connect_tally(routed), (1, 1), "the sanctioned shape");
     }
 }
 
