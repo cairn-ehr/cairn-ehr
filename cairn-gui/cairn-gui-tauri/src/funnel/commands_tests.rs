@@ -134,6 +134,37 @@ fn funnel_js_reads_both_incompleteness_reports_and_the_retry_advice() {
     assert!(fields_read_in(js, "status").contains("provisioning"));
 }
 
+/// #882: an operator's line ("an operator must act") is cleared only by asking the node again,
+/// once a search has answered. Both tempting shortcuts are refused here: clearing it on any
+/// successful search would wipe a TRUE enrolment warning (an unenrolled node searches fine),
+/// and never re-asking leaves a mended fault on screen until a registration happens to succeed.
+#[test]
+fn the_provisioning_line_is_cleared_only_by_asking_the_node_again() {
+    use crate::source_guard::{js_fn, position};
+    let js = include_str!("../../src-ui/funnel.js");
+    let recheck = js_fn(js, "recheckProvisioning");
+    let ask = position(recheck, "invoke(\"funnel_status\")");
+    assert!(ask < position(recheck, "setMessage(line, provisioningLine(status))"));
+    assert_eq!(
+        recheck.matches("setMessage(").count(),
+        1,
+        "set from the node's answer only:\n{recheck}"
+    );
+    // Only the answer of a search that SUCCEEDED for the form on screen asks again.
+    for (f, after) in [
+        ("runBrowse", "browseView.summary;"),
+        ("runPrompt", "renderPrompt(prompt);"),
+    ] {
+        let body = js_fn(js, f);
+        let said = position(body, after);
+        let asked = position(body, "void recheckProvisioning();");
+        assert!(
+            said < asked && asked < position(body, "catch (failure)"),
+            "{body}"
+        );
+    }
+}
+
 /// A form snapshot at revision `rev` (shared with `register_tests`).
 pub(super) fn f(rev: u64, name: &str, dob: &str) -> FormSnapshot {
     FormSnapshot {

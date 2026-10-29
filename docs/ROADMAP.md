@@ -507,8 +507,14 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   opens is built from `db_config(conn)`, which applies them (`keepalive_tests` pins the config and that every
   production `NoTls` connect in `src/*.rs` is matched by a `db_config(` call). Both binaries now bound a silently
   dead remote Postgres the same way.
+- **2026-10-30 — the front door's operator line clears once mended; a remedy is said once (#882 + #885).** PR #PRNUM:
+  `funnel_status` probes the node's standing on every call (the launch-only probe and `AppState.provisioning` are
+  gone), and `funnel.js` asks again after a successful search while its top line warns — never "clear on success",
+  which would wipe a true enrolment warning (#882). A refused reopen's text ends in one exported remedy
+  (`says_operator_remedy`); the register, search and judgement wrappers do not restate it, and the stale-list banners
+  name "Read this chart again" without ordering a press (#885). RUNBOOK §14 (c) gained both checks.
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
-  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#882**, **#884**, **#885**; then HANDOVER's ⇒ NEXT. #699 stays open.
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#884**; then HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 

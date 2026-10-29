@@ -352,3 +352,54 @@ pub(crate) fn sample_candidate() -> Candidate {
         photo_ref: None,
     }
 }
+
+/// A refused reopen's text as `cairn-gui-live` words it (#880), shared with the judgement tests.
+/// The assert in each test that uses it keeps it honest: if the live wording moves, they fail.
+pub(crate) const REFUSED_REOPEN: &str = "connection to the node was lost and could not be \
+    reopened: password authentication failed [28P01]. The node answered and refused the \
+    connection, so pressing again fails the same way until an operator acts.";
+
+/// #885: a refused reopen already says its remedy, so the front door's two wrappers must not
+/// say it again — each says "until an operator acts" exactly once.
+#[test]
+fn a_refused_reopen_s_remedy_is_said_once_at_the_front_door() {
+    assert!(cairn_gui_live::says_operator_remedy(REFUSED_REOPEN));
+    let refused = DataError::NotProvisioned(REFUSED_REOPEN.into());
+    let register = register_error_view(&refused, Restored::Kept);
+    let search = search_error_view(&refused);
+    for v in [&register, &search] {
+        assert_eq!(v.text.matches("operator").count(), 1, "{}", v.text);
+        assert_eq!(v.retry, Retry::AfterOperator);
+    }
+    assert!(
+        register.text.contains("Nothing was saved"),
+        "{}",
+        register.text
+    );
+    assert!(
+        search.text.contains("NOT a \"no match\""),
+        "{}",
+        search.text
+    );
+}
+
+/// #882: what the front door's provisioning line says, from the node's answer to "may this
+/// node write?" — asked afresh by every `funnel_status`, never kept from launch.
+#[test]
+fn the_provisioning_line_says_the_standing_or_why_it_could_not_be_checked() {
+    assert_eq!(
+        provisioning_sentence(Ok(ActorStanding::Enrolled), "k"),
+        None
+    );
+    assert_eq!(
+        provisioning_sentence(Ok(ActorStanding::NeverEnrolled), "k"),
+        standing_sentence(ActorStanding::NeverEnrolled, "k")
+    );
+    let unknown = provisioning_sentence(Err(DataError::Unavailable("reset".into())), "k").unwrap();
+    assert_eq!(
+        unknown,
+        "Could not check whether this node may write (reset), so registering may be refused."
+    );
+    let none = provisioning_sentence(Err(DataError::NotFound), "k").unwrap();
+    assert!(none.contains("(no answer)"), "{none}");
+}

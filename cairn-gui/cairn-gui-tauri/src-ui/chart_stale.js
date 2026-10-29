@@ -32,11 +32,12 @@ const READ_AGAIN = "The chart has been read again — review it before you act o
 /**
  * Said in the chart's warnings when a re-read FAILED while a stale refusal is still open: the list
  * on screen is the old one. It names the control that is the way out — never "reload", which this
- * window lacks.
+ * window lacks — but never orders a press now: beside a reconnect the server refused, the failed
+ * read's line says pressing again fails until an operator acts, and this notice cannot tell (#885).
  */
 const LIST_OUT_OF_DATE =
   'This list is out of date: the record changed while it was on screen, and reading it ' +
-  'again failed. Press "Read this chart again".';
+  'again failed. "Read this chart again" brings it up to date once the node can be read.';
 
 /**
  * Said instead of `LIST_OUT_OF_DATE` when no stale refusal is open — only interrupted commits
@@ -44,7 +45,8 @@ const LIST_OUT_OF_DATE =
  */
 const LIST_MAY_BE_OUT_OF_DATE =
   'This list may be out of date: whether your last act was recorded is not known, and ' +
-  'reading it again failed. Press "Read this chart again".';
+  'reading it again failed. "Read this chart again" brings it up to date once the node ' +
+  'can be read.';
 
 /**
  * Whether a refusal says the screen is behind the record, and what was recorded (Rust's

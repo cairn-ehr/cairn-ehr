@@ -182,8 +182,6 @@ pub struct AppState {
     /// only charts `open_chart` will open, and where their header text comes from.
     pub shown:
         tokio::sync::Mutex<std::collections::HashMap<uuid::Uuid, cairn_patient_search::Candidate>>,
-    /// The launch probe's sentence (#654 option 2), when this node may not write.
-    pub provisioning: Option<String>,
     /// Path to the clinician's sealed key file, unsealed on `unlock`. `None` in fixture
     /// mode, where there is nothing to sign.
     pub attester_key_path: Option<std::path::PathBuf>,

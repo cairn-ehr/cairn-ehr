@@ -52,6 +52,18 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   FAILED — this is NOT a "no match"" (`a_search_that_needs_an_operator_still_never_reads_as_nothing_found`), and
   the register arm claims nothing about the node's enrolment. Before #880 the search arm was bare text — safe only
   while no live path reached it.
+- **A refused reopen says its remedy ONCE** (#885): its text ends in `OPERATOR_REMEDY` (`connection.rs`); a renderer
+  wrapping a `NotProvisioned` asks `says_operator_remedy` and does not restate it (register and search arms, the
+  judgement arm, which then drops its "yet"). Other causes keep their wrapper's remedy: an enrolment refusal does not
+  say what pressing again does, and the judgement arm's not-held cause resolves by sync. The stale-list banners
+  (`chart_stale.js`) name "Read this chart again" but never order a press: they cannot tell a refused reopen from an
+  outage. Pins: `only_a_refused_reopen_says_the_operator_remedy`, `a_refused_reopen_s_remedy_is_said_once_at_the_front_door`,
+  `every_data_error_arm_is_worded_for_a_link`.
+- **The front door's provisioning line is cleared only by asking the node again** (#882): `funnel_status` probes the
+  standing on EVERY call (`FunnelBackend::provisioning`; there is no launch-time copy), and `funnel.js`'s
+  `recheckProvisioning` asks after a search that succeeded while the line shows a warning. **Tempting wrong fix:**
+  clearing the line on any successful search — an unenrolled node searches fine, so that wipes a true warning. Pin:
+  `the_provisioning_line_is_cleared_only_by_asking_the_node_again`.
 - **Known limit, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
   bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649).
 - **The reopen is `cairn_node::db::connect`, not `connect_and_load_schema`.** The schema was loaded at launch, and a

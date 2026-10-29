@@ -35,7 +35,7 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 pub struct FunnelStatus {
     pub mock: bool,
-    /// The launch probe's sentence when this node may not write (#654 option 2).
+    /// Why this node may not write, probed afresh on every call (#654 option 2, #882).
     pub provisioning: Option<String>,
     /// The chart already open (`--patient`), if any.
     pub chart: Option<ChartHeaderView>,
@@ -156,7 +156,7 @@ async fn open_after_registering(
 pub async fn funnel_status_impl(state: &AppState) -> FunnelStatus {
     FunnelStatus {
         mock: state.is_mock(),
-        provisioning: state.provisioning.clone(),
+        provisioning: state.funnel_backend.provisioning().await,
         chart: state.chart.lock().await.as_ref().map(|c| c.header.clone()),
         revision: state.funnel.lock().await.revision(),
     }

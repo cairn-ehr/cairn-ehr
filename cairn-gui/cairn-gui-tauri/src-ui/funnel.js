@@ -163,6 +163,7 @@ async function runBrowse() {
     // From Rust (`view::browse_summary`): "nobody matched" and "the search did not finish"
     // lead to opposite acts, so neither is worded here.
     el("browse-status").textContent = browseView.summary;
+    void recheckProvisioning();
   } catch (failure) {
     if (revision !== browseRevision) return;
     // A failure is shown AS a failure and the old list is cleared: an empty-looking list
@@ -171,6 +172,31 @@ async function runBrowse() {
     setMessage(el("browse-incomplete"), "");
     el("browse-status").textContent = failureText(failure);
   }
+}
+
+/** The provisioning line for a `funnel_status` answer: the node's sentence, then the mock note. */
+function provisioningLine(status) {
+  return [status.provisioning, mockNote].filter(Boolean).join(" ");
+}
+
+/**
+ * #882: a search just answered, so ask the node again whether it may write, if the line says it
+ * may not. `funnel_status` probes afresh: a mended fault (a refused reconnect, an enrolment done
+ * after launch) clears, and a true warning stays — an unenrolled node searches fine, so a search
+ * that succeeded proves nothing about writing. A failed probe leaves the line as it was; so does a
+ * Register refusal said while this one was on its way (it is newer).
+ */
+async function recheckProvisioning() {
+  const line = el("provisioning");
+  const shown = line.textContent;
+  if (shown === mockNote) return;
+  let status;
+  try {
+    status = await invoke("funnel_status");
+  } catch (_) {
+    return;
+  }
+  if (line.textContent === shown) setMessage(line, provisioningLine(status));
 }
 
 // ---- Steps 2 and 3: register, and the prompt ---------------------------------------------
@@ -265,6 +291,7 @@ async function runPrompt(force) {
       return;
     }
     renderPrompt(prompt);
+    void recheckProvisioning();
   } catch (failure) {
     if (form.revision !== registerRevision) return;
     // No token after a failed search: registering without its search is what ADR-0061
@@ -445,7 +472,7 @@ async function boot() {
   mockNote = status.mock
     ? "Fixture data — patients registered here live only as long as this window."
     : "";
-  setMessage(el("provisioning"), [status.provisioning, mockNote].filter(Boolean).join(" "));
+  setMessage(el("provisioning"), provisioningLine(status));
   if (status.chart) {
     enterChart(status.chart);
   } else {

@@ -4,6 +4,7 @@
 //! Future + Send`), so the window dispatches on an enum rather than a trait object. That is not
 //! a workaround: the window KNOWS its mode, and an enum built once at launch is a value that
 //! cannot later disagree with itself — the reasoning `AppState::is_mock` already carries.
+use crate::funnel::view::provisioning_sentence;
 use cairn_gui_data::mock::MockData;
 use cairn_gui_data::port::{DataError, PatientRegistration, PatientSearch};
 use cairn_gui_funnel::{AttestedSearch, NamedAttestation};
@@ -62,6 +63,18 @@ impl FunnelBackend {
         match self {
             FunnelBackend::Mock(mock) => mock.require_provisioned().await,
             FunnelBackend::Live(live) => live.require_provisioned().await,
+        }
+    }
+
+    /// The provisioning line's sentence, probed NOW (#882): an operator's mend, or an enrolment
+    /// done after launch, clears it without a restart. The mock writes to nothing, so it never
+    /// has one.
+    pub async fn provisioning(&self) -> Option<String> {
+        match self {
+            FunnelBackend::Mock(_) => None,
+            FunnelBackend::Live(live) => {
+                provisioning_sentence(live.standing().await, live.node_kid())
+            }
         }
     }
 }

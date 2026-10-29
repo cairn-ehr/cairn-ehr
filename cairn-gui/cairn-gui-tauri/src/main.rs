@@ -156,27 +156,6 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         cli.conn.clone(),
     ));
     let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);
-    let provisioning = match live.standing().await {
-        Ok(standing) => funnel::view::standing_sentence(standing, live.node_kid()),
-        Err(e) => {
-            use cairn_gui_data::port::DataError;
-            let why = match e {
-                DataError::Unavailable(t)
-                | DataError::Refused(t)
-                | DataError::NotProvisioned(t)
-                // Only the words matter here: a standing probe that reports a changed record
-                // is still "could not check", so `Stale` reads like `Refused`.
-                | DataError::Stale(t)
-                // A read commits nothing; listed so a new cause is never silently dropped.
-                | DataError::OutcomeUnknown(t) => t,
-                DataError::NotFound => "no answer".to_string(),
-            };
-            Some(format!(
-                "Could not check whether this node may write ({why}), so registering may be \
-                 refused."
-            ))
-        }
-    };
     Ok(AppState {
         db: Some(db),
         node_sk: Some(node_sk),
@@ -185,7 +164,6 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         funnel_backend: funnel::backend::FunnelBackend::Live(live),
         funnel: tokio::sync::Mutex::new(cairn_gui_funnel::FunnelSession::new()),
         shown: tokio::sync::Mutex::new(Default::default()),
-        provisioning,
         attester_key_path: cli.attester_key.clone(),
         session: tokio::sync::Mutex::new(None),
     })
