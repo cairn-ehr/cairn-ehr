@@ -105,7 +105,7 @@ fn departed_text(id: Uuid, lines: &[DepartedLine]) -> String {
         .unwrap_or_else(|| unread_line(id))
 }
 
-/// Why the departed charts' names could not be read, each distinct error once, in table order
+/// Why the departed charts' names could not be read, each distinct error once, in `lines` order
 /// (#881): one failed read leaves every departed chart unread for the same reason, and saying
 /// it inside each chart's line would repeat it. Only charts in `gone` count.
 fn unread_reasons(gone: &[Uuid], lines: &[DepartedLine]) -> Vec<String> {

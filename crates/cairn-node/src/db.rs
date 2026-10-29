@@ -490,6 +490,11 @@ impl std::fmt::Display for ConnectFailed {
 
 impl std::error::Error for ConnectFailed {}
 
+/// Open a connection to the node's database.
+///
+/// Every error is a [`ConnectFailed`] (reach it with `downcast_ref`), and must stay one: the
+/// window's reopen reads its SQLSTATE to tell a refusal from an outage (#880). Re-wrapping it as
+/// text, or as another error's `source`, would quietly make every refusal read as an outage.
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // The connection string is NEVER echoed into the error — it can carry a password.
     // What the operator needs is the reason, and it arrives by two different routes.

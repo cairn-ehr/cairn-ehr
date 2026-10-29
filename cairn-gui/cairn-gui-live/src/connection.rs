@@ -27,10 +27,11 @@
 //! - **If reopening fails**, `lock` returns [`ConnectionLost`] carrying the CAUSE (a refused
 //!   socket, a rejected password), so the screen says why, not merely "connection closed"
 //!   (#876). A press inside the backoff tries nothing, and its error says when the last attempt
-//!   failed, so it does not read like a fresh failure. Callers classify it through `From` into a
-//!   `DataError`: an outage they may retry (`Unavailable`), unless the server ANSWERED and
-//!   refused the reopen (a rejected password, a dropped database), which only an operator can
-//!   mend (`NotProvisioned`, #880).
+//!   failed, so it does not read like a fresh failure. A caller that decides a retry classifies
+//!   it through `From` into a `DataError`: an outage they may retry (`Unavailable`), unless the
+//!   server ANSWERED and refused the reopen (a rejected password, a dropped database), which
+//!   only an operator can mend (`NotProvisioned`, #880). A caller that only shows the error
+//!   shows its text, which names the remedy either way.
 //! - **Gesture timing uses [`NodeConnection::lock_if_open`]**, which never reopens: the write
 //!   that follows an act must not spend the reopen attempt (and start the backoff) the act's own
 //!   re-read needs.
@@ -68,7 +69,20 @@ impl std::fmt::Display for ConnectionLost {
 
 impl std::error::Error for ConnectionLost {}
 
-/// The ONE place a lost connection is classified (`data_error_from` defers to it). An outage,
+impl ConnectionLost {
+    /// For OTHER crates' tests only (the window classifies one without a database to lose).
+    /// Production builds a `ConnectionLost` in `Held::reopen` alone, through `lost`.
+    #[doc(hidden)]
+    pub fn for_tests(text: &str, refused: bool) -> Self {
+        Self {
+            text: text.into(),
+            refused,
+        }
+    }
+}
+
+/// The ONE place a lost connection is classified into a `DataError` (`data_error_from` and the
+/// window's `ErrorView` conversion both defer to it). An outage,
 /// retried by pressing again: the node may be back by then. A reopen the server REFUSED fails
 /// every press the same way until an operator acts, so it is `NotProvisioned`: a retry-now
 /// would hide the remedy (#880).
@@ -164,10 +178,7 @@ impl Held {
         if let Some(last) = &self.last_failed {
             if !may_retry(Some(last.at), now) {
                 let ago = now.saturating_duration_since(last.at);
-                return Err(ConnectionLost {
-                    text: lost_text(&last.cause, last.refused, Some(ago)),
-                    refused: last.refused,
-                });
+                return Err(lost(&last.cause, last.refused, Some(ago)));
             }
         }
         let attempt = cairn_node::db::connect(conn);
@@ -191,30 +202,50 @@ impl Held {
                     false,
                 ),
             };
-        let text = lost_text(&cause, refused, None);
-        eprintln!("the database {text}");
+        let failure = lost(&cause, refused, None);
+        eprintln!("the database {failure}");
         self.last_failed = Some(Failed {
             at: Instant::now(),
             cause,
             refused,
         });
-        Err(ConnectionLost { text, refused })
+        Err(failure)
+    }
+}
+
+/// A failed reopen, its text derived from the same `refused` it carries, so the words and the
+/// class can never disagree. The only way production builds a [`ConnectionLost`]. Pure.
+fn lost(cause: &str, refused: bool, skipped: Option<Duration>) -> ConnectionLost {
+    ConnectionLost {
+        text: lost_text(cause, refused, skipped),
+        refused,
     }
 }
 
 /// Did the server ANSWER a connect and refuse it, so that every retry fails the same way until
 /// an operator acts (#880)? Class `28` (a rejected password, no `pg_hba.conf` entry), `3D000`
-/// (the database is gone) and `42501` (no CONNECT privilege). Everything else, no answer at all
-/// included, is an outage the next press may get past: `53300` (too many connections) and
-/// `57P03` (starting up) are the server saying "not now", not "never". Pure.
+/// (the database is gone), `42501` (no CONNECT privilege) and `55000` (the database does not
+/// allow connections). Everything else, no answer at all included, is an outage the next press
+/// may get past: `53300` (too many connections) and `57P03` (starting up) are the server saying
+/// "not now", not "never". Pure.
+///
+/// Known limits, each erring towards "press again" (filed as #884 where not inherent):
+/// - A refusal the CLIENT library raises carries no code: a password the server asks for but
+///   the connection string lacks, a SCRAM or SASL failure. Those read as an outage (#884).
+/// - Against several hosts, or a name resolving to several addresses, only the LAST attempt's
+///   error comes back, so an earlier host's refusal can hide behind a later one's outage.
+/// - `CONNECTION LIMIT 0` answers `53300`, the same as a full server.
+/// - Erring the other way: class `28` from an LDAP, RADIUS or PAM backend that is itself
+///   unreachable clears when it returns, without an operator.
 fn server_refused(sqlstate: Option<&str>) -> bool {
-    sqlstate.is_some_and(|code| code.starts_with("28") || code == "3D000" || code == "42501")
+    sqlstate
+        .is_some_and(|code| code.starts_with("28") || ["3D000", "42501", "55000"].contains(&code))
 }
 
 /// What a failed reopen says (#876). `refused` is [`server_refused`]'s answer: the text then
 /// names the operator instead of the next press. `skipped` is how long ago the last attempt
 /// failed, when this press was inside the backoff and tried nothing. Nothing retries on a
-/// timer, so the text names the press that will. Pure.
+/// timer, so an outage's text names the press that will. Pure.
 fn lost_text(cause: &str, refused: bool, skipped: Option<Duration>) -> String {
     let head = match skipped {
         None => "connection to the node was lost and could not be reopened".to_string(),
@@ -292,7 +323,8 @@ mod tests {
     /// server that is busy or starting up may take the next press, so those stay outages.
     #[test]
     fn only_a_refusing_server_needs_an_operator() {
-        for code in ["28P01", "28000", "3D000", "42501"] {
+        // 55000: `ALTER DATABASE … ALLOW_CONNECTIONS false`, an operator's act (#883 review).
+        for code in ["28P01", "28000", "3D000", "42501", "55000"] {
             assert!(server_refused(Some(code)), "{code}");
         }
         for code in [

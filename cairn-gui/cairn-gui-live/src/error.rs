@@ -16,7 +16,9 @@
 //! **One kind of floor decision is still deliberately outside this rule and reported as an
 //! outage:** a **constraint** violation (class `23`) or a **privilege** refusal (`42501`) is the
 //! floor deciding — principle 12 counts RLS and constraints as part of it — but carries its own
-//! SQLSTATE, not `P0001`. No path reachable from these two ports produces one today, and
+//! SQLSTATE, not `P0001`. No path reachable from these two ports produces one today (a
+//! CONNECT-privilege `42501` on a reopen is the server refusing the connection, not the floor
+//! deciding a call, and `ConnectionLost` classifies it, #880), and
 //! `a_constraint_or_privilege_refusal_is_not_yet_told_apart` pins the CLASSIFICATION so the gap
 //! is a value in every run. (It does not pin the reachability; nothing does.) That is the
 //! unanswered *`false` half* of the rule, which `cairn-sync` already had to answer for itself
@@ -123,7 +125,8 @@ pub fn sqlstate_of(e: &anyhow::Error) -> Option<&str> {
 
 /// Map a `cairn-node` orchestrator's failure onto the port's error type.
 ///
-/// The message is `cairn_node::db_diagnosis::operator_chain`'s rendering in both arms — one
+/// The message is `cairn_node::db_diagnosis::operator_chain`'s rendering in both arms (except a
+/// lost connection, which keeps its own class and text, `ConnectionLost`, #880) — one
 /// line, the server's message rendered exactly once, every *distinct* context layer above the
 /// database error kept. (It is not a verbatim transcript: `operator_chain` collapses a layer
 /// whose text the layer above already ends with, and stops descending at the database error,

@@ -85,7 +85,8 @@ pub async fn compare_impl(
     // The other record's list: the SAME custody-applied read opening it would give (§5.9).
     let meds = read_chart_of(state, other)
         .await
-        .map(|list| cairn_gui_tab_medications::view::build_view(&list));
+        .map(|list| cairn_gui_tab_medications::view::build_view(&list))
+        .map_err(|e| format!("{e:#}"));
     let parts = match state.db.as_ref() {
         None => {
             let header = state

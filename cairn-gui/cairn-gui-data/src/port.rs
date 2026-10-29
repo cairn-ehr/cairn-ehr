@@ -58,7 +58,11 @@ pub struct NoteRef {
 ///   withhold the retry-now that `Unavailable` earns, show the remedy, and keep a way to try
 ///   again once it is done. Rendering it as `Refused` strands a clerk whose form was correct;
 ///   rendering it as `Unavailable` hides the remedy behind a retry that will keep failing.
-///   Carried by `cairn_node::db_diagnosis::RefusalScope::NodeState` (PR #661 review).
+///   Carried by `cairn_node::db_diagnosis::RefusalScope::NodeState` (PR #661 review). A SECOND
+///   producer has the same shape but a different decider (#880): a lost connection whose reopen
+///   the database SERVER answered and refused (a rejected password, a dropped database). Its
+///   payload is the refusal's cause, not a command, and it blocks reads as well as writes —
+///   so a consumer must never assume `NotProvisioned` means "enrol this node".
 /// - `OutcomeUnknown` — **the write's COMMIT got no ordinary answer, so it MAY have been
 ///   recorded** (`cairn_node::db_diagnosis::commit_outcome_unknown`, #713/#815). Neither a
 ///   verdict nor an outage: an outage wrote nothing and earns a retry, but the same act pressed
@@ -90,8 +94,9 @@ pub enum DataError {
     /// that refuses before Postgres sees the call. See the enum doc: never retried, always
     /// legible, and the payload is whichever layer decided.
     Refused(String),
-    /// A verdict about this NODE's provisioning state, not about the call. See the enum doc:
-    /// never retried *as is*, but the payload names a command that makes the same call succeed.
+    /// A verdict about this NODE's provisioning state, not about the call, or a reconnect the
+    /// server refused (#880). See the enum doc: never retried *as is*; an operator's act (named
+    /// in the payload, for the provisioning case) makes the same call succeed.
     NotProvisioned(String),
     /// A refusal because the record changed since the caller's picture of it was taken
     /// (`cairn_node::db_diagnosis::RefusalScope::Stale`). Nothing was recorded, and re-reading is

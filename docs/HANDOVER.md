@@ -4,11 +4,13 @@
 
 > [!NOTE]
 > **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#883](https://github.com/cairn-ehr/cairn-ehr/pull/883) (branch `fix/880-881-refused-reconnect-cause`, closes #880, #881): a reopen
-> the server REFUSED (class `28`, `3D000`, `42501`) is `NotProvisioned` → `Retry::AfterOperator` on every press, the
+> the server REFUSED (class `28`, `3D000`, `42501`, `55000`) is `NotProvisioned` → `Retry::AfterOperator` on every press, the
 > backoff's included; the code survives `db::connect` as `cairn_node::db::ConnectFailed` (text unchanged, no
 > `source()`); a departed chart's unread line names why, once (#881); the front door's search keeps "NOT a no match"
 > for an operator's failure too. RUNBOOK §14 (c) gained the refused case (a renamed database). Review filed **#882**
-> (the sticky provisioning line outlives the fix). **Merged 2026-10-28:** PR #879 (#876: a failed reopen says why on screen; filed #880, #881).
+> (the sticky provisioning line outlives the fix); the second review moved the four write gestures' first read
+> (`read_chart_of` → `chart_read_failed`) onto the same class, and filed **#884** (client-side auth refusals carry no
+> code) and **#885** (the remedy said twice). **Merged 2026-10-29:** PR #879 (#876: a failed reopen says why on screen; filed #880, #881).
 > **Merged 2026-10-24/28 (ROADMAP has each):** PR #877 (#875 option 1, `cairn_node::db_keepalive`; #875 open for
 > option 2; filed **#878**) · PR #874 (#807, the window reopens a lost connection; RUNBOOK §14 (c) human-owed; filed
 > #875, #876) · PR #873 (#855 + #837 item 1, ADR-0082 E1) · PR #872 (#869) · PR #868 (#861: a current line carries its
@@ -215,8 +217,10 @@ without its downcast).
   `db_diagnosis.rs`'s 3D000 test (whose comment predicted exactly this) would fail. A sourceless error type that keeps
   the code BESIDE the text changed no caller's output.
 - **⇒ Routing a new cause into an existing variant reaches every renderer of that variant.** The search arm of
-  `NotProvisioned` was bare text — safe while only enrolment reached it; a refused reconnect would have dropped "NOT a
-  no match" (the review caught it). Grep every `match` arm of the variant, not only the retry mapping.
+  `NotProvisioned` was bare text — safe while no live path reached it; a refused reconnect would have dropped "NOT a
+  no match" (the review caught it). Grep every `match` arm of the variant, not only the retry mapping — and every `to_string()` of the error
+  type: the second review found the write gestures' first read stringified `ConnectionLost`, so Sign off kept
+  Retry beside a text saying pressing again fails.
 - **⇒ An operator procedure is a claim (again):** my first RUNBOOK step for a refused reopen used `REVOKE CONNECT`,
   which `PUBLIC`'s default grant and a superuser both defeat; a renamed database refuses under any auth.
 

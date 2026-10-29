@@ -16,7 +16,7 @@
 //! nothing, so the same act may succeed now. A verdict (`Refused`) will decide the same way
 //! every time, so a retry button would be a precise untruth — the clerk's way forward is to
 //! change what was typed. A node-state verdict (`NotProvisioned`) is pointless to retry until
-//! an operator has acted, and then succeeds.
+//! an operator has acted, and then succeeds; so is a reconnect the server refused (#880).
 use crate::funnel::rows::people_phrase;
 use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::{
@@ -36,7 +36,8 @@ pub enum Retry {
     /// Nothing was decided; the same act may succeed now. Keep the button live.
     Now,
     /// This node may not write until its state changes — an operator acts, or sync delivers what
-    /// is missing (a link over a chart not held here yet) — and then the same act succeeds.
+    /// is missing (a link over a chart not held here yet) — and then the same act succeeds. Also
+    /// a reconnect the server refused (#880), which blocks reads as well as writes.
     AfterOperator,
     /// A verdict, or nothing left to retry with. The way forward is to change the form or wait
     /// for the next search, never to press the same button again. The judgement surfaces also

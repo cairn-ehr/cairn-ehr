@@ -340,9 +340,34 @@ fn a_lost_connection_fails_one_thread_and_timing_never_reopens() {
 /// passes through untouched.
 #[test]
 fn a_failed_chart_read_before_the_write_may_be_retried() {
-    let view = chart_read_failed("connection reset".into());
+    let view = chart_read_failed(anyhow::anyhow!("connection reset"));
     assert_eq!(view.retry, Retry::Now);
     assert_eq!(view.text, "connection reset");
+}
+
+/// #880 review: a write gesture's first chart read is where a dead connection is REOPENED, so a
+/// reopen the server refused must reach the button as an operator's job, never a retry-now
+/// beside a text saying pressing again fails the same way. `read_chart_of` keeps the lost
+/// connection typed (a plain `?` on the lock, never mapped to text) so this can see it; the
+/// `ErrorView` conversion that
+/// link, unlink, same-person and duplicates reach with `?` is pinned here too.
+#[test]
+fn a_chart_read_lost_to_a_refused_reopen_needs_an_operator() {
+    use cairn_gui_live::ConnectionLost;
+    let lost = |refused| anyhow::Error::from(ConnectionLost::for_tests("cause [28P01]", refused));
+    let refused = chart_read_failed(lost(true));
+    assert_eq!(refused.retry, Retry::AfterOperator);
+    assert!(refused.text.contains("cause [28P01]"), "{}", refused.text);
+    assert_eq!(chart_read_failed(lost(false)).retry, Retry::Now);
+    for (refused, retry) in [(true, Retry::AfterOperator), (false, Retry::Now)] {
+        let view = ErrorView::from(ConnectionLost::for_tests("t", refused));
+        assert_eq!(view.retry, retry, "refused: {refused}");
+    }
+    let read = crate::source_guard::rust_fn(include_str!("commands.rs"), "read_chart_of");
+    assert!(
+        read.contains("let mut db = db.lock().await?;"),
+        "the lost connection stays typed, never mapped to text: {read}"
+    );
 }
 
 /// #840's rule (maintainer's ruling, 2026-10-22): a gesture whose every write failed answers with

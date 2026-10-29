@@ -25,26 +25,30 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `postgres::Client` connections (#878).
 - **A failed reopen is an ERROR that says why** (#876): `lock()` returns `Err(ConnectionLost)` naming the cause;
   a press inside the backoff tries nothing and says when the last attempt failed. It is an outage (`Retry::Now`:
-  `From` into `DataError::Unavailable` and into the window's `ErrorView`, "Nothing was done: …"). **Tempting wrong
+  `From` into `DataError::Unavailable` and into the window's `ErrorView`, "Nothing was done: …") unless the server
+  refused the reopen (#880, below). **Tempting wrong
   fixes:** `?` inside a per-thread write loop (cease, release) — an earlier thread may be written, so the lock
   failure becomes THAT thread's `Err` and is reported with the others; and gesture timing taking `lock()` — it uses
   `lock_if_open`, so it cannot spend the reopen attempt the act's re-read needs. Pins: `reconnect.rs`'s
   `lose_then_press_five_times` assertions and `lock_if_open_never_spends_a_reopen_attempt` (the primitive);
   `a_lost_connection_fails_one_thread_and_timing_never_reopens` (write_failure_tests.rs, a source guard: both
   wrong fixes compile).
-- **A reopen the server REFUSED is an operator's, not a retry** (#880): class `28`, `3D000`, `42501`
-  (`server_refused`) make `ConnectionLost` classify as `DataError::NotProvisioned` (`Retry::AfterOperator`); busy or
+- **A reopen the server REFUSED is an operator's, not a retry** (#880): class `28`, `3D000`, `42501`,
+  `55000` (`server_refused`) make `ConnectionLost` classify as `DataError::NotProvisioned` (`Retry::AfterOperator`); busy or
   starting up (`53300`, `57P03`) stays an outage. The code survives `db::connect` as `cairn_node::db::ConnectFailed`
   (text unchanged, `sqlstate()` beside it, NO `source()`); `refused` is stored WITH the cause, so a press inside the
   backoff says "operator" too; `data_error_from` downcasts `ConnectionLost` first (cease and release wrap it in
-  `anyhow`). **Tempting wrong fixes:** `.context()` over the `tokio_postgres::Error` in `db::connect` — `main`'s
+  `anyhow`); `read_chart_of` returns `anyhow::Error`, so `chart_read_failed` sees it too — that read is where the four
+  write gestures (sign-off, cease, withhold, release) REOPEN, so it is the route that matters most. **Tempting wrong fixes:** `.context()` over the `tokio_postgres::Error` in `db::connect` — `main`'s
   `{e:?}` then loses the `[SQLSTATE]` (`db_diagnosis.rs`'s 3D000 test fails); classifying only the press that tried.
   Pins: `a_reopen_the_server_refuses_asks_for_an_operator_on_every_press` (reconnect.rs, a real `3D000`),
-  `a_refused_reopen_names_the_operator_by_every_route`, `only_a_refusing_server_needs_an_operator`. **Every
+  `a_refused_reopen_names_the_operator_by_every_route`, `only_a_refusing_server_needs_an_operator`,
+  `a_chart_read_lost_to_a_refused_reopen_needs_an_operator` (also a source guard: no `to_string` in `read_chart_of`).
+  **Known limits** (`server_refused`'s doc): a refusal tokio-postgres raises itself has no code (#884). **Every
   `NotProvisioned` renderer must be true of a refused reconnect too**: the front door's search arm keeps "The search
   FAILED — this is NOT a "no match"" (`a_search_that_needs_an_operator_still_never_reads_as_nothing_found`), and
   the register arm claims nothing about the node's enrolment. Before #880 the search arm was bare text — safe only
-  while nothing but enrolment reached it.
+  while no live path reached it.
 - **Known limit, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
   bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649).
 - **The reopen is `cairn_node::db::connect`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
