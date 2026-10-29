@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER:** branch `fix/884-888-client-refusal-and-provisioning-line` (closes #884 and #888):
+> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#889](https://github.com/cairn-ehr/cairn-ehr/pull/889) (branch `fix/884-888-client-refusal-and-provisioning-line`, closes #884 and #888):
 > `cairn_node::db::ConnectFailed::refused_by_client()` marks a refusal tokio-postgres raises itself ("password
 > missing", an unsupported auth method, a SCRAM failure — no SQLSTATE), and the window's reopen ORs it with
 > `server_refused`, so such a reopen asks for an operator instead of offering a retry forever (#884; a fake node that
@@ -32,7 +32,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge the #884 + #888 PR**; run #838's RUNBOOK §15 (now incl. #861's current-line check) and
+> 1. **Review and merge PR [#889](https://github.com/cairn-ehr/cairn-ehr/pull/889)** (#884 + #888); run #838's RUNBOOK §15 (now incl. #861's current-line check) and
 >    §14 check (c) (the cause on screen; a refused reopen offers no retry; the front door's top line clears). Then #875's remaining option 2 (a
 >    window-side statement timeout: brainstorm first — a timeout during a COMMIT is an UNKNOWN outcome, never "Nothing
 >    was done"; overlaps #649, #825). From PR #868's

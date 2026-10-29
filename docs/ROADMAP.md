@@ -492,7 +492,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `55000`) is `NotProvisioned` → `Retry::AfterOperator`. PR #887 (#882 + #885): the front door's standing is probed on
   every `funnel_status` (bounded), so a mend clears its line; a refused reopen's remedy is said once. All merged
   by 2026-10-29. RUNBOOK §14 (c) owed.
-- **2026-10-30 — a refusal the client library raises asks for an operator too (#884 + #888).** This PR:
+- **2026-10-30 — a refusal the client library raises asks for an operator too (#884 + #888).** PR [#889](https://github.com/cairn-ehr/cairn-ehr/pull/889):
   `ConnectFailed::refused_by_client()` marks tokio-postgres's own deterministic refusals ("password missing", an
   unsupported auth method, a SCRAM failure, an unparseable string), which carry no SQLSTATE, so such a reopen is
   `NotProvisioned`, not a retry forever (#884; a fake node driving the real library pins the wording,
