@@ -89,8 +89,9 @@ pub async fn list_patient_medications(
 /// the set it is handed, so re-reading a STALE set — the set a clinician was shown before an
 /// unlink — would read a group spanning the two now-separate charts as "inside the set" and
 /// drop its cross-patient withholding. The right response to a changed set is ADR-0076
-/// decision 3's: refuse and reload (`signoff/rules.rs::ensure_same_charts`), never re-read the old
-/// set. The only caller is `list_patient_medications`, which always reads the CURRENT set.
+/// decision 3's: refuse and reload (`signoff/rules.rs::ensure_same_charts`), never re-read
+/// the old set. The only caller is `list_patient_medications`, which always reads the CURRENT
+/// set.
 ///
 /// Ceased rows are retained deliberately. A struck line stays visible on a paper drug
 /// chart; dropping it here would lose that parity and would hide a drug the clinician may

@@ -493,7 +493,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   every `funnel_status` (bounded), so a mend clears its line; a refused reopen's remedy is said once. PR #889 (#884 +
   #888): `ConnectFailed::refused_by_client()` marks tokio-postgres's own deterministic refusals (no SQLSTATE), so such
   a reopen is `NotProvisioned` and says the WORKSTATION refused; the provisioning line drops its press framing
-  (`cairn_gui_live::failed_reopen_cause`). All merged by 2026-10-29. RUNBOOK §14 (c) owed.
+  (`cairn_gui_live::failed_reopen_cause`). All merged by 2026-10-30. RUNBOOK §14 (c) owed.
 - **2026-10-30 — four oversized cairn-node files split by responsibility (#810).** `medication/signoff.rs` → the
   orchestrator + `signoff/rules.rs` (the pure set rules) + `signoff/tests.rs`; `db_diagnosis.rs` → the rendering half +
   `db_diagnosis/refusal.rs` (refusal and commit-outcome markers, re-exported, so every path is unchanged) + two test
