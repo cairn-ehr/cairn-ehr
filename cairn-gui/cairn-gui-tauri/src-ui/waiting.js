@@ -1,7 +1,8 @@
 // The waiting bar (#875 option 2): a command still unanswered after WAIT_SHOWN_AFTER_MS shows ONE
 // window-wide bar that empties towards NODE_ANSWERS_WITHIN_MS, the moment the window's
 // connection cuts a stuck command off (`NodeConnection::ANSWER_WITHIN`). Nearly every command
-// answers long before the bar would appear, so it is rarely seen, and never flashes.
+// answers long before the bar would appear, so it is rarely seen, and never for an answer
+// inside 2 s.
 //
 // Loaded BEFORE main.js, which sends every command through `watchWaits(...)`: one wrapper, so
 // no call site can forget it. The bar decides nothing; the answer, when it comes, is drawn by
@@ -43,7 +44,13 @@ function watchWaits(send) {
     } finally {
       clearTimeout(showTimer);
       pendingWaits.delete(wait);
-      drawWait();
+      // A throw here would REPLACE the command's own result: a sign-off that landed would read
+      // as failed. The bar may break; the answer may not (PR #892 review).
+      try {
+        drawWait();
+      } catch (e) {
+        console.error("the waiting bar could not be drawn", e);
+      }
     }
   };
 }
@@ -60,8 +67,9 @@ function oldestWait(waits) {
 /**
  * Show the bar for the oldest wait once it has run WAIT_SHOWN_AFTER_MS, or hide it. The bar's
  * fill empties over what is left of NODE_ANSWERS_WITHIN_MS since that wait was SENT. A press
- * queued behind a stuck one can wait past it (the cut-off, then up to 5 s of reopen), so a bar
- * that runs out says "Reconnecting…" and stays until the answer, rather than lying.
+ * queued behind a stuck one can wait past it: the cut-off, up to 5 s of reopen, then its own
+ * hold, which on a node that is alive but stuck can take its own 15 s. So a bar that runs out
+ * says "Reconnecting…" and stays until the answer, rather than lying.
  */
 function drawWait() {
   const bar = document.getElementById("node-wait");

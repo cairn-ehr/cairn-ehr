@@ -59,6 +59,8 @@ pub async fn reopening(cs: &str, reopen_from: String) -> cairn_gui_live::NodeCon
         .await
         .expect("a connection with its task's handle");
     cairn_gui_live::NodeConnection::reopening(client, task, reopen_from)
+        .await
+        .expect("the connection's backend")
 }
 
 /// A second schema-loaded connection, for the `LiveData` under test to own.

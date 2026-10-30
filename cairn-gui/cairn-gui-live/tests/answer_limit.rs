@@ -75,13 +75,9 @@ async fn a_hold_released_in_time_keeps_the_connection() {
     assert_eq!(backend_pid(&db).await, before, "the same connection");
 }
 
-/// A COMMIT cut off mid-flight is NOT KNOWN, never "failed": `commit_failure` marks it, and the
-/// row lands anyway once the server finishes. A deferred constraint trigger that sleeps makes
-/// the COMMIT itself the slow statement.
-#[tokio::test]
-async fn a_commit_cut_off_is_not_known_and_may_land() {
-    let Some(cs) = common::cs() else { return };
-    let (reader, _guard) = common::connect(&cs).await;
+/// The probe table, with a deferred constraint trigger that sleeps `trigger_sleep`, which
+/// makes the COMMIT itself the slow statement.
+async fn slow_commit_table(reader: &tokio_postgres::Client) {
     reader
         .batch_execute(
             "DROP TABLE IF EXISTS answer_limit_probe;
@@ -93,6 +89,28 @@ async fn a_commit_cut_off_is_not_known_and_may_land() {
         )
         .await
         .expect("the probe table");
+}
+
+async fn probe_rows(db: &NodeConnection) -> i64 {
+    db.lock()
+        .await
+        .expect("open")
+        .query_one("SELECT count(*) FROM answer_limit_probe", &[])
+        .await
+        .expect("a count")
+        .get(0)
+}
+
+/// A COMMIT cut off mid-flight is NOT KNOWN, never "failed" (`commit_failure` marks it), and the
+/// re-read that settles it is FINAL (PR #892 review): the cut does not stop the server, so the
+/// reopen waits until the cut-off backend is gone. Without that, a re-read on the fresh
+/// connection says "not recorded", the commit lands a moment later, and the clerk who pressed
+/// again on the strength of the re-read has made a second chart (#815's hazard).
+#[tokio::test]
+async fn a_commit_cut_off_is_not_known_and_its_re_read_is_final() {
+    let Some(cs) = common::cs() else { return };
+    let (reader, _guard) = common::connect(&cs).await;
+    slow_commit_table(&reader).await;
     let db = watched(&cs).await;
 
     let committed = {
@@ -110,34 +128,73 @@ async fn a_commit_cut_off_is_not_known_and_may_land() {
         "a cut-off commit is not known: {marked:#}"
     );
 
-    // The server never saw the hang-up in time to stop the commit: the row is there.
-    let deadline = tokio::time::Instant::now() + SLACK;
-    loop {
-        let landed: i64 = reader
-            .query_one("SELECT count(*) FROM answer_limit_probe", &[])
-            .await
-            .expect("a count")
-            .get(0);
-        if landed == 1 {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the commit never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    // The trigger sleeps 3 s from the commit; the cut came at 1 s. The re-read must already
+    // say what the end state is: the same count once the trigger's sleep would have ended.
+    let re_read = probe_rows(&db).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(probe_rows(&db).await, re_read, "the re-read was final");
     reader
         .batch_execute("DROP TABLE answer_limit_probe; DROP FUNCTION answer_limit_slow();")
         .await
         .expect("the probe table dropped");
 }
 
+/// A reopened connection is watched as the first was: a second stuck hold is cut off too, and
+/// reads in between stay on one backend (a reopen that kept the old client's cut mark would
+/// reopen on every lock, and a fresh client with no watchdog of its own would hang again).
+#[tokio::test]
+async fn a_reopened_connection_is_watched_again() {
+    let Some(cs) = common::cs() else { return };
+    let (_reader, _guard) = common::connect(&cs).await;
+    let db = watched(&cs).await;
+    for _ in 0..2 {
+        let before = backend_pid(&db).await;
+        assert_eq!(backend_pid(&db).await, before, "one backend between cuts");
+        let stuck = tokio::time::timeout(LIMIT + SLACK, async {
+            db.lock()
+                .await
+                .expect("open")
+                .execute("SELECT pg_sleep(10)", &[])
+                .await
+        })
+        .await
+        .expect("each stuck hold is cut off near the limit");
+        assert!(stuck.expect_err("cut off").is_closed());
+        assert_ne!(backend_pid(&db).await, before, "reopened");
+    }
+}
+
+/// A press queued behind a stuck one is not charged for the wait: its own limit starts when it
+/// gets the connection, so once the stuck hold is cut it runs on a fresh one and answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_press_queued_behind_a_stuck_hold_gets_a_limit_of_its_own() {
+    let Some(cs) = common::cs() else { return };
+    let (_reader, _guard) = common::connect(&cs).await;
+    let db = watched(&cs).await;
+    let stuck = async {
+        db.lock()
+            .await
+            .expect("open")
+            .execute("SELECT pg_sleep(10)", &[])
+            .await
+    };
+    let queued = async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        db.lock()
+            .await
+            .expect("reopened")
+            .execute("SELECT pg_sleep(0.5)", &[])
+            .await
+    };
+    let (stuck, queued) = tokio::join!(stuck, queued);
+    assert!(stuck.expect_err("cut off").is_closed());
+    queued.expect("the queued press answers on the fresh connection");
+}
+
 /// The HOLD is timed, not a query: a command that keeps the guard past the limit between
-/// statements loses the connection too, and the next lock opens a fresh one. (That the
-/// watchdog marks the client cut BEFORE aborting its task, so a lock in the instant between
-/// cannot take the dying client, is NOT pinned here: the window is too narrow to stage, and
-/// this test passes with the mark removed. `Held::is_lost` carries the reasoning.)
+/// statements loses the connection too, and the next lock opens a fresh one. (That a cut client
+/// reads as lost before its task has died is pinned in `src/connection/tests.rs`, which can set
+/// the mark without the abort.)
 #[tokio::test]
 async fn a_hold_kept_past_the_limit_between_statements_is_cut_off() {
     let Some(cs) = common::cs() else { return };
@@ -146,8 +203,10 @@ async fn a_hold_kept_past_the_limit_between_statements_is_cut_off() {
     let before = backend_pid(&db).await;
 
     {
+        // Well past the limit: a single-thread runtime polls this test before the watchdog, so a
+        // stall across both timers would drop the guard first (PR #892 review).
         let _held = db.lock().await.expect("open");
-        tokio::time::sleep(LIMIT + Duration::from_millis(200)).await;
+        tokio::time::sleep(LIMIT * 2).await;
     }
 
     assert_ne!(backend_pid(&db).await, before, "a fresh connection");

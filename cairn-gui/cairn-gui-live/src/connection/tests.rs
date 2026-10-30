@@ -1,4 +1,5 @@
-//! Unit tests for `connection.rs`: the wording, the backoff, and the guard's `Send` pin.
+//! Unit tests for `connection.rs`: the wording, the backoff, the guard's `Send` pin, and the
+//! watchdog's claim on a hold.
 use super::*;
 
 /// #885: a refused reopen's text ENDS in its remedy, so a renderer that wraps it can tell and
@@ -166,4 +167,85 @@ fn the_guard_may_be_held_across_an_await(db: &NodeConnection) -> impl Send + '_ 
         std::future::ready(()).await;
         drop(client);
     }
+}
+
+/// A cutter whose task is never polled and whose backend is never asked for: `Watch` touches
+/// neither, so its claim needs no database.
+fn idle_cutter() -> Cutter {
+    let task = tokio::spawn(std::future::pending::<()>()).abort_handle();
+    Cutter::new(
+        task,
+        Backend {
+            pid: 0,
+            started: String::new(),
+        },
+    )
+}
+
+/// PR #892 review: a guard dropped while the watchdog is cutting (it has claimed the hold, its
+/// cut not yet run) marks the client lost itself, before the lock is released, so the next
+/// lock cannot take the dying client.
+#[tokio::test]
+async fn a_hold_the_watchdog_claimed_is_marked_cut_as_the_guard_drops() {
+    let cutter = idle_cutter();
+    let watch = Watch::start(cutter.clone(), Duration::from_secs(3600));
+    watch.claimed.store(true, Ordering::SeqCst); // the watchdog's claim, its cut still to come
+    watch.end();
+    assert!(cutter.was_cut());
+}
+
+/// The other order: a guard dropped first claims the hold, and a watchdog that fires later
+/// does nothing, so it can never cut the next command's client.
+#[tokio::test]
+async fn a_hold_ended_in_time_is_never_cut_by_a_late_watchdog() {
+    let cutter = idle_cutter();
+    let watch = Watch::start(cutter.clone(), Duration::ZERO);
+    watch.end(); // before the runtime has polled the watchdog once
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!cutter.was_cut());
+}
+
+/// DB-gated (PR #892 review): a client the watchdog has MARKED cut is lost at once, before its
+/// aborted task has died: `lock` reopens on a new backend and `lock_if_open` declines it. The
+/// mark is set here without the abort, which is the instant `Held::is_lost` exists for.
+#[tokio::test]
+async fn a_client_marked_cut_is_lost_before_its_task_has_died() {
+    let Ok(cs) = std::env::var("CAIRN_TEST_PG") else {
+        return;
+    };
+    let _serial = cairn_node::db::test_serial_guard(&cs)
+        .await
+        .expect("the cluster-wide test lock");
+    let (client, task) = cairn_node::db::connect_with_task(&cs).await.expect("open");
+    let db = NodeConnection::reopening(client, task, cs.clone())
+        .await
+        .expect("the backend");
+    let before: i32 = db
+        .lock()
+        .await
+        .expect("open")
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("a read")
+        .get(0);
+    db.held
+        .lock()
+        .await
+        .cutter
+        .as_ref()
+        .expect("watched")
+        .mark_cut();
+    assert!(
+        db.lock_if_open().await.is_none(),
+        "a cut client is not open"
+    );
+    let after: i32 = db
+        .lock()
+        .await
+        .expect("reopened")
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("a read")
+        .get(0);
+    assert_ne!(after, before, "the next lock reopened");
 }

@@ -30,13 +30,23 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   every guard `lock`/`lock_if_open` hands out (`ConnectionGuard`) starts a watchdog that, at the limit, ABORTS the
   client's connection task (`cairn_node::db::connect_with_task`'s handle), so the stuck query fails `connection
   closed` and nothing downstream is new: a cut-off COMMIT is "not known" via `commit_failure`, and the next `lock`
-  reopens. The watchdog marks the client cut BEFORE aborting (`Cutter::cut_off`; `Held::is_lost` reads the mark),
-  because `is_closed()` turns true only once the task is dropped — unpinned, the window is too narrow to stage. The window's connection is opened apart from the schema load for that handle. The webview's waiting bar
+  reopens. The whole HOLD is timed, not one statement. The watchdog marks the client cut BEFORE aborting
+  (`Cutter::cut_off`; `Held::is_lost` reads the mark), because `is_closed()` turns true only once the task is
+  dropped; and the watchdog and the guard's drop each CLAIM the hold first (`Watch`), so a guard dropped as the
+  watchdog fires still marks the client before the lock is released. Pins: `connection/tests.rs`
+  (`a_client_marked_cut_is_lost_before_its_task_has_died`, the two claim tests). **The reopen after a cut ENDS the
+  old backend first** (`Backend::end_on`: `pg_terminate_backend(pid, 3 s)`, matched on pid AND `backend_start`):
+  the server never hears of the cut, so a cut COMMIT may land after a re-read on the fresh connection said "not
+  recorded", inviting a second entry (PR #892 review). A backend that will not end fails the press. Pin:
+  `a_commit_cut_off_is_not_known_and_its_re_read_is_final`. The window's connection is opened apart from the
+  schema load for that handle. The webview's waiting bar
   (`src-ui/waiting.js`) shows only after 2 s and runs out at the same 15 s (`NODE_ANSWERS_WITHIN_MS`), then says
   "Reconnecting…". Pins: `tests/answer_limit.rs` (mutation-checked: without the abort both cut-off tests fail),
   `waiting_webview_tests.rs`. **Tempting wrong fixes:** a `tokio::time::timeout` around a call site — dropping the
-  query future leaves the client stuck on the dead socket and the next command hangs the same way; a SERVER
-  `statement_timeout` — a dead link never delivers its cancel; lowering 15 s — a node alive but slow is cut off
+  query future drops the guard, which cancels its watchdog and leaves the client stuck on the dead socket, so the
+  next command hangs the same way (a caller that must bound its WAIT spawns the work and times the task, as
+  `LiveData::standing` does for `probe_within`); a SERVER `statement_timeout` alone — a dead link never delivers
+  the server's timeout error; a reopen that reads at once after a cut — the cut-off backend may still commit; lowering 15 s — a node alive but slow is cut off
   too, and its commits read "not known"; a watchdog on a `fixed` connection — aborting it kills it for good.
 - **A failed reopen is an ERROR that says why** (#876): `lock()` returns `Err(ConnectionLost)` naming the cause;
   a press inside the backoff tries nothing and says when the last attempt failed. It is an outage (`Retry::Now`:
@@ -86,10 +96,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   clearing the line on any successful search — an unenrolled node searches fine, so that wipes a true warning. Pin:
   `a_search_clears_the_provisioning_line_only_by_asking_the_node_again`. A registration that succeeded clears it too: that is the
   node's answer as well. The probe is bounded (`probe_within`, `PROBE_WITHIN`, twice a reopen's wait) because `boot()` shows the front door only
-  after it answers: pin `funnel_status_probes_the_live_node_afresh_and_bounded`.
-- **Known limit, filed:** a query sent on a dead socket before the keepalives notice still hangs holding the lock,
-  bounded only on Linux (#875 stays open for a window-side bound, which overlaps #649).
-- **The reopen is `cairn_node::db::connect`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
+  after it answers; what it waits on, `LiveData::standing`, runs as a task of its own, so giving up never drops a
+  connection guard mid-query (PR #892 review): pin `funnel_status_probes_the_live_node_afresh_and_bounded`.
+- **The reopen is `cairn_node::db::connect_with_task`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
   replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication; a restart
   still runs it. Unpinned — the tempting "keep it the same as launch" fix.
 - **`LiveData::new` is `NodeConnection::fixed`**: a caller-made client may carry session state (`lost_commit.rs`'s

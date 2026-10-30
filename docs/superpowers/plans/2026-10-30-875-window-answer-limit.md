@@ -39,6 +39,17 @@ same brainstorm is #891.)
   was walked once in Node with a stubbed DOM and timings scaled down ten times (fast answer, the delay,
   "Reconnecting…", a newer answer leaving an older wait's bar, oldest-first redraw). Throwaway, not committed;
   its look and VoiceOver are RUNBOOK §14 (d).
+- **As built, from the PR #892 reviews** (each corrects a line above):
+  - the next `lock` reopens because the client is MARKED cut (`Held::is_lost`), not because it is `is_closed()`
+    yet; the watchdog and the guard's drop each claim the hold, so neither order leaves the mark unset;
+  - the server never hears of a cut, so a cut COMMIT can land after a re-read on the fresh connection said "not
+    recorded". The reopen after a cut terminates the old backend and waits until it has ended (`Backend::end_on`),
+    and fails the press if it will not;
+  - the provisioning probe's 10 s timeout dropped the guard mid-query, cancelling its watchdog; the check now runs
+    as a task of its own and only the wait is timed;
+  - a press queued behind one stuck on a still-held lock gets its own 15 s after the reopen, so it can wait about
+    35 s, not 20 s (RUNBOOK §14 (d) corrected); the bar is never drawn for a wait under 2 s, but it is drawn by
+    more than the one timer.
 
 ## Paper-parity benchmark (§1.2)
 

@@ -7,9 +7,11 @@
 > a command holding the window's connection past **15 s** is cut off (a watchdog aborts the connection task, so a
 > cut-off COMMIT reads "not known" and the next press reopens), and a window-wide bar "Waiting for the node…"
 > shows after **2 s** and runs out at 15 s ("Reconnecting…"). Both numbers are the maintainer's (2026-10-30
-> brainstorm). The same brainstorm filed **#891** (an open chart's events go first in sync; brainstorm before building).
+> brainstorm). Its second review round made the reopen after a cut END the old backend before anything reads (else a
+> cut COMMIT could land after the re-read said "not recorded"), and filed **#893** + **#894**. The same brainstorm
+> filed **#891** (an open chart's events go first in sync; brainstorm before building).
 > **Merged 2026-10-24/30 (ROADMAP has each):** PR #890 (#810) · #889 (#884 + #888) · #887 (#882 + #885) · #886 (#878) · #883 (#880 +
-> #881) · #879 (#876) · #877 (#875 option 1; #875 open for option 2) · #874 (#807; RUNBOOK §14 (c) human-owed) · #873
+> #881) · #879 (#876) · #877 (#875 option 1; option 2 → #892) · #874 (#807; RUNBOOK §14 (c) human-owed) · #873
 > (#855 + #837 item 1, ADR-0082 E1) · #872 (#869) · #868 (#861; filed **#870**, **#871**, decisions) · #865 (#863 +
 > #864; filed **#866**, **#867**, decisions).
 > **Merged 2026-10-18/23 (ROADMAP has each; the hold and stop-reason blocks are in `developers/durable-rules.md`):**
@@ -28,7 +30,7 @@
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Review and merge PR [#892](https://github.com/cairn-ehr/cairn-ehr/pull/892)** (#875 option 2). Run #838's RUNBOOK §15 (now incl. #861's current-line check) and
 >    §14 checks (c) (the cause on screen; a refused reopen offers no retry; the front door's top line clears) and
->    (d) (the waiting bar: none on an ordinary press; a locked table → "Waiting…", then cut off by 15 s). #891 needs a
+>    (d) (the waiting bar: none on an ordinary press; a locked `medication_statement` → "Waiting…", then cut off by 15 s). #891 needs a
 >    brainstorm before any build. From PR #868's
 >    second review, decisions: **#870** (the wrong-chart warning names the dose, not another patient's stop reason) · **#871**
 >    (a current line's angioedema shows only on hover of "current" — paper-parity). From PR #865's second review: **#866** (an
@@ -205,7 +207,11 @@ their idea of an open chart going first in sync became **#891**. Built TDD; the 
   client waiting on the dead socket, so the next command hangs too. Abort the connection TASK instead
   (`connect_with_task`): the client closes, and every existing closed-connection path applies.
 - **⇒ A deferred constraint trigger that sleeps makes COMMIT itself the slow statement** — the way to test a
-  commit cut off mid-flight (`answer_limit.rs`), and it shows the row landing anyway.
+  commit cut off mid-flight (`answer_limit.rs`). It showed the row landing AFTER the cut, which the second review
+  saw as the hazard: a re-read on a fresh connection overtook it. **⇒ Aborting the client never tells the
+  server:** after a cut, end the old backend (`pg_terminate_backend(pid, timeout)`, matched on `backend_start` too)
+  before trusting any read. And a `tokio::time::timeout` over a guard-holding future is the same trap one level
+  up: time a spawned task instead (`LiveData::standing`).
 
 ### 2026-10-30 (second) — #810 (PR [#890](https://github.com/cairn-ehr/cairn-ehr/pull/890)): four oversized cairn-node files split
 Found HANDOVER stale on arrival again (#889 merged, listed as awaiting); no decision had landed, #875 option 2 needs a

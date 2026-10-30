@@ -85,8 +85,9 @@ fn main() -> anyhow::Result<()> {
     //
     // THIS BINDING IS LOAD-BEARING — do not inline it into the `block_on` below. Commands do
     // NOT run on it (Tauri drives those on its own `tauri::async_runtime`); what it hosts is
-    // the `tokio::spawn`ed tokio_postgres connection task that `connect_and_load_schema`
-    // starts. Drop this runtime and that task stops being polled, so every query for the rest
+    // the `tokio::spawn`ed tokio_postgres connection task of the window's working connection
+    // (`connect_with_task` in `build_live_state`; the schema loader's connection is dropped
+    // once loaded). Drop this runtime and that task stops being polled, so every query for the rest
     // of the session hangs or fails. Keeping it alive until `main` returns is the point.
     // (A connection REOPENED after a loss, #807, spawns its task on Tauri's runtime instead,
     // because the reopen runs inside a command; that runtime lives as long as the app.)
@@ -154,11 +155,9 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     // the same string if it is lost (#807), and cut off when a command holds it too long (#875).
     // Opened apart from the schema load above, which hands back no handle on its task to cut.
     let (client, task) = cairn_node::db::connect_with_task(&cli.conn).await?;
-    let db = std::sync::Arc::new(cairn_gui_live::NodeConnection::reopening(
-        client,
-        task,
-        cli.conn.clone(),
-    ));
+    let db = std::sync::Arc::new(
+        cairn_gui_live::NodeConnection::reopening(client, task, cli.conn.clone()).await?,
+    );
     let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);
     Ok(AppState {
         db: Some(db),

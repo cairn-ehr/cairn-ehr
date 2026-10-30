@@ -194,7 +194,7 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 |---|---|---|---|---|---|---|
 | Sign off refused → chart re-read → "Now part of it: B." | live | | | | ≤ single-chart open time | |
 | "Read this chart again" after a failed read (chart read paused by rename, then restored; 1 act) | live | | | | ≤ single-chart open time | |
-| Press → lost-connection line, the node not answering (§14 (d), table locked) | live | | | | ≤ 15 s (≤ 20 s queued) | |
+| Press → failed-read line, the node not answering (§14 (d), table locked) | live | | | | ≤ 15 s (≤ 35 s queued) | |
 
 | Run | Sentence named exactly the colleague's chart? | Own link announced? (must be no) |
 |---|---|---|

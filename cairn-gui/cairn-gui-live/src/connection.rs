@@ -40,22 +40,29 @@
 //! A socket that dies SILENTLY (a pulled cable, a powered-off remote host) sends nothing, so the
 //! client closes only once `db::connect`'s TCP keepalives give up on it, about a minute idle
 //! (the `cairn-db-keepalive` crate). A query sent on it before then would hang until the OS gives
-//! up on its retransmits (minutes on macOS), holding the lock, so:
+//! up on its retransmits (30 s on Linux, via `tcp_user_timeout`; minutes on macOS), holding the
+//! lock, so:
 //!
 //! - **A hold is cut off after [`NodeConnection::ANSWER_WITHIN`]** (#875 option 2). Every guard
-//!   `lock` hands out starts a watchdog; dropping the guard cancels it. A guard still held at the
-//!   limit has its connection's TASK aborted, so the stuck query fails `connection closed`, as
-//!   after a server hang-up, and the lock is released. Nothing downstream is new: a cut-off
-//!   COMMIT is "not known" (`cairn_node::db_diagnosis::commit_failure` marks any commit the
-//!   server did not answer with an ERROR), and the client is now closed, so the next `lock`
-//!   reopens it. **The limit cannot tell a dead link from a node alive but slower than 15 s**;
-//!   that is why it sits far above the slowest command measured (a patient search on the Pi,
-//!   about 0.9 s). A `fixed` connection has no watchdog: aborting it would kill it for good.
+//!   `lock` or `lock_if_open` hands out starts a watchdog; dropping the guard cancels it. The
+//!   whole HOLD is timed, not one statement. A guard still held at the limit has its client
+//!   marked cut and its connection's TASK aborted, so the stuck query fails `connection closed`,
+//!   as after a server hang-up, and the lock is released. A cut-off COMMIT is "not known"
+//!   (`cairn_node::db_diagnosis::commit_failure` marks any commit the server did not answer with
+//!   an ERROR), and the client is marked cut, so the next `lock` reopens it.
+//! - **The reopen after a cut ends the old backend first.** The server never hears of the cut,
+//!   so the cut statement may still be running, and a cut COMMIT may still land. A re-read that
+//!   ran beside it could say "not recorded" for an act that lands a moment later, and invite a
+//!   second entry (PR #892 review). So the reopen terminates that backend and waits until it has
+//!   ended, and fails the press if it will not.
+//! - **The limit cannot tell a dead link from a node alive but slower than 15 s**; that is why
+//!   it sits far above the slowest command measured (a patient search on the Pi, about 0.9 s). A
+//!   `fixed` connection has no watchdog: aborting it would kill it for good.
 //!
-//! The reopen uses `cairn_node::db::connect_with_task`, not `connect_and_load_schema`: the schema was loaded
-//! at launch, and replaying every `db/*.sql` file takes locks a read never needs (#726). It also
-//! skips the deferred-event re-adjudication `connect_and_load_schema` runs; a window restart, or
-//! any other node process connecting, still does that.
+//! The reopen uses `cairn_node::db::connect_with_task`, not `connect_and_load_schema`: the schema
+//! was loaded at launch, and replaying every `db/*.sql` file takes locks a read never needs
+//! (#726). It also skips the deferred-event re-adjudication `connect_and_load_schema` runs; a
+//! window restart, or any other node process connecting, still does that.
 use cairn_gui_data::port::DataError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -163,30 +170,92 @@ impl Held {
     }
 }
 
-/// One client's connection task and whether a watchdog cut it. Each client gets its own (a
-/// reopen makes a fresh one), so a late watchdog of an old client cannot mark a new one.
+/// One client's connection task, its server backend, and whether a watchdog cut it. Each
+/// client gets its own (a reopen makes a fresh one), so a late watchdog of an old client cannot
+/// mark a new one.
 #[derive(Clone)]
 struct Cutter {
     task: AbortHandle,
+    backend: Backend,
     cut: Arc<AtomicBool>,
 }
 
 impl Cutter {
-    fn new(task: AbortHandle) -> Self {
+    fn new(task: AbortHandle, backend: Backend) -> Self {
         Self {
             task,
+            backend,
             cut: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    /// Mark the client lost, so the next `lock` reopens it rather than hand it out.
+    fn mark_cut(&self) {
+        self.cut.store(true, Ordering::SeqCst);
+    }
+
     /// Mark the client lost, THEN abort its task, so no lock can see it open in between.
     fn cut_off(&self) {
-        self.cut.store(true, Ordering::SeqCst);
+        self.mark_cut();
         self.task.abort();
     }
 
     fn was_cut(&self) -> bool {
         self.cut.load(Ordering::SeqCst)
+    }
+}
+
+/// Which server backend a client talks to. Aborting the client's task does not stop it: a
+/// backend notices its client is gone only when it next writes to the socket, so a statement
+/// that was cut off runs on, and a cut COMMIT may still land (PR #892 review). The reopen after
+/// a cut therefore ends this backend before anything reads (`Backend::end_on`). The start time
+/// is kept beside the pid because the server may give a later backend the same pid.
+#[derive(Clone)]
+struct Backend {
+    pid: i32,
+    started: String,
+}
+
+impl Backend {
+    /// How long a reopen waits for a cut-off backend to end, inside its own
+    /// [`NodeConnection::REOPEN_WITHIN`].
+    const ENDED_WITHIN_MS: i64 = 3_000;
+
+    /// The backend `client` talks to.
+    async fn of(client: &Client) -> Result<Self, tokio_postgres::Error> {
+        let row = client
+            .query_one(
+                "SELECT pid, backend_start::text FROM pg_stat_activity WHERE pid = pg_backend_pid()",
+                &[],
+            )
+            .await?;
+        Ok(Self {
+            pid: row.get(0),
+            started: row.get(1),
+        })
+    }
+
+    /// End this backend from `client`, a fresh connection to the same node, and wait until it
+    /// has ended: whatever it was doing is then decided (committed or rolled back), so the
+    /// re-read that follows a cut-off act says what landed. One already gone is fine. An error
+    /// if it is still running after `ENDED_WITHIN_MS`, so the press fails rather than read a
+    /// state its own earlier act may still change.
+    async fn end_on(&self, client: &Client) -> anyhow::Result<()> {
+        let ended: bool = client
+            .query_one(
+                "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_stat_activity
+                                            WHERE pid = $1 AND backend_start::text = $2)
+                             THEN pg_terminate_backend($1, $3) ELSE true END",
+                &[&self.pid, &self.started, &Self::ENDED_WITHIN_MS],
+            )
+            .await?
+            .get(0);
+        anyhow::ensure!(
+            ended,
+            "the command cut off on the last connection is still running on the node, so what \
+             it saved is not known yet"
+        );
+        Ok(())
     }
 }
 
@@ -212,9 +281,19 @@ impl NodeConnection {
 
     /// A connection that is reopened, from `conn`, when it is lost, and cut off when a command
     /// holds it past [`ANSWER_WITHIN`](Self::ANSWER_WITHIN). The window's. `task` is the
-    /// client's connection task (`cairn_node::db::connect_with_task`).
-    pub fn reopening(client: Client, task: AbortHandle, conn: String) -> Self {
-        Self::new(client, Some(Cutter::new(task)), Some(conn))
+    /// client's connection task (`cairn_node::db::connect_with_task`). Asks the server which
+    /// backend `client` is, so a reopen after a cut can end it (`Backend`).
+    pub async fn reopening(
+        client: Client,
+        task: AbortHandle,
+        conn: String,
+    ) -> Result<Self, tokio_postgres::Error> {
+        let backend = Backend::of(&client).await?;
+        Ok(Self::new(
+            client,
+            Some(Cutter::new(task, backend)),
+            Some(conn),
+        ))
     }
 
     /// A connection that is never replaced, nor cut off. For a caller that made the client
@@ -267,32 +346,70 @@ impl NodeConnection {
     /// held after `answer_within` (the module doc). The timer starts AFTER any reopen, so the
     /// reopen's own 5 s cap is not counted against the command.
     fn watched<'a>(&self, held: MutexGuard<'a, Held>) -> ConnectionGuard<'a> {
-        let limit = self.answer_within;
-        let watchdog = held.cutter.clone().map(|cutter| {
-            tokio::spawn(async move {
-                tokio::time::sleep(limit).await;
-                eprintln!(
-                    "the database did not answer within {limit:?}; cut the connection off \
-                     (a commit in flight is not known)"
-                );
-                cutter.cut_off();
-            })
-            .abort_handle()
-        });
+        let watch = held
+            .cutter
+            .clone()
+            .map(|cutter| Watch::start(cutter, self.answer_within));
         ConnectionGuard {
             client: MutexGuard::map(held, |held| &mut held.client),
+            watch,
+        }
+    }
+}
+
+/// One hold's watchdog. The hold ends once, by whichever comes first: the watchdog at the limit,
+/// or the guard's drop. Each claims `claimed` first, so the two can never both act, and neither
+/// can leave a client cut without the mark (PR #892 review).
+struct Watch {
+    watchdog: AbortHandle,
+    claimed: Arc<AtomicBool>,
+    cutter: Cutter,
+}
+
+impl Watch {
+    fn start(cutter: Cutter, limit: Duration) -> Self {
+        let claimed = Arc::new(AtomicBool::new(false));
+        let watchdog = tokio::spawn({
+            let (claimed, cutter) = (claimed.clone(), cutter.clone());
+            async move {
+                tokio::time::sleep(limit).await;
+                if !claimed.swap(true, Ordering::SeqCst) {
+                    cutter.cut_off();
+                    // The whole hold is timed, not one statement: a command of many quick
+                    // statements is cut too, so the line does not say the node never answered.
+                    eprintln!(
+                        "a command held the database connection past {limit:?}; cut it off \
+                         (a commit in flight is not known)"
+                    );
+                }
+            }
+        })
+        .abort_handle();
+        Self {
             watchdog,
+            claimed,
+            cutter,
+        }
+    }
+
+    /// The guard is being dropped. If the watchdog claimed the hold first, it is cutting the
+    /// client off, maybe on another thread at this moment: mark the client lost HERE, while the
+    /// guard still holds the lock, or the next `lock` could take the dying client.
+    fn end(&self) {
+        self.watchdog.abort();
+        if self.claimed.swap(true, Ordering::SeqCst) {
+            self.cutter.mark_cut();
         }
     }
 }
 
 /// The window's connection while a command holds it: a `Client` (it derefs to one), watched.
 /// Dropping it gives the connection back and cancels the watchdog. A command that finishes at
-/// the very instant the watchdog fires loses its connection anyway; it is marked cut first, so
-/// the next `lock` reopens rather than handing out the dying client.
+/// the very instant the watchdog fires loses its connection anyway, but the next `lock` sees it
+/// lost and reopens (`Watch::end`).
 pub struct ConnectionGuard<'a> {
     client: MappedMutexGuard<'a, Client>,
-    watchdog: Option<AbortHandle>,
+    watch: Option<Watch>,
 }
 
 impl std::ops::Deref for ConnectionGuard<'_> {
@@ -310,8 +427,9 @@ impl std::ops::DerefMut for ConnectionGuard<'_> {
 
 impl Drop for ConnectionGuard<'_> {
     fn drop(&mut self) {
-        if let Some(watchdog) = &self.watchdog {
-            watchdog.abort();
+        // Runs before the fields drop, so before the lock is released.
+        if let Some(watch) = &self.watch {
+            watch.end();
         }
     }
 }
@@ -319,8 +437,9 @@ impl Drop for ConnectionGuard<'_> {
 impl Held {
     /// Put a fresh connection in the closed client's place, unless an attempt failed too
     /// recently. On failure the closed client stays and the cause is returned. An attempt is
-    /// logged either way (the loss itself by `db::connect`'s connection task); a press the
-    /// backoff skips is not, its error goes to the caller only.
+    /// logged either way (the loss itself by the connection task, or by the watchdog for a cut:
+    /// an aborted task logs nothing); a press the backoff skips is not, its error goes to the
+    /// caller only.
     async fn reopen(&mut self, conn: &str) -> Result<(), ConnectionLost> {
         let now = Instant::now();
         if let Some(last) = &self.last_failed {
@@ -329,12 +448,13 @@ impl Held {
                 return Err(lost(&last.cause, last.refused, Some(ago)));
             }
         }
-        let attempt = cairn_node::db::connect_with_task(conn);
+        let cut_off = self.cutter.as_ref().filter(|c| c.was_cut());
+        let attempt = open_after(conn, cut_off.map(|c| &c.backend));
         let (cause, refused) =
             match tokio::time::timeout(NodeConnection::REOPEN_WITHIN, attempt).await {
-                Ok(Ok((fresh, task))) => {
+                Ok(Ok((fresh, cutter))) => {
                     self.client = fresh;
-                    self.cutter = Some(Cutter::new(task));
+                    self.cutter = Some(cutter);
                     self.last_failed = None;
                     eprintln!("the database connection was lost; reopened it");
                     return Ok(());
@@ -367,6 +487,18 @@ impl Held {
         });
         Err(failure)
     }
+}
+
+/// A fresh connection on `conn`, with its cutter. When the client it replaces was CUT OFF, its
+/// backend is ended first (`Backend::end_on`), so the first read on the fresh one is final.
+/// Inside the reopen's timeout: a fresh client given up on is dropped, which closes it.
+async fn open_after(conn: &str, cut_off: Option<&Backend>) -> anyhow::Result<(Client, Cutter)> {
+    let (client, task) = cairn_node::db::connect_with_task(conn).await?;
+    if let Some(old) = cut_off {
+        old.end_on(&client).await?;
+    }
+    let backend = Backend::of(&client).await?;
+    Ok((client, Cutter::new(task, backend)))
 }
 
 /// A failed reopen, its text derived from the same `refused` it carries, so the words and the

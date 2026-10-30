@@ -504,10 +504,12 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   Every `NodeConnection` guard starts a watchdog; at 15 s it aborts the connection task
   (`cairn_node::db::connect_with_task`), so a stuck command fails `connection closed`, a cut-off COMMIT reads "not
   known" and the next press reopens. `src-ui/waiting.js` wraps the one `invoke`: "Waiting for the node…" after 2 s,
-  "Reconnecting…" at 15 s. Both numbers the maintainer's. The brainstorm also filed **#891** (an open chart's events
-  go first in sync). RUNBOOK §14 (d) owed.
+  "Reconnecting…" at 15 s. Both numbers the maintainer's. The review round added: the reopen after a cut ENDS the
+  old backend before anything reads (a cut COMMIT could otherwise land after a re-read said "not recorded"), and
+  filed **#893** (a cut-off reads as plain "connection closed") and **#894** (measure long multi-statement holds over
+  a WAN). The brainstorm also filed **#891** (an open chart's events go first in sync). RUNBOOK §14 (d) owed.
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c), (d); **#804** (needs #690); decisions **#866**, **#867**,
-  **#825**, **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#891** (brainstorm first); then
+  **#825**, **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#893**, **#894**, **#891** (brainstorm first); then
   HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
