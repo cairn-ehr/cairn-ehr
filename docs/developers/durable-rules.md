@@ -30,7 +30,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   every guard `lock`/`lock_if_open` hands out (`ConnectionGuard`) starts a watchdog that, at the limit, ABORTS the
   client's connection task (`cairn_node::db::connect_with_task`'s handle), so the stuck query fails `connection
   closed` and nothing downstream is new: a cut-off COMMIT is "not known" via `commit_failure`, and the next `lock`
-  reopens. The window's connection is opened apart from the schema load for that handle. The webview's waiting bar
+  reopens. The watchdog marks the client cut BEFORE aborting (`Cutter::cut_off`; `Held::is_lost` reads the mark),
+  because `is_closed()` turns true only once the task is dropped — unpinned, the window is too narrow to stage. The window's connection is opened apart from the schema load for that handle. The webview's waiting bar
   (`src-ui/waiting.js`) shows only after 2 s and runs out at the same 15 s (`NODE_ANSWERS_WITHIN_MS`), then says
   "Reconnecting…". Pins: `tests/answer_limit.rs` (mutation-checked: without the abort both cut-off tests fail),
   `waiting_webview_tests.rs`. **Tempting wrong fixes:** a `tokio::time::timeout` around a call site — dropping the

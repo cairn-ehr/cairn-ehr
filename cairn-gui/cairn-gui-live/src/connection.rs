@@ -57,6 +57,8 @@
 //! skips the deferred-event re-adjudication `connect_and_load_schema` runs; a window restart, or
 //! any other node process connecting, still does that.
 use cairn_gui_data::port::DataError;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use tokio::task::AbortHandle;
@@ -147,9 +149,45 @@ pub struct NodeConnection {
 /// under ONE tokio mutex, so the failure stamp needs no lock of its own.
 struct Held {
     client: Client,
-    /// The client's connection task, which the watchdog aborts. `None` for a `fixed` connection.
-    task: Option<AbortHandle>,
+    /// What the watchdog cuts this client off with. `None` for a `fixed` connection.
+    cutter: Option<Cutter>,
     last_failed: Option<Failed>,
+}
+
+impl Held {
+    /// Is this client gone: closed, or cut off by a watchdog? The flag answers at once, where
+    /// `is_closed()` turns true only once the aborted task has actually been dropped, so a
+    /// command taking the lock in between would otherwise run on a dying client (PR #892 review).
+    fn is_lost(&self) -> bool {
+        self.client.is_closed() || self.cutter.as_ref().is_some_and(Cutter::was_cut)
+    }
+}
+
+/// One client's connection task and whether a watchdog cut it. Each client gets its own (a
+/// reopen makes a fresh one), so a late watchdog of an old client cannot mark a new one.
+#[derive(Clone)]
+struct Cutter {
+    task: AbortHandle,
+    cut: Arc<AtomicBool>,
+}
+
+impl Cutter {
+    fn new(task: AbortHandle) -> Self {
+        Self {
+            task,
+            cut: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Mark the client lost, THEN abort its task, so no lock can see it open in between.
+    fn cut_off(&self) {
+        self.cut.store(true, Ordering::SeqCst);
+        self.task.abort();
+    }
+
+    fn was_cut(&self) -> bool {
+        self.cut.load(Ordering::SeqCst)
+    }
 }
 
 /// The last failed reopen. `refused` is stored WITH the cause, so a press inside the backoff
@@ -169,14 +207,14 @@ impl NodeConnection {
 
     /// How long a command may hold the connection before it is cut off (#875 option 2): the
     /// maintainer's ruling, "any longer is unrealistic to expect ongoing engagement". The
-    /// window's waiting bar (`main.js`'s `NODE_ANSWERS_WITHIN_MS`) is pinned to it.
+    /// window's waiting bar (`waiting.js`'s `NODE_ANSWERS_WITHIN_MS`) is pinned to it.
     pub const ANSWER_WITHIN: Duration = Duration::from_secs(15);
 
     /// A connection that is reopened, from `conn`, when it is lost, and cut off when a command
     /// holds it past [`ANSWER_WITHIN`](Self::ANSWER_WITHIN). The window's. `task` is the
     /// client's connection task (`cairn_node::db::connect_with_task`).
     pub fn reopening(client: Client, task: AbortHandle, conn: String) -> Self {
-        Self::new(client, Some(task), Some(conn))
+        Self::new(client, Some(Cutter::new(task)), Some(conn))
     }
 
     /// A connection that is never replaced, nor cut off. For a caller that made the client
@@ -192,11 +230,11 @@ impl NodeConnection {
         self
     }
 
-    fn new(client: Client, task: Option<AbortHandle>, reopen_from: Option<String>) -> Self {
+    fn new(client: Client, cutter: Option<Cutter>, reopen_from: Option<String>) -> Self {
         Self {
             held: Mutex::new(Held {
                 client,
-                task,
+                cutter,
                 last_failed: None,
             }),
             reopen_from,
@@ -211,7 +249,7 @@ impl NodeConnection {
     /// error.
     pub async fn lock(&self) -> Result<ConnectionGuard<'_>, ConnectionLost> {
         let mut held = self.held.lock().await;
-        if held.client.is_closed() {
+        if held.is_lost() {
             if let Some(conn) = &self.reopen_from {
                 held.reopen(conn).await?;
             }
@@ -222,7 +260,7 @@ impl NodeConnection {
     /// Take the connection only if it is open, never reopening it (see the module doc).
     pub async fn lock_if_open(&self) -> Option<ConnectionGuard<'_>> {
         let held = self.held.lock().await;
-        (!held.client.is_closed()).then(|| self.watched(held))
+        (!held.is_lost()).then(|| self.watched(held))
     }
 
     /// Hand the held client out, starting the watchdog that cuts it off if the guard is still
@@ -230,14 +268,14 @@ impl NodeConnection {
     /// reopen's own 5 s cap is not counted against the command.
     fn watched<'a>(&self, held: MutexGuard<'a, Held>) -> ConnectionGuard<'a> {
         let limit = self.answer_within;
-        let watchdog = held.task.clone().map(|task| {
+        let watchdog = held.cutter.clone().map(|cutter| {
             tokio::spawn(async move {
                 tokio::time::sleep(limit).await;
                 eprintln!(
                     "the database did not answer within {limit:?}; cut the connection off \
                      (a commit in flight is not known)"
                 );
-                task.abort();
+                cutter.cut_off();
             })
             .abort_handle()
         });
@@ -250,7 +288,8 @@ impl NodeConnection {
 
 /// The window's connection while a command holds it: a `Client` (it derefs to one), watched.
 /// Dropping it gives the connection back and cancels the watchdog. A command that finishes at
-/// the very instant the watchdog fires loses an idle connection, which the next `lock` reopens.
+/// the very instant the watchdog fires loses its connection anyway; it is marked cut first, so
+/// the next `lock` reopens rather than handing out the dying client.
 pub struct ConnectionGuard<'a> {
     client: MappedMutexGuard<'a, Client>,
     watchdog: Option<AbortHandle>,
@@ -295,7 +334,7 @@ impl Held {
             match tokio::time::timeout(NodeConnection::REOPEN_WITHIN, attempt).await {
                 Ok(Ok((fresh, task))) => {
                     self.client = fresh;
-                    self.task = Some(task);
+                    self.cutter = Some(Cutter::new(task));
                     self.last_failed = None;
                     eprintln!("the database connection was lost; reopened it");
                     return Ok(());

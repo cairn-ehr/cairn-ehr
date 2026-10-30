@@ -26,6 +26,9 @@ let drawnWait = null;
 /** The timer that turns the bar's line to "Reconnecting…" when it runs out. */
 let runOutTimer = null;
 
+/** The timer that draws the bar for a wait not yet at the delay (see `drawWait`). */
+let drawAgainTimer = null;
+
 /**
  * `send` (Tauri's invoke), with every call it makes counted as a wait. The bar is drawn 2 s
  * after a call if it is still pending, and redrawn whenever one ends.
@@ -66,11 +69,15 @@ function drawWait() {
   const fill = document.getElementById("node-wait-fill");
   const oldest = oldestWait(pendingWaits);
   const waited = oldest === null ? 0 : performance.now() - oldest.sentAt;
+  clearTimeout(drawAgainTimer);
   if (oldest === null || waited < WAIT_SHOWN_AFTER_MS) {
-    // A newer wait still under 2 s draws itself when its own timer fires.
     bar.hidden = true;
     drawnWait = null;
     clearTimeout(runOutTimer);
+    // Come back when the oldest wait reaches the delay. Its own timer may have fired a
+    // millisecond early, and nothing else would draw the bar until another call ended
+    // (PR #892 review).
+    if (oldest !== null) drawAgainTimer = setTimeout(drawWait, WAIT_SHOWN_AFTER_MS - waited);
     return;
   }
   if (oldest === drawnWait) return;

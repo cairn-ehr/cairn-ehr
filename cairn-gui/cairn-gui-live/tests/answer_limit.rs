@@ -132,3 +132,23 @@ async fn a_commit_cut_off_is_not_known_and_may_land() {
         .await
         .expect("the probe table dropped");
 }
+
+/// The HOLD is timed, not a query: a command that keeps the guard past the limit between
+/// statements loses the connection too, and the next lock opens a fresh one. (That the
+/// watchdog marks the client cut BEFORE aborting its task, so a lock in the instant between
+/// cannot take the dying client, is NOT pinned here: the window is too narrow to stage, and
+/// this test passes with the mark removed. `Held::is_lost` carries the reasoning.)
+#[tokio::test]
+async fn a_hold_kept_past_the_limit_between_statements_is_cut_off() {
+    let Some(cs) = common::cs() else { return };
+    let (_reader, _guard) = common::connect(&cs).await;
+    let db = watched(&cs).await;
+    let before = backend_pid(&db).await;
+
+    {
+        let _held = db.lock().await.expect("open");
+        tokio::time::sleep(LIMIT + Duration::from_millis(200)).await;
+    }
+
+    assert_ne!(backend_pid(&db).await, before, "a fresh connection");
+}
