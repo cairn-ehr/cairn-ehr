@@ -483,40 +483,24 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `hold_text::row_hold_and_stop_lines`, tested) · PR #873 (#855 + #837 item 1: db/059 section 8 locks each hold
   before its check, so a second local release is refused and reported STALE, ADR-0082 erratum E1; a nurse's W on a
   doctor's prescription pinned). All merged by 2026-10-28.
-- **2026-10-28 — the window reopens a lost connection (#807).** PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874): the shared connection is a
-  `cairn_gui_live::NodeConnection` whose `lock` swaps in a fresh client when the old one has closed — never on a
-  refusal, never mid-command, 2 s backoff, 5 s attempt cap (`tests/reconnect.rs`). The sentences that pointed at
-  "Read this chart again" or "once the window can reach the node again" are now true. RUNBOOK §14 check (c) owed.
-  Review: filed **#875** (a silently dead socket hangs the window) and **#876** (a failed reopen's cause reaches only
-  the log). Merged 2026-10-28. Then #875 option 1 (PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)): `db::connect` sets TCP
-  keepalives and a Linux-only `tcp_user_timeout` for every `db::connect` caller (`cairn_node::db_keepalive`); #875 stays open for
-  the in-flight hang off Linux. Review: filed **#878** (the `cairn-sync` binary's own connections lack them).
-  Merged 2026-10-28. Then #876 (PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)): a reopen that fails is an
-  error naming its cause on screen, not "connection closed"; gesture timing never spends the reopen attempt.
-  Review: filed **#880** (a reconnect the server refused still offers Retry) and **#881** (a departed chart's
-  unread line drops its cause). Merged 2026-10-29.
-- **2026-10-29 — a reopen the server refused asks for an operator (#880 + #881).** PR [#883](https://github.com/cairn-ehr/cairn-ehr/pull/883): `db::connect` fails with `cairn_node::db::ConnectFailed` (text unchanged,
-  SQLSTATE kept beside it); a reopen refused with class `28`, `3D000`, `42501` or `55000` is `NotProvisioned` →
-  `Retry::AfterOperator` on every press, the backoff's included (`tests/reconnect.rs` drives a real `3D000`); a
-  departed chart's unread line names why its read failed, once (#881); the front door's search keeps "NOT a no match"
-  for an operator's failure. RUNBOOK §14 (c) gained the refused case. The write gestures' first read (`read_chart_of`)
-  keeps the class too. Review: filed **#882** (sticky provisioning line), **#884** (client-side auth refusals carry no
-  SQLSTATE), **#885** (the remedy said twice).
-- **2026-10-29 — cairn-sync's own connections notice a dead peer (#878).** PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886): #875's settings move to a new
-  crate `cairn-db-keepalive` (was `cairn_node::db_keepalive`); every production connection the `cairn-sync` binary
-  opens is built from `db_config(conn)`, which applies them (`keepalive_tests` pins the config and that every
-  production `NoTls` connect in `src/*.rs` is matched by a `db_config(` call). Both binaries now bound a silently
-  dead remote Postgres the same way.
-- **2026-10-30 — the front door's operator line clears once mended; a remedy is said once (#882 + #885).** PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887):
-  `funnel_status` probes the node's standing on every call (the launch-only probe and `AppState.provisioning` are
-  gone), and `funnel.js` asks again after a successful search while its top line warns — never "clear on success",
-  which would wipe a true enrolment warning (#882). A refused reopen's text ends in one exported remedy
-  (`says_operator_remedy`); the register, search and judgement wrappers do not restate it, and the stale-list banners
-  name "Read this chart again" without ordering a press (#885). RUNBOOK §14 (c) gained both checks. Second review:
-  the probe is bounded at twice a reopen's wait, since `boot()` shows the front door only after it answers; filed
-  **#888** (the line's wording around a refused reopen).
+- **2026-10-28/30 — the window reopens a lost connection, and says why when it cannot (#807 → #888).** PR
+  [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874) (#807): `cairn_gui_live::NodeConnection::lock` swaps in a fresh client once the old one
+  has closed — never on a refusal, never mid-command, 2 s backoff, 5 s cap (`tests/reconnect.rs`). PR #877 + #886
+  (#875 option 1, #878): TCP keepalives + Linux `tcp_user_timeout` for every `db::connect` and `cairn-sync`
+  connection (crate `cairn-db-keepalive`). PR #879 (#876): the cause reaches the screen. PR #883 (#880 + #881):
+  `db::connect` fails with `ConnectFailed` (SQLSTATE kept); a reopen the server refused (class `28`, `3D000`, `42501`,
+  `55000`) is `NotProvisioned` → `Retry::AfterOperator`. PR #887 (#882 + #885): the front door's standing is probed on
+  every `funnel_status` (bounded), so a mend clears its line; a refused reopen's remedy is said once. All merged
+  by 2026-10-29. RUNBOOK §14 (c) owed.
+- **2026-10-30 — a refusal the client library raises asks for an operator too (#884 + #888).** PR [#889](https://github.com/cairn-ehr/cairn-ehr/pull/889):
+  `ConnectFailed::refused_by_client()` marks tokio-postgres's own deterministic refusals ("password missing", an
+  unsupported auth method, a SCRAM failure, an unparseable string), which carry no SQLSTATE, so such a reopen is
+  `NotProvisioned`, not a retry forever, and says the workstation (not the node) refused (`cairn_gui_live::Refusal`;
+  #884; a fake node driving the real library pins the wording, `db_diagnosis.rs`, `reconnect.rs`). The front door's
+  provisioning line says any failed reopen without its press framing, via `cairn_gui_live::failed_reopen_cause` (#888).
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
-  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2), **#884**, **#888**; then HANDOVER's ⇒ NEXT. #699 stays open.
+  **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2, brainstorm first); then
+  HANDOVER's ⇒ NEXT. #699 stays open.
 
 ## Above the foundation line (NOT in this roadmap)
 

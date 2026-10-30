@@ -449,11 +449,12 @@ pub fn connection_ended_line(label: &str, e: &tokio_postgres::Error) -> String {
 }
 
 /// Why [`connect`] failed: the legible line an operator reads, plus the SQLSTATE the server
-/// answered with, if it answered at all (#880).
+/// answered with, if it answered at all (#880), and whether the client library refused on its
+/// own (#884).
 ///
-/// The code is kept so a caller can tell a server that REFUSED the connection (a rejected
-/// password, a dropped database: retrying cannot help until an operator acts) from one that
-/// could not be reached (an outage: the next try may work). Reach it with
+/// Both are kept so a caller can tell a REFUSED connection (a rejected password, a dropped
+/// database, a password the connection string lacks: retrying cannot help until an operator
+/// acts) from one that could not be reached (an outage: the next try may work). Reach them with
 /// `err.downcast_ref::<ConnectFailed>()`.
 ///
 /// It deliberately has no `source()`. The text has already rendered the whole
@@ -463,14 +464,37 @@ pub fn connection_ended_line(label: &str, e: &tokio_postgres::Error) -> String {
 pub struct ConnectFailed {
     text: String,
     sqlstate: Option<String>,
+    refused_by_client: bool,
 }
 
 impl ConnectFailed {
     /// The SQLSTATE the server answered with; `None` when no server answered (a refused
-    /// socket, an unresolvable host) or the connection string did not parse.
+    /// socket, an unresolvable host), the connection string did not parse, or the client
+    /// library refused on its own ([`refused_by_client`](Self::refused_by_client)).
     pub fn sqlstate(&self) -> Option<&str> {
         self.sqlstate.as_deref()
     }
+
+    /// Did tokio-postgres itself give up for a reason retrying cannot change (#884)? A password
+    /// the server asks for but the connection string lacks, an authentication method or SCRAM
+    /// exchange it cannot complete, a configuration it cannot use. These carry no SQLSTATE, so
+    /// without this flag a caller would read them as an outage.
+    pub fn refused_by_client(&self) -> bool {
+        self.refused_by_client
+    }
+}
+
+/// Is `kind` (a `tokio_postgres::Error`'s own `Display`, its category) one the client raises
+/// for a deterministic refusal (#884)? tokio-postgres's `Kind` is private, so its rendered
+/// words are all there is; `tests/db_diagnosis.rs` drives the real library to pin them.
+/// `Io`, `Connect`, `Timeout` and `Closed` are left out: the next try may get through. Pure.
+fn client_refusal(kind: &str) -> bool {
+    [
+        "authentication error",
+        "invalid configuration",
+        "invalid connection string",
+    ]
+    .contains(&kind)
 }
 
 impl From<&tokio_postgres::Error> for ConnectFailed {
@@ -478,6 +502,7 @@ impl From<&tokio_postgres::Error> for ConnectFailed {
         Self {
             text: format!("connecting to the database: {}", legible_db_error(e)),
             sqlstate: e.as_db_error().map(|db| db.code().code().to_string()),
+            refused_by_client: client_refusal(&e.to_string()),
         }
     }
 }
@@ -493,8 +518,9 @@ impl std::error::Error for ConnectFailed {}
 /// Open a connection to the node's database.
 ///
 /// Every error is a [`ConnectFailed`] (reach it with `downcast_ref`), and must stay one: the
-/// window's reopen reads its SQLSTATE to tell a refusal from an outage (#880). Re-wrapping it as
-/// text, or as another error's `source`, would quietly make every refusal read as an outage.
+/// window's reopen reads its SQLSTATE and `refused_by_client` to tell a refusal from an outage
+/// (#880, #884). Re-wrapping it as text, or as another error's `source`, would quietly make
+/// every refusal read as an outage.
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // The connection string is NEVER echoed into the error — it can carry a password.
     // What the operator needs is the reason, and it arrives by two different routes.

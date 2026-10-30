@@ -29,9 +29,10 @@
 //!   (#876). A press inside the backoff tries nothing, and its error says when the last attempt
 //!   failed, so it does not read like a fresh failure. A caller that decides a retry classifies
 //!   it through `From` into a `DataError`: an outage they may retry (`Unavailable`), unless the
-//!   server ANSWERED and refused the reopen (a rejected password, a dropped database), which
-//!   only an operator can mend (`NotProvisioned`, #880). A caller that only shows the error
-//!   shows its text, which names the remedy either way.
+//!   reopen was REFUSED, which only an operator can mend (`NotProvisioned`): by the server (a
+//!   rejected password, a dropped database, #880) or by the client library (a password the
+//!   window was not given, #884). A caller that only shows the error shows its text, which
+//!   names the remedy either way, and who refused ([`Refusal`]).
 //! - **Gesture timing uses [`NodeConnection::lock_if_open`]**, which never reopens: the write
 //!   that follows an act must not spend the reopen attempt (and start the backoff) the act's own
 //!   re-read needs.
@@ -57,8 +58,33 @@ use tokio_postgres::Client;
 #[derive(Debug, Clone)]
 pub struct ConnectionLost {
     text: String,
-    /// The server answered the reopen and refused it ([`server_refused`], #880).
-    refused: bool,
+    /// Who refused the reopen, if anyone did. Retrying a refusal cannot help until an operator
+    /// acts; `None` is an outage.
+    refused: Option<Refusal>,
+}
+
+/// Who refused a reopen that only an operator can mend. Kept apart because the text must name
+/// the right one: an operator told "the node refused" looks for a rejected login in the
+/// server's log, and a client refusal left none (#884 review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The server answered and refused (`server_refused`, #880).
+    Server,
+    /// The client library gave up on what the server asked for: a password the connection
+    /// string lacks, an authentication method it cannot do, a server proof that did not check
+    /// out (`cairn_node::db::ConnectFailed::refused_by_client`, #884).
+    Client,
+}
+
+impl Refusal {
+    /// What happened, as a sentence without its full stop. The ONE wording of each: the reopen's
+    /// text and the front door's provisioning line both say it.
+    pub fn clause(self) -> &'static str {
+        match self {
+            Refusal::Server => "The node answered and refused the connection",
+            Refusal::Client => "This workstation could not complete the sign-in the node asked for",
+        }
+    }
 }
 
 impl std::fmt::Display for ConnectionLost {
@@ -70,25 +96,26 @@ impl std::fmt::Display for ConnectionLost {
 impl std::error::Error for ConnectionLost {}
 
 impl ConnectionLost {
-    /// For OTHER crates' tests only (the window classifies one without a database to lose).
-    /// Production builds a `ConnectionLost` in `Held::reopen` alone, through `lost`.
+    /// For OTHER crates' tests only (the window classifies one without a database to lose);
+    /// `refused` stands for a server's refusal. Production builds a `ConnectionLost` in
+    /// `Held::reopen` alone, through `lost`.
     #[doc(hidden)]
     pub fn for_tests(text: &str, refused: bool) -> Self {
         Self {
             text: text.into(),
-            refused,
+            refused: refused.then_some(Refusal::Server),
         }
     }
 }
 
 /// The ONE place a lost connection is classified into a `DataError` (`data_error_from` and the
 /// window's `ErrorView` conversion both defer to it). An outage,
-/// retried by pressing again: the node may be back by then. A reopen the server REFUSED fails
-/// every press the same way until an operator acts, so it is `NotProvisioned`: a retry-now
-/// would hide the remedy (#880).
+/// retried by pressing again: the node may be back by then. A REFUSED reopen, by the server
+/// (#880) or the client library (#884), fails every press the same way until an operator acts,
+/// so it is `NotProvisioned`: a retry-now would hide the remedy.
 impl From<ConnectionLost> for DataError {
     fn from(lost: ConnectionLost) -> Self {
-        if lost.refused {
+        if lost.refused.is_some() {
             DataError::NotProvisioned(lost.text)
         } else {
             DataError::Unavailable(lost.text)
@@ -115,7 +142,7 @@ struct Held {
 struct Failed {
     at: Instant,
     cause: String,
-    refused: bool,
+    refused: Option<Refusal>,
 }
 
 impl NodeConnection {
@@ -191,15 +218,22 @@ impl Held {
                     return Ok(());
                 }
                 Ok(Err(e)) => {
-                    // `db::connect`'s own error keeps the server's code beside its text (#880).
-                    let code = e
+                    // `db::connect`'s own error keeps the server's code beside its text (#880),
+                    // and marks a refusal the client library raised itself, which has none (#884).
+                    let refused = e
                         .downcast_ref::<cairn_node::db::ConnectFailed>()
-                        .and_then(cairn_node::db::ConnectFailed::sqlstate);
-                    (format!("{e:#}"), server_refused(code))
+                        .and_then(|f| {
+                            if server_refused(f.sqlstate()) {
+                                Some(Refusal::Server)
+                            } else {
+                                f.refused_by_client().then_some(Refusal::Client)
+                            }
+                        });
+                    (format!("{e:#}"), refused)
                 }
                 Err(_) => (
                     format!("no answer within {:?}", NodeConnection::REOPEN_WITHIN),
-                    false,
+                    None,
                 ),
             };
         let failure = lost(&cause, refused, None);
@@ -215,7 +249,7 @@ impl Held {
 
 /// A failed reopen, its text derived from the same `refused` it carries, so the words and the
 /// class can never disagree. The only way production builds a [`ConnectionLost`]. Pure.
-fn lost(cause: &str, refused: bool, skipped: Option<Duration>) -> ConnectionLost {
+fn lost(cause: &str, refused: Option<Refusal>, skipped: Option<Duration>) -> ConnectionLost {
     ConnectionLost {
         text: lost_text(cause, refused, skipped),
         refused,
@@ -229,9 +263,11 @@ fn lost(cause: &str, refused: bool, skipped: Option<Duration>) -> ConnectionLost
 /// may get past: `53300` (too many connections) and `57P03` (starting up) are the server saying
 /// "not now", not "never". Pure.
 ///
-/// Known limits, each erring towards "press again" (filed as #884 where not inherent):
-/// - A refusal the CLIENT library raises carries no code: a password the server asks for but
-///   the connection string lacks, a SCRAM or SASL failure. Those read as an outage (#884).
+/// A refusal the CLIENT library raises carries no code (a password the server asks for but the
+/// connection string lacks, a SCRAM or SASL failure); `ConnectFailed::refused_by_client` marks
+/// those, beside this, at the one call site, as [`Refusal::Client`] (#884).
+///
+/// Known limits, each erring towards "press again":
 /// - Against several hosts, or a name resolving to several addresses, only the LAST attempt's
 ///   error comes back, so an earlier host's refusal can hide behind a later one's outage.
 /// - `CONNECTION LIMIT 0` answers `53300`, the same as a full server.
@@ -242,37 +278,35 @@ fn server_refused(sqlstate: Option<&str>) -> bool {
         .is_some_and(|code| code.starts_with("28") || ["3D000", "42501", "55000"].contains(&code))
 }
 
-/// What a failed reopen says (#876). `refused` is [`server_refused`]'s answer: the text then
-/// names the operator instead of the next press. `skipped` is how long ago the last attempt
-/// failed, when this press was inside the backoff and tried nothing. Nothing retries on a
-/// timer, so an outage's text names the press that will. Pure.
-fn lost_text(cause: &str, refused: bool, skipped: Option<Duration>) -> String {
+/// What a failed reopen says (#876). `refused` says who refused, if anyone did: the text then
+/// says which ([`Refusal::clause`]) and names the operator instead of the next press. `skipped`
+/// is how long ago the last attempt failed, when this press was inside the backoff and tried
+/// nothing. Nothing retries on a timer, so an outage's text names the press that will. Pure.
+fn lost_text(cause: &str, refused: Option<Refusal>, skipped: Option<Duration>) -> String {
     let head = match skipped {
-        None => "connection to the node was lost and could not be reopened".to_string(),
+        None => format!("{LOST_HEAD} and could not be reopened"),
         Some(ago) => {
             // In whole tenths, the age rounded down: the two figures add up to the backoff,
             // and the wait inside it is never "0.0 s".
             let ago = ago.as_millis() / 100;
             let wait = (NodeConnection::RETRY_AFTER.as_millis() / 100).saturating_sub(ago);
             let tenths = |t: u128| format!("{}.{}", t / 10, t % 10);
-            let next = if refused {
-                String::new()
-            } else {
-                format!(" (press again in {} s to retry)", tenths(wait))
+            let next = match refused {
+                Some(_) => String::new(),
+                None => format!(" (press again in {} s to retry)", tenths(wait)),
             };
             format!(
-                "connection to the node was lost; reopening it failed {} s ago, so this press \
-                 tried nothing{next}",
+                "{LOST_HEAD}; reopening it failed {} s ago, so this press tried nothing{next}",
                 tenths(ago),
             )
         }
     };
-    if refused {
-        format!(
-            "{head}: {cause}. The node answered and refused the connection, so {OPERATOR_REMEDY}"
-        )
-    } else {
-        format!("{head}: {cause}")
+    match refused {
+        Some(r) => format!(
+            "{head}: {cause}. {}{REMEDY_JOIN}{OPERATOR_REMEDY}",
+            r.clause()
+        ),
+        None => format!("{head}: {cause}"),
     }
 }
 
@@ -285,6 +319,32 @@ const OPERATOR_REMEDY: &str = "pressing again fails the same way until an operat
 /// reopen's text does; an enrolment refusal or an outage does not)? Pure.
 pub fn says_operator_remedy(text: &str) -> bool {
     text.ends_with(OPERATOR_REMEDY)
+}
+
+/// How every failed reopen's text begins, and what joins a refusal's clause to its remedy.
+/// Shared by [`lost_text`], which writes them, and [`failed_reopen_cause`], which reads them back.
+const LOST_HEAD: &str = "connection to the node was lost";
+const REMEDY_JOIN: &str = ", so ";
+
+/// A failed reopen's text read back: its bare cause, and who refused it if anyone did; `None`
+/// for any text `lost_text` did not write. For a line that is not a press (the front door's
+/// provisioning line after a reload, #888), where "pressing again" and "this press tried
+/// nothing" would be untrue. The heads `lost_text` writes contain no ": ", so the first one
+/// ends the head. Pure.
+pub fn failed_reopen_cause(text: &str) -> Option<(&str, Option<Refusal>)> {
+    let (_head, rest) = text.strip_prefix(LOST_HEAD)?.split_once(": ")?;
+    let Some(body) = rest
+        .strip_suffix(OPERATOR_REMEDY)
+        .and_then(|r| r.strip_suffix(REMEDY_JOIN))
+    else {
+        return Some((rest, None));
+    };
+    [Refusal::Server, Refusal::Client]
+        .into_iter()
+        .find_map(|r| {
+            let cause = body.strip_suffix(r.clause())?.strip_suffix(". ")?;
+            Some((cause, Some(r)))
+        })
 }
 
 /// May a reopen be attempted `now`, given when the last attempt failed? Pure.
@@ -301,12 +361,57 @@ mod tests {
     #[test]
     fn only_a_refused_reopen_says_the_operator_remedy() {
         for skipped in [None, Some(Duration::from_millis(500))] {
-            assert!(says_operator_remedy(&lost_text("c", true, skipped)));
-            assert!(!says_operator_remedy(&lost_text("c", false, skipped)));
+            assert!(says_operator_remedy(&lost_text(
+                "c",
+                Some(Refusal::Server),
+                skipped
+            )));
+            assert!(!says_operator_remedy(&lost_text("c", None, skipped)));
         }
         assert!(!says_operator_remedy(
             "this node's signing key k is not enrolled"
         ));
+    }
+
+    /// #888: a line that is not a press (the front door's provisioning line) gets back the bare
+    /// cause of every text `lost_text` writes, and who refused it if anyone did; any other text
+    /// is not a failed reopen's, even one that ends in the remedy.
+    #[test]
+    fn a_failed_reopen_gives_back_its_bare_cause_and_who_refused() {
+        let cause = "connecting to the database: password authentication failed [28P01]";
+        for skipped in [None, Some(Duration::from_millis(500))] {
+            for refused in [None, Some(Refusal::Server), Some(Refusal::Client)] {
+                assert_eq!(
+                    failed_reopen_cause(&lost_text(cause, refused, skipped)),
+                    Some((cause, refused)),
+                    "{refused:?} {skipped:?}"
+                );
+            }
+        }
+        assert_eq!(
+            failed_reopen_cause("this node's key k is not enrolled"),
+            None
+        );
+        let not_a_reopen = format!(
+            "the cause. {}, so {OPERATOR_REMEDY}",
+            Refusal::Server.clause()
+        );
+        assert_eq!(failed_reopen_cause(&not_a_reopen), None);
+    }
+
+    /// #884 review: a refusal the CLIENT raised (a password the window lacks, a server proof
+    /// that did not check out) never says the node refused: an operator sent to the server's
+    /// logs would find no rejected login. It still names the operator, never the next press.
+    #[test]
+    fn a_client_refusal_is_not_said_to_be_the_nodes() {
+        let cause = "connecting to the database: invalid configuration: password missing";
+        for skipped in [None, Some(Duration::from_millis(500))] {
+            let text = lost_text(cause, Some(Refusal::Client), skipped);
+            assert!(!text.contains("refused the connection"), "{text}");
+            assert!(text.contains("could not complete the sign-in"), "{text}");
+            assert!(says_operator_remedy(&text), "{text}");
+            assert!(!text.contains("press again in"), "{text}");
+        }
     }
 
     /// #876: the cause reaches the screen, and a press the backoff skipped says so instead of
@@ -314,18 +419,18 @@ mod tests {
     #[test]
     fn a_failed_reopen_names_its_cause_and_whether_this_press_tried() {
         let cause = "connecting to the database: connection refused (os error 61)";
-        let now = lost_text(cause, false, None);
+        let now = lost_text(cause, None, None);
         assert!(now.contains("could not be reopened"), "{now}");
         assert!(now.ends_with(cause), "the cause, verbatim: {now}");
 
         // Nothing retries on a timer: the text names the PRESS that will try, never "is tried".
-        let skipped = lost_text(cause, false, Some(Duration::from_millis(500)));
+        let skipped = lost_text(cause, None, Some(Duration::from_millis(500)));
         assert!(skipped.contains("failed 0.5 s ago"), "{skipped}");
         assert!(skipped.contains("press again in 1.5 s"), "{skipped}");
         assert!(skipped.ends_with(cause), "{skipped}");
 
         // Near the end of the backoff the two figures still add up, and the wait is never 0.0.
-        let late = lost_text(cause, false, Some(Duration::from_millis(1960)));
+        let late = lost_text(cause, None, Some(Duration::from_millis(1960)));
         assert!(late.contains("failed 1.9 s ago"), "{late}");
         assert!(late.contains("press again in 0.1 s"), "{late}");
     }
@@ -336,7 +441,7 @@ mod tests {
     fn a_lost_connection_is_an_outage_that_keeps_its_cause() {
         let lost = ConnectionLost {
             text: "the cause".into(),
-            refused: false,
+            refused: None,
         };
         assert!(matches!(DataError::from(lost), DataError::Unavailable(t) if t == "the cause"));
     }
@@ -368,14 +473,14 @@ mod tests {
     fn a_refused_reopen_names_the_operator_by_every_route() {
         let cause = "connecting to the database: password authentication failed [28P01]";
         for skipped in [None, Some(Duration::from_millis(500))] {
-            let text = lost_text(cause, true, skipped);
+            let text = lost_text(cause, Some(Refusal::Server), skipped);
             assert!(text.contains(cause), "{text}");
             assert!(text.contains("until an operator acts"), "{text}");
             assert!(!text.contains("press again in"), "{text}");
         }
         let lost = ConnectionLost {
             text: "t".into(),
-            refused: true,
+            refused: Some(Refusal::Server),
         };
         assert!(matches!(DataError::from(lost.clone()), DataError::NotProvisioned(t) if t == "t"));
         let wrapped = anyhow::Error::from(lost);
@@ -385,7 +490,7 @@ mod tests {
         ));
         let outage = anyhow::Error::from(ConnectionLost {
             text: "t".into(),
-            refused: false,
+            refused: None,
         });
         assert!(matches!(
             crate::error::data_error_from(&outage),

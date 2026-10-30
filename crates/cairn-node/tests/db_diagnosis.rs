@@ -254,6 +254,97 @@ async fn a_refused_socket_names_the_errno_not_just_the_layer() {
         .downcast_ref::<db::ConnectFailed>()
         .expect("db::connect fails with its own type");
     assert_eq!(failed.sqlstate(), None, "{text}");
+    assert!(
+        !failed.refused_by_client(),
+        "an outage, not a refusal: {text}"
+    );
+}
+
+/// A node that answers a connect by asking for an authentication the client cannot give (#884):
+/// it reads the startup packet, then sends one `AuthenticationRequest` carrying `ask` (3: a
+/// cleartext password; 7: GSSAPI), or with `None` hangs up instead, as a restarting server
+/// does. Returns a connection string naming it, with no password.
+///
+/// A fake rather than a scram cluster: what is pinned is how the CLIENT library words its own
+/// refusal, and that needs only the server's first message.
+async fn node_asking_for(ask: Option<i32>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a free port");
+    let port = listener.local_addr().expect("a bound port").port();
+    tokio::spawn(async move {
+        let Ok((mut socket, _)) = listener.accept().await else {
+            return;
+        };
+        // The startup packet: its length (which counts itself), then the rest.
+        let len = socket.read_i32().await.expect("a startup packet");
+        let mut rest = vec![0; usize::try_from(len - 4).expect("a sane length")];
+        socket.read_exact(&mut rest).await.expect("its body");
+        let Some(code) = ask else {
+            return;
+        };
+        // 'R', the length of what follows it (8, itself included), then the code.
+        let mut ask = vec![b'R'];
+        ask.extend_from_slice(&8i32.to_be_bytes());
+        ask.extend_from_slice(&code.to_be_bytes());
+        socket
+            .write_all(&ask)
+            .await
+            .expect("the ask reaches the client");
+        // Stay open until the client gives up, so its error is its own, not an EOF.
+        let _ = socket.read(&mut [0; 1]).await;
+    });
+    format!("host=127.0.0.1 port={port} user=nobody dbname=nowhere")
+}
+
+/// #884: a refusal tokio-postgres raises ITSELF carries no SQLSTATE, so without this flag the
+/// window read it as an outage and offered "press again" forever. The documented path: a role
+/// given a password and `pg_hba` moved to scram, while the window's connection string has none.
+/// tokio-postgres's error kind is private, so the flag reads its rendered category; driving the
+/// real library here is what pins that wording against an upgrade.
+#[tokio::test]
+async fn a_refusal_the_client_raises_itself_is_marked_as_one() {
+    for (code, says) in [
+        (3, "password missing"),
+        (7, "unsupported authentication method"),
+    ] {
+        let err = db::connect(&node_asking_for(Some(code)).await)
+            .await
+            .expect_err("the node asks for what the client cannot give");
+        let text = format!("{err:#}");
+        assert!(text.contains(says), "the cause reaches the text: {text}");
+        let failed = err
+            .downcast_ref::<db::ConnectFailed>()
+            .expect("db::connect fails with its own type");
+        assert_eq!(failed.sqlstate(), None, "no server error to read: {text}");
+        assert!(
+            failed.refused_by_client(),
+            "a refusal, not an outage: {text}"
+        );
+    }
+    // The third category: a string the library cannot parse fails every try the same way.
+    let err = db::connect("port=not_a_number")
+        .await
+        .expect_err("no parse");
+    let failed = err
+        .downcast_ref::<db::ConnectFailed>()
+        .expect("its own type");
+    assert!(failed.refused_by_client(), "{err:#}");
+}
+
+/// #884 review: the tempting wrong fix, pinned without a database. A node that hangs up mid-
+/// startup (a restart) is an outage the next press may get past; were `client_refusal` to
+/// match its `Closed` or `Io` words, the window would send for an operator over a restart.
+#[tokio::test]
+async fn a_node_that_hangs_up_is_an_outage_not_a_refusal() {
+    let err = db::connect(&node_asking_for(None).await)
+        .await
+        .expect_err("the node hung up");
+    let failed = err
+        .downcast_ref::<db::ConnectFailed>()
+        .expect("db::connect fails with its own type");
+    assert!(!failed.refused_by_client(), "{err:#}");
 }
 
 /// The label a dying connection names itself by (issue #474 item 4). Pure: no database, no
