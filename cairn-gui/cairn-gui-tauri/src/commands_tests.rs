@@ -364,6 +364,7 @@ fn every_command_the_webview_calls_is_registered() {
     // `include_str!` needs literal paths, so the list is written out — and checked against the
     // scripts index.html actually loads, so a new script cannot go unscanned (PR #798 review).
     let webview = [
+        ("waiting.js", include_str!("../src-ui/waiting.js")),
         ("main.js", include_str!("../src-ui/main.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
         ("holds.js", include_str!("../src-ui/holds.js")),

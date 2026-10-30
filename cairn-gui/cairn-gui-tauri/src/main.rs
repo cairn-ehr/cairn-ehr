@@ -38,6 +38,8 @@ mod reread_webview_tests;
 #[cfg(test)]
 mod source_guard;
 mod state;
+#[cfg(test)]
+mod waiting_webview_tests;
 mod worklist;
 mod write_failure;
 
@@ -141,16 +143,20 @@ fn main() -> anyhow::Result<()> {
 /// chart needs no actor. The front door asks on every `funnel_status` and says, in the chrome,
 /// what an operator must do (`FunnelBackend::provisioning`, #654 option 2, #882).
 async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
-    let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
-    let identity = cairn_node::identity::load_local(&db).await?;
+    let loader = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+    let identity = cairn_node::identity::load_local(&loader).await?;
+    drop(loader);
     let node_sk = cairn_node::keystore::load(
         &cli.key,
         std::env::var("CAIRN_KEY_PASSPHRASE").ok().as_deref(),
     )?;
-    // ONE connection, shared by the chart commands and the funnel's live port, and reopened
-    // from the same string if it is lost (#807).
+    // ONE connection, shared by the chart commands and the funnel's live port, reopened from
+    // the same string if it is lost (#807), and cut off when a command holds it too long (#875).
+    // Opened apart from the schema load above, which hands back no handle on its task to cut.
+    let (client, task) = cairn_node::db::connect_with_task(&cli.conn).await?;
     let db = std::sync::Arc::new(cairn_gui_live::NodeConnection::reopening(
-        db,
+        client,
+        task,
         cli.conn.clone(),
     ));
     let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);

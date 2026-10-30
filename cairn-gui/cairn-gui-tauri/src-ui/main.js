@@ -9,7 +9,8 @@
 // logic-free to pay for that, and the JS-toolchain decision stays open (issue #332).
 "use strict";
 
-const { invoke } = window.__TAURI__.core;
+// Every command goes through waiting.js's bar (#875): it shows only for an answer slower than 2 s.
+const invoke = watchWaits(window.__TAURI__.core.invoke);
 
 /** How often the window re-checks whether the held key has re-locked (ms). */
 const LOCK_POLL_MS = 10_000;

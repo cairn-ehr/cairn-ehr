@@ -26,6 +26,17 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   matched by a `db_config(` call).
   **Tempting wrong fixes:** setting them in the window only — the CLI and `cairn-node sync` hang on the same dead
   socket; a new `postgres::Client::connect(conn, NoTls)` in `cairn-sync` — it compiles and silently drops them.
+- **A command holding the connection past `NodeConnection::ANSWER_WITHIN` (15 s) is cut off** (#875 option 2):
+  every guard `lock`/`lock_if_open` hands out (`ConnectionGuard`) starts a watchdog that, at the limit, ABORTS the
+  client's connection task (`cairn_node::db::connect_with_task`'s handle), so the stuck query fails `connection
+  closed` and nothing downstream is new: a cut-off COMMIT is "not known" via `commit_failure`, and the next `lock`
+  reopens. The window's connection is opened apart from the schema load for that handle. The webview's waiting bar
+  (`src-ui/waiting.js`) shows only after 2 s and runs out at the same 15 s (`NODE_ANSWERS_WITHIN_MS`), then says
+  "Reconnecting…". Pins: `tests/answer_limit.rs` (mutation-checked: without the abort both cut-off tests fail),
+  `waiting_webview_tests.rs`. **Tempting wrong fixes:** a `tokio::time::timeout` around a call site — dropping the
+  query future leaves the client stuck on the dead socket and the next command hangs the same way; a SERVER
+  `statement_timeout` — a dead link never delivers its cancel; lowering 15 s — a node alive but slow is cut off
+  too, and its commits read "not known"; a watchdog on a `fixed` connection — aborting it kills it for good.
 - **A failed reopen is an ERROR that says why** (#876): `lock()` returns `Err(ConnectionLost)` naming the cause;
   a press inside the backoff tries nothing and says when the last attempt failed. It is an outage (`Retry::Now`:
   `From` into `DataError::Unavailable` and into the window's `ErrorView`, "Nothing was done: …") unless the server

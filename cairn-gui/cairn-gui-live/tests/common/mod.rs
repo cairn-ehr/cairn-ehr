@@ -51,6 +51,16 @@ pub async fn connect(cs: &str) -> (Client, Client) {
     (reader, guard)
 }
 
+/// The window's kind of connection (#807, #875): open on `cs`, reopened from `reopen_from` when
+/// it is lost, and cut off after `NodeConnection::ANSWER_WITHIN`. The schema is loaded by
+/// [`connect`]'s reader, as the window loads it on a connection of its own at launch.
+pub async fn reopening(cs: &str, reopen_from: String) -> cairn_gui_live::NodeConnection {
+    let (client, task) = cairn_node::db::connect_with_task(cs)
+        .await
+        .expect("a connection with its task's handle");
+    cairn_gui_live::NodeConnection::reopening(client, task, reopen_from)
+}
+
 /// A second schema-loaded connection, for the `LiveData` under test to own.
 pub async fn connect_for_live(cs: &str) -> Client {
     cairn_node::db::connect_and_load_schema(cs)
