@@ -49,10 +49,14 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `a_chart_read_lost_to_a_refused_reopen_needs_an_operator` (also a source guard: no `to_string` in `read_chart_of`).
   **A refusal tokio-postgres raises itself** ("password missing", an unsupported auth method, a SCRAM failure) has
   no code: `ConnectFailed::refused_by_client()` marks it from the error's rendered category (`Kind` is private), and
-  the reopen ORs it with `server_refused` (#884). **Tempting wrong fix:** adding the words of `Connect`, `Io`, `Timeout` or
-  `Closed` to `client_refusal` — those are outages the next press may get past. Pins: `a_refusal_the_client_raises_itself_is_marked_as_one`
+  the reopen classifies it as `Refusal::Client` beside `server_refused`'s `Refusal::Server` (#884). Its text must
+  never say the node refused (`Refusal::clause`): an operator would look for a rejected login the node never logged,
+  and a SCRAM failure is the CLIENT rejecting the server's proof. **Tempting wrong fix:** adding the words of `Connect`,
+  `Io`, `Timeout` or `Closed` to `client_refusal` — those are outages the next press may get past
+  (`a_node_that_hangs_up_is_an_outage_not_a_refusal`, no database needed). Pins: `a_refusal_the_client_raises_itself_is_marked_as_one`
   (db_diagnosis.rs, a fake node driving the real library, so an upgrade that rewords a kind fails it),
-  `a_reopen_the_client_cannot_authenticate_asks_for_an_operator` (reconnect.rs). **Every
+  `a_reopen_the_client_cannot_authenticate_asks_for_an_operator` (reconnect.rs), `a_client_refusal_is_not_said_to_be_the_nodes`.
+  `cairn_gui_live::failed_reopen_cause` reads any reopen text back for a line that is not a press (#888). **Every
   `NotProvisioned` renderer must be true of a refused reconnect too**: the front door's search arm keeps "The search
   FAILED — this is NOT a "no match"" (`a_search_that_needs_an_operator_still_never_reads_as_nothing_found`), and
   the register arm claims nothing about the node's enrolment. Before #880 the search arm was bare text — safe only

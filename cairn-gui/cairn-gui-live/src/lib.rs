@@ -37,7 +37,9 @@ use cairn_node::identity::Identity;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
-pub use connection::{refused_reopen_cause, says_operator_remedy, ConnectionLost, NodeConnection};
+pub use connection::{
+    failed_reopen_cause, says_operator_remedy, ConnectionLost, NodeConnection, Refusal,
+};
 
 /// One node connection, plus the identity every write is signed under.
 ///

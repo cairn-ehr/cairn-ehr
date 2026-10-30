@@ -449,11 +449,12 @@ pub fn connection_ended_line(label: &str, e: &tokio_postgres::Error) -> String {
 }
 
 /// Why [`connect`] failed: the legible line an operator reads, plus the SQLSTATE the server
-/// answered with, if it answered at all (#880).
+/// answered with, if it answered at all (#880), and whether the client library refused on its
+/// own (#884).
 ///
-/// The code is kept so a caller can tell a server that REFUSED the connection (a rejected
-/// password, a dropped database: retrying cannot help until an operator acts) from one that
-/// could not be reached (an outage: the next try may work). Reach it with
+/// Both are kept so a caller can tell a REFUSED connection (a rejected password, a dropped
+/// database, a password the connection string lacks: retrying cannot help until an operator
+/// acts) from one that could not be reached (an outage: the next try may work). Reach them with
 /// `err.downcast_ref::<ConnectFailed>()`.
 ///
 /// It deliberately has no `source()`. The text has already rendered the whole
@@ -517,8 +518,9 @@ impl std::error::Error for ConnectFailed {}
 /// Open a connection to the node's database.
 ///
 /// Every error is a [`ConnectFailed`] (reach it with `downcast_ref`), and must stay one: the
-/// window's reopen reads its SQLSTATE to tell a refusal from an outage (#880). Re-wrapping it as
-/// text, or as another error's `source`, would quietly make every refusal read as an outage.
+/// window's reopen reads its SQLSTATE and `refused_by_client` to tell a refusal from an outage
+/// (#880, #884). Re-wrapping it as text, or as another error's `source`, would quietly make
+/// every refusal read as an outage.
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // The connection string is NEVER echoed into the error — it can carry a password.
     // What the operator needs is the reason, and it arrives by two different routes.

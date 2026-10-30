@@ -10,7 +10,8 @@
 //! standing where the reopen connects ([`unreachable_node`]).
 mod common;
 
-use cairn_gui_live::NodeConnection;
+use cairn_gui_data::port::DataError;
+use cairn_gui_live::{NodeConnection, Refusal};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,13 +114,20 @@ async fn lose_then_press_five_times(hang_up: bool) -> Option<(NodeConnection, Ar
         first.contains(cause),
         "the cause reaches the caller: {first}"
     );
+    // A node that hangs up or never answers is an outage, never a refusal (#884 review): the
+    // words of `Closed`, `Io` or `Timeout` in `client_refusal` would send for an operator here.
+    assert!(!first.contains("until an operator acts"), "{first}");
     for _ in 0..5 {
         let Err(lost) = db.lock().await else {
             panic!("the node is down: nothing to reopen");
         };
-        let lost = lost.to_string();
-        assert!(lost.contains(" s ago"), "a press in the backoff: {lost}");
-        assert!(lost.contains(cause), "{lost}");
+        let text = lost.to_string();
+        assert!(text.contains(" s ago"), "a press in the backoff: {text}");
+        assert!(text.contains(cause), "{text}");
+        assert!(
+            matches!(DataError::from(lost), DataError::Unavailable(_)),
+            "an outage offers the press: {text}"
+        );
     }
     Some((db, offered))
 }
@@ -268,7 +276,6 @@ async fn lock_if_open_never_spends_a_reopen_attempt() {
 /// survives `db::connect` and is stored with the cause.
 #[tokio::test]
 async fn a_reopen_the_server_refuses_asks_for_an_operator_on_every_press() {
-    use cairn_gui_data::port::DataError;
     let Some(cs) = common::cs() else { return };
     // The ` dbname=` append is keyword-form syntax (as in cairn-node's db_diagnosis.rs).
     if cs.starts_with("postgres://") || cs.starts_with("postgresql://") {
@@ -330,7 +337,6 @@ async fn node_asking_for_a_password() -> String {
 /// no SQLSTATE. It must still ask for an operator, never offer a press that keeps failing.
 #[tokio::test]
 async fn a_reopen_the_client_cannot_authenticate_asks_for_an_operator() {
-    use cairn_gui_data::port::DataError;
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let asking = node_asking_for_a_password().await;
@@ -340,6 +346,9 @@ async fn a_reopen_the_client_cannot_authenticate_asks_for_an_operator() {
         .expect("a reopen without the password the node asks for fails");
     assert!(first.contains("password missing"), "{first}");
     assert!(first.contains("until an operator acts"), "{first}");
+    // The node asked and the WINDOW could not answer: no rejected login is in the node's log.
+    assert!(!first.contains("refused the connection"), "{first}");
+    assert!(first.contains(Refusal::Client.clause()), "{first}");
     assert!(!first.contains("press again in"), "{first}");
 
     let Err(lost) = db.lock().await else {

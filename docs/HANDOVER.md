@@ -5,11 +5,11 @@
 > [!NOTE]
 > **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#889](https://github.com/cairn-ehr/cairn-ehr/pull/889) (branch `fix/884-888-client-refusal-and-provisioning-line`, closes #884 and #888):
 > `cairn_node::db::ConnectFailed::refused_by_client()` marks a refusal tokio-postgres raises itself ("password
-> missing", an unsupported auth method, a SCRAM failure — no SQLSTATE), and the window's reopen ORs it with
-> `server_refused`, so such a reopen asks for an operator instead of offering a retry forever (#884; a fake node that
-> asks for a password pins the library's wording, `db_diagnosis.rs` + `reconnect.rs`, no scram cluster needed). The
-> front door's provisioning line says a refused reopen as certain and without "pressing again"
-> (`cairn_gui_live::refused_reopen_cause`, #888).
+> missing", an unsupported auth method, a SCRAM failure — no SQLSTATE), so such a reopen asks for an operator
+> instead of offering a retry forever, and its text names the WORKSTATION, not the node, as who refused
+> (`cairn_gui_live::Refusal`; #884; a fake node that asks for a password pins the library's wording, `db_diagnosis.rs`
+> + `reconnect.rs`, no scram cluster needed). The front door's provisioning line says any failed reopen without its
+> press framing, a refusal as certain (`cairn_gui_live::failed_reopen_cause`, #888).
 > **Merged 2026-10-29:** PR #887 (#882 + #885: the standing is probed on every `funnel_status`, bounded by
 > `PROBE_WITHIN`; a refused reopen's remedy is said once) · PR #886 (#878: the `cairn-db-keepalive` crate) · PR #883
 > (#880 + #881: a reopen the server REFUSED is `NotProvisioned` → `Retry::AfterOperator`) · PR #879 (#876).

@@ -495,9 +495,9 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **2026-10-30 — a refusal the client library raises asks for an operator too (#884 + #888).** PR [#889](https://github.com/cairn-ehr/cairn-ehr/pull/889):
   `ConnectFailed::refused_by_client()` marks tokio-postgres's own deterministic refusals ("password missing", an
   unsupported auth method, a SCRAM failure, an unparseable string), which carry no SQLSTATE, so such a reopen is
-  `NotProvisioned`, not a retry forever (#884; a fake node driving the real library pins the wording,
-  `db_diagnosis.rs`, `reconnect.rs`). The front door's provisioning line says a refused reopen without its press
-  framing, via `cairn_gui_live::refused_reopen_cause` (#888).
+  `NotProvisioned`, not a retry forever, and says the workstation (not the node) refused (`cairn_gui_live::Refusal`;
+  #884; a fake node driving the real library pins the wording, `db_diagnosis.rs`, `reconnect.rs`). The front door's
+  provisioning line says any failed reopen without its press framing, via `cairn_gui_live::failed_reopen_cause` (#888).
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
   **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2, brainstorm first); then
   HANDOVER's ⇒ NEXT. #699 stays open.

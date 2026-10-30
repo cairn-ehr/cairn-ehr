@@ -415,7 +415,38 @@ fn the_provisioning_line_says_a_refused_reopen_without_a_press() {
     let line = provisioning_sentence(Err(refused), "k").unwrap();
     assert_eq!(
         line,
-        "Registering is unavailable at this workstation until an operator acts: the node refused \
-         the connection (password authentication failed [28P01])."
+        "Registering is unavailable at this workstation until an operator acts. The node answered \
+         and refused the connection (password authentication failed [28P01])."
+    );
+}
+
+/// #884 review: a refusal the client raised is not said to be the node's, on this line either.
+#[test]
+fn the_provisioning_line_says_a_client_refusal_as_the_workstations() {
+    let text = "connection to the node was lost and could not be reopened: invalid configuration: \
+        password missing. This workstation could not complete the sign-in the node asked for, so \
+        pressing again fails the same way until an operator acts.";
+    let line = provisioning_sentence(Err(DataError::NotProvisioned(text.into())), "k").unwrap();
+    assert_eq!(
+        line,
+        "Registering is unavailable at this workstation until an operator acts. This workstation \
+         could not complete the sign-in the node asked for (invalid configuration: password \
+         missing)."
+    );
+}
+
+/// #888 review: an outage inside the backoff is still worded for a press ("this press tried
+/// nothing (press again in …)"); on this line nobody pressed, so only its cause is said.
+#[test]
+fn the_provisioning_line_says_an_outage_without_a_press() {
+    let text = "connection to the node was lost; reopening it failed 0.3 s ago, so this press \
+        tried nothing (press again in 1.7 s to retry): connecting to the database: connection \
+        refused (os error 61)";
+    let line = provisioning_sentence(Err(DataError::Unavailable(text.into())), "k").unwrap();
+    assert_eq!(
+        line,
+        "Could not check whether this node may write (the connection to the node was lost: \
+         connecting to the database: connection refused (os error 61)), so registering may be \
+         refused."
     );
 }
