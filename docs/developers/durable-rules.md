@@ -388,7 +388,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **Pinned counts this slice moved:** twin registry 26 (`twin_registry.rs`, `db/tests/034`), projection registry 29/31
   (`projection_registry.rs`, `db/tests/039`), `thread_resolution_cost.rs` 7 tables / 8 types.
 
-**⇒ #822 + #823 — THE CLI AFTER AN UNKNOWN COMMIT OUTCOME — do not undo** (pins: `db_diagnosis.rs`'s
+**⇒ #822 + #823 — THE CLI AFTER AN UNKNOWN COMMIT OUTCOME — do not undo** (pins: `db_diagnosis/refusal_scope_tests.rs`'s
 `only_a_stale_refusal_or_an_unknown_outcome_gets_the_cli_remedy`, `tests/event_lookup.rs`, `auto_apply.rs`'s
 `run_verdict` tests, and `tests/identity_commit_lost.rs`'s `a_lost_auto_apply_commit_stops_the_run_with_its_summary`,
 mutation-checked; `a_failed_hlc_tick_stops_the_run_with_its_summary` and `event_lookup.rs`'s unit tests since the
@@ -506,7 +506,7 @@ chart and finishing amends that I cannot know (that is, anything that wasn't in 
 change myself)."*
 - **A "the record changed under you" refusal is routed by TYPE, never by text.** `RefusalScope::Stale` (cairn-node,
   raised by the record check in `chart_link.rs`, `admit.rs`'s `LacksPair`, `shown.rs`'s `stale_record`/`stale_pair`,
-  `medication/signoff.rs`'s `ensure_same_charts` and `ensure_same_targets`) → `DataError::Stale` → `Retry::AfterReread` (the funnel maps it to
+  `medication/signoff/rules.rs`'s `ensure_same_charts` and `ensure_same_targets`) → `DataError::Stale` → `Retry::AfterReread` (the funnel maps it to
   `Never`: it has no chart to re-read); on the Rust side `ChartSetError { Unreadable, Changed }`. **Tempting wrong
   fix:** matching `e == CHANGED` (or any sentence) again — a reworded node sentence then silently stops re-reading. The
   neither-record arm of `shown.rs` stays `Input` (nothing is stale; the input is wrong).
@@ -818,7 +818,7 @@ unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift g
 - **Recorded is not took effect**: every judgement path reads back, in its own transaction, what now stands
   (`chart_link::standing_link`, `LinkEffect`); auto-apply rolls back a matcher link that is not itself the winner.
 - **One lock order: the `match_proposal` row, then db/018's CARNLK** (reversed, a same-pair race deadlocks, 40P01;
-  pinned in `tests/chart_link.rs`).
+  pinned in `tests/chart_link_machine.rs`).
 - **A judgement is a human's** (`Reviewer`: the human key signs AND attests; no node-key fallback). `link` needs BOTH
   charts held; `unlink` also admits a displayed member not held here, filed under the HELD chart (db/005 step 8b).
   Only OPEN proposals move.

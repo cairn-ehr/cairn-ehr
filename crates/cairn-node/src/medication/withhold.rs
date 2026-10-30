@@ -164,7 +164,7 @@ async fn physical_now(client: &tokio_postgres::Client) -> anyhow::Result<String>
 }
 
 /// The named holds ON THREAD `medication_id` that are no longer standing at instant `at`, each
-/// as "hold <id> <why>" — db/059's `cairn_medication_hold_ended`, the floor's own predicate.
+/// as `"hold <id> <why>"` — db/059's `cairn_medication_hold_ended`, the floor's own predicate.
 /// Only this thread's holds: an id that is no withhold, or a withhold on another thread, is a
 /// wrong input, not a stale screen, so it is left to the floor, which checks the thread FIRST
 /// and names it ("release it there"). Called "stale" instead, a mistyped id would ask the
