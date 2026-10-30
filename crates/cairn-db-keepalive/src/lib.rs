@@ -9,8 +9,8 @@
 //! minutes on Linux). The window holds its one connection lock that whole time, so every other
 //! chart and funnel action queues behind the hang.
 //!
-//! [`detect_dead_peers`] shortens both waits for every caller of `cairn_node::db::connect` (the
-//! window, the CLI, `cairn-node sync`) and for the `cairn-sync` binary's own blocking
+//! [`detect_dead_peers`] shortens both waits for every caller of `cairn_node::db::connect` and
+//! `connect_with_task` (the window, the CLI, `cairn-node sync`) and for the `cairn-sync` binary's own blocking
 //! connections (`db_config` in its `main.rs`, #878). It lives in its own crate because
 //! `cairn-sync` depends on `cairn-node` only for tests. Each caller pins its own call site.
 //! `cairn-sync` connects through `postgres::Config`, which converts from the
@@ -22,8 +22,9 @@
 //!   so about two minutes there). The client then reads as closed, and the window reopens it.
 //! - **`tcp_user_timeout`** ([`TCP_USER_TIMEOUT`]) ends a connection whose sent data goes
 //!   unacknowledged that long. It bounds a query sent on an already-dead socket. **Linux only**:
-//!   tokio-postgres applies it nowhere else, so on macOS that query still waits for the OS (#875
-//!   keeps the window-side bound open; it overlaps #649's cancellation question).
+//!   tokio-postgres applies it nowhere else, so on macOS that query still waits for the OS. The
+//!   window bounds it there itself, by cutting off any command that holds its connection past
+//!   `NodeConnection::ANSWER_WITHIN` (#875 option 2, `cairn-gui-live`).
 //!
 //! Neither touches a live connection running a long query: a live server acknowledges both the
 //! probes and the data. Neither applies to a Unix-domain socket, which cannot die silently.

@@ -38,7 +38,8 @@ use std::sync::Arc;
 use tokio_postgres::Client;
 
 pub use connection::{
-    failed_reopen_cause, says_operator_remedy, ConnectionLost, NodeConnection, Refusal,
+    failed_reopen_cause, says_operator_remedy, ConnectionGuard, ConnectionLost, NodeConnection,
+    Refusal,
 };
 
 /// One node connection, plus the identity every write is signed under.

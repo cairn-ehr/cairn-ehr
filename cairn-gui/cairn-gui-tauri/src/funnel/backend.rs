@@ -87,8 +87,9 @@ impl FunnelBackend {
 }
 
 /// How long the provisioning probe waits: a whole reopen's wait, then as long again for the
-/// query. Longer than the reopen's own bound on purpose: a reopen cut off by this timer would
-/// record no failure, so its backoff and its log line would be lost.
+/// query. Giving up drops only the wait: `LiveData::standing` runs as a task of its own, so a
+/// reopen or query in flight finishes (or is cut off by the connection's watchdog) as if the
+/// probe were still waiting, and its failure, backoff and log line are kept (PR #892 review).
 const PROBE_WITHIN: Duration = NodeConnection::REOPEN_WITHIN.saturating_mul(2);
 
 /// `probe`'s answer, or an outage naming the wait if none came `within` — which

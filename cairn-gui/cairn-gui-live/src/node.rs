@@ -35,11 +35,21 @@ impl LiveData {
     ///
     /// All four answers, never a boolean: a `Retired` key told to run `enroll-device-actor`
     /// would meet db/004's resurrection refusal while following the advice (#152).
+    ///
+    /// Runs as a task of its own, because its caller times the wait (`probe_within`): a caller
+    /// that gives up drops only the wait, never the connection guard mid-query. A guard dropped
+    /// mid-query cancels its watchdog and leaves the client stuck on a dead socket for the next
+    /// press (PR #892 review).
     pub async fn standing(&self) -> Result<ActorStanding, DataError> {
-        let db = self.db.lock().await?;
-        device_actor_standing(&db, &self.node_kid)
-            .await
-            .map_err(|e| data_error_from(&e))
+        let (db, kid) = (self.db.clone(), self.node_kid.clone());
+        tokio::spawn(async move {
+            let db = db.lock().await?;
+            device_actor_standing(&db, &kid)
+                .await
+                .map_err(|e| data_error_from(&e))
+        })
+        .await
+        .unwrap_or_else(|e| Err(DataError::Unavailable(format!("the check stopped: {e}"))))
     }
 
     /// The DATABASE's date, as `YYYY-MM-DD`, for `PatientSearch::search`'s `today`.

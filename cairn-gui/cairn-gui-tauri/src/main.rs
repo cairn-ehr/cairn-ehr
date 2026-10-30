@@ -38,6 +38,8 @@ mod reread_webview_tests;
 #[cfg(test)]
 mod source_guard;
 mod state;
+#[cfg(test)]
+mod waiting_webview_tests;
 mod worklist;
 mod write_failure;
 
@@ -83,8 +85,9 @@ fn main() -> anyhow::Result<()> {
     //
     // THIS BINDING IS LOAD-BEARING — do not inline it into the `block_on` below. Commands do
     // NOT run on it (Tauri drives those on its own `tauri::async_runtime`); what it hosts is
-    // the `tokio::spawn`ed tokio_postgres connection task that `connect_and_load_schema`
-    // starts. Drop this runtime and that task stops being polled, so every query for the rest
+    // the `tokio::spawn`ed tokio_postgres connection task of the window's working connection
+    // (`connect_with_task` in `build_live_state`; the schema loader's connection is dropped
+    // once loaded). Drop this runtime and that task stops being polled, so every query for the rest
     // of the session hangs or fails. Keeping it alive until `main` returns is the point.
     // (A connection REOPENED after a loss, #807, spawns its task on Tauri's runtime instead,
     // because the reopen runs inside a command; that runtime lives as long as the app.)
@@ -141,18 +144,20 @@ fn main() -> anyhow::Result<()> {
 /// chart needs no actor. The front door asks on every `funnel_status` and says, in the chrome,
 /// what an operator must do (`FunnelBackend::provisioning`, #654 option 2, #882).
 async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
-    let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
-    let identity = cairn_node::identity::load_local(&db).await?;
+    let loader = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+    let identity = cairn_node::identity::load_local(&loader).await?;
+    drop(loader);
     let node_sk = cairn_node::keystore::load(
         &cli.key,
         std::env::var("CAIRN_KEY_PASSPHRASE").ok().as_deref(),
     )?;
-    // ONE connection, shared by the chart commands and the funnel's live port, and reopened
-    // from the same string if it is lost (#807).
-    let db = std::sync::Arc::new(cairn_gui_live::NodeConnection::reopening(
-        db,
-        cli.conn.clone(),
-    ));
+    // ONE connection, shared by the chart commands and the funnel's live port, reopened from
+    // the same string if it is lost (#807), and cut off when a command holds it too long (#875).
+    // Opened apart from the schema load above, which hands back no handle on its task to cut.
+    let (client, task) = cairn_node::db::connect_with_task(&cli.conn).await?;
+    let db = std::sync::Arc::new(
+        cairn_gui_live::NodeConnection::reopening(client, task, cli.conn.clone()).await?,
+    );
     let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);
     Ok(AppState {
         db: Some(db),

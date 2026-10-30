@@ -522,6 +522,19 @@ impl std::error::Error for ConnectFailed {}
 /// (#880, #884). Re-wrapping it as text, or as another error's `source`, would quietly make
 /// every refusal read as an outage.
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
+    connect_with_task(conn).await.map(|(client, _task)| client)
+}
+
+/// [`connect`], also handing back the connection task's [`AbortHandle`](tokio::task::AbortHandle).
+///
+/// Aborting the task closes the client once the runtime drops it (soon, not at the call): a
+/// query in flight then fails `connection closed`, as after a server hang-up. The SERVER is not
+/// told, so its backend runs on until it next writes to the socket. The window's watchdog uses
+/// it to cut off a command that holds its one connection too long on a link that died silently
+/// (#875 option 2), and keeps its own mark and ends the old backend for both reasons. Every
+/// other caller wants [`connect`], which drops the handle (the task then runs until the client
+/// goes). Every error is a [`ConnectFailed`], as [`connect`]'s is, and must stay one.
+pub async fn connect_with_task(conn: &str) -> anyhow::Result<(Client, tokio::task::AbortHandle)> {
     // The connection string is NEVER echoed into the error — it can carry a password.
     // What the operator needs is the reason, and it arrives by two different routes.
     // A server that ANSWERED sends a `DbError` (`database "x" does not exist` [3D000],
@@ -539,7 +552,8 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     cairn_db_keepalive::detect_dead_peers(&mut cfg);
     let (client, connection) = cfg.connect(NoTls).await.map_err(legible)?;
     // #474 item 4: this task is the ONLY place a mid-session connection death is ever
-    // reported, and `let _ = connection.await;` hid every one of them. The deaths that
+    // reported (a watchdog cut-off, #875, is logged by the window's watchdog: an aborted task
+    // runs nothing), and `let _ = connection.await;` hid every one of them. The deaths that
     // arrive as an `ErrorResponse` carry a real SQLSTATE — `FATAL: terminating connection
     // due to administrator command`, a server restart, an
     // `idle_in_transaction_session_timeout` — and for THOSE the reason was delivered HERE
@@ -559,12 +573,12 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // A clean close returns `Ok(())` — it happens whenever the client is dropped — so a
     // healthy node logs nothing here and the line is never noise.
     let label = connection_label(conn);
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("{}", connection_ended_line(&label, &e));
         }
     });
-    Ok(client)
+    Ok((client, task.abort_handle()))
 }
 
 /// Is `role` a conservative, safe-to-interpolate PostgreSQL identifier?
@@ -1050,13 +1064,18 @@ mod tests {
     #[test]
     fn db_connect_applies_the_dead_peer_settings() {
         let src = include_str!("db.rs");
-        let start = src
-            .find("pub async fn connect(conn: &str)")
-            .expect("db::connect exists");
-        let body = &src[start..start + src[start..].find("\n}\n").expect("its body ends")];
+        let body_of = |signature: &str| {
+            let start = src.find(signature).expect("the function exists");
+            &src[start..start + src[start..].find("\n}\n").expect("its body ends")]
+        };
         assert!(
-            body.contains("cairn_db_keepalive::detect_dead_peers(&mut cfg)"),
-            "db::connect must apply the dead-peer settings (#875)"
+            body_of("pub async fn connect_with_task(conn: &str)")
+                .contains("cairn_db_keepalive::detect_dead_peers(&mut cfg)"),
+            "db::connect_with_task must apply the dead-peer settings (#875)"
+        );
+        assert!(
+            body_of("pub async fn connect(conn: &str)").contains("connect_with_task(conn)"),
+            "db::connect must open through connect_with_task, so it gets them too"
         );
     }
 

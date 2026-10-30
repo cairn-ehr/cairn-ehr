@@ -26,6 +26,12 @@
       <!-- Whether this node may write at all (asked at boot and after a search that succeeded while it warns, #654, #882), or why the window could
            not start. Above everything, because it qualifies every act on both surfaces. -->
       <p id="provisioning" role="status" hidden></p>
+      <!-- A command still unanswered after 2 s (waiting.js, #875). The line is the meaning; the
+           emptying bar is a second channel, hidden from assistive technology. -->
+      <div id="node-wait" hidden>
+        <p id="node-wait-line" role="status" aria-live="polite"></p>
+        <div id="node-wait-track" aria-hidden="true"><div id="node-wait-fill"></div></div>
+      </div>
 
       <section id="front-door" aria-labelledby="find-heading" hidden>
         <h1 id="find-heading">Find a patient</h1>
@@ -239,6 +245,7 @@
         <p id="outcome" role="status" aria-live="polite"></p>
       </section>
     </main>
+    <script src="waiting.js"></script>
     <script src="main.js"></script>
     <script src="stop_reasons.js"></script>
     <script src="holds.js"></script>

@@ -194,6 +194,7 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 |---|---|---|---|---|---|---|
 | Sign off refused → chart re-read → "Now part of it: B." | live | | | | ≤ single-chart open time | |
 | "Read this chart again" after a failed read (chart read paused by rename, then restored; 1 act) | live | | | | ≤ single-chart open time | |
+| Press → failed-read line, the node not answering (§14 (d), table locked) | live | | | | ≤ 15 s (≤ 35 s queued) | |
 
 | Run | Sentence named exactly the colleague's chart? | Own link announced? (must be no) |
 |---|---|---|
@@ -208,6 +209,7 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 | Refusal, "read again" and "Now part of it" announced in order | | |
 | "Read this chart again" reachable by Tab at all times | | |
 | Nothing takes focus on its own | | |
+| Waiting bar: none on an ordinary press; announced at most twice ("Waiting…", "Reconnecting…") | | |
 
 ## Withhold and release (#832, runbook §15)
 

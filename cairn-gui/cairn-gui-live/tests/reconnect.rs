@@ -100,7 +100,7 @@ async fn lose_then_press_five_times(hang_up: bool) -> Option<(NodeConnection, Ar
     let cs = common::cs()?;
     let (reader, _guard) = common::connect(&cs).await;
     let (down, offered) = unreachable_node(hang_up).await;
-    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, down);
+    let db = common::reopening(&cs, down).await;
     let first = lose(&db, &reader)
         .await
         .expect("a reopen towards a node that is down fails");
@@ -139,7 +139,7 @@ async fn lose_then_press_five_times(hang_up: bool) -> Option<(NodeConnection, Ar
 async fn a_lost_connection_is_reopened_on_the_next_lock() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, cs.clone());
+    let db = common::reopening(&cs, cs.clone()).await;
     let before = backend_pid(&db).await.expect("the first read works");
 
     terminate(&reader, before).await;
@@ -212,7 +212,7 @@ async fn a_reopen_that_gets_no_answer_gives_up() {
 async fn an_answered_error_keeps_the_same_connection() {
     let Some(cs) = common::cs() else { return };
     let (_reader, _guard) = common::connect(&cs).await;
-    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, cs.clone());
+    let db = common::reopening(&cs, cs.clone()).await;
     let before = backend_pid(&db).await.expect("the first read works");
 
     let refused = db
@@ -251,7 +251,7 @@ async fn lock_if_open_never_spends_a_reopen_attempt() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let (down, offered) = unreachable_node(true).await;
-    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, down);
+    let db = common::reopening(&cs, down).await;
     let pid = backend_pid(&db).await.expect("the first read works");
     terminate(&reader, pid).await;
 
@@ -284,7 +284,7 @@ async fn a_reopen_the_server_refuses_asks_for_an_operator_on_every_press() {
     }
     let (reader, _guard) = common::connect(&cs).await;
     let refusing = format!("{cs} dbname=cairn_no_such_database_880");
-    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, refusing);
+    let db = common::reopening(&cs, refusing).await;
     let first = lose(&db, &reader)
         .await
         .expect("a reopen towards a database that does not exist fails");
@@ -340,7 +340,7 @@ async fn a_reopen_the_client_cannot_authenticate_asks_for_an_operator() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let asking = node_asking_for_a_password().await;
-    let db = NodeConnection::reopening(common::connect_for_live(&cs).await, asking);
+    let db = common::reopening(&cs, asking).await;
     let first = lose(&db, &reader)
         .await
         .expect("a reopen without the password the node asks for fails");

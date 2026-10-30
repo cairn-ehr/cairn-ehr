@@ -795,6 +795,19 @@ search: the results draw and the top line clears. A top line still warning after
 finding — on an enrolled node; an unenrolled one rightly keeps its enrolment warning, so enrol the rig's
 node first.
 
+(d) A command the node does not answer (#875 option 2). With the chart open, press **Read this chart again**:
+no bar appears (an answer inside 2 s shows nothing — a bar that flashes on an ordinary press is a finding). Then,
+from `psql` on the window's database, `BEGIN; LOCK TABLE medication_statement IN ACCESS EXCLUSIVE MODE;` and
+leave it open (every chart read reads that table, through `medication_thread_group`). Press **Read this chart
+again**: after about 2 s a bar at the top of the page reads "Waiting for the node…" and empties; at 15 s from the
+press it reads "Reconnecting…", and the outcome line then says the read failed, ending in "connection closed". In
+`psql`, `ROLLBACK;`, then press again: the list draws and the bar is gone. Record the time from the press to the
+failed-read line (budget ≤ 15 s). A press made while another was already waiting gets its own 15 s once the
+first is cut off, since the lock is still held: up to about 35 s from the first press. If a second machine is to
+hand, repeat over the LAN to a node there, pulling its cable instead of taking the lock; there a queued press
+fails once the reopen does (≤ 20 s). A window that stays frozen past those, a bar that never leaves, or a bar
+announced more than twice by VoiceOver ("Waiting for the node…", then "Reconnecting…") is a finding.
+
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
 them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a
 colleague's link landing at the same moment if you can; only the colleague's change may be named, and then

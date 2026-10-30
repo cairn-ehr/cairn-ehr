@@ -277,6 +277,29 @@ tr[data-flag="true"] td {
   font-weight: bold;
 }
 
+/* The waiting bar (waiting.js): pinned to the top so it shows wherever the page is scrolled. */
+#node-wait {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  padding-block: 0.25rem;
+}
+
+#node-wait-line {
+  margin: 0 0 0.25rem;
+}
+
+#node-wait-track {
+  height: 0.4rem;
+  border: 1px solid var(--line);
+}
+
+#node-wait-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
 /* A visible focus ring on every control, for keyboard-only use. */
 button:focus-visible,
 input:focus-visible,

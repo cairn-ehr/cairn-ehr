@@ -185,6 +185,13 @@ fn funnel_status_probes_the_live_node_afresh_and_bounded() {
         probe.contains("probe_within(live.standing(), PROBE_WITHIN)"),
         "{probe}"
     );
+    // PR #892 review: the timed wait must never drop the connection guard mid-query, so the
+    // check it waits on runs as a task of its own.
+    let standing = rust_fn(
+        include_str!("../../../cairn-gui-live/src/node.rs"),
+        "standing",
+    );
+    assert!(standing.contains("tokio::spawn(async move"), "{standing}");
 }
 
 /// A form snapshot at revision `rev` (shared with `register_tests`).

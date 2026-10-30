@@ -27,8 +27,9 @@ cairn-gui-funnel = { path = "../cairn-gui-funnel" }
 cairn-node = { path = "../../crates/cairn-node" }
 cairn-event = { path = "../../crates/cairn-event" }
 cairn-patient-search = { path = "../../crates/cairn-patient-search" }
-# `time`: a reopen attempt that gets no answer gives up (`connection.rs`, #807).
-tokio = { version = "1", features = ["sync", "time"] }
+# `time`: a reopen attempt that gets no answer gives up (`connection.rs`, #807); `rt`: the
+# watchdog that cuts off a command holding the connection too long is a spawned task (#875).
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 tokio-postgres = "0.7"
 anyhow = "1"
 uuid = { version = "1", features = ["v7"] }
