@@ -490,14 +490,16 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   connection (crate `cairn-db-keepalive`). PR #879 (#876): the cause reaches the screen. PR #883 (#880 + #881):
   `db::connect` fails with `ConnectFailed` (SQLSTATE kept); a reopen the server refused (class `28`, `3D000`, `42501`,
   `55000`) is `NotProvisioned` → `Retry::AfterOperator`. PR #887 (#882 + #885): the front door's standing is probed on
-  every `funnel_status` (bounded), so a mend clears its line; a refused reopen's remedy is said once. All merged
-  by 2026-10-29. RUNBOOK §14 (c) owed.
-- **2026-10-30 — a refusal the client library raises asks for an operator too (#884 + #888).** PR [#889](https://github.com/cairn-ehr/cairn-ehr/pull/889):
-  `ConnectFailed::refused_by_client()` marks tokio-postgres's own deterministic refusals ("password missing", an
-  unsupported auth method, a SCRAM failure, an unparseable string), which carry no SQLSTATE, so such a reopen is
-  `NotProvisioned`, not a retry forever, and says the workstation (not the node) refused (`cairn_gui_live::Refusal`;
-  #884; a fake node driving the real library pins the wording, `db_diagnosis.rs`, `reconnect.rs`). The front door's
-  provisioning line says any failed reopen without its press framing, via `cairn_gui_live::failed_reopen_cause` (#888).
+  every `funnel_status` (bounded), so a mend clears its line; a refused reopen's remedy is said once. PR #889 (#884 +
+  #888): `ConnectFailed::refused_by_client()` marks tokio-postgres's own deterministic refusals (no SQLSTATE), so such
+  a reopen is `NotProvisioned` and says the WORKSTATION refused; the provisioning line drops its press framing
+  (`cairn_gui_live::failed_reopen_cause`). All merged by 2026-10-29. RUNBOOK §14 (c) owed.
+- **2026-10-30 — four oversized cairn-node files split by responsibility (#810).** `medication/signoff.rs` → the
+  orchestrator + `signoff/rules.rs` (the pure set rules) + `signoff/tests.rs`; `db_diagnosis.rs` → the rendering half +
+  `db_diagnosis/refusal.rs` (refusal and commit-outcome markers, re-exported, so every path is unchanged) + two test
+  files; `tests/chart_link.rs` → itself + `chart_link_machine.rs` + `chart_link_refusals.rs`;
+  `tests/unlink_from_record.rs` → itself + `unlink_from_record_refusals.rs`. Pure moves: the sorted test list of the
+  affected binaries is identical (448 tests).
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c); **#804** (needs #690); decisions **#866**, **#867**, **#825**,
   **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#875** (option 2, brainstorm first); then
   HANDOVER's ⇒ NEXT. #699 stays open.

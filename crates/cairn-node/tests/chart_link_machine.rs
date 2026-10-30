@@ -1,0 +1,452 @@
+//! Repair path R2a — how a human's judgement on two charts meets the MACHINE's state: an open
+//! `match_proposal` moves with the judgement in the same transaction (and a closed one is left
+//! alone), the proposal row is locked before the link lock, a peer machine's later link does not
+//! undo the reviewer's unlink, and a hard-vetoed or doubted machine link yields to a human link
+//! (ADR-0076 decisions 4 and 5; #681's orchestration).
+//!
+//! Split out of `chart_link.rs` (#810), whose helpers it copies (test helpers are file-local by
+//! house convention). Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via
+//! `db::test_serial_guard`.
+use cairn_event::{generate_key, SigningKey};
+use cairn_node::chart_link::{link_charts, unlink_charts, LinkVerb, Reviewer};
+use cairn_node::db;
+use std::time::Duration;
+use tokio::time::timeout;
+use tokio_postgres::Client;
+use uuid::Uuid;
+
+mod common;
+use common::{apply_remote_raw, link_assertion_event, register_pair, seed_proposal, vetoed_pair};
+
+fn cs() -> Option<String> {
+    std::env::var("CAIRN_TEST_PG").ok()
+}
+
+const ORIGIN: &str = "r2a-test-node";
+
+/// Clean identity + proposal state; enroll an agent (to register charts and play the
+/// machine) and a human reviewer.
+async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
+    c.batch_execute(
+        "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
+         patient_demographic, patient_link, person_member, identity_projection_flag CASCADE",
+    )
+    .await
+    .unwrap();
+    c.batch_execute(
+        "DO $$ BEGIN \
+           IF to_regclass('public.chart_dispute') IS NOT NULL THEN TRUNCATE chart_dispute; END IF; \
+           IF to_regclass('public.chart_identity_state') IS NOT NULL THEN TRUNCATE chart_identity_state; END IF; \
+           IF to_regclass('public.link_veto_flag') IS NOT NULL THEN TRUNCATE link_veto_flag; END IF; \
+           TRUNCATE match_proposal; \
+         END $$;",
+    )
+    .await
+    .unwrap();
+    let (sk_a, kid_a) = generate_key().unwrap();
+    let (sk_h, kid_h) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('agent', '{\"model\":\"cl-stub\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+        &[&kid_a],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"records-officer\",\"actor\":\"CL\"}', $1)",
+        &[&kid_h],
+    )
+    .await
+    .unwrap();
+    (sk_a, kid_a, sk_h, kid_h)
+}
+
+async fn standing(c: &Client, a: Uuid, b: Uuid) -> Option<(String, bool)> {
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    c.query_opt(
+        "SELECT state, attested FROM patient_link WHERE low = $1::text::uuid AND high = $2::text::uuid",
+        &[&lo.to_string(), &hi.to_string()],
+    )
+    .await
+    .unwrap()
+    .map(|r| (r.get(0), r.get(1)))
+}
+
+/// db/019's invariant over EVERY proposal row: `applied_event_id` is set exactly when the
+/// status is `applied`/`auto_applied`. Nothing in the schema enforces it, so the tests that
+/// move or leave proposals check it after they run.
+async fn assert_proposal_invariant(c: &Client) {
+    let broken: i64 = c
+        .query_one(
+            "SELECT count(*) FROM match_proposal \
+              WHERE (applied_event_id IS NOT NULL) <> (status IN ('applied', 'auto_applied'))",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        broken, 0,
+        "applied_event_id IS NOT NULL <=> applied/auto_applied"
+    );
+}
+
+async fn proposal(c: &Client, a: Uuid, b: Uuid) -> (String, Option<String>) {
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    let r = c
+        .query_one(
+            "SELECT status, applied_event_id::text FROM match_proposal \
+             WHERE patient_low = $1::text::uuid AND patient_high = $2::text::uuid",
+            &[&lo.to_string(), &hi.to_string()],
+        )
+        .await
+        .unwrap();
+    (r.get(0), r.get(1))
+}
+
+#[tokio::test]
+async fn a_later_machine_link_from_a_peer_does_not_undo_the_reviewers_unlink() {
+    // ADR-0076 decision 5 end to end: the reviewer says "different people"; a peer's matcher then links the
+    // pair with a later clock. The charts stay two.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    unlink_charts(&mut c, a, b, None, &who, ORIGIN)
+        .await
+        .unwrap();
+
+    let wall: i64 = c
+        .query_one("SELECT max(hlc_wall) FROM patient_link", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let later = link_assertion_event(
+        &kid_a,
+        a,
+        b,
+        LinkVerb::Link,
+        wall + 1_000,
+        0,
+        "peer-matcher",
+        false,
+    );
+    apply_remote_raw(&c, &sk_a, later)
+        .await
+        .expect("the peer's link is admitted (set-union)");
+
+    assert_eq!(standing(&c, a, b).await, Some(("unlink".into(), true)));
+}
+
+#[tokio::test]
+async fn a_hard_vetoed_pair_can_still_be_linked_by_a_human_and_is_not_flagged() {
+    // §5.13: a veto forces a human decision, never an automatic refusal.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    link_charts(&mut c, a, b, &who, ORIGIN)
+        .await
+        .expect("a human may link a vetoed pair");
+    let flags: i64 = c
+        .query_one("SELECT count(*) FROM link_veto_flag", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 0,
+        "an attested link is the human decision the veto forces"
+    );
+}
+
+#[tokio::test]
+async fn a_human_link_resolves_a_doubted_machine_link() {
+    // The doubted-link state R1 withholds from sign-off (db/054) is lifted by the human.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
+    let machine = link_assertion_event(&kid_a, a, b, LinkVerb::Link, 50, 0, "peer-matcher", false);
+    apply_remote_raw(&c, &sk_a, machine).await.unwrap();
+    // A plain async fn rather than a closure: a `|c: &Client| async move { .. }` closure's
+    // returned future borrows `c` for the closure's OWN elided lifetime, which the compiler
+    // cannot prove outlives the future — a function item's lifetimes are named per-call
+    // instead, so this sidesteps the issue rather than fighting it with explicit HRTB syntax.
+    async fn doubted(c: &Client, a: Uuid, b: Uuid) -> bool {
+        let ids = vec![a.to_string(), b.to_string()];
+        c.query_one(
+            "SELECT cairn_chart_set_has_doubted_link($1::text[]::uuid[])",
+            &[&ids],
+        )
+        .await
+        .unwrap()
+        .get(0)
+    }
+    assert!(
+        doubted(&c, a, b).await,
+        "precondition: the machine link is doubted"
+    );
+
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    link_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
+    assert!(
+        !doubted(&c, a, b).await,
+        "the human's attested link lifts the doubt"
+    );
+}
+
+#[tokio::test]
+async fn an_open_proposal_moves_with_the_judgement_in_the_same_transaction() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+
+    for open in ["pending", "accepted", "review"] {
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        register_pair(&c, &sk_a, &kid_a, a, b).await;
+        seed_proposal(&c, a, b, open).await;
+        let out = link_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
+        assert!(out.proposal_resolved, "{open} is an open proposal");
+        assert_eq!(
+            proposal(&c, a, b).await,
+            ("applied".into(), Some(out.event_id.to_string()))
+        );
+
+        let (x, y) = (Uuid::now_v7(), Uuid::now_v7());
+        register_pair(&c, &sk_a, &kid_a, x, y).await;
+        seed_proposal(&c, x, y, open).await;
+        let out = unlink_charts(&mut c, y, x, None, &who, ORIGIN)
+            .await
+            .unwrap();
+        assert!(out.proposal_resolved);
+        assert_eq!(
+            proposal(&c, x, y).await,
+            ("rejected".into(), None),
+            "a rejection names no applied event (db/019's invariant)"
+        );
+    }
+    assert_proposal_invariant(&c).await;
+}
+
+#[tokio::test]
+async fn a_closed_proposal_is_left_exactly_as_it_was() {
+    // A closed proposal (applied / auto_applied / rejected / retracted) is left exactly as
+    // it was, whichever judgement is made — what stands is patient_link's business.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    for closed in ["applied", "auto_applied", "rejected", "retracted"] {
+        for verb in [LinkVerb::Link, LinkVerb::Unlink] {
+            let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+            register_pair(&c, &sk_a, &kid_a, a, b).await;
+            seed_proposal(&c, a, b, closed).await;
+            let before = proposal(&c, a, b).await;
+            let out = match verb {
+                LinkVerb::Link => link_charts(&mut c, a, b, &who, ORIGIN).await,
+                LinkVerb::Unlink => unlink_charts(&mut c, a, b, None, &who, ORIGIN).await,
+            }
+            .unwrap();
+            assert!(
+                !out.proposal_resolved,
+                "{closed}/{verb:?} is not an open proposal"
+            );
+            assert_eq!(proposal(&c, a, b).await, before, "{closed}/{verb:?}");
+        }
+    }
+    assert_proposal_invariant(&c).await;
+}
+
+#[tokio::test]
+async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
+    // Lock-order regression. Inside `submit_event`,
+    // db/018's `patient_link_apply` takes the GLOBAL advisory lock
+    // `pg_advisory_xact_lock(x'4341524E4C4B')` ('CARNLK') and holds it until commit.
+    // `auto_apply.rs`'s `apply_auto_candidate` and `apply_proposal.rs`'s
+    // `apply_accepted_proposal` both lock the pair's `match_proposal` row `FOR UPDATE`
+    // FIRST, and only THEN submit (which takes CARNLK). `assert_link_in_tx` used to do the
+    // reverse — submit first, update the proposal row second — so two transactions on the
+    // SAME pair could each end up holding the lock the other needs next (one holds CARNLK
+    // and wants the row; the other holds the row and wants CARNLK) and Postgres aborts one
+    // with 40P01 ("deadlock detected") — the clinician would see a random-looking failure.
+    // The fix locks the pair's proposal row (if one exists) FIRST, before anything is
+    // signed or submitted, so every path now shares ONE order: row, then CARNLK.
+    //
+    // A real deadlock is timing-dependent and not a good test. Instead this proves the
+    // ORDER directly: T1 (a second, independent connection to the same database) takes the
+    // pair's proposal row `FOR UPDATE` and holds it open in its own transaction. A
+    // judgement (`unlink_charts`) on the same pair is fired concurrently and — correctly —
+    // blocks waiting for that row. While it is blocked, T1 tries
+    // `pg_try_advisory_xact_lock(CARNLK)`; why that attempt tells the two orders apart is
+    // explained at the check itself, below. T1 then releases the row lock, and the
+    // judgement completes normally.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+    seed_proposal(&c, a, b, "pending").await;
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+
+    // T1: a second connection to the same database, standing in for a concurrent
+    // judgement / auto-apply / accepted-proposal-apply on the same pair. It locks the
+    // proposal row FOR UPDATE and holds its transaction open.
+    let mut t1 = db::connect(&base)
+        .await
+        .expect("second connection to CAIRN_TEST_PG");
+    let t1_tx = t1.transaction().await.unwrap();
+    let held = t1_tx
+        .query_opt(
+            "SELECT 1 FROM match_proposal \
+             WHERE patient_low = $1::text::uuid AND patient_high = $2::text::uuid FOR UPDATE",
+            &[&lo.to_string(), &hi.to_string()],
+        )
+        .await
+        .unwrap();
+    assert!(held.is_some(), "the seeded proposal row exists to lock");
+
+    // Capture the FIRST connection's backend pid BEFORE it is moved into the spawned task,
+    // so the observer (T1) can watch its REAL state in `pg_stat_activity` rather than
+    // guessing with a fixed sleep. A fixed sleep can pass FALSELY for the very bug this
+    // test guards against: on a loaded/slow runner the observer's check could fire before
+    // the judgement has even reached `submit_event`, so CARNLK would read as free no matter
+    // which lock order the code actually uses — a guard that can pass while broken is not a
+    // guard (review finding, round 1).
+    let judgement_pid: i32 = c
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    // Fire the judgement concurrently on the FIRST connection. `sk_h`/`kid_h` are cloned
+    // into the spawned task (owned) so the future is 'static; the `Reviewer` then borrows
+    // them from inside that same future.
+    let sk_h_owned = sk_h.clone();
+    let kid_h_owned = kid_h.clone();
+    let handle = tokio::spawn(async move {
+        let who = Reviewer {
+            human_sk: &sk_h_owned,
+            human_kid: &kid_h_owned,
+        };
+        unlink_charts(&mut c, a, b, None, &who, ORIGIN).await
+    });
+
+    // Poll `pg_stat_activity`, via T1's own connection, until the judgement's backend
+    // (`judgement_pid`) shows `wait_event_type = 'Lock'` — genuinely parked waiting for
+    // T1's `FOR UPDATE` row lock. This is a real synchronisation signal, not a guessed
+    // delay: it only proceeds once the judgement has provably reached the point this test
+    // is about. Bounded to an overall 5s budget so a regression that never blocks (or one
+    // that panics/returns early) fails this test with a clear message instead of hanging
+    // the suite.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let wait_event_type: Option<String> = t1_tx
+            .query_one(
+                "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+                &[&judgement_pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if wait_event_type.as_deref() == Some("Lock") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the judgement (backend pid {judgement_pid}) never reached \
+             wait_event_type='Lock' within 5s — it may have completed without blocking, or \
+             errored early (last observed wait_event_type = {wait_event_type:?})"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // The crux of the test: NOW that the judgement is provably blocked on the row (not
+    // merely "probably" after a sleep), T1 checks whether it can still take CARNLK. Both
+    // the old and the fixed order eventually show `wait_event_type='Lock'` here — the old
+    // order blocks on this SAME row via its final `UPDATE match_proposal`, the fixed order
+    // via the new pre-lock — so the poll loop above cannot by itself tell them apart. This
+    // check is what does:
+    //   - under the OLD (pre-fix) order, the judgement's transaction had ALREADY called
+    //     submit_event — and so already taken CARNLK — BEFORE it ever reached the row
+    //     update it is now blocked on. So at the exact moment we observe it blocked, it is
+    //     STILL HOLDING CARNLK, and T1's attempt returns FALSE. That is the RED this test
+    //     caught before the fix.
+    //   - under the FIXED order, the new pre-lock means the judgement blocks on the row
+    //     BEFORE it has ever touched submit_event/CARNLK, so at the moment we observe it
+    //     blocked it has NOT taken CARNLK — T1's attempt returns TRUE.
+    let carnlk_free: bool = t1_tx
+        .query_one(
+            "SELECT pg_try_advisory_xact_lock(x'4341524E4C4B'::bigint)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        carnlk_free,
+        "T1 could not take CARNLK — the judgement must already hold it, meaning it \
+         submitted before locking the proposal row (the lock-order inversion this test \
+         guards against)"
+    );
+
+    // Release T1's row lock (and the CARNLK it just took, on rollback) so the judgement
+    // can proceed.
+    t1_tx.rollback().await.unwrap();
+
+    // The judgement now completes. Bounded so a regression that hangs (rather than
+    // deadlocking outright, which Postgres would abort with 40P01 anyway) fails this test
+    // fast instead of eating the CI job.
+    let out = timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("the judgement did not complete within 5s of the row lock being released")
+        .expect("spawned task did not panic")
+        .expect("unlink_charts succeeds once the row is free");
+    assert_eq!(out.charts.members(), &[a]);
+    assert_eq!(
+        proposal(&t1, a, b).await,
+        ("rejected".into(), None),
+        "the judgement's own move still lands once it is unblocked"
+    );
+}
