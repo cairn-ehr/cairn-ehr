@@ -500,7 +500,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   files; `tests/chart_link.rs` → itself + `chart_link_machine.rs` + `chart_link_refusals.rs`;
   `tests/unlink_from_record.rs` → itself + `unlink_from_record_refusals.rs`. Pure moves: the sorted test list of the
   affected binaries is identical (448 tests).
-- **2026-10-30 — the window's connection answers within 15 s, and a bar shows the wait (#875 option 2, PR #PRNUM).**
+- **2026-10-30 — the window's connection answers within 15 s, and a bar shows the wait (#875 option 2, PR [#892](https://github.com/cairn-ehr/cairn-ehr/pull/892)).**
   Every `NodeConnection` guard starts a watchdog; at 15 s it aborts the connection task
   (`cairn_node::db::connect_with_task`), so a stuck command fails `connection closed`, a cut-off COMMIT reads "not
   known" and the next press reopens. `src-ui/waiting.js` wraps the one `invoke`: "Waiting for the node…" after 2 s,
