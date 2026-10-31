@@ -630,7 +630,10 @@ mod tests {
             .await
             .is_ok());
         assert_eq!(
-            state.signer_for_act(Some(id_only("apark")), now).await.err(),
+            state
+                .signer_for_act(Some(id_only("apark")), now)
+                .await
+                .err(),
             Some(KeyRefusal::NeedCredential)
         );
         assert!(
@@ -638,7 +641,10 @@ mod tests {
             "another person's ID must forget the held key"
         );
         assert_eq!(
-            state.signer_for_act(Some(id_only("apark")), now).await.err(),
+            state
+                .signer_for_act(Some(id_only("apark")), now)
+                .await
+                .err(),
             Some(KeyRefusal::NeedCredential),
             "with nothing held, an ID alone is not a credential either"
         );
