@@ -44,13 +44,19 @@ fn resolve_new_vault_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizin
     }
     let first = Zeroizing::new(rpassword::prompt_password("new passphrase: ")?);
     let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
+    confirm_new_passphrase(&first, &again)?;
+    Ok(first)
+}
+
+/// Pure: a new passphrase must be non-empty and typed identically twice. The error names neither.
+fn confirm_new_passphrase(first: &str, again: &str) -> anyhow::Result<()> {
     if first.is_empty() {
         anyhow::bail!("no passphrase provided");
     }
-    if *first != *again {
+    if first != again {
         anyhow::bail!("the two entries differ; nothing was changed");
     }
-    Ok(first)
+    Ok(())
 }
 
 /// Load the signing key for a command. Uses CAIRN_KEY_PASSPHRASE; a plaintext key
@@ -220,7 +226,7 @@ struct ChartPairArgs {
     #[arg(long)]
     attester_key: PathBuf,
     /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
-    #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+    #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE", hide_env_values = true)]
     attester_passphrase: Option<String>,
 }
 
@@ -277,7 +283,7 @@ struct AttestFlags {
     /// Passphrase to unseal --attest-as (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
     /// Shares the env var with `identify-patient --attester-key`: both unseal a human
     /// attester key under the same operator convention.
-    #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+    #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE", hide_env_values = true)]
     attest_passphrase: Option<String>,
     /// Optional context recorded on the vouch (e.g. "admission reconciliation").
     #[arg(long)]
@@ -375,7 +381,7 @@ struct AuthorFlags {
     #[arg(long)]
     author_as: Option<std::path::PathBuf>,
     /// Passphrase to unseal --author-as (else CAIRN_AUTHOR_PASSPHRASE, else prompt).
-    #[arg(long, env = "CAIRN_AUTHOR_PASSPHRASE")]
+    #[arg(long, env = "CAIRN_AUTHOR_PASSPHRASE", hide_env_values = true)]
     author_passphrase: Option<String>,
 }
 
@@ -1560,7 +1566,7 @@ enum Cmd {
         #[arg(long)]
         address: String,
         /// Operational passphrase (else CAIRN_KEY_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
         /// Write the key UNSEALED (test nodes only — no recovery escrow).
         #[arg(long)]
@@ -1568,14 +1574,14 @@ enum Cmd {
     },
     /// Seal an existing plaintext key file and mint a fresh recovery code.
     SealKey {
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
     /// Establish the local-state escrow (`.lsk`) for a node provisioned before slice D.
     /// Prompts for the op passphrase AND the recovery code (both needed once). Errors if
     /// an escrow already exists.
     EstablishLocalStateKey {
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
     /// Establish this node's INDEPENDENT unwrap key (ADR-0066) and register its public
@@ -1584,7 +1590,7 @@ enum Cmd {
     /// replaced. Run it on a node provisioned before ADR-0066, or after recreating a
     /// database beside an existing key file.
     EstablishUnwrapKey {
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
     /// Enrol this node's signing key as a `device` actor, so it may author clinical events.
@@ -1626,7 +1632,7 @@ enum Cmd {
         /// `<key>.unwrap` and can say whether the file on disk really IS the key registered
         /// in the database; without it that one line reads `NOT opened` rather than
         /// claiming a match it never checked.
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
     /// Back up this node's signed event set to a local cold-peer medium (ADR-0026 slice
@@ -1639,7 +1645,7 @@ enum Cmd {
         to: PathBuf,
         /// Operational passphrase to seal the local-state export (else CAIRN_KEY_PASSPHRASE,
         /// else prompt). Only used when a local-state escrow (`.lsk`) exists.
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
     /// Verify a backup medium WITHOUT applying it: every record's signature and the chain must
@@ -1713,7 +1719,7 @@ enum Cmd {
         #[arg(long)]
         superseded_node: Option<String>,
         /// Operational passphrase for the NEW sealed key (else CAIRN_KEY_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
         /// Read the OLD node's recovery code from this file instead of prompting for it, so a
         /// disaster-recovery drill can be scripted (#572, ADR-0069). The file's contents are
@@ -1774,7 +1780,7 @@ enum Cmd {
         /// CAIRN_KEY_PASSPHRASE, else prompt). Matcher keys are regenerable, so there is no
         /// separate recovery escrow — but they SIGN identity links, so seal them by default
         /// exactly like the node key.
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
         /// Write matcher keys UNSEALED (throwaway/test nodes only — no at-rest protection).
         #[arg(long)]
@@ -1900,7 +1906,7 @@ enum Cmd {
         #[arg(long)]
         attester_key: PathBuf,
         /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE", hide_env_values = true)]
         attester_passphrase: Option<String>,
     },
     /// Report a chart's current §5.9 sensitivity grades: the chart-wide reading plus one
@@ -1957,7 +1963,7 @@ enum Cmd {
         #[arg(long, default_value = "clinician")]
         role: String,
         /// Passphrase to seal a newly-minted key (else CAIRN_KEY_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
         /// Mint the key UNSEALED if it does not exist (test nodes only).
         #[arg(long)]
@@ -1980,14 +1986,14 @@ enum Cmd {
         /// A reminder shown at sign-in; never the passphrase itself.
         #[arg(long)]
         hint: Option<String>,
-        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
 
     /// Console-only: set the shared terminal-unlock passphrase (stored only as an Argon2id hash).
     /// Prompted twice, no echo (or CAIRN_VAULT_PASSPHRASE).
     VaultSetTerminalPassphrase {
-        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
 
@@ -2073,7 +2079,7 @@ enum Cmd {
         #[arg(long)]
         attester_key: Option<PathBuf>,
         /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE", hide_env_values = true)]
         attester_passphrase: Option<String>,
     },
 
@@ -2427,7 +2433,7 @@ enum Cmd {
         #[arg(long)]
         attest_as: Option<PathBuf>,
         /// Passphrase to unseal --attest-as (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE", hide_env_values = true)]
         attest_passphrase: Option<String>,
     },
 
@@ -6107,6 +6113,47 @@ fn unreadable_custody_notice(
 
 #[cfg(test)]
 mod tests {
+    /// `--help` prints `[env: NAME=<value>]` for a set variable unless `hide_env_values` is on, so a
+    /// passphrase exported in the shell would be echoed to the terminal. Every passphrase arg, at
+    /// any subcommand depth, must hide it — a future arg without it fails here.
+    #[test]
+    fn every_passphrase_env_arg_hides_its_value_in_help() {
+        use clap::CommandFactory;
+        fn walk(cmd: &clap::Command, bad: &mut Vec<String>) {
+            for a in cmd.get_arguments() {
+                let is_pass = a
+                    .get_env()
+                    .map(|e| e.to_string_lossy().contains("PASSPHRASE"))
+                    .unwrap_or(false);
+                if is_pass && !a.is_hide_env_values_set() {
+                    bad.push(format!("{} --{}", cmd.get_name(), a.get_id()));
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                walk(sub, bad);
+            }
+        }
+        let mut bad = Vec::new();
+        walk(&super::Cli::command(), &mut bad);
+        assert!(
+            bad.is_empty(),
+            "passphrase args echo their env value in --help: {bad:?}"
+        );
+    }
+
+    #[test]
+    fn confirm_new_passphrase_cases() {
+        assert!(super::confirm_new_passphrase("a b", "a b").is_ok());
+        let e = super::confirm_new_passphrase("", "")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no passphrase"));
+        let e = super::confirm_new_passphrase("secret1", "secret2")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("differ") && !e.contains("secret"));
+    }
+
     /// #818 review: a sign-off that signed nothing, stopped at a line whose COMMIT got no
     /// ordinary answer, must not print "nothing was signed off" — that line MAY be signed, the
     /// same false count the window's "Signed 0" rule drops (`write_failure::sign_off_outcome`).

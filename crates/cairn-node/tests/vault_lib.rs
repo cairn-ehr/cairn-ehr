@@ -200,21 +200,26 @@ async fn bootstrap_refuses_a_non_superuser_role() {
 }
 
 #[tokio::test]
-async fn debug_never_prints_the_key() {
+async fn the_terminal_passphrase_round_trips() {
     let Some(_) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
     let (_g, c, _, _) = fresh().await;
-    let su = boss(&c).await;
-    let shown = format!(
-        "{:?}",
-        Release::Released {
-            key: su,
-            kid: "kid".into()
-        }
-    );
-    assert!(shown.contains("redacted"), "{shown}");
+    let phc = cairn_node::vault::terminal_phc("shared pass").unwrap();
+    c.execute("SELECT cairn_vault_set_terminal_phc($1)", &[&phc])
+        .await
+        .unwrap();
+    let stored: String = c
+        .query_one("SELECT cairn_vault_terminal_phc()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(cairn_node::vault::terminal_unlock_ok(
+        &stored,
+        "shared pass"
+    ));
+    assert!(!cairn_node::vault::terminal_unlock_ok(&stored, "wrong"));
 }
 
 #[tokio::test]

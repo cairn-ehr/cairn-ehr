@@ -184,17 +184,28 @@ pub async fn release_for_act(
         )
         .await
         .map_err(|e| anyhow!("vault release failed: {}", db_text(&e)))?;
-    let outcome: String = row.get(0);
-    let seed: Option<Vec<u8>> = row.get(1);
-    let kid: Option<String> = row.get(2);
-    let retry_ms: Option<i64> = row.get(3);
-    let retry = retry_ms.map(|ms| Duration::from_millis(ms.max(0) as u64));
-    match outcome.as_str() {
+    release_from_row(
+        &row.get::<_, String>(0),
+        row.get::<_, Option<Vec<u8>>>(1).as_deref(),
+        row.get::<_, Option<String>>(2).as_deref(),
+        row.get(3),
+    )
+}
+
+/// Pure: turn one `cairn_vault_release` row into a `Release`. Holds R6 (the seed must derive the
+/// key id it was filed under) and the rule that an unknown outcome string is an error.
+fn release_from_row(
+    outcome: &str,
+    seed: Option<&[u8]>,
+    kid: Option<&str>,
+    retry_after_ms: Option<i64>,
+) -> anyhow::Result<Release> {
+    let retry = retry_after_ms.map(|ms| Duration::from_millis(ms.max(0) as u64));
+    match outcome {
         "released" => {
-            let seed = Zeroizing::new(seed.ok_or_else(|| anyhow!("vault released no seed"))?);
             let kid = kid.ok_or_else(|| anyhow!("vault released no key id"))?;
             let arr: [u8; 32] = seed
-                .as_slice()
+                .ok_or_else(|| anyhow!("vault released no seed"))?
                 .try_into()
                 .map_err(|_| anyhow!("vault seed has the wrong length"))?;
             let arr = Zeroizing::new(arr);
@@ -203,7 +214,10 @@ pub async fn release_for_act(
             if hex::encode(key.verifying_key().to_bytes()) != kid {
                 bail!("the released key does not match its registered key id; refusing to use it");
             }
-            Ok(Release::Released { key, kid })
+            Ok(Release::Released {
+                key,
+                kid: kid.to_string(),
+            })
         }
         "wrong" => Ok(Release::Wrong { retry_after: retry }),
         "waiting" => Ok(Release::Waiting {
@@ -218,9 +232,9 @@ pub async fn release_for_act(
 /// An Argon2id PHC string for the shared terminal-unlock passphrase (the window checks against it).
 pub fn terminal_phc(passphrase: &str) -> anyhow::Result<String> {
     let entropy = seal::rand_bytes::<16>().map_err(|e| anyhow!("entropy unavailable: {e}"))?;
-    let params = SaltString::encode_b64(&entropy).map_err(|e| anyhow!("encoding failed: {e}"))?;
+    let encoded = SaltString::encode_b64(&entropy).map_err(|e| anyhow!("encoding failed: {e}"))?;
     Ok(Argon2::default()
-        .hash_password(passphrase.as_bytes(), &params)
+        .hash_password(passphrase.as_bytes(), &encoded)
         .map_err(|e| anyhow!("hashing failed: {e}"))?
         .to_string())
 }
@@ -247,5 +261,60 @@ mod tests {
         assert!(terminal_unlock_ok(&phc, "shared pass"));
         assert!(!terminal_unlock_ok(&phc, "other"));
         assert!(!terminal_unlock_ok("not a phc", "shared pass"));
+    }
+
+    fn seed_of(v: u8) -> [u8; 32] {
+        std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(v))
+    }
+    fn kid_of(seed: [u8; 32]) -> String {
+        hex::encode(SigningKey::from_bytes(&seed).verifying_key().to_bytes())
+    }
+
+    #[test]
+    fn release_from_row_maps_every_outcome() {
+        let s = seed_of(3);
+        let k = kid_of(s);
+        assert!(matches!(
+            release_from_row("released", Some(&s), Some(&k), None).unwrap(),
+            Release::Released { kid, .. } if kid == k
+        ));
+        assert!(matches!(
+            release_from_row("waiting", None, None, Some(1500)).unwrap(),
+            Release::Waiting { retry_after } if retry_after == Duration::from_millis(1500)
+        ));
+        assert!(release_from_row("waiting", None, None, None).is_err());
+        assert!(matches!(
+            release_from_row("wrong", None, None, None).unwrap(),
+            Release::Wrong { retry_after: None }
+        ));
+        assert!(matches!(
+            release_from_row("wrong", None, None, Some(2000)).unwrap(),
+            Release::Wrong { retry_after: Some(d) } if d == Duration::from_secs(2)
+        ));
+        assert!(matches!(
+            release_from_row("unknown", None, None, None).unwrap(),
+            Release::Unknown
+        ));
+        assert!(matches!(
+            release_from_row("refused-purpose", None, None, None).unwrap(),
+            Release::RefusedPurpose
+        ));
+        assert!(release_from_row("bogus", None, None, None).is_err());
+    }
+
+    #[test]
+    fn release_from_row_refuses_a_bad_seed() {
+        let s = seed_of(3);
+        let other = kid_of(seed_of(4));
+        let e = release_from_row("released", Some(&s), Some(&other), None).unwrap_err();
+        assert!(e.to_string().contains("does not match"));
+        assert!(release_from_row("released", Some(&s[..31]), Some(&kid_of(s)), None).is_err());
+    }
+
+    #[test]
+    fn debug_never_prints_the_key() {
+        let (key, kid) = generate_key().unwrap();
+        let shown = format!("{:?}", Release::Released { key, kid });
+        assert!(shown.contains("redacted"), "{shown}");
     }
 }
