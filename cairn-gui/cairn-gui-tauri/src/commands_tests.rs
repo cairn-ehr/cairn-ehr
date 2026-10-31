@@ -367,6 +367,7 @@ fn every_command_the_webview_calls_is_registered() {
     let webview = [
         ("waiting.js", include_str!("../src-ui/waiting.js")),
         ("main.js", include_str!("../src-ui/main.js")),
+        ("signer.js", include_str!("../src-ui/signer.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
         ("holds.js", include_str!("../src-ui/holds.js")),
         ("chart_stale.js", include_str!("../src-ui/chart_stale.js")),
@@ -406,4 +407,21 @@ fn every_command_the_webview_calls_is_registered() {
             "the webview calls `{name}`, main.rs never registers it"
         );
     }
+}
+
+/// The lock screen tells "no terminal passphrase is set" apart from "wrong", so an installer is
+/// never locked out with no explanation. The words are the webview's contract (`signer.js`).
+#[test]
+fn the_terminal_verdict_tells_not_set_from_wrong() {
+    let phc = cairn_node::vault::terminal_phc("shared pass").unwrap();
+    assert_eq!(
+        terminal_verdict(Some(&phc), "shared pass"),
+        TerminalUnlock::Unlocked
+    );
+    assert_eq!(terminal_verdict(Some(&phc), "other"), TerminalUnlock::Wrong);
+    assert_eq!(terminal_verdict(None, "anything"), TerminalUnlock::NotSet);
+    let words = |v| serde_json::to_string(&v).unwrap();
+    assert_eq!(words(TerminalUnlock::Unlocked), "\"unlocked\"");
+    assert_eq!(words(TerminalUnlock::Wrong), "\"wrong\"");
+    assert_eq!(words(TerminalUnlock::NotSet), "\"not-set\"");
 }

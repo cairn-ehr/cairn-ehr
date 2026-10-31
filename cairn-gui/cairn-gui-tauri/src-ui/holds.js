@@ -222,8 +222,11 @@ async function withhold(groupId, reason, kind, local) {
       until: until,
       patientId: renderedPatient,
       charts: renderedCharts,
+      credential: signerCredential(),
     });
+    clearSigner();
   } catch (failure) {
+    clearSigner();
     say("Could not withhold this drug: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
     // The fields stay as typed, so the clinician can correct and retry — but a stale refusal
@@ -250,8 +253,11 @@ async function release(groupId, withholds, reason) {
       reason: reason,
       patientId: renderedPatient,
       charts: renderedCharts,
+      credential: signerCredential(),
     });
+    clearSigner();
   } catch (failure) {
+    clearSigner();
     say("Could not release this hold: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
     // The reason stays as typed; the button comes back unless the list is stale, as `withhold`.

@@ -168,20 +168,45 @@ pub async fn vault_hint_impl(state: &AppState, staff_id: &str) -> Result<Option<
     })
 }
 
+/// What the terminal lock screen is told (the words are `signer.js`'s contract).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalUnlock {
+    Unlocked,
+    Wrong,
+    /// No terminal passphrase is enrolled yet: the screen says so rather than leaving an
+    /// installer locked out with no explanation.
+    NotSet,
+}
+
+/// Pure: the verdict for `passphrase` against the node's terminal PHC, if one is set.
+pub fn terminal_verdict(phc: Option<&str>, passphrase: &str) -> TerminalUnlock {
+    match phc {
+        None => TerminalUnlock::NotSet,
+        Some(phc) if cairn_node::vault::terminal_unlock_ok(phc, passphrase) => {
+            TerminalUnlock::Unlocked
+        }
+        Some(_) => TerminalUnlock::Wrong,
+    }
+}
+
 /// Does `passphrase` open this terminal (the shared staff passphrase, screensaver-style, spec
-/// §5.4)? The lock screen itself is the webview's; this only answers. `false` when no terminal
-/// passphrase is set yet, in fixture mode, and when it cannot be read (detail to stderr).
+/// §5.4)? The lock screen itself is the webview's; this only answers. `Wrong` in fixture mode
+/// and when the PHC cannot be read (detail to stderr); `NotSet` when none is enrolled.
 #[tauri::command]
 pub async fn terminal_unlock(
     state: tauri::State<'_, AppState>,
     passphrase: String,
-) -> Result<bool, String> {
+) -> Result<TerminalUnlock, String> {
     Ok(terminal_unlock_impl(&state, Zeroizing::new(passphrase)).await)
 }
 
-pub async fn terminal_unlock_impl(state: &AppState, passphrase: Zeroizing<String>) -> bool {
+pub async fn terminal_unlock_impl(
+    state: &AppState,
+    passphrase: Zeroizing<String>,
+) -> TerminalUnlock {
     let Some(db) = state.db.as_ref() else {
-        return false;
+        return TerminalUnlock::Wrong;
     };
     let phc = match db.lock().await {
         Err(lost) => Err(anyhow::Error::from(lost)),
@@ -192,11 +217,10 @@ pub async fn terminal_unlock_impl(state: &AppState, passphrase: Zeroizing<String
             .map_err(|e| db.explain(e.into())),
     };
     match phc {
-        Ok(Some(phc)) => cairn_node::vault::terminal_unlock_ok(&phc, &passphrase),
-        Ok(None) => false,
+        Ok(phc) => terminal_verdict(phc.as_deref(), &passphrase),
         Err(e) => {
             eprintln!("the terminal passphrase could not be read: {e:#}");
-            false
+            TerminalUnlock::Wrong
         }
     }
 }

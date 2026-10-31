@@ -37,12 +37,6 @@ let compareToken = 0;
  * I1). `null` whenever there is nothing a Link could honestly be signed over.
  */
 let compared = null; // { patientId, charts, otherId, otherCharts }
-/**
- * Whether the signing key is unlocked, as last reported by `renderLockState` through
- * `updateLinkLock`. Kept here (not read off the DOM) because a comparison can render before
- * the first lock poll lands, and `renderComparison` needs an answer either way.
- */
-let keyUnlocked = false;
 // The banner chart whose **Review** opened the panel (duplicates.js sets it right after
 // `openLinkPanel`), or null when "Same person as…" did — where Close returns focus.
 let linkOpener = null;
@@ -253,37 +247,8 @@ function renderComparison(view) {
   el("link-other-meds-section").hidden = false;
 
   // No Link button unless the whole comparison was read (design: a judgement needs the whole
-  // picture) — and, when it IS shown, its label must reflect the CURRENT lock state, not
-  // whatever the button said the last time it was visible.
+  // picture).
   el("link-confirm").hidden = !view.can_link;
-  updateLinkLock(keyUnlocked);
-}
-
-/**
- * Called by `renderLockState` (main.js) whenever the signing-key lock state is read, so the
- * Link button never claims a key is unlocked (or locked) longer than it actually is — the
- * same "state is ambient, never modal" rule main.js already applies to `#lock-state`.
- */
-function updateLinkLock(unlocked) {
-  keyUnlocked = Boolean(unlocked);
-  el("link-confirm").textContent = keyUnlocked
-    ? "Link — same person"
-    : "Link — same person (unlock your signing key first)";
-  // The unlink button obeys the same ambient lock rule (R2b-2); unlink.js loads after this file.
-  el("unlink-confirm").textContent = keyUnlocked
-    ? "Unlink — not the same person"
-    : "Unlink — not the same person (unlock your signing key first)";
-  // "Different people" (R5a) obeys the same ambient lock rule; its button is in the link panel's
-  // markup (index.html), so it exists whenever this runs.
-  el("link-different").textContent = keyUnlocked
-    ? "Different people — not the same person"
-    : "Different people — not the same person (unlock your signing key first)";
-  // The review panel's second verdict (R6): its label is Rust's (`view.same_label`), stored by
-  // `renderUnlinkComparison` in `dataset.label`, so the suffix is added to the BASE each time and
-  // never appended twice. No label (no verdict offered) stays empty.
-  const same = el("unlink-same");
-  const base = same.dataset.label || "";
-  same.textContent = base && !keyUnlocked ? base + " (unlock your signing key first)" : base;
 }
 
 /**
@@ -372,7 +337,9 @@ async function sendJudgement(command) {
       charts: sent.charts,
       otherId: sent.otherId,
       otherCharts: sent.otherCharts,
+      credential: signerCredential(),
     });
+    clearSigner();
     const place = linkAnswerPlace(sent, token);
     // Recorded: the clinician now holds what their own act left (`charts_after`; null when it
     // changed no set), so no re-read announces their own link back to them (#797).
@@ -412,6 +379,7 @@ async function sendJudgement(command) {
     // would pass a second press. After a change, a fresh Review must re-read anyway.
     disarmNewerComparison(sent);
   } catch (failure) {
+    clearSigner();
     const place = linkAnswerPlace(sent, token);
     const text = failureText(failure);
     // Said where the clinician is now; also the re-read's lead, so it keeps its "For chart …".

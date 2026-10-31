@@ -384,8 +384,14 @@ async function signOff() {
   }
   let report;
   try {
-    report = await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts });
+    report = await invoke("sign_off", {
+      patientId: renderedPatient,
+      charts: renderedCharts,
+      credential: signerCredential(),
+    });
+    clearSigner();
   } catch (failure) {
+    clearSigner();
     // `failureText` reads the ErrorView's text. Since #818 an interrupted commit returns a report,
     // not this error; the "unknown" check stays as defence, so such an error is never "failed".
     const unknown = behindTheRecord(failure) === "unknown";
@@ -407,8 +413,11 @@ async function cease(groupId, reason) {
       reason: reason,
       patientId: renderedPatient,
       charts: renderedCharts,
+      credential: signerCredential(),
     });
+    clearSigner();
   } catch (failure) {
+    clearSigner();
     say("Could not stop this drug: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
     return;
@@ -418,23 +427,8 @@ async function cease(groupId, reason) {
 }
 
 function renderLockState(lock) {
-  if (lock.mock) {
-    el("lock-state").textContent =
-      "Fixture data — this window is showing a sample chart and cannot write to a record.";
-    // Fixture mode holds no signing key at all (link.js's `linkCompared` refuses to write in
-    // it regardless), so the Link button reads exactly as a locked one does — never as if a
-    // key were unlocked when there is none to unlock.
-    if (typeof updateLinkLock === "function") updateLinkLock(false);
-    return;
-  }
-  // Interim (sign-in slice 1, Task 5): the key now comes from the node's vault per act; the
-  // signer strip that sends a staff ID and passphrase with each act is Task 6's.
-  el("lock-state").textContent = lock.held_by
-    ? "Signed in for the next act: " + lock.held_by + "."
-    : "Each act asks for your staff ID and passphrase.";
-  // `link.js` loads after this file and may not always be present (a future front-end could
-  // reuse `main.js` without it) — guarded rather than assumed.
-  if (typeof updateLinkLock === "function") updateLinkLock(Boolean(lock.held_by));
+  // The strip, the "signed in for the next act" line and the terminal lock are signer.js's.
+  renderSigner(lock);
 }
 
 async function pollLock() {
@@ -452,11 +446,11 @@ el("sign-off").addEventListener("click", signOff);
 // both files are classic scripts sharing one scope, loaded main.js first.
 //
 // The FIRST lock poll waits for DOMContentLoaded (#782). Started here, while this file is still
-// loading, its answer could land before link.js (loaded after this file) defines
-// `updateLinkLock`: `renderLockState` then skipped it, and the verdict buttons showed link.js's
-// default "locked" state until the next poll, up to LOCK_POLL_MS later. DOMContentLoaded fires
-// only after every classic, synchronous script has run, so every reader of the lock exists by
-// then (pinned in `link/lock_hint_tests.rs`, which also keeps every script tag classic).
+// loading, its answer could land before signer.js (loaded after this file) defines
+// `renderSigner`: the strip and the terminal lock would then miss the first state until the next
+// poll, up to LOCK_POLL_MS later. DOMContentLoaded fires only after every classic, synchronous
+// script has run, so every reader of the lock exists by then (pinned in
+// `link/lock_hint_tests.rs`, which also keeps every script tag classic).
 document.addEventListener("DOMContentLoaded", () => void pollLock());
 // The key re-locks on a timer in the backend; the window must not learn about it only when
 // a signature is refused (state is ambient, never modal).

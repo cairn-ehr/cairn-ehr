@@ -19,7 +19,7 @@
 // Classic script, loaded after main.js, funnel.js and link.js, sharing their scope: `el`, `cell`,
 // `setMessage`, `say`, `refresh`, `invoke`, `displayedPatient`, `renderedPatient`,
 // `renderedCharts` (main.js), `behindTheRecord`, `holdOwnAct` (chart_stale.js), `failureText`
-// (funnel.js), `sayAnywhere`, `updateLinkLock`, `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's
+// (funnel.js), `sayAnywhere`, `closeLinkPanel` (link.js). It mirrors link.js's
 // rules (read its header) and is a panel SEPARATE FROM THE LINK PANEL: the link panel judges
 // "link / different people" over a searched-for chart; this one reviews a link or judgement that
 // already stands. Its two verdicts are guarded together (above), so one human cannot sign both.
@@ -52,7 +52,7 @@ function clearUnlinkComparison() {
   el("unlink-table").tBodies[0].replaceChildren();
   setMessage(el("unlink-status"), "");
   setMessage(el("unlink-same-note"), "");
-  el("unlink-same").dataset.label = ""; // updateLinkLock must never redraw an old comparison's label
+  el("unlink-same").textContent = "";
 }
 
 /** Disable (or re-enable) BOTH verdicts: one human must never sign two verdicts ms apart. */
@@ -141,11 +141,9 @@ function renderUnlinkComparison(view) {
   // No verdict unless the whole comparison was read: a judgement needs the whole picture.
   el("unlink-confirm").hidden = !view.can_unlink;
   const same = el("unlink-same");
-  // The BASE label; updateLinkLock (link.js) adds the unlock hint to it, below.
-  same.dataset.label = view.same_label || "";
+  same.textContent = view.same_label || "";
   same.hidden = !view.can_confirm;
   setMessage(el("unlink-same-note"), view.same_note || "");
-  updateLinkLock(keyUnlocked);
 }
 
 /**
@@ -204,8 +202,11 @@ async function unlinkCompared() {
         // Handed back unchanged: the node refuses the unlink if the pair's standing judgement
         // is no longer this one (a colleague's confirm landed meanwhile).
         standing: sent.standing,
+        credential: signerCredential(),
       });
+      clearSigner();
     } catch (failure) {
+      clearSigner();
       await showUnlinkFailure(sent, token, failure);
       return;
     }
@@ -235,8 +236,11 @@ async function confirmCompared() {
         high: sent.high,
         kind: sent.kind,
         standing: sent.standing,
+        credential: signerCredential(),
       });
+      clearSigner();
     } catch (failure) {
+      clearSigner();
       await showUnlinkFailure(sent, token, failure);
       return;
     }

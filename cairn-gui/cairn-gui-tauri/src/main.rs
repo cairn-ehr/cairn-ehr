@@ -39,6 +39,8 @@ mod read_again_webview_tests;
 mod reread_webview_tests;
 mod signer;
 #[cfg(test)]
+mod signer_webview_tests;
+#[cfg(test)]
 mod source_guard;
 mod state;
 #[cfg(test)]

@@ -33,6 +33,24 @@
         <div id="node-wait-track" aria-hidden="true"><div id="node-wait-fill"></div></div>
       </div>
 
+      <!-- Who is signed in, and whether a key is held. ALWAYS visible (outside both surfaces). Ambient, never modal: the clinician
+           should see the lock, not discover it when a signature is refused. -->
+      <section id="session" aria-labelledby="session-heading">
+        <h2 id="session-heading" class="visually-hidden">Signing key</h2>
+        <p id="lock-state" role="status" aria-live="polite">Checking signing key…</p>
+        <!-- Who signs the next act. Optional when a key is held (key hold > 0), otherwise typed
+             for each act; the passphrase is emptied after every write (signer.js). -->
+        <form id="signer">
+          <label for="staff-id">Staff ID</label>
+          <input id="staff-id" type="text" list="recent-signers" autocomplete="off" />
+          <datalist id="recent-signers"></datalist>
+          <label for="signer-passphrase">Passphrase</label>
+          <input id="signer-passphrase" type="password" autocomplete="off" />
+          <button id="forget-key" type="button" hidden>Lock</button>
+          <p id="signer-hint" hidden></p>
+        </form>
+      </section>
+
       <section id="front-door" aria-labelledby="find-heading" hidden>
         <h1 id="find-heading">Find a patient</h1>
 
@@ -176,12 +194,6 @@
           <button id="unlink-close" type="button">Close comparison</button>
         </section>
 
-        <!-- Who is signed in, and whether a key is held. Ambient, never modal: the clinician
-             should see the lock, not discover it when a signature is refused. -->
-        <section id="session" aria-labelledby="session-heading">
-          <h2 id="session-heading" class="visually-hidden">Signing key</h2>
-          <p id="lock-state" role="status" aria-live="polite">Checking signing key…</p>
-        </section>
 
         <!-- The possible-duplicate banner (R5a, #680). AMBIENT, never a modal and never
              role="alert": it takes no focus, makes no sound and is never re-popped (§5.12). It sits
@@ -240,8 +252,21 @@
         <p id="outcome" role="status" aria-live="polite"></p>
       </section>
     </main>
+    <!-- The terminal lock screen: shown at launch (live mode) until the shared terminal
+         passphrase is entered. An overlay on the page, never a modal; signer.js makes
+         <main> inert behind it. -->
+    <div id="terminal-lock">
+      <form id="terminal-form">
+        <h2>This terminal is locked</h2>
+        <label for="terminal-passphrase">Terminal passphrase</label>
+        <input id="terminal-passphrase" type="password" autocomplete="off" />
+        <button type="submit">Unlock</button>
+        <p id="terminal-status" role="status" aria-live="polite" hidden></p>
+      </form>
+    </div>
     <script src="waiting.js"></script>
     <script src="main.js"></script>
+    <script src="signer.js"></script>
     <script src="stop_reasons.js"></script>
     <script src="holds.js"></script>
     <script src="chart_stale.js"></script>
