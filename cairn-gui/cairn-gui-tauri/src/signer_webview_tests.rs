@@ -162,7 +162,7 @@ fn the_page_starts_locked_and_a_write_refreshes_the_lock_state() {
         "{clear}"
     );
     assert!(
-        position(&clear, "rememberSigner(") < position(&clear, "el(\"staff-id\").value = \"\";"),
+        position(clear, "rememberSigner(") < position(clear, "el(\"staff-id\").value = \"\";"),
         "remembered before it is cleared"
     );
     let hint = js_fn(SIGNER_JS, "showSignerHint");
