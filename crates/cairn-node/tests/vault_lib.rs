@@ -334,7 +334,10 @@ async fn a_failed_enrolment_says_whether_the_server_answered() {
         .expect_err("a duplicate staff ID is refused");
     assert!(answered_with_error(&refused), "refused: {refused:#}");
 
-    // The same call on a connection that has died: no answer, so not "answered".
+    // The same call on a connection that has died: no answer, so not "answered". (It fails at the
+    // address query, before the write: this half pins the safe direction, that a failure with no
+    // ordinary answer is never read as a refusal. The refusal half above is the one that would go
+    // red if the write's error were reduced to text again.)
     let dead = db::connect(&base).await.unwrap();
     let pid: i32 = dead
         .query_one("SELECT pg_backend_pid()", &[])

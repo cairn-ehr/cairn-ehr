@@ -604,9 +604,15 @@ mod tests {
     /// later (which would let a Lock in flight be undone).
     #[test]
     fn signer_for_act_keeps_the_key_with_the_generation_of_its_own_wipe() {
-        let body: String = crate::source_guard::rust_fn(include_str!("state.rs"), "signer_for_act")
+        let flat: String = crate::source_guard::rust_fn(include_str!("state.rs"), "signer_for_act")
             .split_whitespace()
             .collect();
+        // `rust_fn` runs to the end of the impl for a method; cut at the next method.
+        let body = flat
+            .split("pubasyncfnforget_held_key")
+            .next()
+            .unwrap()
+            .to_string();
         let wipe = body.find("letseen=held.wipe();").expect(&body);
         let keep = body.find(".keep_for_next_act(seen,").expect(&body);
         assert!(wipe < keep, "{body}");

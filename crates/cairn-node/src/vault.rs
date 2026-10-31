@@ -304,9 +304,11 @@ pub fn terminal_phc(passphrase: &str) -> anyhow::Result<String> {
 /// would tell every staff member their correct passphrase is wrong.
 pub fn terminal_unlock_ok(phc: &str, passphrase: &str) -> anyhow::Result<bool> {
     let hash = PasswordHash::new(phc).map_err(|e| anyhow!("the terminal PHC is malformed: {e}"))?;
-    // A PHC cut short still parses; the verifier would then call it a mismatch.
-    if hash.salt.is_none() || hash.hash.is_none() {
-        bail!("the terminal PHC is malformed: it has no salt or no hash");
+    // A PHC cut short can still parse — no hash, or a shorter one, which argon2 would recompute at
+    // that length and call a mismatch. `terminal_phc` always writes the default 32-byte output.
+    if hash.salt.is_none() || hash.hash.map(|h| h.len()) != Some(argon2::Params::DEFAULT_OUTPUT_LEN)
+    {
+        bail!("the terminal PHC is malformed: it has no salt, or no full-length hash");
     }
     match Argon2::default().verify_password(passphrase.as_bytes(), &hash) {
         Ok(()) => Ok(true),
@@ -335,6 +337,15 @@ mod tests {
         let phc = terminal_phc("shared pass").unwrap();
         let truncated = &phc[..phc.len() / 2];
         assert!(terminal_unlock_ok(truncated, "shared pass").is_err());
+        // Cut inside the HASH segment (the last 43 characters): some cuts still parse, and argon2
+        // would hash to the shorter length and call every passphrase a mismatch.
+        for cut in 1..30 {
+            let in_the_hash = &phc[..phc.len() - cut];
+            assert!(
+                terminal_unlock_ok(in_the_hash, "shared pass").is_err(),
+                "cut {cut}"
+            );
+        }
     }
 
     /// The one rule every door (window, console, library) applies to a NEW passphrase, and the

@@ -17,7 +17,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   or door that returns `sealed`. A blob that leaves the database is an OFFLINE guessing target no back-off reaches.
   (No grant binds the owner or a PostgreSQL superuser, and the window connects as the owner today, #898.)
   `cairn_vault_unseal` stays revoked from PUBLIC: for every role but the owner, `cairn_vault_release` is its only
-  door, and db/061 refuses to load if that REVOKE did not take (a non-owner loader's REVOKE is a no-op; pin `the_schema_refuses_to_load_while_the_runtime_role_can_unseal`). Pin:
+  door, and db/061 refuses to load if that REVOKE did not take (a non-owner loader's REVOKE is a no-op; pin `the_schema_refuses_to_load_while_the_runtime_role_can_unseal`). Defence in depth (the runtime role cannot read a blob to feed it), and only on a replay: a `cairn_pgx` reinstall re-grants PUBLIC unseen (#908). Pin:
   `the_runtime_role_cannot_read_the_vault`. **Tempting wrong fix:** a "roster" view for an admin screen that
   selects `*` — select the named non-secret columns through a definer, or nothing.
 - **Never make `cairn_vault_release` raise on a passphrase.** Wrong passphrase, unknown staff ID, wrong purpose and

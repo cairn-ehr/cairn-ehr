@@ -523,7 +523,10 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_member_created() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) FROM PUBLIC;
 -- That REVOKE is only a WARNING, and a no-op, when the loader does not own the extension's
 -- functions (cairn_pgx is not superuser-only, so whoever ran CREATE EXTENSION owns them). Then the
--- runtime role could call the primitive and skip every count. Refuse the load instead.
+-- runtime role could call the unthrottled primitive directly. It would still need a sealed blob,
+-- which it cannot read, so this is defence in depth, not the only wall. Refuse the load instead.
+-- It runs only when the schema is replayed: a cairn_pgx reinstall, which re-grants PUBLIC, skips
+-- it (#908).
 DO $$
 BEGIN
     IF has_function_privilege('cairn_agent', 'cairn_vault_unseal(bytea, text)', 'EXECUTE') THEN

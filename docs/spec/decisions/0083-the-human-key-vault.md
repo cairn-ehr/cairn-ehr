@@ -47,7 +47,10 @@ has to live somewhere other than a file on one machine. Four questions follow, a
   `cairn_agent` gets `insufficient_privilege` if it tries to read it.
 - The unsealing primitive `cairn_vault_unseal` is revoked from `PUBLIC` too. For every role but the owner, the only
   way to reach it is the release door, `cairn_vault_release` (a `SECURITY DEFINER`), which counts every guess
-  (decision 4).
+  (decision 4). db/061 refuses to load if that REVOKE did not take. Both run only when the schema is replayed, so a
+  `cairn_pgx` reinstall, which re-grants `PUBLIC`, goes unseen until the next replay
+  ([#908](https://github.com/cairn-ehr/cairn-ehr/issues/908)). That is defence in depth lost rather than a bypass:
+  the primitive needs a sealed blob, which the runtime role cannot read.
 - **What the grants cannot do.** The table owner and any PostgreSQL superuser can still read `sealed`; grants never
   bind them. And **today's window connects as the owner**: it loads the schema at launch with the same connection
   string it then works on, and it does not switch to `cairn_agent`. So the promise holds against the runtime role
@@ -192,9 +195,10 @@ Two more facts belong to this interim, and the in-database signer must cover the
   passphrase reaches the screen through one. A fault's detail goes to the operator's stderr. (What the screen does
   show besides: the held staff ID, the member's own hint, which is database text, and an enrolment's success line,
   which names the new member.)
-- An enrolment that fails with no ordinary answer from the server (a lost connection, a cut-off) is said to be of
-  unknown outcome, "check before enrolling them again, and never under a new staff ID", not "nothing was recorded":
-  a retry would be told the staff ID is taken, and enrolling the person under another one makes two actors.
+- An enrolment that fails at any step with no ordinary answer from the server (a lost connection, a cut-off) is
+  said to be of unknown outcome: "check before enrolling them again, and never under a new staff ID", not "nothing
+  was recorded". A retry would be told the staff ID is taken, and enrolling the person under another one makes two
+  actors. It errs towards "unknown" even when the failure came before the write, which claims less, never more.
 - **Statement logging can still write the passphrase and the sealed blob, and only the operator can stop it.**
   PostgreSQL logs bind parameters with the statement when `log_statement = 'all'`, `log_min_duration_statement`,
   `log_min_duration_sample` (with `log_statement_sample_rate`) or `log_transaction_sample_rate` logs the call (unless
@@ -348,4 +352,5 @@ key refuses the second member, but a restore that lost the row would not).
     [#901](https://github.com/cairn-ehr/cairn-ehr/issues/901) (decision 7); the back-off held open by another's guesses,
     [#903](https://github.com/cairn-ehr/cairn-ehr/issues/903), and integrity faults that read as user errors,
     [#904](https://github.com/cairn-ehr/cairn-ehr/issues/904) (decision 4); the window's DB-gated enrolment tests
-    that CI never runs, [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905).
+    that CI never runs, [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905); the REVOKE a `cairn_pgx` reinstall
+    undoes unseen, [#908](https://github.com/cairn-ehr/cairn-ehr/issues/908) (decision 1).

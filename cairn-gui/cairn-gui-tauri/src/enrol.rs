@@ -73,8 +73,10 @@ pub enum EnrolRefusal {
     /// The vault or the node refused or failed after the checks passed, with an answer: nothing
     /// was recorded.
     NotRecorded,
-    /// The enrolment itself got no ordinary answer (a lost connection, a cut-off): it may have
-    /// been recorded. Said so, never "nothing was recorded" — a retry would then be told the ID
+    /// A step of the enrolment got no ordinary database answer (a lost connection, a cut-off, or
+    /// a failure with no database error at all): it may have been recorded. Errs towards
+    /// "unknown": a failure BEFORE the write (the address query, minting the key) says so too,
+    /// which claims less than the truth, never more. Said so, never "nothing was recorded" — a retry would then be told the ID
     /// is taken, and the natural next step, a new staff ID, is a second actor for one person.
     OutcomeUnknown,
     Fixture,
@@ -190,7 +192,10 @@ pub async fn enrol_member_impl(
         return Err(EnrolRefusal::Fixture.sentence());
     };
     let fault = |e: anyhow::Error| {
-        eprintln!("an enrolment could not be completed: {e:#}");
+        eprintln!(
+            "an enrolment could not be completed: {}",
+            cairn_node::db_diagnosis::operator_chain(&e)
+        );
         EnrolRefusal::NotRecorded.sentence()
     };
     // One hold of the node connection for release + enrol; every error goes through `explain`
@@ -238,7 +243,10 @@ pub async fn enrol_member_impl(
         .await
         .map_err(|e| {
             let e = db.explain(e);
-            eprintln!("an enrolment could not be completed: {e:#}");
+            eprintln!(
+                "an enrolment could not be completed: {}",
+                cairn_node::db_diagnosis::operator_chain(&e)
+            );
             enrol_failure(&e).sentence()
         })?;
     Ok(format!(

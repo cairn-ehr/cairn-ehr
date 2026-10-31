@@ -40,7 +40,8 @@ member's key answers `not-current`, a damaged terminal PHC is a fault, db/061 re
 > > **#903** (another person's wrong guesses can hold a named member at the 300 s cap: no decay, no reset — needs a
 > > maintainer decision), **#904** (an unreadable sealed blob reads as "wrong passphrase" and is counted; needs a
 > > `cairn_pgx` 0.5.0), **#905** (CI never runs `cairn-gui-tauri`'s DB-gated enrol tests: run them locally with
-> > `CAIRN_TEST_PG`), **#906** (type hardening), **#907** (minor test gaps). Human-key `&SigningKey`
+> > `CAIRN_TEST_PG`), **#906** (type hardening), **#907** (minor test gaps), **#908** (a `cairn_pgx`
+> > reinstall re-grants `cairn_vault_unseal` to PUBLIC unseen: the replay is skipped). Human-key `&SigningKey`
 > > parameters that slice 5 must still move onto the seam: `identify.rs:83` (`LinkParams`), `apply_proposal.rs:94`.
 > > **Local `cairn_pgx` reinstall on this Mac:** the 2026-10-19 Xcode `ld` emits a dylib Postgres will not load — patch
 > > it with `scripts/macos-patch-pgx-dylib.py` (CI is unaffected).
