@@ -37,6 +37,7 @@ mod node_lock_explains_tests;
 mod read_again_webview_tests;
 #[cfg(test)]
 mod reread_webview_tests;
+mod signer;
 #[cfg(test)]
 mod source_guard;
 mod state;
@@ -66,11 +67,14 @@ struct Cli {
     #[arg(long, env = "CAIRN_KEY", default_value = "node.key")]
     key: std::path::PathBuf,
 
-    /// The CLINICIAN's sealed signing key, unsealed in-window by `unlock`. Distinct from
-    /// `--key`: the node seals and holds custody, the human authors and vouches
-    /// (ADR-0053).
-    #[arg(long)]
-    attester_key: Option<std::path::PathBuf>,
+    /// How long a clinician's key stays held after an act, so their next act needs no
+    /// passphrase (spec §5.4 "key hold"). 0, the default, is a SHARED terminal: every act
+    /// carries a staff ID and passphrase. A personal workstation may hold up to 900 s (the
+    /// idle timeout). The clinician's key itself comes from the node's vault per act; it is
+    /// never a file this window opens. Distinct from `--key`: the node seals and holds
+    /// custody, the human authors and vouches (ADR-0053).
+    #[arg(long, default_value = "0", value_parser = signer::parse_key_hold)]
+    key_hold_seconds: std::time::Duration,
 
     /// Run against fixtures with no database. Clinical writes (sign-off, stopping a drug) are
     /// refused in this mode; registering a patient succeeds into an in-memory population that
@@ -107,8 +111,10 @@ fn main() -> anyhow::Result<()> {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::med_list,
-            commands::unlock,
             commands::lock_state,
+            commands::vault_hint,
+            commands::terminal_unlock,
+            commands::forget_held_key,
             commands::sign_off,
             commands::cease,
             hold::withhold,
@@ -169,7 +175,7 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         funnel_backend: funnel::backend::FunnelBackend::Live(live),
         funnel: tokio::sync::Mutex::new(cairn_gui_funnel::FunnelSession::new()),
         shown: tokio::sync::Mutex::new(Default::default()),
-        attester_key_path: cli.attester_key.clone(),
+        key_hold: cli.key_hold_seconds,
         session: tokio::sync::Mutex::new(None),
     })
 }

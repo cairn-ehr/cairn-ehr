@@ -30,6 +30,7 @@ async fn withhold_refuses_a_chart_that_is_not_on_screen() {
         &another_chart(),
         "nil by mouth",
         "reviewed",
+        None,
     )
     .await
     .unwrap_err();
@@ -46,6 +47,7 @@ async fn release_refuses_a_chart_that_is_not_on_screen() {
         &another_chart(),
         &[another_chart()],
         "",
+        None,
     )
     .await
     .unwrap_err();
@@ -64,6 +66,7 @@ async fn a_withhold_on_the_chart_on_screen_meets_the_fixture_refusal() {
         &another_chart(),
         "",
         "",
+        None,
     )
     .await
     .unwrap_err();
@@ -77,6 +80,7 @@ async fn a_withhold_on_the_chart_on_screen_meets_the_fixture_refusal() {
         &another_chart(),
         &["not an id".to_string()],
         "",
+        None,
     )
     .await
     .unwrap_err();
@@ -167,7 +171,7 @@ fn the_refusals_come_before_the_key() {
         "letuntil=parse_until(until).map_err(refused)?;",
         "letrow=chart",
         "plan::withhold_target(row,patient).map_err(refused)?;",
-        "state.live_key(",
+        "state.signer_for_act(",
     ];
     let at: Vec<usize> = order
         .iter()
@@ -184,7 +188,7 @@ fn the_refusals_come_before_the_key() {
         .find("ifplan.write.is_empty(){returnOk(HoldReport{")
         .expect(&release);
     assert!(
-        early < release.find("state.live_key(").unwrap(),
+        early < release.find("state.signer_for_act(").unwrap(),
         "{release}"
     );
     assert!(
@@ -192,7 +196,7 @@ fn the_refusals_come_before_the_key() {
         "{release}"
     );
 
-    // A cease likewise: a line it can stop nothing on is answered before the key (an unlock
+    // A cease likewise: a line it can stop nothing on is answered before the key (a passphrase
     // that writes nothing), and the answer marks the list behind the record (#841's offer rule
     // means the screen drew a Stop it would no longer draw).
     let cease: String = crate::source_guard::rust_fn(include_str!("../commands.rs"), "cease_impl")
@@ -201,7 +205,10 @@ fn the_refusals_come_before_the_key() {
     let early = cease
         .find("ifplan.write.is_empty(){returnOk(CeaseReport{")
         .expect(&cease);
-    assert!(early < cease.find("state.live_key(").unwrap(), "{cease}");
+    assert!(
+        early < cease.find("state.signer_for_act(").unwrap(),
+        "{cease}"
+    );
     assert!(
         cease[early..].contains("behind_the_record:Some(Recorded::No),"),
         "{cease}"

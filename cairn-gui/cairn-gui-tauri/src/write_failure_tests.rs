@@ -67,18 +67,25 @@ fn a_real_verdict_is_never_and_a_real_node_state_refusal_is_after_operator() {
     assert_eq!(view.text, format!("{e:#}"));
 }
 
-/// A locked key keeps the button; a node that cannot write needs its operator. Pinned at the
-/// helpers AND at the two commands that must use them (the branches need a live key/db).
+/// No key to sign keeps the button; a node that cannot write needs its operator. Pinned at the
+/// helpers AND at the two commands that must use them (the branches need a live key/db). The
+/// no-key sentence is `KeyRefusal::sentence`, so it can never carry a passphrase or DB text.
 #[test]
 fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
+    use crate::signer::KeyRefusal;
     use crate::source_guard::rust_fn;
-    assert_eq!(key_locked("x").retry, Retry::Now);
+    let refusal = KeyRefusal::NeedCredential;
+    assert_eq!(key_locked(&refusal).retry, Retry::Now);
+    assert_eq!(key_locked(&refusal).text, refusal.sentence());
     assert_eq!(node_cannot_write("x").retry, Retry::AfterOperator);
     let src = include_str!("commands.rs");
     for f in ["sign_off_impl", "cease_impl"] {
         let body = rust_fn(src, f);
+        let flat: String = body.split_whitespace().collect();
         assert!(
-            body.contains("key_locked(\"your signing key is locked"),
+            flat.contains(
+                ".signer_for_act(credential,Now::read()).await.map_err(|r|key_locked(&r))?;"
+            ),
             "{f}"
         );
         assert!(body.contains("node_cannot_write(\"no node key\")"), "{f}");

@@ -421,20 +421,20 @@ function renderLockState(lock) {
   if (lock.mock) {
     el("lock-state").textContent =
       "Fixture data — this window is showing a sample chart and cannot write to a record.";
-    el("unlock-form").hidden = true;
     // Fixture mode holds no signing key at all (link.js's `linkCompared` refuses to write in
     // it regardless), so the Link button reads exactly as a locked one does — never as if a
     // key were unlocked when there is none to unlock.
     if (typeof updateLinkLock === "function") updateLinkLock(false);
     return;
   }
-  el("lock-state").textContent = lock.unlocked
-    ? "Signing as " + lock.kid + " — your key is unlocked."
-    : "Your signing key is locked. Unlock it to sign off or stop a drug.";
-  el("unlock-form").hidden = Boolean(lock.unlocked);
+  // Interim (sign-in slice 1, Task 5): the key now comes from the node's vault per act; the
+  // signer strip that sends a staff ID and passphrase with each act is Task 6's.
+  el("lock-state").textContent = lock.held_by
+    ? "Signed in for the next act: " + lock.held_by + "."
+    : "Each act asks for your staff ID and passphrase.";
   // `link.js` loads after this file and may not always be present (a future front-end could
-  // reuse `main.js` without it) — guarded rather than assumed, the same as `unlock-form`.
-  if (typeof updateLinkLock === "function") updateLinkLock(lock.unlocked);
+  // reuse `main.js` without it) — guarded rather than assumed.
+  if (typeof updateLinkLock === "function") updateLinkLock(Boolean(lock.held_by));
 }
 
 async function pollLock() {
@@ -446,21 +446,6 @@ async function pollLock() {
 }
 
 el("sign-off").addEventListener("click", signOff);
-
-el("unlock-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const field = el("passphrase");
-  try {
-    renderLockState(await invoke("unlock", { passphrase: field.value }));
-    say("Signing key unlocked.");
-  } catch (e) {
-    say(String(e));
-  } finally {
-    // Clear the field either way: a passphrase left in a DOM node outlives the failure
-    // that put it there.
-    field.value = "";
-  }
-});
 
 // No `refresh()` here: whether a chart is showing at all is the front door's decision
 // (funnel.js), which calls `refresh()` when it opens one. `refresh` and `say` stay globals —

@@ -126,6 +126,7 @@ async fn link_refuses_when_the_other_record_changed() {
         charts,
         &other.to_string(),
         vec![other.to_string(), Uuid::from_u128(4).to_string()],
+        None,
     )
     .await
     .unwrap_err();
@@ -147,6 +148,7 @@ async fn link_in_fixture_mode_passes_every_check_then_refuses_to_write() {
         charts,
         &other.to_string(),
         vec![other.to_string()],
+        None,
     )
     .await
     .unwrap_err();
@@ -171,6 +173,7 @@ async fn link_refuses_when_this_record_changed() {
         vec![p.clone(), Uuid::from_u128(7).to_string()],
         &other.to_string(),
         vec![other.to_string()],
+        None,
     )
     .await
     .unwrap_err();
@@ -194,6 +197,7 @@ async fn an_unreadable_left_set_is_not_worded_as_a_change() {
         vec!["not-a-uuid".into()],
         &other.to_string(),
         vec![other.to_string()],
+        None,
     )
     .await
     .unwrap_err();
@@ -218,6 +222,7 @@ async fn an_unreadable_other_set_is_not_worded_as_a_change() {
         charts,
         &other.to_string(),
         vec!["not-a-uuid".into()],
+        None,
     )
     .await
     .unwrap_err();
@@ -238,6 +243,7 @@ async fn link_is_bound_to_the_chart_on_screen() {
         vec![],
         &other.to_string(),
         vec![other.to_string()],
+        None,
     )
     .await
     .unwrap_err();
@@ -251,7 +257,7 @@ async fn link_is_bound_to_the_chart_on_screen() {
 async fn link_refuses_a_chart_already_in_the_record() {
     let state = window_showing(&[fixture()]).await;
     let (p, charts) = on_screen();
-    let err = link_impl(&state, &p, charts.clone(), &p, charts)
+    let err = link_impl(&state, &p, charts.clone(), &p, charts, None)
         .await
         .unwrap_err();
     assert_eq!(err.text, view::ALREADY_IN_RECORD);
@@ -262,7 +268,7 @@ async fn link_refuses_a_chart_no_list_showed() {
     let state = window_showing(&[]).await;
     let (p, charts) = on_screen();
     let other = Uuid::from_u128(2).to_string();
-    let err = link_impl(&state, &p, charts, &other, vec![other.clone()])
+    let err = link_impl(&state, &p, charts, &other, vec![other.clone()], None)
         .await
         .unwrap_err();
     assert_eq!(err.text, view::NOT_ON_SCREEN);

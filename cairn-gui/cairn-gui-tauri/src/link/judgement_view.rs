@@ -6,6 +6,7 @@
 //! that did not take effect "linked", and a failure never offers a live retry over a commit
 //! whose outcome is unknown (#713).
 use crate::funnel::view::{ErrorView, Recorded, Retry};
+use crate::signer::KeyRefusal;
 use cairn_gui_data::port::DataError;
 use cairn_gui_live::says_operator_remedy;
 use cairn_medication_view::ChartSet;
@@ -111,20 +112,22 @@ pub fn stale(text: impl Into<String>) -> ErrorView {
     }
 }
 
-/// Link pressed while the signing key is locked. NOT a verdict: nothing about the comparison
-/// was wrong, and once the clinician unlocks the key the identical Link succeeds — so it keeps
-/// the button (`Retry::Now`). As `Retry::Never` the webview took the comparison away and forced
-/// a second Compare, an act the paper workflow does not have (PR #707 review).
-pub fn key_locked() -> ErrorView {
-    key_locked_for("Link — same person")
+/// Link pressed with no key to sign it (`crate::signer::KeyRefusal`). NOT a verdict: nothing
+/// about the comparison was wrong, and once the clinician types a right staff ID and passphrase
+/// the identical Link succeeds — so it keeps the button (`Retry::Now`). As `Retry::Never` the
+/// webview took the comparison away and forced a second Compare, an act the paper workflow
+/// does not have (PR #707 review).
+pub fn key_locked(refusal: &KeyRefusal) -> ErrorView {
+    key_locked_for("Link — same person", refusal)
 }
 
 /// [`key_locked`] for any judgement button: the message must name the button the clinician
 /// actually pressed — on a safety panel, naming the opposite act ("press Link" after an
-/// Unlink click) is a wrong instruction. Still `Retry::Now`.
-pub fn key_locked_for(button: &str) -> ErrorView {
+/// Unlink click) is a wrong instruction. Still `Retry::Now`. The refusal's own sentence says
+/// what to do; it carries no database text and never the passphrase.
+pub fn key_locked_for(button: &str, refusal: &KeyRefusal) -> ErrorView {
     ErrorView {
-        text: format!("your signing key is locked — unlock it, then press \"{button}\" again"),
+        text: format!("\"{button}\" was not signed. {}", refusal.sentence()),
         retry: Retry::Now,
     }
 }

@@ -49,7 +49,7 @@ Paper counterpart: the inpatient drug chart.
 | Cease one drug | 2 (strike + initial/date) | 1 | |
 
 `M > N` would be an architecture defect and must be filed (#217 rule). Record `K` as
-observed, including the unlock if it was needed.
+observed, including typing the staff ID and passphrase if no key was held.
 
 ## Accessibility pass
 
@@ -92,7 +92,7 @@ prompt? **yes / no**
 | "Same person as…" → Compare → read → Link → outcome line | live | | | | ≤ 20 s | |
 | "Same person as…" → Compare → read → Link → fixture-refusal line | `--mock` | | | | ≤ 20 s | |
 
-| Run | Findings shown | Key already unlocked? |
+| Run | Findings shown | Key already held? |
 |---|---|---|
 | 1 | | |
 | 2 | | |
@@ -115,7 +115,7 @@ prompt? **yes / no**
 |---|---|---|---|---|---|---|
 | "Review this link…" → read → Unlink → outcome line | live | | | | ≤ 15 s | |
 
-| Run | Findings shown | Key already unlocked? |
+| Run | Findings shown | Key already held? |
 |---|---|---|
 | 1 | | |
 | 2 | | |
@@ -139,7 +139,7 @@ prompt? **yes / no**
 | Banner **Review** → read → Different people / Link → outcome line | live | | | | ≤ 20 s | |
 | Chart open WITH a banner, vs a single-chart open (no proposal) | live | | | | banner open ≤ single-chart open | |
 
-| Run | Verdict (Different people / Link) | Findings shown | Key already unlocked? |
+| Run | Verdict (Different people / Link) | Findings shown | Key already held? |
 |---|---|---|---|
 | 1 | | | |
 | 2 | | | |

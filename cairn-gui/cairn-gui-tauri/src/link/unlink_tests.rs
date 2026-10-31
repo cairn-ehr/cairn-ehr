@@ -44,6 +44,7 @@ async fn unlink_is_bound_to_the_chart_on_screen() {
         "1",
         "2",
         vec![],
+        None,
     )
     .await
     .unwrap_err();
@@ -64,6 +65,7 @@ async fn unlink_refuses_a_changed_record() {
         &Uuid::from_u128(1).to_string(),
         &Uuid::from_u128(2).to_string(),
         vec![],
+        None,
     )
     .await
     .unwrap_err();
@@ -109,6 +111,7 @@ async fn unlink_refuses_a_link_the_record_no_longer_has() {
         &p,
         &Uuid::from_u128(2).to_string(),
         vec![],
+        None,
     )
     .await
     .unwrap_err();
@@ -143,7 +146,7 @@ async fn compare_linked_refuses_a_link_the_record_no_longer_has() {
 async fn an_unparseable_link_is_refused_not_guessed() {
     let state = AppState::mock(Some(fixture()));
     let (p, charts) = on_screen();
-    let err = unlink_impl(&state, &p, charts, "not-a-uuid", "2", vec![])
+    let err = unlink_impl(&state, &p, charts, "not-a-uuid", "2", vec![], None)
         .await
         .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);

@@ -1,19 +1,26 @@
-//! The window's session state — above all, custody of the clinician's signing key.
+//! The window's session state — above all, custody of a clinician's signing key between acts.
 //!
-//! # Why the key is held at all
+//! # Where the key comes from
 //!
-//! Whole-list sign-off must cost ONE human act (#288). If the passphrase were re-entered
-//! per sign-off the gesture would cost two, and the paper counterpart says otherwise: on a
-//! drug chart your identity is established by presence, not re-proved at every signature.
-//! So the key is unsealed once and held.
+//! Each clinical act carries the clinician's staff ID and passphrase, and the node's vault
+//! releases their key for that act (`AppState::signer_for_act`, `crate::signer`). Nothing is
+//! unsealed at launch and nothing is held by default.
+//!
+//! # Why a key may be held at all
+//!
+//! On a PERSONAL workstation, whole-list sign-off must cost ONE human act (#288), and the paper
+//! counterpart agrees: on a drug chart your identity is established by presence, not re-proved
+//! at every signature. So a terminal launched with `--key-hold-seconds N` keeps the last
+//! signer's key for up to N seconds of no activity (at most `IDLE_TIMEOUT`). A SHARED terminal
+//! holds nothing (the default, 0): the next person can never write as the last one.
 //!
 //! # Why it is re-locked
 //!
 //! A held key widens the unattended-workstation window. Paper has the same failure — an
 //! open chart on a desk — so this is parity rather than regression, but Cairn should not be
-//! WORSE than paper. The key is wiped after `IDLE_TIMEOUT` of no activity, and only the
-//! 32-byte seed is retained, inside `Zeroizing`, so the wipe is real rather than a dropped
-//! reference the allocator may leave behind.
+//! WORSE than paper. The key is wiped once the hold runs out, and only the 32-byte seed is
+//! retained, inside `Zeroizing`, so the wipe is real rather than a dropped reference the
+//! allocator may leave behind.
 //!
 //! # What "activity" means, and what it deliberately does not
 //!
@@ -23,11 +30,14 @@
 //! than discovered when a signature is refused). Routing that poll through the touching
 //! accessor is what made the timeout unreachable in the first review of this slice: the
 //! idle clock was reset by the window rather than by the clinician, and the key never
-//! re-locked at all. Hence the two accessors below — `key_status` reads, `live_key` uses.
+//! re-locked at all. Hence the two accessors below — `key_status` reads, `signer_for_act` uses.
+use crate::signer::{decide, from_release, Credential, HeldDecision, KeyRefusal};
+use cairn_node::vault::Purpose;
 use std::time::{Duration, Instant, SystemTime};
 use zeroize::Zeroizing;
 
-/// How long a held signing key survives without activity.
+/// The LONGEST a held signing key may survive without activity: the cap on
+/// `--key-hold-seconds` (`crate::signer::parse_key_hold`).
 ///
 /// A named constant with a test pinning it, so this is a reviewable clinical decision
 /// rather than a number buried in a timer.
@@ -66,7 +76,7 @@ impl Now {
     /// This reading, advanced on both clocks — the normal passage of time, for tests that
     /// need to cross a 15-minute boundary without waiting 15 minutes.
     #[cfg(test)]
-    fn plus(self, elapsed: Duration) -> Self {
+    pub(crate) fn plus(self, elapsed: Duration) -> Self {
         Self {
             monotonic: self.monotonic + elapsed,
             wall: self.wall + elapsed,
@@ -76,7 +86,7 @@ impl Now {
     /// This reading with the WALL clock alone advanced: what a machine that slept looks
     /// like, since the monotonic clock does not count suspended time.
     #[cfg(test)]
-    fn slept(self, elapsed: Duration) -> Self {
+    pub(crate) fn slept(self, elapsed: Duration) -> Self {
         Self {
             monotonic: self.monotonic,
             wall: self.wall + elapsed,
@@ -94,23 +104,26 @@ impl Now {
     }
 }
 
-/// The clinician's unsealed signing key, held for the session.
+/// A clinician's released signing key, held between acts on a terminal with a key hold.
 pub struct SessionKey {
     /// The Ed25519 seed. `SigningKey` is reconstructed per use so the only long-lived copy
     /// is inside `Zeroizing`, which wipes on drop.
     seed: Zeroizing<[u8; 32]>,
     /// Hex key id, safe to display and to log.
     pub kid: String,
+    /// The staff ID it was released for, as typed: the window shows it as "who signs next".
+    pub staff_id: String,
     /// When a clinical act last used this key. Both clocks — see [`Now`].
     last_activity: Now,
 }
 
 impl SessionKey {
-    pub fn new(sk: cairn_event::SigningKey, now: Now) -> Self {
+    pub fn new(sk: cairn_event::SigningKey, staff_id: String, now: Now) -> Self {
         let kid = hex::encode(sk.verifying_key().to_bytes());
         Self {
             seed: Zeroizing::new(sk.to_bytes()),
             kid,
+            staff_id,
             last_activity: now,
         }
     }
@@ -120,19 +133,19 @@ impl SessionKey {
         cairn_event::SigningKey::from_bytes(&self.seed)
     }
 
-    /// Has this key gone idle? See [`Now`] for why both clocks are consulted and why the
-    /// answer is biased towards "yes".
-    pub fn is_expired(&self, now: Now) -> bool {
+    /// Has this key been idle for `hold` or longer? See [`Now`] for why both clocks are
+    /// consulted and why the answer is biased towards "yes". A zero hold is always expired.
+    pub fn is_expired(&self, now: Now, hold: Duration) -> bool {
         // Saturates to zero rather than panicking if the readings arrive out of order.
         if now
             .monotonic
             .duration_since(self.last_activity.monotonic)
-            .ge(&IDLE_TIMEOUT)
+            .ge(&hold)
         {
             return true;
         }
         match now.wall.duration_since(self.last_activity.wall) {
-            Ok(elapsed) => elapsed >= IDLE_TIMEOUT,
+            Ok(elapsed) => elapsed >= hold,
             // The wall clock moved backwards, so we cannot say how long this key has been
             // idle. Principle 4 applied to a security control: an unknown idle time is not
             // evidence of recent activity, so it re-locks.
@@ -151,7 +164,11 @@ impl SessionKey {
     #[cfg(test)]
     pub fn for_test(now: Now) -> Self {
         let seed: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(1));
-        Self::new(cairn_event::SigningKey::from_bytes(&seed), now)
+        Self::new(
+            cairn_event::SigningKey::from_bytes(&seed),
+            "test-signer".into(),
+            now,
+        )
     }
 }
 
@@ -182,9 +199,9 @@ pub struct AppState {
     /// only charts `open_chart` will open, and where their header text comes from.
     pub shown:
         tokio::sync::Mutex<std::collections::HashMap<uuid::Uuid, cairn_patient_search::Candidate>>,
-    /// Path to the clinician's sealed key file, unsealed on `unlock`. `None` in fixture
-    /// mode, where there is nothing to sign.
-    pub attester_key_path: Option<std::path::PathBuf>,
+    /// How long a released key is held for the next act (`--key-hold-seconds`, at most
+    /// `IDLE_TIMEOUT`). Zero, the default, holds nothing: every act carries a credential.
+    pub key_hold: Duration,
     pub session: tokio::sync::Mutex<Option<SessionKey>>,
 }
 
@@ -205,14 +222,17 @@ impl AppState {
     /// still be held.
     async fn expire_if_idle(&self, now: Now) -> tokio::sync::MutexGuard<'_, Option<SessionKey>> {
         let mut guard = self.session.lock().await;
-        if guard.as_ref().is_some_and(|k| k.is_expired(now)) {
+        if guard
+            .as_ref()
+            .is_some_and(|k| k.is_expired(now, self.key_hold))
+        {
             // Dropping the SessionKey drops its Zeroizing seed, which wipes it.
             *guard = None;
         }
         guard
     }
 
-    /// Is a key held, and whose — WITHOUT counting the question as activity.
+    /// Is a key held, and whose staff ID — WITHOUT counting the question as activity.
     ///
     /// This is what the window's lock poll calls. It expires an idle key (so the poll is
     /// what makes the re-lock *visible* on screen) but never touches a live one, because
@@ -221,18 +241,81 @@ impl AppState {
         self.expire_if_idle(now)
             .await
             .as_ref()
-            .map(|k| k.kid.clone())
+            .map(|k| k.staff_id.clone())
     }
 
-    /// Take the held key for a CLINICAL ACT, expiring and wiping it first if it has gone
-    /// idle. Using the key is activity, so this one touches.
+    /// The key that signs this CLINICAL ACT, and its kid — or why there is none.
     ///
-    /// Returns the reconstructed `SigningKey` and its kid.
-    pub async fn live_key(&self, now: Now) -> Option<(cairn_event::SigningKey, String)> {
-        let mut guard = self.expire_if_idle(now).await;
-        let key = guard.as_mut()?;
-        key.touch(now);
-        Some((key.signing_key(), key.kid.clone()))
+    /// The steps (`crate::signer` has the rules):
+    /// 1. [`decide`] under the session lock. A held key that serves is
+    ///    touched (using it is activity) and returned with no database call.
+    /// 2. A typed credential first WIPES any held key, whatever the vault then says: someone
+    ///    new is at the keyboard, and a mistyped passphrase must not leave the last person's
+    ///    key signing the next act that carries none.
+    /// 3. The vault is asked with the session lock released (an Argon2 check takes a moment,
+    ///    and the lock poll must not wait on it). A fault's detail goes to stderr, explained
+    ///    through the connection guard so a cut-off says so (#893); the clinician gets
+    ///    [`KeyRefusal::Fault`], which carries no database text.
+    /// 4. The released key is held for the next act only on a terminal with a key hold.
+    ///
+    /// In fixture mode there is no vault: no key can be held, so this is `NeedCredential`
+    /// without a credential and `Fault` with one. Every mock write is refused before it asks.
+    pub async fn signer_for_act(
+        &self,
+        credential: Option<Credential>,
+        now: Now,
+    ) -> Result<(cairn_event::SigningKey, String), KeyRefusal> {
+        let credential = {
+            let mut held = self.expire_if_idle(now).await;
+            match decide(held.as_ref(), credential.as_ref(), self.key_hold, now) {
+                HeldDecision::UseHeld => {
+                    let key = held.as_mut().ok_or(KeyRefusal::NeedCredential)?;
+                    key.touch(now);
+                    return Ok((key.signing_key(), key.kid.clone()));
+                }
+                HeldDecision::NeedCredential => return Err(KeyRefusal::NeedCredential),
+                HeldDecision::Release => {
+                    *held = None;
+                    credential.ok_or(KeyRefusal::NeedCredential)?
+                }
+            }
+        };
+        let Some(db) = self.db.as_ref() else {
+            return Err(KeyRefusal::Fault);
+        };
+        let released = match db.lock().await {
+            Err(lost) => Err(anyhow::Error::from(lost)),
+            Ok(db) => cairn_node::vault::release_for_act(
+                &db,
+                &credential.staff_id,
+                &credential.passphrase,
+                Purpose::Clinical,
+            )
+            .await
+            .map_err(|e| db.explain(e)),
+        };
+        let (key, kid) = match released {
+            Ok(release) => from_release(release)?,
+            Err(e) => {
+                // Operator diagnostics, as `record_timing` does. `release_for_act` never puts the
+                // passphrase in an error (cairn_node::vault's house rules).
+                eprintln!("the vault could not release a signing key: {e:#}");
+                return Err(KeyRefusal::Fault);
+            }
+        };
+        if !self.key_hold.is_zero() {
+            *self.session.lock().await = Some(SessionKey::new(
+                cairn_event::SigningKey::from_bytes(&Zeroizing::new(key.to_bytes())),
+                credential.staff_id.clone(),
+                now,
+            ));
+        }
+        Ok((key, kid))
+    }
+
+    /// Wipe the held key now — the window's explicit Lock.
+    pub async fn forget_held_key(&self) {
+        *self.session.lock().await = None;
     }
 }
 
@@ -243,7 +326,9 @@ mod tests {
     /// A state holding nothing but a session — enough to exercise the two accessors, which
     /// is where the lock's real behaviour lives.
     fn state_holding(session: Option<SessionKey>) -> AppState {
-        let state = AppState::mock(None);
+        let mut state = AppState::mock(None);
+        // A personal workstation's longest hold: the timing tests below are about it.
+        state.key_hold = IDLE_TIMEOUT;
         *state.session.try_lock().expect("uncontended") = session;
         state
     }
@@ -260,27 +345,27 @@ mod tests {
     fn a_key_is_live_until_the_timeout_elapses() {
         let start = Now::read();
         let key = SessionKey::for_test(start);
-        assert!(!key.is_expired(start));
-        assert!(!key.is_expired(start.plus(Duration::from_secs(14 * 60 + 59))));
+        assert!(!key.is_expired(start, IDLE_TIMEOUT));
+        assert!(!key.is_expired(start.plus(Duration::from_secs(14 * 60 + 59)), IDLE_TIMEOUT));
     }
 
     #[test]
     fn a_key_expires_at_the_timeout() {
         let start = Now::read();
         let key = SessionKey::for_test(start);
-        assert!(key.is_expired(start.plus(IDLE_TIMEOUT)));
-        assert!(key.is_expired(start.plus(Duration::from_secs(60 * 60))));
+        assert!(key.is_expired(start.plus(IDLE_TIMEOUT), IDLE_TIMEOUT));
+        assert!(key.is_expired(start.plus(Duration::from_secs(60 * 60)), IDLE_TIMEOUT));
     }
 
     /// Idle means idle: activity resets the clock, so a clinician working continuously is
-    /// never asked to unlock mid-list.
+    /// never asked for their passphrase mid-list.
     #[test]
     fn activity_pushes_the_expiry_out() {
         let start = Now::read();
         let mut key = SessionKey::for_test(start);
         key.touch(start.plus(Duration::from_secs(10 * 60)));
-        assert!(!key.is_expired(start.plus(Duration::from_secs(20 * 60))));
-        assert!(key.is_expired(start.plus(Duration::from_secs(25 * 60))));
+        assert!(!key.is_expired(start.plus(Duration::from_secs(20 * 60)), IDLE_TIMEOUT));
+        assert!(key.is_expired(start.plus(Duration::from_secs(25 * 60)), IDLE_TIMEOUT));
     }
 
     /// A closed laptop is the commonest unattended workstation there is, and the monotonic
@@ -290,7 +375,7 @@ mod tests {
         let start = Now::read();
         let key = SessionKey::for_test(start);
         assert!(
-            key.is_expired(start.slept(Duration::from_secs(8 * 60 * 60))),
+            key.is_expired(start.slept(Duration::from_secs(8 * 60 * 60)), IDLE_TIMEOUT),
             "a machine asleep for eight hours must not reopen with a live signing key"
         );
     }
@@ -301,7 +386,10 @@ mod tests {
     fn a_backwards_wall_clock_step_re_locks_rather_than_extending() {
         let start = Now::read();
         let key = SessionKey::for_test(start);
-        assert!(key.is_expired(start.wall_stepped_back(Duration::from_secs(60 * 60))));
+        assert!(key.is_expired(
+            start.wall_stepped_back(Duration::from_secs(60 * 60)),
+            IDLE_TIMEOUT
+        ));
     }
 
     /// The kid must be the key's real public identity, not a label: it is what the node
@@ -356,8 +444,8 @@ mod tests {
         );
     }
 
-    /// The other half of the same rule: a clinician who IS working must never be asked to
-    /// unlock mid-list, so a real act does push the expiry out.
+    /// The other half of the same rule: a clinician who IS working must never be asked for
+    /// their passphrase mid-list, so a real act does push the expiry out.
     #[tokio::test]
     async fn signing_keeps_the_key_alive() {
         let start = Now::read();
@@ -368,7 +456,7 @@ mod tests {
         for _ in 0..6 {
             now = now.plus(Duration::from_secs(10 * 60));
             assert!(
-                state.live_key(now).await.is_some(),
+                state.signer_for_act(None, now).await.is_ok(),
                 "a key in continuous clinical use must not re-lock"
             );
         }
@@ -390,12 +478,45 @@ mod tests {
         );
     }
 
+    /// Review focus 2, at the seam: a typed credential wipes the held key BEFORE the vault
+    /// answers, so a mistyped passphrase (here, fixture mode's `Fault`) never leaves the last
+    /// person's key to sign the next act that carries none.
+    #[tokio::test]
+    async fn a_typed_credential_wipes_the_held_key_whatever_the_answer() {
+        let now = Now::read();
+        let state = state_holding(Some(SessionKey::for_test(now)));
+        let credential = Credential {
+            staff_id: "apark".into(),
+            passphrase: Zeroizing::new(["not", "hers"].join("-")),
+        };
+        assert_eq!(
+            state.signer_for_act(Some(credential), now).await.err(),
+            Some(KeyRefusal::Fault)
+        );
+        assert!(state.session.lock().await.is_none());
+        assert_eq!(
+            state.signer_for_act(None, now).await.err(),
+            Some(KeyRefusal::NeedCredential)
+        );
+    }
+
+    /// The explicit Lock wipes the held key.
+    #[tokio::test]
+    async fn forgetting_the_held_key_wipes_it() {
+        let state = state_holding(Some(SessionKey::for_test(Now::read())));
+        state.forget_held_key().await;
+        assert!(state.key_status(Now::read()).await.is_none());
+    }
+
     /// A locked window has no key to take, and asking must not create one.
     #[tokio::test]
     async fn an_empty_session_yields_nothing_from_either_accessor() {
         let state = state_holding(None);
         let now = Now::read();
         assert!(state.key_status(now).await.is_none());
-        assert!(state.live_key(now).await.is_none());
+        assert_eq!(
+            state.signer_for_act(None, now).await.err(),
+            Some(KeyRefusal::NeedCredential)
+        );
     }
 }

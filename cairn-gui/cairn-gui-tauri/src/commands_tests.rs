@@ -136,8 +136,8 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
     })
     .unwrap();
     let lock = serde_json::to_value(LockState {
-        unlocked: false,
-        kid: None,
+        held_by: None,
+        key_hold_secs: 0,
         mock: false,
     })
     .unwrap();
@@ -241,7 +241,7 @@ async fn med_list_names_a_change_from_the_seen_set() {
 #[tokio::test]
 async fn sign_off_refuses_a_chart_that_is_not_on_screen() {
     let (state, _) = open_on_the_fixture_chart();
-    let err = sign_off_impl(&state, &another_chart(), vec![another_chart()])
+    let err = sign_off_impl(&state, &another_chart(), vec![another_chart()], None)
         .await
         .unwrap_err();
     assert!(err.text.contains("not the chart"));
@@ -256,6 +256,7 @@ async fn cease_refuses_a_chart_that_is_not_on_screen() {
         vec![another_chart()],
         &another_chart(),
         "allergy",
+        None,
     )
     .await
     .unwrap_err();
@@ -266,7 +267,7 @@ async fn cease_refuses_a_chart_that_is_not_on_screen() {
 #[tokio::test]
 async fn a_write_on_the_chart_on_screen_meets_the_fixture_refusal() {
     let (state, on_screen) = open_on_the_fixture_chart();
-    let err = sign_off_impl(&state, &on_screen, vec![on_screen.clone()])
+    let err = sign_off_impl(&state, &on_screen, vec![on_screen.clone()], None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, crate::funnel::view::Retry::Never);

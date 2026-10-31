@@ -10,14 +10,14 @@
 //! existing `chart_link` judgement path: no new event type, no wire change.
 //!
 //! Paper counterpart: lay the two folders side by side and initial the clip "same person". The
-//! verdict click IS that initial — the signature under the unlocked key (ADR-0053). There is no
+//! verdict click IS that initial — the signature under the signing clinician's key (ADR-0053). There is no
 //! confirmation dialog (principle 3): the comparison the clinician just read is the check.
 //!
 //! The rule order: the pair kind the panel sent must be one we know (an unknown one names no
 //! pair, so nothing is guessed); then [`resolve_edge`] — the chart on screen, the displayed set
 //! (a changed one makes the comparison stale), the pair still being what the line showed; then
-//! fixture mode; then the standing address is present ([`require_standing`]); then the key (a
-//! locked key is not a verdict: the button stays for after the unlock). The screen rules are
+//! fixture mode; then the standing address is present ([`require_standing`]); then the key (no
+//! key to sign is not a verdict: the button stays for the next press with a credential). The screen rules are
 //! pinned by this file's tests (and `resolve_edge`'s own in `unlink_tests.rs`). Of the write-side
 //! arms, the node call is pinned by the node's DB tests (`cairn-node/tests/confirm_link.rs`) and
 //! the routing to it by `unlink_tests.rs`'s source read; the fixture and locked-key arms are not
@@ -36,10 +36,11 @@ use super::record_links::PairKind;
 use super::unlink::{resolve_edge, Act};
 use super::unlink_view::{require_standing, LINK_GONE};
 use crate::funnel::view::ErrorView;
+use crate::signer::Credential;
 use crate::state::{AppState, Now};
 
-/// The button the clinician pressed, by pair kind — named in a locked-key refusal so they know
-/// which button to press again after the unlock.
+/// The button the clinician pressed, by pair kind — named in a no-key refusal so they know
+/// which button to press again.
 fn verdict_label(kind: PairKind) -> &'static str {
     match kind {
         PairKind::Link => CONFIRM_SAME,
@@ -52,6 +53,7 @@ fn verdict_label(kind: PairKind) -> &'static str {
 ///
 /// `charts`, `low`, `high`, `kind` and `standing` are exactly what the review panel
 /// (`LinkReviewView`) handed the webview; the webview sends them back untouched.
+#[allow(clippy::too_many_arguments)] // the panel's six values, the state and the credential
 pub async fn confirm_link_impl(
     state: &AppState,
     patient_id: &str,
@@ -60,6 +62,7 @@ pub async fn confirm_link_impl(
     high: &str,
     kind: &str,
     standing: Vec<u8>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
     // 1: the kind must be one we sent; an unknown one names no pair.
     let kind = PairKind::parse(kind).ok_or_else(|| refused(LINK_GONE))?;
@@ -75,11 +78,11 @@ pub async fn confirm_link_impl(
     // 6: an empty address means the panel never read which judgement stands: nothing to sign
     // over.
     require_standing(&standing)?;
-    // 7: the key. A confirm is a clinical act, so taking the key counts as activity.
+    // 7: the key. A confirm is a clinical act, so a held key it uses counts as activity.
     let (human_sk, human_kid) = state
-        .live_key(Now::read())
+        .signer_for_act(credential, Now::read())
         .await
-        .ok_or_else(|| key_locked_for(verdict_label(kind)))?;
+        .map_err(|r| key_locked_for(verdict_label(kind), &r))?;
     let mut db = state
         .db
         .as_ref()
@@ -112,8 +115,9 @@ pub async fn confirm_link_impl(
 
 // ---- Tauri forwarder (camelCase JS keys → snake_case parameters). ----
 
-/// JS keys: `patientId, charts, low, high, kind, standing`.
+/// JS keys: `patientId, charts, low, high, kind, standing, credential`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // one parameter per webview key (Tauri maps them)
 pub async fn confirm_link(
     state: tauri::State<'_, AppState>,
     patient_id: String,
@@ -122,8 +126,19 @@ pub async fn confirm_link(
     high: String,
     kind: String,
     standing: Vec<u8>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
-    confirm_link_impl(&state, &patient_id, charts, &low, &high, &kind, standing).await
+    confirm_link_impl(
+        &state,
+        &patient_id,
+        charts,
+        &low,
+        &high,
+        &kind,
+        standing,
+        credential,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -153,6 +168,7 @@ mod tests {
             "2",
             "link",
             vec![],
+            None,
         )
         .await
         .unwrap_err();
@@ -171,6 +187,7 @@ mod tests {
             &Uuid::from_u128(2).to_string(),
             "link",
             vec![],
+            None,
         )
         .await
         .unwrap_err();
@@ -199,6 +216,7 @@ mod tests {
             &Uuid::from_u128(2).to_string(),
             "merge",
             vec![],
+            None,
         )
         .await
         .unwrap_err();
@@ -218,6 +236,7 @@ mod tests {
             &Uuid::from_u128(2).to_string(),
             "link",
             vec![],
+            None,
         )
         .await
         .unwrap_err();

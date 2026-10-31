@@ -40,8 +40,12 @@ cairn-node --conn "$CONN" --key "$NODE_KEY" \
 
 ## 1. Enrol the clinician who will sign
 
-The window signs as an **enrolled human actor** (ADR-0053); an unenrolled key is refused at
-unlock. Two clinicians need two *distinguishing determinants* — enrolling both as a bare
+The window signs as an **enrolled human actor** (ADR-0053). Since the sign-in slice the window
+opens no key file: each act carries the clinician's **staff ID and passphrase**, and the node's key
+vault (db/061) releases their key for that act. A vault member is enrolled by a superuser
+(`cairn-node vault-bootstrap-superuser` makes the first one at the console; the window's enrolment
+form for clinicians is the next slice task). The `enroll-human` key files below are still what the
+`cairn-node` CLI verbs (`link-charts`, …) sign with. Two clinicians need two *distinguishing determinants* — enrolling both as a bare
 `{"role":"clinician"}` collides into one `actor_id` and is refused
 ([ADR-0044](../../../docs/spec/decisions/0044-enroll-fail-closed-on-actor-id-collision.md)).
 
@@ -50,10 +54,10 @@ cairn-node --conn "$CONN" --key /tmp/dr-a.key enroll-human --handle dr-a --insec
 cairn-node --conn "$CONN" --key /tmp/dr-b.key enroll-human --handle dr-b --insecure-plaintext
 ```
 
-> The window unlocks a **sealed** key with a passphrase. For a measured run that is the
-> realistic path — seal `dr-a.key` (`cairn-node seal-key`) and use its passphrase at the
-> unlock prompt. An unsealed key needs no passphrase and makes the unlock step vanish, which
-> would understate the gesture.
+> The launches below pass `--key-hold-seconds 900` (a personal workstation: one passphrase,
+> then the key is held for the next acts). A shared terminal is the default, 0, where every act
+> carries the staff ID and passphrase; say which you measured. Typing the credential is part of
+> the gesture whenever no key was held.
 
 ## 2. Seed a five-drug chart, three of which are unsigned
 
@@ -120,7 +124,7 @@ timing a gesture over a chart the node already says is incomplete.
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$PATIENT" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 `--release` matters: a debug build measures the compiler's tempo, not the design's.
@@ -130,8 +134,8 @@ cargo run --release -p cairn-gui-tauri -- \
 Start the stopwatch **when the window appears**, not when the command is typed — process
 start-up is not a clinical act and is not what the budget is about.
 
-1. **Review and sign.** Unlock the key, read the five lines, press *Sign off 3 unsigned
-   medication(s)*. Stop the clock when the outcome line reports the result. Record the wall
+1. **Review and sign.** Read the five lines, enter dr-a's staff ID and passphrase (unless a key
+   is already held), press *Sign off 3 unsigned medication(s)*. Stop the clock when the outcome line reports the result. Record the wall
    time, and note whether the count on the button matched the number of lines you judged to
    need a signature.
 2. **Cease one drug.** Type a reason into a current row and press *Stop*. Stop the clock when
@@ -268,7 +272,7 @@ $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$PATIENT" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 **`--mock`** (no database; the fixture's second chart is reachable by typing a fragment of its
@@ -298,7 +302,7 @@ design page's R2b section). Record, per run:
 - the wall time from step 1 to the outcome line;
 - the number of veto findings shown (0 is a legitimate answer — the panel renders nothing for
   an empty list, never "no conflicts");
-- whether the clinician's key was already unlocked, or the run also measures an unlock.
+- whether the clinician's key was already held, or the run also measures typing the credential.
 
 Repeat at least five times (fresh chart pairs each time — `patient-register` again), because a
 single sample tells you nothing about the tail.
@@ -317,8 +321,8 @@ single sample tells you nothing about the tail.
 - [ ] Every outcome in the panel — a refusal, the fixture refusal, a failed Compare, an Outranked
       link ("Recorded, but NOT in effect …") — is both SHOWN and announced in the panel's status
       line, never silent. After a refusal that cannot change on retry, the Link button is gone
-      (compare again to get it back). A locked key is NOT such a refusal: the button stays —
-      unlock, then press "Link — same person" again.
+      (compare again to get it back). No key to sign is NOT such a refusal: the button stays —
+      enter the staff ID and passphrase, then press "Link — same person" again.
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
       or switching to a different chart closes the panel, and focus goes to the new chart's
       heading (or to the front door) — not to "Same person as…".
@@ -347,7 +351,7 @@ $NODE link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 Open A and unlink **B–C**, the link on the list that does not touch the chart you opened. **Note:**
@@ -386,7 +390,7 @@ one record through other links …" for a cycle (A–B, B–C, A–C: unlinking 
 
 Budget **review-and-unlink ≤ 15 s** (§1.2 in the design page's R2b section). Record, per run: the wall
 time from step 1 to the outcome line; the number of findings shown (0 is legitimate — nothing renders,
-never "no conflicts"); whether the key was already unlocked. Repeat at least five times with fresh pairs.
+never "no conflicts"); whether a key was already held. Repeat at least five times with fresh pairs.
 
 **Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
@@ -426,7 +430,7 @@ uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CON
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 **Measurement 1 — review and judge.** Start the stopwatch at the press of **Review** on the banner
@@ -441,7 +445,7 @@ pairs.
 
 Budget **banner-to-recorded-judgement ≤ 20 s** (§1.2 in the design page's R5a section), of which the
 side-by-side read is the load. Record, per run: the wall time from step 1 to the outcome line; which
-verdict; the number of findings shown (0 is legitimate); whether the key was already unlocked.
+verdict; the number of findings shown (0 is legitimate); whether a key was already held.
 Repeat at least five times with fresh pairs.
 
 **Measurement 2 — chart open.** Time opening chart A (stopwatch from launch or the open gesture, to
@@ -449,7 +453,7 @@ the medication table and banner painted) **with** the banner present, against th
 chart with **no** proposal (a single-chart open — e.g. a chart registered with nothing similar).
 Budget: banner open **≤ single-chart open**. The banner reads eagerly (the other record's lines
 included); a miss decides whether the other record's lines move to a second paint — it is a finding,
-not an adjustment. Five opens each, same session state (key locked or unlocked, the same for both).
+not an adjustment. Five opens each, same session state (a key held or not, the same for both).
 
 **Check 3 — the "running" line on a checked chart (R7, [#742](https://github.com/cairn-ehr/cairn-ehr/issues/742)).**
 No stopwatch: it adds no act. With chart A checked (the worker drained) and **no** worker running,
@@ -526,7 +530,7 @@ Emery Elmsworth|1965-05-15
 SEED
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 The front door shows **"Possible duplicates (5)"** below the registration form (more if section 11's
@@ -622,7 +626,7 @@ $NODE unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 `cairn_chart_set_doubts` over the three charts must print one `separated` row for A–C.
@@ -651,14 +655,14 @@ both stay on record."
 2. Read the panel: the comparison, and the note naming the earlier judgement and its date.
 3. Press **Same person — link them**.
 
-**The locked key.** Run one pass with the key locked: both verdicts read "… (unlock your signing key
-first)", and a press signs nothing (the panel's status line names the unlock; the button stays). Unlock (the existing session act, not one this
-slice adds) and the suffix goes. Do not time the locked pass.
+**No key to sign.** Run one pass with no key held and no credential typed: a press signs nothing
+(the panel's status line says ""…" was not signed. Enter your staff ID and passphrase to sign."; the
+button stays). Enter the credential and press again. Do not time that pass.
 
 Budget **review-and-confirm ≤ 15 s** for both measurements (§1.2 in the design page's R6 section; the
 same budget as section 10's unlink). Steps: confirm paper 2 → 2 acts; bridge paper 3 → 2 acts. Record,
 per run: the wall time from step 1 to the outcome line; which measurement; the number of findings shown
-(0 is legitimate on an undoubted link, never on Setup A); whether the key was already unlocked. Repeat
+(0 is legitimate on an undoubted link, never on Setup A); whether a key was already held. Repeat
 at least five times with fresh pairs. An outcome of "Recorded, but NOT in effect: …" (Outranked)
 means a colleague's judgement landed meanwhile — record it, and both verdicts must then be gone from
 the panel.
@@ -719,7 +723,7 @@ only** (a `--mock` chart never changes under you). Paper counterpart: you write 
 colleague has meanwhile written a new one; the two are reconciled.
 
 **Setup.** Two charts A and B, registered with section 13's `reg()` helper and **not** linked, at least one
-unsigned line on A, the window open on A with the key unlocked. A second node, or `cairn-node` on this same
+unsigned line on A, the window open on A with dr-a's key held. A second node, or `cairn-node` on this same
 node as another clinician, is ready to run `$NODE link-charts "$A" "$B" --attester-key <the other
 clinician's key>` (`$NODE` as in section 13). Check the window shows no "How these charts are linked" line before you start.
 
@@ -864,8 +868,8 @@ $NODE medication-assert "$PATIENT" --term metformin --dose-amount 1 --dose-unit 
 $NODE medication-list "$PATIENT"     # two lines, both [current] — unsigned
 ```
 
-**Measurement 1 — Withhold.** Start the stopwatch when the window appears (as section 4). Unlock the key, type a
-reason into the W field of one current line, leave *until* on "until reviewed", press *Withhold*. Stop when the
+**Measurement 1 — Withhold.** Start the stopwatch when the window appears (as section 4). Enter the staff ID and
+passphrase (unless a key is held), type a reason into the W field of one current line, leave *until* on "until reviewed", press *Withhold*. Stop when the
 line draws its W ("W until reviewed"). Repeat with *until a time* and a time later today (stop at "W until
 HH:MM"). Five runs each; repeated holds on one line are admitted, so a fresh chart is not needed per run.
 
