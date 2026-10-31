@@ -17,12 +17,18 @@
 > **Open sub-questions these raise (brainstorm before building; none is a patch):** (a) one superuser is a single
 > point of lockout: require two, or say what the recovery is; (b) is superuser a separate role-actor of the same
 > person (the existing `(entity, role)` model, #168), and does it confer anything beyond enrol/revoke — it should
-> not; (c) **the vault reverses ADR-0026's "a signing key is never backed up"** if the vault is backed up — a new
-> ADR either way, and it is the natural home for the still-unspecified human key-loss ceremony (security §7.5,
-> **#247**: a superuser authorises a re-key) — but db/004's actor algebra has only `enroll / supersede / revoke`,
-> no `rotate-key` or `suspend`; (d) does the vault stay node-local or follow a roaming clinician; (e) a recorded-not-
-> attested note needs a floor variant: ADR-0053 requires the human to be the medication signer, so the note stream
-> must admit a node-signed event naming a provisional human author at the `asserted` grade (§7.3); (f) "charted
+> not; (c) **a backed-up vault breaks ADR-0026's reasoning** — its "the private signing key is never backed up" is
+> written for the NODE's key, but its argument (a stolen backup must not resurrect an identity) applies to a human's
+> key just as well — a new ADR either way, and it is the natural home for the human key-loss ceremony security §7.5
+> names an honest gap needing its own ADR (proposal: a superuser authorises a re-key) — but db/004's actor algebra
+> has only `enroll / supersede / revoke`, no `rotate-key` or `suspend`, and a re-key must answer **#247** (contributor
+> sets hold a key id, so authorship does not survive rotation) and **#664** (a superseded key stays in
+> `actor_current`, so a rotate-key door would let it keep authoring); (d) does the vault stay node-local or follow a
+> roaming clinician; (e) a recorded-not-attested draft needs a floor variant on EVERY stream it can land on — note,
+> allergy AND medication, not only notes: db/005 step 4b (`cairn_authorship_bound`, ADR-0053) is unconditional at
+> the strict door, so a node-signed event naming the clinician in a responsibility-bearing role (`authored`) is
+> refused on any stream; it needs a contributory role for the clinician or the `asserted` grade (named author, no
+> key; §7.3) that ADR-0053 deferred "with the UI"; (f) "charted
 > here by this clinician" should be visible on the line — `info_source` is value-open (`patient-reported |
 > clinician-observed | external-record | unknown`), so a new value may need no wire change; check before adding one.
 > **Build order proposed:** sign-in slice (vault, picker, explicit Lock/Sign out, window enrolment gated to the
