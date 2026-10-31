@@ -93,7 +93,19 @@ fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
     // after the window's snapshot: its `Stale` refusal must reach the webview classified, never
     // as a plain string (#797 review — a revert to `refused(format!(…))` reads naturally here).
     assert!(
-        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&e))?"),
+        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&db.explain(e)))?"),
+        "sign_off_impl"
+    );
+    // #893: a sign-off the window cut off names the cut in its stop and its failed lines, read
+    // while the guard is held. Compared without whitespace: rustfmt splits the call.
+    let flat: String = rust_fn(src, "sign_off_impl")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        flat.contains(
+            "name_the_cut(outcome.interrupted.as_mut(),&mutoutcome.failed,db.cut_off(),);"
+        ),
         "sign_off_impl"
     );
 }
@@ -293,7 +305,9 @@ fn cease_sorts_an_interrupted_commit_from_a_failure() {
     let flat: String = body.split_whitespace().collect();
     for shape in [
         "Err(e)=>matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
-        "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
+        "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:cairn_gui_live::cause_of(&e),}),",
+        // #893: a hold the window cut off says so, here and in the cause above.
+        ".await.map_err(|e|db.explain(e))",
         "lettext=cease_outcome(ceased,&failed,&unknown);",
         // #843: a Stop that landed on a line already stopped says so — only when every thread
         // of this press stopped for certain (#853 review: not beside a failure or an unknown).
@@ -447,4 +461,57 @@ fn a_stop_of_a_line_already_stopped_says_so() {
     // must not say "your stop is recorded" beside the sentence saying it is NOT known, or NOT
     // stopped (#853 review).
     assert_eq!(already_stopped_note(ceased, false), None);
+}
+
+/// #893: a sign-off the window cut off names the cut, not the bare "connection closed" a node
+/// restart leaves too, in its stop AND in the line the cut failed (#895 review: a one-line
+/// sign-off cut during its attest has no stop, only that failed line). A line refused for its own
+/// reason, and any line with no cut, keeps its words.
+#[test]
+fn a_cut_off_sign_off_names_the_cut() {
+    use cairn_node::medication::signoff::{FailedLine, SignOffInterrupted, StoppedLine};
+    let stopped = || SignOffInterrupted {
+        medication_id: uuid::Uuid::from_u128(2),
+        line: StoppedLine::NotSigned,
+        cause: "connection closed".into(),
+        not_attempted: vec![],
+    };
+    let refused = "attesting: db error: ERROR: this line is ceased";
+    let failed = || {
+        vec![
+            FailedLine {
+                medication_id: uuid::Uuid::from_u128(3),
+                error: refused.into(),
+            },
+            FailedLine {
+                medication_id: uuid::Uuid::from_u128(4),
+                error: "attesting: connection closed".into(),
+            },
+        ]
+    };
+    let cut = cairn_gui_live::CutOff::for_tests(std::time::Duration::from_secs(15));
+
+    let (mut cut_stop, mut cut_lines) = (stopped(), failed());
+    name_the_cut(Some(&mut cut_stop), &mut cut_lines, Some(cut));
+    assert_eq!(cut_stop.cause, cut.to_string());
+    assert!(cut_stop.cause.contains("within 15 s"), "{}", cut_stop.cause);
+    assert_eq!(cut_lines[0].error, refused);
+    assert_eq!(
+        cut_lines[1].error,
+        format!("{cut}: attesting: connection closed")
+    );
+
+    // A one-line sign-off cut during its attest: no stop, and the failed line names the cut.
+    let mut only = failed().split_off(1);
+    name_the_cut(None, &mut only, Some(cut));
+    assert!(
+        only[0].error.starts_with(&cut.to_string()),
+        "{}",
+        only[0].error
+    );
+
+    let (mut restarted, mut lines) = (stopped(), failed());
+    name_the_cut(Some(&mut restarted), &mut lines, None);
+    assert_eq!(restarted.cause, "connection closed");
+    assert_eq!(lines, failed());
 }

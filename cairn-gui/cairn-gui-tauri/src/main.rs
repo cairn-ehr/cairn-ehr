@@ -32,6 +32,8 @@ mod hold;
 mod holds_webview_tests;
 mod link;
 #[cfg(test)]
+mod node_lock_explains_tests;
+#[cfg(test)]
 mod read_again_webview_tests;
 #[cfg(test)]
 mod reread_webview_tests;

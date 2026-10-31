@@ -31,7 +31,7 @@ impl PatientSearch for LiveData {
         // `a_failed_search_is_an_error_not_an_empty_list`.
         cairn_node::patient::search::search_patients(&*db, query, today)
             .await
-            .map_err(|e| data_error_from(&e))
+            .map_err(|e| data_error_from(&db.explain(e)))
     }
 }
 
@@ -81,7 +81,7 @@ impl PatientRegistration for LiveData {
         // until the window reloads.
         match outcome {
             Ok(id) => Ok(id),
-            Err(e) => Err((data_error_from(&e), attested)),
+            Err(e) => Err((data_error_from(&db.explain(e)), attested)),
         }
     }
 }

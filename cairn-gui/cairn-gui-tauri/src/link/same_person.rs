@@ -114,9 +114,16 @@ pub async fn compare_impl(
         Some(db) => {
             let db = db.lock().await?;
             ComparisonParts {
-                left: as_text(cairn_node::patient::compare::chart_facts(&*db, &left).await),
-                right: as_text(cairn_node::patient::compare::chart_facts(&*db, &right).await),
+                left: as_text(
+                    &db,
+                    cairn_node::patient::compare::chart_facts(&*db, &left).await,
+                ),
+                right: as_text(
+                    &db,
+                    cairn_node::patient::compare::chart_facts(&*db, &right).await,
+                ),
                 findings: as_text(
+                    &db,
                     cairn_node::patient::compare::cross_vetoes(&*db, &left, &right).await,
                 ),
                 other_medications: meds,
@@ -193,7 +200,7 @@ pub async fn link_impl(
         &state.node_origin,
     )
     .await
-    .map_err(|e| link_error_view(&e))?;
+    .map_err(|e| link_error_view(&db.explain(e)))?;
     // `left`: the set this link left the record on screen as, so the re-read never announces
     // the clinician's own link back to them (#797). Attached only if the link changed the
     // record (`LinkReportView::left`).

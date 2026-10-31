@@ -59,8 +59,10 @@ pub async fn tray_count_impl(state: &AppState) -> TrayCountView {
     let status = read_snapshot(&db)
         .await
         .map(|s| classify(&s, STALLED_AFTER_SECS))
-        .map_err(|e| operator_chain(&e));
-    let count = worklist_count(&*db).await.map_err(|e| operator_chain(&e));
+        .map_err(|e| operator_chain(&db.explain(e)));
+    let count = worklist_count(&*db)
+        .await
+        .map_err(|e| operator_chain(&db.explain(e)));
     tray_count_view(count, status)
 }
 
@@ -88,17 +90,25 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
         Ok(db) => db,
         Err(lost) => return worklist_view(Err(lost.to_string())),
     };
+    // Says a read the window cut off was cut off (#893). Every use is before `drop(db)`: the cut
+    // flag is the client's, so after the drop a later hold's cut could set it (`CutWatch`).
+    let cut = db.cut_watch();
     let read = async {
         let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
         let list = worklist(&*db, MAX_SHOWN).await?;
-        let doubted = doubted_sides(&*db, &list.items).await;
+        let doubted = doubted_sides(&*db, &list.items, &cut).await;
         let found: Found = candidates_by_id(&*db, &charts_of(&list.items), &today)
             .await
             .map(|cands| cands.into_iter().map(|c| (c.patient_id, c)).collect())
-            .map_err(names_read_error);
+            .map_err(|e| names_read_error(cut.explain(e)));
         Ok::<_, anyhow::Error>((list, found, doubted))
     }
-    .await;
+    .await
+    .map(|(mut list, found, doubted)| {
+        name_cut_in_sides(&mut list.items, cut.cut_off());
+        (list, found, doubted)
+    })
+    .map_err(|e| cut.explain(e));
     drop(db);
     match read {
         Err(e) => worklist_view(Err(operator_chain(&e))),
@@ -123,6 +133,17 @@ fn names_read_error(e: anyhow::Error) -> String {
     operator_chain(&e.context("reading the names of the shown charts"))
 }
 
+/// Each side whose record read failed, with the cut named if the window cut the read off (#893).
+/// `cairn-node` words a side's failure as text inside the list, so only its words can say so
+/// (`name_cut_in`: a side refused for its own reason keeps them). **Pure.**
+fn name_cut_in_sides(items: &mut [WorklistItem], cut: Option<cairn_gui_live::CutOff>) {
+    for side in items.iter_mut().flat_map(|i| [&mut i.newer, &mut i.older]) {
+        if let Err(text) = side {
+            *text = cairn_gui_live::name_cut_in(text, cut);
+        }
+    }
+}
+
 /// Every chart of every READ side of `items`, sorted, once each — the ids of the ONE candidate
 /// read. A side whose record could not be read contributes nothing. **Pure.**
 fn charts_of(items: &[WorklistItem]) -> Vec<Uuid> {
@@ -138,11 +159,12 @@ fn charts_of(items: &[WorklistItem]) -> Vec<Uuid> {
 }
 
 /// db/054's doubt boolean for every linked read side of `items`, once per distinct record. A
-/// failed read is kept per side, worded (operator chain), so it becomes that side's error —
-/// never "not doubted".
+/// failed read is kept per side, worded (operator chain, saying so if `cut` was cut off), so it
+/// becomes that side's error — never "not doubted".
 async fn doubted_sides<C: tokio_postgres::GenericClient + Sync>(
     client: &C,
     items: &[WorklistItem],
+    cut: &cairn_gui_live::CutWatch,
 ) -> Doubted {
     let mut doubted = Doubted::new();
     let linked = items
@@ -156,7 +178,7 @@ async fn doubted_sides<C: tokio_postgres::GenericClient + Sync>(
         }
         let read = cairn_node::patient::edges::record_is_doubted(client, set)
             .await
-            .map_err(|e| operator_chain(&e));
+            .map_err(|e| operator_chain(&cut.explain(e)));
         doubted.insert(set.members().to_vec(), read);
     }
     doubted

@@ -129,6 +129,24 @@ pub(crate) fn sign_off_outcome(
     (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
+/// The sign-off orchestrator words its failures as TEXT: a stop by its ROOT cause, a failed line
+/// by its chain. For a hold the window cut off both end in only "connection closed", the text of
+/// a node restart too, so name the cut in them (#893; `name_cut_in`). The failed lines matter as
+/// much as the stop: a one-line sign-off cut during its attest has no stop at all. A line refused
+/// for its own reason keeps its words. No I/O.
+pub(crate) fn name_the_cut(
+    stopped: Option<&mut cairn_node::medication::signoff::SignOffInterrupted>,
+    failed: &mut [cairn_node::medication::signoff::FailedLine],
+    cut: Option<cairn_gui_live::CutOff>,
+) {
+    if let Some(stopped) = stopped {
+        stopped.cause = cairn_gui_live::name_cut_in(&stopped.cause, cut);
+    }
+    for line in failed {
+        line.error = cairn_gui_live::name_cut_in(&line.error, cut);
+    }
+}
+
 /// A thread whose write (a cease, a withhold, a release) got no ordinary answer at commit
 /// (#814): the write may or may not have landed, so the thread is neither done nor failed.
 #[derive(Debug, Clone, PartialEq, Eq)]

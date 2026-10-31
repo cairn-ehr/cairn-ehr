@@ -101,7 +101,7 @@ pub async fn confirm_link_impl(
         &state.node_origin,
     )
     .await
-    .map_err(|e| confirm_error_view(&e))?;
+    .map_err(|e| confirm_error_view(&db.explain(e)))?;
     // `left`: the set this confirm left the record on screen as (#797), only if it changed the
     // record; see `unlink_impl`.
     Ok(

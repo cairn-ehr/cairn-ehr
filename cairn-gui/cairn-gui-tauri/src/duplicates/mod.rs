@@ -69,15 +69,15 @@ pub async fn duplicate_section(
                     chart: *chart,
                     pending: chart_check_pending(&db, *chart)
                         .await
-                        .map_err(|e| operator_chain(&e)),
+                        .map_err(|e| operator_chain(&db.explain(e))),
                 });
             }
             let status = read_snapshot(&db)
                 .await
                 .map(|s| classify(&s, STALLED_AFTER_SECS))
-                .map_err(|e| operator_chain(&e));
+                .map_err(|e| operator_chain(&db.explain(e)));
             let found = match duplicate_review::possible_duplicates(&*db, charts).await {
-                Err(e) => Err(operator_chain(&e)),
+                Err(e) => Err(operator_chain(&db.explain(e))),
                 Ok(entries) => {
                     let total = entries.len();
                     let mut shown = vec![];
@@ -88,7 +88,7 @@ pub async fn duplicate_section(
                         )
                         .await
                         .map(|ids| ids.iter().map(member_line).collect::<Vec<_>>())
-                        .map_err(|e| operator_chain(&e));
+                        .map_err(|e| operator_chain(&db.explain(e)));
                         shown.push((entry, ids));
                     }
                     Ok((total, shown))
@@ -175,7 +175,7 @@ async fn record_charts(state: &AppState, patient: Uuid) -> Result<ChartSet, Stri
     let db = db.lock().await.map_err(|e| e.to_string())?;
     cairn_node::patient::person::person_charts(&*db, patient)
         .await
-        .map_err(|e| operator_chain(&e))
+        .map_err(|e| operator_chain(&db.explain(e)))
 }
 
 #[tauri::command]
@@ -217,7 +217,7 @@ pub(crate) async fn admit_other(
             text: format!(
                 "Could not read whether that chart is an open possible duplicate of this record \
                  — nothing was done: {}",
-                operator_chain(&e)
+                operator_chain(&db.explain(e))
             ),
             retry: Retry::Now,
         })?;
@@ -302,17 +302,22 @@ pub async fn different_people_impl(
     .map_err(|e| ErrorView {
         text: format!(
             "Could not read whether this possible duplicate is still open — nothing was done: {}",
-            operator_chain(&e)
+            operator_chain(&db.explain(e))
         ),
         retry: Retry::Now,
     })?;
-    different_people_view(outcome)
+    different_people_view(outcome, |e| db.explain(e))
 }
 
 /// The window's reading of a "Different people" outcome. **Pure**, so the refusals are
 /// testable without a database. `AcceptedAsSame` (#736): a human already accepted the pair as
 /// the same person, so this judgement would silently overrule them; nothing was written.
-fn different_people_view(outcome: DifferentPeople) -> Result<LinkReportView, ErrorView> {
+/// `explain` is the guard's (#893): each pair's failure comes back inside `Judged`, so it is
+/// explained here, one by one, or a pair the window cut off would read "connection closed".
+fn different_people_view(
+    outcome: DifferentPeople,
+    explain: impl Fn(anyhow::Error) -> anyhow::Error,
+) -> Result<LinkReportView, ErrorView> {
     match outcome {
         DifferentPeople::NothingOpen => Err(refused(NOTHING_OPEN)),
         DifferentPeople::AcceptedAsSame => Err(refused(ACCEPTED_NOT_OVERRULED)),
@@ -325,7 +330,7 @@ fn different_people_view(outcome: DifferentPeople) -> Result<LinkReportView, Err
                     outcome: j
                         .outcome
                         .map(|o| o.effect)
-                        .map_err(|e| different_people_error_view(&e)),
+                        .map_err(|e| different_people_error_view(&explain(e))),
                 })
                 .collect(),
         ),

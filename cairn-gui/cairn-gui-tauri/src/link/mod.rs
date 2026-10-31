@@ -30,10 +30,14 @@ use crate::state::AppState;
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 
-/// A read's error as the text a comparison part carries (the operator chain, legible).
-/// A plain generic fn, not a closure: it is used at several different `T`s.
-pub(crate) fn as_text<T>(r: anyhow::Result<T>) -> Result<T, String> {
-    r.map_err(|e| cairn_node::db_diagnosis::operator_chain(&e))
+/// A read's error as the text a comparison part carries (the operator chain, legible), saying
+/// so if `db`'s hold was cut off (#893). A plain generic fn, not a closure: it is used at
+/// several different `T`s.
+pub(crate) fn as_text<T>(
+    db: &cairn_gui_live::ConnectionGuard<'_>,
+    r: anyhow::Result<T>,
+) -> Result<T, String> {
+    r.map_err(|e| cairn_node::db_diagnosis::operator_chain(&db.explain(e)))
 }
 
 /// The record `patient` belongs to: its link component live, itself alone in fixture mode
@@ -49,7 +53,7 @@ pub(crate) async fn chart_set_of(state: &AppState, patient: Uuid) -> Result<Char
         .map_err(|e| ErrorView {
             text: format!(
                 "Could not read which charts this record combines — nothing was done: {}",
-                cairn_node::db_diagnosis::operator_chain(&e)
+                cairn_node::db_diagnosis::operator_chain(&db.explain(e))
             ),
             retry: crate::funnel::view::Retry::Now,
         })

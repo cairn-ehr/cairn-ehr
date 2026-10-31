@@ -127,7 +127,9 @@ fn both_gestures_sort_an_interrupted_commit_from_a_failure() {
     let withhold = flat("withhold_impl");
     for shape in [
         "matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
-        "Some(event)=>Some(UnknownThread{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
+        "Some(event)=>Some(UnknownThread{thread:medication_id,event,cause:cairn_gui_live::cause_of(&e),}),",
+        // #893: a hold the window cut off says so, here and in the cause above.
+        ".await.map_err(|e|db.explain(e))",
         "None=>returnErr(node_failure(&e)),",
         "withhold_outcome(unknown.as_ref())",
     ] {
@@ -136,7 +138,8 @@ fn both_gestures_sort_an_interrupted_commit_from_a_failure() {
     let release = flat("release_impl");
     for shape in [
         "Err(e)=>matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
-        "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
+        "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:cairn_gui_live::cause_of(&e),}),",
+        ".await.map_err(|e|db.explain(e))",
         "(!unknown.is_empty()).then_some(Recorded::Unknown)",
     ] {
         assert!(release.contains(shape), "{shape}\n{release}");

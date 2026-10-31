@@ -247,7 +247,44 @@ fn a_failed_names_read_says_what_was_being_read() {
 #[test]
 fn the_names_read_is_worded_through_names_read_error() {
     let body = crate::source_guard::rust_fn(include_str!("mod.rs"), "worklist_impl");
-    crate::source_guard::position(body, ".map_err(names_read_error)");
+    crate::source_guard::position(body, ".map_err(|e| names_read_error(cut.explain(e)))");
+}
+
+/// #893 (#895 review): `cairn-node` words a side whose record read failed as TEXT inside the
+/// list, so a side the window cut off has only its words to say so. One the cut failed names it;
+/// one refused for its own reason, and every side with no cut, keeps its words.
+#[test]
+fn a_side_the_window_cut_off_names_the_cut() {
+    let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let cut_side = "reading the record of chart X: connection closed";
+    let own = "reading the record of chart Y: db error: ERROR: permission denied";
+    let items = || {
+        vec![
+            item_of(Err(cut_side.into()), b, a),
+            item_of(Err(own.into()), a, b),
+        ]
+    };
+    let cut = cairn_gui_live::CutOff::for_tests(std::time::Duration::from_secs(15));
+
+    let mut cut_items = items();
+    name_cut_in_sides(&mut cut_items, Some(cut));
+    assert_eq!(cut_items[0].newer, Err(format!("{cut}: {cut_side}")));
+    assert_eq!(cut_items[1].newer, Err(own.to_string()));
+    assert!(cut_items[0].older.is_ok());
+
+    let mut plain = items();
+    name_cut_in_sides(&mut plain, None);
+    assert_eq!(plain, items());
+}
+
+/// …and the sides are named, and every error explained, BEFORE the guard drops: the cut flag is
+/// the client's, so after the drop a later hold's cut could set it (`CutWatch`).
+#[test]
+fn the_worklist_names_the_cut_before_the_guard_drops() {
+    let body = crate::source_guard::rust_fn(include_str!("mod.rs"), "worklist_impl");
+    let drop_at = crate::source_guard::position(body, "drop(db);");
+    assert!(crate::source_guard::position(body, "name_cut_in_sides(") < drop_at);
+    assert!(!body[drop_at..].contains("explain("), "{body}");
 }
 
 /// #752 points 1 and 2, the webview's half. The tray's two reads are ordered by their own
