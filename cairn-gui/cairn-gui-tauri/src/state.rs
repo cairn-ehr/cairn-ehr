@@ -111,7 +111,8 @@ pub struct SessionKey {
     seed: Zeroizing<[u8; 32]>,
     /// Hex key id, safe to display and to log.
     pub kid: String,
-    /// The staff ID it was released for, as typed: the window shows it as "who signs next".
+    /// The staff ID it was released for, trimmed of spaces (`new`): the window shows it as "who
+    /// signs next".
     pub staff_id: String,
     /// When a clinical act last used this key. Both clocks — see [`Now`].
     last_activity: Now,
@@ -319,7 +320,7 @@ impl AppState {
     /// An all-empty credential (both fields blank) counts as none, so it never wipes a hold.
     ///
     /// In fixture mode there is no vault: no key can be held, so this is `NeedCredential`
-    /// without a credential and `Fault` with one. Every mock write is refused before it asks.
+    /// without a passphrase and `Fault` with one. Every mock write is refused before it asks.
     pub async fn signer_for_act(
         &self,
         credential: Option<Credential>,

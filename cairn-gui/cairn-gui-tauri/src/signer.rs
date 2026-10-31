@@ -15,7 +15,7 @@
 //!   else's was (an empty passphrase never reaches the vault, where it would count as a guess);
 //! - otherwise → [`HeldDecision::NeedCredential`].
 //!
-//! Whether a key is held at all is the terminal's `--key-hold-seconds` (spec §5.4): 0 on a
+//! Whether a key is held at all is the terminal's `--key-hold-seconds` (design §5.4, docs/superpowers/specs/2026-10-31-gui-sign-in-and-authorship-design.md): 0 on a
 //! shared terminal (the default — the next person can never write as the last one), up to the
 //! 15-minute `IDLE_TIMEOUT` on a personal workstation, where #288's whole-list sign-off stays
 //! one gesture with one passphrase.
@@ -125,7 +125,7 @@ pub enum KeyRefusal {
     Waiting { retry_after: Duration },
     /// No one with that staff ID is enrolled on this node.
     Unknown,
-    /// A superuser's key: it confers no clinical authorship (spec §5.1), so the vault refused it.
+    /// A superuser's key: it confers no clinical authorship (design §5.1), so the vault refused it.
     NotForClinicalActs,
     /// This member's key was revoked or replaced: it can sign nothing here.
     NotCurrent,

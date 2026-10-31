@@ -197,8 +197,9 @@ END $$;
 -- registry decides WHO may author: submit_event (005) trusts actor_current, so anyone who
 -- can enroll a pubkey can author "legitimately signed" events. Enrollment must stay an
 -- owner-privileged ceremony — never reachable by PUBLIC, and by the runtime agent role only
--- through a GATED definer door: db/061's cairn_vault_enrol lets cairn_agent enrol a clinician,
--- but only with a current superuser's attestation over that exact request. Any other path for
+-- through a GATED definer door: db/061's cairn_vault_enrol lets cairn_agent enrol a member
+-- (of any role, another superuser included), but only with a current superuser's attestation over
+-- that exact request. Any other path for
 -- the runtime role is a hole.
 -- enroll_actor is invoker-rights (deliberately NOT SECURITY DEFINER), so today the gate
 -- holds only because cairn_agent has no INSERT on actor_event by default. That is too

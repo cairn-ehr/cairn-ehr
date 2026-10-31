@@ -966,7 +966,8 @@ finding — file an issue; never adjust the budget.**
 **Setup.** Sections 0 and 2 (a throwaway database with `cairn_pgx` **0.4.0** — db/061 refuses to load without
 `cairn_vault_unseal` — and a seeded chart). Then, at the node's console, with the **owner** connection (the
 console verbs were run against a fresh database on 2026-10-31; each passphrase is prompted twice with no echo, or
-read from `CAIRN_VAULT_PASSPHRASE` for a script):
+read for a script from `CAIRN_VAULT_PASSPHRASE` (the superuser's) and `CAIRN_TERMINAL_PASSPHRASE` (the terminal's).
+They are two variables on purpose: one exported for both would make the shared terminal passphrase the superuser's):
 
 ```bash
 NODE="cairn-node --conn $CONN --key $NODE_KEY"
@@ -976,25 +977,30 @@ psql "$CONN" -At -c "SELECT staff_id, role, enrolled_by FROM vault_member"   # b
 ```
 
 > [!WARNING]
-> **Statement logging can write a passphrase into the server log.** The signing passphrase is a bind parameter
-> of `cairn_vault_release`. PostgreSQL prints bind parameters with a logged statement (`log_statement = 'all'`,
-> or `log_min_duration_statement` ≥ 0, unless `log_parameter_max_length = 0`) and on an error
+> **Statement logging can write a passphrase, or a sealed key, into the server log.** The signing passphrase is a
+> bind parameter of `cairn_vault_release`, and the sealed key blob one of `cairn_vault_enrol`/`cairn_vault_bootstrap`
+> (which raise on every refusal). PostgreSQL prints bind parameters with a logged statement (`log_statement = 'all'`,
+> `log_min_duration_statement` ≥ 0, `log_min_duration_sample` ≥ 0 with `log_statement_sample_rate` > 0, or
+> `log_transaction_sample_rate` > 0, unless `log_parameter_max_length = 0`) and on an error
 > (`log_parameter_max_length_on_error` other than 0). Check before every run, and on every real node:
 >
 > ```bash
 > psql "$CONN" -c "SELECT name, setting FROM pg_settings WHERE name IN ('log_statement',
->   'log_min_duration_statement','log_parameter_max_length','log_parameter_max_length_on_error') ORDER BY name"
+>   'log_min_duration_statement','log_min_duration_sample','log_statement_sample_rate',
+>   'log_transaction_sample_rate','log_parameter_max_length','log_parameter_max_length_on_error') ORDER BY name"
 > psql "$CONN" -c "SELECT * FROM pg_db_role_setting"   # per-role / per-database overrides
 > ```
 >
-> Safe is `log_statement = none` (or `ddl`/`mod`: the release is a `SELECT`), `log_min_duration_statement = -1`
-> and `log_parameter_max_length_on_error = 0` — PostgreSQL's defaults. A node that needs statement logging for
+> Safe is `log_statement = none` (or `ddl`/`mod`: the release is a `SELECT`), `log_min_duration_statement = -1`,
+> `log_min_duration_sample = -1`, `log_transaction_sample_rate = 0` and `log_parameter_max_length_on_error = 0` —
+> PostgreSQL's defaults. A node that needs statement logging for
 > other roles pins it off for the role the window connects as: `ALTER ROLE <role> SET log_statement = 'none'`,
-> `… SET log_min_duration_statement = -1`, `… SET log_parameter_max_length_on_error = 0`.
+> `… SET log_min_duration_statement = -1`, `… SET log_min_duration_sample = -1`,
+> `… SET log_transaction_sample_rate = 0`, `… SET log_parameter_max_length_on_error = 0`.
 
 > [!WARNING]
-> **The window's connection is not encrypted** (ADR-0083 decision 3). A window on the node's own machine (a local
-> socket, as in section 0) is fine. A window on another machine sends the passphrase and receives the signing key
+> **The window's connection is not encrypted** (ADR-0083 decision 3). A window on the node's own machine, connected
+> over loopback (`host=127.0.0.1`, as in section 0) or a Unix socket, is fine. A window on another machine sends the passphrase and receives the signing key
 > in clear: measure over a LAN only through an encrypted tunnel.
 
 Launch the window as section 3, with **no** `--key-hold-seconds` (the default 0, a shared terminal) unless a step

@@ -1099,3 +1099,33 @@ async fn a_token_for_one_role_cannot_enrol_another() {
         .expect_err("a nurse's token must not enrol a superuser");
     assert!(db_message(&e).contains("attestation"), "{}", db_message(&e));
 }
+
+/// db/061 refuses to LOAD while the runtime role can call the unthrottled primitive (PR #897
+/// review). Its `REVOKE … FROM PUBLIC` is only a WARNING, and a no-op, when the loader does not own
+/// the extension's functions, and then `cairn_agent` could skip every count by calling
+/// `cairn_vault_unseal` directly. Simulated with a direct grant, which that REVOKE does not reach.
+#[tokio::test]
+async fn the_schema_refuses_to_load_while_the_runtime_role_can_unseal() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    c.batch_execute("GRANT EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) TO cairn_agent")
+        .await
+        .unwrap();
+    let loaded = c
+        .batch_execute(include_str!("../../../db/061_vault.sql"))
+        .await;
+    // Restore before asserting, so a failure here cannot leave the grant behind for other suites.
+    c.batch_execute("ROLLBACK").await.unwrap();
+    c.batch_execute("REVOKE EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) FROM cairn_agent")
+        .await
+        .unwrap();
+    let e = loaded.expect_err("the load must refuse");
+    assert!(
+        db_message(&e).contains("can still execute cairn_vault_unseal"),
+        "{}",
+        db_message(&e)
+    );
+}

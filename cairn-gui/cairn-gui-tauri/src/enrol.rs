@@ -21,7 +21,8 @@
 //!
 //! # No secret in any output
 //!
-//! Every sentence comes from [`EnrolRefusal`] or [`KeyRefusal`], built from enums alone. A
+//! Every refusal sentence comes from [`EnrolRefusal`] or [`KeyRefusal`], built from enums alone
+//! (the success line names the new member, which the superuser just typed). A
 //! database error's text is never passed on (it goes to the operator's stderr), and neither
 //! passphrase is in any string, `Debug` output or log line this file produces.
 use crate::signer::{from_release, Credential, KeyRefusal};

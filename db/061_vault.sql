@@ -22,9 +22,10 @@
 --
 -- THE FOUR PROMISES THIS FILE KEEPS (and how):
 --
---   1. The wrapped key never leaves the database. `vault_member` has NO grant to anyone (not
---      PUBLIC, not cairn_agent, not cairn_node), and no function, view or door returns the
---      `sealed` column. Even the door that checks a passphrase (`cairn_vault_release`) returns
+--   1. The wrapped key never leaves the database — for every role but the owner (and PostgreSQL
+--      superusers, whom no grant binds; the window connects as the owner today, #898).
+--      `vault_member` has NO grant to anyone (not PUBLIC, not cairn_agent, not cairn_node), and no
+--      function, view or door returns the `sealed` column. Even the door that checks a passphrase (`cairn_vault_release`) returns
 --      the unwrapped seed — for one act — never the blob. Why it matters: a sealed blob that
 --      leaves is an OFFLINE brute-force target, where no back-off can reach the guesser. While it
 --      stays here every guess goes through the back-off below.
@@ -37,6 +38,13 @@
 --      "Never raises" is a promise at the default READ COMMITTED: a REPEATABLE READ / SERIALIZABLE
 --      caller can get a 40001 on the row lock, and a lock or statement timeout can cancel the
 --      call. None of those loses a count (see promise 4) — they can only refuse to answer.
+--
+--   3. A superuser's key is never released for a clinical act. Design §5.1: the superuser role
+--      administers the site (it enrols people); it confers NO clinical authorship. A
+--      clinician-superuser therefore has TWO members — two staff IDs, two keys — one per role.
+--      This is enforced HERE, at the vault, not only in the window: the release door maps role
+--      to the one purpose it may serve (superuser → 'enrol', everyone else → 'clinical') and
+--      answers 'refused-purpose' for any other pairing.
 --
 --   4. EVERY GUESS IS COUNTED WHERE A ROLLBACK CANNOT UNDO IT — before anything is revealed.
 --      An ordinary counter column is TRANSACTIONAL: the door increments it, returns 'wrong', and
@@ -55,25 +63,19 @@
 --      just leaves that attempt counted as a failure: it can only ever hurt the caller.
 --      Residual, stated plainly: the attempt row is locked FOR UPDATE for the whole call, so a
 --      raw-SQL client that holds a transaction open after calling the door holds that lock and
---      delays THAT ONE staff member's next sign-in until it lets go. That is a denial of service
---      by someone who already holds the runtime role, bounded in practice by the window's 15 s
---      cut on a sign; it is never a bypass.
+--      delays THAT ONE staff member's next sign-in until it lets go; each press meanwhile fails
+--      when the window cuts its own command off (ANSWER_WITHIN, 15 s). That is a denial of
+--      service by someone who already holds the runtime role; it is never a bypass.
 --
---   3. A superuser's key is never released for a clinical act. Spec §5.1: the superuser role
---      administers the site (it enrols people); it confers NO clinical authorship. A
---      clinician-superuser therefore has TWO members — two staff IDs, two keys — one per role.
---      This is enforced HERE, at the vault, not only in the window: the release door maps role
---      to the one purpose it may serve (superuser → 'enrol', everyone else → 'clinical') and
---      answers 'refused-purpose' for any other pairing.
---
--- THE BACK-OFF, AND WHY IT IS NEVER A LOCK-OUT. Failures 1–3 are free (people mistype). From the
+-- THE BACK-OFF, AND WHY IT HAS NO HARD LOCK-OUT. Failures 1–3 are free (people mistype). From the
 -- 4th, the member must wait `least(2^(failures-4), 300)` seconds before the next try: 1 s, 2 s,
 -- 4 s … capped at five minutes. A try during the wait answers 'waiting' with the milliseconds
 -- left, does NOT check the passphrase, and does NOT count as a failure — so a clinician pressing
 -- again too soon cannot dig herself deeper. A success resets the count. There is deliberately no
 -- hard lock-out: a locked-out clinician in an emergency is a paper-parity failure (paper never
 -- refuses a pen), and five minutes per guess already makes an online guess at a real passphrase
--- hopeless.
+-- hopeless. The residual, stated plainly: failures never decay, so another person's wrong guesses
+-- can keep a named member at the five-minute cap (#903).
 --
 -- WHO MAY CALL WHAT:
 --   * cairn_agent (the window's runtime role): cairn_vault_release, cairn_vault_hint, cairn_vault_staff_id_taken,
@@ -81,7 +83,8 @@
 --   * owner only (the node's console, `cairn-node vault-bootstrap-superuser` and friends):
 --     cairn_vault_bootstrap, cairn_vault_set_terminal_phc.
 --   * `cairn_vault_unseal` itself is REVOKED from PUBLIC below, so the back-off cannot be skipped
---     by calling the primitive directly: cairn_vault_release (a SECURITY DEFINER) is its only door.
+--     by calling the primitive directly: for every role but the owner, cairn_vault_release (a
+--     SECURITY DEFINER) is its only door. The load refuses if that REVOKE did not take.
 
 BEGIN;
 
@@ -121,8 +124,8 @@ RETURNS int LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 -- One row per ROLE-ACTOR (a clinician who is also a superuser has two rows, two staff IDs; #168
--- makes the person behind them first-class). `is_superuser` is `role = 'superuser'` — never a
--- second column that could disagree with it. Constraints are NAMED so a refusal says which rule
+-- makes the person behind them first-class). There is no is_superuser column: a superuser is
+-- `role = 'superuser'`, never a second column that could disagree with it. Constraints are NAMED so a refusal says which rule
 -- failed.
 CREATE TABLE IF NOT EXISTS vault_member (
     staff_id       text PRIMARY KEY
@@ -243,8 +246,9 @@ REVOKE ALL ON vault_member, vault_attempt, vault_terminal FROM PUBLIC, cairn_age
 -- The address a superuser's attestation token signs to approve ONE enrolment: a sha2-256
 -- multihash (the 0x12 0x20 prefix, as every Cairn content address) over the normalised staff ID,
 -- the new key and the role. A token over any other request — another staff ID, another key, a
--- promotion to superuser — verifies against a different address and is refused. Pure and IMMUTABLE,
--- so the window's Rust twin can be checked against it byte-for-byte. Deliberately NOT a definer:
+-- promotion to superuser — verifies against a different address and is refused. Pure and IMMUTABLE.
+-- There is deliberately no Rust copy: the window asks this function for the address (R7), and the
+-- SQL mirror (db/tests/061) restates the formula to pin it. Deliberately NOT a definer:
 -- it reads no table, so a definer would add privilege for nothing.
 CREATE OR REPLACE FUNCTION cairn_vault_enrol_address(p_staff_id text, p_signing_key_id text, p_role text)
 RETURNS bytea LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -274,8 +278,8 @@ $$;
 -- (taken at step 2), so two terminals guessing the same staff ID at once are serialised and cannot
 -- both slip past one wait:
 --   1. look up the member, check the purpose and that its actor is current — no writes, no lock;
---   2. take the lock; read failures and the last attempt's time from the sequences — no writes; still inside the
---      wait → 'waiting' (no unsealing, no counting);
+--   2. take the lock; read failures and the last attempt's time from the sequences — no writes;
+--      still inside the wait → 'waiting' (no unsealing, no counting);
 --   3. CONSUME an attempt number and stamp the clock — non-transactional, so from here on the
 --      guess is on record whatever the caller does — and only THEN unseal;
 --   4. right → move success_mark up to this attempt → 'released'; wrong → 'wrong', with the new
@@ -373,7 +377,8 @@ $$;
 -- Is this staff ID already enrolled? The window asks BEFORE it releases a superuser's key, so a
 -- duplicate gets its own plain sentence instead of the floor's refusal (a floor P0001 carries no
 -- scope, and matching its message text is forbidden: reuse the predicate). It reveals only
--- whether an ID is enrolled, which cairn_vault_hint already answers: the roster is not secret.
+-- whether an ID is enrolled, which cairn_vault_release already answers ('unknown' vs 'wrong'), as
+-- does the hint for any member who set one: the roster is not secret.
 CREATE OR REPLACE FUNCTION cairn_vault_staff_id_taken(p_staff_id text)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT EXISTS (SELECT 1 FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id));
@@ -404,7 +409,9 @@ $$;
 -- constraint is re-raised with the constraint's NAME only. Postgres's own CHECK / NOT NULL error
 -- carries a DETAIL "Failing row contains (…)" that would print every column — the sealed blob
 -- included — into the client's error and the server log. Catching it and raising SQLERRM alone
--- (which names the constraint, never the values) keeps the blob out. Invoker-rights and revoked
+-- (which names the constraint, never the values) keeps the blob out of the error's DETAIL.
+-- Bind-parameter logging, which would log the blob as an argument, is the operator's to keep off
+-- (ADR-0083 decision 5). Invoker-rights and revoked
 -- from PUBLIC: it is reached only from inside the two definer doors below.
 CREATE OR REPLACE FUNCTION cairn_vault_insert_member(
     p_staff_id text, p_display_name text, p_role text, p_actor_id bytea, p_signing_key_id text,
@@ -514,6 +521,18 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_member_created() FROM PUBLIC;
 -- The unwrapping primitive: unthrottled (one Argon2id per call), so reachable only through the
 -- release door, which counts and backs off.
 REVOKE EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) FROM PUBLIC;
+-- That REVOKE is only a WARNING, and a no-op, when the loader does not own the extension's
+-- functions (cairn_pgx is not superuser-only, so whoever ran CREATE EXTENSION owns them). Then the
+-- runtime role could call the primitive and skip every count. Refuse the load instead.
+DO $$
+BEGIN
+    IF has_function_privilege('cairn_agent', 'cairn_vault_unseal(bytea, text)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'db/061: cairn_agent can still execute cairn_vault_unseal, so the vault''s back-off could be skipped'
+            USING HINT = 'Load the schema as the role that ran CREATE EXTENSION cairn_pgx (it owns '
+                         || 'cairn_vault_unseal), or REVOKE EXECUTE on it FROM PUBLIC as that role.';
+    END IF;
+END;
+$$;
 
 GRANT EXECUTE ON FUNCTION cairn_vault_release(text, text, text) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_hint(text) TO cairn_agent;

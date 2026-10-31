@@ -139,7 +139,7 @@ pub async fn forget_held_key(state: tauri::State<'_, AppState>) -> Result<LockSt
     Ok(lock_state_impl(&state).await)
 }
 
-/// The clinician's own passphrase hint, shown once their staff ID is typed (spec §5.4). `None`
+/// The clinician's own passphrase hint, shown once their staff ID is typed (design §5.4). `None`
 /// when there is none, nobody has that ID, or in fixture mode. A failed read is a worded
 /// refusal; its detail goes to stderr.
 #[tauri::command]
@@ -209,8 +209,8 @@ pub fn terminal_verdict(phc: Option<&str>, passphrase: &str) -> TerminalUnlock {
     }
 }
 
-/// Does `passphrase` open this terminal (the shared staff passphrase, screensaver-style, spec
-/// §5.4)? The lock screen itself is the webview's; this only answers. `Wrong` in fixture mode;
+/// Does `passphrase` open this terminal (the shared staff passphrase, shown once when a live
+/// window opens, design §5.4)? The lock screen itself is the webview's; this only answers. `Wrong` in fixture mode;
 /// `Fault` when the PHC cannot be read (detail to stderr); `NotSet` when none is enrolled.
 #[tauri::command]
 pub async fn terminal_unlock(

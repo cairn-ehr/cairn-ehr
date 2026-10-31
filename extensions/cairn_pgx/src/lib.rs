@@ -145,8 +145,9 @@ fn cairn_wrap_dek(dek: &[u8], unwrap_pub: &[u8]) -> Vec<u8> {
 /// Check a clinician's sign-in passphrase against their passphrase-sealed key blob, and return
 /// the 32-byte Ed25519 seed on success.
 ///
-/// Why this lives in the database: the vault's wrapped keys NEVER leave Postgres, so the
-/// passphrase has to be checked here, next to the blob, rather than by shipping the blob out.
+/// Why this lives in the database: the vault's wrapped keys never leave Postgres (for every role
+/// but the owner, #898), so the passphrase has to be checked here, next to the blob, rather than
+/// by shipping the blob out.
 ///
 /// Why it returns NULL instead of raising: a raised error (or a panic) can carry the bind
 /// parameters, i.e. the passphrase, into the server log. So a wrong passphrase and an

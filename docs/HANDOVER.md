@@ -23,7 +23,12 @@
 > `cairn_pgx` **0.4.0**): a key vault in the node's database; the window signs EVERY act with staff ID + passphrase
 > (`--key-hold-seconds`, default 0 = shared terminal); a signer strip, a terminal lock, "Enrol staff"; the
 > `cairn-node vault-bootstrap-superuser` / `vault-set-terminal-passphrase` console verbs; one `EventSigner` seam for
-> every human signature (slice 5's in-database signer plugs in there). `--attester-key` is gone.
+> every human signature (slice 5's in-database signer plugs in there). `--attester-key` is gone from the window (the
+`cairn-node` console verbs still take it). **Review round 2026-11-01** (the PR's multi-agent review): one
+passphrase rule at sign-in and every enrol door (spaces alone are none), separate env variables for the superuser's
+and the terminal's passphrase, a failed enrolment with no server answer says "may have been enrolled", a revoked
+member's key answers `not-current`, a damaged terminal PHC is a fault, db/061 refuses to load if the
+`cairn_vault_unseal` REVOKE did not take, and the missing floor tests (the row lock really blocks, and others).
 >
 > > [!WARNING]
 > > **NOT YET GUARANTEED — gates on any pilot, and the reason there is no real clinical use before slice 2:** the
@@ -31,8 +36,12 @@
 > > `cairn_agent`. The window connects as the schema OWNER (**#898**), and its connection is `NoTls`, so a terminal on
 > > another machine sends the passphrase and receives the seed in clear (**#899**). Also open from the slice: **#900**
 > > (a superuser key could sign a clinical event — strict-door refusal), **#901** (bound the Argon2 parameters a stored
-> > blob may carry), **#902** (`enroll-human --handle` keeps case, the vault lowercases). Human-key `&SigningKey`
-> > parameters that slice 5 must still move onto the seam: `identify.rs:83` (`IdentifyParams`), `apply_proposal.rs:94`.
+> > blob may carry), **#902** (`enroll-human --handle` keeps case, the vault lowercases); from the review round
+> > **#903** (another person's wrong guesses can hold a named member at the 300 s cap: no decay, no reset — needs a
+> > maintainer decision), **#904** (an unreadable sealed blob reads as "wrong passphrase" and is counted; needs a
+> > `cairn_pgx` 0.5.0), **#905** (CI never runs `cairn-gui-tauri`'s DB-gated enrol tests: run them locally with
+> > `CAIRN_TEST_PG`), **#906** (type hardening), **#907** (minor test gaps). Human-key `&SigningKey`
+> > parameters that slice 5 must still move onto the seam: `identify.rs:83` (`LinkParams`), `apply_proposal.rs:94`.
 > > **Local `cairn_pgx` reinstall on this Mac:** the 2026-10-19 Xcode `ld` emits a dylib Postgres will not load — patch
 > > it with `scripts/macos-patch-pgx-dylib.py` (CI is unaffected).
 > > **Known UX edge (key-hold terminals only):** the strip keeps the last staff ID, so a next person who types only a

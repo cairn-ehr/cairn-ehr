@@ -151,7 +151,9 @@ jobs:
   # twice per CI run for no coverage that is not already obtained there.
   #
   # Everything else in this tree is pure (the view model, the session-key lock, the JS/Rust
-  # drift guard, the funnel's rules), and CAIRN_ALLOW_DB_SKIP — declared on the `cargo test`
+  # drift guard, the funnel's rules) EXCEPT cairn-gui-tauri's DB-gated enrolment tests
+  # (enrol_tests.rs `live()`), which skip here and run in no job yet (#905; a source-order guard
+  # stands in until then). CAIRN_ALLOW_DB_SKIP — declared on the `cargo test`
   # STEP below, not on this job — is the DECLARATION that the skip is intended:
   # `cairn-gui-live`'s `db_gate_ran` fails closed without it, so a developer who simply forgot
   # to export CAIRN_TEST_PG is told, while this job is not (#442, #450).

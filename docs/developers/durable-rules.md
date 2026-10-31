@@ -15,7 +15,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 `cairn-gui-tauri/src/{signer_tests,enrol_tests}.rs` and `state.rs`'s held-key tests):
 - **Never grant a read of `vault_member`** (nor of `vault_attempt`/`vault_terminal`), and never add a function, view
   or door that returns `sealed`. A blob that leaves the database is an OFFLINE guessing target no back-off reaches.
-  `cairn_vault_unseal` stays revoked from PUBLIC: `cairn_vault_release` is its only door. Pin:
+  (No grant binds the owner or a PostgreSQL superuser, and the window connects as the owner today, #898.)
+  `cairn_vault_unseal` stays revoked from PUBLIC: for every role but the owner, `cairn_vault_release` is its only
+  door, and db/061 refuses to load if that REVOKE did not take (a non-owner loader's REVOKE is a no-op; pin `the_schema_refuses_to_load_while_the_runtime_role_can_unseal`). Pin:
   `the_runtime_role_cannot_read_the_vault`. **Tempting wrong fix:** a "roster" view for an admin screen that
   selects `*` — select the named non-secret columns through a definer, or nothing.
 - **Never make `cairn_vault_release` raise on a passphrase.** Wrong passphrase, unknown staff ID, wrong purpose and
@@ -37,23 +39,42 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   table column, or to `nextval` re-opens a bypass (rollback) or a phantom-failure lock-out after a crash. A missing
   `vault_attempt` row answers `unknown`. Pins: `a_rolled_back_guess_still_counts`, `an_erroring_statement_still_counts`,
   `a_count_is_logged_exactly`, `a_missing_attempt_row_fails_closed`, `waiting_does_not_count_a_failure`.
+- **The attempt row's `FOR UPDATE` lock is load-bearing.** The door counts with an absolute
+  `setval(mark + failures + 1)`, so without the lock N terminals reading the state together each get a guess that
+  is counted once. Pin: `a_second_terminal_waits_for_the_attempt_row_lock` (the older concurrency test passes with
+  the lock deleted). **Tempting wrong fix:** dropping `FOR UPDATE` "because sequences are atomic anyway".
+- **A revoked or superseded member's key is not released** (`not-current`, before counting). Pins:
+  `a_revoked_member_is_told_so_and_nothing_is_unsealed_or_counted`, `a_revoked_superuser_cannot_enrol`.
 - **Staff-ID normalisation lives only in SQL** (`cairn_vault_staff_id`); Rust asks for the enrolment address
   (`SELECT cairn_vault_enrol_address(…)`) and the pinned handle (`cairn_vault_staff_id`) rather than computing a
   twin; both enrol doors rebuild the pinned set `{role, handle}` and refuse any other. Pins:
   `release_normalises_the_staff_id`, `staff_id_taken_normalises_and_answers`,
   `both_doors_refuse_a_pinned_set_they_did_not_build`, `a_case_variant_of_a_staff_id_mints_no_second_actor`.
-- **Never send an empty passphrase to the vault** (it is a counted wrong guess). `signer::decide` yields `Release`
-  only with a passphrase; a staff ID alone uses the holder's live key or forgets it. The strip keeps the ID on any
+- **Never send an empty passphrase to the vault** (it is a counted wrong guess), and never enrol one sign-in would
+  refuse: one rule, `cairn_node::vault::passphrase_is_usable` (spaces alone are none), at sign-in and at every
+  enrolment door (`mint_sealed` itself refuses). Pins: `a_passphrase_of_spaces_is_not_usable`,
+  `a_key_is_never_sealed_under_a_passphrase_of_spaces`, `a_passphrase_of_spaces_is_refused`. `signer::decide`
+  yields `Release` only with a passphrase; a staff ID alone uses the holder's live key or forgets it. The strip keeps the ID on any
   terminal with a hold (`keyHoldSecs`, not `heldBy`, which the post-act poll has not refreshed yet). **Tempting wrong
   fix:** "simplify" `decide` back to "any credential means a release". Pins:
   `an_empty_passphrase_is_never_sent_to_the_vault`, `a_staff_id_alone_never_asks_the_vault`,
   `clear_signer_empties_the_passphrase_and_keeps_the_id_only_on_a_held_terminal`.
 - **A future last-attempt stamp is not a wait.** `cairn_vault_release` waits only when the stamp is not after now; a
-  clock stepped back would otherwise lock a member out for as long as it stepped. Pin:
-  `a_clock_stepped_back_never_locks_out`.
-- **A late release never re-stores a key** (`Held::store_if_current` and its generation; every wipe bumps it).
-  Pins: `a_lock_between_the_wipe_and_the_store_drops_the_released_key` and its neighbours in `state.rs`;
-  `a_new_signer_replaces_the_held_one`, `an_expired_hold_needs_a_credential`.
+  clock stepped back would otherwise lock a member out for as long as it stepped. The guess it lets through restamps
+  the clock at now, so it frees ONE guess. Pins: `a_clock_stepped_back_never_locks_out`,
+  `a_clock_stepped_back_frees_one_guess_and_no_more`.
+- **A late release never re-stores a key** (`Held::keep_for_next_act` / `store_if_current` and its generation;
+  every wipe bumps it, an enrolment's included). Pins: `a_lock_between_the_wipe_and_the_store_drops_the_released_key`
+  and its neighbours in `state.rs`, `signer_for_act_keeps_the_key_with_the_generation_of_its_own_wipe`,
+  `enrolling_wipes_a_held_key`; `a_new_signer_replaces_the_held_one`, `an_expired_hold_needs_a_credential`.
+- **A failed enrolment with no ordinary answer is "may have been enrolled"**, never "nothing was recorded" (a retry is
+  told the ID is taken, and a new ID makes two actors for one person). `vault::enrol_member` keeps the database
+  error on the chain (`LocalDbFault`) so `db_diagnosis::answered_with_error` can tell. **Tempting wrong fix:**
+  `anyhow!("…: {}", db_text(&e))`, which drops the error and makes every failure look unanswered or every one
+  answered. Pins: `a_failed_enrolment_says_whether_the_server_answered`,
+  `an_unanswered_enrolment_failure_is_outcome_unknown`.
+- **The superuser's and the terminal's passphrases never share an env variable** (`CAIRN_VAULT_PASSPHRASE` vs
+  `CAIRN_TERMINAL_PASSPHRASE`). Pin: `the_two_vault_passphrases_never_share_an_env_variable`.
 
 **⇒ #807 — THE WINDOW'S CONNECTION IS REOPENED WHEN LOST — do not undo** (pins:
 `cairn-gui/cairn-gui-live/tests/reconnect.rs`, `connection.rs`'s backoff and wording unit tests and `Send` pin):

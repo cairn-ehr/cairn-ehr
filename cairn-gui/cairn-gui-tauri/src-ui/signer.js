@@ -4,8 +4,8 @@
 //  - WHO signs the next act: the strip's staff ID + personal passphrase, sent with each write
 //    (`credential: signerCredential()`). The node's vault checks it; this file never does.
 //  - MAY ANYONE USE THIS TERMINAL: the shared terminal passphrase on the lock screen
-//    (#terminal-lock), shown at launch in live mode. Screensaver-style, not a confirmation
-//    dialog: it is an overlay on the page, never a modal.
+//    (#terminal-lock), shown once at launch in live mode (it does not re-lock when idle). Not
+//    a confirmation dialog: it is an overlay on the page, never a modal.
 // Classic script, loaded after main.js (uses its `el`, `setMessage`, `invoke`).
 
 const RECENT_SIGNERS_MAX = 10;
