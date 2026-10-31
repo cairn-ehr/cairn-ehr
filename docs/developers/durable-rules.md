@@ -10,6 +10,39 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 1 — THE HUMAN KEY VAULT (ADR-0083, db/061) — do not undo** (pins:
+`crates/cairn-node/tests/vault_floor.rs`, `vault_lib.rs`, `secret32_conversions_are_named.rs`;
+`cairn-gui-tauri/src/{signer_tests,enrol_tests}.rs` and `state.rs`'s held-key tests):
+- **Never grant a read of `vault_member`** (nor of `vault_attempt`/`vault_terminal`), and never add a function, view
+  or door that returns `sealed`. A blob that leaves the database is an OFFLINE guessing target no back-off reaches.
+  `cairn_vault_unseal` stays revoked from PUBLIC: `cairn_vault_release` is its only door. Pin:
+  `the_runtime_role_cannot_read_the_vault`. **Tempting wrong fix:** a "roster" view for an admin screen that
+  selects `*` — select the named non-secret columns through a definer, or nothing.
+- **Never make `cairn_vault_release` raise on a passphrase.** Wrong passphrase, unknown staff ID, wrong purpose and
+  a wait are all ANSWERS (`outcome` rows): a raised error can carry the bind parameters, the passphrase, into the
+  server log. Same for `cairn_vault_unseal` (NULL, never `pgrx::error!`). Pins:
+  `a_wrong_passphrase_is_an_answer_not_an_error`, `refusal_sentences_never_echo_the_passphrase`. **Tempting wrong
+  fix:** `RAISE EXCEPTION 'wrong passphrase'` "for clarity". The window builds its sentence from `KeyRefusal`.
+- **Never let a superuser key out for `'clinical'`** (nor a clinician key for `'enrol'`): the release door maps
+  role → purpose BEFORE unsealing. Pins: `a_superuser_key_is_not_released_for_a_clinical_act`,
+  `a_clinician_key_cannot_enrol`, `the_superuser_key_is_never_held` (enrolment bypasses `signer_for_act`, which may
+  hold keys). The rule binds only at the vault: a client holding a released superuser key could still sign a
+  clinical event (ADR-0083 decision 7, a follow-up issue) — do not read the vault rule as the whole defence.
+- **Never take a human `&SigningKey` in new code** — take `&dyn EventSigner` (`cairn_event::signer`). Slice 5's
+  in-database signer is a new implementation of that trait; a call site typed on `SigningKey` is one more to rewrite.
+  Pin: none by test (the trait signatures on `sign`/`sign_attestation` and the orchestrators' `&dyn EventSigner`
+  fields); hold it in review.
+- **Count before unsealing, with `setval`, in the per-member sequences.** Moving the count after the unseal, into a
+  table column, or to `nextval` re-opens a bypass (rollback) or a phantom-failure lock-out after a crash. A missing
+  `vault_attempt` row answers `unknown`. Pins: `a_rolled_back_guess_still_counts`, `an_erroring_statement_still_counts`,
+  `a_count_is_logged_exactly`, `a_missing_attempt_row_fails_closed`, `waiting_does_not_count_a_failure`.
+- **Staff-ID normalisation lives only in SQL** (`cairn_vault_staff_id`); Rust asks for the enrolment address
+  (`SELECT cairn_vault_enrol_address(…)`) rather than computing a twin. Pin: `release_normalises_the_staff_id`,
+  `staff_id_taken_normalises_and_answers`.
+- **A late release never re-stores a key** (`Held::store_if_current` and its generation; every wipe bumps it).
+  Pins: `a_lock_between_the_wipe_and_the_store_drops_the_released_key` and its neighbours in `state.rs`;
+  `a_new_signer_replaces_the_held_one`, `an_expired_hold_needs_a_credential`.
+
 **⇒ #807 — THE WINDOW'S CONNECTION IS REOPENED WHEN LOST — do not undo** (pins:
 `cairn-gui/cairn-gui-live/tests/reconnect.rs`, `connection.rs`'s backoff and wording unit tests and `Send` pin):
 - **Reopen only when the client `is_closed()`, and only when the lock is taken** (`NodeConnection::lock`,

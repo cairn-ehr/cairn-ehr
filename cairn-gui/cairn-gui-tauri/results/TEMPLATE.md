@@ -243,6 +243,38 @@ Steps: Withhold paper *N* = 2 → forced *M* = 2 → observed *K* = \_\_ · Rele
 | Pinned reason closes on Escape, and on a click elsewhere | | |
 | Withheld line identifiable without colour | | |
 
+## Sign in and sign (GUI sign-in slice 1, runbook §16)
+
+Logging settings checked before the run (`log_statement`, `log_min_duration_statement`,
+`log_parameter_max_length_on_error`, `pg_db_role_setting`): **safe / not safe** \_\_ ·
+Window on the node's machine, or over an encrypted link: \_\_
+
+| Gesture | Mode | Key hold | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|---|
+| Sign one act: first keystroke in Staff ID → outcome | live | 0 | | | | ≤ 3 s | |
+| … of which press → outcome | live | 0 | | | | — | |
+| Enrol one member: form opened → "is enrolled" | live | 0 | | | | (record) | |
+
+Steps: sign paper *N* = 1 → forced *M* = 1 → observed *K* = \_\_ · next nurse paper 0 → Cairn 0 → observed extra
+acts \_\_. `M > N` is an architecture defect (file it).
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Lock: wrong / right / not set / node stopped each say their own sentence | | |
+| Enrol: mismatch, duplicate, clinician credential each refused with their sentence; fields emptied | | |
+| A superuser's key is never held, and is refused on a clinical write | | |
+| A staff ID with capitals and spaces signs as the enrolled member | | |
+| Hold 900: held key serves; the next nurse's credential replaces it; Lock clears it; a hold runs out | | |
+| Back-off: tries 1–3 free, try 4 "Wait 1 s", a press inside the wait is "Too many tries" and not counted | | |
+| Staff ID retyped after a refusal (count) | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Lock screen, strip and enrol form complete by keyboard alone | | |
+| Every field announced by its label | | |
+| Each refusal and back-off sentence read once, whole; no passphrase spoken | | |
+| "Signed in for the next act" announced; nothing takes focus on its own | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

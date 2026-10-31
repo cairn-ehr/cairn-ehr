@@ -211,6 +211,7 @@ nav:
       - ADR-0080 · A connect replays the schema only when it changed: spec/decisions/0080-a-connect-replays-the-schema-only-when-it-changed.md
       - ADR-0081 · A medication withhold is a time-bounded hold: spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md
       - ADR-0082 · A release of an ended hold is refused at the local door: spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md
+      - ADR-0083 · The human key vault: spec/decisions/0083-the-human-key-vault.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

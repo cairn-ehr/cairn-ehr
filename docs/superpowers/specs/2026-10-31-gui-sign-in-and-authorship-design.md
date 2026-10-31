@@ -227,10 +227,10 @@ split concrete for the first runnable window.
 
 | # | Slice | Contents |
 |---|---|---|
-| 1 | **Sign-in** | terminals are windows on the facility node; superuser role (signature-gated enrol at the floor); installation creates superuser #1 and prints sealed tokens; window enrolment; vault on the facility node; shared-staff terminal unlock; per-act ID + passphrase signing for the existing medication writes; key-hold setting; attempt back-off. Replaces `--attester-key`. |
+| 1 | **Sign-in** | terminals are windows on the facility node; superuser role (signature-gated enrol at the floor); installation creates superuser #1 (sealed tokens moved to slice 4, below); window enrolment; vault on the facility node; shared-staff terminal unlock; per-act ID + passphrase signing for the existing medication writes; key-hold setting; attempt back-off. Replaces `--attester-key`. |
 | 2 | Re-key | `rotate-key` (and `suspend`) in the actor algebra, fixing **#247** and **#664** first; token re-key; SMS/email gateway seam. |
 | 3 | Who's writing / opening | passphrase-free claim; durable draft store; auto-commit after the quarantine timer; the `Asserted` grade + its display; chart-open claim + site policy. |
-| 4 | Emergency key | its own ADR; sealed-token use; time-bounded key; confirm / repudiate. |
+| 4 | Emergency key | its own ADR; sealed tokens printed **and** used (moved here from slice 1, 2026-10-31); time-bounded key; confirm / repudiate. |
 | 5 | Autonomous terminal nodes | actor-event sync with specified nodes (registry, never private keys); custody of a terminal-written event; the cut-off path graded `asserted`. Needs a brainstorm of its own. |
 | — | Then the rest of the milestone | wire `cairn-gui-shell`'s tabs → demographics edit → allergy stream → add a medication from the window → thin encounter + real note stream → one encounter sign-off. Each brainstormed on its own. |
 
@@ -241,6 +241,10 @@ slice 2** (the project is pre-clinical, so this costs nothing today).
 Slice 1 ships sealed tokens **printed and stored** but not yet **usable** — using one is slice 4. Until then a
 locked-out last superuser is recovered at the node's CLI (a superuser-enrol verb beside today's `enroll-human`;
 an operator at the node's console is already trusted with its database). Say so on the sheet.
+
+*Changed at plan time (2026-10-31):* slice 1 prints **no** sealed tokens. A sheet of tokens that do nothing invites
+someone to try one in an outage; slice 4 prints them when they work. Until then a locked-out last superuser is
+recovered at the console with `cairn-node vault-bootstrap-superuser` (ADR-0083 decision 10).
 
 ## 7. Paper-parity benchmark (§1.2)
 

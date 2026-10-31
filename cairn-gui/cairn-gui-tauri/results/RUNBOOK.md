@@ -43,8 +43,8 @@ cairn-node --conn "$CONN" --key "$NODE_KEY" \
 The window signs as an **enrolled human actor** (ADR-0053). Since the sign-in slice the window
 opens no key file: each act carries the clinician's **staff ID and passphrase**, and the node's key
 vault (db/061) releases their key for that act. A vault member is enrolled by a superuser
-(`cairn-node vault-bootstrap-superuser` makes the first one at the console; the window's enrolment
-form for clinicians is the next slice task). The `enroll-human` key files below are still what the
+(`cairn-node vault-bootstrap-superuser` makes the first one at the console; the window's *Enrol
+staff* form makes the rest — section 16 walks both). The `enroll-human` key files below are still what the
 `cairn-node` CLI verbs (`link-charts`, …) sign with. Two clinicians need two *distinguishing determinants* — enrolling both as a bare
 `{"role":"clinician"}` collides into one `actor_id` and is refused
 ([ADR-0044](../../../docs/spec/decisions/0044-enroll-fail-closed-on-actor-id-collision.md)).
@@ -944,3 +944,127 @@ above were checked): `$NODE medication-withhold "$PATIENT" <thread> --reason "NB
 **What could not be run here.** The stopwatch figures, the VoiceOver checks and every `ui_gesture_timing` row
 need the window and a human; this section's commands were run against a throwaway database for the CLI half only.
 `TEMPLATE.md` carries a matching block (*Withhold and release*).
+
+---
+
+## 16. Sign in and sign (GUI sign-in slice 1, ADR-0083)
+
+The slice's gestures: the **terminal lock** (gatekeeping: may anyone use this terminal?), the **signer strip**
+(attribution: who signs this act?), **Enrol staff** (a superuser vouches for a new member) and the **key hold**.
+Paper counterpart: the bedside chart. Anyone on staff reads it, each entry carries its writer's own signature, and
+the next nurse picks up the pen with no ceremony. **Live only** (a `--mock` window has no vault: the lock screen
+is not shown and every write is refused before it asks); `--mock` is enough for the strip's labels and Tab order.
+
+**Budgets (design §7, the slice plan's §1.2).** Sign **≤ 3 s, credential included** (a pen signature is about
+2 s). The strip is typed BEFORE the press, so the stopwatch starts at the **first keystroke in Staff ID** and stops
+when the outcome line reports the result; record the press → outcome share beside it. Steps: paper *N* = 1 (a
+signature) → architecture-forced *M* = 1 (the write gesture carries staff ID + passphrase) → UI bundling target
+*K* = 1. **The next nurse: 0 extra acts** (paper 0 → Cairn 0: nothing is logged in to switch away from). The
+terminal unlock is a gatekeeping act with no per-write cost. **A figure outside its budget, or `M > N`, is the
+finding — file an issue; never adjust the budget.**
+
+**Setup.** Sections 0 and 2 (a throwaway database with `cairn_pgx` **0.4.0** — db/061 refuses to load without
+`cairn_vault_unseal` — and a seeded chart). Then, at the node's console, with the **owner** connection (the
+console verbs were run against a fresh database on 2026-10-31; each passphrase is prompted twice with no echo, or
+read from `CAIRN_VAULT_PASSPHRASE` for a script):
+
+```bash
+NODE="cairn-node --conn $CONN --key $NODE_KEY"
+$NODE vault-bootstrap-superuser --staff-id boss --display-name "Site Admin" --email it@example.invalid
+$NODE vault-set-terminal-passphrase
+psql "$CONN" -At -c "SELECT staff_id, role, enrolled_by FROM vault_member"   # boss|superuser|console
+```
+
+> [!WARNING]
+> **Statement logging can write a passphrase into the server log.** The signing passphrase is a bind parameter
+> of `cairn_vault_release`. PostgreSQL prints bind parameters with a logged statement (`log_statement = 'all'`,
+> or `log_min_duration_statement` ≥ 0, unless `log_parameter_max_length = 0`) and on an error
+> (`log_parameter_max_length_on_error` other than 0). Check before every run, and on every real node:
+>
+> ```bash
+> psql "$CONN" -c "SELECT name, setting FROM pg_settings WHERE name IN ('log_statement',
+>   'log_min_duration_statement','log_parameter_max_length','log_parameter_max_length_on_error') ORDER BY name"
+> psql "$CONN" -c "SELECT * FROM pg_db_role_setting"   # per-role / per-database overrides
+> ```
+>
+> Safe is `log_statement = none` (or `ddl`/`mod`: the release is a `SELECT`), `log_min_duration_statement = -1`
+> and `log_parameter_max_length_on_error = 0` — PostgreSQL's defaults. A node that needs statement logging for
+> other roles pins it off for the role the window connects as: `ALTER ROLE <role> SET log_statement = 'none'`,
+> `… SET log_min_duration_statement = -1`, `… SET log_parameter_max_length_on_error = 0`.
+
+> [!WARNING]
+> **The window's connection is not encrypted** (ADR-0083 decision 3). A window on the node's own machine (a local
+> socket, as in section 0) is fine. A window on another machine sends the passphrase and receives the signing key
+> in clear: measure over a LAN only through an encrypted tunnel.
+
+Launch the window as section 3, with **no** `--key-hold-seconds` (the default 0, a shared terminal) unless a step
+says otherwise.
+
+**Measurement 1 — the terminal lock.** The lock screen shows at launch, with focus in *Terminal passphrase*.
+
+- [ ] A wrong passphrase: "That passphrase is not right." The field empties; the page behind stays unreachable
+      by Tab.
+- [ ] The right passphrase: the page shows and focus moves to *Staff ID*.
+- [ ] On a node with no terminal passphrase set (skip `vault-set-terminal-passphrase` on a second rig): "No
+      terminal passphrase is set. Run cairn-node vault-set-terminal-passphrase on the node."
+- [ ] With the node's Postgres stopped: "The terminal could not be unlocked. Try again." — never "not right".
+
+**Measurement 2 — enrol two nurses from the window.** Open *Enrol staff*. Type `boss` and its passphrase into the
+signer strip; the new member types their own passphrase twice. Enrol `nurse-a` and `nurse-b` (role *nurse*, a
+phone or an email). Time each from opening the form to "… (staff ID nurse-a) is enrolled as nurse." (no budget
+yet — record it). Then confirm:
+
+- [ ] Both passphrase fields and the strip's passphrase are empty after every attempt, success or refusal.
+- [ ] Two different new passphrases: "The two new passphrases do not match. Nobody was enrolled."
+- [ ] `nurse-a` again: "That staff ID is already in use. Nobody was enrolled." (asked before the superuser's key
+      is released, so it costs boss no attempt).
+- [ ] `nurse-a`'s own credential in the strip: "Only a superuser can enrol staff. …"
+- [ ] After a successful enrol, no "Signed in for the next act" line ever names `boss`, whatever the key hold
+      (repeat once at `--key-hold-seconds 900`): a superuser's key is never held.
+
+**Measurement 3 — sign one act (the ≤ 3 s budget).** On the section 2 chart: Tab to *Staff ID*, type `nurse-a`,
+Tab, type the passphrase, Tab to *Sign off* (or type a reason and Tab to a line's *Stop*), press it. Start at the
+first keystroke in Staff ID; stop at the outcome line. Five runs (re-seed or Stop a different line each run).
+Then:
+
+- [ ] The passphrase field is empty after the act; with a key hold of 0 the Staff ID is empty too.
+- [ ] `$NODE medication-list "$PATIENT"` shows the act signed by nurse-a's key
+      (`psql "$CONN" -At -c "SELECT staff_id, left(signing_key_id, 8) FROM vault_member"` maps key to person).
+- [ ] `boss` and its passphrase on a clinical write: "A superuser cannot sign a clinical act. Enter your own staff
+      ID." Nothing is signed.
+- [ ] ` NURSE-A ` (capitals, spaces) signs as nurse-a: staff IDs are compared without case or surrounding spaces.
+
+**Measurement 4 — the next nurse (0 extra acts).** Straight after nurse-a's act, nurse-b steps up, types her own
+ID and passphrase and signs. Count every act she makes beyond those of Measurement 3 (target 0: no log-out, no
+log-in). Then relaunch with `--key-hold-seconds 900` (a personal workstation) and repeat:
+
+- [ ] nurse-a signs once; "Signed in for the next act: nurse-a." shows and the *Lock* button appears; her next act
+      needs no credential.
+- [ ] nurse-b types her own credential: the act is signed by nurse-b (check with `medication-list`), and the line
+      then names nurse-b.
+- [ ] *Lock*: the line clears; the next act with an empty strip says "Enter your staff ID and passphrase to sign."
+- [ ] The hold runs out: sign as nurse-a with `--key-hold-seconds 60`, wait past a minute with no act, and the
+      "Signed in …" line goes by itself within about 10 s (the lock poll); the next empty-strip act asks for a
+      credential.
+
+**Measurement 5 — the back-off, read aloud.** With VoiceOver on, sign as nurse-a with a wrong passphrase, four
+times. Tries 1–3 say "… That passphrase is not right." Try 4 says "That passphrase is not right. Wait 1 s, then
+try again." A press inside that wait says "Too many tries. Wait 1 s, then try again." and does not count as a
+failure. Then the right passphrase, after the wait, signs. Confirm:
+
+- [ ] VoiceOver reads each sentence once, whole, from the outcome line, and the wait is said in whole seconds.
+- [ ] No sentence, on screen or spoken, contains the passphrase.
+- [ ] Record whether the Staff ID had to be retyped after each refusal (on a hold of 0 it is cleared with the
+      passphrase): every retype is a paper-parity cost to note.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The lock screen, the strip and the enrol form are reachable and complete by keyboard alone.
+- [ ] *Staff ID*, *Passphrase*, *Terminal passphrase* and each enrol field are announced by their labels.
+- [ ] Enter in the strip does not submit anything (it has no submit of its own); the act is the write button.
+- [ ] "Signed in for the next act: …" is announced when it appears, and nothing takes focus on its own.
+- [ ] The hint: typing a Staff ID and leaving the field shows "Your hint: …" for a member who set one.
+
+**What could not be run here.** The window gestures, the stopwatch figures and the VoiceOver pass need the window
+and a human. The console verbs and the release door's answers (`wrong`, `refused-purpose`) were run against a
+throwaway database on 2026-10-31. `TEMPLATE.md` carries a matching block (*Sign in and sign*).
