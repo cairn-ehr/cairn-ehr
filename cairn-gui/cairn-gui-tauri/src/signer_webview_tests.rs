@@ -39,8 +39,8 @@ fn every_write_sends_the_credential_and_clears_the_passphrase_both_ways() {
         let invoke = position(body, "invoke(");
         let catch = position(body, "catch (failure) {");
         assert!(
-            body[invoke..catch].contains("clearSigner();"),
-            "{file} {name} must clear the strip when the act comes back: {body}"
+            body[invoke..catch].contains("clearSigner(true);"),
+            "{file} {name} must clear the strip (and remember the signer) when the act is signed: {body}"
         );
         assert!(
             body[catch + "catch (failure) {".len()..]
@@ -140,4 +140,36 @@ fn the_old_unlock_hint_and_form_are_gone() {
             assert!(!text.contains(gone), "{name} still has `{gone}`");
         }
     }
+}
+
+/// Fix round 1 (M1-M4): the page starts locked, the lock takes focus, a write refreshes the lock
+/// state at once, and only a signed act enters the recent-signers list.
+#[test]
+fn the_page_starts_locked_and_a_write_refreshes_the_lock_state() {
+    assert!(
+        INDEX_HTML.contains("<main inert>"),
+        "main starts inert (M1)"
+    );
+    let lock = js_fn(SIGNER_JS, "setTerminalLocked");
+    assert!(
+        lock.contains("el(\"terminal-passphrase\").focus();"),
+        "{lock}"
+    );
+    let clear = js_fn(SIGNER_JS, "clearSigner");
+    assert!(clear.contains("void pollLock();"), "{clear}");
+    assert!(
+        clear.contains("if (signed) rememberSigner(el(\"staff-id\").value);"),
+        "{clear}"
+    );
+    assert!(
+        position(&clear, "rememberSigner(") < position(&clear, "el(\"staff-id\").value = \"\";"),
+        "remembered before it is cleared"
+    );
+    let hint = js_fn(SIGNER_JS, "showSignerHint");
+    assert!(
+        !hint.contains("rememberSigner"),
+        "a typo never enters the list: {hint}"
+    );
+    let verdicts = js_fn(SIGNER_JS, "tryTerminalUnlock");
+    assert!(verdicts.contains("\"fault\""), "{verdicts}");
 }

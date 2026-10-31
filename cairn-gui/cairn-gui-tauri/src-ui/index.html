@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <main>
+    <main inert>
       <!-- Whether this node may write at all (asked at boot and after a search that succeeded while it warns, #654, #882), or why the window could
            not start. Above everything, because it qualifies every act on both surfaces. -->
       <p id="provisioning" role="status" hidden></p>
@@ -259,7 +259,7 @@
       <form id="terminal-form">
         <h2>This terminal is locked</h2>
         <label for="terminal-passphrase">Terminal passphrase</label>
-        <input id="terminal-passphrase" type="password" autocomplete="off" />
+        <input id="terminal-passphrase" type="password" autocomplete="off" autofocus />
         <button type="submit">Unlock</button>
         <p id="terminal-status" role="status" aria-live="polite" hidden></p>
       </form>

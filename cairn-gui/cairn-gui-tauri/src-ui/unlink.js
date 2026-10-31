@@ -204,7 +204,7 @@ async function unlinkCompared() {
         standing: sent.standing,
         credential: signerCredential(),
       });
-      clearSigner();
+      clearSigner(true);
     } catch (failure) {
       clearSigner();
       await showUnlinkFailure(sent, token, failure);
@@ -238,7 +238,7 @@ async function confirmCompared() {
         standing: sent.standing,
         credential: signerCredential(),
       });
-      clearSigner();
+      clearSigner(true);
     } catch (failure) {
       clearSigner();
       await showUnlinkFailure(sent, token, failure);

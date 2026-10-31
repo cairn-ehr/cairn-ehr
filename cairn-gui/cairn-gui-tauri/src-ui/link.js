@@ -339,7 +339,7 @@ async function sendJudgement(command) {
       otherCharts: sent.otherCharts,
       credential: signerCredential(),
     });
-    clearSigner();
+    clearSigner(true);
     const place = linkAnswerPlace(sent, token);
     // Recorded: the clinician now holds what their own act left (`charts_after`; null when it
     // changed no set), so no re-read announces their own link back to them (#797).

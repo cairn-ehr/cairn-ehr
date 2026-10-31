@@ -224,7 +224,7 @@ async function withhold(groupId, reason, kind, local) {
       charts: renderedCharts,
       credential: signerCredential(),
     });
-    clearSigner();
+    clearSigner(true);
   } catch (failure) {
     clearSigner();
     say("Could not withhold this drug: " + failureText(failure));
@@ -255,7 +255,7 @@ async function release(groupId, withholds, reason) {
       charts: renderedCharts,
       credential: signerCredential(),
     });
-    clearSigner();
+    clearSigner(true);
   } catch (failure) {
     clearSigner();
     say("Could not release this hold: " + failureText(failure));

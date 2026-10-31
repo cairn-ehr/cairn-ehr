@@ -177,6 +177,20 @@ pub enum TerminalUnlock {
     /// No terminal passphrase is enrolled yet: the screen says so rather than leaving an
     /// installer locked out with no explanation.
     NotSet,
+    /// The node could not be asked (lost connection, failed read). NOT a wrong passphrase: the
+    /// operator must not conclude they forgot one they typed correctly.
+    Fault,
+}
+
+/// Pure: the verdict for a PHC read that may have failed. A failure is `Fault`, never `Wrong`.
+pub fn terminal_read_verdict<E>(
+    read: Result<Option<String>, E>,
+    passphrase: &str,
+) -> TerminalUnlock {
+    match read {
+        Ok(phc) => terminal_verdict(phc.as_deref(), passphrase),
+        Err(_) => TerminalUnlock::Fault,
+    }
 }
 
 /// Pure: the verdict for `passphrase` against the node's terminal PHC, if one is set.
@@ -191,8 +205,8 @@ pub fn terminal_verdict(phc: Option<&str>, passphrase: &str) -> TerminalUnlock {
 }
 
 /// Does `passphrase` open this terminal (the shared staff passphrase, screensaver-style, spec
-/// §5.4)? The lock screen itself is the webview's; this only answers. `Wrong` in fixture mode
-/// and when the PHC cannot be read (detail to stderr); `NotSet` when none is enrolled.
+/// §5.4)? The lock screen itself is the webview's; this only answers. `Wrong` in fixture mode;
+/// `Fault` when the PHC cannot be read (detail to stderr); `NotSet` when none is enrolled.
 #[tauri::command]
 pub async fn terminal_unlock(
     state: tauri::State<'_, AppState>,
@@ -216,13 +230,10 @@ pub async fn terminal_unlock_impl(
             .map(|row| row.get::<_, Option<String>>(0))
             .map_err(|e| db.explain(e.into())),
     };
-    match phc {
-        Ok(phc) => terminal_verdict(phc.as_deref(), &passphrase),
-        Err(e) => {
-            eprintln!("the terminal passphrase could not be read: {e:#}");
-            TerminalUnlock::Wrong
-        }
+    if let Err(e) = &phc {
+        eprintln!("the terminal passphrase could not be read: {e:#}");
     }
+    terminal_read_verdict(phc, &passphrase)
 }
 
 /// What one sign-off gesture did — and, just as important, what it did not do.

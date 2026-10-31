@@ -389,7 +389,7 @@ async function signOff() {
       charts: renderedCharts,
       credential: signerCredential(),
     });
-    clearSigner();
+    clearSigner(true);
   } catch (failure) {
     clearSigner();
     // `failureText` reads the ErrorView's text. Since #818 an interrupted commit returns a report,
@@ -415,7 +415,7 @@ async function cease(groupId, reason) {
       charts: renderedCharts,
       credential: signerCredential(),
     });
-    clearSigner();
+    clearSigner(true);
   } catch (failure) {
     clearSigner();
     say("Could not stop this drug: " + failureText(failure));

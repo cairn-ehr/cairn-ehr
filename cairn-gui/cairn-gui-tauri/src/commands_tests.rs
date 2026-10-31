@@ -425,3 +425,21 @@ fn the_terminal_verdict_tells_not_set_from_wrong() {
     assert_eq!(words(TerminalUnlock::Wrong), "\"wrong\"");
     assert_eq!(words(TerminalUnlock::NotSet), "\"not-set\"");
 }
+
+/// A node fault while reading the terminal PHC is NOT a wrong passphrase: the operator would
+/// retype a correct passphrase and conclude they had forgotten it. It gets its own word.
+#[test]
+fn a_failed_phc_read_is_a_fault_never_wrong() {
+    let fault: Result<Option<String>, ()> = Err(());
+    assert_eq!(
+        terminal_read_verdict(fault, "anything"),
+        TerminalUnlock::Fault
+    );
+    assert_eq!(
+        serde_json::to_string(&TerminalUnlock::Fault).unwrap(),
+        "\"fault\""
+    );
+    let phc = cairn_node::vault::terminal_phc("shared pass").unwrap();
+    let read: Result<Option<String>, ()> = Ok(Some(phc));
+    assert_eq!(terminal_read_verdict(read, "other"), TerminalUnlock::Wrong);
+}

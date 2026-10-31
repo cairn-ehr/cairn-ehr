@@ -29,13 +29,18 @@ function signerCredential() {
 /**
  * Called after EVERY write comes back, success and refusal alike: a typed passphrase never stays
  * on screen for the next person. The staff ID stays only while the window holds that person's key.
+ * `signed` is true on the success path: the ID then joins the type-ahead list.
  */
-function clearSigner() {
+function clearSigner(signed) {
+  // Only a SIGNED act enters the recent list, so a typo never does (shared terminal).
+  if (signed) rememberSigner(el("staff-id").value);
   el("signer-passphrase").value = "";
   if (!heldBy) {
     el("staff-id").value = "";
     setMessage(el("signer-hint"), "");
   }
+  // Refresh the lock state at once, so "Signed in for the next act" and `heldBy` are current.
+  void pollLock();
 }
 
 /** Remember an ID for the type-ahead list (most recent first, at most 10, this session only). */
@@ -71,6 +76,7 @@ function renderSigner(lock) {
 function setTerminalLocked(locked) {
   el("terminal-lock").hidden = !locked;
   document.querySelector("main").inert = locked;
+  if (locked) el("terminal-passphrase").focus();
 }
 
 async function tryTerminalUnlock(event) {
@@ -80,7 +86,7 @@ async function tryTerminalUnlock(event) {
   try {
     verdict = await invoke("terminal_unlock", { passphrase: field.value });
   } catch (e) {
-    verdict = "fault";
+    verdict = "fault"; // the call itself failed: said as a fault, never as a wrong passphrase
   }
   field.value = "";
   if (verdict === "unlocked") {
@@ -96,13 +102,12 @@ async function tryTerminalUnlock(event) {
       ? NOT_SET_SENTENCE
       : verdict === "wrong"
         ? "That passphrase is not right."
-        : "The terminal could not be unlocked. Try again.",
+        : "The terminal could not be unlocked. Try again.", // "fault", or the call itself failed
   );
 }
 
 async function showSignerHint() {
   const staffId = el("staff-id").value;
-  rememberSigner(staffId);
   let hint = null;
   if (staffId.trim() !== "") {
     try {
