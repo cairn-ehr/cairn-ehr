@@ -43,7 +43,7 @@ impl AppState {
             shown: tokio::sync::Mutex::new(Default::default()),
             // Nothing is held in fixture mode: there is no vault to release a key from.
             key_hold: std::time::Duration::ZERO,
-            session: tokio::sync::Mutex::new(None),
+            session: tokio::sync::Mutex::new(Default::default()),
         }
     }
 

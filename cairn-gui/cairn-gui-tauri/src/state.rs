@@ -118,12 +118,14 @@ pub struct SessionKey {
 }
 
 impl SessionKey {
+    /// `staff_id` is trimmed of spaces for display, and only of spaces: case and Unicode
+    /// normalisation live in SQL alone (`cairn_vault_staff_id`, R7).
     pub fn new(sk: cairn_event::SigningKey, staff_id: String, now: Now) -> Self {
         let kid = hex::encode(sk.verifying_key().to_bytes());
         Self {
             seed: Zeroizing::new(sk.to_bytes()),
             kid,
-            staff_id,
+            staff_id: staff_id.trim_matches(' ').to_string(),
             last_activity: now,
         }
     }
@@ -172,6 +174,38 @@ impl SessionKey {
     }
 }
 
+/// The held key, plus a generation counter that closes the wrong-author race.
+///
+/// `signer_for_act` releases the session lock while the vault checks a passphrase. Without the
+/// counter, a Lock pressed in that moment (or a second credentialed press) would be undone when
+/// the slower release finished and stored its key: the next act with no credential would sign
+/// as someone who had locked the terminal. Every wipe bumps the generation; a release stores its
+/// key only if no wipe has happened since its own.
+#[derive(Default)]
+pub struct Held {
+    pub key: Option<SessionKey>,
+    generation: u64,
+}
+
+impl Held {
+    /// Wipe the held key, and return the generation a later [`Held::store_if_current`] must
+    /// still see.
+    pub fn wipe(&mut self) -> u64 {
+        self.key = None;
+        self.generation += 1;
+        self.generation
+    }
+
+    /// Pure: hold `key` only if nothing has wiped since `seen`. Returns whether it was held.
+    pub fn store_if_current(&mut self, seen: u64, key: SessionKey) -> bool {
+        if self.generation != seen {
+            return false;
+        }
+        self.key = Some(key);
+        true
+    }
+}
+
 /// Everything a command needs. One database connection, because a single-patient window
 /// has no concurrency worth pooling for, and the mutex makes the borrow rules explicit.
 pub struct AppState {
@@ -202,7 +236,7 @@ pub struct AppState {
     /// How long a released key is held for the next act (`--key-hold-seconds`, at most
     /// `IDLE_TIMEOUT`). Zero, the default, holds nothing: every act carries a credential.
     pub key_hold: Duration,
-    pub session: tokio::sync::Mutex<Option<SessionKey>>,
+    pub session: tokio::sync::Mutex<Held>,
 }
 
 impl AppState {
@@ -220,14 +254,16 @@ impl AppState {
     /// The ONE place a stale key can be reached from: both accessors below go through it,
     /// so there is no path that reads a held key without first asking whether it should
     /// still be held.
-    async fn expire_if_idle(&self, now: Now) -> tokio::sync::MutexGuard<'_, Option<SessionKey>> {
+    async fn expire_if_idle(&self, now: Now) -> tokio::sync::MutexGuard<'_, Held> {
         let mut guard = self.session.lock().await;
         if guard
+            .key
             .as_ref()
             .is_some_and(|k| k.is_expired(now, self.key_hold))
         {
-            // Dropping the SessionKey drops its Zeroizing seed, which wipes it.
-            *guard = None;
+            // Dropping the SessionKey drops its Zeroizing seed, which wipes it. No generation
+            // bump: expiry cannot race a release, which brings a NEW key.
+            guard.key = None;
         }
         guard
     }
@@ -240,6 +276,7 @@ impl AppState {
     pub async fn key_status(&self, now: Now) -> Option<String> {
         self.expire_if_idle(now)
             .await
+            .key
             .as_ref()
             .map(|k| k.staff_id.clone())
     }
@@ -256,7 +293,11 @@ impl AppState {
     ///    and the lock poll must not wait on it). A fault's detail goes to stderr, explained
     ///    through the connection guard so a cut-off says so (#893); the clinician gets
     ///    [`KeyRefusal::Fault`], which carries no database text.
-    /// 4. The released key is held for the next act only on a terminal with a key hold.
+    /// 4. The released key is held for the next act only on a terminal with a key hold, and
+    ///    only if no Lock or newer press wiped the slot while the vault was checking
+    ///    ([`Held::store_if_current`]).
+    ///
+    /// An all-empty credential (both fields blank) counts as none, so it never wipes a hold.
     ///
     /// In fixture mode there is no vault: no key can be held, so this is `NeedCredential`
     /// without a credential and `Fault` with one. Every mock write is refused before it asks.
@@ -265,18 +306,19 @@ impl AppState {
         credential: Option<Credential>,
         now: Now,
     ) -> Result<(cairn_event::SigningKey, String), KeyRefusal> {
-        let credential = {
+        let credential = credential.filter(|c| !c.is_blank());
+        let (credential, seen) = {
             let mut held = self.expire_if_idle(now).await;
-            match decide(held.as_ref(), credential.as_ref(), self.key_hold, now) {
+            match decide(held.key.as_ref(), credential.as_ref(), self.key_hold, now) {
                 HeldDecision::UseHeld => {
-                    let key = held.as_mut().ok_or(KeyRefusal::NeedCredential)?;
+                    let key = held.key.as_mut().ok_or(KeyRefusal::NeedCredential)?;
                     key.touch(now);
                     return Ok((key.signing_key(), key.kid.clone()));
                 }
                 HeldDecision::NeedCredential => return Err(KeyRefusal::NeedCredential),
                 HeldDecision::Release => {
-                    *held = None;
-                    credential.ok_or(KeyRefusal::NeedCredential)?
+                    let seen = held.wipe();
+                    (credential.ok_or(KeyRefusal::NeedCredential)?, seen)
                 }
             }
         };
@@ -304,18 +346,23 @@ impl AppState {
             }
         };
         if !self.key_hold.is_zero() {
-            *self.session.lock().await = Some(SessionKey::new(
-                cairn_event::SigningKey::from_bytes(&Zeroizing::new(key.to_bytes())),
-                credential.staff_id.clone(),
-                now,
-            ));
+            // Not held if a Lock or a newer press wiped the slot meanwhile; this act still signs.
+            self.session.lock().await.store_if_current(
+                seen,
+                SessionKey::new(
+                    cairn_event::SigningKey::from_bytes(&Zeroizing::new(key.to_bytes())),
+                    credential.staff_id.clone(),
+                    now,
+                ),
+            );
         }
         Ok((key, kid))
     }
 
     /// Wipe the held key now — the window's explicit Lock.
     pub async fn forget_held_key(&self) {
-        *self.session.lock().await = None;
+        // A wipe, so a release still in flight does not re-store its key afterwards.
+        self.session.lock().await.wipe();
     }
 }
 
@@ -329,7 +376,7 @@ mod tests {
         let mut state = AppState::mock(None);
         // A personal workstation's longest hold: the timing tests below are about it.
         state.key_hold = IDLE_TIMEOUT;
-        *state.session.try_lock().expect("uncontended") = session;
+        state.session.try_lock().expect("uncontended").key = session;
         state
     }
 
@@ -473,9 +520,70 @@ mod tests {
         assert!(state.key_status(start).await.is_some());
         assert!(state.key_status(start.plus(IDLE_TIMEOUT)).await.is_none());
         assert!(
-            state.session.lock().await.is_none(),
+            state.session.lock().await.key.is_none(),
             "the expired key must be WIPED by the check, not merely reported as expired"
         );
+    }
+
+    /// Fix round 1 (the wrong-author race): a release still in flight when Lock is pressed must
+    /// NOT store its key. Otherwise the next act with no credential signs as her.
+    #[test]
+    fn a_lock_between_the_wipe_and_the_store_drops_the_released_key() {
+        let now = Now::read();
+        let mut held = Held::default();
+        let seen = held.wipe();
+        held.wipe(); // Lock (`forget_held_key`) while the vault is still checking.
+        assert!(!held.store_if_current(seen, SessionKey::for_test(now)));
+        assert!(held.key.is_none());
+    }
+
+    /// Two credentialed presses overlapping: the LAST TYPED wins, never the last to finish.
+    #[test]
+    fn a_newer_release_outranks_an_older_one_that_finishes_later() {
+        let now = Now::read();
+        let mut held = Held::default();
+        let first = held.wipe();
+        let second = held.wipe();
+        let mut newer = SessionKey::for_test(now);
+        newer.staff_id = "apark".into();
+        assert!(held.store_if_current(second, newer));
+        assert!(!held.store_if_current(first, SessionKey::for_test(now)));
+        assert_eq!(
+            held.key.as_ref().map(|k| k.staff_id.as_str()),
+            Some("apark")
+        );
+    }
+
+    /// With nothing interleaved, the released key is held.
+    #[test]
+    fn an_uninterrupted_release_is_held() {
+        let mut held = Held::default();
+        let seen = held.wipe();
+        assert!(held.store_if_current(seen, SessionKey::for_test(Now::read())));
+        assert!(held.key.is_some());
+    }
+
+    /// `held_by` shows the staff ID without the spaces a keyboard left around it. Spaces only:
+    /// case and Unicode normalisation live in SQL alone (`cairn_vault_staff_id`, R7).
+    #[test]
+    fn the_held_staff_id_is_trimmed_of_spaces_only() {
+        let key = SessionKey::for_test(Now::read());
+        let held = SessionKey::new(key.signing_key(), " JSmith ".into(), Now::read());
+        assert_eq!(held.staff_id, "JSmith");
+    }
+
+    /// An all-empty credential is no credential: a webview sending empty fields never wipes a
+    /// hold, and the held key still serves.
+    #[tokio::test]
+    async fn an_all_empty_credential_keeps_the_hold() {
+        let now = Now::read();
+        let state = state_holding(Some(SessionKey::for_test(now)));
+        let blank = Credential {
+            staff_id: "  ".into(),
+            passphrase: Zeroizing::new(" ".into()),
+        };
+        assert!(state.signer_for_act(Some(blank), now).await.is_ok());
+        assert!(state.session.lock().await.key.is_some());
     }
 
     /// Review focus 2, at the seam: a typed credential wipes the held key BEFORE the vault
@@ -493,7 +601,7 @@ mod tests {
             state.signer_for_act(Some(credential), now).await.err(),
             Some(KeyRefusal::Fault)
         );
-        assert!(state.session.lock().await.is_none());
+        assert!(state.session.lock().await.key.is_none());
         assert_eq!(
             state.signer_for_act(None, now).await.err(),
             Some(KeyRefusal::NeedCredential)

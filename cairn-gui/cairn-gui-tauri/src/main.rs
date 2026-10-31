@@ -176,6 +176,6 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         funnel: tokio::sync::Mutex::new(cairn_gui_funnel::FunnelSession::new()),
         shown: tokio::sync::Mutex::new(Default::default()),
         key_hold: cli.key_hold_seconds,
-        session: tokio::sync::Mutex::new(None),
+        session: tokio::sync::Mutex::new(Default::default()),
     })
 }

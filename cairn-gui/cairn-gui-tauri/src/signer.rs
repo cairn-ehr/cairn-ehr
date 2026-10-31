@@ -40,6 +40,14 @@ pub struct Credential {
     pub passphrase: Zeroizing<String>,
 }
 
+impl Credential {
+    /// Both fields empty once spaces are trimmed: a webview that sent its empty strip. Treated
+    /// as NO credential, so it never wipes a held key (`AppState::signer_for_act`).
+    pub fn is_blank(&self) -> bool {
+        self.staff_id.trim_matches(' ').is_empty() && self.passphrase.trim_matches(' ').is_empty()
+    }
+}
+
 /// Written by hand so a `{:?}` anywhere (a panic, a log line) can never print the passphrase.
 impl std::fmt::Debug for Credential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

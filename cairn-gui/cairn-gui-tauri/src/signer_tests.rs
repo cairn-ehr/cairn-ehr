@@ -224,3 +224,17 @@ fn key_hold_is_capped_at_the_idle_timeout() {
         "the default is a shared terminal"
     );
 }
+
+/// Fix round 1: empty fields (after trimming spaces) are no credential at all; anything typed
+/// in either field is one.
+#[test]
+fn an_all_empty_credential_is_no_credential() {
+    let typed = |id: &str, pass: &str| Credential {
+        staff_id: id.into(),
+        passphrase: Zeroizing::new(pass.into()),
+    };
+    assert!(typed("", "").is_blank());
+    assert!(typed("  ", " ").is_blank());
+    assert!(!typed("jsmith", "").is_blank());
+    assert!(!typed("", &test_passphrase()).is_blank());
+}
