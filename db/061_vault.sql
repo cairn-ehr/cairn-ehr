@@ -104,7 +104,7 @@ $$;
 -- enrolled. One home, so the CHECK and the lookups can never disagree (durable-rules trap 16).
 -- COLLATE pg_unicode_fast (trap 17): a bare lower() follows the cluster's collation, which differs
 -- between ICU and libc builds for non-ASCII letters; this pins full Unicode case mapping on every
--- node — the same mapping Rust's `to_lowercase` uses for the address twin. Pure.
+-- node. Pure.
 CREATE OR REPLACE FUNCTION cairn_vault_staff_id(p_staff_id text)
 RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT lower(btrim(p_staff_id) COLLATE pg_unicode_fast);

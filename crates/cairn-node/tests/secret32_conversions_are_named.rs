@@ -124,7 +124,7 @@ const INVENTORY: &[(&str, usize, &str)] = &[
         1,
         "`mint_sealed` wraps a FRESHLY GENERATED human clinician's Ed25519 signing seed \
          (`generate_key()`) so it can be sealed under THAT human's vault passphrase — the seed is \
-         stored AS a seed, the same shape as `generate_sealed`'s conversion (1) above, no role \
+         stored AS a seed, the same shape as conversion (1), `generate_sealed`, in the `cairn-keystore/src/keystore.rs` entry below, no role \
          crossed. It is not the ADR-0066 coupling: the seed is never this node's signing seed, and \
          it never becomes an unwrap secret — the unwrap secret is a separate, freshly generated \
          value that this file never touches",

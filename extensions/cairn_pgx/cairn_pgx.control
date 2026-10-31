@@ -1,4 +1,4 @@
-comment = 'Cairn in-database verify gate — COSE_Sign1/Ed25519 event verification (Spike 0002)'
+comment = 'Cairn in-database primitives: the COSE_Sign1/Ed25519 event verify gate (Spike 0002) and the clinician key-vault unseal (cairn_vault_unseal, db/061)'
 default_version = '0.4.0'
 module_pathname = '$libdir/cairn_pgx'
 relocatable = false
