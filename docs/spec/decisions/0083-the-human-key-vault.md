@@ -52,13 +52,16 @@ has to live somewhere other than a file on one machine. Four questions follow, a
   bind them. And **today's window connects as the owner**: it loads the schema at launch with the same connection
   string it then works on, and it does not switch to `cairn_agent`. So the promise holds against the runtime role
   and against a client given only that role, not yet against a modified window. Running the window as a role that
-  is only `cairn_agent` is owed (a follow-up issue). Until then this is the same interim boundary as decision 3: the
+  is only `cairn_agent` is owed ([#898](https://github.com/cairn-ehr/cairn-ehr/issues/898)). Until then this is the same interim boundary as decision 3: the
   window is trusted code.
 - Nothing syncs the vault. No sync, capture or export code reads these tables. The keys stay on the node whose
   database the window is connected to. In the interim deployment (decision 3) that is the facility node.
 
 Why it matters: a sealed blob that leaves the database is an offline brute-force target, where no back-off can
-reach the guesser. While it stays inside, every guess goes through the back-off.
+reach the guesser. While it stays inside, every guess goes through the back-off, for every connection that is only
+`cairn_agent`. Two things stand outside that today: the window connects as the owner, which can read the blobs
+([#898](https://github.com/cairn-ehr/cairn-ehr/issues/898)), and over a remote link with `NoTls` the passphrase and
+seed travel in clear ([#899](https://github.com/cairn-ehr/cairn-ehr/issues/899)).
 
 ### 2. The vault is not in any backup, and after a disk loss every clinician needs a new key
 
@@ -78,9 +81,10 @@ weak, so that is a real attack. The vault therefore stays out of backups.
   restore today:
   - the actor registry comes back with every clinician's old public key, and the vault comes back empty, so
     nobody can sign through the window;
-  - enrolling the same person again with the same role and the staff ID written as before is **refused** by the
-    registry's fail-closed guard (ADR-0044). The `actor_id` is computed from the pinned set, which holds the role
-    and the staff ID (decision 6), and the restored registry already binds that `actor_id` to the lost key;
+  - enrolling the same person again with the same role and staff ID is **refused** by the registry's fail-closed
+    guard (ADR-0044), whatever the staff ID's case or surrounding spaces. The `actor_id` is computed from the pinned
+    set, which holds the role and the normalised staff ID (decision 6), and the restored registry already binds that
+    `actor_id` to the lost key;
   - so the only path today is to enrol each person under a **new** staff ID. That makes a new actor, and the link
     between them and what their old key signed is lost. This is one reason for the design's rule that there is
     **no real clinical use before slice 2**.
@@ -95,9 +99,13 @@ the window, which builds the signing key and checks that it matches the key ID i
 refused, never signed with). The window signs the act and then drops the key, unless the terminal holds keys
 (decision 8).
 
-This is a stated interim, not the end state. It is acceptable for now because the window already holds the **node's
-own** signing key (`--key`), which has custody of every sealed body. A clinician's seed in the same process is no
-wider than a boundary we already accept.
+This is a stated interim, not the end state, and it is **wider** than the boundary the window already had. The
+window holds the **node's own** signing key (`--key`), which has custody of every sealed body. Custody is not human
+authorship: the node key alone never let anyone sign as a clinician. Owner access to the vault, which the window has
+today ([#898](https://github.com/cairn-ehr/cairn-ehr/issues/898)), is a path to exactly that: the owner can read
+every sealed blob, and any clinician whose passphrase falls to an offline guess against their blob can then be
+signed for. The interim is tolerable for slice 1 only because the design allows **no real clinical use before
+slice 2** (see "Not yet guaranteed" under Consequences).
 
 **Slice 5 owes an in-database signer.** Every human signature now goes through the `cairn_event::EventSigner` trait.
 A signer whose key never leaves the database must be a new implementation of that trait, not a rewrite of every
@@ -110,8 +118,8 @@ Two more facts belong to this interim, and the in-database signer must cover the
   member's passphrase never reaches the database, but it and the fresh seed are briefly in the window's memory.
 - **The connection is not encrypted.** The node's connection code opens PostgreSQL connections with `NoTls`. A
   window on the same machine as the node uses a local socket, which is fine. A window on another machine sends the
-  passphrase, and receives the seed, in clear over the network. Until the connection carries TLS (a follow-up
-  issue), a terminal on another machine must reach the node only over an encrypted link, such as a VPN tunnel.
+  passphrase, and receives the seed, in clear over the network. Until the connection carries TLS
+  ([#899](https://github.com/cairn-ehr/cairn-ehr/issues/899)), a terminal on another machine must reach the node only over an encrypted link, such as a VPN tunnel.
 
 ### 4. Every guess is counted, before anything is revealed, and the wait never becomes a lock-out
 
@@ -135,6 +143,11 @@ Two more facts belong to this interim, and the in-database signer must cover the
   power cut would wake up with about 32 phantom failures: made to wait up to 300 s with the right passphrase. The
   door sets the exact next value with `setval`, which logs that value exactly, so recovery replays exactly the
   attempts that were counted.
+- **A clock stepped back never locks anyone out.** The last attempt is stamped with the wall clock. If the clock is
+  then stepped back (an NTP correction, a dead clock battery after a power cut), that stamp lies in the future and
+  the time since the attempt is unknown. The door then checks the guess rather than wait an unknown time, and
+  restamps the clock at now, so the back-off resumes from that attempt. A guesser gains at most one guess per
+  backward step (`a_clock_stepped_back_never_locks_out`).
 - **A missing attempt row fails closed.** The `vault_attempt` row is both the lock and the success mark. A member
   without one (only a hand `DELETE` can do that) could not be backed off, so the door answers `unknown`, unseals
   nothing and writes nothing.
@@ -145,6 +158,12 @@ Two more facts belong to this interim, and the in-database signer must cover the
 - **The residual, stated plainly.** A raw-SQL client that calls the door and then keeps its transaction open holds
   that row lock, and delays that one member's next sign-in until it lets go. That is a denial of service by someone
   who already holds the runtime role. It is never a way around the count.
+- **Whose guesses these are.** Everything above binds a guess made through the release door, which is every guess
+  from a connection that is only `cairn_agent`. A connection that can read `vault_member.sealed` can guess offline,
+  where no count reaches: the window today connects as the owner
+  ([#898](https://github.com/cairn-ehr/cairn-ehr/issues/898)), and so does anyone holding a copy of the database
+  (decision 2). And over a remote link with `NoTls` the passphrase itself travels in clear
+  ([#899](https://github.com/cairn-ehr/cairn-ehr/issues/899)).
 
 ### 5. The passphrase is never in an error or a log line, as far as Cairn controls it
 
@@ -168,20 +187,21 @@ Two more facts belong to this interim, and the in-database signer must cover the
 `cairn_vault_staff_id(x)` is `lower(btrim(x))`, with the `pg_unicode_fast` collation pinned so every node maps case
 the same way. The table's CHECK, the enrolment address and every lookup call it, so `" JSmith "` typed at a terminal
 finds the `jsmith` who was enrolled. There is no Rust copy of this rule: the Rust code asks the database for the
-enrolment address instead of computing it. (The window trims spaces from the enrol form's fields before it sends
+enrolment address and the normalised staff ID instead of computing them. (The window trims spaces from the enrol form's fields before it sends
 them, which the database rule then does again; case is only ever folded in SQL.)
 
-One thing is **not** normalised: the person-distinguishing determinant in the new actor's pinned set is the staff ID
-as it was typed (trimmed, case kept). So the `actor_id` depends on how the staff ID was written at enrolment, while
-the vault compares it case-blind.
+The new actor's pinned set follows the same rule. It is exactly `{role, handle}`, and its person-distinguishing
+determinant, `handle`, is the normalised staff ID: `cairn_node::vault` reads it back from `cairn_vault_staff_id`, and
+both enrol doors rebuild the set themselves and refuse any other (another handle, an extra determinant, or a handle
+that is not normalised). So `Boss` and `boss` are one actor, and a case variant can never mint a second actor for one person.
 
 ### 7. The superuser enrols people and signs nothing clinical
 
 - A **superuser** is a vault member whose role is `superuser`. The role administers the site. It confers no clinical
   authorship. A person who is both a clinician and a superuser has two members, with two staff IDs and two keys.
 - **Only a superuser can enrol, and the database checks it.** `cairn_vault_enrol` refuses unless the named superuser
-  is a member with role `superuser`, their key is a current (enrolled, not revoked) actor, the pinned role matches
-  the role being enrolled, and the request carries that superuser's attestation token over the enrolment address.
+  is a member with role `superuser`, their key is a current (enrolled, not revoked) actor, the pinned set is exactly
+  the one the door builds for this request (decision 6), and the request carries that superuser's attestation token over the enrolment address.
   The address is a sha2-256 over the normalised staff ID, the new key and the role (`cairn_vault_enrol_address`), so
   a token cannot be reused for another person, key or role. A database login alone is not enough: the window's own
   connection has one. (As in decision 1, this binds every role but the owner, who can write the tables directly.)
@@ -203,11 +223,13 @@ the vault compares it case-blind.
   released for `enrol` could use it to sign a clinical event, and the strict door would admit it, because the
   superuser is an enrolled, current actor. That event is honestly attributed to the superuser role-actor, so it is
   not impersonation of a clinician, but a superuser could chart as "superuser". Closing it needs the strict door to
-  refuse a `superuser` author on clinical event types, a db/005 change outside this slice (a follow-up issue).
+  refuse a `superuser` author on clinical event types, a db/005 change outside this slice
+  ([#900](https://github.com/cairn-ehr/cairn-ehr/issues/900)).
 - **Known gap: a client-built sealed blob sets its own unsealing cost.** `cairn_vault_enrol` stores the blob the
   client sends, and unsealing uses the Argon2 cost parameters written inside that blob. A hostile client holding a
   superuser's credential could file a blob whose cost exhausts a backend's memory when it is released. Bounding
-  those parameters in `cairn_vault_unseal` needs an extension release (a follow-up issue).
+  those parameters in `cairn_vault_unseal` needs an extension release
+  ([#901](https://github.com/cairn-ehr/cairn-ehr/issues/901)).
 
 ### 8. How long a key stays usable is a per-terminal setting
 
@@ -219,10 +241,14 @@ the vault compares it case-blind.
   next acts need no passphrase while they keep working (#288). (A whole-list sign-off is one press, and one
   credential, at any hold.) Using the key counts as activity; the window's own
   timer asking whether a key is held does not.
-- **A typed credential always wins.** It wipes any held key before the vault answers, so a mistyped passphrase never
+- **A typed passphrase always wins.** It wipes any held key before the vault answers, so a mistyped passphrase never
   leaves the last person's key signing the next act.
+- **A staff ID with no passphrase never reaches the vault**, where it would count as a wrong guess. On a terminal
+  with a hold the strip keeps the staff ID after each act, so the holder's own ID alone (spaces trimmed, otherwise
+  exact) signs with her live held key. Anyone else's ID alone wipes the held key and asks for a passphrase.
 - **A late release never puts a key back.** The window releases its session lock while the vault checks a
-  passphrase. A generation counter is bumped on every wipe (a typed credential, or the Lock button), and a release
+  passphrase. A generation counter is bumped on every wipe (a typed passphrase, another person's staff ID, or the Lock
+  button), and a release
   stores its key only if no wipe has happened since its own. So a Lock pressed while a release is in flight, or a
   newer signer's press, is never undone.
 
@@ -255,10 +281,20 @@ the vault compares it case-blind.
   per-member sequence DDL, and a lock held across an Argon2 check. The rules are pinned by tests wherever a test can hold them (`vault_floor.rs`,
   `vault_lib.rs`, the window's `signer_tests.rs`, `enrol_tests.rs` and `state.rs` tests), and
   `docs/developers/durable-rules.md` lists the ones a tidy-up must not undo, including one held only in review.
+- **Not yet guaranteed.** Until these close, the vault's promises hold only against a connection that is only
+  `cairn_agent`, which is why there is **no real clinical use before slice 2**:
+  - the window connects as the owner, so it can read every sealed blob and guess offline
+    ([#898](https://github.com/cairn-ehr/cairn-ehr/issues/898));
+  - a remote terminal's `NoTls` connection carries the passphrase and the seed in clear
+    ([#899](https://github.com/cairn-ehr/cairn-ehr/issues/899));
+  - a copy of the database an operator makes (`pg_dump`, a snapshot, a replica) carries the sealed blobs out of
+    reach of the back-off (decision 2).
 - **What we are betting on, and how we would know it failed.**
   - That the interim release is safe enough until slice 5. We would know it failed if a window process were
     compromised: it would see seeds as they are used, and, while it connects as the owner, could read every
-    sealed blob. The same compromise already gets the node's key.
+    sealed blob and guess at them offline. The same compromise gets the node's key, but that is custody of sealed
+    bodies, not human authorship: the vault is what would let it sign as any clinician whose passphrase falls to
+    an offline guess.
   - That no operator logs bind parameters for the window's role. A passphrase in a server log is that failure.
   - That a back-off capped at five minutes beats a lock-out. A successful online guess at a real passphrase would
     show it is not.
@@ -269,5 +305,8 @@ the vault compares it case-blind.
   - Slice 4: sealed emergency tokens and the emergency key.
   - Slice 5: the in-database signer (behind `EventSigner`), with key generation in the database too, and actor
     sync with specified nodes.
-  - Follow-up issues: the window running as the owner (decision 1), TLS on the window's connection (decision 3),
-    and the superuser-as-clinical-author gap and the Argon2 cost bound (decision 7).
+  - Follow-up issues: the window running as the owner, [#898](https://github.com/cairn-ehr/cairn-ehr/issues/898)
+    (decision 1); TLS on the window's connection, [#899](https://github.com/cairn-ehr/cairn-ehr/issues/899)
+    (decision 3); the superuser-as-clinical-author gap,
+    [#900](https://github.com/cairn-ehr/cairn-ehr/issues/900), and the Argon2 cost bound,
+    [#901](https://github.com/cairn-ehr/cairn-ehr/issues/901) (decision 7).

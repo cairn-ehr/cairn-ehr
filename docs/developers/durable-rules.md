@@ -27,18 +27,30 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   role → purpose BEFORE unsealing. Pins: `a_superuser_key_is_not_released_for_a_clinical_act`,
   `a_clinician_key_cannot_enrol`, `the_superuser_key_is_never_held` (enrolment bypasses `signer_for_act`, which may
   hold keys). The rule binds only at the vault: a client holding a released superuser key could still sign a
-  clinical event (ADR-0083 decision 7, a follow-up issue) — do not read the vault rule as the whole defence.
+  clinical event (ADR-0083 decision 7, #900) — do not read the vault rule as the whole defence.
 - **Never take a human `&SigningKey` in new code** — take `&dyn EventSigner` (`cairn_event::signer`). Slice 5's
   in-database signer is a new implementation of that trait; a call site typed on `SigningKey` is one more to rewrite.
-  Pin: none by test (the trait signatures on `sign`/`sign_attestation` and the orchestrators' `&dyn EventSigner`
-  fields); hold it in review.
+  Pins: `a_refusing_human_signer_seals_and_signs_nothing` (cairn-node; builds `AuthorParams` over a signer that is
+  not a `SigningKey`, so the field's type is a compile-time pin) and `a_refusing_signer_signs_nothing`
+  (cairn-event); a new `&SigningKey` parameter elsewhere is still held only in review.
 - **Count before unsealing, with `setval`, in the per-member sequences.** Moving the count after the unseal, into a
   table column, or to `nextval` re-opens a bypass (rollback) or a phantom-failure lock-out after a crash. A missing
   `vault_attempt` row answers `unknown`. Pins: `a_rolled_back_guess_still_counts`, `an_erroring_statement_still_counts`,
   `a_count_is_logged_exactly`, `a_missing_attempt_row_fails_closed`, `waiting_does_not_count_a_failure`.
 - **Staff-ID normalisation lives only in SQL** (`cairn_vault_staff_id`); Rust asks for the enrolment address
-  (`SELECT cairn_vault_enrol_address(…)`) rather than computing a twin. Pin: `release_normalises_the_staff_id`,
-  `staff_id_taken_normalises_and_answers`.
+  (`SELECT cairn_vault_enrol_address(…)`) and the pinned handle (`cairn_vault_staff_id`) rather than computing a
+  twin; both enrol doors rebuild the pinned set `{role, handle}` and refuse any other. Pins:
+  `release_normalises_the_staff_id`, `staff_id_taken_normalises_and_answers`,
+  `both_doors_refuse_a_pinned_set_they_did_not_build`, `a_case_variant_of_a_staff_id_mints_no_second_actor`.
+- **Never send an empty passphrase to the vault** (it is a counted wrong guess). `signer::decide` yields `Release`
+  only with a passphrase; a staff ID alone uses the holder's live key or forgets it. The strip keeps the ID on any
+  terminal with a hold (`keyHoldSecs`, not `heldBy`, which the post-act poll has not refreshed yet). **Tempting wrong
+  fix:** "simplify" `decide` back to "any credential means a release". Pins:
+  `an_empty_passphrase_is_never_sent_to_the_vault`, `a_staff_id_alone_never_asks_the_vault`,
+  `clear_signer_empties_the_passphrase_and_keeps_the_id_only_on_a_held_terminal`.
+- **A future last-attempt stamp is not a wait.** `cairn_vault_release` waits only when the stamp is not after now; a
+  clock stepped back would otherwise lock a member out for as long as it stepped. Pin:
+  `a_clock_stepped_back_never_locks_out`.
 - **A late release never re-stores a key** (`Held::store_if_current` and its generation; every wipe bumps it).
   Pins: `a_lock_between_the_wipe_and_the_store_drops_the_released_key` and its neighbours in `state.rs`;
   `a_new_signer_replaces_the_held_one`, `an_expired_hold_needs_a_credential`.

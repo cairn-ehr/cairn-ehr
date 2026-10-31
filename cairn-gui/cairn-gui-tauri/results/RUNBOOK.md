@@ -1038,8 +1038,10 @@ Then:
 ID and passphrase and signs. Count every act she makes beyond those of Measurement 3 (target 0: no log-out, no
 log-in). Then relaunch with `--key-hold-seconds 900` (a personal workstation) and repeat:
 
-- [ ] nurse-a signs once; "Signed in for the next act: nurse-a." shows and the *Lock* button appears; her next act
-      needs no credential.
+- [ ] nurse-a signs once; "Signed in for the next act: nurse-a." shows and the *Lock* button appears; her Staff ID
+      stays in the strip and her next act needs no passphrase.
+- [ ] nurse-b types only her Staff ID (no passphrase) and presses: "Enter your staff ID and passphrase to sign.";
+      the "Signed in …" line clears (nurse-a's key is forgotten).
 - [ ] nurse-b types her own credential: the act is signed by nurse-b (check with `medication-list`), and the line
       then names nurse-b.
 - [ ] *Lock*: the line clears; the next act with an empty strip says "Enter your staff ID and passphrase to sign."
