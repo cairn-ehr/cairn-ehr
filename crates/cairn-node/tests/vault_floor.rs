@@ -177,14 +177,29 @@ async fn release(c: &Client, staff_id: &str, passphrase: &str, purpose: &str) ->
     }
 }
 
-async fn failures(c: &Client, staff_id: &str) -> i32 {
+/// Failures since the last success, as the release door itself computes them (from the member's
+/// non-transactional attempt sequence and the transactional success mark).
+async fn failures(c: &Client, staff_id: &str) -> i64 {
     c.query_one(
-        "SELECT failures FROM vault_attempt WHERE staff_id = $1",
+        "SELECT failures FROM cairn_vault_attempt_state($1)",
         &[&staff_id],
     )
     .await
     .unwrap()
     .get(0)
+}
+
+/// The test seam for time: move a member's last-attempt clock to `offset_ms` from now (negative
+/// = in the past). The clock is a sequence, so this is `setval` on it, as the owner.
+async fn set_last_attempt(c: &Client, staff_id: &str, offset_ms: i64) {
+    c.query_one(
+        "SELECT setval(format('public.%I', cairn_vault_sequence_name(m.attempt_series_id, 'clock'))::regclass,
+                       (extract(epoch FROM clock_timestamp()) * 1000)::bigint + $2)
+           FROM vault_member m WHERE m.staff_id = $1",
+        &[&staff_id, &offset_ms],
+    )
+    .await
+    .unwrap();
 }
 
 fn db_message(e: &tokio_postgres::Error) -> String {
@@ -288,24 +303,14 @@ async fn waiting_does_not_count_a_failure() {
         release(&c, "jsmith", "not it", "clinical").await;
     }
     // Push the wait out so the test cannot race the 1-second first back-off.
-    c.execute(
-        "UPDATE vault_attempt SET next_allowed_at = clock_timestamp() + interval '1 minute' WHERE staff_id = 'jsmith'",
-        &[],
-    )
-    .await
-    .unwrap();
+    set_last_attempt(&c, "jsmith", 60_000).await;
     let r = release(&c, "jsmith", CLIN_PASS, "clinical").await;
     assert_eq!(r.outcome, "waiting", "the right passphrase waits too");
     assert_eq!(r.seed, None, "waiting never unseals");
     assert!(r.retry_after_ms.is_some_and(|ms| ms > 0));
     assert_eq!(failures(&c, "jsmith").await, 4);
 
-    c.execute(
-        "UPDATE vault_attempt SET next_allowed_at = clock_timestamp() - interval '1 second' WHERE staff_id = 'jsmith'",
-        &[],
-    )
-    .await
-    .unwrap();
+    set_last_attempt(&c, "jsmith", -2_000).await;
     let r = release(&c, "jsmith", CLIN_PASS, "clinical").await;
     assert_eq!(r.outcome, "released");
     assert_eq!(
@@ -313,15 +318,10 @@ async fn waiting_does_not_count_a_failure() {
         0,
         "a success resets the count"
     );
-    let next: Option<std::time::SystemTime> = c
-        .query_one(
-            "SELECT next_allowed_at FROM vault_attempt WHERE staff_id = 'jsmith'",
-            &[],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(next, None);
+    // Really reset: the next wrong guess is a free one again.
+    let r = release(&c, "jsmith", "not it", "clinical").await;
+    assert_eq!(r.outcome, "wrong");
+    assert_eq!(r.retry_after_ms, None, "{r:?}");
 }
 
 #[tokio::test]
@@ -403,6 +403,36 @@ async fn enrol_needs_a_superuser_token_over_this_request() {
         .unwrap()
         .get(0);
     assert_eq!(kind, "human");
+
+    // M1: the approval is kept on the member row, and re-verifies; a console bootstrap has none.
+    let ok: bool = c
+        .query_one(
+            "SELECT cairn_attestation_ok(m.enrol_token,
+                        cairn_vault_enrol_address(m.staff_id, m.signing_key_id, m.role),
+                        decode(su.signing_key_id, 'hex'))
+               FROM vault_member m, vault_member su
+              WHERE m.staff_id = 'anurse' AND su.staff_id = m.enrolled_by",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        ok,
+        "the stored enrol token must re-verify against the enrolling superuser"
+    );
+    let boss_token: Option<Vec<u8>> = c
+        .query_one(
+            "SELECT enrol_token FROM vault_member WHERE staff_id = 'boss'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        boss_token, None,
+        "a console bootstrap is approved by no superuser"
+    );
 }
 
 #[tokio::test]
@@ -429,6 +459,26 @@ async fn the_runtime_role_cannot_read_the_vault() {
         .query("SELECT cairn_vault_unseal('\\x00'::bytea, 'x')", &[])
         .await
         .expect_err("cairn_vault_release is the only door to cairn_vault_unseal");
+    assert_eq!(
+        e.code(),
+        Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+
+    // Nor reset its own back-off by moving the attempt clock (the sequences carry no grant).
+    c.batch_execute("RESET ROLE").await.unwrap();
+    let clock: String = c
+        .query_one(
+            "SELECT format('public.%I', cairn_vault_sequence_name(attempt_series_id, 'clock')) FROM vault_member WHERE staff_id = 'jsmith'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    let e = c
+        .query(&format!("SELECT setval('{clock}'::regclass, 1)"), &[])
+        .await
+        .expect_err("the runtime role must not move a member's attempt clock");
     assert_eq!(
         e.code(),
         Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
@@ -473,4 +523,126 @@ async fn a_refused_enrolment_never_echoes_the_sealed_blob() {
     assert!(said.contains("vault_member_needs_a_contact"), "{said}");
     assert!(!said.contains(&hex::encode(&blob)[..16]), "{said}");
     assert_eq!(d.detail(), None, "{said}");
+}
+
+/// THE BYPASS (fix round 1, Important #1): a caller who reads the outcome and then ROLLS BACK must
+/// not undo the count, or any runtime client could guess at full speed. Four rolled-back wrong
+/// guesses still start the back-off.
+#[tokio::test]
+async fn a_rolled_back_guess_still_counts() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    for n in 1..=4 {
+        c.batch_execute("BEGIN").await.unwrap();
+        let r = release(&c, "jsmith", "not it", "clinical").await;
+        assert_eq!(r.outcome, "wrong", "guess {n}");
+        c.batch_execute("ROLLBACK").await.unwrap();
+    }
+    let r = release(&c, "jsmith", "not it", "clinical").await;
+    assert_eq!(
+        r.outcome, "waiting",
+        "a rollback must not undo a counted guess: {r:?}"
+    );
+}
+
+/// The same bypass in autocommit: a statement that reads the outcome and then ERRORS rolls its own
+/// work back. Four such statements still start the back-off.
+#[tokio::test]
+async fn an_erroring_statement_still_counts() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    for n in 1..=4 {
+        let e = c
+            .query(
+                "SELECT 1 / (r.outcome <> 'wrong')::int FROM cairn_vault_release($1, $2, $3) r",
+                &[&"jsmith", &"not it", &"clinical"],
+            )
+            .await
+            .expect_err("a wrong outcome divides by zero");
+        assert_eq!(
+            e.code(),
+            Some(&tokio_postgres::error::SqlState::DIVISION_BY_ZERO),
+            "guess {n}"
+        );
+    }
+    let r = release(&c, "jsmith", "not it", "clinical").await;
+    assert_eq!(
+        r.outcome, "waiting",
+        "an erroring statement must not undo a counted guess: {r:?}"
+    );
+}
+
+/// Two terminals at once. Terminal 1 guesses inside an open transaction (holding the attempt row's
+/// lock); terminal 2 guesses meanwhile and is made to wait for that lock; terminal 1 then rolls
+/// back. Both guesses must be accounted for: terminal 1's is counted although rolled back, and
+/// terminal 2's is either counted too (`wrong`) or answered `waiting` — never silently free.
+///
+/// (The brief said "failures 5". That holds only if terminal 1's unseal outlasts the 1-second
+/// first back-off; otherwise terminal 2 is rightly answered `waiting`, which does not count. So
+/// the invariant is asserted, not a timing-dependent number.)
+#[tokio::test]
+async fn concurrent_wrong_attempts_both_count() {
+    let Some(base) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    for _ in 0..3 {
+        release(&c, "jsmith", "not it", "clinical").await;
+    }
+    assert_eq!(failures(&c, "jsmith").await, 3);
+
+    c.batch_execute("BEGIN").await.unwrap();
+    let first = release(&c, "jsmith", "not it", "clinical").await;
+    assert_eq!(first.outcome, "wrong");
+
+    let c2 = db::connect(&base).await.unwrap();
+    let second = tokio::spawn(async move { release(&c2, "jsmith", "not it", "clinical").await });
+    // Give terminal 2 time to reach the row lock; if it has not, the test still holds (it then
+    // simply runs after the rollback).
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    c.batch_execute("ROLLBACK").await.unwrap();
+    let second = second.await.unwrap();
+    eprintln!("terminal 2 answered: {second:?}");
+
+    assert!(
+        second.outcome == "wrong" || second.outcome == "waiting",
+        "{second:?}"
+    );
+    let second_counted = i64::from(second.outcome == "wrong");
+    assert_eq!(
+        failures(&c, "jsmith").await,
+        3 + 1 + second_counted,
+        "terminal 1's rolled-back guess and terminal 2's guess must both be accounted for ({second:?})"
+    );
+    assert!(second.retry_after_ms.is_some_and(|ms| ms > 0), "{second:?}");
+}
+
+/// M5: a token signed by a CLINICIAN's key but naming the real superuser `boss` as the enroller is
+/// refused by the ATTESTATION check (boss is a superuser; the token is just not boss's).
+#[tokio::test]
+async fn a_clinician_token_naming_the_superuser_is_refused_at_the_attestation() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    let seed = test_seed(3);
+    let forged = enrol_token(&c, "anurse", &kid_of(seed), "clinician", test_seed(2)).await;
+    let e = enrol(&c, "anurse", seed, "clinician", "boss", &forged)
+        .await
+        .expect_err("a clinician's token must not enrol, whoever it names");
+    let msg = db_message(&e);
+    assert!(msg.contains("attestation"), "{msg}");
+    assert!(!msg.contains("not an enrolled superuser"), "{msg}");
 }
