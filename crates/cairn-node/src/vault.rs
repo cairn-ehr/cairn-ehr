@@ -17,7 +17,6 @@ use cairn_event::{generate_key, sign_attestation, EventSigner, SigningKey};
 use tokio_postgres::Client;
 use zeroize::Zeroizing;
 
-use crate::enroll::build_human_pinned;
 use crate::seal;
 
 /// A person to put in the vault. Borrowed fields: the caller owns the strings (and wipes the passphrase).
@@ -42,25 +41,38 @@ fn mint_sealed(new: &NewMember<'_>) -> anyhow::Result<(String, Vec<u8>)> {
     Ok((kid, seal::to_cbor(&sealed)))
 }
 
+/// The pinned determinant set both enrolment doors insist on: `{role, handle}`, the handle being
+/// the staff ID AS THE DATABASE NORMALISES IT (`normalised`, read back from
+/// `cairn_vault_staff_id`, never computed here — R7). The floor rebuilds the same set and refuses
+/// any other, so "Boss" and "boss" are one actor. Pure. A blank role is refused here, as
+/// `build_human_pinned` refused it before the vault had its own set.
+fn vault_pinned(role: &str, normalised: &str) -> anyhow::Result<serde_json::Value> {
+    if role.trim().is_empty() {
+        bail!("enrolment needs a role");
+    }
+    Ok(serde_json::json!({ "role": role, "handle": normalised }))
+}
+
 /// Enrol `new` with a superuser's say-so. The superuser's attestation covers exactly this
-/// `(staff_id, kid, role)` request; the address to sign comes from the database so staff-ID
-/// normalisation has one home. Returns the new member's key id.
+/// `(staff_id, kid, role)` request; the address to sign and the pinned set's handle both come from
+/// the database, in one round trip, so staff-ID normalisation has one home. Returns the new
+/// member's key id.
 pub async fn enrol_member(
     db: &Client,
     new: &NewMember<'_>,
     superuser_staff_id: &str,
     superuser: &dyn EventSigner,
 ) -> anyhow::Result<String> {
-    let pinned = build_human_pinned(new.role, None, Some(new.staff_id))?;
     let (kid, sealed) = mint_sealed(new)?;
-    let addr: Vec<u8> = db
+    let row = db
         .query_one(
-            "SELECT cairn_vault_enrol_address($1, $2, $3)",
+            "SELECT cairn_vault_enrol_address($1, $2, $3), cairn_vault_staff_id($1)",
             &[&new.staff_id, &kid, &new.role],
         )
         .await
-        .context("computing the enrolment address")?
-        .get(0);
+        .context("computing the enrolment address")?;
+    let addr: Vec<u8> = row.get(0);
+    let pinned = vault_pinned(new.role, row.get(1))?;
     let su_kid = hex::encode(superuser.verifying_key().to_bytes());
     let token = sign_attestation(&addr, &su_kid, "enrolled", superuser)
         .map_err(|e| anyhow!("signing the enrolment failed: {e}"))?;
@@ -93,7 +105,12 @@ pub async fn bootstrap_superuser(db: &Client, new: &NewMember<'_>) -> anyhow::Re
             new.role
         );
     }
-    let pinned = build_human_pinned("superuser", None, Some(new.staff_id))?;
+    let normalised: String = db
+        .query_one("SELECT cairn_vault_staff_id($1)", &[&new.staff_id])
+        .await
+        .context("normalising the staff ID")?
+        .get(0);
+    let pinned = vault_pinned("superuser", &normalised)?;
     let (kid, sealed) = mint_sealed(new)?;
     db.query_one(
         "SELECT cairn_vault_bootstrap($1, $2, $3::text::jsonb, $4, $5, $6, $7, $8)",

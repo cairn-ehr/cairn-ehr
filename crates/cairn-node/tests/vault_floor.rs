@@ -63,17 +63,26 @@ async fn fresh() -> (Client, Client) {
 const SU_PASS: &str = "boss passphrase";
 const CLIN_PASS: &str = "nurse passphrase";
 
-/// Bootstrap the site's first superuser, `boss`, at the "console". Returns its key id.
-async fn bootstrap_boss(c: &Client) -> String {
-    let seed = test_seed(1);
-    let kid = kid_of(seed);
+/// The pinned determinant set the vault's doors accept for `(role, normalised staff ID)`: the role
+/// and the staff ID as the actor's `handle`, nothing else (final review item 2).
+fn pinned(role: &str, handle: &str) -> String {
+    format!(r#"{{"role":"{role}","handle":"{handle}"}}"#)
+}
+
+/// Call `cairn_vault_bootstrap` for `staff_id` with `pinned`, sealed under the superuser passphrase.
+async fn bootstrap(
+    c: &Client,
+    staff_id: &str,
+    pinned: &str,
+    seed: [u8; 32],
+) -> Result<Vec<u8>, tokio_postgres::Error> {
     c.query_one(
         "SELECT cairn_vault_bootstrap($1, $2, $3::text::jsonb, $4, $5, $6, $7, $8)",
         &[
-            &"boss",
+            &staff_id,
             &"Site Superuser",
-            &r#"{"role":"superuser","staff_id":"boss"}"#,
-            &kid,
+            &pinned,
+            &kid_of(seed),
             &sealed_blob(seed, SU_PASS),
             &Some("the usual"),
             &Some("0400 000 000"),
@@ -81,8 +90,16 @@ async fn bootstrap_boss(c: &Client) -> String {
         ],
     )
     .await
-    .unwrap();
-    kid
+    .map(|r| r.get(0))
+}
+
+/// Bootstrap the site's first superuser, `boss`, at the "console". Returns its key id.
+async fn bootstrap_boss(c: &Client) -> String {
+    let seed = test_seed(1);
+    bootstrap(c, "boss", &pinned("superuser", "boss"), seed)
+        .await
+        .unwrap();
+    kid_of(seed)
 }
 
 /// The superuser's attestation token over the enrolment `(staff_id, kid, role)`.
@@ -110,7 +127,8 @@ async fn enrol_token(
     .unwrap()
 }
 
-/// Call `cairn_vault_enrol` for a clinician whose pinned role is `role`.
+/// Call `cairn_vault_enrol` for a clinician whose pinned role is `role` (`staff_id` must already
+/// be normalised: it is the pinned handle as typed).
 async fn enrol(
     c: &Client,
     staff_id: &str,
@@ -119,7 +137,28 @@ async fn enrol(
     superuser_staff_id: &str,
     token: &[u8],
 ) -> Result<Vec<u8>, tokio_postgres::Error> {
-    let pinned = format!(r#"{{"role":"{role}","staff_id":"{staff_id}"}}"#);
+    enrol_pinned(
+        c,
+        staff_id,
+        seed,
+        role,
+        &pinned(role, staff_id),
+        superuser_staff_id,
+        token,
+    )
+    .await
+}
+
+/// [`enrol`] with a caller-chosen pinned set, for the tests that the floor refuses a wrong one.
+async fn enrol_pinned(
+    c: &Client,
+    staff_id: &str,
+    seed: [u8; 32],
+    role: &str,
+    pinned: &str,
+    superuser_staff_id: &str,
+    token: &[u8],
+) -> Result<Vec<u8>, tokio_postgres::Error> {
     c.query_one(
         "SELECT cairn_vault_enrol($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9, $10, $11)",
         &[
@@ -508,7 +547,7 @@ async fn a_refused_enrolment_never_echoes_the_sealed_blob() {
             &[
                 &"boss",
                 &"Site Superuser",
-                &r#"{"role":"superuser","staff_id":"boss"}"#,
+                &pinned("superuser", "boss"),
                 &kid_of(seed),
                 &blob,
                 &None::<&str>,
@@ -727,4 +766,97 @@ async fn staff_id_taken_normalises_and_answers() {
     assert!(taken(&c, "jsmith").await, "callable by the runtime role");
     assert!(!taken(&c, "nobody-here").await);
     c.batch_execute("RESET ROLE").await.unwrap();
+}
+
+/// Final review item 2: the floor BUILDS the pinned set it accepts — `{role, handle}` with the
+/// handle the normalised staff ID — and refuses any other, so a raw-SQL caller cannot enrol a
+/// vault member under an actor whose determinants say something else. Three ways to get it wrong,
+/// at both doors: another handle, an extra determinant, and the handle as typed, not normalised.
+#[tokio::test]
+async fn both_doors_refuse_a_pinned_set_they_did_not_build() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let wrong = [
+        ("another handle", pinned("superuser", "someone-else")),
+        (
+            "an extra determinant",
+            r#"{"role":"superuser","handle":"boss","registration_id":"MED-1"}"#.to_string(),
+        ),
+        ("a typed, not normalised, handle", pinned("superuser", " Boss ")),
+    ];
+    for (what, set) in &wrong {
+        let e = bootstrap(&c, " Boss ", set, test_seed(1))
+            .await
+            .expect_err(what);
+        assert!(db_message(&e).contains("pinned"), "{what}: {}", db_message(&e));
+    }
+    bootstrap(&c, " Boss ", &pinned("superuser", "boss"), test_seed(1))
+        .await
+        .expect("the set the floor builds is accepted");
+
+    let seed = test_seed(3);
+    let token = enrol_token(&c, " ANurse ", &kid_of(seed), "clinician", test_seed(1)).await;
+    let wrong = [
+        ("another handle", pinned("clinician", "someone-else")),
+        (
+            "an extra determinant",
+            r#"{"role":"clinician","handle":"anurse","registration_id":"MED-1"}"#.to_string(),
+        ),
+        ("a typed, not normalised, handle", pinned("clinician", " ANurse ")),
+    ];
+    for (what, set) in &wrong {
+        let e = enrol_pinned(&c, " ANurse ", seed, "clinician", set, "boss", &token)
+            .await
+            .expect_err(what);
+        assert!(db_message(&e).contains("pinned"), "{what}: {}", db_message(&e));
+    }
+    enrol_pinned(
+        &c,
+        " ANurse ",
+        seed,
+        "clinician",
+        &pinned("clinician", "anurse"),
+        "boss",
+        &token,
+    )
+    .await
+    .expect("the set the floor builds is accepted");
+}
+
+/// Final review item 2's point: because the handle is the NORMALISED staff ID, a case variant of
+/// a staff ID is the same actor. Enrol "Boss", empty the vault (a restore that kept the registry),
+/// enrol "boss" with a new key: the registry refuses it as prior history of the SAME actor_id
+/// (enroll_actor's #152 check), rather than minting a second actor for one person.
+#[tokio::test]
+async fn a_case_variant_of_a_staff_id_is_the_same_actor() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let first = bootstrap(&c, "Boss", &pinned("superuser", "boss"), test_seed(1))
+        .await
+        .unwrap();
+    c.batch_execute("DELETE FROM vault_attempt; DELETE FROM vault_member")
+        .await
+        .unwrap();
+    let e = bootstrap(&c, "boss", &pinned("superuser", "boss"), test_seed(5))
+        .await
+        .expect_err("a second key for the same actor is not a fresh enrolment");
+    assert!(
+        db_message(&e).contains("prior registration history"),
+        "{}",
+        db_message(&e)
+    );
+    let actors: Vec<Vec<u8>> = c
+        .query("SELECT DISTINCT actor_id FROM actor_event", &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(actors, vec![first], "one person, one actor");
 }

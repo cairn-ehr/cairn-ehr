@@ -409,8 +409,12 @@ $$;
 --   (b) that superuser's key is a current (enrolled, non-revoked) actor;
 --   (c) p_token is that superuser's valid attestation over cairn_vault_enrol_address of THIS
 --       request — so a token cannot be replayed for another person, key or role;
---   (d) the pinned determinant set's role equals p_role (the registry and the vault must agree
---       on what this actor is).
+--   (d) the pinned determinant set is EXACTLY the one the floor builds for this member,
+--       `{role: p_role, handle: cairn_vault_staff_id(p_staff_id)}`. The registry and the vault
+--       must agree on what this actor is, and the handle must be the NORMALISED staff ID: built
+--       from the ID as typed, "Boss" and "boss" would compute two actor_ids for one person. A
+--       caller-built set with another handle or an extra determinant is refused, so a raw-SQL
+--       client cannot file a vault member under an actor whose determinants say something else.
 -- Then the actor is enrolled in the append-only registry and the vault row inserted, in one
 -- transaction: either both exist or neither does. Refusals name the failed check and never echo
 -- p_sealed or p_token.
@@ -438,9 +442,11 @@ BEGIN
                             decode(v_su_key, 'hex')) IS NOT TRUE THEN
         RAISE EXCEPTION 'cairn_vault_enrol: the superuser''s attestation is invalid or does not cover this enrolment (staff ID, key and role)';
     END IF;
-    IF p_pinned ->> 'role' IS DISTINCT FROM p_role THEN
-        RAISE EXCEPTION 'cairn_vault_enrol: the pinned role % does not match the enrolled role %',
-            p_pinned ->> 'role', p_role;
+    -- jsonb equality ignores key order and whitespace, so this compares the SET, not its text.
+    IF p_pinned IS DISTINCT FROM
+       jsonb_build_object('role', p_role, 'handle', cairn_vault_staff_id(p_staff_id)) THEN
+        RAISE EXCEPTION 'cairn_vault_enrol: the pinned set must be exactly {role, handle} with the role % and the normalised staff ID % as the handle',
+            p_role, cairn_vault_staff_id(p_staff_id);
     END IF;
 
     v_actor_id := enroll_actor('human', p_pinned, p_signing_key_id);
@@ -453,7 +459,9 @@ $$;
 
 -- Owner only (the node's console): enrol a superuser with no superuser to approve it — the first
 -- one on a new site, or the recovery of a locked-out last one. The role is forced to 'superuser'
--- and `enrolled_by` to 'console'; the pinned set must say so too. No grant: being able to run this
+-- and `enrolled_by` to 'console'; the pinned set must be exactly the one the floor builds,
+-- `{role: 'superuser', handle: cairn_vault_staff_id(p_staff_id)}` (see cairn_vault_enrol's (d)
+-- for why the handle is the normalised staff ID). No grant: being able to run this
 -- IS the authority (whoever holds the database owner's credentials already holds the site).
 CREATE OR REPLACE FUNCTION cairn_vault_bootstrap(
     p_staff_id text, p_display_name text, p_pinned jsonb, p_signing_key_id text, p_sealed bytea,
@@ -461,8 +469,10 @@ CREATE OR REPLACE FUNCTION cairn_vault_bootstrap(
 RETURNS bytea LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_actor_id bytea;
 BEGIN
-    IF p_pinned ->> 'role' IS DISTINCT FROM 'superuser' THEN
-        RAISE EXCEPTION 'cairn_vault_bootstrap: the pinned role must be superuser, not %', p_pinned ->> 'role';
+    IF p_pinned IS DISTINCT FROM
+       jsonb_build_object('role', 'superuser', 'handle', cairn_vault_staff_id(p_staff_id)) THEN
+        RAISE EXCEPTION 'cairn_vault_bootstrap: the pinned set must be exactly {role, handle} with the role superuser and the normalised staff ID % as the handle',
+            cairn_vault_staff_id(p_staff_id);
     END IF;
     v_actor_id := enroll_actor('human', p_pinned, p_signing_key_id);
     PERFORM cairn_vault_insert_member(p_staff_id, p_display_name, 'superuser', v_actor_id,

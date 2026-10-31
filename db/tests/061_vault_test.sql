@@ -192,4 +192,28 @@ BEGIN
     ASSERT NOT cairn_vault_staff_id_taken('nobody-here'), 'an unknown ID is not taken';
 END $$;
 
+-- 10. Final review item 2: the doors accept only the pinned set the floor builds — `{role,
+--     handle}` with the NORMALISED staff ID as the handle — so a case variant of a staff ID can
+--     never mint a second actor for one person. Bootstrap refuses before it touches the registry,
+--     so the key and blob here need not be real. (The Rust suite pins the accepted set and the
+--     enrol door: vault_floor.rs, both_doors_refuse_a_pinned_set_they_did_not_build.)
+DO $$
+DECLARE wrong jsonb;
+BEGIN
+    FOREACH wrong IN ARRAY ARRAY[
+        '{"role":"superuser","handle":"someone-else"}'::jsonb,               -- another handle
+        '{"role":"superuser","handle":"boss","registration_id":"M"}'::jsonb, -- an extra determinant
+        '{"role":"superuser","handle":" Boss "}'::jsonb,                     -- typed, not normalised
+        '{"role":"clinician","handle":"boss"}'::jsonb                        -- not a superuser
+    ] LOOP
+        BEGIN
+            PERFORM cairn_vault_bootstrap(' Boss ', 'B', wrong, repeat('cd', 32), '\x00', NULL,
+                                          NULL, 'b@x');
+            RAISE EXCEPTION 'bootstrap accepted the pinned set %', wrong;
+        EXCEPTION WHEN raise_exception THEN
+            ASSERT SQLERRM LIKE 'cairn_vault_bootstrap: the pinned set must be exactly%', SQLERRM;
+        END;
+    END LOOP;
+END $$;
+
 ROLLBACK;

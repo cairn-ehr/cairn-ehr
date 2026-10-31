@@ -272,3 +272,38 @@ async fn staff_id_taken_sees_an_enrolled_member_through_the_library() {
         .await
         .unwrap());
 }
+
+/// Final review item 2, through the library: the pinned handle is the staff ID as the DATABASE
+/// normalises it (`cairn_vault_staff_id`), so "Boss" and "boss" are one actor. After a restore
+/// that emptied the vault but kept the registry, re-enrolling "boss" with a new key is refused as
+/// that actor's prior history, never minted as a second actor for the same person.
+#[tokio::test]
+async fn a_case_variant_of_a_staff_id_mints_no_second_actor() {
+    let Some(_) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, c, _, _) = fresh().await;
+    bootstrap_superuser(&c, &member("Boss", "superuser", SU_PASS))
+        .await
+        .unwrap();
+    c.batch_execute("DELETE FROM vault_attempt; DELETE FROM vault_member")
+        .await
+        .unwrap();
+    let err = bootstrap_superuser(&c, &member("boss", "superuser", SU_PASS))
+        .await
+        .expect_err("the same person's actor already has a key");
+    assert!(
+        err.to_string().contains("prior registration history"),
+        "{err}"
+    );
+    let humans: i64 = c
+        .query_one(
+            "SELECT count(DISTINCT actor_id) FROM actor_event WHERE kind = 'human'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(humans, 1, "one person, one actor");
+}
