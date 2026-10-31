@@ -589,7 +589,7 @@ async fn an_erroring_statement_still_counts() {
 /// first back-off; otherwise terminal 2 is rightly answered `waiting`, which does not count. So
 /// the invariant is asserted, not a timing-dependent number.)
 #[tokio::test]
-async fn concurrent_wrong_attempts_both_count() {
+async fn a_concurrent_guess_after_a_rolled_back_one_still_counts() {
     let Some(base) = cs() else {
         eprintln!("skipped");
         return;
@@ -645,4 +645,61 @@ async fn a_clinician_token_naming_the_superuser_is_refused_at_the_attestation() 
     let msg = db_message(&e);
     assert!(msg.contains("attestation"), "{msg}");
     assert!(!msg.contains("not an enrolled superuser"), "{msg}");
+}
+
+/// Fix round 2: `nextval` WAL-logs 32 values AHEAD, and crash recovery restores the logged value —
+/// so after a power cut a recently active member would wake up with up to 32 phantom failures and
+/// be made to wait with the RIGHT passphrase. Counting with `setval` logs the exact value. The
+/// observable proxy for "nothing pre-logged that a crash could replay" is `log_cnt = 0`.
+#[tokio::test]
+async fn a_count_is_logged_exactly() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    assert_eq!(
+        release(&c, "jsmith", "not it", "clinical").await.outcome,
+        "wrong"
+    );
+    let counter: String = c
+        .query_one(
+            "SELECT format('public.%I', cairn_vault_sequence_name(attempt_series_id, 'attempts')) FROM vault_member WHERE staff_id = 'jsmith'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let (last, pre_logged): (i64, i64) = {
+        let r = c
+            .query_one(&format!("SELECT last_value, log_cnt FROM {counter}"), &[])
+            .await
+            .unwrap();
+        (r.get(0), r.get(1))
+    };
+    assert_eq!(last, 1, "one counted attempt");
+    assert_eq!(
+        pre_logged, 0,
+        "a crash must replay exactly the counted attempts, no more"
+    );
+}
+
+/// Fix round 2: a member whose attempt row is missing must fail CLOSED. Without the row there is
+/// nothing to lock and no success mark, so the door could not back off — it answers `unknown`,
+/// unsealing nothing, even for the right passphrase.
+#[tokio::test]
+async fn a_missing_attempt_row_fails_closed() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    c.execute("DELETE FROM vault_attempt WHERE staff_id = 'jsmith'", &[])
+        .await
+        .unwrap();
+    let r = release(&c, "jsmith", CLIN_PASS, "clinical").await;
+    assert_eq!(r.outcome, "unknown", "{r:?}");
+    assert_eq!(r.seed, None);
 }

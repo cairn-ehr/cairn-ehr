@@ -44,10 +44,12 @@
 --      that errors after reading the outcome, e.g. `SELECT 1/(r.outcome <> 'wrong')::int FROM
 --      cairn_vault_release(…) r`). The caller has learned the answer, and the increment is gone.
 --      Any client holding the runtime role could then guess forever at full speed. So the count
---      lives in two PostgreSQL SEQUENCES per member, created at enrolment: `nextval` and `setval`
---      are NEVER rolled back (PostgreSQL docs, "Sequence Manipulation Functions"). The door
---      consumes one attempt number (`nextval`) and stamps the attempt clock (`setval` to the
---      epoch in ms) BEFORE it unseals, so the guess is on record whatever the caller does next.
+--      lives in two PostgreSQL SEQUENCES per member, created at enrolment: sequence changes are
+--      NEVER rolled back (PostgreSQL docs, "Sequence Manipulation Functions"). The door moves the
+--      attempt counter up by one and stamps the attempt clock (the epoch in ms), both with
+--      `setval`, BEFORE it unseals, so the guess is on record whatever the caller does next.
+--      (`setval`, not `nextval`, so that a crash replays the exact count — see
+--      cairn_vault_attempt_state.)
 --      The only transactional piece is `vault_attempt.success_mark` — the attempt number of the
 --      last success — and failures = attempts − success_mark. Rolling back a SUCCESS therefore
 --      just leaves that attempt counted as a failure: it can only ever hurt the caller.
@@ -165,7 +167,7 @@ CREATE TABLE IF NOT EXISTS vault_attempt (
 );
 
 -- The name of one of a member's two attempt sequences: 'attempts' (an attempt counter, one
--- `nextval` per checked guess) or 'clock' (the epoch-ms of the last checked guess, via `setval`).
+-- step per checked guess) or 'clock' (the epoch-ms of the last checked guess, via `setval`).
 -- Derived from the member's attempt_series_id only. One home for the naming, so the trigger that
 -- creates them and the door that uses them can never disagree. Pure.
 CREATE OR REPLACE FUNCTION cairn_vault_sequence_name(p_series uuid, p_kind text)
@@ -195,9 +197,16 @@ CREATE TRIGGER vault_member_created AFTER INSERT ON vault_member
 -- A member's attempt state, read WITHOUT writing: failures since the last success, and the
 -- epoch-ms of the last checked guess (NULL if none yet). No row for an unknown staff ID. Reading a
 -- sequence relation directly (`SELECT last_value, is_called`) consumes nothing; `is_called` is
--- false until the first nextval/setval. Invoker-rights, owner only: the release door calls it.
--- (A sequence may jump ahead after a crash — PostgreSQL pre-logs values — which can only ADD
--- failures, never remove one: the safe direction.)
+-- false until the first setval. Invoker-rights, owner only: the release door calls it.
+--
+-- WHY THE DOOR COUNTS WITH setval, NEVER nextval. Both are non-transactional, but they differ
+-- after a CRASH. For speed, `nextval` writes the sequence to the WAL 32 values AHEAD of what it
+-- hands out (`log_cnt`), and crash recovery restores that logged value. A member who guessed
+-- once just before a power cut would wake up with ~32 phantom failures: made to wait with the
+-- RIGHT passphrase for up to 300 s, and charged 300 s for the first mistype after — a lock-out in
+-- all but name, at exactly the moment (a remote clinic coming back from a power cut) it hurts
+-- most. `setval(seq, value, true)` WAL-logs the exact value (`log_cnt` = 0), so recovery replays
+-- precisely the attempts that were counted. The clock is set with setval for the same reason.
 CREATE OR REPLACE FUNCTION cairn_vault_attempt_state(p_staff_id text)
 RETURNS TABLE(failures bigint, last_attempt_ms bigint) LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -281,6 +290,7 @@ DECLARE
     v_now_ms   bigint;
     v_backoff  int;
     v_attempt  bigint;
+    v_mark     bigint;
     v_seed     bytea;
 BEGIN
     -- 1. Who, and for what.
@@ -298,7 +308,14 @@ BEGIN
     END IF;
 
     -- 2. Backed off? Read-only: a 'waiting' answer writes nothing and counts nothing.
-    PERFORM 1 FROM vault_attempt a WHERE a.staff_id = v_staff_id FOR UPDATE;
+    --    The attempt row is both the lock and the success mark. A member WITHOUT one (only a hand
+    --    DELETE can do that; the trigger always creates it) could not be backed off, so the door
+    --    fails CLOSED: 'unknown', nothing unsealed, nothing written.
+    SELECT a.success_mark INTO v_mark FROM vault_attempt a WHERE a.staff_id = v_staff_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'unknown'::text, NULL::bytea, NULL::text, NULL::bigint;
+        RETURN;
+    END IF;
     SELECT s.failures, s.last_attempt_ms INTO v_failures, v_last_ms
       FROM cairn_vault_attempt_state(v_staff_id) s;
     v_now_ms  := (extract(epoch FROM clock_timestamp()) * 1000)::bigint;
@@ -309,9 +326,11 @@ BEGIN
         RETURN;
     END IF;
 
-    -- 3. Count the guess where no rollback can reach it, THEN check it.
-    v_attempt := nextval(format('public.%I',
-        cairn_vault_sequence_name(v_member.attempt_series_id, 'attempts'))::regclass);
+    -- 3. Count the guess where no rollback can reach it, THEN check it. setval, not nextval: see
+    --    cairn_vault_attempt_state on crashes. Exact under the row lock: attempts = mark + failures.
+    v_attempt := v_mark + v_failures + 1;
+    PERFORM setval(format('public.%I',
+        cairn_vault_sequence_name(v_member.attempt_series_id, 'attempts'))::regclass, v_attempt, true);
     PERFORM setval(format('public.%I',
         cairn_vault_sequence_name(v_member.attempt_series_id, 'clock'))::regclass, v_now_ms);
     v_seed := cairn_vault_unseal(v_member.sealed, p_passphrase);   -- NULL = wrong; never raises
