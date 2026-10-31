@@ -306,13 +306,18 @@ pub async fn different_people_impl(
         ),
         retry: Retry::Now,
     })?;
-    different_people_view(outcome)
+    different_people_view(outcome, |e| db.explain(e))
 }
 
 /// The window's reading of a "Different people" outcome. **Pure**, so the refusals are
 /// testable without a database. `AcceptedAsSame` (#736): a human already accepted the pair as
 /// the same person, so this judgement would silently overrule them; nothing was written.
-fn different_people_view(outcome: DifferentPeople) -> Result<LinkReportView, ErrorView> {
+/// `explain` is the guard's (#893): each pair's failure comes back inside `Judged`, so it is
+/// explained here, one by one, or a pair the window cut off would read "connection closed".
+fn different_people_view(
+    outcome: DifferentPeople,
+    explain: impl Fn(anyhow::Error) -> anyhow::Error,
+) -> Result<LinkReportView, ErrorView> {
     match outcome {
         DifferentPeople::NothingOpen => Err(refused(NOTHING_OPEN)),
         DifferentPeople::AcceptedAsSame => Err(refused(ACCEPTED_NOT_OVERRULED)),
@@ -325,7 +330,7 @@ fn different_people_view(outcome: DifferentPeople) -> Result<LinkReportView, Err
                     outcome: j
                         .outcome
                         .map(|o| o.effect)
-                        .map_err(|e| different_people_error_view(&e)),
+                        .map_err(|e| different_people_error_view(&explain(e))),
                 })
                 .collect(),
         ),

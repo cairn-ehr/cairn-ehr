@@ -4,10 +4,11 @@
 
 > [!NOTE]
 > **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895) (branch `fix/893-cut-off-text`, closes #893): a command the window's
-> watchdog cut off now SAYS so ("the node did not answer within 15 s, so this window cut the connection off")
-> instead of the bare `connection closed` a node restart leaves too. Every `NodeConnection` call site passes its
-> error through `ConnectionGuard::explain` while it holds the guard; outcome-line causes use `cause_of`; text only,
-> no class changes (durable-rules' #875 block). PR #892 (#875 option 2, the 15 s cut + waiting bar) merged
+> watchdog cut off now SAYS so ("the command was not finished within 15 s, so this window cut the connection
+> off") instead of the bare `connection closed` a node restart leaves too. Every `NodeConnection` call site whose
+> error reaches the screen passes it through `ConnectionGuard::explain` while it holds the guard (pinned per
+> function by `node_lock_explains_tests.rs`); outcome-line causes use `cause_of`; failures already worded as text
+> (sign-off lines, worklist sides) get `name_cut_in`; text only, no class changes (durable-rules' #893 bullet). PR #892 (#875 option 2, the 15 s cut + waiting bar) merged
 > 2026-10-30; its brainstorm filed **#891** (an open chart's events go first in sync; brainstorm before building)
 > and its review **#894** (measure long multi-statement holds over a WAN).
 > **Merged 2026-10-24/30 (ROADMAP has each):** PR #892 (#875 option 2) · #890 (#810) · #889 (#884 + #888) · #887 (#882 + #885) · #886 (#878) · #883 (#880 +
@@ -203,11 +204,19 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 ### 2026-10-31 — #893 (PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895)): a cut-off command says the window cut it off
 
 Found HANDOVER stale on arrival again (#892 merged, listed as awaiting); no decision had landed; the maintainer
-picked #893. TDD (the search-through-a-lock test red first); the cease pin mutation-checked.
-- **⇒ An aborted tokio-postgres task gives every pending query the same `Error::closed()`** (`connection.rs`'s
-  `poll_read`), so no error can carry its cause from the source: the marker is a context layer added by whoever
-  holds BOTH the guard and the error. `explain` must run before the guard drops; a transaction that borrows the
-  guard mutably takes a `CutWatch` first (`record_links`).
+picked #893. TDD (the search-through-a-lock test red first); the cease pin mutation-checked. A five-agent review
+then found the sentence false for a hold of many ANSWERED statements ("did not answer" → "was not finished"), three
+failures that come back inside an `Ok` outcome and so skipped `explain` (sign-off failed lines, "Different people"
+pairs, worklist sides), and the explain-after-drop rule stated backwards; all fixed, plus the per-function source
+guard (mutation-checked on both crates).
+- **⇒ An aborted tokio-postgres task gives every pending query the same `Error::closed()`** (tokio-postgres
+  `client.rs`, `Responses::poll_next`: the response channel's sender is dropped), so no error can carry its cause
+  from the source: the marker is a context layer added by whoever holds BOTH the guard and the error. Read the cut
+  before the guard drops — the flag is the CLIENT's, so later a next hold's cut could set it; a transaction that
+  borrows the guard mutably takes a `CutWatch` first (`record_links`).
+- **⇒ "Every call site" is not "every error path".** An orchestrator that keeps going after a failure returns it
+  INSIDE `Ok` (a failed line, a judged pair, a worklist side), often already as text; wrapping the `Err` arm misses
+  it. Look at what the outcome type carries, not only at `map_err`.
 - **⇒ Grep for a call across line breaks.** `\.lock()\.await` missed four sites (unlock, link, unlink, confirm) that
   rustfmt had split as `.lock()\n.await`; and my first mutation matched nothing for the same reason.
 - **⇒ A `"{text}"` assert message reads like a crash**: a panic printing `connection closed` was my own assert, not
@@ -380,10 +389,10 @@ Both TDD with independent reviews (#860's filed #861, #863, #864).
 
 Condensed 2026-10-31; ROADMAP has each slice. #797: brainstorm → plan → SDD; the maintainer's rule (durable-rules):
 *tell the clinician only what changed from ANOTHER source since they took the chart*; #803/#804 decided there. Also
-#745 · #752 · #740 (PR #798), #799 · #800 · #801 (PR #802), #792 (R6 residuals #787 · #786 · #783 · #782), splits
+#745 · #752 · #740 (PR #798), #799 · #800 · #801 (PR #802), PR #792 (R6 residuals #787 · #786 · #783 · #782), splits
 #781 · #789 · #732 · #793 · #712 item 3 · #737 · #796 (PRs #794, #795); R6 = #716 + #723; R7 = #742 + #743 part 2.
 Filed then: #781 · #782 · #783 · #784 · #785 · #786 · #787 · #789 · #790 · #791 · #755 · #756 · #757 · #778; commented #718 · #738; decisions left: #649 · #613 · #628 · #780
-(`casefold()`); #427 is lower than it reads (#424); #220 gained a test; #626's `do_pull` non-P0001 arm open.
+(`casefold()`), Turkish dotless `ı` (the ADR-0014 profile's job); #427 is lower than it reads (#424); #220 gained a test; #626's `do_pull` non-P0001 arm open.
 - **⇒ Route a cause by TYPE end to end** (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`). **A
   baseline that must survive overlapping reads is window STATE.** **Rule on the evidence, not on who proposed it**
   (a reviewer's counter-case beat my `applyOwnAct` formula). Pin "after apply, before commit" on BOTH sides.

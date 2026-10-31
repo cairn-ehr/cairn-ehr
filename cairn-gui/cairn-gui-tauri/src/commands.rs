@@ -146,7 +146,13 @@ pub async fn unlock(
         .map_err(|e| format!("Your passphrase was right, but the key was not unlocked: the {e}"))?;
     if !cairn_node::identify::attester_is_enrolled_human(&db, &kid)
         .await
-        .map_err(|e| db.explain(e).to_string())?
+        .map_err(|e| {
+            format!(
+                "Your passphrase was right, but the key was not unlocked: whether it is enrolled \
+                 could not be read: {:#}",
+                db.explain(e)
+            )
+        })?
     {
         return Err(format!(
             "key {} is not an enrolled human actor on this node — run `cairn-node \
@@ -281,7 +287,11 @@ pub async fn sign_off_impl(
         )
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
-        name_the_cut(outcome.interrupted.as_mut(), db.cut_off());
+        name_the_cut(
+            outcome.interrupted.as_mut(),
+            &mut outcome.failed,
+            db.cut_off(),
+        );
         outcome
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;

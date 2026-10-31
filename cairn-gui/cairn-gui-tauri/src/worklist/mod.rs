@@ -90,7 +90,8 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
         Ok(db) => db,
         Err(lost) => return worklist_view(Err(lost.to_string())),
     };
-    // Says a read the window cut off was cut off (#893), after the lock is released.
+    // Says a read the window cut off was cut off (#893). Every use is before `drop(db)`: the cut
+    // flag is the client's, so after the drop a later hold's cut could set it (`CutWatch`).
     let cut = db.cut_watch();
     let read = async {
         let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
@@ -102,10 +103,15 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
             .map_err(|e| names_read_error(cut.explain(e)));
         Ok::<_, anyhow::Error>((list, found, doubted))
     }
-    .await;
+    .await
+    .map(|(mut list, found, doubted)| {
+        name_cut_in_sides(&mut list.items, cut.cut_off());
+        (list, found, doubted)
+    })
+    .map_err(|e| cut.explain(e));
     drop(db);
     match read {
-        Err(e) => worklist_view(Err(operator_chain(&cut.explain(e)))),
+        Err(e) => worklist_view(Err(operator_chain(&e))),
         Ok((list, found, doubted)) => {
             let mut entries = vec![];
             let mut admitted: Vec<Candidate> = vec![];
@@ -125,6 +131,17 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
 /// **Pure.**
 fn names_read_error(e: anyhow::Error) -> String {
     operator_chain(&e.context("reading the names of the shown charts"))
+}
+
+/// Each side whose record read failed, with the cut named if the window cut the read off (#893).
+/// `cairn-node` words a side's failure as text inside the list, so only its words can say so
+/// (`name_cut_in`: a side refused for its own reason keeps them). **Pure.**
+fn name_cut_in_sides(items: &mut [WorklistItem], cut: Option<cairn_gui_live::CutOff>) {
+    for side in items.iter_mut().flat_map(|i| [&mut i.newer, &mut i.older]) {
+        if let Err(text) = side {
+            *text = cairn_gui_live::name_cut_in(text, cut);
+        }
+    }
 }
 
 /// Every chart of every READ side of `items`, sorted, once each — the ids of the ONE candidate

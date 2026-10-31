@@ -129,14 +129,21 @@ pub(crate) fn sign_off_outcome(
     (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
-/// The sign-off orchestrator names a stop's ROOT cause, which for a hold the window cut off is
-/// only "connection closed", the text of a node restart too: name the cut instead (#893). Pure.
+/// The sign-off orchestrator words its failures as TEXT: a stop by its ROOT cause, a failed line
+/// by its chain. For a hold the window cut off both end in only "connection closed", the text of
+/// a node restart too, so name the cut in them (#893; `name_cut_in`). The failed lines matter as
+/// much as the stop: a one-line sign-off cut during its attest has no stop at all. A line refused
+/// for its own reason keeps its words. No I/O.
 pub(crate) fn name_the_cut(
     stopped: Option<&mut cairn_node::medication::signoff::SignOffInterrupted>,
+    failed: &mut [cairn_node::medication::signoff::FailedLine],
     cut: Option<cairn_gui_live::CutOff>,
 ) {
-    if let (Some(stopped), Some(cut)) = (stopped, cut) {
-        stopped.cause = cut.to_string();
+    if let Some(stopped) = stopped {
+        stopped.cause = cairn_gui_live::name_cut_in(&stopped.cause, cut);
+    }
+    for line in failed {
+        line.error = cairn_gui_live::name_cut_in(&line.error, cut);
     }
 }
 

@@ -197,9 +197,27 @@ fn duplicates_js_reads_no_field_the_backend_does_not_send() {
 /// #736: "Different people" on an accepted pair is refused, wording and `Retry::Never`.
 #[test]
 fn accepted_as_same_maps_to_the_not_overruled_refusal() {
-    let err = different_people_view(DifferentPeople::AcceptedAsSame).unwrap_err();
+    let err =
+        different_people_view(DifferentPeople::AcceptedAsSame, std::convert::identity).unwrap_err();
     assert_eq!(err.text, view::ACCEPTED_NOT_OVERRULED);
     assert_eq!(err.retry, Retry::Never);
+}
+
+/// #893 (#895 review): each pair's own failure comes back inside `Judged`, past the explain on
+/// `record_different_people`'s error, so it is passed through the guard's explain one by one: a
+/// pair the window cut off says so, not just "connection closed".
+#[test]
+fn each_judged_pair_failure_is_explained() {
+    let pair = |n| cairn_node::duplicate_review::PairJudgement {
+        low: Uuid::from_u128(n),
+        high: Uuid::from_u128(n + 1),
+        outcome: Err(anyhow::anyhow!("connection closed")),
+    };
+    let err = different_people_view(DifferentPeople::Judged(vec![pair(1), pair(3)]), |e| {
+        e.context("CUT")
+    })
+    .unwrap_err();
+    assert_eq!(err.text.matches("CUT").count(), 2, "{}", err.text);
 }
 
 /// #745 points 1–2: the banner ALONE, which the window reads when the chart's medication list

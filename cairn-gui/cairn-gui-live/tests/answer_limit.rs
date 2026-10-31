@@ -10,7 +10,7 @@ mod common;
 
 use cairn_gui_data::port::{DataError, PatientSearch};
 use cairn_gui_live::error::data_error_from;
-use cairn_gui_live::{LiveData, NodeConnection};
+use cairn_gui_live::{name_cut_in, LiveData, NodeConnection};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +21,8 @@ const LIMIT: Duration = Duration::from_secs(1);
 const SLACK: Duration = Duration::from_secs(5);
 
 /// What a cut-off command's error says (#893), at `LIMIT`.
-const CUT_TEXT: &str = "the node did not answer within 1 s, so this window cut the connection off";
+const CUT_TEXT: &str =
+    "the command was not finished within 1 s, so this window cut the connection off";
 
 /// The window's kind of connection, watched with the short limit, reopening from `cs`.
 async fn watched(cs: &str) -> NodeConnection {
@@ -240,7 +241,15 @@ async fn a_cut_off_command_says_the_window_cut_it_off() {
     let explained = {
         let client = db.lock().await.expect("open");
         let stuck = client.execute("SELECT pg_sleep(10)", &[]).await;
-        client.explain(stuck.expect_err("cut off").into())
+        let stuck = stuck.expect_err("cut off");
+        // `name_cut_in` finds a cut in text by this ending: a real cut's own words end so.
+        assert!(stuck.to_string().ends_with("connection closed"), "{stuck}");
+        let worded = format!("reading the record of chart X: {stuck}");
+        assert_eq!(
+            name_cut_in(&worded, client.cut_off()),
+            format!("{CUT_TEXT}: {worded}")
+        );
+        client.explain(stuck.into())
     };
     assert!(format!("{explained:#}").contains(CUT_TEXT), "{explained:#}");
     match data_error_from(&explained) {

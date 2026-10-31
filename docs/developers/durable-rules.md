@@ -51,14 +51,22 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **A cut-off command's error SAYS the window cut it off** (#893): tokio-postgres hands every pending query of an
   aborted task the same bare `connection closed` as a server restart, so the marker is added afterwards by the
   one party that knows — every call site passes its error through `ConnectionGuard::explain` (or a `CutWatch`
-  taken before a transaction borrows the guard) **while the guard is still held**, and an outcome line's cause is
-  `cairn_gui_live::cause_of(&e)`, never `e.root_cause()` (the sign-off's own root cause is replaced by
-  `name_the_cut`). The marker is a context layer (`CutOff`), so classification is unchanged: a cut read stays an
-  outage, a cut COMMIT stays "not known". Pins: `answer_limit.rs`'s `a_cut_off_command_says_…`,
-  `a_cut_off_search_says_…` and the commit test's class/cause asserts; `cut_off.rs`'s unit tests;
-  `a_cut_off_sign_off_names_the_cut`. **A new `NodeConnection` call site must do the same** — nothing pins that
-  by source; a site that forgets shows "connection closed" again. **Tempting wrong fix:** calling `explain` after
-  the guard is dropped — it can no longer tell, and says nothing.
+  taken from the guard) **while the guard is still held**, and an outcome line's cause is
+  `cairn_gui_live::cause_of(&e)`, never `e.root_cause()`. A failure the node already worded as TEXT inside an `Ok`
+  outcome (a sign-off's stop AND failed lines — `name_the_cut`; a worklist side — `name_cut_in_sides`) gets the cut
+  named by `name_cut_in`, which touches only a text ending in `connection closed`; one inside an outcome as an
+  error (a "Different people" pair) is explained one by one. The sentence says the command *was not finished*
+  within the limit, never that the node *did not answer*: the whole hold is timed, and a command of many answered
+  statements is cut too (#895 review). The marker is a context layer (`CutOff`), so classification is unchanged: a
+  cut read stays an outage, a cut COMMIT stays "not known". Pins: `answer_limit.rs`'s `a_cut_off_command_says_…`
+  (which also pins the `connection closed` ending against a real cut), `a_cut_off_search_says_…` and the commit
+  test's class/cause asserts; `cut_off.rs`'s unit tests; `a_cut_off_sign_off_names_the_cut`,
+  `each_judged_pair_failure_is_explained`, `a_side_the_window_cut_off_names_the_cut`. **A new `NodeConnection`
+  call site must do the same**: `node_lock_explains_tests.rs` fails any function in cairn-gui-tauri or
+  cairn-gui-live that locks the node and never explains (exemptions in its `EXEMPT`, each with why) — but per
+  FUNCTION, so a second error path forgotten beside an explained one still passes. **Tempting wrong fix:** reading
+  a `CutWatch` after the guard drops (or holding one across an await): the flag is the CLIENT's, not the hold's, so
+  a later hold's cut can set it and name a cut this error never had.
 - **A failed reopen is an ERROR that says why** (#876): `lock()` returns `Err(ConnectionLost)` naming the cause;
   a press inside the backoff tries nothing and says when the last attempt failed. It is an outage (`Retry::Now`:
   `From` into `DataError::Unavailable` and into the window's `ErrorView`, "Nothing was done: …") unless the server

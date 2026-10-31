@@ -511,8 +511,11 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   Merged 2026-10-30.
 - **2026-10-31 — a cut-off command says the window cut it off (#893, PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895)).** `cairn_gui_live::CutOff` is a context layer
   `ConnectionGuard::explain` adds while the guard is held (`CutWatch` where a transaction borrows it); every
-  `NodeConnection` call site in `cairn-gui-live` and `cairn-gui-tauri` uses it, outcome-line causes use `cause_of`,
-  and the sign-off's `name_the_cut`. Text only: a cut read stays an outage, a cut COMMIT "not known".
+  `NodeConnection` call site in `cairn-gui-live` and `cairn-gui-tauri` whose error reaches the screen uses it (a
+  source guard, `node_lock_explains_tests.rs`, fails a function that locks and never explains), outcome-line causes
+  use `cause_of`, and failures already worded as text get `name_cut_in` (the sign-off's stop and failed lines, the
+  worklist's sides). It says the command "was not finished within 15 s", never that the node "did not answer": the
+  whole hold is timed. Text only: a cut read stays an outage, a cut COMMIT "not known".
 - **Next:** RUNBOOK §15 (#838, #861's check) and §14 (c), (d); **#804** (needs #690); decisions **#866**, **#867**,
   **#825**, **#850**, **#870**, **#871**, **#837** item 3; **#858**, **#808**, **#894**, **#891** (brainstorm first); then
   HANDOVER's ⇒ NEXT. #699 stays open.

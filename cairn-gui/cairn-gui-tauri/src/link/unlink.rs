@@ -222,7 +222,12 @@ pub async fn compare_linked_impl(
     };
     let db = db.lock().await?;
     let (l, h) = (ChartSet::single(edge.low), ChartSet::single(edge.high));
-    let standing = cairn_node::chart_link::standing_link(&*db, edge.low, edge.high).await;
+    // Worded at its own await (#895 review): a cut during the three reads below must not be
+    // named on this read's own, earlier failure.
+    let standing = as_text(
+        &db,
+        cairn_node::chart_link::standing_link(&*db, edge.low, edge.high).await,
+    );
     let parts = UnlinkParts {
         low: as_text(
             &db,
@@ -236,7 +241,7 @@ pub async fn compare_linked_impl(
             &db,
             cairn_node::patient::compare::cross_vetoes(&*db, &l, &h).await,
         ),
-        standing: as_text(&db, standing),
+        standing,
     };
     Ok(link_review_view(
         parts,

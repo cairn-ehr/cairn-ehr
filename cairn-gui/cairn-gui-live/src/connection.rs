@@ -59,8 +59,9 @@
 //!   it sits far above the slowest command measured (a patient search on the Pi, about 0.9 s). A
 //!   `fixed` connection has no watchdog: aborting it would kill it for good.
 //! - **A cut-off command's error says so** (#893): the stuck query fails with the same bare
-//!   `connection closed` as a server restart, so each call site passes its error through
-//!   [`ConnectionGuard::explain`] while it still holds the guard (`cut_off.rs`).
+//!   `connection closed` as a server restart, so every call site whose error reaches the screen
+//!   passes it through [`ConnectionGuard::explain`] while it still holds the guard (`cut_off.rs`;
+//!   pinned for every lock by `cairn-gui-tauri`'s `node_lock_explains_tests.rs`).
 //!
 //! The reopen uses `cairn_node::db::connect_with_task`, not `connect_and_load_schema`: the schema
 //! was loaded at launch, and replaying every `db/*.sql` file takes locks a read never needs
@@ -75,7 +76,7 @@ use tokio::task::AbortHandle;
 use tokio_postgres::Client;
 
 mod cut_off;
-pub use cut_off::{cause_of, CutOff, CutWatch};
+pub use cut_off::{cause_of, name_cut_in, CutOff, CutWatch};
 
 /// The connection was lost and could not be reopened, either by this press or, inside the
 /// backoff, by the press that last tried; the text says why (#876). The text is a lowercase
@@ -200,8 +201,9 @@ impl Cutter {
         self.cut.store(true, Ordering::SeqCst);
     }
 
-    /// Mark the client lost, THEN abort its task, so no lock can see it open in between.
-    fn cut_off(&self) {
+    /// Mark the client lost, THEN abort its task, so no lock can see it open in between. (The
+    /// verb; `ConnectionGuard::cut_off` is the question "was it cut?".)
+    fn cut(&self) {
         self.mark_cut();
         self.task.abort();
     }
@@ -382,7 +384,7 @@ impl Watch {
             async move {
                 tokio::time::sleep(limit).await;
                 if !claimed.swap(true, Ordering::SeqCst) {
-                    cutter.cut_off();
+                    cutter.cut();
                     // The whole hold is timed, not one statement: a command of many quick
                     // statements is cut too, so the line does not say the node never answered.
                     eprintln!(
