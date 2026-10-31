@@ -89,8 +89,8 @@ pub enum HeldDecision {
 ///   carrying on: the live held key signs. Anyone else's ID alone means someone new is at the
 ///   keyboard: [`HeldDecision::Forget`]. The ID is matched trimmed of spaces and exactly, as the
 ///   held key stores it (`SessionKey::new`); case lives in SQL alone (R7).
-/// - No credential: a held key serves only while the hold is on (`key_hold > 0`) and has not
-///   run out.
+/// - No credential, or a blank one (both fields empty): a held key serves only while the hold is
+///   on (`key_hold > 0`) and has not run out.
 pub fn decide(
     held: Option<&SessionKey>,
     credential: Option<&Credential>,
@@ -98,6 +98,9 @@ pub fn decide(
     now: Now,
 ) -> HeldDecision {
     let live = held.filter(|key| !key_hold.is_zero() && !key.is_expired(now, key_hold));
+    // A blank credential (both fields empty) is no credential here too, not only by the caller's
+    // filter: it must never wipe a held key.
+    let credential = credential.filter(|c| !c.is_blank());
     match (credential, live) {
         (Some(c), _) if c.has_passphrase() => HeldDecision::Release,
         (Some(c), Some(key)) if c.staff_id.trim_matches(' ') == key.staff_id => {

@@ -312,6 +312,15 @@ fn an_empty_passphrase_is_never_sent_to_the_vault() {
                         "{id:?} hold {hold:?}"
                     );
                 }
+                // A blank credential (both fields empty) is no credential, in `decide` itself and
+                // not only by the caller's filter: never a release, and never a forget.
+                for blank in ["", "  "] {
+                    assert_eq!(
+                        decide(key, Some(&id_only(blank)), hold, later),
+                        decide(key, None, hold, later),
+                        "{blank:?} hold {hold:?}"
+                    );
+                }
             }
         }
     }
