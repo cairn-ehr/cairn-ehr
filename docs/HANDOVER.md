@@ -2,8 +2,42 @@
 
 ## ⇒ NEXT
 
+> [!IMPORTANT]
+> **⇒ THE NEXT GOAL (maintainer, 2026-10-31): a GUI milestone** — register a clinician as a user, log in, search /
+> select / register a patient, enter demographics, write a progress note, record an allergy, chart a medication,
+> sign everything off, log out. **Four decisions taken in conversation, not yet in any ADR:**
+> 1. **A superuser role assigns new users.** The installer creates at least one superuser at installation time.
+> 2. **A key vault holds the clinicians' signing keys**, so login is "choose who you are + passphrase", not a
+>    `--attester-key` path given at launch.
+> 3. **A draft auto-committed after the quarantine timer (the clinician has logged out) is RECORDED, NOT ATTESTED** —
+>    the clinician's key is gone, so it cannot carry their signature; attesting it later is an overlay.
+> 4. **"Prescribe" in this milestone means CHARTED** (a medication added to the chart from the window). Printed and
+>    electronic prescriptions come much later.
+>
+> **Open sub-questions these raise (brainstorm before building; none is a patch):** (a) one superuser is a single
+> point of lockout: require two, or say what the recovery is; (b) is superuser a separate role-actor of the same
+> person (the existing `(entity, role)` model, #168), and does it confer anything beyond enrol/revoke — it should
+> not; (c) **a backed-up vault breaks ADR-0026's reasoning** — its "the private signing key is never backed up" is
+> written for the NODE's key, but its argument (a stolen backup must not resurrect an identity) applies to a human's
+> key just as well — a new ADR either way, and it is the natural home for the human key-loss ceremony security §7.5
+> names an honest gap needing its own ADR (proposal: a superuser authorises a re-key) — but db/004's actor algebra
+> has only `enroll / supersede / revoke`, no `rotate-key` or `suspend`, and a re-key must answer **#247** (contributor
+> sets hold a key id, so authorship does not survive rotation) and **#664** (a superseded key stays in
+> `actor_current`, so a rotate-key door would let it keep authoring); (d) does the vault stay node-local or follow a
+> roaming clinician; (e) a recorded-not-attested draft needs a floor variant on EVERY stream it can land on — note,
+> allergy AND medication, not only notes: db/005 step 4b (`cairn_authorship_bound`, ADR-0053) is unconditional at
+> the strict door, so a node-signed event naming the clinician in a responsibility-bearing role (`authored`) is
+> refused on any stream; it needs a contributory role for the clinician or the `asserted` grade (named author, no
+> key; §7.3) that ADR-0053 deferred "with the UI"; (f) "charted
+> here by this clinician" should be visible on the line — `info_source` is value-open (`patient-reported |
+> clinician-observed | external-record | unknown`), so a new value may need no wire change; check before adding one.
+> **Build order proposed:** sign-in slice (vault, picker, explicit Lock/Sign out, window enrolment gated to the
+> superuser) → wire `cairn-gui-shell`'s tabs → demographics edit (events exist) → allergy stream (cloned from
+> medication; NKA ≠ unknown ≠ not asked) → add a medication from the window (`medication-assert` exists) → thin
+> encounter + durable draft store + a real note stream (`note.added` is a spike counter) → one encounter sign-off.
+
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER:** PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895) (branch `fix/893-cut-off-text`, closes #893): a command the window's
+> **PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895) MERGED 2026-10-31** (closes #893): a command the window's
 > watchdog cut off now SAYS so ("the command was not finished within 15 s, so this window cut the connection
 > off") instead of the bare `connection closed` a node restart leaves too. Every `NodeConnection` call site whose
 > error reaches the screen passes it through `ConnectionGuard::explain` while it holds the guard (pinned per
@@ -29,7 +63,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895)** (#893). Run #838's RUNBOOK §15 (now incl. #861's current-line check) and
+> 1. **Brainstorm the GUI milestone's sub-questions (the block above), then build its sign-in slice.** Still owed from
+>    PR #895 (merged): run #838's RUNBOOK §15 (now incl. #861's current-line check) and
 >    §14 checks (c) (the cause on screen; a refused reopen offers no retry; the front door's top line clears) and
 >    (d) (the waiting bar: none on an ordinary press; a locked `medication_statement` → "Waiting…", then cut off by 15 s,
 >    and since #893 the outcome says the window cut it off). **#894** needs the satellite rig. #891 needs a
