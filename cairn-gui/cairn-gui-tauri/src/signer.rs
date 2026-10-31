@@ -7,10 +7,12 @@
 //! clinician's staff ID and personal passphrase. The command asks
 //! `AppState::signer_for_act` for a key, which asks [`decide`] first:
 //!
-//! - a credential was typed → [`HeldDecision::Release`]: the node's vault checks the passphrase
-//!   INSIDE Postgres and hands back that clinician's key for this one act (db/061,
+//! - a passphrase was typed → [`HeldDecision::Release`]: the node's vault checks it INSIDE
+//!   Postgres and hands back that clinician's key for this one act (db/061,
 //!   `cairn_node::vault::release_for_act`);
-//! - no credential, and this terminal holds a key that has not run out → [`HeldDecision::UseHeld`];
+//! - no passphrase, and this terminal holds a key that has not run out → [`HeldDecision::UseHeld`]
+//!   when no staff ID or the holder's own was typed, [`HeldDecision::Forget`] when someone
+//!   else's was (an empty passphrase never reaches the vault, where it would count as a guess);
 //! - otherwise → [`HeldDecision::NeedCredential`].
 //!
 //! Whether a key is held at all is the terminal's `--key-hold-seconds` (spec §5.4): 0 on a
@@ -44,7 +46,13 @@ impl Credential {
     /// Both fields empty once spaces are trimmed: a webview that sent its empty strip. Treated
     /// as NO credential, so it never wipes a held key (`AppState::signer_for_act`).
     pub fn is_blank(&self) -> bool {
-        self.staff_id.trim_matches(' ').is_empty() && self.passphrase.trim_matches(' ').is_empty()
+        self.staff_id.trim_matches(' ').is_empty() && !self.has_passphrase()
+    }
+
+    /// Was a passphrase typed (anything but spaces)? Without one, [`decide`] never asks the
+    /// vault: an empty guess would be counted as a wrong one.
+    pub fn has_passphrase(&self) -> bool {
+        !self.passphrase.trim_matches(' ').is_empty()
     }
 }
 
@@ -67,23 +75,38 @@ pub enum HeldDecision {
     Release,
     /// Nothing can sign: ask the clinician for their staff ID and passphrase.
     NeedCredential,
+    /// Someone other than the holder typed a staff ID with no passphrase: wipe the held key
+    /// (they must not sign as the holder), then ask for their passphrase.
+    Forget,
 }
 
-/// Pure: which key signs the next act. A credential ALWAYS means a release, even over a live
-/// held key — whoever typed it is at the keyboard now (review focus 2). Without one, a held
-/// key serves only while the hold is on (`key_hold > 0`) and has not run out.
+/// Pure: which key signs the next act.
+///
+/// - A typed passphrase ALWAYS means a release, even over a live held key — whoever typed it is
+///   at the keyboard now (review focus 2).
+/// - A staff ID with NO passphrase is never sent to the vault (it would count as a wrong
+///   guess). On a held terminal the strip keeps the holder's ID, so that ID alone is the holder
+///   carrying on: the live held key signs. Anyone else's ID alone means someone new is at the
+///   keyboard: [`HeldDecision::Forget`]. The ID is matched trimmed of spaces and exactly, as the
+///   held key stores it (`SessionKey::new`); case lives in SQL alone (R7).
+/// - No credential: a held key serves only while the hold is on (`key_hold > 0`) and has not
+///   run out.
 pub fn decide(
     held: Option<&SessionKey>,
     credential: Option<&Credential>,
     key_hold: Duration,
     now: Now,
 ) -> HeldDecision {
-    if credential.is_some() {
-        return HeldDecision::Release;
-    }
-    match held {
-        Some(key) if !key_hold.is_zero() && !key.is_expired(now, key_hold) => HeldDecision::UseHeld,
-        _ => HeldDecision::NeedCredential,
+    let live = held.filter(|key| !key_hold.is_zero() && !key.is_expired(now, key_hold));
+    match (credential, live) {
+        (Some(c), _) if c.has_passphrase() => HeldDecision::Release,
+        (Some(c), Some(key)) if c.staff_id.trim_matches(' ') == key.staff_id => {
+            HeldDecision::UseHeld
+        }
+        (Some(_), Some(_)) => HeldDecision::Forget,
+        (Some(_), None) => HeldDecision::NeedCredential,
+        (None, Some(_)) => HeldDecision::UseHeld,
+        (None, None) => HeldDecision::NeedCredential,
     }
 }
 

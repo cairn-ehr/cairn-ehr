@@ -286,9 +286,10 @@ impl AppState {
     /// The steps (`crate::signer` has the rules):
     /// 1. [`decide`] under the session lock. A held key that serves is
     ///    touched (using it is activity) and returned with no database call.
-    /// 2. A typed credential first WIPES any held key, whatever the vault then says: someone
+    /// 2. A typed passphrase first WIPES any held key, whatever the vault then says: someone
     ///    new is at the keyboard, and a mistyped passphrase must not leave the last person's
-    ///    key signing the next act that carries none.
+    ///    key signing the next act that carries none. Another person's staff ID with no
+    ///    passphrase wipes it too ([`HeldDecision::Forget`]), without asking the vault.
     /// 3. The vault is asked with the session lock released (an Argon2 check takes a moment,
     ///    and the lock poll must not wait on it). A fault's detail goes to stderr, explained
     ///    through the connection guard so a cut-off says so (#893); the clinician gets
@@ -316,6 +317,10 @@ impl AppState {
                     return Ok((key.signing_key(), key.kid.clone()));
                 }
                 HeldDecision::NeedCredential => return Err(KeyRefusal::NeedCredential),
+                HeldDecision::Forget => {
+                    held.wipe();
+                    return Err(KeyRefusal::NeedCredential);
+                }
                 HeldDecision::Release => {
                     let seen = held.wipe();
                     (credential.ok_or(KeyRefusal::NeedCredential)?, seen)
@@ -605,6 +610,37 @@ mod tests {
         assert_eq!(
             state.signer_for_act(None, now).await.err(),
             Some(KeyRefusal::NeedCredential)
+        );
+    }
+
+    /// Final review item 1, at the seam: the holder's own staff ID with an empty passphrase signs
+    /// with the held key; anyone else's wipes it and asks for a passphrase. Neither asks the vault
+    /// (in fixture mode a vault call would be `Fault`), so an empty passphrase is never a counted
+    /// wrong guess.
+    #[tokio::test]
+    async fn a_staff_id_alone_never_asks_the_vault() {
+        let id_only = |id: &str| Credential {
+            staff_id: id.into(),
+            passphrase: Zeroizing::new(String::new()),
+        };
+        let now = Now::read();
+        let state = state_holding(Some(SessionKey::for_test(now)));
+        assert!(state
+            .signer_for_act(Some(id_only(" test-signer ")), now)
+            .await
+            .is_ok());
+        assert_eq!(
+            state.signer_for_act(Some(id_only("apark")), now).await.err(),
+            Some(KeyRefusal::NeedCredential)
+        );
+        assert!(
+            state.session.lock().await.key.is_none(),
+            "another person's ID must forget the held key"
+        );
+        assert_eq!(
+            state.signer_for_act(Some(id_only("apark")), now).await.err(),
+            Some(KeyRefusal::NeedCredential),
+            "with nothing held, an ID alone is not a credential either"
         );
     }
 

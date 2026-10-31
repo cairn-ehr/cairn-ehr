@@ -235,6 +235,84 @@ fn an_all_empty_credential_is_no_credential() {
     };
     assert!(typed("", "").is_blank());
     assert!(typed("  ", " ").is_blank());
+    // A staff ID alone is still a credential (it may name the held key's owner, below), but it
+    // carries no passphrase, so it can never be sent to the vault.
     assert!(!typed("jsmith", "").is_blank());
+    assert!(!typed("jsmith", " ").has_passphrase());
     assert!(!typed("", &test_passphrase()).is_blank());
+    assert!(typed("", &test_passphrase()).has_passphrase());
+}
+
+fn id_only(staff_id: &str) -> Credential {
+    Credential {
+        staff_id: staff_id.to_string(),
+        passphrase: Zeroizing::new(String::new()),
+    }
+}
+
+/// Final review item 1: on a held terminal the strip keeps the holder's staff ID, so the next
+/// act arrives as that ID with an empty passphrase. That is the holder carrying on, not a new
+/// credential: it signs with the held key. Matched after trimming spaces, and exactly (case
+/// lives in SQL alone, R7).
+#[test]
+fn the_holder_s_own_id_alone_uses_the_held_key() {
+    let now = Now::read();
+    let held = held_by("JSmith", now);
+    let hold = Duration::from_secs(900);
+    assert_eq!(
+        decide(Some(&held), Some(&id_only(" JSmith ")), hold, now),
+        HeldDecision::UseHeld
+    );
+    // Once the hold has run out, the ID alone signs nothing.
+    assert_eq!(
+        decide(Some(&held), Some(&id_only("JSmith")), hold, now.plus(hold)),
+        HeldDecision::NeedCredential
+    );
+    // Nor on a shared terminal, where no hold is ever live.
+    assert_eq!(
+        decide(Some(&held), Some(&id_only("JSmith")), Duration::ZERO, now),
+        HeldDecision::NeedCredential
+    );
+}
+
+/// Anyone else's ID with no passphrase is a new person at the keyboard: the held key is
+/// forgotten (they must not sign as the holder) and they are asked for their passphrase.
+#[test]
+fn another_id_alone_forgets_the_held_key() {
+    let now = Now::read();
+    let held = held_by("JSmith", now);
+    let hold = Duration::from_secs(900);
+    for other in ["apark", "jsmith"] {
+        assert_eq!(
+            decide(Some(&held), Some(&id_only(other)), hold, now),
+            HeldDecision::Forget,
+            "{other}"
+        );
+    }
+    assert_eq!(
+        decide(None, Some(&id_only("apark")), hold, now),
+        HeldDecision::NeedCredential
+    );
+}
+
+/// The bug this pins: an empty passphrase sent to the vault is a counted WRONG guess, so a
+/// nurse carrying on at her own held terminal would walk herself into the back-off. Whatever
+/// is held, for whoever, on any hold, an empty passphrase never yields a release.
+#[test]
+fn an_empty_passphrase_is_never_sent_to_the_vault() {
+    let now = Now::read();
+    let held = held_by("jsmith", now);
+    for key in [None, Some(&held)] {
+        for hold in [Duration::ZERO, Duration::from_secs(60), IDLE_TIMEOUT] {
+            for later in [now, now.plus(IDLE_TIMEOUT)] {
+                for id in ["jsmith", "apark", " jsmith "] {
+                    assert_ne!(
+                        decide(key, Some(&id_only(id)), hold, later),
+                        HeldDecision::Release,
+                        "{id:?} hold {hold:?}"
+                    );
+                }
+            }
+        }
+    }
 }
