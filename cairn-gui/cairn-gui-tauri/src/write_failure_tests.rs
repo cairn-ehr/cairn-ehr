@@ -93,7 +93,13 @@ fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
     // after the window's snapshot: its `Stale` refusal must reach the webview classified, never
     // as a plain string (#797 review — a revert to `refused(format!(…))` reads naturally here).
     assert!(
-        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&e))?"),
+        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&db.explain(e)))?"),
+        "sign_off_impl"
+    );
+    // #893: a sign-off the window cut off names the cut, read while the guard is held.
+    assert!(
+        rust_fn(src, "sign_off_impl")
+            .contains("name_the_cut(outcome.interrupted.as_mut(), db.cut_off());"),
         "sign_off_impl"
     );
 }
@@ -293,7 +299,9 @@ fn cease_sorts_an_interrupted_commit_from_a_failure() {
     let flat: String = body.split_whitespace().collect();
     for shape in [
         "Err(e)=>matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
-        "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
+        "Some(event)=>unknown.push(UnknownThread{thread:medication_id,event,cause:cairn_gui_live::cause_of(&e),}),",
+        // #893: a hold the window cut off says so, here and in the cause above.
+        ".await.map_err(|e|db.explain(e))",
         "lettext=cease_outcome(ceased,&failed,&unknown);",
         // #843: a Stop that landed on a line already stopped says so — only when every thread
         // of this press stopped for certain (#853 review: not beside a failure or an unknown).
@@ -447,4 +455,27 @@ fn a_stop_of_a_line_already_stopped_says_so() {
     // must not say "your stop is recorded" beside the sentence saying it is NOT known, or NOT
     // stopped (#853 review).
     assert_eq!(already_stopped_note(ceased, false), None);
+}
+
+/// #893: a sign-off the window cut off names the cut, not the bare "connection closed" a node
+/// restart leaves too; a stop with no cut keeps its cause.
+#[test]
+fn a_cut_off_sign_off_names_the_cut() {
+    use cairn_node::medication::signoff::{SignOffInterrupted, StoppedLine};
+    let stopped = || SignOffInterrupted {
+        medication_id: uuid::Uuid::from_u128(2),
+        line: StoppedLine::NotSigned,
+        cause: "connection closed".into(),
+        not_attempted: vec![],
+    };
+    let cut = cairn_gui_live::CutOff::for_tests(std::time::Duration::from_secs(15));
+
+    let mut cut_off = stopped();
+    name_the_cut(Some(&mut cut_off), Some(cut));
+    assert_eq!(cut_off.cause, cut.to_string());
+    assert!(cut_off.cause.contains("within 15 s"), "{}", cut_off.cause);
+
+    let mut restarted = stopped();
+    name_the_cut(Some(&mut restarted), None);
+    assert_eq!(restarted.cause, "connection closed");
 }

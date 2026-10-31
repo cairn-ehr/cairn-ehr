@@ -219,14 +219,21 @@ pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<Re
         return Err("there is no database to read the links from".into());
     };
     let mut db = db.lock().await.map_err(|e| e.to_string())?;
+    // Taken before the snapshot borrows the guard: says a cut-off read was cut off (#893).
+    let cut = db.cut_watch();
     let snapshot = db
         .build_transaction()
         .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
         .read_only(true)
         .start()
         .await
-        .map_err(|e| format!("could not open a read of the links: {e}"))?;
-    let diagnose = |e: anyhow::Error| cairn_node::db_diagnosis::operator_chain(&e);
+        .map_err(|e| {
+            format!(
+                "could not open a read of the links: {:#}",
+                cut.explain(e.into())
+            )
+        })?;
+    let diagnose = |e: anyhow::Error| cairn_node::db_diagnosis::operator_chain(&cut.explain(e));
     let edges = cairn_node::patient::edges::record_edges(&snapshot, charts)
         .await
         .map_err(diagnose)?;
@@ -240,10 +247,12 @@ pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<Re
         .map_err(diagnose);
     if unverified.is_ok() {
         // Read-only: dropping would roll back just as well; committing says the read is finished.
-        snapshot
-            .commit()
-            .await
-            .map_err(|e| format!("could not finish the read of the links: {e}"))?;
+        snapshot.commit().await.map_err(|e| {
+            format!(
+                "could not finish the read of the links: {:#}",
+                cut.explain(e.into())
+            )
+        })?;
     }
     // On a failed notes read the aborted transaction is dropped, which rolls it back.
     Ok(RecordLinks {

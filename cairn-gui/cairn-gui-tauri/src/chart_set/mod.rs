@@ -392,7 +392,7 @@ pub async fn chart_identities(state: &AppState, ids: &[Uuid]) -> Result<Vec<Memb
     let db = db.lock().await.map_err(|e| e.to_string())?;
     let identities = cairn_node::patient::person::chart_identities(&*db, &charts)
         .await
-        .map_err(|e| format!("{e:#}"))?;
+        .map_err(|e| format!("{:#}", db.explain(e)))?;
     Ok(identities.iter().map(member_line).collect())
 }
 

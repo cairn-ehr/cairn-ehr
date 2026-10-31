@@ -69,15 +69,15 @@ pub async fn duplicate_section(
                     chart: *chart,
                     pending: chart_check_pending(&db, *chart)
                         .await
-                        .map_err(|e| operator_chain(&e)),
+                        .map_err(|e| operator_chain(&db.explain(e))),
                 });
             }
             let status = read_snapshot(&db)
                 .await
                 .map(|s| classify(&s, STALLED_AFTER_SECS))
-                .map_err(|e| operator_chain(&e));
+                .map_err(|e| operator_chain(&db.explain(e)));
             let found = match duplicate_review::possible_duplicates(&*db, charts).await {
-                Err(e) => Err(operator_chain(&e)),
+                Err(e) => Err(operator_chain(&db.explain(e))),
                 Ok(entries) => {
                     let total = entries.len();
                     let mut shown = vec![];
@@ -88,7 +88,7 @@ pub async fn duplicate_section(
                         )
                         .await
                         .map(|ids| ids.iter().map(member_line).collect::<Vec<_>>())
-                        .map_err(|e| operator_chain(&e));
+                        .map_err(|e| operator_chain(&db.explain(e)));
                         shown.push((entry, ids));
                     }
                     Ok((total, shown))
@@ -175,7 +175,7 @@ async fn record_charts(state: &AppState, patient: Uuid) -> Result<ChartSet, Stri
     let db = db.lock().await.map_err(|e| e.to_string())?;
     cairn_node::patient::person::person_charts(&*db, patient)
         .await
-        .map_err(|e| operator_chain(&e))
+        .map_err(|e| operator_chain(&db.explain(e)))
 }
 
 #[tauri::command]
@@ -217,7 +217,7 @@ pub(crate) async fn admit_other(
             text: format!(
                 "Could not read whether that chart is an open possible duplicate of this record \
                  — nothing was done: {}",
-                operator_chain(&e)
+                operator_chain(&db.explain(e))
             ),
             retry: Retry::Now,
         })?;
@@ -302,7 +302,7 @@ pub async fn different_people_impl(
     .map_err(|e| ErrorView {
         text: format!(
             "Could not read whether this possible duplicate is still open — nothing was done: {}",
-            operator_chain(&e)
+            operator_chain(&db.explain(e))
         ),
         retry: Retry::Now,
     })?;

@@ -129,6 +129,17 @@ pub(crate) fn sign_off_outcome(
     (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
+/// The sign-off orchestrator names a stop's ROOT cause, which for a hold the window cut off is
+/// only "connection closed", the text of a node restart too: name the cut instead (#893). Pure.
+pub(crate) fn name_the_cut(
+    stopped: Option<&mut cairn_node::medication::signoff::SignOffInterrupted>,
+    cut: Option<cairn_gui_live::CutOff>,
+) {
+    if let (Some(stopped), Some(cut)) = (stopped, cut) {
+        stopped.cause = cut.to_string();
+    }
+}
+
 /// A thread whose write (a cease, a withhold, a release) got no ordinary answer at commit
 /// (#814): the write may or may not have landed, so the thread is neither done nor failed.
 #[derive(Debug, Clone, PartialEq, Eq)]

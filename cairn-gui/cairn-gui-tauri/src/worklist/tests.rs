@@ -247,7 +247,7 @@ fn a_failed_names_read_says_what_was_being_read() {
 #[test]
 fn the_names_read_is_worded_through_names_read_error() {
     let body = crate::source_guard::rust_fn(include_str!("mod.rs"), "worklist_impl");
-    crate::source_guard::position(body, ".map_err(names_read_error)");
+    crate::source_guard::position(body, ".map_err(|e| names_read_error(cut.explain(e)))");
 }
 
 /// #752 points 1 and 2, the webview's half. The tray's two reads are ordered by their own

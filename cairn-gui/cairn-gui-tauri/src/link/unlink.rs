@@ -224,10 +224,19 @@ pub async fn compare_linked_impl(
     let (l, h) = (ChartSet::single(edge.low), ChartSet::single(edge.high));
     let standing = cairn_node::chart_link::standing_link(&*db, edge.low, edge.high).await;
     let parts = UnlinkParts {
-        low: as_text(cairn_node::patient::compare::chart_facts(&*db, &l).await),
-        high: as_text(cairn_node::patient::compare::chart_facts(&*db, &h).await),
-        findings: as_text(cairn_node::patient::compare::cross_vetoes(&*db, &l, &h).await),
-        standing: as_text(standing),
+        low: as_text(
+            &db,
+            cairn_node::patient::compare::chart_facts(&*db, &l).await,
+        ),
+        high: as_text(
+            &db,
+            cairn_node::patient::compare::chart_facts(&*db, &h).await,
+        ),
+        findings: as_text(
+            &db,
+            cairn_node::patient::compare::cross_vetoes(&*db, &l, &h).await,
+        ),
+        standing: as_text(&db, standing),
     };
     Ok(link_review_view(
         parts,
@@ -299,7 +308,7 @@ pub async fn unlink_impl(
         &state.node_origin,
     )
     .await
-    .map_err(|e| unlink_error_view(&e))?;
+    .map_err(|e| unlink_error_view(&db.explain(e)))?;
     // `left`: the set this unlink left the record on screen as — read by the node inside the
     // act's own transaction — so the window's re-read compares against it and never announces
     // the clinician's own unlink back to them (#797). Attached only if the unlink changed the

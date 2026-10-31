@@ -58,6 +58,9 @@
 //! - **The limit cannot tell a dead link from a node alive but slower than 15 s**; that is why
 //!   it sits far above the slowest command measured (a patient search on the Pi, about 0.9 s). A
 //!   `fixed` connection has no watchdog: aborting it would kill it for good.
+//! - **A cut-off command's error says so** (#893): the stuck query fails with the same bare
+//!   `connection closed` as a server restart, so each call site passes its error through
+//!   [`ConnectionGuard::explain`] while it still holds the guard (`cut_off.rs`).
 //!
 //! The reopen uses `cairn_node::db::connect_with_task`, not `connect_and_load_schema`: the schema
 //! was loaded at launch, and replaying every `db/*.sql` file takes locks a read never needs
@@ -70,6 +73,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 use tokio::task::AbortHandle;
 use tokio_postgres::Client;
+
+mod cut_off;
+pub use cut_off::{cause_of, CutOff, CutWatch};
 
 /// The connection was lost and could not be reopened, either by this press or, inside the
 /// backoff, by the press that last tried; the text says why (#876). The text is a lowercase
@@ -364,6 +370,8 @@ struct Watch {
     watchdog: AbortHandle,
     claimed: Arc<AtomicBool>,
     cutter: Cutter,
+    /// The limit this hold runs under, for the text that says it was cut off (#893).
+    limit: Duration,
 }
 
 impl Watch {
@@ -389,6 +397,7 @@ impl Watch {
             watchdog,
             claimed,
             cutter,
+            limit,
         }
     }
 

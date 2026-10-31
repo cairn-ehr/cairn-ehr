@@ -8,7 +8,10 @@
 //! `2026-10-30-875-window-answer-limit.md`). Each test sets a short limit so the suite stays fast.
 mod common;
 
-use cairn_gui_live::NodeConnection;
+use cairn_gui_data::port::{DataError, PatientSearch};
+use cairn_gui_live::error::data_error_from;
+use cairn_gui_live::{LiveData, NodeConnection};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The limit these tests run with, in place of the window's 15 s.
@@ -16,6 +19,9 @@ const LIMIT: Duration = Duration::from_secs(1);
 
 /// How long past the limit a cut-off may take to show: the abort and the closed client.
 const SLACK: Duration = Duration::from_secs(5);
+
+/// What a cut-off command's error says (#893), at `LIMIT`.
+const CUT_TEXT: &str = "the node did not answer within 1 s, so this window cut the connection off";
 
 /// The window's kind of connection, watched with the short limit, reopening from `cs`.
 async fn watched(cs: &str) -> NodeConnection {
@@ -119,13 +125,24 @@ async fn a_commit_cut_off_is_not_known_and_its_re_read_is_final() {
         tx.execute("INSERT INTO answer_limit_probe VALUES (1)", &[])
             .await
             .expect("the insert");
-        tx.commit().await
+        // As an orchestrator marks it, then as a call site explains it under the guard (#893).
+        let committed = tx.commit().await.map_err(|fault| {
+            cairn_node::db_diagnosis::commit_failure(uuid::Uuid::now_v7(), fault.into())
+        });
+        committed.map_err(|marked| client.explain(marked))
     };
-    let fault = committed.expect_err("the commit is cut off before it answers");
-    let marked = cairn_node::db_diagnosis::commit_failure(uuid::Uuid::now_v7(), fault.into());
+    let marked = committed.expect_err("the commit is cut off before it answers");
     assert!(
         cairn_node::db_diagnosis::commit_outcome_unknown_event(&marked).is_some(),
         "a cut-off commit is not known: {marked:#}"
+    );
+    assert!(
+        matches!(data_error_from(&marked), DataError::OutcomeUnknown(_)),
+        "saying it was cut off does not change its class: {marked:#}"
+    );
+    assert!(
+        cairn_gui_live::cause_of(&marked).contains(CUT_TEXT),
+        "the outcome line's cause says the window cut it off: {marked:#}"
     );
 
     // The trigger sleeps 3 s from the commit; the cut came at 1 s. The re-read must already
@@ -210,4 +227,60 @@ async fn a_hold_kept_past_the_limit_between_statements_is_cut_off() {
     }
 
     assert_ne!(backend_pid(&db).await, before, "a fresh connection");
+}
+
+/// #893: a cut-off command's error says the WINDOW cut it off, not merely "connection closed"
+/// (the text of a server restart too), and it stays an outage to retry.
+#[tokio::test]
+async fn a_cut_off_command_says_the_window_cut_it_off() {
+    let Some(cs) = common::cs() else { return };
+    let (_reader, _guard) = common::connect(&cs).await;
+    let db = watched(&cs).await;
+
+    let explained = {
+        let client = db.lock().await.expect("open");
+        let stuck = client.execute("SELECT pg_sleep(10)", &[]).await;
+        client.explain(stuck.expect_err("cut off").into())
+    };
+    assert!(format!("{explained:#}").contains(CUT_TEXT), "{explained:#}");
+    match data_error_from(&explained) {
+        DataError::Unavailable(text) => assert!(text.contains(CUT_TEXT), "{text}"),
+        other => panic!("a cut-off read is an outage to retry: {other:?}"),
+    }
+
+    // A hold that answered in time explains nothing.
+    let client = db.lock().await.expect("reopened");
+    let refused = client.execute("SELECT no_such_column", &[]).await;
+    let plain = client.explain(refused.expect_err("an answered error").into());
+    assert!(
+        !format!("{plain:#}").contains("cut the connection off"),
+        "{plain:#}"
+    );
+}
+
+/// #893 at a call site: a patient search stuck behind a lock is cut off, and the error the
+/// front door shows says so.
+#[tokio::test]
+async fn a_cut_off_search_says_the_window_cut_it_off() {
+    let Some(cs) = common::cs() else { return };
+    let (mut reader, _guard) = common::connect(&cs).await;
+    let (sk, _kid) = common::setup(&reader).await;
+    let live = LiveData::sharing(
+        Arc::new(watched(&cs).await),
+        sk,
+        &common::identity("gui-live-origin"),
+    );
+
+    let lock = reader.transaction().await.expect("a transaction");
+    lock.batch_execute("LOCK TABLE patient_name IN ACCESS EXCLUSIVE MODE")
+        .await
+        .expect("the lock");
+    let query = cairn_patient_search::SearchQuery::new("Stuck", None, &[]);
+    let searched = live.search(&query, "2026-10-31").await;
+    lock.rollback().await.expect("the lock released");
+
+    match searched {
+        Err(DataError::Unavailable(text)) => assert!(text.contains(CUT_TEXT), "{text}"),
+        other => panic!("a cut-off search is an outage that says it was cut off: {other:?}"),
+    }
 }

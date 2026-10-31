@@ -27,8 +27,8 @@ use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
-    already_stopped_note, cease_outcome, chart_read_failed, key_locked, node_cannot_write,
-    node_failure, retry_when_nothing_written, sign_off_outcome, UnknownThread,
+    already_stopped_note, cease_outcome, chart_read_failed, key_locked, name_the_cut,
+    node_cannot_write, node_failure, retry_when_nothing_written, sign_off_outcome, UnknownThread,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{elsewhere_report, short_kid, PatientMedicationList};
@@ -146,7 +146,7 @@ pub async fn unlock(
         .map_err(|e| format!("Your passphrase was right, but the key was not unlocked: the {e}"))?;
     if !cairn_node::identify::attester_is_enrolled_human(&db, &kid)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| db.explain(e).to_string())?
     {
         return Err(format!(
             "key {} is not an enrolled human actor on this node — run `cairn-node \
@@ -269,7 +269,7 @@ pub async fn sign_off_impl(
             basis: None,
             note: None,
         };
-        cairn_node::medication::signoff::sign_off_medication_list(
+        let mut outcome = cairn_node::medication::signoff::sign_off_medication_list(
             &mut db,
             node_sk,
             &state.node_origin,
@@ -280,7 +280,9 @@ pub async fn sign_off_impl(
             Some(&shown),
         )
         .await
-        .map_err(|e| node_failure(&e))?
+        .map_err(|e| node_failure(&db.explain(e)))?;
+        name_the_cut(outcome.interrupted.as_mut(), db.cut_off());
+        outcome
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
     // Every field named, none behind `..` (#820): a field added to the outcome breaks this
@@ -471,20 +473,19 @@ pub async fn cease_impl(
         // it is reported with the others, never as "nothing was done" (#876).
         let result = match db.lock().await {
             Err(lost) => Err(anyhow::Error::from(lost)),
-            Ok(mut db) => {
-                cairn_node::medication::cease_medication(
-                    &mut db,
-                    node_sk,
-                    &node_kid,
-                    &state.node_origin,
-                    thread_chart,
-                    medication_id,
-                    &input,
-                    Some(&author),
-                    None,
-                )
-                .await
-            }
+            Ok(mut db) => cairn_node::medication::cease_medication(
+                &mut db,
+                node_sk,
+                &node_kid,
+                &state.node_origin,
+                thread_chart,
+                medication_id,
+                &input,
+                Some(&author),
+                None,
+            )
+            .await
+            .map_err(|e| db.explain(e)),
         };
         match result {
             Ok(_) => ceased += 1,
@@ -493,7 +494,7 @@ pub async fn cease_impl(
                 Some(event) => unknown.push(UnknownThread {
                     thread: medication_id,
                     event,
-                    cause: e.root_cause().to_string(),
+                    cause: cairn_gui_live::cause_of(&e),
                 }),
                 None => {
                     retries.push(node_failure(&e).retry);
@@ -556,6 +557,7 @@ pub(crate) async fn read_chart_of(
         cairn_node::medication::read::list_patient_medications(tx, patient).await
     })
     .await
+    .map_err(|e| db.explain(e))
 }
 
 /// Record what a gesture cost, and never let that recording fail the gesture.

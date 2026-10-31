@@ -173,6 +173,7 @@ pub async fn withhold_impl(
             Some(&author),
         )
         .await
+        .map_err(|e| db.explain(e))
     };
     // ONE write, so one outcome: landed, NOT known (#814), or an ordinary failure returned as
     // the node's own sentence.
@@ -182,7 +183,7 @@ pub async fn withhold_impl(
             Some(event) => Some(UnknownThread {
                 thread: medication_id,
                 event,
-                cause: e.root_cause().to_string(),
+                cause: cairn_gui_live::cause_of(&e),
             }),
             None => return Err(node_failure(&e)),
         },
@@ -299,20 +300,19 @@ pub async fn release_impl(
         // it is reported with the others, never as "nothing was done" (#876).
         let result = match db.lock().await {
             Err(lost) => Err(anyhow::Error::from(lost)),
-            Ok(mut db) => {
-                cairn_node::medication::release_medication_holds(
-                    &mut db,
-                    node_sk,
-                    &node_kid,
-                    &state.node_origin,
-                    thread_chart,
-                    medication_id,
-                    &ids,
-                    reason,
-                    Some(&author),
-                )
-                .await
-            }
+            Ok(mut db) => cairn_node::medication::release_medication_holds(
+                &mut db,
+                node_sk,
+                &node_kid,
+                &state.node_origin,
+                thread_chart,
+                medication_id,
+                &ids,
+                reason,
+                Some(&author),
+            )
+            .await
+            .map_err(|e| db.explain(e)),
         };
         match result {
             Ok(_) => released += ids.len(),
@@ -321,7 +321,7 @@ pub async fn release_impl(
                 Some(event) => unknown.push(UnknownThread {
                     thread: medication_id,
                     event,
-                    cause: e.root_cause().to_string(),
+                    cause: cairn_gui_live::cause_of(&e),
                 }),
                 None => {
                     retries.push(node_failure(&e).retry);

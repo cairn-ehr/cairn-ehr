@@ -27,7 +27,7 @@ impl LiveData {
         let db = self.db.lock().await?;
         require_device_actor(&db, &self.node_kid)
             .await
-            .map_err(|e| data_error_from(&e))
+            .map_err(|e| data_error_from(&db.explain(e)))
     }
 
     /// Where this node's signing key stands — the window's provisioning line, asked on every
@@ -46,7 +46,7 @@ impl LiveData {
             let db = db.lock().await?;
             device_actor_standing(&db, &kid)
                 .await
-                .map_err(|e| data_error_from(&e))
+                .map_err(|e| data_error_from(&db.explain(e)))
         })
         .await
         .unwrap_or_else(|e| Err(DataError::Unavailable(format!("the check stopped: {e}"))))
@@ -62,7 +62,7 @@ impl LiveData {
         let row = db
             .query_one("SELECT current_date::text", &[])
             .await
-            .map_err(|e| data_error_from(&anyhow::Error::from(e)))?;
+            .map_err(|e| data_error_from(&db.explain(e.into())))?;
         Ok(row.get(0))
     }
 }
