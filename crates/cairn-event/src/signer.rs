@@ -58,6 +58,19 @@ mod tests {
         }
     }
 
+    /// Test-only signer that refuses every request, as a vault signer will when it cannot be
+    /// reached. Its public key is real, so only the refusal can stop the signature.
+    struct RefusingSigner;
+
+    impl EventSigner for RefusingSigner {
+        fn verifying_key(&self) -> VerifyingKey {
+            key().verifying_key()
+        }
+        fn sign_tbs(&self, _tbs: &[u8]) -> Result<Signature, crate::EventError> {
+            Err(crate::EventError::Seal("the signer refused".into()))
+        }
+    }
+
     fn key() -> SigningKey {
         // Runtime-derived seed, never a literal (house rule 6).
         SigningKey::from_bytes(&std::array::from_fn(|i| (i * 7 + 3) as u8))
@@ -113,5 +126,14 @@ mod tests {
         assert_eq!(via_trait, direct);
         assert_eq!(c.calls.load(Ordering::SeqCst), 1);
         assert!(verify_attestation(&via_trait, &ca, &key().verifying_key()));
+    }
+
+    /// The point of a fallible `sign_tbs`: a refusal reaches the caller as an error, never as a
+    /// token or signed event built around a missing signature.
+    #[test]
+    fn a_refusing_signer_signs_nothing() {
+        assert!(sign(&body(), &RefusingSigner).is_err());
+        let kid = hex::encode(key().verifying_key().to_bytes());
+        assert!(sign_attestation(&[9u8; 34], &kid, "attested", &RefusingSigner).is_err());
     }
 }

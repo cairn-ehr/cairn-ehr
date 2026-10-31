@@ -815,13 +815,20 @@ async fn both_doors_refuse_a_pinned_set_they_did_not_build() {
             "an extra determinant",
             r#"{"role":"superuser","handle":"boss","registration_id":"MED-1"}"#.to_string(),
         ),
-        ("a typed, not normalised, handle", pinned("superuser", " Boss ")),
+        (
+            "a typed, not normalised, handle",
+            pinned("superuser", " Boss "),
+        ),
     ];
     for (what, set) in &wrong {
         let e = bootstrap(&c, " Boss ", set, test_seed(1))
             .await
             .expect_err(what);
-        assert!(db_message(&e).contains("pinned"), "{what}: {}", db_message(&e));
+        assert!(
+            db_message(&e).contains("pinned"),
+            "{what}: {}",
+            db_message(&e)
+        );
     }
     bootstrap(&c, " Boss ", &pinned("superuser", "boss"), test_seed(1))
         .await
@@ -835,13 +842,20 @@ async fn both_doors_refuse_a_pinned_set_they_did_not_build() {
             "an extra determinant",
             r#"{"role":"clinician","handle":"anurse","registration_id":"MED-1"}"#.to_string(),
         ),
-        ("a typed, not normalised, handle", pinned("clinician", " ANurse ")),
+        (
+            "a typed, not normalised, handle",
+            pinned("clinician", " ANurse "),
+        ),
     ];
     for (what, set) in &wrong {
         let e = enrol_pinned(&c, " ANurse ", seed, "clinician", set, "boss", &token)
             .await
             .expect_err(what);
-        assert!(db_message(&e).contains("pinned"), "{what}: {}", db_message(&e));
+        assert!(
+            db_message(&e).contains("pinned"),
+            "{what}: {}",
+            db_message(&e)
+        );
     }
     enrol_pinned(
         &c,

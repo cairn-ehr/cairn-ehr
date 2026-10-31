@@ -441,4 +441,37 @@ mod tests {
              body.safety, not just leave it alone"
         );
     }
+
+    /// A human signer that refuses, as a vault-backed one will when it cannot be reached.
+    struct RefusingSigner(SigningKey);
+
+    impl EventSigner for RefusingSigner {
+        fn verifying_key(&self) -> cairn_event::VerifyingKey {
+            self.0.verifying_key()
+        }
+        fn sign_tbs(&self, _tbs: &[u8]) -> Result<cairn_event::Signature, cairn_event::EventError> {
+            Err(cairn_event::EventError::Seal("the signer refused".into()))
+        }
+    }
+
+    /// The swap seam, pinned at compile time: `AuthorParams` takes ANY `EventSigner`, not a
+    /// `&SigningKey`, so slice 5's in-database signer drops in without touching a call site. And
+    /// its refusal stops the seal-and-sign: no medication event is built around a missing
+    /// signature, and the node's key does not quietly sign in the human's place.
+    #[test]
+    fn a_refusing_human_signer_seals_and_signs_nothing() {
+        let human = RefusingSigner(SigningKey::from_bytes(&std::array::from_fn(|i| {
+            i as u8 ^ 0x5a
+        })));
+        let node_sk = SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_mul(3)));
+        let human_kid = hex::encode(human.verifying_key().to_bytes());
+        let author = AuthorParams {
+            human_sk: &human,
+            human_kid: &human_kid,
+        };
+        let mut body = bare_body(serde_json::json!({"drug": "test"}));
+        body.plaintext_twin = Some("a test twin".into());
+        let (body, signer) = apply_author(body, Some(&author), &node_sk);
+        assert!(seal_and_sign(body, signer).is_err());
+    }
 }

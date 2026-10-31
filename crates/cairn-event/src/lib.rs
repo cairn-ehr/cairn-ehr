@@ -34,7 +34,8 @@ pub use attachment::{Attachment, Rendition, SealRef};
 // contributor-vocabulary detail: `verify_self_described_event` yields one through
 // `VerifiedEvent::signer` (#412).
 pub use contributor::VerifiedKid;
-pub use ed25519_dalek::{SigningKey, VerifyingKey};
+// `Signature` too: it is in `EventSigner::sign_tbs`'s signature, so a signer outside this crate needs it.
+pub use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 pub use signer::EventSigner;
 // Re-exported at the crate root for the same reason `VerifiedKid` is: the unwrap-key cert API
 // (`sign_unwrap_key_cert` / `verify_unwrap_key_cert`) lives here, so its key type is part of this
