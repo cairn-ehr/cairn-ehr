@@ -421,6 +421,12 @@ fn the_terminal_verdict_tells_not_set_from_wrong() {
     );
     assert_eq!(terminal_verdict(Some(&phc), "other"), TerminalUnlock::Wrong);
     assert_eq!(terminal_verdict(None, "anything"), TerminalUnlock::NotSet);
+    // A damaged PHC is the node's fault: every staff member would otherwise be told their
+    // correct shared passphrase is wrong (PR #897 review).
+    assert_eq!(
+        terminal_verdict(Some("not a phc"), "shared pass"),
+        TerminalUnlock::Fault
+    );
     let words = |v| serde_json::to_string(&v).unwrap();
     assert_eq!(words(TerminalUnlock::Unlocked), "\"unlocked\"");
     assert_eq!(words(TerminalUnlock::Wrong), "\"wrong\"");

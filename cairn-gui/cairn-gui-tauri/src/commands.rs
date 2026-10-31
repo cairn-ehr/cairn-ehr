@@ -193,14 +193,19 @@ pub fn terminal_read_verdict<E>(
     }
 }
 
-/// Pure: the verdict for `passphrase` against the node's terminal PHC, if one is set.
+/// The verdict for `passphrase` against the node's terminal PHC, if one is set. A PHC that
+/// cannot be checked is `Fault` (detail to stderr), never `Wrong`.
 pub fn terminal_verdict(phc: Option<&str>, passphrase: &str) -> TerminalUnlock {
-    match phc {
-        None => TerminalUnlock::NotSet,
-        Some(phc) if cairn_node::vault::terminal_unlock_ok(phc, passphrase) => {
-            TerminalUnlock::Unlocked
+    let Some(phc) = phc else {
+        return TerminalUnlock::NotSet;
+    };
+    match cairn_node::vault::terminal_unlock_ok(phc, passphrase) {
+        Ok(true) => TerminalUnlock::Unlocked,
+        Ok(false) => TerminalUnlock::Wrong,
+        Err(e) => {
+            eprintln!("the terminal passphrase could not be checked: {e:#}");
+            TerminalUnlock::Fault
         }
-        Some(_) => TerminalUnlock::Wrong,
     }
 }
 

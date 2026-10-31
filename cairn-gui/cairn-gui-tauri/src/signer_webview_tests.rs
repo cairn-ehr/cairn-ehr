@@ -235,3 +235,30 @@ fn the_enrol_panel_is_labelled_warns_about_the_hint_and_clears_both_ways() {
         "an enrol is not a signed act"
     );
 }
+
+/// Lock empties the strip BEFORE it asks Rust, so a Lock whose call fails still leaves no typed
+/// credential for the next person's press to sign with (PR #897 review).
+#[test]
+fn lock_clears_the_strip_before_it_asks() {
+    let lock = js_fn(SIGNER_JS, "lockNow");
+    let cleared = position(lock, "el(\"signer-passphrase\").value = \"\";");
+    assert!(
+        cleared < position(lock, "invoke(\"forget_held_key\")"),
+        "lockNow must clear the passphrase before invoking: {lock}"
+    );
+    assert!(
+        position(lock, "el(\"staff-id\").value = \"\";") < position(lock, "invoke("),
+        "lockNow must clear the staff ID before invoking: {lock}"
+    );
+}
+
+/// A hint that could not be READ says so (Rust's worded refusal), rather than looking like a
+/// member with no hint (PR #897 review).
+#[test]
+fn a_failed_hint_read_is_shown_not_hidden() {
+    let hint = js_fn(SIGNER_JS, "showSignerHint");
+    assert!(
+        hint.contains("failureText(e)"),
+        "a failed hint read must show its refusal: {hint}"
+    );
+}

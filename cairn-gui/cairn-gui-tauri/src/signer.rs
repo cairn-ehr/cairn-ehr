@@ -50,9 +50,10 @@ impl Credential {
     }
 
     /// Was a passphrase typed (anything but spaces)? Without one, [`decide`] never asks the
-    /// vault: an empty guess would be counted as a wrong one.
+    /// vault: an empty guess would be counted as a wrong one. The same rule every enrolment
+    /// door applies to a new passphrase, so no member can be enrolled under one this refuses.
     pub fn has_passphrase(&self) -> bool {
-        !self.passphrase.trim_matches(' ').is_empty()
+        cairn_node::vault::passphrase_is_usable(&self.passphrase)
     }
 }
 
@@ -126,6 +127,8 @@ pub enum KeyRefusal {
     Unknown,
     /// A superuser's key: it confers no clinical authorship (spec §5.1), so the vault refused it.
     NotForClinicalActs,
+    /// This member's key was revoked or replaced: it can sign nothing here.
+    NotCurrent,
     /// The node could not be asked, or answered something we will not sign with. The detail is
     /// on the operator's stderr.
     Fault,
@@ -152,6 +155,11 @@ impl KeyRefusal {
             KeyRefusal::NotForClinicalActs => {
                 "A superuser cannot sign a clinical act. Enter your own staff ID.".into()
             }
+            KeyRefusal::NotCurrent => {
+                "Your signing key is no longer enrolled here. Nothing was signed. Ask a \
+                 superuser to enrol you again."
+                    .into()
+            }
             KeyRefusal::Fault => {
                 "Your passphrase could not be checked. Nothing was signed. Try again, and if it \
                  fails again, ask your IT support."
@@ -174,6 +182,7 @@ pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), Key
         Release::Waiting { retry_after } => Err(KeyRefusal::Waiting { retry_after }),
         Release::Unknown => Err(KeyRefusal::Unknown),
         Release::RefusedPurpose => Err(KeyRefusal::NotForClinicalActs),
+        Release::NotCurrent => Err(KeyRefusal::NotCurrent),
     }
 }
 

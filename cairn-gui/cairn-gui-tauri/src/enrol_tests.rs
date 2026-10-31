@@ -66,6 +66,48 @@ fn an_empty_passphrase_is_refused() {
     );
 }
 
+/// Spaces alone are no passphrase: sign-in would never send one to the vault, so enrolling it
+/// seals a key its owner can never use (PR #897 review).
+#[test]
+fn a_passphrase_of_spaces_is_refused() {
+    assert_eq!(
+        check_form(&form("   ", "   ")),
+        Err(EnrolRefusal::PassphraseEmpty)
+    );
+}
+
+/// A failed enrolment the server did not answer may have been recorded: the superuser is told to
+/// check, never "nothing was recorded", which invites enrolling the person again under a new ID.
+#[test]
+fn an_unanswered_enrolment_failure_is_outcome_unknown() {
+    let lost = anyhow::anyhow!("connection closed");
+    assert_eq!(enrol_failure(&lost), EnrolRefusal::OutcomeUnknown);
+    let said = EnrolRefusal::OutcomeUnknown.sentence();
+    assert!(said.contains("may have been enrolled"), "{said}");
+    assert!(!said.contains("Nothing was recorded"), "{said}");
+}
+
+/// A typed superuser passphrase means someone new is at the keyboard, as on a clinical act: the
+/// held key is wiped first, so the next act with an empty strip cannot sign as its holder.
+#[test]
+fn enrolling_wipes_a_held_key() {
+    let mut state = AppState::mock(None);
+    state.key_hold = Duration::from_secs(900);
+    state.session.try_lock().unwrap().key = Some(crate::state::SessionKey::for_test(Now::read()));
+    let said = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(enrol_member_impl(
+            &state,
+            credential("boss", &pass("s")),
+            form(&pass("a"), &pass("a")),
+        ));
+    assert_eq!(said, Err(EnrolRefusal::Fixture.sentence()));
+    assert!(
+        state.session.try_lock().unwrap().key.is_none(),
+        "the held key was wiped"
+    );
+}
+
 #[test]
 fn a_member_needs_a_phone_or_an_email() {
     let mut f = form(&pass("a"), &pass("a"));
@@ -105,6 +147,7 @@ fn every_sentence_is_plain_and_names_no_value() {
         EnrolRefusal::MissingDetail,
         EnrolRefusal::NotForEnrolment,
         EnrolRefusal::NotRecorded,
+        EnrolRefusal::OutcomeUnknown,
         EnrolRefusal::Fixture,
         EnrolRefusal::AlreadyEnrolled,
         EnrolRefusal::NeedSuperuser,
@@ -112,6 +155,37 @@ fn every_sentence_is_plain_and_names_no_value() {
         let s = r.sentence();
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
     }
+}
+
+/// The ORDER the DB-gated tests below prove, pinned where CI can see it: CI's GUI job has no
+/// database, so those tests skip there (PR #897 review). Held key wiped, then the duplicate asked
+/// about, then the superuser's key released, then the enrolment; and never through the held
+/// session (`signer_for_act` may hold a key, and a superuser's must never be held).
+#[test]
+fn the_enrolment_runs_its_steps_in_order() {
+    let body: String = crate::source_guard::rust_fn(include_str!("enrol.rs"), "enrol_member_impl")
+        .split_whitespace()
+        .collect();
+    let order = [
+        "check_form(&member)",
+        "if!credential.has_passphrase(){",
+        "state.forget_held_key().await;",
+        "cairn_node::vault::staff_id_taken(",
+        "cairn_node::vault::release_for_act(",
+        "cairn_node::vault::enrol_member(",
+    ];
+    let at: Vec<usize> = order
+        .iter()
+        .map(|shape| {
+            body.find(shape)
+                .unwrap_or_else(|| panic!("{shape}\n{body}"))
+        })
+        .collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{body}");
+    assert!(
+        !body.contains("signer_for_act") && !body.contains("session"),
+        "{body}"
+    );
 }
 
 // ---- DB-gated ----

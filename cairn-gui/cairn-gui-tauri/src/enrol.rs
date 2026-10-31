@@ -6,10 +6,12 @@
 //! into the signer strip; the new member types THEIR OWN new passphrase, twice, into the
 //! "Enrol staff" form. One press does, in order:
 //!
-//! 1. [`check_form`] (pure, no database): the two passphrases match, are not empty, and the form
+//! 1. [`check_form`] (pure, no database): the two passphrases match, are usable (not empty, not
+//!    only spaces: `cairn_node::vault::passphrase_is_usable`, the rule sign-in uses), and the form
 //!    carries an ID, a name, a role and at least one of phone/email (the vault's CHECK demands
 //!    a contact). A typo here costs nothing and never touches the vault.
-//! 2. The superuser's key is released with `Purpose::Enrol`, used ONCE to vouch for the
+//! 2. Any key this terminal holds is wiped: a typed passphrase means someone new is at the
+//!    keyboard, as on a clinical act. Then the superuser's key is released with `Purpose::Enrol`, used ONCE to vouch for the
 //!    enrolment, and dropped. It is never put in the held session, whatever
 //!    `--key-hold-seconds` says: an enrol act is not a clinical act, and a held superuser key
 //!    would let the next person at a hold terminal enrol staff. That is why this does NOT go
@@ -67,8 +69,13 @@ pub enum EnrolRefusal {
     MissingDetail,
     /// The credential's key may not enrol (a clinician's: the vault said `refused-purpose`).
     NotForEnrolment,
-    /// The vault or the node failed after the checks passed; nothing was recorded.
+    /// The vault or the node refused or failed after the checks passed, with an answer: nothing
+    /// was recorded.
     NotRecorded,
+    /// The enrolment itself got no ordinary answer (a lost connection, a cut-off): it may have
+    /// been recorded. Said so, never "nothing was recorded" — a retry would then be told the ID
+    /// is taken, and the natural next step, a new staff ID, is a second actor for one person.
+    OutcomeUnknown,
     Fixture,
     /// The staff ID is already enrolled (checked before the superuser's key is released).
     AlreadyEnrolled,
@@ -97,9 +104,16 @@ impl EnrolRefusal {
                 "Only a superuser can enrol staff. Enter a superuser's staff ID and passphrase above."
                     .into()
             }
-            EnrolRefusal::NotRecorded => "The member could not be enrolled. Nothing was recorded. \
-                 Check that the staff ID is not already in use, then try again."
-                .into(),
+            EnrolRefusal::NotRecorded => {
+                "The member could not be enrolled. Nothing was recorded. Try again, and if it \
+                 fails again, ask your IT support."
+                    .into()
+            }
+            EnrolRefusal::OutcomeUnknown => {
+                "The node did not confirm the enrolment, so the member may have been enrolled. \
+                 Check the staff list before enrolling them again, and never under a new staff ID."
+                    .into()
+            }
             EnrolRefusal::AlreadyEnrolled => {
                 "That staff ID is already in use. Nobody was enrolled.".into()
             }
@@ -115,7 +129,7 @@ impl EnrolRefusal {
 
 /// Pure: is this form worth sending to the vault? Runs BEFORE any database call.
 pub fn check_form(form: &NewMemberForm) -> Result<(), EnrolRefusal> {
-    if form.passphrase.is_empty() {
+    if !cairn_node::vault::passphrase_is_usable(&form.passphrase) {
         return Err(EnrolRefusal::PassphraseEmpty);
     }
     if *form.passphrase != *form.passphrase_again {
@@ -129,6 +143,17 @@ pub fn check_form(form: &NewMemberForm) -> Result<(), EnrolRefusal> {
         return Err(EnrolRefusal::NeedContact);
     }
     Ok(())
+}
+
+/// Pure: what a failed ENROLMENT write means. Only an ordinary ERROR answer proves the statement
+/// rolled back; anything else may have landed (`cairn_node::db_diagnosis::answered_with_error`,
+/// the rule every clinical write uses).
+pub fn enrol_failure(e: &anyhow::Error) -> EnrolRefusal {
+    if cairn_node::db_diagnosis::answered_with_error(e) {
+        EnrolRefusal::NotRecorded
+    } else {
+        EnrolRefusal::OutcomeUnknown
+    }
 }
 
 /// `None` for a blank optional field, else the trimmed text.
@@ -157,6 +182,9 @@ pub async fn enrol_member_impl(
     if !credential.has_passphrase() {
         return Err(EnrolRefusal::NeedSuperuser.sentence());
     }
+    // Whoever typed that passphrase is at the keyboard now: the last holder's key must not sign
+    // the next act that carries an empty strip (ADR-0083 decision 8, as on a clinical act).
+    state.forget_held_key().await;
     let Some(db) = state.db.as_ref() else {
         return Err(EnrolRefusal::Fixture.sentence());
     };
@@ -165,7 +193,8 @@ pub async fn enrol_member_impl(
         EnrolRefusal::NotRecorded.sentence()
     };
     // One hold of the node connection for release + enrol; every error goes through `explain`
-    // so a cut-off says so (#893).
+    // so the operator's stderr says when the window cut it off (#893). The screen gets the
+    // sentence alone: before the enrolment write, a failure wrote nothing.
     let db = db.lock().await.map_err(|lost| fault(lost.into()))?;
     // Asked BEFORE the superuser's key is released (R11), so a duplicate is told plainly and costs
     // the superuser no release attempt. Two simultaneous enrols of one ID can both pass this and
@@ -206,7 +235,11 @@ pub async fn enrol_member_impl(
     };
     cairn_node::vault::enrol_member(&db, &new, &credential.staff_id, &key)
         .await
-        .map_err(|e| fault(db.explain(e)))?;
+        .map_err(|e| {
+            let e = db.explain(e);
+            eprintln!("an enrolment could not be completed: {e:#}");
+            enrol_failure(&e).sentence()
+        })?;
     Ok(format!(
         "{} (staff ID {}) is enrolled as {}.",
         new.display_name, new.staff_id, new.role

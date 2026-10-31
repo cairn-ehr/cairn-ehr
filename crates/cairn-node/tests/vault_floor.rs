@@ -393,6 +393,29 @@ async fn a_clock_stepped_back_never_locks_out() {
     assert_eq!(r.outcome, "released", "{r:?}");
 }
 
+/// The other half of the clock-step rule (PR #897 review): the guess the step let through RESTAMPS
+/// the clock at now, so the back-off resumes from it at once. A "monotonic" tidy-up that kept the
+/// future stamp would make every guess free for the whole size of the step — years, after a dead
+/// clock battery.
+#[tokio::test]
+async fn a_clock_stepped_back_frees_one_guess_and_no_more() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    set_failures(&c, "jsmith", 10).await;
+    set_last_attempt(&c, "jsmith", 3_600_000).await;
+    let first = release(&c, "jsmith", "not it", "clinical").await;
+    assert_eq!(
+        first.outcome, "wrong",
+        "the step frees one guess: {first:?}"
+    );
+    let second = release(&c, "jsmith", "not it", "clinical").await;
+    assert_eq!(second.outcome, "waiting", "and only one: {second:?}");
+}
+
 #[tokio::test]
 async fn a_superuser_key_is_not_released_for_a_clinical_act() {
     let Some(_) = cs() else {
@@ -404,6 +427,8 @@ async fn a_superuser_key_is_not_released_for_a_clinical_act() {
     let r = release(&c, "boss", SU_PASS, "clinical").await;
     assert_eq!(r.outcome, "refused-purpose");
     assert_eq!(r.seed, None);
+    // Refused before any guess is counted: a mis-pressed act never starts a back-off.
+    assert_eq!(failures(&c, "boss").await, 0);
     // The same key IS released for the act a superuser exists for.
     assert_eq!(
         release(&c, "boss", SU_PASS, "enrol").await.outcome,
@@ -422,6 +447,7 @@ async fn a_clinician_key_cannot_enrol() {
     let r = release(&c, "jsmith", CLIN_PASS, "enrol").await;
     assert_eq!(r.outcome, "refused-purpose");
     assert_eq!(r.seed, None);
+    assert_eq!(failures(&c, "jsmith").await, 0);
     // A purpose outside the vocabulary is refused the same way, never raised.
     assert_eq!(
         release(&c, "jsmith", CLIN_PASS, "nonsense").await.outcome,
@@ -696,6 +722,68 @@ async fn a_concurrent_guess_after_a_rolled_back_one_still_counts() {
     assert!(second.retry_after_ms.is_some_and(|ms| ms > 0), "{second:?}");
 }
 
+/// The row lock itself (PR #897 review: the test above passes with it deleted, because sequences
+/// are not transactional and terminal 2 reads the same state either way). The door counts with an
+/// absolute `setval(mark + failures + 1)`: without the lock, N terminals reading the state at the
+/// same moment each get a guess and all are counted as ONE. So: hold the attempt row's lock as the
+/// owner; terminal 2's release must WAIT on it (seen in pg_stat_activity, not timed); move the
+/// state while it waits; and after the commit it must answer from the NEW state.
+#[tokio::test]
+async fn a_second_terminal_waits_for_the_attempt_row_lock() {
+    let Some(base) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute(
+        "SELECT 1 FROM vault_attempt WHERE staff_id = 'jsmith' FOR UPDATE",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let c2 = db::connect(&base).await.unwrap();
+    let pid: i32 = c2
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let second = tokio::spawn(async move { release(&c2, "jsmith", "not it", "clinical").await });
+    let observer = db::connect(&base).await.unwrap();
+    let mut waiting = false;
+    for _ in 0..500 {
+        let row = observer
+            .query_one(
+                "SELECT coalesce(wait_event_type, '') FROM pg_stat_activity WHERE pid = $1",
+                &[&pid],
+            )
+            .await
+            .unwrap();
+        if row.get::<_, String>(0) == "Lock" {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(waiting, "terminal 2 must wait on the attempt row's lock");
+    assert!(
+        !second.is_finished(),
+        "terminal 2 answered without the lock"
+    );
+
+    // While it waits: ten failures, the last one just now.
+    set_failures(&c, "jsmith", 10).await;
+    set_last_attempt(&c, "jsmith", 0).await;
+    c.batch_execute("COMMIT").await.unwrap();
+    let second = second.await.unwrap();
+    assert_eq!(
+        second.outcome, "waiting",
+        "terminal 2 must read the state AFTER the lock, not before it: {second:?}"
+    );
+}
+
 /// M5: a token signed by a CLINICIAN's key but naming the real superuser `boss` as the enroller is
 /// refused by the ATTESTATION check (boss is a superuser; the token is just not boss's).
 #[tokio::test]
@@ -903,4 +991,111 @@ async fn a_case_variant_of_a_staff_id_is_the_same_actor() {
         .map(|r| r.get(0))
         .collect();
     assert_eq!(actors, vec![first], "one person, one actor");
+}
+
+/// Revoke every actor enrolled under `kid` (the registry is append-only: a `revoke` event).
+async fn revoke(c: &Client, kid: &str) {
+    c.execute(
+        "INSERT INTO actor_event (actor_id, op) \
+         SELECT DISTINCT actor_id, 'revoke' FROM actor_event WHERE signing_key_id = $1",
+        &[&kid],
+    )
+    .await
+    .unwrap();
+}
+
+/// A revoked superuser enrols nobody, even with a valid token from its own key (PR #897 review:
+/// `cairn_vault_enrol`'s `actor_current` check had no test, so a revoked — perhaps compromised —
+/// superuser key could have kept enrolling staff with nothing going red).
+#[tokio::test]
+async fn a_revoked_superuser_cannot_enrol() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let boss = bootstrap_boss(&c).await;
+    revoke(&c, &boss).await;
+    let seed = test_seed(3);
+    let token = enrol_token(&c, "anurse", &kid_of(seed), "nurse", test_seed(1)).await;
+    let e = enrol(&c, "anurse", seed, "nurse", "boss", &token)
+        .await
+        .expect_err("a revoked superuser must not enrol");
+    assert!(
+        db_message(&e).contains("not a current"),
+        "{}",
+        db_message(&e)
+    );
+}
+
+/// A revoked member's key is not released: every act it signed would be refused by the floor, and
+/// the clinician should be told why rather than see their act fail (PR #897 review). Answered
+/// before any guess is counted, with or without the right passphrase.
+#[tokio::test]
+async fn a_revoked_member_is_told_so_and_nothing_is_unsealed_or_counted() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let (_boss, jsmith) = boss_and_jsmith(&c).await;
+    revoke(&c, &jsmith).await;
+    for pass in [CLIN_PASS, "not it"] {
+        let r = release(&c, "jsmith", pass, "clinical").await;
+        assert_eq!(r.outcome, "not-current", "{r:?}");
+        assert_eq!(r.seed, None);
+    }
+    assert_eq!(failures(&c, "jsmith").await, 0);
+}
+
+/// Postgres's own NOT NULL error carries "Failing row contains (…)" too, sealed blob and all; the
+/// re-raise must catch it like the CHECK above (PR #897 review: only the CHECK was pinned).
+#[tokio::test]
+async fn a_not_null_refusal_never_echoes_the_sealed_blob() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let seed = test_seed(4);
+    let blob = sealed_blob(seed, SU_PASS);
+    let e = c
+        .query_one(
+            "SELECT cairn_vault_bootstrap($1, $2, $3::text::jsonb, $4, $5, $6, $7, $8)",
+            &[
+                &"boss",
+                &None::<&str>, // no display name
+                &pinned("superuser", "boss"),
+                &kid_of(seed),
+                &blob,
+                &None::<&str>,
+                &Some("0400 000 000"),
+                &None::<&str>,
+            ],
+        )
+        .await
+        .expect_err("a member with no name must be refused");
+    let d = e.as_db_error().expect("a database refusal");
+    let said = format!("{} {:?} {:?}", d.message(), d.detail(), d.hint());
+    assert!(!said.contains(&hex::encode(&blob)[..16]), "{said}");
+    assert_eq!(d.detail(), None, "{said}");
+}
+
+/// A superuser's token binds the ROLE: a token over `(anurse, kid, nurse)` cannot enrol that same
+/// key and ID as a superuser (PR #897 review: the address's role binding was pinned only by the
+/// SQL mirror, so a door that stopped passing `p_role` would have passed every test).
+#[tokio::test]
+async fn a_token_for_one_role_cannot_enrol_another() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    bootstrap_boss(&c).await;
+    let seed = test_seed(3);
+    let token = enrol_token(&c, "anurse", &kid_of(seed), "nurse", test_seed(1)).await;
+    let e = enrol(&c, "anurse", seed, "superuser", "boss", &token)
+        .await
+        .expect_err("a nurse's token must not enrol a superuser");
+    assert!(db_message(&e).contains("attestation"), "{}", db_message(&e));
 }

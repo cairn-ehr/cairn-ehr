@@ -204,6 +204,24 @@ impl Held {
         self.key = Some(key);
         true
     }
+
+    /// Pure: what `signer_for_act` does with a key the vault just released for `staff_id`: keep
+    /// it for the next act only on a terminal with a key hold, and only if no Lock or newer
+    /// press wiped the slot since `seen` (the generation `signer_for_act`'s own wipe returned).
+    /// Returns whether it was kept. The act it was released for signs either way.
+    pub fn keep_for_next_act(
+        &mut self,
+        seen: u64,
+        key_hold: Duration,
+        key: cairn_event::SigningKey,
+        staff_id: &str,
+        now: Now,
+    ) -> bool {
+        if key_hold.is_zero() {
+            return false;
+        }
+        self.store_if_current(seen, SessionKey::new(key, staff_id.to_string(), now))
+    }
 }
 
 /// Everything a command needs. One database connection, because a single-patient window
@@ -296,7 +314,7 @@ impl AppState {
     ///    [`KeyRefusal::Fault`], which carries no database text.
     /// 4. The released key is held for the next act only on a terminal with a key hold, and
     ///    only if no Lock or newer press wiped the slot while the vault was checking
-    ///    ([`Held::store_if_current`]).
+    ///    ([`Held::keep_for_next_act`]).
     ///
     /// An all-empty credential (both fields blank) counts as none, so it never wipes a hold.
     ///
@@ -350,17 +368,14 @@ impl AppState {
                 return Err(KeyRefusal::Fault);
             }
         };
-        if !self.key_hold.is_zero() {
-            // Not held if a Lock or a newer press wiped the slot meanwhile; this act still signs.
-            self.session.lock().await.store_if_current(
-                seen,
-                SessionKey::new(
-                    cairn_event::SigningKey::from_bytes(&Zeroizing::new(key.to_bytes())),
-                    credential.staff_id.clone(),
-                    now,
-                ),
-            );
-        }
+        // A copy for the hold (a `SigningKey` wipes itself on drop); this act signs with `key`.
+        self.session.lock().await.keep_for_next_act(
+            seen,
+            self.key_hold,
+            key.clone(),
+            &credential.staff_id,
+            now,
+        );
         Ok((key, kid))
     }
 
@@ -557,6 +572,44 @@ mod tests {
             held.key.as_ref().map(|k| k.staff_id.as_str()),
             Some("apark")
         );
+    }
+
+    /// The step `signer_for_act` takes after the vault answers (PR #897 review: the race rule was
+    /// pinned only on its building block). A shared terminal (hold 0) never holds, even with
+    /// nothing interleaved; a Lock while the vault was checking drops the key; otherwise it is held.
+    #[test]
+    fn a_released_key_is_kept_only_on_a_hold_terminal_and_only_if_nothing_wiped() {
+        let now = Now::read();
+        let key = || SessionKey::for_test(now).signing_key();
+        let mut held = Held::default();
+        let seen = held.wipe();
+        assert!(!held.keep_for_next_act(seen, Duration::ZERO, key(), "jsmith", now));
+        assert!(held.key.is_none(), "hold 0 holds nothing");
+
+        let seen = held.wipe();
+        held.wipe(); // Lock while the vault is checking.
+        assert!(!held.keep_for_next_act(seen, IDLE_TIMEOUT, key(), "jsmith", now));
+        assert!(held.key.is_none(), "a Lock in flight wins");
+
+        let seen = held.wipe();
+        assert!(held.keep_for_next_act(seen, IDLE_TIMEOUT, key(), " jsmith ", now));
+        assert_eq!(
+            held.key.as_ref().map(|k| k.staff_id.as_str()),
+            Some("jsmith")
+        );
+    }
+
+    /// ...and `signer_for_act` takes it with the generation its OWN wipe returned, not one read
+    /// later (which would let a Lock in flight be undone).
+    #[test]
+    fn signer_for_act_keeps_the_key_with_the_generation_of_its_own_wipe() {
+        let body: String = crate::source_guard::rust_fn(include_str!("state.rs"), "signer_for_act")
+            .split_whitespace()
+            .collect();
+        let wipe = body.find("letseen=held.wipe();").expect(&body);
+        let keep = body.find(".keep_for_next_act(seen,").expect(&body);
+        assert!(wipe < keep, "{body}");
+        assert_eq!(body.matches("store_if_current(").count(), 0, "{body}");
     }
 
     /// With nothing interleaved, the released key is held.

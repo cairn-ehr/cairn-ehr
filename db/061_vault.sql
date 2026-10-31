@@ -266,11 +266,15 @@ $$;
 --                                                    the vocabulary — checked BEFORE any unsealing,
 --                                                    so a key that will not be released is never
 --                                                    even unwrapped)
+--   'not-current'    NULL                    NULL   (the member's actor is revoked or superseded:
+--                                                    its key signs nothing the floor accepts;
+--                                                    checked before counting, like the purpose)
 --
--- The order is the whole point (promise 4). Under the attempt row's FOR UPDATE lock, so two
--- terminals guessing the same staff ID at once are serialised and cannot both slip past one wait:
---   1. look up the member and check the purpose — no writes;
---   2. read failures and the last attempt's time from the sequences — no writes; still inside the
+-- The order is the whole point (promise 4). Steps 2–4 run under the attempt row's FOR UPDATE lock
+-- (taken at step 2), so two terminals guessing the same staff ID at once are serialised and cannot
+-- both slip past one wait:
+--   1. look up the member, check the purpose and that its actor is current — no writes, no lock;
+--   2. take the lock; read failures and the last attempt's time from the sequences — no writes; still inside the
 --      wait → 'waiting' (no unsealing, no counting);
 --   3. CONSUME an attempt number and stamp the clock — non-transactional, so from here on the
 --      guess is on record whatever the caller does — and only THEN unseal;
@@ -304,6 +308,13 @@ BEGIN
     IF p_purpose IS DISTINCT FROM
        (CASE WHEN v_member.role = 'superuser' THEN 'enrol' ELSE 'clinical' END) THEN
         RETURN QUERY SELECT 'refused-purpose'::text, NULL::bytea, NULL::text, NULL::bigint;
+        RETURN;
+    END IF;
+    -- A key whose actor is revoked (or superseded to another key) signs nothing the floor will
+    -- accept, so it is not released: the member is told why, instead of seeing every act fail.
+    -- Before the count, like the purpose: it reveals nothing a guess would.
+    IF NOT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = v_member.signing_key_id) THEN
+        RETURN QUERY SELECT 'not-current'::text, NULL::bytea, NULL::text, NULL::bigint;
         RETURN;
     END IF;
 

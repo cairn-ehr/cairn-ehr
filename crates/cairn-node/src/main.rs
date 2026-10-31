@@ -36,11 +36,13 @@ fn resolve_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizing<String>>
     Ok(p)
 }
 
-/// A NEW vault passphrase: from the flag/env (CAIRN_VAULT_PASSPHRASE) or prompted twice, no echo.
-/// Refuses an empty one or two entries that differ; never echoes either in the error.
+/// A NEW vault passphrase: from the verb's flag/env or prompted twice, no echo. Refuses an empty
+/// one, one of only spaces, or two entries that differ; never echoes either in the error.
 fn resolve_new_vault_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizing<String>> {
     if let Some(p) = flag.filter(|s| !s.is_empty()) {
-        return Ok(Zeroizing::new(p));
+        let p = Zeroizing::new(p);
+        confirm_new_passphrase(&p, &p)?;
+        return Ok(p);
     }
     let first = Zeroizing::new(rpassword::prompt_password("new passphrase: ")?);
     let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
@@ -48,10 +50,11 @@ fn resolve_new_vault_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizin
     Ok(first)
 }
 
-/// Pure: a new passphrase must be non-empty and typed identically twice. The error names neither.
+/// Pure: a new passphrase must be usable (not empty, not only spaces: the window would never send
+/// it) and typed identically twice. The error names neither.
 fn confirm_new_passphrase(first: &str, again: &str) -> anyhow::Result<()> {
-    if first.is_empty() {
-        anyhow::bail!("no passphrase provided");
+    if !cairn_node::vault::passphrase_is_usable(first) {
+        anyhow::bail!("no passphrase provided (spaces alone are not one)");
     }
     if first != again {
         anyhow::bail!("the two entries differ; nothing was changed");
@@ -1991,9 +1994,10 @@ enum Cmd {
     },
 
     /// Console-only: set the shared terminal-unlock passphrase (stored only as an Argon2id hash).
-    /// Prompted twice, no echo (or CAIRN_VAULT_PASSPHRASE).
+    /// Prompted twice, no echo (or CAIRN_TERMINAL_PASSPHRASE). Deliberately NOT the superuser's
+    /// variable: one variable exported for both would make the shared passphrase the superuser's.
     VaultSetTerminalPassphrase {
-        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE", hide_env_values = true)]
+        #[arg(long, env = "CAIRN_TERMINAL_PASSPHRASE", hide_env_values = true)]
         passphrase: Option<String>,
     },
 
@@ -6144,14 +6148,49 @@ mod tests {
     #[test]
     fn confirm_new_passphrase_cases() {
         assert!(super::confirm_new_passphrase("a b", "a b").is_ok());
-        let e = super::confirm_new_passphrase("", "")
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("no passphrase"));
+        for blank in ["", "   "] {
+            let e = super::confirm_new_passphrase(blank, blank)
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("no passphrase"), "{blank:?}: {e}");
+        }
         let e = super::confirm_new_passphrase("secret1", "secret2")
             .unwrap_err()
             .to_string();
         assert!(e.contains("differ") && !e.contains("secret"));
+    }
+
+    /// A passphrase of spaces given by flag or env is refused, not used: the window would never
+    /// send it to the vault, so the member could never sign (PR #897 review).
+    #[test]
+    fn a_new_passphrase_of_spaces_from_the_flag_is_refused() {
+        let e = super::resolve_new_vault_passphrase(Some("   ".into())).unwrap_err();
+        assert!(e.to_string().contains("no passphrase"), "{e}");
+    }
+
+    /// The superuser's personal passphrase and the shared terminal passphrase come from
+    /// DIFFERENT variables. One variable for both, exported for a script, made every staff
+    /// member told the terminal passphrase able to enrol staff, and put a hash of the
+    /// superuser's passphrase within reach of every window (PR #897 review).
+    #[test]
+    fn the_two_vault_passphrases_never_share_an_env_variable() {
+        use clap::CommandFactory;
+        let cli = super::Cli::command();
+        let env_of = |verb: &str| {
+            cli.find_subcommand(verb)
+                .and_then(|c| c.get_arguments().find(|a| a.get_id() == "passphrase"))
+                .and_then(|a| a.get_env())
+                .map(|v| v.to_string_lossy().into_owned())
+                .unwrap_or_else(|| panic!("{verb} reads its passphrase from an env variable"))
+        };
+        assert_eq!(
+            env_of("vault-bootstrap-superuser"),
+            "CAIRN_VAULT_PASSPHRASE"
+        );
+        assert_eq!(
+            env_of("vault-set-terminal-passphrase"),
+            "CAIRN_TERMINAL_PASSPHRASE"
+        );
     }
 
     /// #818 review: a sign-off that signed nothing, stopped at a line whose COMMIT got no

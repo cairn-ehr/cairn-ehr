@@ -5,8 +5,10 @@
 //! release (the passphrase is checked INSIDE Postgres, and the seed comes back for ONE act).
 //!
 //! House rules held here: the passphrase never appears in an error, a `Debug` impl or a log line; the
-//! seed lives in a `Zeroizing` buffer until it is turned into a `SigningKey`; staff-ID normalisation
-//! is done by the database (`cairn_vault_staff_id`) and nowhere in Rust.
+//! released seed is copied only into a `Zeroizing` buffer, then into a `SigningKey` (which wipes
+//! itself on drop) — the bytes tokio-postgres received and the bytea Postgres built are outside
+//! this module's reach and are NOT wiped; staff-ID normalisation is done by the database
+//! (`cairn_vault_staff_id`) and nowhere in Rust.
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -17,6 +19,7 @@ use cairn_event::{generate_key, sign_attestation, EventSigner, SigningKey};
 use tokio_postgres::Client;
 use zeroize::Zeroizing;
 
+use crate::db_diagnosis::LocalDbFault;
 use crate::seal;
 
 /// A person to put in the vault. Borrowed fields: the caller owns the strings (and wipes the passphrase).
@@ -30,8 +33,20 @@ pub struct NewMember<'a> {
     pub hint: Option<&'a str>,
 }
 
+/// Pure: is `passphrase` a passphrase at all? Spaces alone are not. The ONE rule for both sides of
+/// a vault passphrase: every enrolment door refuses a new one that fails it, and the window never
+/// sends a typed one that fails it to the vault (an empty guess would count as a wrong one). Two
+/// rules here once enrolled a key under "   " that sign-in could then never send (PR #897 review).
+pub fn passphrase_is_usable(passphrase: &str) -> bool {
+    !passphrase.trim_matches(' ').is_empty()
+}
+
 /// Mint a key for `new`, seal its seed under their passphrase, and return `(kid, sealed blob)`.
+/// Refuses an unusable passphrase, whichever door called it.
 fn mint_sealed(new: &NewMember<'_>) -> anyhow::Result<(String, Vec<u8>)> {
+    if !passphrase_is_usable(new.passphrase) {
+        bail!("a new passphrase must not be empty or only spaces");
+    }
     let (sk, kid) = generate_key().map_err(|e| anyhow!("key generation failed: {e}"))?;
     let seed = Zeroizing::new(sk.to_bytes());
     // shortcut: the vault re-keys by token (slice 2), so the recovery wrap is unused; drop it if slice 2 does not want it.
@@ -93,7 +108,9 @@ pub async fn enrol_member(
         ],
     )
     .await
-    .map_err(|e| anyhow!("enrolment refused: {}", db_text(&e)))?;
+    // A `LocalDbFault`, not text: the window must still find the database error on the chain to
+    // tell a refusal (nothing written) from a lost answer (it may have been written).
+    .map_err(|e| LocalDbFault::new("enrolment", e))?;
     Ok(kid)
 }
 
@@ -126,11 +143,12 @@ pub async fn bootstrap_superuser(db: &Client, new: &NewMember<'_>) -> anyhow::Re
         ],
     )
     .await
-    .map_err(|e| anyhow!("bootstrap refused: {}", db_text(&e)))?;
+    .map_err(|e| LocalDbFault::new("bootstrap", e))?;
     Ok(kid)
 }
 
-/// The DB's own message for a refusal (the SQL never echoes a passphrase or sealed blob).
+/// The DB's own message for a refusal (the SQL never echoes a passphrase or sealed blob). For the
+/// reads; the two enrolment writes keep the whole error ([`LocalDbFault`]).
 fn db_text(e: &tokio_postgres::Error) -> String {
     e.as_db_error()
         .map(|d| d.message().to_string())
@@ -157,11 +175,20 @@ impl Purpose {
 // The key is short-lived and the enum is never stored in bulk; boxing would only change the brief's shape.
 #[allow(clippy::large_enum_variant)]
 pub enum Release {
-    Released { key: SigningKey, kid: String },
-    Wrong { retry_after: Option<Duration> },
-    Waiting { retry_after: Duration },
+    Released {
+        key: SigningKey,
+        kid: String,
+    },
+    Wrong {
+        retry_after: Option<Duration>,
+    },
+    Waiting {
+        retry_after: Duration,
+    },
     Unknown,
     RefusedPurpose,
+    /// The member's actor is revoked or superseded: its key would sign nothing the floor accepts.
+    NotCurrent,
 }
 
 impl std::fmt::Debug for Release {
@@ -182,6 +209,7 @@ impl std::fmt::Debug for Release {
                 .finish(),
             Release::Unknown => f.write_str("Unknown"),
             Release::RefusedPurpose => f.write_str("RefusedPurpose"),
+            Release::NotCurrent => f.write_str("NotCurrent"),
         }
     }
 }
@@ -203,7 +231,8 @@ pub async fn release_for_act(
         .map_err(|e| anyhow!("vault release failed: {}", db_text(&e)))?;
     release_from_row(
         &row.get::<_, String>(0),
-        row.get::<_, Option<Vec<u8>>>(1).as_deref(),
+        // Borrowed from the row's buffer, not copied into a Vec the allocator would keep unwiped.
+        row.get::<_, Option<&[u8]>>(1),
         row.get::<_, Option<String>>(2).as_deref(),
         row.get(3),
     )
@@ -221,11 +250,14 @@ fn release_from_row(
     match outcome {
         "released" => {
             let kid = kid.ok_or_else(|| anyhow!("vault released no key id"))?;
-            let arr: [u8; 32] = seed
-                .ok_or_else(|| anyhow!("vault released no seed"))?
-                .try_into()
-                .map_err(|_| anyhow!("vault seed has the wrong length"))?;
-            let arr = Zeroizing::new(arr);
+            let seed = seed.ok_or_else(|| anyhow!("vault released no seed"))?;
+            if seed.len() != 32 {
+                bail!("vault seed has the wrong length");
+            }
+            // Copied straight into the wiped buffer: a `[u8; 32]` built first and then wrapped
+            // would leave its moved-from stack copy behind (#54).
+            let mut arr = Zeroizing::new([0u8; 32]);
+            arr.copy_from_slice(seed);
             let key = SigningKey::from_bytes(&arr);
             // The vault does not check this pairing; a mismatch would sign under the wrong identity.
             if hex::encode(key.verifying_key().to_bytes()) != kid {
@@ -242,6 +274,7 @@ fn release_from_row(
         }),
         "unknown" => Ok(Release::Unknown),
         "refused-purpose" => Ok(Release::RefusedPurpose),
+        "not-current" => Ok(Release::NotCurrent),
         other => bail!("vault returned an unknown outcome {other:?}"),
     }
 }
@@ -266,15 +299,20 @@ pub fn terminal_phc(passphrase: &str) -> anyhow::Result<String> {
         .to_string())
 }
 
-/// Pure: does `passphrase` match the PHC string? A malformed PHC is simply "no".
-pub fn terminal_unlock_ok(phc: &str, passphrase: &str) -> bool {
-    PasswordHash::new(phc)
-        .map(|h| {
-            Argon2::default()
-                .verify_password(passphrase.as_bytes(), &h)
-                .is_ok()
-        })
-        .unwrap_or(false)
+/// Pure: does `passphrase` match the PHC string? `Ok(false)` is a mismatch and nothing else; a
+/// PHC that cannot be parsed or verified is an `Err`, because it is the node's fault and a "no"
+/// would tell every staff member their correct passphrase is wrong.
+pub fn terminal_unlock_ok(phc: &str, passphrase: &str) -> anyhow::Result<bool> {
+    let hash = PasswordHash::new(phc).map_err(|e| anyhow!("the terminal PHC is malformed: {e}"))?;
+    // A PHC cut short still parses; the verifier would then call it a mismatch.
+    if hash.salt.is_none() || hash.hash.is_none() {
+        bail!("the terminal PHC is malformed: it has no salt or no hash");
+    }
+    match Argon2::default().verify_password(passphrase.as_bytes(), &hash) {
+        Ok(()) => Ok(true),
+        Err(argon2::password_hash::Error::Password) => Ok(false),
+        Err(e) => bail!("the terminal PHC could not be checked: {e}"),
+    }
 }
 
 #[cfg(test)]
@@ -285,9 +323,43 @@ mod tests {
     fn terminal_unlock_ok_true_and_false() {
         let phc = terminal_phc("shared pass").unwrap();
         assert!(phc.starts_with("$argon2id$"));
-        assert!(terminal_unlock_ok(&phc, "shared pass"));
-        assert!(!terminal_unlock_ok(&phc, "other"));
-        assert!(!terminal_unlock_ok("not a phc", "shared pass"));
+        assert!(terminal_unlock_ok(&phc, "shared pass").unwrap());
+        assert!(!terminal_unlock_ok(&phc, "other").unwrap());
+    }
+
+    /// A damaged PHC is the node's fault, not the typist's: an error, never "no" — or every
+    /// staff member is told their correct shared passphrase is wrong (PR #897 review).
+    #[test]
+    fn a_malformed_terminal_phc_is_an_error_not_a_wrong_passphrase() {
+        assert!(terminal_unlock_ok("not a phc", "shared pass").is_err());
+        let phc = terminal_phc("shared pass").unwrap();
+        let truncated = &phc[..phc.len() / 2];
+        assert!(terminal_unlock_ok(truncated, "shared pass").is_err());
+    }
+
+    /// The one rule every door (window, console, library) applies to a NEW passphrase, and the
+    /// rule the window applies to a typed one: spaces alone are no passphrase. Enrolling one
+    /// would seal a key its owner can never use — sign-in never sends it to the vault.
+    #[test]
+    fn a_passphrase_of_spaces_is_not_usable() {
+        assert!(!passphrase_is_usable(""));
+        assert!(!passphrase_is_usable("   "));
+        assert!(passphrase_is_usable(" a "));
+        assert!(passphrase_is_usable("correct horse"));
+    }
+
+    #[test]
+    fn a_key_is_never_sealed_under_a_passphrase_of_spaces() {
+        let new = NewMember {
+            staff_id: "x",
+            display_name: "X",
+            role: "nurse",
+            phone: None,
+            email: None,
+            passphrase: "   ",
+            hint: None,
+        };
+        assert!(mint_sealed(&new).is_err());
     }
 
     fn seed_of(v: u8) -> [u8; 32] {
@@ -325,6 +397,10 @@ mod tests {
         assert!(matches!(
             release_from_row("refused-purpose", None, None, None).unwrap(),
             Release::RefusedPurpose
+        ));
+        assert!(matches!(
+            release_from_row("not-current", None, None, None).unwrap(),
+            Release::NotCurrent
         ));
         assert!(release_from_row("bogus", None, None, None).is_err());
     }

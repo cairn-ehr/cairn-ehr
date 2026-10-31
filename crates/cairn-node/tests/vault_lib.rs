@@ -215,11 +215,8 @@ async fn the_terminal_passphrase_round_trips() {
         .await
         .unwrap()
         .get(0);
-    assert!(cairn_node::vault::terminal_unlock_ok(
-        &stored,
-        "shared pass"
-    ));
-    assert!(!cairn_node::vault::terminal_unlock_ok(&stored, "wrong"));
+    assert!(cairn_node::vault::terminal_unlock_ok(&stored, "shared pass").unwrap());
+    assert!(!cairn_node::vault::terminal_unlock_ok(&stored, "wrong").unwrap());
 }
 
 #[tokio::test]
@@ -233,8 +230,15 @@ async fn a_seed_that_does_not_match_its_key_id_is_never_handed_out() {
     enrol_member(&c, &member("jsmith", "clinician", CLIN_PASS), "boss", &su)
         .await
         .unwrap();
-    // As owner, file jsmith's sealed key under somebody else's key id.
+    // As owner, file jsmith's sealed key under somebody else's key id — a CURRENT actor's, so the
+    // vault's own `not-current` check passes and the library's R6 check is what refuses it.
     let (_, other_kid) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"nurse\",\"handle\":\"other\"}', $1)",
+        &[&other_kid],
+    )
+    .await
+    .unwrap();
     c.batch_execute("ALTER TABLE vault_member DISABLE TRIGGER USER")
         .await
         .unwrap();
@@ -306,4 +310,49 @@ async fn a_case_variant_of_a_staff_id_mints_no_second_actor() {
         .unwrap()
         .get(0);
     assert_eq!(humans, 1, "one person, one actor");
+}
+
+/// PR #897 review: an enrolment that FAILED must say whether it may have landed. The library keeps
+/// the database error on the chain, so a refusal (the server answered ERROR: nothing written) is
+/// told from a connection that died under it (no answer: it may have been written), which the
+/// window must word as "check before enrolling again", never "nothing was recorded".
+#[tokio::test]
+async fn a_failed_enrolment_says_whether_the_server_answered() {
+    use cairn_node::db_diagnosis::answered_with_error;
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, c, _node_sk, _node_kid) = fresh().await;
+    let su = boss(&c).await;
+    enrol_member(&c, &member("dup", "nurse", CLIN_PASS), "boss", &su)
+        .await
+        .unwrap();
+    // A second enrolment of the same staff ID: the floor refuses it, with an answer.
+    let refused = enrol_member(&c, &member("dup", "nurse", CLIN_PASS), "boss", &su)
+        .await
+        .expect_err("a duplicate staff ID is refused");
+    assert!(answered_with_error(&refused), "refused: {refused:#}");
+
+    // The same call on a connection that has died: no answer, so not "answered".
+    let dead = db::connect(&base).await.unwrap();
+    let pid: i32 = dead
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    c.execute("SELECT pg_terminate_backend($1)", &[&pid])
+        .await
+        .unwrap();
+    for _ in 0..1000 {
+        if dead.is_closed() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(dead.is_closed(), "the terminated connection closed");
+    let lost = enrol_member(&dead, &member("lost", "nurse", CLIN_PASS), "boss", &su)
+        .await
+        .expect_err("a dead connection fails");
+    assert!(!answered_with_error(&lost), "lost: {lost:#}");
 }

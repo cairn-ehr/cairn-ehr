@@ -115,6 +115,7 @@ fn refusal_sentences_never_echo_the_passphrase() {
         },
         KeyRefusal::Unknown,
         KeyRefusal::NotForClinicalActs,
+        KeyRefusal::NotCurrent,
         KeyRefusal::Fault,
     ];
     for refusal in &every {
@@ -188,6 +189,10 @@ fn each_vault_answer_maps_to_its_refusal() {
     assert_eq!(
         from_release(Release::RefusedPurpose).unwrap_err(),
         KeyRefusal::NotForClinicalActs
+    );
+    assert_eq!(
+        from_release(Release::NotCurrent).unwrap_err(),
+        KeyRefusal::NotCurrent
     );
     let key = SessionKey::for_test(Now::read()).signing_key();
     let kid = hex::encode(key.verifying_key().to_bytes());

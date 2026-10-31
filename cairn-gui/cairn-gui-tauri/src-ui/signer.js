@@ -114,27 +114,31 @@ async function tryTerminalUnlock(event) {
 
 async function showSignerHint() {
   const staffId = el("staff-id").value;
-  let hint = null;
+  let said = "";
   if (staffId.trim() !== "") {
     try {
-      hint = await invoke("vault_hint", { staffId: staffId });
+      const hint = await invoke("vault_hint", { staffId: staffId });
+      said = hint ? "Your hint: " + hint : "";
     } catch (e) {
-      hint = null; // a hint is a courtesy; the refusal on the act says what matters
+      // Said, not hidden: an empty line here would read as "you set no hint". Rust sends a
+      // plain sentence; only an IPC-level failure is something else.
+      said = typeof e === "string" ? e : failureText(e);
     }
   }
-  setMessage(el("signer-hint"), hint ? "Your hint: " + hint : "");
+  setMessage(el("signer-hint"), said);
 }
 
 async function lockNow() {
+  // Emptied FIRST: a Lock whose call fails must still leave no typed credential behind for the
+  // next person's press to sign with.
+  el("signer-passphrase").value = "";
+  el("staff-id").value = "";
+  setMessage(el("signer-hint"), "");
   try {
     renderSigner(await invoke("forget_held_key"));
   } catch (e) {
     el("lock-state").textContent = "Could not lock the signing key: " + failureText(e);
-    return;
   }
-  el("signer-passphrase").value = "";
-  el("staff-id").value = "";
-  setMessage(el("signer-hint"), "");
 }
 
 // Enter in the strip must not submit the page (the strip has no submit of its own).
