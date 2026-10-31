@@ -106,6 +106,8 @@ fn every_sentence_is_plain_and_names_no_value() {
         EnrolRefusal::NotForEnrolment,
         EnrolRefusal::NotRecorded,
         EnrolRefusal::Fixture,
+        EnrolRefusal::AlreadyEnrolled,
+        EnrolRefusal::NeedSuperuser,
     ] {
         let s = r.sentence();
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
@@ -243,4 +245,49 @@ async fn a_wrong_superuser_passphrase_enrols_nobody_and_echoes_nothing() {
         .unwrap()
         .get(0);
     assert_eq!(n, 0);
+}
+
+/// R11: a duplicate staff ID is told plainly, in BOTH shapes the floor refuses differently (same
+/// role: `enroll_actor` first; another role: the vault's primary key). The superuser passphrase
+/// here is WRONG on purpose: the pre-check runs before the key is released, so the answer is still
+/// "already in use" and no release attempt was counted against the superuser.
+#[tokio::test]
+async fn a_duplicate_staff_id_is_named_before_the_superuser_key_is_released() {
+    let (su_p, cl_p, wrong) = (pass("su"), pass("cl"), pass("bad"));
+    let Some((_g, state)) = live(&su_p, &cl_p).await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    for role in ["clinician", "nurse"] {
+        let mut f = form(&pass("n"), &pass("n"));
+        f.staff_id = " NURSE1 ".into();
+        f.role = role.into();
+        let said = enrol_member_impl(&state, credential(SU_STAFF, &wrong), f)
+            .await
+            .expect_err("a duplicate is refused");
+        assert_eq!(said, EnrolRefusal::AlreadyEnrolled.sentence(), "{role}");
+    }
+    let db = state.db.as_ref().unwrap().lock().await.unwrap();
+    let failures: i64 = db
+        .query_one(
+            "SELECT coalesce(sum(failures), 0)::bigint FROM cairn_vault_attempt_state('boss')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(failures, 0, "the superuser's key was never asked for");
+}
+
+#[tokio::test]
+async fn a_blank_credential_asks_for_a_superuser_not_a_signature() {
+    let said = enrol_member_impl(
+        &AppState::mock(None),
+        credential("", ""),
+        form(&pass("a"), &pass("a")),
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(said, EnrolRefusal::NeedSuperuser.sentence());
+    assert!(said.contains("enrol staff"), "{said}");
 }

@@ -253,3 +253,22 @@ async fn a_seed_that_does_not_match_its_key_id_is_never_handed_out() {
         .unwrap_err();
     assert!(err.to_string().contains("does not match"), "{err}");
 }
+
+#[tokio::test]
+async fn staff_id_taken_sees_an_enrolled_member_through_the_library() {
+    let Some(_) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, c, _node_sk, _node_kid) = fresh().await;
+    let su = boss(&c).await;
+    assert!(!cairn_node::vault::staff_id_taken(&c, "JSmith")
+        .await
+        .unwrap());
+    enrol_member(&c, &member("JSmith", "clinician", CLIN_PASS), "boss", &su)
+        .await
+        .unwrap();
+    assert!(cairn_node::vault::staff_id_taken(&c, " jsmith ")
+        .await
+        .unwrap());
+}

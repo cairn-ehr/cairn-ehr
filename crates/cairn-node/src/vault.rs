@@ -229,6 +229,16 @@ fn release_from_row(
     }
 }
 
+/// Is `staff_id` already enrolled? The database normalises the ID (case, spaces) like every other
+/// vault door. Asked before a superuser's key is released, so a duplicate is told plainly.
+pub async fn staff_id_taken(db: &Client, staff_id: &str) -> anyhow::Result<bool> {
+    let row = db
+        .query_one("SELECT cairn_vault_staff_id_taken($1)", &[&staff_id])
+        .await
+        .map_err(|e| anyhow!("staff-id check failed: {}", db_text(&e)))?;
+    Ok(row.get(0))
+}
+
 /// An Argon2id PHC string for the shared terminal-unlock passphrase (the window checks against it).
 pub fn terminal_phc(passphrase: &str) -> anyhow::Result<String> {
     let entropy = seal::rand_bytes::<16>().map_err(|e| anyhow!("entropy unavailable: {e}"))?;

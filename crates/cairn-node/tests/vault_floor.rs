@@ -703,3 +703,28 @@ async fn a_missing_attempt_row_fails_closed() {
     assert_eq!(r.outcome, "unknown", "{r:?}");
     assert_eq!(r.seed, None);
 }
+
+/// R11: the window asks "is this staff ID taken?" BEFORE it releases a superuser's key. The
+/// predicate normalises like every other door, answers for the runtime role, and reveals only
+/// whether an ID is enrolled (the roster is not secret; `cairn_vault_hint` already says as much).
+#[tokio::test]
+async fn staff_id_taken_normalises_and_answers() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let _ = boss_and_jsmith(&c).await;
+    async fn taken(c: &Client, id: &str) -> bool {
+        c.query_one("SELECT cairn_vault_staff_id_taken($1)", &[&id])
+            .await
+            .unwrap()
+            .get(0)
+    }
+    assert!(taken(&c, " JSmith ").await);
+    assert!(!taken(&c, "nobody-here").await);
+    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    assert!(taken(&c, "jsmith").await, "callable by the runtime role");
+    assert!(!taken(&c, "nobody-here").await);
+    c.batch_execute("RESET ROLE").await.unwrap();
+}

@@ -76,7 +76,7 @@
 -- hopeless.
 --
 -- WHO MAY CALL WHAT:
---   * cairn_agent (the window's runtime role): cairn_vault_release, cairn_vault_hint,
+--   * cairn_agent (the window's runtime role): cairn_vault_release, cairn_vault_hint, cairn_vault_staff_id_taken,
 --     cairn_vault_terminal_phc, cairn_vault_enrol (which itself demands a superuser's token).
 --   * owner only (the node's console, `cairn-node vault-bootstrap-superuser` and friends):
 --     cairn_vault_bootstrap, cairn_vault_set_terminal_phc.
@@ -353,6 +353,15 @@ RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_t
     SELECT m.hint FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
 $$;
 
+-- Is this staff ID already enrolled? The window asks BEFORE it releases a superuser's key, so a
+-- duplicate gets its own plain sentence instead of the floor's refusal (a floor P0001 carries no
+-- scope, and matching its message text is forbidden: reuse the predicate). It reveals only
+-- whether an ID is enrolled, which cairn_vault_hint already answers: the roster is not secret.
+CREATE OR REPLACE FUNCTION cairn_vault_staff_id_taken(p_staff_id text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT EXISTS (SELECT 1 FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id));
+$$;
+
 -- The site's terminal-unlock PHC string, for the window to check the shared staff passphrase
 -- against. NULL until the console has set one.
 CREATE OR REPLACE FUNCTION cairn_vault_terminal_phc()
@@ -467,6 +476,7 @@ $$;
 -- granted to exactly the role the header names.
 REVOKE EXECUTE ON FUNCTION cairn_vault_release(text, text, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_hint(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_staff_id_taken(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_terminal_phc() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_enrol(text, text, text, jsonb, text, bytea, text, text, text, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_bootstrap(text, text, jsonb, text, bytea, text, text, text) FROM PUBLIC;
@@ -480,6 +490,7 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION cairn_vault_release(text, text, text) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_hint(text) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_vault_staff_id_taken(text) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_terminal_phc() TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_enrol(text, text, text, jsonb, text, bytea, text, text, text, text, bytea) TO cairn_agent;
 

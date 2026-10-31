@@ -185,4 +185,11 @@ BEGIN
     ASSERT o = 'unknown', o;
 END $$;
 
+-- 9. R11: the "already enrolled?" predicate normalises like every other door.
+DO $$
+BEGIN
+    ASSERT cairn_vault_staff_id_taken(' MIRROR-member '), 'the predicate normalises case and spaces';
+    ASSERT NOT cairn_vault_staff_id_taken('nobody-here'), 'an unknown ID is not taken';
+END $$;
+
 ROLLBACK;

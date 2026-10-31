@@ -70,6 +70,10 @@ pub enum EnrolRefusal {
     /// The vault or the node failed after the checks passed; nothing was recorded.
     NotRecorded,
     Fixture,
+    /// The staff ID is already enrolled (checked before the superuser's key is released).
+    AlreadyEnrolled,
+    /// No superuser credential was typed.
+    NeedSuperuser,
 }
 
 impl EnrolRefusal {
@@ -96,6 +100,12 @@ impl EnrolRefusal {
             EnrolRefusal::NotRecorded => "The member could not be enrolled. Nothing was recorded. \
                  Check that the staff ID is not already in use, then try again."
                 .into(),
+            EnrolRefusal::AlreadyEnrolled => {
+                "That staff ID is already in use. Nobody was enrolled.".into()
+            }
+            EnrolRefusal::NeedSuperuser => {
+                "Enter a superuser's staff ID and passphrase to enrol staff.".into()
+            }
             EnrolRefusal::Fixture => {
                 "This window is showing sample data. Nobody can be enrolled here.".into()
             }
@@ -143,7 +153,7 @@ pub async fn enrol_member_impl(
 ) -> Result<String, String> {
     check_form(&member).map_err(|r| r.sentence())?;
     if credential.is_blank() {
-        return Err(KeyRefusal::NeedCredential.sentence());
+        return Err(EnrolRefusal::NeedSuperuser.sentence());
     }
     let Some(db) = state.db.as_ref() else {
         return Err(EnrolRefusal::Fixture.sentence());
@@ -155,6 +165,15 @@ pub async fn enrol_member_impl(
     // One hold of the node connection for release + enrol; every error goes through `explain`
     // so a cut-off says so (#893).
     let db = db.lock().await.map_err(|lost| fault(lost.into()))?;
+    // Asked BEFORE the superuser's key is released (R11), so a duplicate is told plainly and costs
+    // the superuser no release attempt. Two simultaneous enrols of one ID can both pass this and
+    // still fall to the generic `NotRecorded` sentence below: the floor stays the judge.
+    if cairn_node::vault::staff_id_taken(&db, member.staff_id.trim())
+        .await
+        .map_err(|e| fault(db.explain(e)))?
+    {
+        return Err(EnrolRefusal::AlreadyEnrolled.sentence());
+    }
     // Released, used once below, dropped at the end of this function. Never stored.
     let released = cairn_node::vault::release_for_act(
         &db,
