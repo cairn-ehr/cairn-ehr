@@ -51,6 +51,39 @@
         </form>
       </section>
 
+      <!-- Enrol staff (sign-in slice 1). A superuser vouches through the signer strip above; the
+           new member types their OWN passphrase here, twice. Both passphrase fields are emptied
+           after every attempt (enrol.js). Optional, collapsed: it is not part of a chart's flow. -->
+      <details id="enrol-staff">
+        <summary>Enrol staff</summary>
+        <form id="enrol-form" autocomplete="off">
+          <p>The superuser enters their own staff ID and passphrase in the signer strip above. The new member types their own new passphrase below.</p>
+          <label for="enrol-staff-id">New staff ID</label>
+          <input id="enrol-staff-id" type="text" autocomplete="off" />
+          <label for="enrol-name">Display name</label>
+          <input id="enrol-name" type="text" autocomplete="off" />
+          <label for="enrol-role">Role</label>
+          <select id="enrol-role">
+            <option value="clinician">clinician</option>
+            <option value="nurse">nurse</option>
+            <option value="superuser">superuser</option>
+          </select>
+          <label for="enrol-phone">Phone (a phone or an email is needed)</label>
+          <input id="enrol-phone" type="text" autocomplete="off" />
+          <label for="enrol-email">Email</label>
+          <input id="enrol-email" type="text" autocomplete="off" />
+          <label for="enrol-passphrase">New passphrase</label>
+          <input id="enrol-passphrase" type="password" autocomplete="off" />
+          <label for="enrol-passphrase-again">New passphrase again</label>
+          <input id="enrol-passphrase-again" type="password" autocomplete="off" />
+          <label for="enrol-hint">Passphrase hint (optional)</label>
+          <input id="enrol-hint" type="text" autocomplete="off" />
+          <p id="enrol-hint-warning">Colleagues at a shared terminal can read this hint.</p>
+          <button type="submit">Enrol</button>
+          <p id="enrol-status" role="status" aria-live="polite" hidden></p>
+        </form>
+      </details>
+
       <section id="front-door" aria-labelledby="find-heading" hidden>
         <h1 id="find-heading">Find a patient</h1>
 
@@ -267,6 +300,7 @@
     <script src="waiting.js"></script>
     <script src="main.js"></script>
     <script src="signer.js"></script>
+    <script src="enrol.js"></script>
     <script src="stop_reasons.js"></script>
     <script src="holds.js"></script>
     <script src="chart_stale.js"></script>

@@ -173,3 +173,55 @@ fn the_page_starts_locked_and_a_write_refreshes_the_lock_state() {
     let verdicts = js_fn(SIGNER_JS, "tryTerminalUnlock");
     assert!(verdicts.contains("\"fault\""), "{verdicts}");
 }
+
+const ENROL_JS: &str = include_str!("../src-ui/enrol.js");
+
+/// Task 7: the enrol panel is labelled, carries the shared-terminal warning, and empties BOTH
+/// new-passphrase fields (and the strip, without remembering the superuser) on both ways out.
+#[test]
+fn the_enrol_panel_is_labelled_warns_about_the_hint_and_clears_both_ways() {
+    assert!(INDEX_HTML.contains("<details id=\"enrol-staff\">"));
+    assert!(INDEX_HTML.contains("<script src=\"enrol.js\"></script>"));
+    for id in [
+        "enrol-staff-id",
+        "enrol-name",
+        "enrol-role",
+        "enrol-phone",
+        "enrol-email",
+        "enrol-passphrase",
+        "enrol-passphrase-again",
+        "enrol-hint",
+    ] {
+        assert!(
+            INDEX_HTML.contains(&format!("<label for=\"{id}\"")),
+            "{id} needs a <label for>"
+        );
+    }
+    for role in ["clinician", "nurse", "superuser"] {
+        assert!(INDEX_HTML.contains(&format!("<option value=\"{role}\">")));
+    }
+    assert!(
+        INDEX_HTML.contains("Colleagues at a shared terminal can read this hint."),
+        "the hint warning"
+    );
+    assert!(!ENROL_JS.contains("confirm(") && !INDEX_HTML.contains("<dialog"));
+    let body = js_fn(ENROL_JS, "enrolStaff");
+    assert!(body.contains("credential: signerCredential()"), "{body}");
+    let catch = position(body, "catch (failure) {");
+    let after = &body[catch..];
+    // Cleared AFTER the try/catch, so one code path covers success and refusal.
+    for clear in [
+        "el(\"enrol-passphrase\").value = \"\";",
+        "el(\"enrol-passphrase-again\").value = \"\";",
+        "clearSigner(false);",
+    ] {
+        assert!(
+            after.contains(clear),
+            "{clear} missing after the catch: {body}"
+        );
+    }
+    assert!(
+        !body.contains("clearSigner(true)"),
+        "an enrol is not a signed act"
+    );
+}

@@ -26,6 +26,7 @@ mod chart_set;
 mod chart_view_webview_tests;
 mod commands;
 mod duplicates;
+mod enrol;
 mod funnel;
 mod hold;
 #[cfg(test)]
@@ -119,6 +120,7 @@ fn main() -> anyhow::Result<()> {
             commands::forget_held_key,
             commands::sign_off,
             commands::cease,
+            enrol::enrol_member,
             hold::withhold,
             hold::release,
             funnel::commands::funnel_status,
