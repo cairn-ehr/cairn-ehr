@@ -320,7 +320,13 @@ BEGIN
       FROM cairn_vault_attempt_state(v_staff_id) s;
     v_now_ms  := (extract(epoch FROM clock_timestamp()) * 1000)::bigint;
     v_backoff := cairn_vault_backoff_seconds(v_failures::int);      -- NULL for failures 0–3
-    IF v_now_ms < v_last_ms + v_backoff * 1000 THEN
+    -- A last attempt stamped LATER than now means the wall clock was stepped back since (an NTP
+    -- correction, a dead clock battery after a power cut). How long ago that attempt really was
+    -- is then unknown, and an unknown wait must not become a lock-out: waiting "until the stamp
+    -- plus the back-off" could mean hours or years. So the guess is checked as if the wait were
+    -- over. It costs little: step 3 restamps the clock at now, so the back-off resumes from this
+    -- attempt at once, and an attacker gains at most one extra guess per backward clock step.
+    IF v_last_ms <= v_now_ms AND v_now_ms < v_last_ms + v_backoff * 1000 THEN
         RETURN QUERY SELECT 'waiting'::text, NULL::bytea, NULL::text,
             v_last_ms + v_backoff * 1000 - v_now_ms;
         RETURN;

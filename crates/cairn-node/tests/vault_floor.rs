@@ -241,6 +241,20 @@ async fn set_last_attempt(c: &Client, staff_id: &str, offset_ms: i64) {
     .unwrap();
 }
 
+/// The other test seam: set a member's failures since the last success to `n`, by moving the
+/// attempt counter (a sequence, so `setval`, as the owner) to the success mark plus `n`.
+async fn set_failures(c: &Client, staff_id: &str, n: i64) {
+    c.query_one(
+        "SELECT setval(format('public.%I', cairn_vault_sequence_name(m.attempt_series_id, 'attempts'))::regclass,
+                       a.success_mark + $2, true)
+           FROM vault_member m JOIN vault_attempt a ON a.staff_id = m.staff_id
+          WHERE m.staff_id = $1",
+        &[&staff_id, &n],
+    )
+    .await
+    .unwrap();
+}
+
 fn db_message(e: &tokio_postgres::Error) -> String {
     e.as_db_error()
         .map(|d| d.message().to_string())
@@ -338,18 +352,16 @@ async fn waiting_does_not_count_a_failure() {
     };
     let (_g, c) = fresh().await;
     boss_and_jsmith(&c).await;
-    for _ in 0..4 {
-        release(&c, "jsmith", "not it", "clinical").await;
-    }
-    // Push the wait out so the test cannot race the 1-second first back-off.
-    set_last_attempt(&c, "jsmith", 60_000).await;
+    // Ten failures (a 64 s back-off), the last one just now: the test cannot race the wait.
+    set_failures(&c, "jsmith", 10).await;
+    set_last_attempt(&c, "jsmith", 0).await;
     let r = release(&c, "jsmith", CLIN_PASS, "clinical").await;
     assert_eq!(r.outcome, "waiting", "the right passphrase waits too");
     assert_eq!(r.seed, None, "waiting never unseals");
     assert!(r.retry_after_ms.is_some_and(|ms| ms > 0));
-    assert_eq!(failures(&c, "jsmith").await, 4);
+    assert_eq!(failures(&c, "jsmith").await, 10);
 
-    set_last_attempt(&c, "jsmith", -2_000).await;
+    set_last_attempt(&c, "jsmith", -65_000).await;
     let r = release(&c, "jsmith", CLIN_PASS, "clinical").await;
     assert_eq!(r.outcome, "released");
     assert_eq!(
@@ -361,6 +373,24 @@ async fn waiting_does_not_count_a_failure() {
     let r = release(&c, "jsmith", "not it", "clinical").await;
     assert_eq!(r.outcome, "wrong");
     assert_eq!(r.retry_after_ms, None, "{r:?}");
+}
+
+/// Final review item 3: the last attempt is stamped with the wall clock, so if the clock is then
+/// stepped BACK (an NTP correction, a dead RTC battery after a power cut) the last attempt looks
+/// like it is in the future. The time since it is unknown, and an unknown wait must not become
+/// a lock-out — the door checks the guess (and restamps the clock at now).
+#[tokio::test]
+async fn a_clock_stepped_back_never_locks_out() {
+    let Some(_) = cs() else {
+        eprintln!("skipped");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    boss_and_jsmith(&c).await;
+    set_failures(&c, "jsmith", 10).await;
+    set_last_attempt(&c, "jsmith", 3_600_000).await;
+    let r = release(&c, "jsmith", CLIN_PASS, "clinical").await;
+    assert_eq!(r.outcome, "released", "{r:?}");
 }
 
 #[tokio::test]
