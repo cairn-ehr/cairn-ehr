@@ -1,7 +1,7 @@
-//! The chart surface's five commands (the front door's are in `funnel::commands`): three act
-//! on a chart (`med_list`, `sign_off`, `cease`) and two on the signing session (`unlock`,
-//! `lock_state`). Each one is a thin adapter: it resolves state, calls a `cairn-node` function,
-//! and maps the result. No clinical logic lives here — that is all in `cairn-medication-view`
+//! The chart surface's commands (the front door's are in `funnel::commands`): three act on a
+//! chart (`med_list`, `sign_off`, `cease`) and four on the terminal's signing state
+//! (`lock_state`, `forget_held_key`, `vault_hint`, `terminal_unlock`). Each one is a thin
+//! adapter: it resolves state, calls a `cairn-node` function, and maps the result. No clinical logic lives here — that is all in `cairn-medication-view`
 //! and `cairn-gui-tab-medications`, under `cargo test`.
 //!
 //! The three chart commands are one-line `#[tauri::command]` forwarders onto plain
@@ -25,13 +25,14 @@ use crate::chart_set::{
 };
 use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
-use crate::state::{AppState, Now, SessionKey};
+use crate::signer::Credential;
+use crate::state::{AppState, Now};
 use crate::write_failure::{
     already_stopped_note, cease_outcome, chart_read_failed, key_locked, name_the_cut,
     node_cannot_write, node_failure, retry_when_nothing_written, sign_off_outcome, UnknownThread,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
-use cairn_medication_view::{elsewhere_report, short_kid, PatientMedicationList};
+use cairn_medication_view::{elsewhere_report, PatientMedicationList};
 use std::time::Instant;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -94,81 +95,26 @@ pub async fn med_list_impl(
     Ok(chart_pane(&list, patient, members, links, dups, change))
 }
 
-/// Whether a signing key is currently held, and whose.
+/// Whether a signing key is held for the next act, and for whom.
 #[derive(serde::Serialize)]
 pub struct LockState {
-    pub unlocked: bool,
-    /// The short key id of whoever is signed in, when someone is. The window shows this so
-    /// a clinician cannot sign a chart believing they are someone else.
-    pub kid: Option<String>,
-    /// True in fixture mode, where there is nothing to unlock and nothing to write.
+    /// The staff ID whose key will sign the next act with no credential typed, while one is
+    /// held. The window shows it so a clinician cannot sign believing they are someone else.
+    pub held_by: Option<String>,
+    /// This terminal's key hold (`--key-hold-seconds`): 0 on a shared terminal, where every act
+    /// asks for a staff ID and passphrase.
+    pub key_hold_secs: u64,
+    /// True in fixture mode, where there is nothing to sign and nothing to write.
     pub mock: bool,
 }
 
-/// Unseal the clinician's signing key and hold it for the session.
-///
-/// One unseal per session is what makes the whole-list gesture cost ONE act — see the
-/// module doc on `state.rs` for why holding it is the paper-parity answer and re-locking is
-/// the safety answer.
-#[tauri::command]
-pub async fn unlock(
-    state: tauri::State<'_, AppState>,
-    passphrase: String,
-) -> Result<LockState, String> {
-    // Wiped when this function returns, on the success path and on every error path alike.
-    // The webview clears its own field either way (see `main.js`); this is the other half —
-    // a passphrase left in the heap outlives the failure that put it there, and this process
-    // stays alive for a whole clinical session.
-    let passphrase = Zeroizing::new(passphrase);
-
-    let path = state
-        .attester_key_path
-        .as_ref()
-        .ok_or("this window is showing fixture data; there is nothing to sign")?;
-
-    // The same routine every CLI verb uses to unseal a human key — not a second
-    // implementation, because a second one would eventually accept a key the node refuses.
-    let sk = cairn_node::keystore::load(path, Some(passphrase.as_str()))
-        .map_err(|e| format!("could not unseal the signing key: {e}"))?;
-    let kid = hex::encode(sk.verifying_key().to_bytes());
-
-    // Refuse early and legibly rather than letting the in-DB floor reject every signature
-    // later. The floor is still the real enforcement (principle 12) — this only means the
-    // clinician learns at unlock time, not after reviewing a whole chart.
-    let db = state
-        .db
-        .as_ref()
-        .ok_or("no database connection")?
-        .lock()
-        .await
-        // The key is unsealed by now: say so, or a rejected DATABASE password ("password
-        // authentication failed") reads as a wrong passphrase.
-        .map_err(|e| format!("Your passphrase was right, but the key was not unlocked: the {e}"))?;
-    if !cairn_node::identify::attester_is_enrolled_human(&db, &kid)
-        .await
-        .map_err(|e| {
-            format!(
-                "Your passphrase was right, but the key was not unlocked: whether it is enrolled \
-                 could not be read: {:#}",
-                db.explain(e)
-            )
-        })?
-    {
-        return Err(format!(
-            "key {} is not an enrolled human actor on this node — run `cairn-node \
-             enroll-human` first",
-            short_kid(&kid)
-        ));
+/// The lock as it stands, read WITHOUT counting as activity (`AppState::key_status`).
+async fn lock_state_impl(state: &AppState) -> LockState {
+    LockState {
+        held_by: state.key_status(Now::read()).await,
+        key_hold_secs: state.key_hold.as_secs(),
+        mock: state.is_mock(),
     }
-    drop(db);
-
-    let short = short_kid(&kid).to_string();
-    *state.session.lock().await = Some(SessionKey::new(sk, Now::read()));
-    Ok(LockState {
-        unlocked: true,
-        kid: Some(short),
-        mock: false,
-    })
 }
 
 /// Report whether a key is still held.
@@ -177,18 +123,122 @@ pub async fn unlock(
 /// discovering it when a sign-off is refused — the same "state is ambient, never modal"
 /// rule the shell design follows.
 ///
-/// It goes through `key_status`, NOT `live_key`, and that distinction is the whole reason
-/// the two exist. This runs on a 10-second timer with nobody at the keyboard; treating it as
-/// activity meant the window kept resetting its own idle clock and the key never re-locked
-/// at all. See the `state` module doc.
+/// It goes through `key_status`, NOT `signer_for_act`, and that distinction is the whole
+/// reason the two exist. This runs on a 10-second timer with nobody at the keyboard; treating
+/// it as activity meant the window kept resetting its own idle clock and the key never
+/// re-locked at all. See the `state` module doc.
 #[tauri::command]
 pub async fn lock_state(state: tauri::State<'_, AppState>) -> Result<LockState, String> {
-    let held = state.key_status(Now::read()).await;
-    Ok(LockState {
-        unlocked: held.is_some(),
-        kid: held.as_deref().map(|kid| short_kid(kid).to_string()),
-        mock: state.is_mock(),
+    Ok(lock_state_impl(&state).await)
+}
+
+/// The explicit Lock: wipe the held key now, and report the lock as it then stands.
+#[tauri::command]
+pub async fn forget_held_key(state: tauri::State<'_, AppState>) -> Result<LockState, String> {
+    state.forget_held_key().await;
+    Ok(lock_state_impl(&state).await)
+}
+
+/// The clinician's own passphrase hint, shown once their staff ID is typed (design §5.4). `None`
+/// when there is none, nobody has that ID, or in fixture mode. A failed read is a worded
+/// refusal; its detail goes to stderr.
+#[tauri::command]
+pub async fn vault_hint(
+    state: tauri::State<'_, AppState>,
+    staff_id: String,
+) -> Result<Option<String>, String> {
+    vault_hint_impl(&state, &staff_id).await
+}
+
+pub async fn vault_hint_impl(state: &AppState, staff_id: &str) -> Result<Option<String>, String> {
+    let Some(db) = state.db.as_ref() else {
+        return Ok(None);
+    };
+    let read = match db.lock().await {
+        Err(lost) => Err(anyhow::Error::from(lost)),
+        Ok(db) => db
+            .query_one("SELECT cairn_vault_hint($1)", &[&staff_id])
+            .await
+            .map(|row| row.get::<_, Option<String>>(0))
+            .map_err(|e| db.explain(e.into())),
+    };
+    read.map_err(|e| {
+        eprintln!("the passphrase hint could not be read: {e:#}");
+        "The passphrase hint could not be read.".to_string()
     })
+}
+
+/// What the terminal lock screen is told (the words are `signer.js`'s contract).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalUnlock {
+    Unlocked,
+    Wrong,
+    /// No terminal passphrase is enrolled yet: the screen says so rather than leaving an
+    /// installer locked out with no explanation.
+    NotSet,
+    /// The node could not be asked (lost connection, failed read). NOT a wrong passphrase: the
+    /// operator must not conclude they forgot one they typed correctly.
+    Fault,
+}
+
+/// Pure: the verdict for a PHC read that may have failed. A failure is `Fault`, never `Wrong`.
+pub fn terminal_read_verdict<E>(
+    read: Result<Option<String>, E>,
+    passphrase: &str,
+) -> TerminalUnlock {
+    match read {
+        Ok(phc) => terminal_verdict(phc.as_deref(), passphrase),
+        Err(_) => TerminalUnlock::Fault,
+    }
+}
+
+/// The verdict for `passphrase` against the node's terminal PHC, if one is set. A PHC that
+/// cannot be checked is `Fault` (detail to stderr), never `Wrong`.
+pub fn terminal_verdict(phc: Option<&str>, passphrase: &str) -> TerminalUnlock {
+    let Some(phc) = phc else {
+        return TerminalUnlock::NotSet;
+    };
+    match cairn_node::vault::terminal_unlock_ok(phc, passphrase) {
+        Ok(true) => TerminalUnlock::Unlocked,
+        Ok(false) => TerminalUnlock::Wrong,
+        Err(e) => {
+            eprintln!("the terminal passphrase could not be checked: {e:#}");
+            TerminalUnlock::Fault
+        }
+    }
+}
+
+/// Does `passphrase` open this terminal (the shared staff passphrase, shown once when a live
+/// window opens, design §5.4)? The lock screen itself is the webview's; this only answers. `Wrong` in fixture mode;
+/// `Fault` when the PHC cannot be read (detail to stderr); `NotSet` when none is enrolled.
+#[tauri::command]
+pub async fn terminal_unlock(
+    state: tauri::State<'_, AppState>,
+    passphrase: String,
+) -> Result<TerminalUnlock, String> {
+    Ok(terminal_unlock_impl(&state, Zeroizing::new(passphrase)).await)
+}
+
+pub async fn terminal_unlock_impl(
+    state: &AppState,
+    passphrase: Zeroizing<String>,
+) -> TerminalUnlock {
+    let Some(db) = state.db.as_ref() else {
+        return TerminalUnlock::Wrong;
+    };
+    let phc = match db.lock().await {
+        Err(lost) => Err(anyhow::Error::from(lost)),
+        Ok(db) => db
+            .query_one("SELECT cairn_vault_terminal_phc()", &[])
+            .await
+            .map(|row| row.get::<_, Option<String>>(0))
+            .map_err(|e| db.explain(e.into())),
+    };
+    if let Err(e) = &phc {
+        eprintln!("the terminal passphrase could not be read: {e:#}");
+    }
+    terminal_read_verdict(phc, &passphrase)
 }
 
 /// What one sign-off gesture did — and, just as important, what it did not do.
@@ -217,15 +267,18 @@ pub async fn sign_off(
     state: tauri::State<'_, AppState>,
     patient_id: String,
     charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<SignOffReport, ErrorView> {
-    sign_off_impl(&state, &patient_id, charts).await
+    sign_off_impl(&state, &patient_id, charts, credential).await
 }
 
 /// `charts` is the chart SET the webview displayed (`MedListView::charts`, sent back as-is).
+/// `credential` is the signer strip's staff ID and passphrase, if typed (`crate::signer`).
 pub async fn sign_off_impl(
     state: &AppState,
     patient_id: &str,
     charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<SignOffReport, ErrorView> {
     // FIRST: the chart the clinician was LOOKING AT when they pressed the button, and only if
     // it is still the open one — never "whatever is open now" (see
@@ -248,12 +301,12 @@ pub async fn sign_off_impl(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
+    // ONE key for the whole list: one press, one credential (#288). A refusal is not a failure
+    // to hide: the clinician needs to know nothing signed, and why.
     let (human_sk, human_kid) = state
-        .live_key(Now::read())
+        .signer_for_act(credential, Now::read())
         .await
-        // Not a failure to hide: the clinician needs to know the key re-locked, not to see
-        // a gesture silently do nothing.
-        .ok_or_else(|| key_locked("your signing key is locked — unlock it to sign off"))?;
+        .map_err(|r| key_locked(&r))?;
     let node_sk = state
         .node_sk
         .as_ref()
@@ -371,7 +424,7 @@ pub struct CeaseReport {
 /// reopen. But the fix #342 records is deliberately **local-authoring only** — a door-level
 /// NOT NULL would fork the event set the moment a peer replicated a rationale-less
 /// cessation — and this window IS a local-authoring surface. So it supplies both: the
-/// unlocked clinician is the author (ADR-0053), and the reason is required here. The verb
+/// signing clinician is the author (ADR-0053), and the reason is required here. The verb
 /// stays unchanged; the window simply never walks the path #342 is about.
 #[tauri::command]
 pub async fn cease(
@@ -380,17 +433,19 @@ pub async fn cease(
     reason: String,
     patient_id: String,
     charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<CeaseReport, ErrorView> {
-    cease_impl(&state, &patient_id, charts, &group_id, &reason).await
+    cease_impl(&state, &patient_id, charts, &group_id, &reason, credential).await
 }
 
-/// `charts` is the chart SET the webview displayed, exactly as for [`sign_off_impl`].
+/// `charts` and `credential` are exactly as for [`sign_off_impl`].
 pub async fn cease_impl(
     state: &AppState,
     patient_id: &str,
     charts: Vec<String>,
     group_id: &str,
     reason: &str,
+    credential: Option<Credential>,
 ) -> Result<CeaseReport, ErrorView> {
     // Asked ONCE, and FIRST, for the whole gesture — and only if it is the chart the clinician
     // was looking at (`AppState::displayed_patient`).
@@ -433,7 +488,7 @@ pub async fn cease_impl(
         .find(|row| row.group_id == group)
         .ok_or_else(|| stale("that drug is no longer on this chart — nothing was done"))?;
     let plan = cease_plan(row, patient);
-    // Nothing this chart may write: said now, before the key, as a release does — an unlock
+    // Nothing this chart may write: said now, before the key, as a release does — a passphrase
     // that writes nothing is a step paper never has — and not timed. On a hazard line the window
     // draws Stop only where `cease_plan` writes (#841), and an ordinary line has a thread unless
     // its read raced a reconcile — so a press reaching here means the list on screen is behind
@@ -447,9 +502,9 @@ pub async fn cease_impl(
         });
     }
     let (human_sk, human_kid) = state
-        .live_key(Now::read())
+        .signer_for_act(credential, Now::read())
         .await
-        .ok_or_else(|| key_locked("your signing key is locked — unlock it to stop a drug"))?;
+        .map_err(|r| key_locked(&r))?;
     let node_sk = state
         .node_sk
         .as_ref()
@@ -588,11 +643,6 @@ pub(crate) async fn record_timing(state: &AppState, kind: &str, items: usize, el
         eprintln!("gesture timing not recorded (the act reports its own outcome): {e:#}");
     }
 }
-
-// `short_kid` is `cairn_medication_view::display::short_kid` — ONE truncation rule, because
-// this window shows a key id from the view model (the signature column) and one from its own
-// lock state (the "signing as …" line) on the same screen. Two copies of the rule is one edit
-// away from rendering the same clinician as two different-looking ids.
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

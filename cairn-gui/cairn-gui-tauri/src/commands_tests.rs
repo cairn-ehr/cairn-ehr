@@ -136,8 +136,8 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
     })
     .unwrap();
     let lock = serde_json::to_value(LockState {
-        unlocked: false,
-        kid: None,
+        held_by: None,
+        key_hold_secs: 0,
         mock: false,
     })
     .unwrap();
@@ -241,7 +241,7 @@ async fn med_list_names_a_change_from_the_seen_set() {
 #[tokio::test]
 async fn sign_off_refuses_a_chart_that_is_not_on_screen() {
     let (state, _) = open_on_the_fixture_chart();
-    let err = sign_off_impl(&state, &another_chart(), vec![another_chart()])
+    let err = sign_off_impl(&state, &another_chart(), vec![another_chart()], None)
         .await
         .unwrap_err();
     assert!(err.text.contains("not the chart"));
@@ -256,6 +256,7 @@ async fn cease_refuses_a_chart_that_is_not_on_screen() {
         vec![another_chart()],
         &another_chart(),
         "allergy",
+        None,
     )
     .await
     .unwrap_err();
@@ -266,7 +267,7 @@ async fn cease_refuses_a_chart_that_is_not_on_screen() {
 #[tokio::test]
 async fn a_write_on_the_chart_on_screen_meets_the_fixture_refusal() {
     let (state, on_screen) = open_on_the_fixture_chart();
-    let err = sign_off_impl(&state, &on_screen, vec![on_screen.clone()])
+    let err = sign_off_impl(&state, &on_screen, vec![on_screen.clone()], None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, crate::funnel::view::Retry::Never);
@@ -366,6 +367,8 @@ fn every_command_the_webview_calls_is_registered() {
     let webview = [
         ("waiting.js", include_str!("../src-ui/waiting.js")),
         ("main.js", include_str!("../src-ui/main.js")),
+        ("signer.js", include_str!("../src-ui/signer.js")),
+        ("enrol.js", include_str!("../src-ui/enrol.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
         ("holds.js", include_str!("../src-ui/holds.js")),
         ("chart_stale.js", include_str!("../src-ui/chart_stale.js")),
@@ -405,4 +408,45 @@ fn every_command_the_webview_calls_is_registered() {
             "the webview calls `{name}`, main.rs never registers it"
         );
     }
+}
+
+/// The lock screen tells "no terminal passphrase is set" apart from "wrong", so an installer is
+/// never locked out with no explanation. The words are the webview's contract (`signer.js`).
+#[test]
+fn the_terminal_verdict_tells_not_set_from_wrong() {
+    let phc = cairn_node::vault::terminal_phc("shared pass").unwrap();
+    assert_eq!(
+        terminal_verdict(Some(&phc), "shared pass"),
+        TerminalUnlock::Unlocked
+    );
+    assert_eq!(terminal_verdict(Some(&phc), "other"), TerminalUnlock::Wrong);
+    assert_eq!(terminal_verdict(None, "anything"), TerminalUnlock::NotSet);
+    // A damaged PHC is the node's fault: every staff member would otherwise be told their
+    // correct shared passphrase is wrong (PR #897 review).
+    assert_eq!(
+        terminal_verdict(Some("not a phc"), "shared pass"),
+        TerminalUnlock::Fault
+    );
+    let words = |v| serde_json::to_string(&v).unwrap();
+    assert_eq!(words(TerminalUnlock::Unlocked), "\"unlocked\"");
+    assert_eq!(words(TerminalUnlock::Wrong), "\"wrong\"");
+    assert_eq!(words(TerminalUnlock::NotSet), "\"not-set\"");
+}
+
+/// A node fault while reading the terminal PHC is NOT a wrong passphrase: the operator would
+/// retype a correct passphrase and conclude they had forgotten it. It gets its own word.
+#[test]
+fn a_failed_phc_read_is_a_fault_never_wrong() {
+    let fault: Result<Option<String>, ()> = Err(());
+    assert_eq!(
+        terminal_read_verdict(fault, "anything"),
+        TerminalUnlock::Fault
+    );
+    assert_eq!(
+        serde_json::to_string(&TerminalUnlock::Fault).unwrap(),
+        "\"fault\""
+    );
+    let phc = cairn_node::vault::terminal_phc("shared pass").unwrap();
+    let read: Result<Option<String>, ()> = Ok(Some(phc));
+    assert_eq!(terminal_read_verdict(read, "other"), TerminalUnlock::Wrong);
 }

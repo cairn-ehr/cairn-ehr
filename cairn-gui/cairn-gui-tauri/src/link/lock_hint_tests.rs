@@ -1,24 +1,25 @@
-//! #782 — the verdict buttons' "(unlock your signing key first)" hint must never be lost to
-//! script load order.
+//! #782 — the lock state must never be lost to script load order. (The verdict buttons' "(unlock
+//! your signing key first)" hint this once protected is gone: with a key hold of 0 no key is
+//! held beforehand, and `signer_webview_tests` pins its absence. What stays is the same race for
+//! the signer strip and the terminal lock.)
 //!
 //! # The race
 //!
 //! `main.js` asks the backend for the signing key's lock state (`pollLock` → `renderLockState`)
-//! and hands the answer to `updateLinkLock`, which `link.js` defines. The scripts are classic
-//! `<script>` tags, `main.js` first and `link.js` fifth. The first poll used to start while
-//! `main.js` itself was loading. If its answer landed before `link.js` had run, `renderLockState`
-//! found no `updateLinkLock` and skipped it, and `link.js` then started from its own default
-//! (`keyUnlocked = false`). The verdict buttons showed the wrong lock state until the next poll,
-//! up to `LOCK_POLL_MS` later. A headless walk with an instant `lock_state` reproduced it
+//! and hands the answer to `renderSigner`, which `signer.js` defines. The scripts are classic
+//! `<script>` tags, `main.js` first and `signer.js` second. The first poll used to start while
+//! `main.js` itself was loading. If its answer landed before `signer.js` had run, `renderLockState`
+//! found no `renderSigner` (a ReferenceError, caught as "could not check the signing key"), and the
+//! strip and terminal lock showed their defaults until the next poll, up to `LOCK_POLL_MS` later. A headless walk with an instant `lock_state` reproduced it
 //! (R6's Task 8), and showed the fix (PR #792).
 //!
 //! # The fix these tests pin
 //!
 //! The first poll starts on `DOMContentLoaded`. The browser fires that event only after every
-//! parser-inserted classic script has run, so `updateLinkLock` exists by then. The second test
+//! parser-inserted classic script has run, so `renderSigner` exists by then. The second test
 //! keeps the page that way. An `async` script may run AFTER `DOMContentLoaded`, which reopens the
 //! race. A `defer` script would run before the event, but out of step with the classic ones
-//! around it. A module gets its own scope, so `main.js` could not see `updateLinkLock` at all.
+//! around it. A module gets its own scope, so `main.js` could not see `renderSigner` at all.
 //! None of the three belongs in this page.
 //!
 //! `main.js` and `index.html` are untyped, so these tests read their source, like the
@@ -56,7 +57,7 @@ fn the_first_lock_poll_waits_for_every_script_to_load() {
     assert_eq!(
         top_level, TOP_LEVEL_POLL_LOCK,
         "main.js may poll the lock at load time only from DOMContentLoaded: a poll started while \
-         main.js is still loading can land before link.js defines updateLinkLock (#782)"
+         main.js is still loading can land before signer.js defines renderSigner (#782)"
     );
 }
 
@@ -68,8 +69,8 @@ fn every_script_is_classic_and_synchronous_so_domcontentloaded_follows_them_all(
         .filter(|line| line.starts_with("<script"))
         .collect();
     assert!(
-        tags.iter().any(|t| t.contains("src=\"link.js\"")),
-        "index.html loads link.js: {tags:?}"
+        tags.iter().any(|t| t.contains("src=\"signer.js\"")),
+        "index.html loads signer.js: {tags:?}"
     );
     for tag in tags {
         for word in ["async", "defer", "type=\"module\""] {

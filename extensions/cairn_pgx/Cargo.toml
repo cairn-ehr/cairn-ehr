@@ -1,6 +1,6 @@
 [package]
 name = "cairn_pgx"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 # A pgrx extension installed via cargo-pgrx into PostgreSQL, not a crates.io library: never
@@ -36,6 +36,8 @@ pg_test = []
 [dependencies]
 pgrx = "=0.18.1"
 cairn-event = { path = "../../crates/cairn-event" }
+# Passphrase-sealed vault keys (argon2 + XChaCha20-Poly1305): MIT/Apache-2.0, AGPL-compatible.
+cairn-keystore = { path = "../../crates/cairn-keystore" }
 serde_json = "1" # used by cairn_body (later task) in non-test code
 hex = "0.4" # pgrx pg_test feature compiles the tests module as a lib, not #[cfg(test)], so hex must be a regular dep
 

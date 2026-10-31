@@ -9,7 +9,7 @@
 use cairn_event::medication::{
     medication_attestation_body, render_medication_attestation_twin, MedicationAttestation,
 };
-use cairn_event::{event_address, sign_attestation, EventBody, Hlc, SigningKey};
+use cairn_event::{event_address, sign_attestation, EventBody, EventSigner, Hlc, SigningKey};
 use uuid::Uuid;
 
 const ATTESTATION_SCHEMA_VERSION: &str = "clinical.medication-attestation/1";
@@ -18,7 +18,7 @@ const ATTESTATION_SCHEMA_VERSION: &str = "clinical.medication-attestation/1";
 /// the author paths stay pure functions of their arguments. The human key both signs
 /// AND attests the attestation event (the `identify --link` precedent).
 pub struct AttestParams<'a> {
-    pub human_sk: &'a SigningKey,
+    pub human_sk: &'a dyn EventSigner,
     pub human_kid: &'a str,
     pub basis: Option<&'a str>,
     pub note: Option<&'a str>,

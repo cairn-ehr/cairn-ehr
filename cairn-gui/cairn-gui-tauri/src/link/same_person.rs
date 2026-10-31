@@ -4,7 +4,7 @@
 //! Paper counterpart: fetch the other folder, lay the front sheets side by side, clip. Three
 //! acts — find (the in-chart search, which reuses `browse`: it adds its results to
 //! `AppState::shown` and never switches the open chart), Compare, Link. The Link click IS the
-//! signature under the unlocked key (ADR-0053); there is no confirmation dialog (principle 3).
+//! signature under the signing clinician's key (ADR-0053); there is no confirmation dialog (principle 3).
 //!
 //! Every command here applies the chart-command rules IN THIS ORDER, and each test pins one:
 //! the chart on screen (`displayed_patient`), the displayed set (`check_displayed_set`), the
@@ -25,6 +25,7 @@ use super::{as_text, chart_set_of};
 use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::commands::read_chart_of;
 use crate::funnel::view::ErrorView;
+use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
@@ -146,6 +147,7 @@ pub async fn link_impl(
     charts: Vec<String>,
     other_id: &str,
     other_charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
     let (patient, left, other, _) =
         resolve_pair(state, Act::Link, patient_id, &charts, other_id).await?;
@@ -167,9 +169,12 @@ pub async fn link_impl(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
-    // Linking is a clinical act, so taking the key counts as activity (`live_key`). A locked
-    // key is not a verdict: `key_locked` keeps the Link button for after the unlock.
-    let (human_sk, human_kid) = state.live_key(Now::read()).await.ok_or_else(key_locked)?;
+    // Linking is a clinical act, so a held key it uses counts as activity (`signer_for_act`).
+    // A missing or wrong passphrase is not a verdict: `key_locked` keeps the Link button.
+    let (human_sk, human_kid) = state
+        .signer_for_act(credential, Now::read())
+        .await
+        .map_err(|r| key_locked(&r))?;
     let mut db = state
         .db
         .as_ref()
@@ -226,8 +231,17 @@ pub async fn link_records(
     charts: Vec<String>,
     other_id: String,
     other_charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
-    link_impl(&state, &patient_id, charts, &other_id, other_charts).await
+    link_impl(
+        &state,
+        &patient_id,
+        charts,
+        &other_id,
+        other_charts,
+        credential,
+    )
+    .await
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ use crate::funnel::view::{ErrorView, Retry};
 use crate::link::chart_set_of;
 use crate::link::judgement_view::{key_locked_for, refused, stale, LinkReportView};
 use crate::link::view::{ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED};
+use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
 use cairn_node::db_diagnosis::operator_chain;
@@ -251,6 +252,7 @@ pub async fn different_people_impl(
     charts: Vec<String>,
     other_id: &str,
     other_charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let left = check_displayed_set(&chart_set_of(state, patient).await?, &charts).map_err(|e| {
@@ -278,9 +280,9 @@ pub async fn different_people_impl(
         ));
     }
     let (human_sk, human_kid) = state
-        .live_key(Now::read())
+        .signer_for_act(credential, Now::read())
         .await
-        .ok_or_else(|| key_locked_for(DIFFERENT_PEOPLE_BUTTON))?;
+        .map_err(|r| key_locked_for(DIFFERENT_PEOPLE_BUTTON, &r))?;
     let mut db = state
         .db
         .as_ref()
@@ -344,8 +346,17 @@ pub async fn record_different_people(
     charts: Vec<String>,
     other_id: String,
     other_charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
-    different_people_impl(&state, &patient_id, charts, &other_id, other_charts).await
+    different_people_impl(
+        &state,
+        &patient_id,
+        charts,
+        &other_id,
+        other_charts,
+        credential,
+    )
+    .await
 }
 
 #[cfg(test)]

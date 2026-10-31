@@ -14,8 +14,13 @@ cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-0000000
 
 # Against a real node: the front door, or straight onto one chart with --patient.
 cargo run --release -p cairn-gui-tauri -- \
-    --conn "$CONN" --key node.key --attester-key dr-a.key [--patient <uuid>]
+    --conn "$CONN" --key node.key [--key-hold-seconds 900] [--patient <uuid>]
 ```
+
+The window opens no clinician key file. Each clinical act carries the clinician's staff ID and
+passphrase, and the node's key vault (db/061) releases their key for that act. `--key-hold-seconds`
+(default 0, a shared terminal; at most 900) keeps the last signer's key for their next acts on a
+personal workstation.
 
 At launch against a real node the window asks whether this node's key may write (all four
 `ActorStanding` answers). A "no" does not stop it opening, since reading needs no actor; the line above
@@ -55,7 +60,7 @@ both surfaces (the front door and the chart) says what an operator must do inste
 ## Stopping a drug takes a reason
 
 An order may be cancelled only by somebody **taking ownership** and **giving a rationale** (ADR-0060). So
-`cease` requires non-empty reason text and authors as the unlocked clinician (ADR-0053). The CLI verb
+`cease` requires non-empty reason text and authors as the signing clinician (ADR-0053). The CLI verb
 still accepts neither ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342)) — that fix is
 local-authoring-only by design, and this window is already on the right side of it.
 

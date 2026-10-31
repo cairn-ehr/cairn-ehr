@@ -69,7 +69,7 @@ async fn an_in_record_chart_is_refused_before_any_admission() {
 async fn a_malformed_other_chart_is_not_on_screen() {
     let state = AppState::mock(Some(fixture()));
     let p = fixture().to_string();
-    let err = different_people_impl(&state, &p, vec![p.clone()], "not-a-uuid", vec![])
+    let err = different_people_impl(&state, &p, vec![p.clone()], "not-a-uuid", vec![], None)
         .await
         .unwrap_err();
     assert_eq!(err.text, crate::link::view::NOT_ON_SCREEN);
@@ -78,9 +78,16 @@ async fn a_malformed_other_chart_is_not_on_screen() {
 #[tokio::test]
 async fn different_people_is_bound_to_the_chart_on_screen() {
     let state = AppState::mock(Some(fixture()));
-    let err = different_people_impl(&state, &Uuid::from_u128(9).to_string(), vec![], "x", vec![])
-        .await
-        .unwrap_err();
+    let err = different_people_impl(
+        &state,
+        &Uuid::from_u128(9).to_string(),
+        vec![],
+        "x",
+        vec![],
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
 }
 
@@ -94,6 +101,7 @@ async fn different_people_refuses_a_changed_set() {
         vec![p.clone(), Uuid::from_u128(7).to_string()],
         &Uuid::from_u128(2).to_string(),
         vec![],
+        None,
     )
     .await
     .unwrap_err();
@@ -109,9 +117,16 @@ async fn fixture_mode_cannot_record_different_people() {
     let state = AppState::mock(Some(fixture()));
     let p = fixture().to_string();
     let other = Uuid::from_u128(2).to_string();
-    let err = different_people_impl(&state, &p, vec![p.clone()], &other, vec![other.clone()])
-        .await
-        .unwrap_err();
+    let err = different_people_impl(
+        &state,
+        &p,
+        vec![p.clone()],
+        &other,
+        vec![other.clone()],
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(err.text.contains("fixture mode"), "{}", err.text);
 }
 
@@ -130,6 +145,7 @@ async fn different_people_refuses_when_the_other_record_changed() {
         vec![p.clone()],
         &other.to_string(),
         vec![other.to_string(), Uuid::from_u128(4).to_string()],
+        None,
     )
     .await
     .unwrap_err();
@@ -143,7 +159,7 @@ async fn different_people_refuses_when_the_other_record_changed() {
 async fn different_people_refuses_a_chart_already_in_this_record() {
     let state = AppState::mock(Some(fixture()));
     let p = fixture().to_string();
-    let err = different_people_impl(&state, &p, vec![p.clone()], &p, vec![p.clone()])
+    let err = different_people_impl(&state, &p, vec![p.clone()], &p, vec![p.clone()], None)
         .await
         .unwrap_err();
     assert_eq!(err.text, crate::link::view::ALREADY_IN_RECORD);
