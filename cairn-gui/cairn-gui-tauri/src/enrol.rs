@@ -152,7 +152,9 @@ pub async fn enrol_member_impl(
     member: NewMemberForm,
 ) -> Result<String, String> {
     check_form(&member).map_err(|r| r.sentence())?;
-    if credential.is_blank() {
+    // No passphrase, no superuser: a staff ID alone (the strip keeps it on a held terminal) must
+    // never reach the vault, where it would count as the superuser's wrong guess.
+    if !credential.has_passphrase() {
         return Err(EnrolRefusal::NeedSuperuser.sentence());
     }
     let Some(db) = state.db.as_ref() else {

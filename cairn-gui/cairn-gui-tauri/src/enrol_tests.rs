@@ -291,3 +291,21 @@ async fn a_blank_credential_asks_for_a_superuser_not_a_signature() {
     assert_eq!(said, EnrolRefusal::NeedSuperuser.sentence());
     assert!(said.contains("enrol staff"), "{said}");
 }
+
+/// Re-review item 1: a staff ID with no passphrase (the strip keeps the ID on a held terminal) is
+/// no superuser credential. It is refused before the node is asked, so it can never be counted as
+/// a superuser's wrong guess. On the fixture state any later step would answer `Fixture`, so
+/// `NeedSuperuser` here proves no vault call was reached.
+#[tokio::test]
+async fn a_staff_id_alone_asks_for_a_superuser_and_never_reaches_the_vault() {
+    for blank in ["", "  "] {
+        let said = enrol_member_impl(
+            &AppState::mock(None),
+            credential(SU_STAFF, blank),
+            form(&pass("a"), &pass("a")),
+        )
+        .await
+        .expect_err("refused");
+        assert_eq!(said, EnrolRefusal::NeedSuperuser.sentence(), "{blank:?}");
+    }
+}
