@@ -51,14 +51,24 @@ fn every_write_sends_the_credential_and_clears_the_passphrase_both_ways() {
     }
 }
 
+/// The ID is kept on any terminal with a key hold, not only while `heldBy` says a key is held:
+/// `heldBy` is read before the post-act poll, so right after the FIRST signed act on a held
+/// terminal it is still null and the ID would be cleared (final review item 1). Keeping it is
+/// safe because an ID with no passphrase never reaches the vault (`signer::decide`).
 #[test]
-fn clear_signer_empties_the_passphrase_and_keeps_the_id_only_while_a_key_is_held() {
+fn clear_signer_empties_the_passphrase_and_keeps_the_id_only_on_a_held_terminal() {
     let clear = js_fn(SIGNER_JS, "clearSigner");
     assert!(
         clear.contains("el(\"signer-passphrase\").value = \"\";"),
         "{clear}"
     );
-    assert!(clear.contains("if (!heldBy) {"), "{clear}");
+    assert!(clear.contains("if (keyHoldSecs === 0) {"), "{clear}");
+    assert!(!clear.contains("if (!heldBy)"), "{clear}");
+    let render = js_fn(SIGNER_JS, "renderSigner");
+    assert!(
+        render.contains("keyHoldSecs = lock.key_hold_secs || 0;"),
+        "{render}"
+    );
     assert!(clear.contains("el(\"staff-id\").value = \"\";"), "{clear}");
     let credential = js_fn(SIGNER_JS, "signerCredential");
     assert!(

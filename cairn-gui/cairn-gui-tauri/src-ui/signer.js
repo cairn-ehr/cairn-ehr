@@ -13,6 +13,8 @@ const RECENT_SIGNERS_MAX = 10;
 let recentSigners = [];
 // The staff ID whose key the window holds for the next act (lock_state.held_by), or null.
 let heldBy = null;
+// This terminal's key hold in seconds (lock_state.key_hold_secs): 0 on a shared terminal.
+let keyHoldSecs = 0;
 let terminalUnlocked = false;
 
 const NOT_SET_SENTENCE =
@@ -28,14 +30,17 @@ function signerCredential() {
 
 /**
  * Called after EVERY write comes back, success and refusal alike: a typed passphrase never stays
- * on screen for the next person. The staff ID stays only while the window holds that person's key.
+ * on screen for the next person. The staff ID stays on a terminal with a key hold, so the holder
+ * carries on with no passphrase; it is not `heldBy` that decides, because `heldBy` is only
+ * refreshed by the poll below, after this runs. Keeping it is safe: the node signs an ID with no
+ * passphrase only with that same person's live held key, never by asking the vault.
  * `signed` is true on the success path: the ID then joins the type-ahead list.
  */
 function clearSigner(signed) {
   // Only a SIGNED act enters the recent list, so a typo never does (shared terminal).
   if (signed) rememberSigner(el("staff-id").value);
   el("signer-passphrase").value = "";
-  if (!heldBy) {
+  if (keyHoldSecs === 0) {
     el("staff-id").value = "";
     setMessage(el("signer-hint"), "");
   }
@@ -60,6 +65,7 @@ function rememberSigner(staffId) {
 /** Draw the strip and the lock screen from a `lock_state` answer (main.js polls it). */
 function renderSigner(lock) {
   heldBy = lock.held_by || null;
+  keyHoldSecs = lock.key_hold_secs || 0;
   el("forget-key").hidden = !heldBy;
   if (lock.mock) {
     // terminal_unlock always answers "wrong" in fixture mode: a lock here would trap the window.
