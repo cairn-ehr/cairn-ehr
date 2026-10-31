@@ -9,7 +9,7 @@
  */
 
 /* `hidden` must always hide. Every view in this window shows and hides by the `hidden` attribute,
-   and any author `display` rule (e.g. `#unlock-form { display: flex }`) otherwise beats the
+   and any author `display` rule (e.g. `#signer { display: flex }`) otherwise beats the
    user agent's `[hidden] { display: none }` — which left the passphrase form on screen. */
 [hidden] {
   display: none !important;
@@ -77,11 +77,30 @@ h2 {
   color: var(--muted);
 }
 
-#unlock-form {
+#signer {
   display: flex;
   gap: 0.5rem;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* The terminal lock screen: covers the page; <main> is inert behind it (signer.js). */
+#terminal-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+#terminal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 18rem;
 }
 
 input[type="password"],

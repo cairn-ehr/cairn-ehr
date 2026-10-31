@@ -41,8 +41,9 @@ impl AppState {
             funnel_backend: FunnelBackend::Mock(MockData::with_fixtures()),
             funnel: tokio::sync::Mutex::new(FunnelSession::new()),
             shown: tokio::sync::Mutex::new(Default::default()),
-            attester_key_path: None,
-            session: tokio::sync::Mutex::new(None),
+            // Nothing is held in fixture mode: there is no vault to release a key from.
+            key_hold: std::time::Duration::ZERO,
+            session: tokio::sync::Mutex::new(Default::default()),
         }
     }
 

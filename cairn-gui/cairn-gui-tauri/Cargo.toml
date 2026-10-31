@@ -31,7 +31,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 uuid = { version = "1", features = ["v7"] }
-zeroize = { version = "1", features = ["zeroize_derive"] }
+zeroize = { version = "1", features = ["zeroize_derive", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 # A hold's end time is checked as RFC 3339 before it is written (#832). Already in this tree

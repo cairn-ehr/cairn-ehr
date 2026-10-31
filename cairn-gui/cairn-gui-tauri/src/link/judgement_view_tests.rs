@@ -166,26 +166,43 @@ fn an_unknown_commit_outcome_rereads_and_is_never_retried_live() {
     }
 }
 
-/// PR #707 review: a locked key is not a verdict — the clinician unlocks it in seconds and the
-/// identical Link then succeeds, so the refusal must keep the button (`Retry::Now`), never
-/// take the comparison away and force a second Compare.
+/// PR #707 review: no key to sign is not a verdict — the clinician types their staff ID and
+/// passphrase in seconds and the identical Link then succeeds, so EVERY such refusal must keep
+/// the button (`Retry::Now`), never take the comparison away and force a second Compare. Each
+/// names its remedy: the refusal's own sentence.
 #[test]
 fn a_locked_key_is_not_a_verdict() {
-    let e = key_locked();
-    assert_eq!(e.retry, Retry::Now);
-    assert!(e.text.contains("unlock"), "it names the remedy");
+    use crate::signer::KeyRefusal;
+    for refusal in [
+        KeyRefusal::NeedCredential,
+        KeyRefusal::Wrong { retry_after: None },
+        KeyRefusal::Waiting {
+            retry_after: std::time::Duration::from_secs(3),
+        },
+        KeyRefusal::Unknown,
+        KeyRefusal::NotForClinicalActs,
+        KeyRefusal::Fault,
+    ] {
+        let e = key_locked(&refusal);
+        assert_eq!(e.retry, Retry::Now, "{refusal:?}");
+        assert!(e.text.contains(&refusal.sentence()), "it names the remedy");
+    }
+    assert!(key_locked(&KeyRefusal::NeedCredential)
+        .text
+        .contains("staff ID and passphrase"));
 }
 
 #[test]
 fn a_locked_key_names_the_button_that_was_pressed() {
+    use crate::signer::KeyRefusal;
     assert_eq!(
-        key_locked().text,
-        "your signing key is locked — unlock it, then press \"Link — same person\" again"
+        key_locked(&KeyRefusal::NeedCredential).text,
+        "\"Link — same person\" was not signed. Enter your staff ID and passphrase to sign."
     );
-    let e = key_locked_for("Unlink — not the same person");
+    let e = key_locked_for("Unlink — not the same person", &KeyRefusal::NeedCredential);
     assert_eq!(e.retry, Retry::Now);
     assert!(e.text.contains("Unlink"), "it names the unlink button");
-    assert!(!e.text.contains("press \"Link\""), "never the opposite act");
+    assert!(!e.text.contains("\"Link"), "never the opposite act");
 }
 
 /// A refusal over a changed record: nothing was recorded, and the remedy is a re-read of the

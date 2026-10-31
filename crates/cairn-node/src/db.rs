@@ -390,6 +390,10 @@ const SCHEMA: &[(&str, &str)] = &[
         "060_medication_cessation_reason",
         include_str!("../../../db/060_medication_cessation_reason.sql"),
     ),
+    // db/061 (GUI sign-in slice 1): the clinicians' key vault — each human's sealed seed, released
+    // for one act by passphrase, never its wrapping. Node-only: the vault is local key custody,
+    // not something cairn-sync serves.
+    ("061_vault", include_str!("../../../db/061_vault.sql")),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

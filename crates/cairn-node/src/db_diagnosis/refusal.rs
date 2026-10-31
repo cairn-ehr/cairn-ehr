@@ -338,18 +338,25 @@ pub fn commit_outcome_unknown(event_id: uuid::Uuid, cause: anyhow::Error) -> any
 /// FATAL that arrived before the commit began, is marked too. That claims LESS than the truth,
 /// never more.
 pub fn commit_failure(event_id: uuid::Uuid, fault: anyhow::Error) -> anyhow::Error {
-    use tokio_postgres::error::Severity;
-    let answered = fault.chain().any(|cause| {
-        cause
-            .downcast_ref::<tokio_postgres::Error>()
-            .and_then(|pg| pg.as_db_error())
-            .is_some_and(|db| db.parsed_severity() == Some(Severity::Error))
-    });
-    if answered {
+    if answered_with_error(&fault) {
         fault
     } else {
         commit_outcome_unknown(event_id, fault)
     }
+}
+
+/// Did the server answer this failure with an ordinary ERROR (somewhere on the chain)? Then the
+/// statement was rolled back and nothing was written. Anything else — no answer, a FATAL, a
+/// PANIC, or a chain that lost the database error — may have been written. [`commit_failure`]'s
+/// test, for a caller whose write names no event (the vault's enrolment, PR #897 review). **Pure.**
+pub fn answered_with_error(e: &anyhow::Error) -> bool {
+    use tokio_postgres::error::Severity;
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(|pg| pg.as_db_error())
+            .is_some_and(|db| db.parsed_severity() == Some(Severity::Error))
+    })
 }
 
 /// The floor's own sentence, if this chain is a floor refusal: a bare `RAISE EXCEPTION`, SQLSTATE

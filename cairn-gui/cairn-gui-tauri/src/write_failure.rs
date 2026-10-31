@@ -227,12 +227,14 @@ pub(crate) fn chart_read_failed(e: anyhow::Error) -> ErrorView {
     }
 }
 
-/// The signing key is locked: not a verdict. The identical act succeeds once the clinician
-/// unlocks it, so it keeps the button (`Retry::Now`) - the vocabulary of
-/// `link::judgement_view::key_locked`.
-pub(crate) fn key_locked(text: &str) -> ErrorView {
+/// No key signed this act (`crate::signer::KeyRefusal`): not a verdict on the gesture. The
+/// identical act succeeds once the clinician types a right staff ID and passphrase (or waits
+/// out a back-off), so it keeps the button (`Retry::Now`) - the vocabulary of
+/// `link::judgement_view::key_locked`. The text is the refusal's own sentence, which carries
+/// no database text and never the passphrase.
+pub(crate) fn key_locked(refusal: &crate::signer::KeyRefusal) -> ErrorView {
     ErrorView {
-        text: text.into(),
+        text: refusal.sentence(),
         retry: Retry::Now,
     }
 }

@@ -5,7 +5,7 @@
 //! and annotate "not the same person", or initial the clip "same person". Two acts: the line's
 //! one door on "How these charts are linked" ("Review this link…" / "Review this judgement…")
 //! opens the review panel (`compare_linked`), whose verdicts the panel decides (`unlink_view.rs`'s
-//! `link_review_view`). The verdict click IS the signature under the unlocked key (ADR-0053);
+//! `link_review_view`). The verdict click IS the signature under the signing clinician's key (ADR-0053);
 //! there is no confirmation dialog (principle 3). This file holds the read and the Unlink; the
 //! "same person" verdict's command (`confirm.rs`) builds on [`resolve_edge`] beside it.
 //!
@@ -35,6 +35,7 @@ use super::view::THIS_CHANGED;
 use super::{as_text, chart_set_of};
 use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::funnel::view::{ErrorView, Retry};
+use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
 use cairn_node::patient::edges::DoubtKind;
@@ -265,6 +266,7 @@ pub async fn unlink_impl(
     low: &str,
     high: &str,
     standing: Vec<u8>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
     // An unlink applies to a standing link only: a separated pair is already unlinked.
     let edge = resolve_edge(
@@ -284,11 +286,11 @@ pub async fn unlink_impl(
     }
     // An empty address means the panel never read which judgement stands: nothing to sign over.
     require_standing(&standing)?;
-    // An unlink is a clinical act, so taking the key counts as activity (`live_key`).
+    // An unlink is a clinical act, so a held key it uses counts as activity (`signer_for_act`).
     let (human_sk, human_kid) = state
-        .live_key(Now::read())
+        .signer_for_act(credential, Now::read())
         .await
-        .ok_or_else(|| key_locked_for("Unlink — not the same person"))?;
+        .map_err(|r| key_locked_for("Unlink — not the same person", &r))?;
     let mut db = state
         .db
         .as_ref()
@@ -345,7 +347,7 @@ pub async fn compare_linked(
     compare_linked_impl(&state, &patient_id, charts, &low, &high, &kind, attested).await
 }
 
-/// JS keys: `patientId, charts, low, high, standing`.
+/// JS keys: `patientId, charts, low, high, standing, credential`.
 #[tauri::command]
 pub async fn unlink_records(
     state: tauri::State<'_, AppState>,
@@ -354,8 +356,18 @@ pub async fn unlink_records(
     low: String,
     high: String,
     standing: Vec<u8>,
+    credential: Option<Credential>,
 ) -> Result<LinkReportView, ErrorView> {
-    unlink_impl(&state, &patient_id, charts, &low, &high, standing).await
+    unlink_impl(
+        &state,
+        &patient_id,
+        charts,
+        &low,
+        &high,
+        standing,
+        credential,
+    )
+    .await
 }
 
 #[cfg(test)]

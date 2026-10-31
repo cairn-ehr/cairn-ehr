@@ -22,6 +22,7 @@ async fn a_changed_set_refuses_sign_off_as_stale() {
         &state,
         &on_screen,
         vec![on_screen.clone(), Uuid::from_u128(99).to_string()],
+        None,
     )
     .await
     .unwrap_err();
@@ -40,6 +41,7 @@ async fn a_changed_set_refuses_cease_as_stale() {
         vec![on_screen.clone(), Uuid::from_u128(99).to_string()],
         &Uuid::from_u128(10).to_string(),
         "",
+        None,
     )
     .await
     .unwrap_err();

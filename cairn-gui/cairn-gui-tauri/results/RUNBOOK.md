@@ -40,8 +40,12 @@ cairn-node --conn "$CONN" --key "$NODE_KEY" \
 
 ## 1. Enrol the clinician who will sign
 
-The window signs as an **enrolled human actor** (ADR-0053); an unenrolled key is refused at
-unlock. Two clinicians need two *distinguishing determinants* — enrolling both as a bare
+The window signs as an **enrolled human actor** (ADR-0053). Since the sign-in slice the window
+opens no key file: each act carries the clinician's **staff ID and passphrase**, and the node's key
+vault (db/061) releases their key for that act. A vault member is enrolled by a superuser
+(`cairn-node vault-bootstrap-superuser` makes the first one at the console; the window's *Enrol
+staff* form makes the rest — section 16 walks both). The `enroll-human` key files below are still what the
+`cairn-node` CLI verbs (`link-charts`, …) sign with. Two clinicians need two *distinguishing determinants* — enrolling both as a bare
 `{"role":"clinician"}` collides into one `actor_id` and is refused
 ([ADR-0044](../../../docs/spec/decisions/0044-enroll-fail-closed-on-actor-id-collision.md)).
 
@@ -50,10 +54,10 @@ cairn-node --conn "$CONN" --key /tmp/dr-a.key enroll-human --handle dr-a --insec
 cairn-node --conn "$CONN" --key /tmp/dr-b.key enroll-human --handle dr-b --insecure-plaintext
 ```
 
-> The window unlocks a **sealed** key with a passphrase. For a measured run that is the
-> realistic path — seal `dr-a.key` (`cairn-node seal-key`) and use its passphrase at the
-> unlock prompt. An unsealed key needs no passphrase and makes the unlock step vanish, which
-> would understate the gesture.
+> The launches below pass `--key-hold-seconds 900` (a personal workstation: one passphrase,
+> then the key is held for the next acts). A shared terminal is the default, 0, where every act
+> carries the staff ID and passphrase; say which you measured. Typing the credential is part of
+> the gesture whenever no key was held.
 
 ## 2. Seed a five-drug chart, three of which are unsigned
 
@@ -120,7 +124,7 @@ timing a gesture over a chart the node already says is incomplete.
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$PATIENT" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 `--release` matters: a debug build measures the compiler's tempo, not the design's.
@@ -130,8 +134,8 @@ cargo run --release -p cairn-gui-tauri -- \
 Start the stopwatch **when the window appears**, not when the command is typed — process
 start-up is not a clinical act and is not what the budget is about.
 
-1. **Review and sign.** Unlock the key, read the five lines, press *Sign off 3 unsigned
-   medication(s)*. Stop the clock when the outcome line reports the result. Record the wall
+1. **Review and sign.** Read the five lines, enter dr-a's staff ID and passphrase (unless a key
+   is already held), press *Sign off 3 unsigned medication(s)*. Stop the clock when the outcome line reports the result. Record the wall
    time, and note whether the count on the button matched the number of lines you judged to
    need a signature.
 2. **Cease one drug.** Type a reason into a current row and press *Stop*. Stop the clock when
@@ -268,7 +272,7 @@ $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$PATIENT" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 **`--mock`** (no database; the fixture's second chart is reachable by typing a fragment of its
@@ -298,7 +302,7 @@ design page's R2b section). Record, per run:
 - the wall time from step 1 to the outcome line;
 - the number of veto findings shown (0 is a legitimate answer — the panel renders nothing for
   an empty list, never "no conflicts");
-- whether the clinician's key was already unlocked, or the run also measures an unlock.
+- whether the clinician's key was already held, or the run also measures typing the credential.
 
 Repeat at least five times (fresh chart pairs each time — `patient-register` again), because a
 single sample tells you nothing about the tail.
@@ -317,8 +321,8 @@ single sample tells you nothing about the tail.
 - [ ] Every outcome in the panel — a refusal, the fixture refusal, a failed Compare, an Outranked
       link ("Recorded, but NOT in effect …") — is both SHOWN and announced in the panel's status
       line, never silent. After a refusal that cannot change on retry, the Link button is gone
-      (compare again to get it back). A locked key is NOT such a refusal: the button stays —
-      unlock, then press "Link — same person" again.
+      (compare again to get it back). No key to sign is NOT such a refusal: the button stays —
+      enter the staff ID and passphrase, then press "Link — same person" again.
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
       or switching to a different chart closes the panel, and focus goes to the new chart's
       heading (or to the front door) — not to "Same person as…".
@@ -347,7 +351,7 @@ $NODE link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 Open A and unlink **B–C**, the link on the list that does not touch the chart you opened. **Note:**
@@ -386,7 +390,7 @@ one record through other links …" for a cycle (A–B, B–C, A–C: unlinking 
 
 Budget **review-and-unlink ≤ 15 s** (§1.2 in the design page's R2b section). Record, per run: the wall
 time from step 1 to the outcome line; the number of findings shown (0 is legitimate — nothing renders,
-never "no conflicts"); whether the key was already unlocked. Repeat at least five times with fresh pairs.
+never "no conflicts"); whether a key was already held. Repeat at least five times with fresh pairs.
 
 **Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
@@ -426,7 +430,7 @@ uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CON
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 **Measurement 1 — review and judge.** Start the stopwatch at the press of **Review** on the banner
@@ -441,7 +445,7 @@ pairs.
 
 Budget **banner-to-recorded-judgement ≤ 20 s** (§1.2 in the design page's R5a section), of which the
 side-by-side read is the load. Record, per run: the wall time from step 1 to the outcome line; which
-verdict; the number of findings shown (0 is legitimate); whether the key was already unlocked.
+verdict; the number of findings shown (0 is legitimate); whether a key was already held.
 Repeat at least five times with fresh pairs.
 
 **Measurement 2 — chart open.** Time opening chart A (stopwatch from launch or the open gesture, to
@@ -449,7 +453,7 @@ the medication table and banner painted) **with** the banner present, against th
 chart with **no** proposal (a single-chart open — e.g. a chart registered with nothing similar).
 Budget: banner open **≤ single-chart open**. The banner reads eagerly (the other record's lines
 included); a miss decides whether the other record's lines move to a second paint — it is a finding,
-not an adjustment. Five opens each, same session state (key locked or unlocked, the same for both).
+not an adjustment. Five opens each, same session state (a key held or not, the same for both).
 
 **Check 3 — the "running" line on a checked chart (R7, [#742](https://github.com/cairn-ehr/cairn-ehr/issues/742)).**
 No stopwatch: it adds no act. With chart A checked (the worker drained) and **no** worker running,
@@ -526,7 +530,7 @@ Emery Elmsworth|1965-05-15
 SEED
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 The front door shows **"Possible duplicates (5)"** below the registration form (more if section 11's
@@ -622,7 +626,7 @@ $NODE unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
-    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+    --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 `cairn_chart_set_doubts` over the three charts must print one `separated` row for A–C.
@@ -651,14 +655,14 @@ both stay on record."
 2. Read the panel: the comparison, and the note naming the earlier judgement and its date.
 3. Press **Same person — link them**.
 
-**The locked key.** Run one pass with the key locked: both verdicts read "… (unlock your signing key
-first)", and a press signs nothing (the panel's status line names the unlock; the button stays). Unlock (the existing session act, not one this
-slice adds) and the suffix goes. Do not time the locked pass.
+**No key to sign.** Run one pass with no key held and no credential typed: a press signs nothing
+(the panel's status line says ""…" was not signed. Enter your staff ID and passphrase to sign."; the
+button stays). Enter the credential and press again. Do not time that pass.
 
 Budget **review-and-confirm ≤ 15 s** for both measurements (§1.2 in the design page's R6 section; the
 same budget as section 10's unlink). Steps: confirm paper 2 → 2 acts; bridge paper 3 → 2 acts. Record,
 per run: the wall time from step 1 to the outcome line; which measurement; the number of findings shown
-(0 is legitimate on an undoubted link, never on Setup A); whether the key was already unlocked. Repeat
+(0 is legitimate on an undoubted link, never on Setup A); whether a key was already held. Repeat
 at least five times with fresh pairs. An outcome of "Recorded, but NOT in effect: …" (Outranked)
 means a colleague's judgement landed meanwhile — record it, and both verdicts must then be gone from
 the panel.
@@ -719,7 +723,7 @@ only** (a `--mock` chart never changes under you). Paper counterpart: you write 
 colleague has meanwhile written a new one; the two are reconciled.
 
 **Setup.** Two charts A and B, registered with section 13's `reg()` helper and **not** linked, at least one
-unsigned line on A, the window open on A with the key unlocked. A second node, or `cairn-node` on this same
+unsigned line on A, the window open on A with dr-a's key held. A second node, or `cairn-node` on this same
 node as another clinician, is ready to run `$NODE link-charts "$A" "$B" --attester-key <the other
 clinician's key>` (`$NODE` as in section 13). Check the window shows no "How these charts are linked" line before you start.
 
@@ -864,8 +868,8 @@ $NODE medication-assert "$PATIENT" --term metformin --dose-amount 1 --dose-unit 
 $NODE medication-list "$PATIENT"     # two lines, both [current] — unsigned
 ```
 
-**Measurement 1 — Withhold.** Start the stopwatch when the window appears (as section 4). Unlock the key, type a
-reason into the W field of one current line, leave *until* on "until reviewed", press *Withhold*. Stop when the
+**Measurement 1 — Withhold.** Start the stopwatch when the window appears (as section 4). Enter the staff ID and
+passphrase (unless a key is held), type a reason into the W field of one current line, leave *until* on "until reviewed", press *Withhold*. Stop when the
 line draws its W ("W until reviewed"). Repeat with *until a time* and a time later today (stop at "W until
 HH:MM"). Five runs each; repeated holds on one line are admitted, so a fresh chart is not needed per run.
 
@@ -940,3 +944,135 @@ above were checked): `$NODE medication-withhold "$PATIENT" <thread> --reason "NB
 **What could not be run here.** The stopwatch figures, the VoiceOver checks and every `ui_gesture_timing` row
 need the window and a human; this section's commands were run against a throwaway database for the CLI half only.
 `TEMPLATE.md` carries a matching block (*Withhold and release*).
+
+---
+
+## 16. Sign in and sign (GUI sign-in slice 1, ADR-0083)
+
+The slice's gestures: the **terminal lock** (gatekeeping: may anyone use this terminal?), the **signer strip**
+(attribution: who signs this act?), **Enrol staff** (a superuser vouches for a new member) and the **key hold**.
+Paper counterpart: the bedside chart. Anyone on staff reads it, each entry carries its writer's own signature, and
+the next nurse picks up the pen with no ceremony. **Live only** (a `--mock` window has no vault: the lock screen
+is not shown and every write is refused before it asks); `--mock` is enough for the strip's labels and Tab order.
+
+**Budgets (design §7, the slice plan's §1.2).** Sign **≤ 3 s, credential included** (a pen signature is about
+2 s). The strip is typed BEFORE the press, so the stopwatch starts at the **first keystroke in Staff ID** and stops
+when the outcome line reports the result; record the press → outcome share beside it. Steps: paper *N* = 1 (a
+signature) → architecture-forced *M* = 1 (the write gesture carries staff ID + passphrase) → UI bundling target
+*K* = 1. **The next nurse: 0 extra acts** (paper 0 → Cairn 0: nothing is logged in to switch away from). The
+terminal unlock is a gatekeeping act with no per-write cost. **A figure outside its budget, or `M > N`, is the
+finding — file an issue; never adjust the budget.**
+
+**Setup.** Sections 0 and 2 (a throwaway database with `cairn_pgx` **0.4.0** — db/061 refuses to load without
+`cairn_vault_unseal` — and a seeded chart). Then, at the node's console, with the **owner** connection (the
+console verbs were run against a fresh database on 2026-10-31; each passphrase is prompted twice with no echo, or
+read for a script from `CAIRN_VAULT_PASSPHRASE` (the superuser's) and `CAIRN_TERMINAL_PASSPHRASE` (the terminal's).
+They are two variables on purpose: one exported for both would make the shared terminal passphrase the superuser's):
+
+```bash
+NODE="cairn-node --conn $CONN --key $NODE_KEY"
+$NODE vault-bootstrap-superuser --staff-id boss --display-name "Site Admin" --email it@example.invalid
+$NODE vault-set-terminal-passphrase
+psql "$CONN" -At -c "SELECT staff_id, role, enrolled_by FROM vault_member"   # boss|superuser|console
+```
+
+> [!WARNING]
+> **Statement logging can write a passphrase, or a sealed key, into the server log.** The signing passphrase is a
+> bind parameter of `cairn_vault_release`, and the sealed key blob one of `cairn_vault_enrol`/`cairn_vault_bootstrap`
+> (which raise on every refusal). PostgreSQL prints bind parameters with a logged statement (`log_statement = 'all'`,
+> `log_min_duration_statement` ≥ 0, `log_min_duration_sample` ≥ 0 with `log_statement_sample_rate` > 0, or
+> `log_transaction_sample_rate` > 0, unless `log_parameter_max_length = 0`) and on an error
+> (`log_parameter_max_length_on_error` other than 0). Check before every run, and on every real node:
+>
+> ```bash
+> psql "$CONN" -c "SELECT name, setting FROM pg_settings WHERE name IN ('log_statement',
+>   'log_min_duration_statement','log_min_duration_sample','log_statement_sample_rate',
+>   'log_transaction_sample_rate','log_parameter_max_length','log_parameter_max_length_on_error') ORDER BY name"
+> psql "$CONN" -c "SELECT * FROM pg_db_role_setting"   # per-role / per-database overrides
+> ```
+>
+> Safe is `log_statement = none` (or `ddl`/`mod`: the release is a `SELECT`), `log_min_duration_statement = -1`,
+> `log_min_duration_sample = -1`, `log_transaction_sample_rate = 0` and `log_parameter_max_length_on_error = 0` —
+> PostgreSQL's defaults. A node that needs statement logging for
+> other roles pins it off for the role the window connects as: `ALTER ROLE <role> SET log_statement = 'none'`,
+> `… SET log_min_duration_statement = -1`, `… SET log_min_duration_sample = -1`,
+> `… SET log_transaction_sample_rate = 0`, `… SET log_parameter_max_length_on_error = 0`.
+
+> [!WARNING]
+> **The window's connection is not encrypted** (ADR-0083 decision 3). A window on the node's own machine, connected
+> over loopback (`host=127.0.0.1`, as in section 0) or a Unix socket, is fine. A window on another machine sends the passphrase and receives the signing key
+> in clear: measure over a LAN only through an encrypted tunnel.
+
+Launch the window as section 3, with **no** `--key-hold-seconds` (the default 0, a shared terminal) unless a step
+says otherwise.
+
+**Measurement 1 — the terminal lock.** The lock screen shows at launch, with focus in *Terminal passphrase*.
+
+- [ ] A wrong passphrase: "That passphrase is not right." The field empties; the page behind stays unreachable
+      by Tab.
+- [ ] The right passphrase: the page shows and focus moves to *Staff ID*.
+- [ ] On a node with no terminal passphrase set (skip `vault-set-terminal-passphrase` on a second rig): "No
+      terminal passphrase is set. Run cairn-node vault-set-terminal-passphrase on the node."
+- [ ] With the node's Postgres stopped: "The terminal could not be unlocked. Try again." — never "not right".
+
+**Measurement 2 — enrol two nurses from the window.** Open *Enrol staff*. Type `boss` and its passphrase into the
+signer strip; the new member types their own passphrase twice. Enrol `nurse-a` and `nurse-b` (role *nurse*, a
+phone or an email). Time each from opening the form to "… (staff ID nurse-a) is enrolled as nurse." (no budget
+yet — record it). Then confirm:
+
+- [ ] Both passphrase fields and the strip's passphrase are empty after every attempt, success or refusal.
+- [ ] Two different new passphrases: "The two new passphrases do not match. Nobody was enrolled."
+- [ ] `nurse-a` again: "That staff ID is already in use. Nobody was enrolled." (asked before the superuser's key
+      is released, so it costs boss no attempt).
+- [ ] `nurse-a`'s own credential in the strip: "Only a superuser can enrol staff. …"
+- [ ] After a successful enrol, no "Signed in for the next act" line ever names `boss`, whatever the key hold
+      (repeat once at `--key-hold-seconds 900`): a superuser's key is never held.
+
+**Measurement 3 — sign one act (the ≤ 3 s budget).** On the section 2 chart: Tab to *Staff ID*, type `nurse-a`,
+Tab, type the passphrase, Tab to *Sign off* (or type a reason and Tab to a line's *Stop*), press it. Start at the
+first keystroke in Staff ID; stop at the outcome line. Five runs (re-seed or Stop a different line each run).
+Then:
+
+- [ ] The passphrase field is empty after the act; with a key hold of 0 the Staff ID is empty too.
+- [ ] `$NODE medication-list "$PATIENT"` shows the act signed by nurse-a's key
+      (`psql "$CONN" -At -c "SELECT staff_id, left(signing_key_id, 8) FROM vault_member"` maps key to person).
+- [ ] `boss` and its passphrase on a clinical write: "A superuser cannot sign a clinical act. Enter your own staff
+      ID." Nothing is signed.
+- [ ] ` NURSE-A ` (capitals, spaces) signs as nurse-a: staff IDs are compared without case or surrounding spaces.
+
+**Measurement 4 — the next nurse (0 extra acts).** Straight after nurse-a's act, nurse-b steps up, types her own
+ID and passphrase and signs. Count every act she makes beyond those of Measurement 3 (target 0: no log-out, no
+log-in). Then relaunch with `--key-hold-seconds 900` (a personal workstation) and repeat:
+
+- [ ] nurse-a signs once; "Signed in for the next act: nurse-a." shows and the *Lock* button appears; her Staff ID
+      stays in the strip and her next act needs no passphrase.
+- [ ] nurse-b types only her Staff ID (no passphrase) and presses: "Enter your staff ID and passphrase to sign.";
+      the "Signed in …" line clears (nurse-a's key is forgotten).
+- [ ] nurse-b types her own credential: the act is signed by nurse-b (check with `medication-list`), and the line
+      then names nurse-b.
+- [ ] *Lock*: the line clears; the next act with an empty strip says "Enter your staff ID and passphrase to sign."
+- [ ] The hold runs out: sign as nurse-a with `--key-hold-seconds 60`, wait past a minute with no act, and the
+      "Signed in …" line goes by itself within about 10 s (the lock poll); the next empty-strip act asks for a
+      credential.
+
+**Measurement 5 — the back-off, read aloud.** With VoiceOver on, sign as nurse-a with a wrong passphrase, four
+times. Tries 1–3 say "… That passphrase is not right." Try 4 says "That passphrase is not right. Wait 1 s, then
+try again." A press inside that wait says "Too many tries. Wait 1 s, then try again." and does not count as a
+failure. Then the right passphrase, after the wait, signs. Confirm:
+
+- [ ] VoiceOver reads each sentence once, whole, from the outcome line, and the wait is said in whole seconds.
+- [ ] No sentence, on screen or spoken, contains the passphrase.
+- [ ] Record whether the Staff ID had to be retyped after each refusal (on a hold of 0 it is cleared with the
+      passphrase): every retype is a paper-parity cost to note.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The lock screen, the strip and the enrol form are reachable and complete by keyboard alone.
+- [ ] *Staff ID*, *Passphrase*, *Terminal passphrase* and each enrol field are announced by their labels.
+- [ ] Enter in the strip does not submit anything (it has no submit of its own); the act is the write button.
+- [ ] "Signed in for the next act: …" is announced when it appears, and nothing takes focus on its own.
+- [ ] The hint: typing a Staff ID and leaving the field shows "Your hint: …" for a member who set one.
+
+**What could not be run here.** The window gestures, the stopwatch figures and the VoiceOver pass need the window
+and a human. The console verbs and the release door's answers (`wrong`, `refused-purpose`) were run against a
+throwaway database on 2026-10-31. `TEMPLATE.md` carries a matching block (*Sign in and sign*).

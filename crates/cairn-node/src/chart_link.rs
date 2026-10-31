@@ -27,7 +27,7 @@ use anyhow::Context;
 use cairn_event::identity::{
     link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
 };
-use cairn_event::{event_address, sign, sign_attestation, EventBody, Hlc, SigningKey};
+use cairn_event::{event_address, sign, sign_attestation, EventBody, EventSigner, Hlc};
 use uuid::Uuid;
 
 pub mod admit;
@@ -163,7 +163,7 @@ pub fn build_attested_assertion_body(
 /// The human making the judgement: the unlocked signing key and its key id. A judgement
 /// about who a person is belongs to a human (ADR-0053) — there is no node-key fallback.
 pub struct Reviewer<'a> {
-    pub human_sk: &'a SigningKey,
+    pub human_sk: &'a dyn EventSigner,
     pub human_kid: &'a str,
 }
 

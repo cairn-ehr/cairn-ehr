@@ -17,6 +17,7 @@ use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::commands::{read_chart_of, record_timing};
 use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
+use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{
     chart_read_failed, key_locked, node_cannot_write, node_failure, retry_when_nothing_written,
@@ -81,12 +82,23 @@ pub async fn withhold(
     until: String,
     patient_id: String,
     charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<HoldReport, ErrorView> {
-    withhold_impl(&state, &patient_id, charts, &group_id, &reason, &until).await
+    withhold_impl(
+        &state,
+        &patient_id,
+        charts,
+        &group_id,
+        &reason,
+        &until,
+        credential,
+    )
+    .await
 }
 
 /// The testable body of [`withhold`]; the flow is the module doc's. `charts` is the chart SET
-/// the webview displayed, exactly as for `commands::cease_impl`.
+/// the webview displayed, and `credential` the signer strip's, exactly as for
+/// `commands::cease_impl`.
 pub async fn withhold_impl(
     state: &AppState,
     patient_id: &str,
@@ -94,6 +106,7 @@ pub async fn withhold_impl(
     group_id: &str,
     reason: &str,
     until: &str,
+    credential: Option<Credential>,
 ) -> Result<HoldReport, ErrorView> {
     // FIRST, as for every chart write: only the chart the clinician was LOOKING AT, so no other
     // refusal can mask a wrong-chart one (`AppState::displayed_patient`).
@@ -129,12 +142,12 @@ pub async fn withhold_impl(
     // Which thread carries the W, and the chart it lives on (`plan::withhold_target`): never
     // the opened chart by assumption, and never another person's drug on a hazard line.
     let (medication_id, thread_chart) = plan::withhold_target(row, patient).map_err(refused)?;
-    // The key last (a cease asks for it earlier): a locked key is not a verdict on the gesture,
-    // so every refusal that IS one is said first.
+    // The key last (a cease asks for it earlier): a missing or wrong passphrase is not a
+    // verdict on the gesture, so every refusal that IS one is said first.
     let (human_sk, human_kid) = state
-        .live_key(Now::read())
+        .signer_for_act(credential, Now::read())
         .await
-        .ok_or_else(|| key_locked("your signing key is locked — unlock it to withhold a drug"))?;
+        .map_err(|r| key_locked(&r))?;
     let node_sk = state
         .node_sk
         .as_ref()
@@ -209,8 +222,18 @@ pub async fn release(
     reason: String,
     patient_id: String,
     charts: Vec<String>,
+    credential: Option<Credential>,
 ) -> Result<HoldReport, ErrorView> {
-    release_impl(&state, &patient_id, charts, &group_id, &withholds, &reason).await
+    release_impl(
+        &state,
+        &patient_id,
+        charts,
+        &group_id,
+        &withholds,
+        &reason,
+        credential,
+    )
+    .await
 }
 
 /// `withholds` are the hold (withhold event) ids the webview displayed on this line: a release
@@ -223,6 +246,7 @@ pub async fn release_impl(
     group_id: &str,
     withholds: &[String],
     reason: &str,
+    credential: Option<Credential>,
 ) -> Result<HoldReport, ErrorView> {
     // The same first three steps as a withhold, for the same reasons.
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
@@ -258,9 +282,9 @@ pub async fn release_impl(
     if plan.write.is_empty() && plan.held_back.is_empty() {
         return Err(stale(all_shown_gone(plan.unseen)));
     }
-    // Nothing this chart may write, only holds held back: said now, before the key — a locked
-    // key would otherwise hide "release it from its own chart" behind an unlock that writes
-    // nothing — and no timing sample, as no gesture was made.
+    // Nothing this chart may write, only holds held back: said now, before the key — a key
+    // refusal would otherwise hide "release it from its own chart" behind a passphrase that
+    // writes nothing — and no timing sample, as no gesture was made.
     if plan.write.is_empty() {
         return Ok(HoldReport {
             text: release_outcome(0, plan.gone.len(), plan.unseen, &plan.held_back, &[]),
@@ -269,9 +293,9 @@ pub async fn release_impl(
     }
     let reason = Some(reason.trim()).filter(|r| !r.is_empty());
     let (human_sk, human_kid) = state
-        .live_key(Now::read())
+        .signer_for_act(credential, Now::read())
         .await
-        .ok_or_else(|| key_locked("your signing key is locked — unlock it to release a hold"))?;
+        .map_err(|r| key_locked(&r))?;
     let node_sk = state
         .node_sk
         .as_ref()

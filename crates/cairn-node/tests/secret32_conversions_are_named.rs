@@ -120,6 +120,16 @@ fn production_conversions(text: &str) -> usize {
 /// `keys.rs` used to attempt and get wrong.
 const INVENTORY: &[(&str, usize, &str)] = &[
     (
+        "crates/cairn-node/src/vault.rs",
+        1,
+        "`mint_sealed` wraps a FRESHLY GENERATED human clinician's Ed25519 signing seed \
+         (`generate_key()`) so it can be sealed under THAT human's vault passphrase — the seed is \
+         stored AS a seed, the same shape as conversion (1), `generate_sealed`, in the `cairn-keystore/src/keystore.rs` entry below, no role \
+         crossed. It is not the ADR-0066 coupling: the seed is never this node's signing seed, and \
+         it never becomes an unwrap secret — the unwrap secret is a separate, freshly generated \
+         value that this file never touches",
+    ),
+    (
         "crates/cairn-keystore/src/keystore.rs",
         3,
         "THREE, and only ONE of them installs anything. (1) `generate_sealed` seals the Ed25519 \

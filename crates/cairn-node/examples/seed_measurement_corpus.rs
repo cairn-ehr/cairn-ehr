@@ -71,7 +71,7 @@ struct Args {
     /// Operational passphrase for the node key. The rig must be provisioned SEALED (a
     /// `--insecure-plaintext` node has no recovery escrow, so `backup` writes no sealed
     /// `CAIRNL1` export and a restore from it measures the degraded, custody-less path).
-    #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+    #[arg(long, env = "CAIRN_KEY_PASSPHRASE", hide_env_values = true)]
     passphrase: Option<String>,
     /// Where to mint the throwaway human clinician's key.
     #[arg(long, default_value = "/tmp/cairn-measure-clinician.key")]
