@@ -142,6 +142,25 @@ fn cairn_wrap_dek(dek: &[u8], unwrap_pub: &[u8]) -> Vec<u8> {
         .unwrap_or_else(|e| pgrx::error!("cairn_wrap_dek: {e}"))
 }
 
+/// Check a clinician's sign-in passphrase against their passphrase-sealed key blob, and return
+/// the 32-byte Ed25519 seed on success.
+///
+/// Why this lives in the database: the vault's wrapped keys NEVER leave Postgres, so the
+/// passphrase has to be checked here, next to the blob, rather than by shipping the blob out.
+///
+/// Why it returns NULL instead of raising: a raised error (or a panic) can carry the bind
+/// parameters, i.e. the passphrase, into the server log. So a wrong passphrase and an
+/// unparsable blob are both just NULL, and this function never calls `pgrx::error!`.
+/// `strict` makes a NULL argument yield NULL without running the body at all.
+///
+/// The `Secret32` wipes itself on drop; the copy handed to Postgres is unavoidable.
+#[pg_extern(volatile, strict)]
+fn cairn_vault_unseal(sealed: &[u8], passphrase: &str) -> Option<Vec<u8>> {
+    let key = cairn_keystore::seal::from_cbor(sealed).ok()?;
+    let seed = cairn_keystore::seal::unseal_op(&key, passphrase)?;
+    Some(seed.as_bytes().to_vec())
+}
+
 /// True iff `token` is a valid attestation by `attester_key` bound to `content_address`.
 #[pg_extern(immutable, parallel_safe)]
 fn cairn_attestation_ok(token: &[u8], content_address: &[u8], attester_key: &[u8]) -> bool {
