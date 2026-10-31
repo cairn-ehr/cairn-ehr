@@ -35,6 +35,8 @@
 > > parameters that slice 5 must still move onto the seam: `identify.rs:83` (`IdentifyParams`), `apply_proposal.rs:94`.
 > > **Local `cairn_pgx` reinstall on this Mac:** the 2026-10-19 Xcode `ld` emits a dylib Postgres will not load — patch
 > > it with `scripts/macos-patch-pgx-dylib.py` (CI is unaffected).
+> > **Known UX edge (key-hold terminals only):** the strip keeps the last staff ID, so a next person who types only a
+> > passphrase over it costs the PREVIOUS person a counted try (never a wrong author) — revisit with slice 3's "who's writing".
 
 > [!NOTE]
 > **PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895) MERGED 2026-10-31** (closes #893): a command the window's
