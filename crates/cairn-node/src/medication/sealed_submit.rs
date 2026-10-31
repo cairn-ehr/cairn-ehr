@@ -19,7 +19,7 @@
 
 use anyhow::Context;
 use cairn_event::seal::{seal_event_payload, seal_stub_twin};
-use cairn_event::{sign, EventBody, SigningKey};
+use cairn_event::{sign, EventBody, EventSigner, SigningKey};
 
 /// The human who AUTHORS a clinical event (#204 / ADR-0053) — the FIRST half of
 /// principle 10, the mirror of `AttestParams` (attestation.rs, the second half). The
@@ -27,7 +27,7 @@ use cairn_event::{sign, EventBody, SigningKey};
 /// holds custody. Threaded explicitly so the verb paths stay pure functions of their
 /// arguments. `None` ⇒ device-additive (the node signs, `recorded`-only), unchanged.
 pub struct AuthorParams<'a> {
-    pub human_sk: &'a SigningKey,
+    pub human_sk: &'a dyn EventSigner,
     pub human_kid: &'a str,
 }
 
@@ -49,7 +49,7 @@ pub fn apply_author<'a>(
     body: EventBody,
     author: Option<&'a AuthorParams<'a>>,
     node_sk: &'a SigningKey,
-) -> (EventBody, &'a SigningKey) {
+) -> (EventBody, &'a dyn EventSigner) {
     match author {
         Some(a) => (
             cairn_event::contributor::with_human_author(body, a.human_kid),
@@ -113,7 +113,7 @@ pub async fn ensure_unwrap_key(client: &tokio_postgres::Client) -> anyhow::Resul
 /// a precise claim and publish nothing beside it.
 pub fn seal_and_sign(
     mut body: EventBody,
-    sk: &SigningKey,
+    sk: &(impl EventSigner + ?Sized),
 ) -> anyhow::Result<(Vec<u8>, cairn_event::seal::Secret32)> {
     // The clear twin travels INSIDE the sealed region under the same DEK as its body
     // (ADR-0052 / #92 (a)); the OUTER twin is the mechanical stub. Take() the clear twin

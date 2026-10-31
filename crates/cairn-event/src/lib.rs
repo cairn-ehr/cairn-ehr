@@ -20,9 +20,11 @@
 //! kinds, and a signature minted for one can never verify as another — see
 //! [`SigningContext`].
 
+pub mod signer;
+
 use std::io::{Cursor, Read};
 
-use ed25519_dalek::{Signer, Verifier};
+use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 
 // Re-exported so downstream crates (cairn-sync) need not depend on ed25519-dalek
@@ -33,6 +35,7 @@ pub use attachment::{Attachment, Rendition, SealRef};
 // `VerifiedEvent::signer` (#412).
 pub use contributor::VerifiedKid;
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
+pub use signer::EventSigner;
 // Re-exported at the crate root for the same reason `VerifiedKid` is: the unwrap-key cert API
 // (`sign_unwrap_key_cert` / `verify_unwrap_key_cert`) lives here, so its key type is part of this
 // module's shape, not only the seal plane's (#511). Note this makes THREE paths to one
@@ -148,7 +151,7 @@ pub const CTX_UNWRAP_KEY: SigningContext = SigningContext("application/cairn-unw
 /// type, and the same string as `external_aad` inside the signed Sig_structure.
 fn cose_sign1_in_context(
     payload: Vec<u8>,
-    sk: &SigningKey,
+    sk: &(impl EventSigner + ?Sized),
     ctx: SigningContext,
 ) -> Result<Vec<u8>, EventError> {
     use coset::{iana, CborSerializable, CoseSign1Builder, HeaderBuilder};
@@ -161,7 +164,10 @@ fn cose_sign1_in_context(
     let sign1 = CoseSign1Builder::new()
         .protected(protected)
         .payload(payload)
-        .create_signature(ctx.as_bytes(), |tbs| sk.sign(tbs).to_bytes().to_vec())
+        // The fallible variant lets a vault-backed signer's refusal propagate as an error.
+        .try_create_signature(ctx.as_bytes(), |tbs| {
+            sk.sign_tbs(tbs).map(|sig| sig.to_bytes().to_vec())
+        })?
         .build();
     sign1.to_vec().map_err(|e| EventError::Cose(e.to_string()))
 }
@@ -430,7 +436,10 @@ pub fn verify_slice(
 
 /// Sign a body into `signed_bytes` (COSE_Sign1, Ed25519, bound to [`CTX_EVENT`])
 /// plus its content address.
-pub fn sign(body: &EventBody, signing_key: &SigningKey) -> Result<SignedEvent, EventError> {
+pub fn sign(
+    body: &EventBody,
+    signing_key: &(impl EventSigner + ?Sized),
+) -> Result<SignedEvent, EventError> {
     let payload = canonical_cbor(body)?;
     let signed_bytes = cose_sign1_in_context(payload, signing_key, CTX_EVENT)?;
     let content_address = event_address(&signed_bytes);
@@ -692,7 +701,7 @@ pub fn sign_attestation(
     content_address: &[u8],
     attester_key_id: &str,
     role: &str,
-    sk: &SigningKey,
+    sk: &(impl EventSigner + ?Sized),
 ) -> Result<Vec<u8>, EventError> {
     let body = AttestationBody {
         content_address_hex: hex::encode(content_address),
@@ -892,6 +901,7 @@ pub fn verify_unwrap_key_cert(bytes: &[u8]) -> Result<(String, PublicKey32), Eve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::Signer;
     use serde_json::json;
 
     fn sample() -> EventBody {
