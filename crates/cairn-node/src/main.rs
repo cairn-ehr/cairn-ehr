@@ -36,6 +36,23 @@ fn resolve_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizing<String>>
     Ok(p)
 }
 
+/// A NEW vault passphrase: from the flag/env (CAIRN_VAULT_PASSPHRASE) or prompted twice, no echo.
+/// Refuses an empty one or two entries that differ; never echoes either in the error.
+fn resolve_new_vault_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizing<String>> {
+    if let Some(p) = flag.filter(|s| !s.is_empty()) {
+        return Ok(Zeroizing::new(p));
+    }
+    let first = Zeroizing::new(rpassword::prompt_password("new passphrase: ")?);
+    let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
+    if first.is_empty() {
+        anyhow::bail!("no passphrase provided");
+    }
+    if *first != *again {
+        anyhow::bail!("the two entries differ; nothing was changed");
+    }
+    Ok(first)
+}
+
 /// Load the signing key for a command. Uses CAIRN_KEY_PASSPHRASE; a plaintext key
 /// needs no secret. We attempt the load ONCE and react only to the typed `Sealed`
 /// error — there is no separate `key_at_rest_state` read that could race the load
@@ -1945,6 +1962,33 @@ enum Cmd {
         /// Mint the key UNSEALED if it does not exist (test nodes only).
         #[arg(long)]
         insecure_plaintext: bool,
+    },
+
+    /// Console-only: enrol the site's FIRST (or a locked-out last) superuser into the key vault
+    /// (db/061). Needs the database OWNER connection. The passphrase is prompted twice, no echo
+    /// (or taken from CAIRN_VAULT_PASSPHRASE for scripted tests).
+    VaultBootstrapSuperuser {
+        /// The staff ID they will sign in with (compared case/space-insensitively).
+        #[arg(long)]
+        staff_id: String,
+        #[arg(long)]
+        display_name: String,
+        #[arg(long)]
+        phone: Option<String>,
+        #[arg(long)]
+        email: Option<String>,
+        /// A reminder shown at sign-in; never the passphrase itself.
+        #[arg(long)]
+        hint: Option<String>,
+        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE")]
+        passphrase: Option<String>,
+    },
+
+    /// Console-only: set the shared terminal-unlock passphrase (stored only as an Argon2id hash).
+    /// Prompted twice, no echo (or CAIRN_VAULT_PASSPHRASE).
+    VaultSetTerminalPassphrase {
+        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE")]
+        passphrase: Option<String>,
     },
 
     /// Record clinician-observed identity evidence on an existing chart (§5.4): an
@@ -4676,6 +4720,39 @@ async fn run() -> anyhow::Result<()> {
                     println!("human actor {kid} already enrolled (no change)");
                 }
             }
+        }
+        Cmd::VaultBootstrapSuperuser {
+            staff_id,
+            display_name,
+            phone,
+            email,
+            hint,
+            passphrase,
+        } => {
+            let pass = resolve_new_vault_passphrase(passphrase)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let kid = cairn_node::vault::bootstrap_superuser(
+                &db,
+                &cairn_node::vault::NewMember {
+                    staff_id: &staff_id,
+                    display_name: &display_name,
+                    role: "superuser",
+                    phone: phone.as_deref(),
+                    email: email.as_deref(),
+                    passphrase: &pass,
+                    hint: hint.as_deref(),
+                },
+            )
+            .await?;
+            println!("enrolled superuser {staff_id} (key {kid})");
+        }
+        Cmd::VaultSetTerminalPassphrase { passphrase } => {
+            let pass = resolve_new_vault_passphrase(passphrase)?;
+            let phc = cairn_node::vault::terminal_phc(&pass)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            db.execute("SELECT cairn_vault_set_terminal_phc($1)", &[&phc])
+                .await?;
+            println!("terminal-unlock passphrase set");
         }
         Cmd::AssertObservedEvidence {
             patient,
