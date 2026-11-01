@@ -10,6 +10,60 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 2 — IN-PERSON ENROLMENT AND RE-KEY (ADR-0085, db/004, db/061, db/063) — do not undo** (pins:
+`crates/cairn-node/tests/{actor_rotate_key,actor_readers_after_rotation,suppression_owner_gate,vault_enrollers,vault_rekey,vault_admin_lib,restore_actor_registry_new_ops,window_role_vault_doors,device_actor_enrolment}.rs`,
+`db/tests/{004_actors,063_vault_enrollers}_test.sql`, `cairn-gui-tauri/src/{signer,rekey,reseal,superuser_panel}_tests.rs`;
+which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-actor-reader-table.md`):
+- **"Is this key current?" has three answers; ask the one you mean.** A door that lets a key author something NEW
+  here reads `actor_current`. A gate that RE-ADMITS an event signed elsewhere or earlier (`apply_remote_event`, db/043's
+  deferred pass, and so a restore) or RE-GRADES a stored one (`cairn_claim_authority` R1/R2, db/048's worklist) reads
+  `actor_key_vouches`. A HISTORY reader filters `op IN ('enroll','rotate-key')` — never `('enroll','supersede')`: a
+  `supersede` row carries no key (#666), so that filter silently drops every rotated-in key. **Tempting wrong fixes:**
+  "tidy" a re-grade back to `actor_current` (a re-keyed clinician's past attestations go unverified); move
+  `submit_event` to `actor_key_vouches` (a rotated-away key authors again). Pins: `a_rotated_away_key_cannot_submit`,
+  `a_rotated_attester_still_vouches_for_past_claims`, `a_rotated_away_keys_past_event_is_admitted_by_remote_apply`,
+  `a_recall_selects_what_both_keys_of_a_rotated_actor_signed`, `a_remote_event_by_a_rotated_in_key_is_attributed_to_its_actor`.
+- **`actor_current` picks the latest row FIRST and filters OUTSIDE the subquery.** Filtering inside lets a repudiated
+  or superseded latest row fall back to the older key the rotation retired. Its column list never changes
+  (`CREATE OR REPLACE VIEW` cannot). Pins: `a_repudiated_latest_key_leaves_the_actor_without_a_current_key`,
+  `a_superseded_actor_is_not_current`.
+- **"Unconfirmed" is defined only in `cairn_key_confirmation`.** A door approved by a superuser or the console writes
+  the `confirm` row in the SAME transaction; a row with `approved_by IS NULL` is `outside` the mechanism, never
+  unconfirmed. Repudiation is final for the key (a later confirm is refused) and never revokes the actor. Pins:
+  `confirmation_has_one_definition`, `a_superuser_enrolment_is_confirmed_at_once`, `bootstrap_writes_a_confirm_row`,
+  `a_repudiated_enrollers_unconfirmed_members_are_doubtful`, `rekey_after_repudiation_restores_the_actor`.
+- **Unconfirmed never blocks signing by itself.** Only a repudiation, a revoke or a site's own expiry stops a key, and
+  the expiry is OFF by default (`vault_policy` empty). **Tempting wrong fix:** refuse an unconfirmed key "to be safe" —
+  it sends the newcomer back to paper or to a shared login. Pins: `no_expiry_by_default`, `a_confirmed_key_never_expires`.
+- **The approver rule lives only in `cairn_vault_approver_ok`, and an enroller's act needs a current grant AND a
+  confirmed (or `outside`) key** (`cairn_vault_enroller_problem`). Dropping the confirmed-key clause re-opens the
+  impostor chain. An enroller never enrols or re-keys a `superuser` or an `admin`, grants, or judges; nobody re-keys a
+  superuser outside the console. Pins: `an_unconfirmed_enroller_cannot_enrol`, `an_enroller_cannot_enrol_a_superuser_or_an_admin`,
+  `an_enroller_cannot_grant_or_judge`, `a_stale_grant_token_is_refused`.
+- **Every administrative act is signed over its own domain-separated address**, computed in SQL and fetched by Rust
+  (`cairn_vault_{enrol,rekey,grant,judge,reseal}_address`). The re-key address binds the ROLE (a restored node has no
+  member row to check it against); the grant address binds the prior grant `seq`; the reseal address binds the old
+  blob's digest. This is what keeps a clinician-enroller's key, released for `enrol`, from signing a clinical event.
+- **The release door's RETURN shape never changes** (`outcome, seed, signing_key_id, retry_after_ms`): a new fact is a
+  new `outcome` (`replaced`, `expired`) or a companion function. `replaced` is counted exactly like `wrong` and given on
+  a FAILURE only; `expired` and `not-current` come before the count. Pins: `rekey_keeps_the_actor_and_retires_the_old_key`,
+  `an_expired_unconfirmed_key_is_not_released`.
+- **The rules the release and enrol doors call live in db/061, AHEAD of the doors**, not in db/063: on an upgrade's
+  replay a door calling a function a later file defines raises "function does not exist" at a concurrent sign-in
+  (ADR-0083's never-raises promise). **Tempting wrong fix:** move them to db/063 "where the slice lives" to shorten
+  db/061.
+- **A change of passphrase checks the current one through the counted release door** (purpose `reseal`), never a
+  second, uncounted check. Pins: `reseal_releases_the_key_for_reseal_only`, `reseal_needs_the_members_own_proof`,
+  `a_wrong_current_passphrase_changes_nothing`.
+- **Every vault answer that becomes a person's sentence goes through `signer::from_release_noting`**, or a replaced
+  passphrase reads "not right" again. Pin: `a_vault_answer_reaches_the_person_through_from_release_noting`.
+- **Repudiate asks no question** (principle 3). Pin: `repudiate_asks_no_question`. The expiry warning names the staff
+  ID and is cleared with it, so the next person never reads it as theirs. Pin:
+  `the_expiry_warning_is_asked_for_the_typed_id_before_the_act`.
+- **The suppression owner gate compares ACTORS, not keys**, and a suppressor key resolving to zero or several actors
+  refuses. Pins: `a_rekeyed_author_may_suppress_their_own_earlier_note`, `cross_human_suppress_refused_after_author_key_rotation`,
+  `a_repudiated_key_may_not_suppress_its_actors_note`, `a_rotated_in_keys_note_cannot_be_hidden_by_another_human`.
+
 **⇒ THE WINDOW'S OWN LOGIN (ADR-0084, db/062, #898/#899) — do not undo** (pins:
 `crates/cairn-node/tests/{conn_posture_db,window_role_grants,provision_window_role}.rs`,
 `crates/cairn-node/src/{conn_posture,window_access}_tests.rs`, `cairn-gui-tauri/src/launch_posture_tests.rs`):
@@ -51,7 +105,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   server log. Same for `cairn_vault_unseal` (NULL, never `pgrx::error!`). Pins:
   `a_wrong_passphrase_is_an_answer_not_an_error`, `refusal_sentences_never_echo_the_passphrase`. **Tempting wrong
   fix:** `RAISE EXCEPTION 'wrong passphrase'` "for clarity". The window builds its sentence from `KeyRefusal`.
-- **Never let a superuser key out for `'clinical'`** (nor a clinician key for `'enrol'`): the release door maps
+- **Never let a superuser key out for `'clinical'`** (nor a clinician key for `'enrol'`, unless it passes slice 2's
+  enroller rule — see that block; `admin` is administrative-only like `superuser`): the release door maps
   role → purpose BEFORE unsealing. Pins: `a_superuser_key_is_not_released_for_a_clinical_act`,
   `a_clinician_key_cannot_enrol`, `the_superuser_key_is_never_held` (enrolment bypasses `signer_for_act`, which may
   hold keys). The rule binds only at the vault: a client holding a released superuser key could still sign a

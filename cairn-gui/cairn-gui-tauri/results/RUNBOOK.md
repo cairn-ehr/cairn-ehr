@@ -1129,3 +1129,130 @@ failure. Then the right passphrase, after the wait, signs. Confirm:
 **What could not be run here.** The window gestures, the stopwatch figures and the VoiceOver pass need the window
 and a human. The console verbs and the release door's answers (`wrong`, `refused-purpose`) were run against a
 throwaway database on 2026-10-31. `TEMPLATE.md` carries a matching block (*Sign in and sign*).
+
+## 17. Enrol in person, re-key, change a passphrase, confirm (GUI sign-in slice 2, ADR-0085)
+
+The slice's gestures: **Enrol staff** approved by an *enroller* (a member a superuser granted the role), **Forgotten
+passphrase** (a re-key: the same person, a new key), **Change my passphrase** (the same key, a new passphrase) and the
+superuser's panel, **Superuser: enrollers and keys** (grant the role; Confirm or Repudiate a key). Paper counterpart:
+a newcomer signs their own name on their first note, with no ceremony; a pen has no passphrase to forget. **Live
+only**, like section 16.
+
+**Budgets (design §7, the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Enrolment by an enroller | the newcomer says "I'm new" | the outcome line after the newcomer's **first own signature** | **≤ 2 min** |
+| Re-key in person | *Forgotten passphrase* opened | the member's first signature with the new passphrase | **≤ 1 min** |
+| Change my passphrase | *Change my passphrase* opened | "Your passphrase is changed." | **≤ 30 s** |
+| Superuser confirm | Confirm pressed (credential already in the strip) | the row leaves the worklist | **≤ 10 s per row** |
+
+Steps: enrolment paper *N* = 0 → forced *M* = 2 (the enroller's form and signature; the newcomer's passphrase twice),
+once per person per node → bundling target *K* = 2. Re-key paper 0 → *M* = 2 → *K* = 2. Change of passphrase paper 0
+→ *M* = 1 → *K* = 1. Confirm: 1 press per row. **`M > N` is already filed** (the M > N issue named in ADR-0085); record
+the observed counts against it. **A figure outside its budget is the finding — file an issue; never adjust the
+budget.**
+
+**Setup.** Section 16's setup (the database, the owner connection, `cnode`, the logging check, a superuser `boss`
+and the terminal passphrase). Enrol, from the window as section 16 Measurement 2, a clinician `dr-a` (role
+*clinician*, approved by `boss`: confirmed at once). Then, at the console:
+
+```bash
+# The site's optional expiry (off by default). Measure with it OFF; Measurement 6 turns it on and off again.
+cnode vault-set-unconfirmed-expiry --none
+# Who is unconfirmed, and who approved what, straight from the registry (owner connection):
+psql "$CONN" -At -c "SELECT m.staff_id, cairn_key_confirmation(m.signing_key_id) FROM vault_member m ORDER BY 1"
+```
+
+**Measurement 1 — grant the enroller role.** Open *Superuser: enrollers and keys*. Type `boss` and its passphrase
+into the strip; press *Grant* beside `dr-a`.
+
+- [ ] "dr-a can now enrol staff." The row now says "can enrol staff" and offers *Withdraw*.
+- [ ] `dr-a`'s own credential and *Grant* beside another member: "Only a superuser can do this. …" Nothing changes.
+- [ ] The strip's passphrase is empty after every press, success or refusal.
+
+**Measurement 2 — enrolment by an enroller (the ≤ 2 min budget).** A colleague plays the newcomer. Start when they
+say "I'm new". `dr-a` opens *Enrol staff*, types the newcomer's details (`locum-b`, role *clinician*, a contact) and
+their own credential into the strip; the newcomer types their own passphrase twice and presses *Enrol*; then the
+newcomer signs one act on the section 2 chart with their own staff ID and passphrase. Stop at that act's outcome
+line. Three runs (new staff IDs each time).
+
+- [ ] The enroller never sees the newcomer's passphrase, and the newcomer never chooses anything but a passphrase.
+- [ ] The newcomer's act is signed by their own key (`medication-list`, then the `psql` line above: `unconfirmed`).
+- [ ] `dr-a` choosing role *admin* or *superuser*: "Only a superuser can enrol a superuser or an admin. …"
+- [ ] The newcomer's key appears under *Keys waiting for a superuser*: "… new key approved by dr-a on …".
+
+**Measurement 3 — re-key in person (the ≤ 1 min budget).** `locum-b` has "forgotten" their passphrase. `dr-a` opens
+*Forgotten passphrase*, types `locum-b`, role *clinician*, and their own credential in the strip; `locum-b` types a
+new passphrase twice and presses *Give a new key*; then signs one act with it. Stop at that act's outcome line.
+
+- [ ] "locum-b has a new key. Their old passphrase no longer works; …"
+- [ ] `locum-b` signing with the OLD passphrase: "This passphrase was replaced on {date}, approved by {dr-a's name}.
+      If you didn't ask for that, tell a superuser." It counts as a wrong try: the fourth in a row says "Wait 1 s".
+- [ ] The act signed with the new passphrase is `locum-b`'s, on the same actor
+      (`psql "$CONN" -At -c "SELECT op, left(signing_key_id,8) FROM actor_event WHERE actor_id = (SELECT actor_id FROM vault_member WHERE staff_id='locum-b') ORDER BY seq"`:
+      `enroll`, then `rotate-key`).
+- [ ] *Role* offers no *superuser*. A superuser is re-keyed only at the console:
+      `cnode vault-rekey-superuser --staff-id boss` (passphrase prompted twice), then `boss` signs in with the new one.
+
+**Measurement 4 — change my passphrase (the ≤ 30 s budget).** `dr-a` opens *Change my passphrase*, types staff ID,
+current passphrase and a new one twice, and presses *Change passphrase*.
+
+- [ ] "Your passphrase is changed." The next sign with the new passphrase works; the old one is "not right" (no
+      "replaced": the key did not change).
+- [ ] A wrong current passphrase: the ordinary refusal ("That passphrase is not right."), and it counts as a try.
+- [ ] The same passphrase as the current one: "Your new passphrase is the same as your current one. Nothing was changed."
+
+**Measurement 5 — confirm and repudiate (the ≤ 10 s per row budget).** Back in the superuser's panel as `boss`.
+Time *Confirm* on `locum-b`'s row (five rows: enrol more newcomers first).
+
+- [ ] "The key is confirmed." The row leaves the worklist; the `psql` line says `confirmed`.
+- [ ] *Repudiate* on another newcomer: no question is asked (principle 3). "The key is repudiated. Give the member a
+      new key from the re-key form." That member's next sign: "Your signing key is no longer enrolled here. …"
+- [ ] **The cascade cannot be produced from the window — record it as not run.** An enroller's key must be confirmed
+      to approve anyone, and the panel offers *Repudiate* only on a key that is still waiting, so no enroller's key is
+      ever on the list. The door does it (`a_repudiated_enrollers_unconfirmed_members_are_doubtful`); the window owes a
+      way to repudiate a confirmed key (ADR-0085, "not guaranteed"). The worklist's "Doubtful: approved by a
+      repudiated enroller." wording is pinned by `a_doubtful_row_says_why`.
+
+**Measurement 6 — the optional expiry.** `cnode vault-set-unconfirmed-expiry --days 5`, then enrol a newcomer
+through `dr-a` (unconfirmed): it stops signing in five days, inside the strip's seven-day warning. To see the stop itself on
+this **throwaway** database only, back-date that key's registry rows past the limit as the tests do
+(`vault_enrollers.rs`'s `age_key`: the owner disables `actor_event_no_update`, moves `recorded_at` back, and
+re-enables it at once). Never on a real node: the registry is append-only. Then:
+
+- [ ] Typing that member's staff ID in the strip (and leaving the field), within seven days of the stop: "Not yet
+      confirmed by a superuser. {staff ID}'s key stops signing on {date}." Another staff ID clears it.
+- [ ] The worklist row says "Stops signing on {date}." (or "Stopped signing on …" once past).
+- [ ] Past the stop, a sign: "No superuser has confirmed your signing key, and this site stops unconfirmed keys
+      signing after a set time. Nothing was signed. …" Confirm it in the panel; the next sign works.
+- [ ] `cnode vault-set-unconfirmed-expiry --none` afterwards. Record that a restore comes back with no expiry
+      (the policy is outside the backups).
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] *Forgotten passphrase*, *Change my passphrase* and the superuser's panel open, fill and submit by keyboard
+      alone; *Enrol staff*'s new *admin* role is reachable in its list.
+- [ ] Every field of the two new forms is announced by its label; *Grant*/*Withdraw* and *Confirm*/*Repudiate* are
+      announced with the row they belong to (record if VoiceOver reads the button without its row).
+- [ ] Each outcome sentence (re-key, change, grant, confirm, repudiate, "replaced", the expiry warning) is read once,
+      whole, from its status line, and none speaks a passphrase.
+- [ ] A double press on *Confirm* sends one act (the row's buttons are disabled while it is in flight).
+- [ ] Nothing takes focus on its own when the worklist redraws.
+
+**The window's DB-gated tests (owed by a human — CI never runs them,
+[#905](https://github.com/cairn-ehr/cairn-ehr/issues/905)).** With the dev cluster (`CAIRN_TEST_PG` as in
+`docs/developers/getting-started.md`), from `cairn-gui/`:
+
+```bash
+CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=$USER dbname=cairn_test" \
+  cargo test -p cairn-gui-tauri -- --nocapture   # no pipe: `| tail` or `| grep` would hide cargo's exit code
+```
+
+- [ ] No `skipped:` line, and `an_enroller_rekeys_from_the_window`, `a_replaced_sign_names_the_approver`,
+      `a_superuser_grants_and_an_enroller_then_rekeys` and `a_repudiated_key_leaves_the_worklist_for_good` pass.
+- [ ] Never beside `scripts/run-db-gated-tests.sh` on the same database (a shared schema replay deadlocks).
+
+**What could not be run here.** Every gesture, stopwatch figure and the VoiceOver pass need the window and a human.
+The doors behind them were run against throwaway databases by the slice's DB-gated tests on 2026-11-01.
+`TEMPLATE.md` carries a matching block (*Enrol in person, re-key, change a passphrase, confirm*).
