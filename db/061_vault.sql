@@ -425,8 +425,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 
 -- When an UNCONFIRMED key stops signing under the site's optional expiry (§5.5), or NULL when no
--- expiry applies: no limit set (the default — the empty policy table answers before anything
--- else is read), or the key is confirmed, 'outside' the mechanism, repudiated or unknown. The age
+-- expiry applies: no limit set (the default), or the key is confirmed, 'outside' the mechanism,
+-- repudiated or unknown. The age
 -- runs from the row that introduced the key with an approver — the "approved at" the superuser's
 -- worklist shows (cairn_vault_unconfirmed, db/063), so the two can never disagree. A 'doubtful'
 -- key (its approver since repudiated) is still unconfirmed and expires like one. The release door

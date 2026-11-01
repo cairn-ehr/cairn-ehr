@@ -137,7 +137,7 @@ async fn rekeyed_world() -> Option<(impl Sized, AppState, String, String)> {
     let owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
     owner
         .batch_execute(
-            "TRUNCATE vault_attempt, vault_member, vault_terminal, event_log, actor_event, \
+            "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, \
              patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
         )
         .await

@@ -56,7 +56,8 @@ pub struct EnrollerView {
 }
 
 /// Pure: the sentence for one worklist row. `now` supplies the local time zone. An approver who
-/// is no longer in the vault is said so, never left blank (principle 4).
+/// is no longer in the vault is said so, never left blank (principle 4). Under a site expiry the
+/// row also says when the key stops (or stopped) signing.
 pub fn unconfirmed_text<Tz: chrono::TimeZone>(u: &Unconfirmed, now: &chrono::DateTime<Tz>) -> String
 where
     Tz::Offset: std::fmt::Display,
@@ -77,6 +78,18 @@ where
     );
     if u.doubtful {
         text.push_str(" Doubtful: approved by a repudiated enroller.");
+    }
+    // §5.5: the superuser is the one who can stop it, so the date is said here too.
+    if let Some(at) = &u.stops_at {
+        let past = chrono::DateTime::parse_from_rfc3339(at).is_ok_and(|t| t <= *now);
+        text.push_str(&if past {
+            format!(
+                " Stopped signing on {}. Confirm it to let it sign again.",
+                local_at(at, now)
+            )
+        } else {
+            format!(" Stops signing on {}.", local_at(at, now))
+        });
     }
     text
 }

@@ -30,7 +30,7 @@ async fn the_windows_vault_doors_run_under_its_own_login() {
     let (owner, window) = owner_and_window(&base).await;
     setup(&owner, &[]).await;
     owner
-        .batch_execute("TRUNCATE vault_attempt, vault_member, vault_terminal CASCADE")
+        .batch_execute("TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy CASCADE")
         .await
         .unwrap();
     let su_pass = format!("su-{}", Uuid::now_v7());
@@ -143,7 +143,7 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
     let (owner, window) = owner_and_window(&base).await;
     setup(&owner, &[]).await;
     owner
-        .batch_execute("TRUNCATE vault_attempt, vault_member, vault_terminal CASCADE")
+        .batch_execute("TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy CASCADE")
         .await
         .unwrap();
     let pass = |who: &str| format!("{who}-{}", Uuid::now_v7());
@@ -206,6 +206,27 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
             .len(),
         1
     );
+    // The expiry warning's date (§5.5): under a site limit (the owner's, at the console) the
+    // window reads when anurse's unconfirmed key stops signing; then the limit is lifted again.
+    owner
+        .execute("SELECT cairn_vault_set_unconfirmed_expiry(30)", &[])
+        .await
+        .unwrap();
+    let stops: Option<std::time::SystemTime> = door(
+        &window,
+        "SELECT cairn_vault_unconfirmed_expires_at('anurse')",
+        &[],
+    )
+    .await[0]
+        .get(0);
+    assert!(
+        stops.is_some(),
+        "an unconfirmed key under a limit has a date"
+    );
+    owner
+        .execute("SELECT cairn_vault_set_unconfirmed_expiry(NULL)", &[])
+        .await
+        .unwrap();
     let t = signed(
         &window,
         "SELECT cairn_vault_judge_address($1, true)",
@@ -245,13 +266,6 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
         .len(),
         1
     );
-    // The expiry warning's date (§5.5): no limit is set, so there is none.
-    door(
-        &window,
-        "SELECT cairn_vault_unconfirmed_expires_at('anurse')",
-        &[],
-    )
-    .await;
 
     // A reseal, proved by the member's own released key.
     let blob = sealed(&jk, &pass("j2"));

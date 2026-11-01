@@ -138,7 +138,7 @@ pub enum KeyRefusal {
     /// This member's key was revoked or replaced: it can sign nothing here.
     NotCurrent,
     /// This member's key is still unconfirmed past the site's optional limit (§5.5): a
-    /// superuser's confirmation lets it sign again. The strip warned a week ahead.
+    /// superuser's confirmation lets it sign again. The strip may have warned a week ahead.
     Expired,
     /// The window's connection has more power than a window may have (#898), so no passphrase
     /// was sent. The fix is the operator's: give the window its own login.
@@ -294,11 +294,14 @@ where
 /// never a surprise at the moment of signing"). A week covers a roster's days off.
 const EXPIRY_WARNING: chrono::TimeDelta = chrono::TimeDelta::days(7);
 
-/// Pure: the strip's warning after a signed act, given when the signer's unconfirmed key stops
-/// signing (`cairn_node::vault_admin::unconfirmed_expires_at`, RFC 3339 UTC): a sentence when
-/// that is within [`EXPIRY_WARNING`] of `now`, else `None` (no limit, a confirmed key, or later).
-/// An instant that does not parse is still warned about, quoted as recorded (principle 4).
+/// Pure: the strip's warning for `staff_id`, given when their unconfirmed key stops signing
+/// (`cairn_node::vault_admin::unconfirmed_expires_at`, RFC 3339 UTC): a sentence when that is
+/// within [`EXPIRY_WARNING`] of `now`, else `None` (no limit, a confirmed key, or later). It
+/// names the staff ID, so on a shared screen it is never read as the next person's. Full stops,
+/// not dashes, for the screen reader. An instant that does not parse is still warned about,
+/// quoted as recorded (principle 4).
 pub(crate) fn expiry_notice<Tz: chrono::TimeZone>(
+    staff_id: &str,
     expires_at: Option<&str>,
     now: &chrono::DateTime<Tz>,
 ) -> Option<String>
@@ -311,7 +314,8 @@ where
         .unwrap_or(true);
     near.then(|| {
         format!(
-            "Not yet confirmed by a superuser — signing stops on {}.",
+            "Not yet confirmed by a superuser. {}'s key stops signing on {}.",
+            staff_id.trim(),
             local_at(at, now)
         )
     })

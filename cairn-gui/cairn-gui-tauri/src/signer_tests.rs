@@ -467,20 +467,25 @@ fn an_expired_key_is_told_to_ask_a_superuser_to_confirm_it() {
 }
 
 /// The warning days ahead (§5.5: never a surprise at the moment of signing): shown when signing
-/// stops within 7 days, in the clinician's local time; silent with no limit or a later one. An
-/// instant that does not parse is still warned about, as recorded (principle 4).
+/// stops within 7 days, in the clinician's local time, naming the staff ID; silent with no limit
+/// or a later one. An instant that does not parse is still warned about, as recorded (principle 4).
 #[test]
 fn an_unconfirmed_key_is_warned_within_seven_days_of_its_expiry() {
     let now = utc_now(); // Sun 1 Nov 2026 09:00 UTC
     assert_eq!(
-        expiry_notice(Some("2026-11-05T04:05:00Z"), &now).as_deref(),
-        Some("Not yet confirmed by a superuser — signing stops on Thu 5 Nov 2026 04:05.")
+        expiry_notice(" anurse ", Some("2026-11-05T04:05:00Z"), &now).as_deref(),
+        Some(
+            "Not yet confirmed by a superuser. anurse's key stops signing on Thu 5 Nov 2026 04:05."
+        )
     );
-    assert!(expiry_notice(Some("2026-11-08T08:59:00Z"), &now).is_some());
-    assert_eq!(expiry_notice(Some("2026-11-08T09:01:00Z"), &now), None);
-    assert_eq!(expiry_notice(None, &now), None);
+    assert!(expiry_notice("anurse", Some("2026-11-08T08:59:00Z"), &now).is_some());
     assert_eq!(
-        expiry_notice(Some("soon"), &now).as_deref(),
-        Some("Not yet confirmed by a superuser — signing stops on soon.")
+        expiry_notice("anurse", Some("2026-11-08T09:01:00Z"), &now),
+        None
+    );
+    assert_eq!(expiry_notice("anurse", None, &now), None);
+    assert_eq!(
+        expiry_notice("anurse", Some("soon"), &now).as_deref(),
+        Some("Not yet confirmed by a superuser. anurse's key stops signing on soon.")
     );
 }

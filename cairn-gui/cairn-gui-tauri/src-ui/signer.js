@@ -34,22 +34,22 @@ function signerCredential() {
  * carries on with no passphrase; it is not `heldBy` that decides, because `heldBy` is only
  * refreshed by the poll below, after this runs. Keeping it is safe: the node signs an ID with no
  * passphrase only with that same person's live held key, never by asking the vault.
- * `signed` is true on the success path: the ID then joins the type-ahead list, and the signer
- * is warned if their unconfirmed key stops signing soon (design §5.5).
+ * `signed` is true on the success path: the ID then joins the type-ahead list.
  */
 function clearSigner(signed) {
-  // Who signed: the typed ID, or the holder when the act used a held key with none typed.
-  const who = el("staff-id").value.trim() || heldBy || "";
+  const typed = el("staff-id").value.trim();
   // Only a SIGNED act enters the recent list, so a typo never does (shared terminal).
   if (signed) rememberSigner(el("staff-id").value);
-  // The last signer's warning is not the next person's.
-  setMessage(el("signer-notice"), "");
-  if (signed && who !== "") void showExpiryNotice(who);
   el("signer-passphrase").value = "";
   if (keyHoldSecs === 0) {
     el("staff-id").value = "";
     setMessage(el("signer-hint"), "");
+    // The expiry warning belongs to the ID just cleared: never the next person's.
+    setMessage(el("signer-notice"), "");
   }
+  // A typed ID was warned at its `change` (onStaffIdChange). A held-key act with NO ID typed
+  // never was, so it asks once now, for the holder (design §5.5).
+  if (signed && typed === "" && heldBy) void showExpiryNotice(heldBy);
   // Refresh the lock state at once, so "Signed in for the next act" and `heldBy` are current.
   void pollLock();
 }
@@ -134,15 +134,29 @@ async function showSignerHint() {
   setMessage(el("signer-hint"), said);
 }
 
-/** The days-ahead warning for an unconfirmed key (§5.5); nothing when none applies. */
+/**
+ * The days-ahead warning for an unconfirmed key (§5.5), BEFORE the act when the ID is typed:
+ * never a surprise at the moment of signing. Nothing when none applies. Shown only if `staffId`
+ * is still the one in the strip (or the holder, with none typed) when the answer arrives, so a
+ * slow answer never labels the next person.
+ */
 async function showExpiryNotice(staffId) {
+  let said = "";
   try {
-    setMessage(el("signer-notice"), await invoke("expiry_notice", { staffId: staffId }));
+    said = await invoke("expiry_notice", { staffId: staffId });
   } catch (e) {
-    // Only an IPC-level failure lands here (Rust answers None for a failed read): the act is
-    // signed either way, and an expired key's refusal still says why.
-    setMessage(el("signer-notice"), "");
+    // Only an IPC-level failure lands here (Rust answers None for a failed read); an expired
+    // key's refusal still says why at the press.
   }
+  if (staffId === (el("staff-id").value.trim() || heldBy)) setMessage(el("signer-notice"), said);
+}
+
+/** A new staff ID in the strip: its own hint and its own expiry warning, the last one's gone. */
+function onStaffIdChange() {
+  setMessage(el("signer-notice"), "");
+  void showSignerHint();
+  const staffId = el("staff-id").value.trim();
+  if (staffId !== "") void showExpiryNotice(staffId);
 }
 
 async function lockNow() {
@@ -161,6 +175,6 @@ async function lockNow() {
 
 // Enter in the strip must not submit the page (the strip has no submit of its own).
 el("signer").addEventListener("submit", (event) => event.preventDefault());
-el("staff-id").addEventListener("change", showSignerHint);
+el("staff-id").addEventListener("change", onStaffIdChange);
 el("forget-key").addEventListener("click", lockNow);
 el("terminal-form").addEventListener("submit", tryTerminalUnlock);

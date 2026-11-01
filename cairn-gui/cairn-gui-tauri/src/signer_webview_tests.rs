@@ -336,19 +336,38 @@ fn a_failed_hint_read_is_shown_not_hidden() {
     );
 }
 
-/// §5.5: a signed act whose key is unconfirmed under a site expiry is warned days ahead. The
-/// strip asks once, after a SIGNED act only, for the person who signed (the typed ID, or the
-/// holder); every write first clears the last person's warning.
+/// §5.5 ("never a surprise at the moment of signing"): the expiry warning is asked for when a
+/// staff ID is typed, BEFORE the act — the change handler first clears the last ID's warning.
+/// After the act it is asked only for a held-key act with no ID typed, so a sign costs at most
+/// one read. A shared terminal clears the warning with the ID (I2).
 #[test]
-fn a_signed_act_asks_once_for_the_expiry_warning() {
-    let clear = js_fn(SIGNER_JS, "clearSigner");
-    let wipe = position(clear, "setMessage(el(\"signer-notice\"), \"\");");
-    let ask = position(
-        clear,
-        "if (signed && who !== \"\") void showExpiryNotice(who);",
+fn the_expiry_warning_is_asked_for_the_typed_id_before_the_act() {
+    let change = js_fn(SIGNER_JS, "onStaffIdChange");
+    let wipe = position(change, "setMessage(el(\"signer-notice\"), \"\");");
+    let ask = position(change, "void showExpiryNotice(staffId);");
+    assert!(wipe < ask, "{change}");
+    assert!(change.contains("void showSignerHint();"), "{change}");
+    assert!(
+        SIGNER_JS.contains("el(\"staff-id\").addEventListener(\"change\", onStaffIdChange);"),
+        "the staff ID's change handler asks"
     );
-    assert!(wipe < ask, "{clear}");
+    let clear = js_fn(SIGNER_JS, "clearSigner");
+    assert!(
+        clear.contains("if (signed && typed === \"\" && heldBy) void showExpiryNotice(heldBy);"),
+        "{clear}"
+    );
+    let shared = &clear[position(clear, "if (keyHoldSecs === 0) {")..];
+    assert!(
+        shared[..position(shared, "}")].contains("setMessage(el(\"signer-notice\"), \"\");"),
+        "a shared terminal clears the warning with the ID: {clear}"
+    );
+    let show = js_fn(SIGNER_JS, "showExpiryNotice");
+    assert!(
+        show.contains("if (staffId === (el(\"staff-id\").value.trim() || heldBy))"),
+        "a late answer never labels the next person: {show}"
+    );
     assert_eq!(SIGNER_JS.matches("invoke(\"expiry_notice\"").count(), 1);
+    assert_eq!(SIGNER_JS.matches("showExpiryNotice(").count(), 3);
     assert!(
         INDEX_HTML.contains("<p id=\"signer-notice\" role=\"status\" hidden></p>"),
         "the warning has its own announced line in the strip"

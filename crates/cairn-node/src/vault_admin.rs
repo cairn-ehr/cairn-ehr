@@ -259,15 +259,22 @@ pub struct Unconfirmed {
     /// RFC 3339 (UTC).
     pub approved_at: String,
     pub doubtful: bool,
+    /// When it stops signing under the site's optional expiry (§5.5), RFC 3339 (UTC); `None`
+    /// with no limit set.
+    pub stops_at: Option<String>,
 }
 
-/// The superuser's worklist: current keys still unconfirmed or doubtful, oldest first.
+/// The superuser's worklist: current keys still unconfirmed or doubtful, oldest first, each
+/// with its expiry date (a companion call per row in the same statement, so
+/// `cairn_vault_unconfirmed`'s columns stay as they are).
 pub async fn unconfirmed(db: &Client) -> anyhow::Result<Vec<Unconfirmed>> {
     let rows = db
         .query(
             "SELECT staff_id, COALESCE(display_name, ''), signing_key_id, \
                     COALESCE(approver_staff_id, ''), \
-                    to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), doubtful \
+                    to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), doubtful, \
+                    to_char(cairn_vault_unconfirmed_expires_at(staff_id) AT TIME ZONE 'UTC', \
+                            'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
                FROM cairn_vault_unconfirmed()",
             &[],
         )
@@ -282,6 +289,7 @@ pub async fn unconfirmed(db: &Client) -> anyhow::Result<Vec<Unconfirmed>> {
             approver_staff_id: r.get(3),
             approved_at: r.get(4),
             doubtful: r.get(5),
+            stops_at: r.get(6),
         })
         .collect())
 }

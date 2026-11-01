@@ -24,6 +24,7 @@ fn row(approver: &str, doubtful: bool) -> Unconfirmed {
         approver_staff_id: approver.into(),
         approved_at: "2026-11-01T04:05:00Z".into(),
         doubtful,
+        stops_at: None,
     }
 }
 
@@ -46,6 +47,28 @@ fn a_doubtful_row_says_why() {
     let said = unconfirmed_text(&row("enrol1", true), &utc());
     assert!(
         said.ends_with(" Doubtful: approved by a repudiated enroller."),
+        "{said}"
+    );
+}
+
+/// §5.5 I1: under a site expiry the superuser sees when each unconfirmed key stops signing —
+/// the one person who can prevent it, warned even if its holder signs nothing in its last week.
+#[test]
+fn a_row_under_a_site_expiry_says_when_it_stops_signing() {
+    let mut r = row("enrol1", false);
+    assert!(!unconfirmed_text(&r, &utc()).contains("signing"));
+    r.stops_at = Some("2026-11-20T04:05:00Z".into());
+    let said = unconfirmed_text(&r, &utc());
+    assert!(
+        said.ends_with(" Stops signing on Fri 20 Nov 2026 04:05."),
+        "{said}"
+    );
+    r.stops_at = Some("2026-11-01T09:00:00Z".into());
+    let said = unconfirmed_text(&r, &utc());
+    assert!(
+        said.ends_with(
+            " Stopped signing on Sun 1 Nov 2026 09:00. Confirm it to let it sign again."
+        ),
         "{said}"
     );
 }
@@ -149,7 +172,7 @@ async fn world() -> Option<(impl Sized, AppState, String, String)> {
     let owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
     owner
         .batch_execute(
-            "TRUNCATE vault_attempt, vault_member, vault_terminal, event_log, actor_event, \
+            "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, \
              patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
         )
         .await

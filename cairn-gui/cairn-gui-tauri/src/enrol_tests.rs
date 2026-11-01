@@ -238,7 +238,7 @@ async fn live(
     let guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
     c.batch_execute(
-        "TRUNCATE vault_attempt, vault_member, vault_terminal, event_log, actor_event, \
+        "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, \
          patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
     )
     .await

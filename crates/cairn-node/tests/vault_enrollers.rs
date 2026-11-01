@@ -372,6 +372,17 @@ async fn an_expired_unconfirmed_key_is_not_released() {
         .unwrap()
         .get(0);
     assert!(same && shown.ends_with('Z'), "{shown}");
+    // The superuser's worklist carries the same date for each unconfirmed key (I1).
+    let listed: Vec<(String, Option<String>)> = cairn_node::vault_admin::unconfirmed(&c)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|u| (u.staff_id, u.stops_at))
+        .collect();
+    assert!(
+        listed.contains(&("bnurse".to_string(), Some(shown.clone()))),
+        "{listed:?}"
+    );
     assert_eq!(
         cairn_node::vault_admin::unconfirmed_expires_at(&c, "jsmith")
             .await
@@ -426,6 +437,8 @@ async fn a_confirmed_key_never_expires() {
         release(&c, "jsmith", &pass_of(JSMITH), "clinical").await.0,
         "released"
     );
+    // Leave the site with no limit, whatever runs next on this database.
+    set_expiry(&c, None).await;
 }
 
 /// A limit is a whole number of days greater than zero; zero or less is refused, not stored.
