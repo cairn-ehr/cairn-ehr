@@ -34,11 +34,17 @@ function signerCredential() {
  * carries on with no passphrase; it is not `heldBy` that decides, because `heldBy` is only
  * refreshed by the poll below, after this runs. Keeping it is safe: the node signs an ID with no
  * passphrase only with that same person's live held key, never by asking the vault.
- * `signed` is true on the success path: the ID then joins the type-ahead list.
+ * `signed` is true on the success path: the ID then joins the type-ahead list, and the signer
+ * is warned if their unconfirmed key stops signing soon (design §5.5).
  */
 function clearSigner(signed) {
+  // Who signed: the typed ID, or the holder when the act used a held key with none typed.
+  const who = el("staff-id").value.trim() || heldBy || "";
   // Only a SIGNED act enters the recent list, so a typo never does (shared terminal).
   if (signed) rememberSigner(el("staff-id").value);
+  // The last signer's warning is not the next person's.
+  setMessage(el("signer-notice"), "");
+  if (signed && who !== "") void showExpiryNotice(who);
   el("signer-passphrase").value = "";
   if (keyHoldSecs === 0) {
     el("staff-id").value = "";
@@ -128,12 +134,24 @@ async function showSignerHint() {
   setMessage(el("signer-hint"), said);
 }
 
+/** The days-ahead warning for an unconfirmed key (§5.5); nothing when none applies. */
+async function showExpiryNotice(staffId) {
+  try {
+    setMessage(el("signer-notice"), await invoke("expiry_notice", { staffId: staffId }));
+  } catch (e) {
+    // Only an IPC-level failure lands here (Rust answers None for a failed read): the act is
+    // signed either way, and an expired key's refusal still says why.
+    setMessage(el("signer-notice"), "");
+  }
+}
+
 async function lockNow() {
   // Emptied FIRST: a Lock whose call fails must still leave no typed credential behind for the
   // next person's press to sign with.
   el("signer-passphrase").value = "";
   el("staff-id").value = "";
   setMessage(el("signer-hint"), "");
+  setMessage(el("signer-notice"), "");
   try {
     renderSigner(await invoke("forget_held_key"));
   } catch (e) {

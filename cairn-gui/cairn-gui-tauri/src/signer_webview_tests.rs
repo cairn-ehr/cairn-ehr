@@ -335,3 +335,22 @@ fn a_failed_hint_read_is_shown_not_hidden() {
         "a failed hint read must show its refusal: {hint}"
     );
 }
+
+/// §5.5: a signed act whose key is unconfirmed under a site expiry is warned days ahead. The
+/// strip asks once, after a SIGNED act only, for the person who signed (the typed ID, or the
+/// holder); every write first clears the last person's warning.
+#[test]
+fn a_signed_act_asks_once_for_the_expiry_warning() {
+    let clear = js_fn(SIGNER_JS, "clearSigner");
+    let wipe = position(clear, "setMessage(el(\"signer-notice\"), \"\");");
+    let ask = position(
+        clear,
+        "if (signed && who !== \"\") void showExpiryNotice(who);",
+    );
+    assert!(wipe < ask, "{clear}");
+    assert_eq!(SIGNER_JS.matches("invoke(\"expiry_notice\"").count(), 1);
+    assert!(
+        INDEX_HTML.contains("<p id=\"signer-notice\" role=\"status\" hidden></p>"),
+        "the warning has its own announced line in the strip"
+    );
+}

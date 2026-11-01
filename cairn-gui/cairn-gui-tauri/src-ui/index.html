@@ -48,6 +48,8 @@
           <input id="signer-passphrase" type="password" autocomplete="off" />
           <button id="forget-key" type="button" hidden>Lock</button>
           <p id="signer-hint" hidden></p>
+          <!-- After a signed act: "signing stops on …" for a key still unconfirmed (signer.js). -->
+          <p id="signer-notice" role="status" hidden></p>
         </form>
       </section>
 

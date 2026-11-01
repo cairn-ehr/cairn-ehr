@@ -245,6 +245,13 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
         .len(),
         1
     );
+    // The expiry warning's date (§5.5): no limit is set, so there is none.
+    door(
+        &window,
+        "SELECT cairn_vault_unconfirmed_expires_at('anurse')",
+        &[],
+    )
+    .await;
 
     // A reseal, proved by the member's own released key.
     let blob = sealed(&jk, &pass("j2"));

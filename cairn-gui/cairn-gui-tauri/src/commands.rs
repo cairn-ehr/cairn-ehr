@@ -168,6 +168,37 @@ pub async fn vault_hint_impl(state: &AppState, staff_id: &str) -> Result<Option<
     })
 }
 
+/// The strip's warning after a SIGNED act (design §5.5): "Not yet confirmed by a superuser —
+/// signing stops on {date}" when `staff_id`'s unconfirmed key stops signing within a week under
+/// the site's optional expiry, else `None`. One read per signed act; with no limit set (the
+/// default) the database answers from an empty policy table. A failed read is only a missing
+/// warning — the act already signed, and an expired key's refusal still says why — so it is
+/// `None` on screen and the detail goes to stderr.
+#[tauri::command]
+pub async fn expiry_notice(
+    state: tauri::State<'_, AppState>,
+    staff_id: String,
+) -> Result<Option<String>, String> {
+    Ok(expiry_notice_impl(&state, &staff_id).await)
+}
+
+pub async fn expiry_notice_impl(state: &AppState, staff_id: &str) -> Option<String> {
+    let db = state.db.as_ref()?;
+    let read = match db.lock().await {
+        Err(lost) => Err(anyhow::Error::from(lost)),
+        Ok(db) => cairn_node::vault_admin::unconfirmed_expires_at(&db, staff_id)
+            .await
+            .map_err(|e| db.explain(e)),
+    };
+    match read {
+        Ok(at) => crate::signer::expiry_notice(at.as_deref(), &chrono::Local::now()),
+        Err(e) => {
+            eprintln!("the unconfirmed-key expiry could not be read: {e:#}");
+            None
+        }
+    }
+}
+
 /// What the terminal lock screen is told (the words are `signer.js`'s contract).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]

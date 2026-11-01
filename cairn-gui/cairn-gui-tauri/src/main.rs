@@ -127,6 +127,7 @@ fn main() -> anyhow::Result<()> {
             commands::med_list,
             commands::lock_state,
             commands::vault_hint,
+            commands::expiry_notice,
             commands::terminal_unlock,
             commands::forget_held_key,
             commands::sign_off,

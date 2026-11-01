@@ -40,3 +40,13 @@ fn bootstrap_superuser_refuses_a_remote_database() {
         "CAIRN_VAULT_PASSPHRASE",
     );
 }
+
+/// No secret here, but the same posture as its siblings: a site's policy is set at the node's
+/// own console, never across the network.
+#[test]
+fn set_unconfirmed_expiry_refuses_a_remote_database() {
+    refuses(
+        &["vault-set-unconfirmed-expiry", "--days", "30"],
+        "CAIRN_VAULT_PASSPHRASE",
+    );
+}

@@ -58,6 +58,21 @@ pub async fn replaced_notice(
     }))
 }
 
+/// When `staff_id`'s signing stops because their key is still unconfirmed under the site's
+/// optional expiry (§5.5), as RFC 3339 UTC — or `None` when it never will (no limit set, the key
+/// is confirmed, or no such member). The window asks once after a signed act, to warn days ahead.
+pub async fn unconfirmed_expires_at(db: &Client, staff_id: &str) -> anyhow::Result<Option<String>> {
+    let row = db
+        .query_one(
+            "SELECT to_char(cairn_vault_unconfirmed_expires_at($1) AT TIME ZONE 'UTC', \
+                            'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
+            &[&staff_id],
+        )
+        .await
+        .context("reading when an unconfirmed key stops signing")?;
+    Ok(row.get(0))
+}
+
 /// Sign `addr` as `signer`: the approval token every approver-gated door takes.
 fn approve(addr: &[u8], signer: &dyn EventSigner) -> anyhow::Result<Vec<u8>> {
     let kid = hex::encode(signer.verifying_key().to_bytes());

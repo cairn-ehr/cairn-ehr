@@ -205,6 +205,10 @@ pub enum Release {
     Replaced {
         retry_after: Option<Duration>,
     },
+    /// The key is still unconfirmed past the site's optional limit (§5.5, off by default; db/061
+    /// `cairn_vault_key_expires_at`). Nothing was checked or counted; a superuser's confirmation
+    /// lets it sign again.
+    Expired,
     /// The connection has more power than a window may have (#898), so the vault was never
     /// asked and the passphrase never sent. `why` is the first reason, for the operator.
     OverPowered {
@@ -235,6 +239,7 @@ impl std::fmt::Debug for Release {
             Release::Unknown => f.write_str("Unknown"),
             Release::RefusedPurpose => f.write_str("RefusedPurpose"),
             Release::NotCurrent => f.write_str("NotCurrent"),
+            Release::Expired => f.write_str("Expired"),
             Release::OverPowered { why } => {
                 f.debug_struct("OverPowered").field("why", why).finish()
             }
@@ -314,6 +319,7 @@ fn release_from_row(
         "unknown" => Ok(Release::Unknown),
         "refused-purpose" => Ok(Release::RefusedPurpose),
         "not-current" => Ok(Release::NotCurrent),
+        "expired" => Ok(Release::Expired),
         other => bail!("vault returned an unknown outcome {other:?}"),
     }
 }
@@ -456,6 +462,11 @@ mod tests {
             release_from_row("replaced", None, None, Some(2000)).unwrap(),
             Release::Replaced { retry_after: Some(d) } if d == Duration::from_secs(2)
         ));
+        assert!(matches!(
+            release_from_row("expired", None, None, None).unwrap(),
+            Release::Expired
+        ));
+        assert_eq!(format!("{:?}", Release::Expired), "Expired");
         assert!(release_from_row("bogus", None, None, None).is_err());
     }
 

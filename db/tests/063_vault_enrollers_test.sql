@@ -84,17 +84,23 @@ BEGIN
         'cairn_vault_is_enroller(text)',
         'cairn_vault_unconfirmed()',
         'cairn_vault_enrollers()',
-        'cairn_vault_replaced_notice(text)'
+        'cairn_vault_replaced_notice(text)',
+        'cairn_vault_unconfirmed_expires_at(text)'
     ] LOOP
         ASSERT has_function_privilege('cairn_agent', f, 'EXECUTE'), format('the window must reach %s', f);
     END LOOP;
     FOREACH f IN ARRAY ARRAY[
         'cairn_vault_bootstrap_rekey(text, text, text, bytea, text, text, text)',
-        'cairn_vault_approver_ok(text, bytea, bytea, boolean)'
+        'cairn_vault_approver_ok(text, bytea, bytea, boolean)',
+        'cairn_vault_set_unconfirmed_expiry(integer)',
+        'cairn_vault_key_expires_at(text)'
     ] LOOP
         ASSERT NOT has_function_privilege('cairn_agent', f, 'EXECUTE'), format('%s is the owner''s alone', f);
         ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), format('%s is revoked from PUBLIC', f);
     END LOOP;
+    -- The site's policy (§5.5) is custody state, the owner's alone, like vault_terminal.
+    ASSERT NOT has_table_privilege('cairn_agent', 'vault_policy', 'SELECT')
+       AND NOT has_table_privilege('cairn_agent', 'vault_policy', 'UPDATE'), 'vault_policy is the owner''s';
 END $$;
 
 ROLLBACK;

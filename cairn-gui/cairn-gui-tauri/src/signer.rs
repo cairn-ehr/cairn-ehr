@@ -137,6 +137,9 @@ pub enum KeyRefusal {
     NotForClinicalActs,
     /// This member's key was revoked or replaced: it can sign nothing here.
     NotCurrent,
+    /// This member's key is still unconfirmed past the site's optional limit (§5.5): a
+    /// superuser's confirmation lets it sign again. The strip warned a week ahead.
+    Expired,
     /// The window's connection has more power than a window may have (#898), so no passphrase
     /// was sent. The fix is the operator's: give the window its own login.
     OverPowered,
@@ -191,6 +194,11 @@ impl KeyRefusal {
                  superuser to enrol you again."
                     .into()
             }
+            KeyRefusal::Expired => {
+                "No superuser has confirmed your signing key, and this site stops unconfirmed keys \
+                 signing after a set time. Nothing was signed. Ask a superuser to confirm your key."
+                    .into()
+            }
             KeyRefusal::OverPowered => {
                 "This workstation is connected to the node with more access than a window may \
                  have, so it cannot sign. Nothing was signed. Ask your IT support to run \
@@ -223,6 +231,7 @@ pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), Key
         Release::Unknown => Err(KeyRefusal::Unknown),
         Release::RefusedPurpose => Err(KeyRefusal::NotForClinicalActs),
         Release::NotCurrent => Err(KeyRefusal::NotCurrent),
+        Release::Expired => Err(KeyRefusal::Expired),
         Release::OverPowered { .. } => Err(KeyRefusal::OverPowered),
     }
 }
@@ -279,6 +288,33 @@ where
             .to_string(),
         Err(_) => utc.to_string(),
     }
+}
+
+/// How far ahead the strip warns that an unconfirmed key will stop signing (§5.5: "days ahead,
+/// never a surprise at the moment of signing"). A week covers a roster's days off.
+const EXPIRY_WARNING: chrono::TimeDelta = chrono::TimeDelta::days(7);
+
+/// Pure: the strip's warning after a signed act, given when the signer's unconfirmed key stops
+/// signing (`cairn_node::vault_admin::unconfirmed_expires_at`, RFC 3339 UTC): a sentence when
+/// that is within [`EXPIRY_WARNING`] of `now`, else `None` (no limit, a confirmed key, or later).
+/// An instant that does not parse is still warned about, quoted as recorded (principle 4).
+pub(crate) fn expiry_notice<Tz: chrono::TimeZone>(
+    expires_at: Option<&str>,
+    now: &chrono::DateTime<Tz>,
+) -> Option<String>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let at = expires_at?;
+    let near = chrono::DateTime::parse_from_rfc3339(at)
+        .map(|t| t.signed_duration_since(now) <= EXPIRY_WARNING)
+        .unwrap_or(true);
+    near.then(|| {
+        format!(
+            "Not yet confirmed by a superuser — signing stops on {}.",
+            local_at(at, now)
+        )
+    })
 }
 
 /// clap's parser for `--key-hold-seconds`: whole seconds, at most `IDLE_TIMEOUT`. Refused at
