@@ -6,6 +6,7 @@
 //! password makes the window's password pointless, so we refuse to provision on one), plus the two
 //! DB functions the `provision-window-role` verb orchestrates. `main.rs` only sequences them.
 
+use crate::conn_posture::{over_powered, read_posture_of};
 use crate::db::is_safe_role_ident;
 use crate::db_diagnosis::legible_db_error;
 use tokio_postgres::Client;
@@ -55,7 +56,33 @@ pub fn hba_verdict(rules: &[HbaRule]) -> Result<Vec<String>, String> {
     }
 }
 
-/// Read the server's parsed `pg_hba.conf`. Only a superuser may; a 42501 becomes an instruction.
+/// Pure: the on-disk `pg_hba.conf` is newer than what the server loaded, so the rules we read
+/// are not the rules in force (an operator who removed `trust` but did not reload would pass).
+pub fn hba_freshness(file_newer_than_load: bool) -> Result<(), String> {
+    if file_newer_than_load {
+        Err("pg_hba.conf changed since the server last read it. Reload the server, and run this again.".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Has `pg_hba.conf` been modified since the server last (re)loaded its configuration?
+pub async fn hba_file_is_stale(db: &Client) -> anyhow::Result<bool> {
+    let row = db
+        .query_one(
+            "SELECT (pg_stat_file(current_setting('hba_file'))).modification > pg_conf_load_time()",
+            &[],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("checking pg_hba.conf freshness: {}", legible_db_error(&e)))?;
+    Ok(row.get::<_, Option<bool>>(0).unwrap_or(true))
+}
+
+/// Read the server's parsed `pg_hba.conf`.
+///
+/// `pg_hba_file_rules` shows the FILE as it is now, not the rules in force: pair this with
+/// [`hba_file_is_stale`]. Lines pulled in by an `include` directive are not judged here.
+/// Only a superuser may; a 42501 becomes an instruction.
 pub async fn read_hba_rules(db: &Client) -> anyhow::Result<Vec<HbaRule>> {
     let rows = db
         .query(
@@ -96,6 +123,58 @@ pub async fn role_exists(db: &Client, role: &str) -> anyhow::Result<bool> {
         .get(0))
 }
 
+/// The catalog facts that say whether an existing role is exactly a window login.
+#[derive(Debug, Clone, Copy)]
+pub struct RoleFacts {
+    pub can_login: bool,
+    /// superuser, createrole, createdb, replication or bypassrls.
+    pub has_attribute_power: bool,
+    /// a direct membership in any role other than `cairn_window`.
+    pub other_membership: bool,
+}
+
+/// Pure: why an existing role may not be taken over as the window login, or `None` if it may.
+pub fn existing_role_refusal(f: &RoleFacts, posture_why: Option<&str>) -> Option<String> {
+    let why = if !f.can_login {
+        "it cannot log in"
+    } else if f.has_attribute_power {
+        "it has superuser, createrole, createdb, replication or bypassrls"
+    } else if f.other_membership {
+        "it is a member of roles other than cairn_window"
+    } else if let Some(w) = posture_why {
+        return Some(refusal_text(w.trim_end_matches('.')));
+    } else {
+        return None;
+    };
+    Some(refusal_text(why))
+}
+
+fn refusal_text(why: &str) -> String {
+    format!(
+        "that role already exists and is not a window login ({why}); nothing was changed. \
+         Choose a new name, or the existing window login."
+    )
+}
+
+async fn read_role_facts(db: &Client, role: &str) -> anyhow::Result<RoleFacts> {
+    let r = db
+        .query_one(
+            "SELECT r.rolcanlogin, \
+                    (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls), \
+                    EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid \
+                             WHERE m.member = r.oid AND g.rolname <> 'cairn_window') \
+               FROM pg_roles r WHERE r.rolname = $1",
+            &[&role],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("reading role {role}: {}", legible_db_error(&e)))?;
+    Ok(RoleFacts {
+        can_login: r.get(0),
+        has_attribute_power: r.get(1),
+        other_membership: r.get(2),
+    })
+}
+
 /// Create (or refresh) the window's LOGIN role, member of `cairn_window`.
 ///
 /// A new role REQUIRES a password. With a password the role gets a SCRAM-SHA-256 verifier, so the
@@ -115,6 +194,15 @@ pub async fn provision_window_login(
         );
     }
     let exists = role_exists(db, role).await?;
+    if exists {
+        // Refuse BEFORE any DDL: re-passwording or re-granting an arbitrary existing login would
+        // lock out whoever uses it, or hand cairn_window to a whole group.
+        let facts = read_role_facts(db, role).await?;
+        let posture = read_posture_of(db, role).await?;
+        if let Some(why) = existing_role_refusal(&facts, over_powered(&posture)) {
+            anyhow::bail!(why);
+        }
+    }
     if !exists && password.is_none() {
         anyhow::bail!("role {role} does not exist yet, so it needs a password; none was given");
     }

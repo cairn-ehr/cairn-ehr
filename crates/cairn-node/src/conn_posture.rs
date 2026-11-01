@@ -108,6 +108,18 @@ pub fn over_powered(f: &PostureFacts) -> Option<&'static str> {
 /// and no `search_path` can point a check at a decoy. (The login is always a member of itself, so
 /// the set is never empty; were it empty, `coalesce(…, true)` would refuse rather than pass.)
 pub async fn read_posture(db: &Client) -> anyhow::Result<PostureFacts> {
+    let me: String = db
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .context("reading this connection's login")?
+        .get(0);
+    read_posture_of(db, &me).await
+}
+
+/// The same [`PostureFacts`] for a NAMED role, read from any connection that can see the catalogs.
+/// `provision-window-role` uses it to refuse reusing an existing role that is more than a window
+/// login. [`read_posture`] calls this, so the two share one query and cannot drift.
+pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureFacts> {
     let row = db
         .query_one(
             "SELECT coalesce(bool_or(r.rolsuper), true), \
@@ -120,8 +132,8 @@ pub async fn read_posture(db: &Client) -> anyhow::Result<PostureFacts> {
                         has_function_privilege(r.oid, 'public.apply_remote_event(bytea, bytea, bytea, bytea)', 'EXECUTE') \
                         OR has_function_privilege(r.oid, 'public.submit_node_event(bytea)', 'EXECUTE') \
                         OR has_function_privilege(r.oid, 'public.cairn_vault_unseal(bytea, text)', 'EXECUTE')), true) \
-               FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'MEMBER')",
-            &[],
+               FROM pg_roles r WHERE pg_has_role($1::text::name, r.oid, 'MEMBER')",
+            &[&role],
         )
         .await
         .context("reading what this connection's login may do")?;

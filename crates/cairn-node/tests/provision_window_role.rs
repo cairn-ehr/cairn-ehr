@@ -86,3 +86,101 @@ async fn the_verb_refuses_a_trusting_cluster_and_changes_nothing() {
         .await
         .unwrap());
 }
+
+#[tokio::test]
+async fn an_existing_role_that_is_not_a_window_login_is_refused_and_untouched() {
+    let Some(cs) = common::cs() else {
+        eprintln!("skipped: no CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
+    let db = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
+    let pw = format!("{}-{}", "a long enough", "test phrase");
+    let me: String = db
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let before: Option<String> = db
+        .query_one(
+            "SELECT rolpassword FROM pg_authid WHERE rolname = current_user",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    // The owner's own login (a superuser).
+    assert!(provision_window_login(&db, &me, Some(&pw)).await.is_err());
+    let after: Option<String> = db
+        .query_one(
+            "SELECT rolpassword FROM pg_authid WHERE rolname = current_user",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(before, after);
+
+    // NOLOGIN role, and a login that is a member of cairn_node.
+    let nologin = "cairn_wtest_nologin";
+    let node_login = "cairn_wtest_nodelogin";
+    for r in [nologin, node_login] {
+        db.batch_execute(&format!("DROP ROLE IF EXISTS {r}"))
+            .await
+            .unwrap();
+    }
+    db.batch_execute(&format!(
+        "CREATE ROLE {nologin} NOLOGIN; CREATE ROLE {node_login} LOGIN; GRANT cairn_node TO {node_login}"
+    ))
+    .await
+    .unwrap();
+    assert!(provision_window_login(&db, nologin, Some(&pw))
+        .await
+        .is_err());
+    assert!(provision_window_login(&db, node_login, Some(&pw))
+        .await
+        .is_err());
+    for r in [nologin, node_login] {
+        db.batch_execute(&format!("DROP ROLE {r}")).await.unwrap();
+    }
+
+    // The upgrade path: an existing window login is still refreshed.
+    drop_role(&db).await;
+    provision_window_login(&db, ROLE, Some(&pw)).await.unwrap();
+    provision_window_login(&db, ROLE, Some(&pw)).await.unwrap();
+    drop_role(&db).await;
+}
+
+#[tokio::test]
+async fn the_hba_freshness_query_runs() {
+    let Some(cs) = common::cs() else {
+        eprintln!("skipped: no CAIRN_TEST_PG");
+        return;
+    };
+    let db = cairn_node::db::connect(&cs).await.unwrap();
+    cairn_node::window_access::hba_file_is_stale(&db)
+        .await
+        .unwrap();
+}
+
+/// The verb must refuse before it mutates: each step appears in this order in its match arm.
+#[test]
+fn the_verb_refuses_before_it_mutates_in_source_order() {
+    let src = include_str!("../src/main.rs");
+    let arm = &src[src.find("Cmd::ProvisionWindowRole { role } =>").unwrap()..];
+    let arm = &arm[..arm.find("Cmd::Status {").unwrap()];
+    let mut at = 0;
+    for needle in [
+        "require_local",
+        "db::connect(",
+        "read_hba_rules",
+        "hba_verdict",
+        "connect_and_load_schema",
+        "provision_window_login",
+    ] {
+        let i = arm[at..]
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} missing or out of order"));
+        at += i + needle.len();
+    }
+}

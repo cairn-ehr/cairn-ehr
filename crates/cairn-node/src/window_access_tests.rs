@@ -61,3 +61,49 @@ fn peer_without_map_warns_and_with_map_does_not() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn a_stale_hba_file_is_refused() {
+    assert!(super::hba_freshness(true)
+        .unwrap_err()
+        .contains("Reload the server"));
+    assert!(super::hba_freshness(false).is_ok());
+}
+
+#[test]
+fn existing_role_refusals() {
+    use super::{existing_role_refusal as r, RoleFacts};
+    let ok = RoleFacts {
+        can_login: true,
+        has_attribute_power: false,
+        other_membership: false,
+    };
+    assert!(r(&ok, None).is_none());
+    assert!(r(
+        &RoleFacts {
+            can_login: false,
+            ..ok
+        },
+        None
+    )
+    .is_some());
+    assert!(r(
+        &RoleFacts {
+            has_attribute_power: true,
+            ..ok
+        },
+        None
+    )
+    .is_some());
+    assert!(r(
+        &RoleFacts {
+            other_membership: true,
+            ..ok
+        },
+        None
+    )
+    .is_some());
+    assert!(r(&ok, Some("the login is a database superuser."))
+        .unwrap()
+        .contains("Choose a new name"));
+}

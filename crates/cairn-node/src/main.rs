@@ -2852,6 +2852,8 @@ async fn run() -> anyhow::Result<()> {
             cairn_node::conn_posture::require_local(&cli.conn)?;
             let owner = cairn_node::db::connect(&cli.conn).await?;
             let rules = wa::read_hba_rules(&owner).await?;
+            wa::hba_freshness(wa::hba_file_is_stale(&owner).await?)
+                .map_err(|e| anyhow::anyhow!(e))?;
             for w in wa::hba_verdict(&rules).map_err(|e| anyhow::anyhow!(e))? {
                 eprintln!("warning: {w}");
             }
@@ -2862,9 +2864,17 @@ async fn run() -> anyhow::Result<()> {
                 .filter(|p| !p.is_empty());
             let password = match given {
                 Some(p) => Some(Zeroizing::new(p)),
-                None if !wa::role_exists(&db, &role).await? => Some(Zeroizing::new(
-                    rpassword::prompt_password(format!("password for {role}: "))?,
-                )),
+                None if !wa::role_exists(&db, &role).await? => {
+                    // Twice: a typo here makes a login nobody can use, and a re-run would not ask.
+                    let first = Zeroizing::new(rpassword::prompt_password(format!(
+                        "password for {role}: "
+                    ))?);
+                    let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
+                    if first != again {
+                        anyhow::bail!("the two entries differ; nothing was changed");
+                    }
+                    Some(first)
+                }
                 None => None,
             };
             if password.as_ref().is_some_and(|p| p.trim().is_empty()) {
