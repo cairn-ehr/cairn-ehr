@@ -17,36 +17,36 @@
 > **Its sign-in / authorship part:** design
 > [`superpowers/specs/2026-10-31-gui-sign-in-and-authorship-design.md`](superpowers/specs/2026-10-31-gui-sign-in-and-authorship-design.md)
 > (builds ADR-0008 §5.11; slices 1 sign-in → 2 re-key (#247, #664 first) → 3 drafts + `Asserted` grade + its display →
-> 4 emergency key → 5 autonomous terminal nodes that sync credentials with specified nodes). **Slice 1 is MERGED (2026-10-31) in PR
-> [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)** (plan `superpowers/plans/2026-10-31-gui-sign-in-slice-1.md`,
-> [ADR-0083](spec/decisions/0083-the-human-key-vault.md), spec **v0.85**, `db/061`, `SCHEMA_GENERATION` **61**,
-> `cairn_pgx` **0.4.0**): a key vault in the node's database; the window signs EVERY act with staff ID + passphrase
-> (`--key-hold-seconds`, default 0 = shared terminal); a signer strip, a terminal lock, "Enrol staff"; the
-> `cairn-node vault-bootstrap-superuser` / `vault-set-terminal-passphrase` console verbs; one `EventSigner` seam for
-> every human signature (slice 5's in-database signer plugs in there). `--attester-key` is gone from the window (the
-`cairn-node` console verbs still take it). **Review round 2026-11-01** (the PR's multi-agent review): one
-passphrase rule at sign-in and every enrol door (spaces alone are none), separate env variables for the superuser's
-and the terminal's passphrase, a failed enrolment with no server answer says "may have been enrolled", a revoked
-member's key answers `not-current`, a damaged terminal PHC is a fault, db/061 refuses to load if the
-`cairn_vault_unseal` REVOKE did not take, and the missing floor tests (the row lock really blocks, and others).
+> 4 emergency key → 5 autonomous terminal nodes that sync credentials with specified nodes). **Slice 1 MERGED
+> 2026-10-31** (PR [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897), [ADR-0083](spec/decisions/0083-the-human-key-vault.md),
+> `db/061`, `cairn_pgx` **0.4.0**): the key vault, per-act signing (`--key-hold-seconds`, 0 = shared terminal), the
+> signer strip, the terminal lock, "Enrol staff", the `vault-*` console verbs, one `EventSigner` seam.
+>
+> **#898 + #899 BUILT in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
+> `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
+> [ADR-0084](spec/decisions/0084-the-window-never-holds-the-owners-keys.md), spec **v0.86**, `db/062`,
+> `SCHEMA_GENERATION` **62**). The window runs on its own login (`cairn_window`: inherits `cairn_agent`, never
+> `cairn_node`), never loads the schema (a stamp mismatch refuses the launch), refuses a database on another machine
+> (no TLS exists, so no override), and `release_for_act` refuses — before any passphrase is sent — over a connection
+> that is over-powered through ANY role it is a member of. **`cairn-node provision-window-role --role <name>`** is the
+> one owner step for install AND upgrade; it refuses a cluster with any `trust` rule or an unreloaded `pg_hba.conf`.
+> **⚠️ RUNBOOK §0 changed:** the measurement cluster must use `scram-sha-256` (provisioning refuses `trust`), and every
+> window launch uses `$WINDOW_CONN`. Tests are unaffected (they log in as a probe role, never through the verb).
 >
 > > [!WARNING]
-> > **NOT YET GUARANTEED — gates on any pilot, and the reason there is no real clinical use before slice 2:** the
-> > vault's "no offline cracking / the back-off cannot be bypassed" holds only for a connection that is ONLY
-> > `cairn_agent`. The window connects as the schema OWNER (**#898**), and its connection is `NoTls`, so a terminal on
-> > another machine sends the passphrase and receives the seed in clear (**#899**). Also open from the slice: **#900**
-> > (a superuser key could sign a clinical event — strict-door refusal), **#901** (bound the Argon2 parameters a stored
-> > blob may carry), **#902** (`enroll-human --handle` keeps case, the vault lowercases); from the review round
-> > **#903** (another person's wrong guesses can hold a named member at the 300 s cap: no decay, no reset — needs a
-> > maintainer decision), **#904** (an unreadable sealed blob reads as "wrong passphrase" and is counted; needs a
-> > `cairn_pgx` 0.5.0), **#905** (CI never runs `cairn-gui-tauri`'s DB-gated enrol tests: run them locally with
-> > `CAIRN_TEST_PG`), **#906** (type hardening), **#907** (minor test gaps), **#908** (a `cairn_pgx`
-> > reinstall re-grants `cairn_vault_unseal` to PUBLIC unseen: the replay is skipped). Human-key `&SigningKey`
-> > parameters that slice 5 must still move onto the seam: `identify.rs:83` (`LinkParams`), `apply_proposal.rs:94`.
-> > **Local `cairn_pgx` reinstall on this Mac:** the 2026-10-19 Xcode `ld` emits a dylib Postgres will not load — patch
-> > it with `scripts/macos-patch-pgx-dylib.py` (CI is unaffected).
-> > **Known UX edge (key-hold terminals only):** the strip keeps the last staff ID, so a next person who types only a
-> > passphrase over it costs the PREVIOUS person a counted try (never a wrong author) — revisit with slice 3's "who's writing".
+> > **NOT YET GUARANTEED — gates on any pilot:** until **#909** (pinned, installer-generated TLS) or slice 5 (every
+> > terminal its own node) lands, a facility has ONE usable terminal: the one on the database's machine. **#912**: no
+> > long-running process re-adjudicates deferred events (the window's launch used to, incidentally). **#910**: a
+> > Cairn-installed Postgres (brainstorm first). **Slice 5's design must answer** (design §4): synced sealed blobs on a
+> > stolen terminal disk can be guessed offline, and the attempt counter is per node. Open from slice 1: **#900**
+> > (a superuser key could sign a clinical event) · **#901** (bound stored Argon2 parameters) · **#902** (handle case) ·
+> > **#903** (another's guesses can hold a member at the 300 s cap — a decision) · **#904** (an unreadable blob counts
+> > as a wrong guess; `cairn_pgx` 0.5.0) · **#905** (CI never runs `cairn-gui-tauri`'s DB-gated tests — run them
+> > locally) · **#906** · **#907** · **#908** (a `cairn_pgx` reinstall re-grants `cairn_vault_unseal` to PUBLIC unseen).
+> > Human-key `&SigningKey` parameters slice 5 must move onto the seam: `identify.rs:83`, `apply_proposal.rs:94`.
+> > **Local `cairn_pgx` reinstall on this Mac:** patch the dylib with `scripts/macos-patch-pgx-dylib.py` (CI unaffected).
+> > **Key-hold terminals:** the strip keeps the last staff ID, so a next person typing only a passphrase costs the
+> > PREVIOUS person a counted try (never a wrong author) — revisit with slice 3's "who's writing".
 
 > [!NOTE]
 > **PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895) MERGED 2026-10-31** (closes #893): a command the window's
@@ -75,8 +75,9 @@ member's key answers `not-current`, a damaged terminal PHC is a fault, db/061 re
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **#898 + #899 (they gate any multi-machine terminal; design `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`), then
->    brainstorm slice 2 (re-key; #247 and #664 first).** Owed by a human: **RUNBOOK §16** (sign ≤ 3 s, next-nurse
+> 1. **Review / merge PR #911 (#898 + #899), then brainstorm slice 2 (re-key; #247 and #664 first).** The
+>    maintainer picks the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
+>    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK §16** (sign ≤ 3 s, next-nurse
 >    switch, VoiceOver/keyboard on the strip, the terminal lock). Still owed from
 >    PR #895 (merged): run #838's RUNBOOK §15 (now incl. #861's current-line check) and
 >    §14 checks (c) (the cause on screen; a refused reopen offers no retry; the front door's top line clears) and
@@ -216,12 +217,12 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-31/11-01 (GUI milestone: sign-in design, plan, slice 1 built, PR [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)) · 2026-10-31 (#893, PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895)) · 2026-10-30 (#875 option 2, PR [#892](https://github.com/cairn-ehr/cairn-ehr/pull/892)) · 2026-10-30 (#810, PR [#890](https://github.com/cairn-ehr/cairn-ehr/pull/890)) · 2026-10-30 (#882 + #885, PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887)) · 2026-10-29 (#878, PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886)) · 2026-10-29 (#880 + #881, PR [#883](https://github.com/cairn-ehr/cairn-ehr/pull/883)) · 2026-10-29 (#876, PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)) · 2026-10-28 (#875 option 1, PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)) · 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-11-01 (#898 + #899, PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)) · 2026-10-31/11-01 (GUI milestone: sign-in design, plan, slice 1 built, PR [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)) · 2026-10-31 (#893, PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895)) · 2026-10-30 (#875 option 2, PR [#892](https://github.com/cairn-ehr/cairn-ehr/pull/892)) · 2026-10-30 (#810, PR [#890](https://github.com/cairn-ehr/cairn-ehr/pull/890)) · 2026-10-30 (#882 + #885, PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887)) · 2026-10-29 (#878, PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886)) · 2026-10-29 (#880 + #881, PR [#883](https://github.com/cairn-ehr/cairn-ehr/pull/883)) · 2026-10-29 (#876, PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)) · 2026-10-28 (#875 option 1, PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)) · 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
-ROADMAP. · **Spec:** **v0.84** (newest ADR-0082; #857 and #861 needed no ADR — a projection-side fix, no wire change;
+ROADMAP. · **Spec:** **v0.86** (newest ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
-wording only) · **`SCHEMA_GENERATION`:** **60** (`db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
+wording only) · **`SCHEMA_GENERATION`:** **62** (`db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a
@@ -249,6 +250,24 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-11-01 — #898 + #899 (PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)): brainstorm → design → plan → SDD
+
+Found #897 merged and HANDOVER saying "review it" (stale again). Brainstormed with the maintainer (no assumption
+about where a machine sits or who installs it; long term every terminal is a node; no override for either refusal);
+7 tasks, each reviewed; filed #909, #910, #912.
+- **⇒ An issue's suggested fix is a claim** (again): `SET ROLE` after the schema load closes nothing — `RESET ROLE`
+  undoes it and the owner's password stays in a copyable string. The hole is the credential HANDED OUT.
+- **⇒ `has_*_privilege` and `pg_has_role(…, 'USAGE')` see only INHERITED power.** A `WITH INHERIT FALSE` member can
+  still `SET ROLE` into the owner or `cairn_node`. Judge every fact over every role the login is a MEMBER of
+  (the plan's own `'USAGE'` was the defect; the task review caught it).
+- **⇒ A permission walk that runs a read on EMPTY data proves nothing** — search before anything is registered
+  returns after its first query. Drive each call to success on a fixture that reaches its deep path.
+- **⇒ An owner verb that takes a role name must refuse an existing role that is not exactly what it makes** — the
+  first cut would have reset a superuser's password. **`pg_hba_file_rules` is the FILE**, not the loaded rules
+  (compare `pg_stat_file(hba_file).modification` with `pg_conf_load_time()`).
+- **⇒ Removing a call removes its side effects:** the window's `connect_and_load_schema` was, incidentally, the only
+  routine runner of the deferred-event re-adjudication (#912). Grep what a function does before dropping its caller.
 
 ### 2026-10-31 → 11-01 — GUI sign-in slice 1 (PR [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)): brainstorm → design → plan → SDD
 
@@ -310,81 +329,33 @@ Condensed 2026-11-01; ROADMAP has each, durable-rules carries each slice's rules
   nothing else can park the victim; two humans with the same determinants are ONE actor (#152); an ADR consequence a
   later fix closes gets a dated erratum (ADR-0082 E1).
 
-### 2026-10-26 — #861 (PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)): a current line shows its stopped members' reasons
+### 2026-10-18 → 10-26 — the W and its follow-ups (PRs #813–#868)
 
-Built to the maintainer's 2026-10-24 decision. TDD, two reviews (no code defect; filed #869; the second renamed a
-test the PR had made false, pinned holds.js's reveal gate, made the status split the pure `reasons_for_status` with
-the shown-stop-gave-none case tested, and filed the decisions #870 and #871).
-- **⇒ A new meaning gets a new field, not a status-dependent reading of an old one.** Filling `cessation_reason` on a
-  current line would have made every renderer that does not know the change say "Stopped" of a current drug; a field
-  of its own fails safe (a renderer that ignores it shows nothing, as before).
-- **⇒ "The shown stop" is the thread's NEWEST RECORDED stop** (db/031 keeps one row per thread), not its
-  latest-effective one — my first test assumed the latter. Read the projection before writing an order assertion.
-- **⇒ When a fix makes a caller-chosen claim true everywhere, delete the choice** (both `LIST_*`
-  constants and `already_stopped_sentence`'s `list` parameter), then grep docs and comments for the old claim (the review found
-  three in durable-rules, four in comments, one in RUNBOOK).
-
-### 2026-10-24 — #863 + #864 (PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)): a shred hands its rows on; a list is one snapshot
-
-TDD, each pin mutation-checked, two reviews (filed **#866**, **#867**).
-- **⇒ "Never over-erase" is half a rule**: leaving a one-winner key EMPTY is under-statement, so any scrub of a
-  winner-takes-all projection owes a re-fold of what remains. **Never SKIP a locked sibling** on the theory its holder
-  writes it (a rollback writes nothing) — serialize and wait; a door cycle is a transient 40P01. **Compare ids
-  canonically** (the floor admits any uuid spelling).
-- **⇒ Raise isolation only for reads** (a door write at REPEATABLE READ reopens the custody/shred race); the snapshot
-  lives at the callers that own a bare connection.
-- **⇒ "Its clear view is gone" is true only of a SEALED event** — the sync door shreds a peer's plaintext event too,
-  so the re-fold excludes its own target by id (an earlier-shredded sibling: **#866**). Never `USING ERRCODE` in db/
-  (`floor_refusals_carry_no_errcode.rs`); whether a failed sibling should block the erasure: **#867**.
-- **⇒ A source-guard slice at `at - N` bytes panics on an em dash** (`floor_char_boundary`). **zsh does not
-  word-split `$T`** — use an array, `"${T[@]}"` (bit again 2026-10-28 with `--manifest-path`).
-
-### 2026-10-23 → 10-24 — #835 + #854 (PR #856), #857 + #859 (PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860))
-
-Both TDD with independent reviews (#860's filed #861, #863, #864).
-- **⇒ A new projection beside a one-winner one is the cheap honest fix**: a SECOND apply fn for the same event type,
-  a generation bump so the loader's heal backfills, the shred delete, BOTH registry counts; fixture truncate lists
-  (three `tests/common` files, two cairn-sync lists) and `combined_read.rs`'s golden strip reach it too.
-- **⇒ Fixing what a list SHOWS changes what every sentence ABOUT it may claim** — grep the sentences, not only the
-  renderers; and check a sentence about what the list keeps against the projection (it overwrites).
-- **⇒ A sentence about a FUTURE event must check the event will still act** ("Release at 16:00" on a hold whose
-  `until` is 14:00 ends nothing; 7c requires `released_at < until_at`). A release before a pending start is a cancel.
-- **⇒ Widen a set-returning read with a sibling predicate, not a new column** (`CREATE OR REPLACE` refuses a
-  return-type change; an older binary's replay then fails). A display-only read must not block a safety write.
-- **⇒ A rule shared by two surfaces is shared only if they act on the same unit** (the window stops a LINE, the CLI
-  a THREAD). An undated stop is effective NOW, so a "sibling keeps it current" test must backdate the stop.
-- **⇒ Env exports do not survive between tool calls**: a DB suite "ok" in 0.00 s was a self-skip.
-
-### 2026-10-22 → 10-23 — #846 (PR #847), #848 (PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)), #843 + #849 (PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853))
-
-- **⇒ A maintainer decision in an issue can still reverse an ADR sentence** — grep the ADR before building and write
-  the amending ADR (#843 → ADR-0082). **A floor `P0001` carries no scope**: reuse the floor's predicate as a Rust
-  pre-check (`cairn_medication_hold_ended`), never match message text. **`retry_when_nothing_written` returns `None`
-  whenever an outcome is unknown**, so "returned above" comments lie about that path.
-- **⇒ A surviving mutation can mean a second witness, not a dead predicate** (#848's `standing_patient`: a moved
-  thread's assert also seeds a point-0 dose row) — find the case, then pin it. **A new model field breaks its literals,
-  not its readers**: grep the readers of the SIBLING fields (the semantic tree was found that way, by the review).
-- **⇒ Walk a remedy or absence sentence through every state** ("record it again" beside a drug already listed; "No
-  medications recorded" beside the report; "on another chart" of a thread no chart lists). **Two statements are two
-  snapshots**: a truth the report depends on is re-checked inside the statement that says it.
-- **⇒ A flag written at arrival can only see what had arrived** (#846): where a contradiction can appear from either
-  side, read it at list time (a view), and check the plan reaches the base tables (`EXPLAIN`; it needed a
-  `medication_id` index).
-
-### 2026-10-18 → 10-22 — interrupted commits (PRs #813–#830), the W (PRs #831, #838), its follow-ups (PR #842)
-
-- **⇒ The logical clock is not a wall clock** (#803): a clinical "now" comes from the node's PHYSICAL clock. **A
-  fallback in the floor is a bypass of the rule the client follows** (ADR-0021). **A new enum value other code reads
-  as "on the list" is a silent filter** — put a new state BESIDE the enum. **An `IF NOT EXISTS` index never picks up an
-  edited predicate** (rename it).
-- **⇒ A real mouse finds what `element.click()` cannot** (#832). **Hiding a button hides what its refusal said**
-  (#841) — say it on the line. **Read the code before the issue's fix list.** `cargo doc -D warnings` catches what
-  clippy cannot.
-- **⇒ An outcome that MAY have written settles like a success**; only an ERROR answer proves a rollback; one
-  `commit_failure` marks every commit (#815). To learn a rolled-back id, have the kill switch SAY it (#820). A flag
-  carried by one async call dies with it — make it window state (#811). **An issue's survey is a claim** (#826); **a
-  printed line can be a parse contract** (#828). Not done (optional in #820): one renderer for the CLI's and the
-  window's interruption sentence; nothing reads Postgres notices (#585); #812 items 7–10 and #814.
+Condensed 2026-11-01; ROADMAP has each, durable-rules carries each slice's rules. PRs: interrupted commits #813–#830
+(#811, #814, #815, #820, #826, #828), the W #831 + #838 (#803, #832), #842 (#841), #847 (#846), #851 (#848), #853
+(#843 + #849, ADR-0082), #856 (#835 + #854), #860 (#857 + #859), #865 (#863 + #864; filed **#866**, **#867**), #868
+(#861; filed #869, **#870**, **#871**). Not done then: #812 items 7–10, #814; nothing reads Postgres notices (#585).
+- **⇒ A new meaning gets a new field, not a status-dependent reading of an old one**; a new state goes BESIDE an enum
+  other code reads as "on the list"; a new model field breaks its literals, not its readers — grep the SIBLING fields'
+  readers. **Widen a set-returning read with a sibling predicate**, not a new column (`CREATE OR REPLACE` refuses a
+  return-type change). A new projection beside a one-winner one: a second apply fn, a generation bump, the shred
+  delete, BOTH registry counts, the fixture truncate lists.
+- **⇒ Walk every remedy, absence or future-event sentence through every state it is shown in** ("Release at 16:00"
+  on a hold ending 14:00; "record it again" beside a listed drug); fixing what a list SHOWS changes what every
+  sentence ABOUT it may claim. When a fix makes a caller-chosen claim true everywhere, delete the choice.
+- **⇒ "Never over-erase" is half a rule** — a scrub of a winner-takes-all projection owes a re-fold; never SKIP a
+  locked sibling (serialize and wait); compare ids canonically; raise isolation only for reads. "Its clear view is
+  gone" is true only of a SEALED event. A flag written at arrival sees only what had arrived — read at list time.
+- **⇒ The logical clock is not a wall clock** (#803); a fallback in the floor bypasses the rule the client follows;
+  an `IF NOT EXISTS` index never picks up an edited predicate. **A floor `P0001` carries no scope** — reuse the
+  floor's predicate as a Rust pre-check; a maintainer decision in an issue can still reverse an ADR sentence.
+- **⇒ An outcome that MAY have written settles like a success**; only an ERROR answer proves a rollback; a flag
+  carried by one async call dies with it — make it window state. A real mouse finds what `element.click()` cannot;
+  hiding a button hides what its refusal said. A surviving mutation can mean a second witness, not a dead predicate.
+- **Mechanics:** read the projection before an order assertion ("the shown stop" is the NEWEST RECORDED); a
+  source-guard slice at `at - N` bytes panics on an em dash (`floor_char_boundary`); zsh does not word-split `$T`;
+  env exports do not survive between tool calls (a 0.00 s DB "ok" is a self-skip); `cargo doc -D warnings` catches
+  what clippy cannot.
 
 ### 2026-10-04 → 10-17 — R4–R7 (PRs #724, #733, #735, #749, #777, #788), cloud passes (PRs #770–#776, #779), #797 (PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805))
 
