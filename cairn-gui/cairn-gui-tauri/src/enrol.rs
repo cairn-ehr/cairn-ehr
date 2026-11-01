@@ -25,7 +25,7 @@
 //! (the success line names the new member, which the superuser just typed). A
 //! database error's text is never passed on (it goes to the operator's stderr), and neither
 //! passphrase is in any string, `Debug` output or log line this file produces.
-use crate::signer::{from_release, Credential, KeyRefusal};
+use crate::signer::{from_release_noting, Credential, KeyRefusal};
 use crate::state::AppState;
 use cairn_node::vault::{NewMember, Purpose, Release};
 use serde::Deserialize;
@@ -259,7 +259,8 @@ pub async fn release_enrol_key(
             return Err(KeyRefusal::OverPowered.sentence());
         }
         other => {
-            return Err(from_release(other)
+            return Err(from_release_noting(db, &credential.staff_id, other)
+                .await
                 .err()
                 .unwrap_or(KeyRefusal::Fault)
                 .sentence())

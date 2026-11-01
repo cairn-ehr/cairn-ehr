@@ -274,6 +274,41 @@ fn the_rekey_panel_is_labelled_and_clears_both_ways() {
     assert!(!REKEY_JS.contains("confirm("));
 }
 
+const RESEAL_JS: &str = include_str!("../src-ui/reseal.js");
+
+/// Slice 2, Task 7: "Change my passphrase" is labelled, and empties all three passphrases on
+/// both ways out of the call.
+#[test]
+fn the_change_passphrase_panel_is_labelled_and_clears_both_ways() {
+    assert!(INDEX_HTML.contains("<details id=\"change-passphrase\">"));
+    assert!(INDEX_HTML.contains("<script src=\"reseal.js\"></script>"));
+    for id in [
+        "reseal-staff-id",
+        "reseal-current",
+        "reseal-new",
+        "reseal-new-again",
+        "reseal-hint",
+    ] {
+        assert!(
+            INDEX_HTML.contains(&format!("<label for=\"{id}\"")),
+            "{id} needs a <label for>"
+        );
+    }
+    let body = js_fn(RESEAL_JS, "changePassphrase");
+    let after = &body[position(body, "catch (failure) {")..];
+    for clear in [
+        "el(\"reseal-current\").value = \"\";",
+        "el(\"reseal-new\").value = \"\";",
+        "el(\"reseal-new-again\").value = \"\";",
+    ] {
+        assert!(
+            after.contains(clear),
+            "{clear} missing after the catch: {body}"
+        );
+    }
+    assert!(!RESEAL_JS.contains("confirm("));
+}
+
 /// Lock empties the strip BEFORE it asks Rust, so a Lock whose call fails still leaves no typed
 /// credential for the next person's press to sign with (PR #897 review).
 #[test]

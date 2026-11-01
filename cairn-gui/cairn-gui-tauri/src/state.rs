@@ -31,7 +31,9 @@
 //! accessor is what made the timeout unreachable in the first review of this slice: the
 //! idle clock was reset by the window rather than by the clinician, and the key never
 //! re-locked at all. Hence the two accessors below — `key_status` reads, `signer_for_act` uses.
-use crate::signer::{decide, from_release, Credential, HeldDecision, KeyRefusal};
+use crate::signer::{
+    decide, from_release, from_release_noting, Credential, HeldDecision, KeyRefusal,
+};
 use cairn_node::vault::Purpose;
 use std::time::{Duration, Instant, SystemTime};
 use zeroize::Zeroizing;
@@ -351,14 +353,34 @@ impl AppState {
         };
         let released = match db.lock().await {
             Err(lost) => Err(anyhow::Error::from(lost)),
-            Ok(db) => cairn_node::vault::release_for_act(
-                &db,
-                &credential.staff_id,
-                &credential.passphrase,
-                Purpose::Clinical,
-            )
-            .await
-            .map_err(|e| db.explain(e)),
+            Ok(db) => {
+                match cairn_node::vault::release_for_act(
+                    &db,
+                    &credential.staff_id,
+                    &credential.passphrase,
+                    Purpose::Clinical,
+                )
+                .await
+                {
+                    // A replaced answer is turned into its sentence here, while the connection
+                    // is in hand (`from_release_noting` looks the notice up once).
+                    Ok(cairn_node::vault::Release::Replaced { retry_after }) => {
+                        return Err(
+                            match from_release_noting(
+                                &db,
+                                &credential.staff_id,
+                                cairn_node::vault::Release::Replaced { retry_after },
+                            )
+                            .await
+                            {
+                                Err(refusal) => refusal,
+                                Ok(_) => KeyRefusal::Fault,
+                            },
+                        );
+                    }
+                    other => other.map_err(|e| db.explain(e)),
+                }
+            }
         };
         let (key, kid) = match released {
             Ok(release) => {

@@ -342,3 +342,61 @@ fn an_empty_passphrase_is_never_sent_to_the_vault() {
         }
     }
 }
+
+/// The maintainer's sentence (2026-11-01), byte for byte.
+#[test]
+fn the_replaced_sentence_is_exact() {
+    let r = KeyRefusal::Replaced {
+        at: "Sun 1 Nov 2026 14:05".into(),
+        approver: "Dr Smith".into(),
+        retry_after: None,
+    };
+    assert_eq!(
+        r.sentence(),
+        "This passphrase was replaced on Sun 1 Nov 2026 14:05, approved by Dr Smith. If you \
+         didn't ask for that, tell a superuser."
+    );
+}
+
+/// An approver no longer in the vault arrives as "": never "approved by ."
+#[test]
+fn a_departed_approver_still_reads_sensibly() {
+    let s = KeyRefusal::Replaced {
+        at: "Sun 1 Nov 2026 14:05".into(),
+        approver: String::new(),
+        retry_after: None,
+    }
+    .sentence();
+    assert!(
+        s.contains("approved by someone no longer enrolled here."),
+        "{s}"
+    );
+    assert!(!s.contains("by ."), "{s}");
+}
+
+/// A replaced answer is still a counted wrong guess: the back-off wording keeps parity.
+#[test]
+fn a_replaced_answer_keeps_the_back_off() {
+    let s = KeyRefusal::Replaced {
+        at: "x".into(),
+        approver: "y".into(),
+        retry_after: Some(Duration::from_millis(1200)),
+    }
+    .sentence();
+    assert!(
+        s.ends_with("tell a superuser. Wait 2 s, then try again."),
+        "{s}"
+    );
+}
+
+#[test]
+fn a_local_time_is_date_and_time_in_the_given_zone() {
+    use chrono::{FixedOffset, TimeZone};
+    let zone = FixedOffset::east_opt(10 * 3600).unwrap();
+    let now = zone.with_ymd_and_hms(2026, 11, 1, 9, 0, 0).unwrap();
+    assert_eq!(
+        local_at("2026-11-01T04:05:00Z", &now),
+        "Sun 1 Nov 2026 14:05"
+    );
+    assert_eq!(local_at("not a time", &now), "not a time");
+}

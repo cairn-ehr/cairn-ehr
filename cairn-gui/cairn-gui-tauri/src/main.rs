@@ -41,6 +41,7 @@ mod read_again_webview_tests;
 mod rekey;
 #[cfg(test)]
 mod reread_webview_tests;
+mod reseal;
 mod signer;
 #[cfg(test)]
 mod signer_webview_tests;
@@ -131,6 +132,7 @@ fn main() -> anyhow::Result<()> {
             commands::cease,
             enrol::enrol_member,
             rekey::rekey_member,
+            reseal::change_passphrase,
             hold::withhold,
             hold::release,
             funnel::commands::funnel_status,

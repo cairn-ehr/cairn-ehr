@@ -121,6 +121,14 @@ pub enum KeyRefusal {
     NeedCredential,
     /// The passphrase did not match; `retry_after` is the back-off before the next try, if any.
     Wrong { retry_after: Option<Duration> },
+    /// The passphrase typed is the one this member had BEFORE a re-key (still a counted wrong
+    /// guess, so `retry_after` is the same back-off). `at` is already a local date and time;
+    /// `approver` is a display name, or "" when that person is no longer in the vault.
+    Replaced {
+        at: String,
+        approver: String,
+        retry_after: Option<Duration>,
+    },
     /// Too many wrong tries: the vault will not check another for `retry_after`.
     Waiting { retry_after: Duration },
     /// No one with that staff ID is enrolled on this node.
@@ -150,6 +158,26 @@ impl KeyRefusal {
                 "That passphrase is not right. Wait {} s, then try again.",
                 seconds(*wait)
             ),
+            KeyRefusal::Replaced {
+                at,
+                approver,
+                retry_after,
+            } => {
+                // An approver who has left the vault must not read as "approved by ."
+                let who = if approver.is_empty() {
+                    "someone no longer enrolled here"
+                } else {
+                    approver
+                };
+                let base = format!(
+                    "This passphrase was replaced on {at}, approved by {who}. If you didn't ask \
+                     for that, tell a superuser."
+                );
+                match retry_after {
+                    None => base,
+                    Some(wait) => format!("{base} Wait {} s, then try again.", seconds(*wait)),
+                }
+            }
             KeyRefusal::Waiting { retry_after } => format!(
                 "Too many tries. Wait {} s, then try again.",
                 seconds(*retry_after)
@@ -188,13 +216,54 @@ pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), Key
     match release {
         Release::Released { key, kid } => Ok((key, kid)),
         Release::Wrong { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
-        // Task 7 gives a replaced key its own sentence; until then it reads as a wrong passphrase.
+        // Pure, so no notice to quote: reads as a wrong passphrase. Callers holding the database
+        // use `from_release_noting`, which gives a replaced key its own sentence.
         Release::Replaced { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
         Release::Waiting { retry_after } => Err(KeyRefusal::Waiting { retry_after }),
         Release::Unknown => Err(KeyRefusal::Unknown),
         Release::RefusedPurpose => Err(KeyRefusal::NotForClinicalActs),
         Release::NotCurrent => Err(KeyRefusal::NotCurrent),
         Release::OverPowered { .. } => Err(KeyRefusal::OverPowered),
+    }
+}
+
+/// [`from_release`], except that a `Replaced` answer is looked up once: the member is told when
+/// their passphrase was replaced and who approved it. No notice (or a failed lookup, logged to
+/// stderr) degrades to the plain wrong-passphrase sentence, never to an error.
+pub(crate) async fn from_release_noting(
+    db: &tokio_postgres::Client,
+    staff_id: &str,
+    release: Release,
+) -> Result<(SigningKey, String), KeyRefusal> {
+    let Release::Replaced { retry_after } = release else {
+        return from_release(release);
+    };
+    match cairn_node::vault_admin::replaced_notice(db, staff_id).await {
+        Ok(Some(n)) => Err(KeyRefusal::Replaced {
+            at: local_at(&n.at, &chrono::Local::now()),
+            approver: n.approver,
+            retry_after,
+        }),
+        Ok(None) => Err(KeyRefusal::Wrong { retry_after }),
+        Err(e) => {
+            eprintln!("the replaced-key notice could not be read: {e:#}");
+            Err(KeyRefusal::Wrong { retry_after })
+        }
+    }
+}
+
+/// Pure: an RFC 3339 instant as a local date and time ("Sun 1 Nov 2026 14:05"), in `now`'s zone.
+/// Text that does not parse is returned as recorded, never blank (principle 4).
+pub(crate) fn local_at<Tz: chrono::TimeZone>(utc: &str, now: &chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    match chrono::DateTime::parse_from_rfc3339(utc) {
+        Ok(t) => t
+            .with_timezone(&now.timezone())
+            .format("%a %-d %b %Y %H:%M")
+            .to_string(),
+        Err(_) => utc.to_string(),
     }
 }
 

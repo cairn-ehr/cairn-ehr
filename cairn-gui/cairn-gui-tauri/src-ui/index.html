@@ -111,6 +111,26 @@
         </form>
       </details>
 
+      <!-- Change my passphrase (sign-in slice 2). The member's own current passphrase goes through
+           the counted door; all three passphrases are emptied after every attempt (reseal.js). -->
+      <details id="change-passphrase">
+        <summary>Change my passphrase</summary>
+        <form id="reseal-form" autocomplete="off">
+          <label for="reseal-staff-id">Staff ID</label>
+          <input id="reseal-staff-id" type="text" autocomplete="off" />
+          <label for="reseal-current">Current passphrase</label>
+          <input id="reseal-current" type="password" autocomplete="off" />
+          <label for="reseal-new">New passphrase</label>
+          <input id="reseal-new" type="password" autocomplete="off" />
+          <label for="reseal-new-again">New passphrase again</label>
+          <input id="reseal-new-again" type="password" autocomplete="off" />
+          <label for="reseal-hint">Passphrase hint (optional)</label>
+          <input id="reseal-hint" type="text" autocomplete="off" />
+          <button type="submit">Change passphrase</button>
+          <p id="reseal-status" role="status" aria-live="polite" hidden></p>
+        </form>
+      </details>
+
       <section id="front-door" aria-labelledby="find-heading" hidden>
         <h1 id="find-heading">Find a patient</h1>
 
@@ -329,6 +349,7 @@
     <script src="signer.js"></script>
     <script src="enrol.js"></script>
     <script src="rekey.js"></script>
+    <script src="reseal.js"></script>
     <script src="stop_reasons.js"></script>
     <script src="holds.js"></script>
     <script src="chart_stale.js"></script>
