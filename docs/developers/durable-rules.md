@@ -10,6 +10,32 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ THE WINDOW'S OWN LOGIN (ADR-0084, db/062, #898/#899) — do not undo** (pins:
+`crates/cairn-node/tests/{conn_posture_db,window_role_grants,provision_window_role}.rs`,
+`crates/cairn-node/src/{conn_posture,window_access}_tests.rs`, `cairn-gui-tauri/src/launch_posture_tests.rs`):
+- **The over-power check runs on EVERY `release_for_act`, is never cached, and is judged over EVERY role the login is
+  a MEMBER of** (`pg_has_role(…, 'MEMBER')`, so a `NOINHERIT` membership counts: a member can `SET ROLE`). An operator
+  fixes a login while the window's connection stays open (#807). **Tempting wrong fixes:** read the facts once at
+  launch "to save a query"; test the login's own privileges only (a member of the owner role passes). Pins:
+  `a_member_of_the_owner_role_is_refused_until_the_membership_is_revoked`,
+  `a_membership_that_does_not_inherit_still_counts`. The refusal comes BEFORE the passphrase is sent
+  (`a_wrong_passphrase_over_an_over_powered_connection_is_never_counted`).
+- **The window never calls `connect_and_load_schema`** (its login cannot replay DDL; it reads the stamp and refuses
+  the LAUNCH on a mismatch). A reintroduced loader also silently restores owner-level use. Pin:
+  `the_window_never_loads_the_schema` (walks every non-test source of `cairn-gui-tauri`). The window no longer runs
+  the loader's deferred re-adjudication pass; that is the loader's, not a bug to patch back into the window.
+- **`cairn_window` never gains a vault read, `cairn_vault_unseal`, `INSERT` on `event_log`, or a peer door**, and never
+  inherits `cairn_node`. A missing grant is added narrowly (a column list, not the table) with its reason, and the
+  entry point is added to `window_role_grants.rs`. Pins: `the_window_login_has_none_of_the_powers`,
+  `each_direct_grant_of_a_power_is_seen`, and the four `the_windows_*_run_under_its_own_login` tests.
+- **`provision-window-role` refuses BEFORE it mutates, and never touches an existing role that is not a window
+  login.** Order: `require_local`, the rules read, freshness, the `trust` verdict, THEN the schema load and the role
+  DDL. `trust` is refused whatever its line's type or database; `peer` without a map only warns. No override flag, for
+  this refusal or for `require_local`. Pins: `the_verb_refuses_before_it_mutates_in_source_order`,
+  `the_verb_refuses_a_trusting_cluster_and_changes_nothing`,
+  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`,
+  `the_remote_refusal_comes_before_any_connect`.
+
 **⇒ GUI SIGN-IN SLICE 1 — THE HUMAN KEY VAULT (ADR-0083, db/061) — do not undo** (pins:
 `crates/cairn-node/tests/vault_floor.rs`, `vault_lib.rs`, `secret32_conversions_are_named.rs`;
 `cairn-gui-tauri/src/{signer_tests,enrol_tests}.rs` and `state.rs`'s held-key tests):

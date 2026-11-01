@@ -41,7 +41,8 @@ ALTER TABLE ui_gesture_timing DROP CONSTRAINT IF EXISTS ui_gesture_timing_kind_c
 ALTER TABLE ui_gesture_timing ADD CONSTRAINT ui_gesture_timing_kind_ck
     CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release'));
 
--- NO GRANT TO cairn_agent, deliberately. The window writes here as the node role; no
+-- NO GRANT TO cairn_agent, deliberately. The window writes here as its own login, which holds
+-- cairn_window (db/062, #898: the one writer this table names); no
 -- advisory agent has any reason to touch a UI metric, and an agent that could UPDATE this
 -- table could silently poison the §1.2 paper-parity evidence the table exists to produce —
 -- in a file whose whole argument is that this data must never become a lever. Least

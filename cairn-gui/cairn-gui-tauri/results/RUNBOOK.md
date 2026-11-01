@@ -38,6 +38,31 @@ cairn-node --conn "$CONN" --key "$NODE_KEY" \
 > `--key` is a **global** flag: it comes before the subcommand, not after it. Every command
 > below follows that shape.
 
+**The window runs on its own login, not the owner's** ([ADR-0084](../../../docs/spec/decisions/0084-the-window-never-holds-the-owners-keys.md),
+#898/#899). Three consequences for this rig:
+
+1. **The cluster must not trust anyone.** `provision-window-role` refuses while any `pg_hba.conf` line says `trust`
+   (it names the line), and refuses a file changed since the server last loaded it. Set the rig's lines to
+   `scram-sha-256`, reload (`SELECT pg_reload_conf()`), and give the owner a password
+   (`ALTER ROLE "$USER" PASSWORD '…'`); `tokio-postgres` does not read `PGPASSWORD`, so put it in the string:
+   `export CONN="host=127.0.0.1 port=5532 user=$USER password=… dbname=cairn_measure"` (replace the `CONN` above). `psql` (unlike `cairn-node`) reads `PGPASSWORD`, so export it too for the `psql` lines.
+2. **The owner provisions the window's login once**, after `init` (it also installs or upgrades the schema, which the
+   window never does). The owner must be a database superuser (it reads `pg_hba_file_rules`). Choose the window's
+   password and export it for the step (otherwise it is prompted for, twice):
+
+   ```bash
+   export CAIRN_WINDOW_DB_PASSWORD='…'
+   cairn-node --conn "$CONN" provision-window-role --role cairn_window_login
+   export WINDOW_CONN="host=127.0.0.1 port=5532 user=cairn_window_login password=$CAIRN_WINDOW_DB_PASSWORD dbname=cairn_measure"
+   ```
+
+   Re-run it after every schema-changing build: a window refuses to start on a database its build has not been
+   prepared for, and names this command.
+3. **Every window launch below uses `"$WINDOW_CONN"`**; every `cairn-node` and `psql` step keeps the owner `"$CONN"`.
+   The connection must be on this machine (`127.0.0.1`, `localhost` or a socket): the window refuses any other host.
+   A window started with `"$CONN"` still opens and reads, but every signature and "Enrol staff" is refused with
+   "more access than a window may have", and the reason is printed on the terminal's stderr.
+
 ## 1. Enrol the clinician who will sign
 
 The window signs as an **enrolled human actor** (ADR-0053). Since the sign-in slice the window
@@ -123,7 +148,7 @@ timing a gesture over a chart the node already says is incomplete.
 ```bash
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
-    --patient "$PATIENT" --conn "$CONN" \
+    --patient "$PATIENT" --conn "$WINDOW_CONN" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -231,7 +256,7 @@ SEED
 reported separately and never merged):
 
 ```bash
-cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY"
+cargo run --release -p cairn-gui-tauri -- --conn "$WINDOW_CONN" --key "$NODE_KEY"
 cargo run --release -p cairn-gui-tauri -- --mock
 ```
 
@@ -271,7 +296,7 @@ opened (a plausible duplicate — same or a near-miss name):
 $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
-    --patient "$PATIENT" --conn "$CONN" \
+    --patient "$PATIENT" --conn "$WINDOW_CONN" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -350,7 +375,7 @@ $NODE link-charts "$A" "$B" --attester-key /tmp/dr-a.key
 $NODE link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$CONN" \
+    --patient "$A" --conn "$WINDOW_CONN" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -429,7 +454,7 @@ A=$(reg); B=$(reg)
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$CONN" \
+    --patient "$A" --conn "$WINDOW_CONN" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -530,7 +555,7 @@ Emery Elmsworth|1965-05-15
 SEED
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY" --key-hold-seconds 900
+cargo run --release -p cairn-gui-tauri -- --conn "$WINDOW_CONN" --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 The front door shows **"Possible duplicates (5)"** below the registration form (more if section 11's
@@ -625,7 +650,7 @@ $NODE link-charts "$A" "$C" --attester-key /tmp/dr-a.key
 $NODE unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$CONN" \
+    --patient "$A" --conn "$WINDOW_CONN" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
