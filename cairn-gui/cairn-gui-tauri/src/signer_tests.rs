@@ -400,3 +400,55 @@ fn a_local_time_is_date_and_time_in_the_given_zone() {
     );
     assert_eq!(local_at("not a time", &now), "not a time");
 }
+
+fn notice(approver: &str) -> cairn_node::vault_admin::ReplacedNotice {
+    cairn_node::vault_admin::ReplacedNotice {
+        at: "2026-11-01T04:05:00Z".into(),
+        approver: approver.into(),
+    }
+}
+
+fn utc_now() -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Utc.with_ymd_and_hms(2026, 11, 1, 9, 0, 0).unwrap()
+}
+
+/// A notice becomes the Replaced refusal; no notice or a failed lookup degrades to Wrong with
+/// the same back-off (never an error, never a blank).
+#[test]
+fn a_notice_names_the_approver_and_its_absence_degrades_to_wrong() {
+    let wait = Some(Duration::from_secs(3));
+    assert_eq!(
+        noting(wait, Ok(Some(notice("Dr Smith"))), &utc_now()),
+        KeyRefusal::Replaced {
+            at: "Sun 1 Nov 2026 04:05".into(),
+            approver: "Dr Smith".into(),
+            retry_after: wait
+        }
+    );
+    assert_eq!(
+        noting(wait, Ok(None), &utc_now()),
+        KeyRefusal::Wrong { retry_after: wait }
+    );
+    assert_eq!(
+        noting(None, Err(anyhow::anyhow!("lookup failed")), &utc_now()),
+        KeyRefusal::Wrong { retry_after: None }
+    );
+}
+
+/// The window has no DB-backed test rig in this suite (#738), so the WIRING is pinned by source:
+/// every place a vault answer becomes a refusal for a person must use `from_release_noting`, or
+/// a replaced passphrase silently reads "not right" again.
+#[test]
+fn a_vault_answer_reaches_the_person_through_from_release_noting() {
+    use crate::source_guard::rust_fn;
+    for (src, name) in [
+        (include_str!("state.rs"), "signer_for_act"),
+        (include_str!("reseal.rs"), "change_passphrase_impl"),
+        (include_str!("enrol.rs"), "release_enrol_key"),
+    ] {
+        let body = rust_fn(src, name);
+        assert!(body.contains("from_release_noting("), "{name}: {body}");
+        assert!(!body.contains("from_release("), "{name}: {body}");
+    }
+}

@@ -35,7 +35,8 @@ zeroize = { version = "1", features = ["zeroize_derive", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 # A hold's end time is checked as RFC 3339 before it is written (#832). Already in this tree
-# through cairn-gui-tab-medications; MIT/Apache-2.0.
+# through cairn-gui-tab-medications; MIT/Apache-2.0. The `clock` feature is for `Local` time in
+# `signer::local_at` (the replaced-passphrase sentence).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # The drift guard builds its reference payload from the sample chart, which is test-only in

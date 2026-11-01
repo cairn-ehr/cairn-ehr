@@ -31,9 +31,7 @@
 //! accessor is what made the timeout unreachable in the first review of this slice: the
 //! idle clock was reset by the window rather than by the clinician, and the key never
 //! re-locked at all. Hence the two accessors below — `key_status` reads, `signer_for_act` uses.
-use crate::signer::{
-    decide, from_release, from_release_noting, Credential, HeldDecision, KeyRefusal,
-};
+use crate::signer::{decide, from_release_noting, Credential, HeldDecision, KeyRefusal};
 use cairn_node::vault::Purpose;
 use std::time::{Duration, Instant, SystemTime};
 use zeroize::Zeroizing;
@@ -351,6 +349,8 @@ impl AppState {
         let Some(db) = self.db.as_ref() else {
             return Err(KeyRefusal::Fault);
         };
+        // The vault's answer as a key or a refusal. `from_release_noting` runs while the
+        // connection is in hand: a replaced passphrase looks up its notice once.
         let released = match db.lock().await {
             Err(lost) => Err(anyhow::Error::from(lost)),
             Ok(db) => {
@@ -362,35 +362,20 @@ impl AppState {
                 )
                 .await
                 {
-                    // A replaced answer is turned into its sentence here, while the connection
-                    // is in hand (`from_release_noting` looks the notice up once).
-                    Ok(cairn_node::vault::Release::Replaced { retry_after }) => {
-                        return Err(
-                            match from_release_noting(
-                                &db,
-                                &credential.staff_id,
-                                cairn_node::vault::Release::Replaced { retry_after },
-                            )
-                            .await
-                            {
-                                Err(refusal) => refusal,
-                                Ok(_) => KeyRefusal::Fault,
-                            },
-                        );
+                    Ok(release) => {
+                        // Operator diagnostics: the screen says "ask IT"; IT needs the reason.
+                        // `why` is a fixed sentence from `cairn_node::conn_posture`.
+                        if let cairn_node::vault::Release::OverPowered { why } = &release {
+                            eprintln!("the window's connection is over-powered: {why}");
+                        }
+                        Ok(from_release_noting(&db, &credential.staff_id, release).await)
                     }
-                    other => other.map_err(|e| db.explain(e)),
+                    Err(e) => Err(db.explain(e)),
                 }
             }
         };
         let (key, kid) = match released {
-            Ok(release) => {
-                // Operator diagnostics: the screen says "ask IT"; IT needs the reason. `why` is
-                // a fixed sentence from `cairn_node::conn_posture`, never a credential.
-                if let cairn_node::vault::Release::OverPowered { why } = &release {
-                    eprintln!("the window's connection is over-powered: {why}");
-                }
-                from_release(release)?
-            }
+            Ok(answer) => answer?,
             Err(e) => {
                 // Operator diagnostics, as `record_timing` does. `release_for_act` never puts the
                 // passphrase in an error (cairn_node::vault's house rules).

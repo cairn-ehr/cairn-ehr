@@ -124,16 +124,16 @@ fn the_rekey_runs_its_steps_in_order() {
     );
 }
 
-/// DB-gated (run locally, #905): an enroller re-keys a clinician from the window and the OLD
-/// passphrase is then told `Replaced`. Self-skips without `CAIRN_TEST_PG`.
-#[tokio::test]
-async fn an_enroller_rekeys_from_the_window() {
+/// DB-gated setup shared by the two tests below: an enroller re-keys `nurse1` from the window.
+/// `None` (self-skip) without `CAIRN_TEST_PG`. Returns the serial guard, the window state, the
+/// nurse's OLD passphrase, and the re-key's success sentence.
+async fn rekeyed_world() -> Option<(impl Sized, AppState, String, String)> {
     use cairn_node::vault::{bootstrap_superuser, NewMember, Purpose, Release};
     let Ok(cs) = std::env::var("CAIRN_TEST_PG") else {
         eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
+        return None;
     };
-    let _guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
+    let guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
     let owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
     owner
         .batch_execute(
@@ -202,11 +202,53 @@ async fn an_enroller_rekeys_from_the_window() {
     let said = rekey_member_impl(&state, credential("enrol1", &en_p), form(&new_p, &new_p))
         .await
         .expect("an enroller re-keys a clinician");
-    assert!(said.contains("nurse1"), "{said}");
     assert!(!said.contains(&new_p) && !said.contains(&en_p));
+    Some((guard, state, old_p, said))
+}
+
+/// DB-gated (run locally, #905): the OLD passphrase is told `Replaced` by the vault.
+#[tokio::test]
+async fn an_enroller_rekeys_from_the_window() {
+    let Some((_guard, state, old_p, said)) = rekeyed_world().await else {
+        return;
+    };
+    assert!(said.contains("nurse1"), "{said}");
     let db = state.db.as_ref().unwrap().lock().await.unwrap();
-    let old = cairn_node::vault::release_for_act(&db, "nurse1", &old_p, Purpose::Clinical)
+    let old = cairn_node::vault::release_for_act(
+        &db,
+        "nurse1",
+        &old_p,
+        cairn_node::vault::Purpose::Clinical,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(old, cairn_node::vault::Release::Replaced { .. }),
+        "{old:?}"
+    );
+}
+
+/// DB-gated: signing with the OLD passphrase after a re-key says the passphrase was replaced and
+/// names the approver (the enroller's display name). Self-skips without `CAIRN_TEST_PG`.
+#[tokio::test]
+async fn a_replaced_sign_names_the_approver() {
+    let Some((_guard, state, old_p, _said)) = rekeyed_world().await else {
+        return;
+    };
+    let refusal = state
+        .signer_for_act(
+            Some(credential("nurse1", &old_p)),
+            crate::state::Now::read(),
+        )
         .await
-        .unwrap();
-    assert!(matches!(old, Release::Replaced { .. }), "{old:?}");
+        .unwrap_err();
+    let said = refusal.sentence();
+    assert!(
+        said.starts_with("This passphrase was replaced on "),
+        "{said}"
+    );
+    assert!(
+        said.contains(", approved by Test Person. If you didn't ask for that, tell a superuser."),
+        "{said}"
+    );
 }

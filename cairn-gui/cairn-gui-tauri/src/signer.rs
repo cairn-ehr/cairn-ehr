@@ -228,8 +228,7 @@ pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), Key
 }
 
 /// [`from_release`], except that a `Replaced` answer is looked up once: the member is told when
-/// their passphrase was replaced and who approved it. No notice (or a failed lookup, logged to
-/// stderr) degrades to the plain wrong-passphrase sentence, never to an error.
+/// their passphrase was replaced and who approved it (see [`noting`] for the degrade rules).
 pub(crate) async fn from_release_noting(
     db: &tokio_postgres::Client,
     staff_id: &str,
@@ -238,16 +237,31 @@ pub(crate) async fn from_release_noting(
     let Release::Replaced { retry_after } = release else {
         return from_release(release);
     };
-    match cairn_node::vault_admin::replaced_notice(db, staff_id).await {
-        Ok(Some(n)) => Err(KeyRefusal::Replaced {
-            at: local_at(&n.at, &chrono::Local::now()),
+    let notice = cairn_node::vault_admin::replaced_notice(db, staff_id).await;
+    Err(noting(retry_after, notice, &chrono::Local::now()))
+}
+
+/// Pure: the refusal for a `Replaced` answer, given what the notice lookup returned. A notice
+/// names the date and approver; no notice, or a failed lookup (logged to stderr), degrades to
+/// the plain wrong-passphrase refusal with the SAME back-off, never to an error.
+pub(crate) fn noting<Tz: chrono::TimeZone>(
+    retry_after: Option<Duration>,
+    notice: anyhow::Result<Option<cairn_node::vault_admin::ReplacedNotice>>,
+    now: &chrono::DateTime<Tz>,
+) -> KeyRefusal
+where
+    Tz::Offset: std::fmt::Display,
+{
+    match notice {
+        Ok(Some(n)) => KeyRefusal::Replaced {
+            at: local_at(&n.at, now),
             approver: n.approver,
             retry_after,
-        }),
-        Ok(None) => Err(KeyRefusal::Wrong { retry_after }),
+        },
+        Ok(None) => KeyRefusal::Wrong { retry_after },
         Err(e) => {
             eprintln!("the replaced-key notice could not be read: {e:#}");
-            Err(KeyRefusal::Wrong { retry_after })
+            KeyRefusal::Wrong { retry_after }
         }
     }
 }
