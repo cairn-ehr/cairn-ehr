@@ -187,6 +187,22 @@ fn the_rekey_runs_its_steps_in_order() {
     );
 }
 
+/// The window's own login, as enrol_tests (#898): a LOGIN in the cairn_window group.
+async fn window_login(owner: &tokio_postgres::Client, cs: &str) -> tokio_postgres::Client {
+    owner
+        .batch_execute(
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_window_probe') \
+             THEN CREATE ROLE cairn_window_probe LOGIN; END IF; \
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$; \
+             GRANT cairn_window TO cairn_window_probe;",
+        )
+        .await
+        .unwrap();
+    cairn_node::db::connect(&format!("{cs} user=cairn_window_probe"))
+        .await
+        .unwrap()
+}
+
 /// DB-gated setup shared by the two tests below: an enroller re-keys `nurse1` from the window.
 /// `None` (self-skip) without `CAIRN_TEST_PG`. Returns the serial guard, the window state, the
 /// nurse's OLD passphrase, and the re-key's success sentence.
@@ -218,19 +234,7 @@ async fn rekeyed_world() -> Option<(impl Sized, AppState, String, String)> {
     bootstrap_superuser(&owner, &member("boss", "superuser", &su_p))
         .await
         .unwrap();
-    // The window's own login, as enrol_tests (#898): a LOGIN in the cairn_window group.
-    owner
-        .batch_execute(
-            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_window_probe') \
-             THEN CREATE ROLE cairn_window_probe LOGIN; END IF; \
-             EXCEPTION WHEN duplicate_object THEN NULL; END $$; \
-             GRANT cairn_window TO cairn_window_probe;",
-        )
-        .await
-        .unwrap();
-    let window = cairn_node::db::connect(&format!("{cs} user=cairn_window_probe"))
-        .await
-        .unwrap();
+    let window = window_login(&owner, &cs).await;
     let su_key = match cairn_node::vault::release_for_act(&window, "boss", &su_p, Purpose::Enrol)
         .await
         .unwrap()
@@ -318,4 +322,101 @@ async fn a_replaced_sign_names_the_approver() {
         said.contains(", approved by Test Person. If you didn't ask for that, tell a superuser."),
         "{said}"
     );
+}
+
+/// DB-gated (run locally, #905): the restore path, design §5.8. The vault is emptied and the
+/// registry kept, the console re-keys the superuser, and the superuser then re-keys a clinician
+/// from the window. Without a name and a contact the window refuses before any key is released;
+/// with them the member row is re-created on the SAME actor, the line is the superuser-approved
+/// wording (confirmed at once), and the new passphrase releases the key. Self-skips without
+/// `CAIRN_TEST_PG`.
+#[tokio::test]
+async fn a_superuser_rekeys_a_restored_member_from_the_window() {
+    use cairn_node::vault::{bootstrap_superuser, NewMember, Purpose, Release};
+    let Ok(cs) = std::env::var("CAIRN_TEST_PG") else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
+    let owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
+    owner
+        .batch_execute(
+            "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, \
+             patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+        )
+        .await
+        .unwrap();
+    let (su_p, su_p2, old_p, new_p) = (pass("su"), pass("su2"), pass("old"), pass("new"));
+    let member = |staff_id, role, passphrase| NewMember {
+        staff_id,
+        display_name: "Test Person",
+        role,
+        phone: None,
+        email: Some("t@example.org"),
+        passphrase,
+        hint: None,
+    };
+    bootstrap_superuser(&owner, &member("boss", "superuser", &su_p))
+        .await
+        .unwrap();
+    let window = window_login(&owner, &cs).await;
+    let su_key = match cairn_node::vault::release_for_act(&window, "boss", &su_p, Purpose::Enrol)
+        .await
+        .unwrap()
+    {
+        Release::Released { key, .. } => key,
+        other => panic!("{other:?}"),
+    };
+    cairn_node::vault::enrol_member(
+        &owner,
+        &member("nurse1", "clinician", &old_p),
+        "boss",
+        &su_key,
+    )
+    .await
+    .unwrap();
+    // A restore: the registry comes back, the vault (outside every backup) does not.
+    owner
+        .batch_execute("TRUNCATE vault_attempt, vault_member CASCADE")
+        .await
+        .unwrap();
+    cairn_node::vault_admin::rekey_superuser_from_console(
+        &owner,
+        &cairn_node::vault_admin::Rekey {
+            staff_id: "boss",
+            role: "superuser",
+            display_name: Some("Site Admin"),
+            phone: None,
+            email: Some("it@example.org"),
+            passphrase: &su_p2,
+            hint: None,
+        },
+    )
+    .await
+    .unwrap();
+    let mut state = AppState::mock(None);
+    state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
+        window,
+    )));
+
+    let blank = rekey_member_impl(&state, credential("boss", &su_p2), form(&new_p, &new_p))
+        .await
+        .expect_err("no row: a name and a contact are needed first");
+    assert_eq!(blank, RekeyRefusal::NeedNameAndContact.sentence());
+
+    let mut filled = form(&new_p, &new_p);
+    filled.display_name = "Nurse One".into();
+    filled.email = "n1@example.org".into();
+    let said = rekey_member_impl(&state, credential("boss", &su_p2), filled)
+        .await
+        .expect("a superuser re-keys a restored member");
+    assert_eq!(
+        said,
+        "nurse1 has a new key. Their old passphrase no longer works."
+    );
+    let db = state.db.as_ref().unwrap().lock().await.unwrap();
+    let released = cairn_node::vault::release_for_act(&db, "nurse1", &new_p, Purpose::Clinical)
+        .await
+        .unwrap();
+    assert!(matches!(released, Release::Released { .. }), "{released:?}");
 }

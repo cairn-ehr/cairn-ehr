@@ -1196,13 +1196,6 @@ new passphrase twice and presses *Give a new key*; then signs one act with it. S
       `enroll`, then `rotate-key`).
 - [ ] *Role* offers no *superuser*. A superuser is re-keyed only at the console:
       `cnode vault-rekey-superuser --staff-id boss` (passphrase prompted twice), then `boss` signs in with the new one.
-- [ ] **After a restore** (on a throwaway database: `psql "$CONN" -c "TRUNCATE vault_attempt, vault_member CASCADE"`,
-      then `cnode vault-rekey-superuser --staff-id boss --display-name "Site Admin" --email it@example.invalid`):
-      with `boss` in the strip, re-key `dr-a` from the window with name and contact blank: "This staff ID has no vault entry here, as after a
-      restore. Enter the member's display name and a phone or an email, then try again. Nobody was re-keyed." —
-      and `boss`'s release was not spent (no attempt counted). Fill in the name and an email: `dr-a` is re-keyed on
-      the same actor and signs (use `dr-a`'s new passphrase from here on).
-
 **Measurement 4 — change my passphrase (the ≤ 30 s budget).** `dr-a` opens *Change my passphrase*, types staff ID,
 current passphrase and a new one twice, and presses *Change passphrase*.
 
@@ -1238,6 +1231,21 @@ re-enables it at once). Never on a real node: the registry is append-only. Then:
 - [ ] `cnode vault-set-unconfirmed-expiry --none` afterwards. Record that a restore comes back with no expiry
       (the policy is outside the backups).
 
+**Measurement 7 — re-key after a restore. Run it LAST:** it empties the vault, so every member enrolled above has
+to be re-keyed (or the database re-seeded) before any earlier measurement is repeated. On the throwaway database:
+
+```bash
+psql "$CONN" -c "TRUNCATE vault_attempt, vault_member CASCADE"   # the vault is outside backups; the registry stays
+cnode vault-rekey-superuser --staff-id boss --display-name "Site Admin" --email it@example.invalid
+```
+
+- [ ] With `boss` in the strip, re-key `dr-a` from the window with name and contact blank: "This staff ID has no
+      vault entry here, as after a restore. Enter the member's display name and a phone or an email, then try again.
+      Nobody was re-keyed." `boss`'s release was not spent (no attempt counted).
+- [ ] Fill in the name and an email and press again: "dr-a has a new key. Their old passphrase no longer works." (a
+      superuser approved: confirmed at once). `dr-a` signs with the new passphrase, on the same actor
+      (`actor_event` shows a new `rotate-key` row for it).
+
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
 - [ ] *Forgotten passphrase*, *Change my passphrase* and the superuser's panel open, fill and submit by keyboard
@@ -1260,7 +1268,8 @@ CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=$USER dbname=cairn_test" \
 ```
 
 - [ ] No `skipped:` line, and `an_enroller_rekeys_from_the_window`, `a_replaced_sign_names_the_approver`,
-      `a_superuser_grants_and_an_enroller_then_rekeys` and `a_repudiated_key_leaves_the_worklist_for_good` pass.
+      `a_superuser_grants_and_an_enroller_then_rekeys`, `a_repudiated_key_leaves_the_worklist_for_good` and
+      `a_superuser_rekeys_a_restored_member_from_the_window` pass.
 - [ ] Never beside `scripts/run-db-gated-tests.sh` on the same database (a shared schema replay deadlocks).
 
 **What could not be run here.** Every gesture, stopwatch figure and the VoiceOver pass need the window and a human.

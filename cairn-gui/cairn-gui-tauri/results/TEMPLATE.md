@@ -299,10 +299,10 @@ filed (#919); record the counts against that issue.
 | Change of passphrase: works; wrong current counted; same-as-current refused | | |
 | Confirm leaves the worklist; Repudiate asks no question and the member is then refused | | |
 | Repudiate key on a confirmed member's row; the row then says repudiated; their unconfirmed approvals turn doubtful | | |
-| After a restore: a re-key without name/contact refused before any release; with them, re-keyed on the same actor | | |
 | Re-key success line: enroller's says a superuser must confirm; superuser's does not | | |
 | Expiry: strip warns naming the ID; worklist shows the stop date; an expired key refused, then confirmed | | |
-| Window DB-gated tests run by hand (#905): no `skipped:`, the four named tests pass | | |
+| Measurement 7, run LAST (empties the vault): a re-key without name/contact refused before any release; with them, re-keyed on the same actor, superuser wording | | |
+| Window DB-gated tests run by hand (#905): no `skipped:`, the five named tests pass | | |
 
 | Accessibility check | Verdict | Notes |
 |---|---|---|

@@ -78,8 +78,9 @@ Five questions follow:
   does not fall back to the key the rotation retired.
 - `actor_key_vouches` answers "did this key legitimately belong to the actor?": every `enroll` or `rotate-key` row
   whose actor was never revoked and whose key was never repudiated. A rotated-away key stays in it.
-- `enroll_actor` takes two trailing arguments for the approver and the token (its 3-argument form is dropped first,
-  so a 3-argument call still resolves). `cairn_actor_append` is the only other writer: it appends the five new ops and
+- `enroll_actor` takes two trailing arguments for the approver and the token. They default to NULL, so a 3-argument
+  call still resolves, to the new function; the old 3-argument form is dropped first, so that call is not ambiguous
+  between two overloads. `cairn_actor_append` is the only other writer: it appends the five new ops and
   refuses `enroll`, `supersede` and `revoke`. For a `rotate-key` it refuses a revoked or superseded actor (the row
   would outrank the retirement and resurrect it), a key that binds another actor (#166), and a key this actor already
   held (a rotated-away key never comes back), under the same two advisory locks as `enroll_actor`, in the same order.
@@ -178,8 +179,8 @@ unconfirmed. The new passphrase never reaches the database.
 
 ### 7. The real owner is told when a sign fails on a replaced key
 
-- When the passphrase is wrong and the member's current key came from a `rotate-key` written within the last 14 days,
-  or is still `unconfirmed` or `doubtful`, the release door answers `replaced` instead of `wrong`
+- When the passphrase is wrong and the member's current key came from a `rotate-key` that is less than 14 days old or
+  whose key is still `unconfirmed` or `doubtful`, the release door answers `replaced` instead of `wrong`
   (`cairn_vault_replaced_notice` is the rule's one home). It is **counted exactly like `wrong`** and carries the same
   back-off.
 - The window says: *"This passphrase was replaced on {when}, approved by {approver}. If you didn't ask for that, tell

@@ -43,7 +43,8 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
 - **Every administrative act is signed over its own domain-separated address**, computed in SQL and fetched by Rust
   (`cairn_vault_{enrol,rekey,grant,judge,reseal}_address`). The re-key address binds the ROLE (a restored node has no
   member row to check it against); the grant address binds the prior grant `seq`; the reseal address binds the old
-  blob's digest. This is what keeps a clinician-enroller's key, released for `enrol`, from signing a clinical event.
+  blob's digest. This stops an approval token from being replayed as another act, or as a clinical event. It does NOT
+  stop a client holding a released seed from signing anything: the purpose rule binds only at the vault (#900).
 - **The release door's RETURN shape never changes** (`outcome, seed, signing_key_id, retry_after_ms`): a new fact is a
   new `outcome` (`replaced`, `expired`) or a companion function. `replaced` is counted exactly like `wrong` and given on
   a FAILURE only; `expired` and `not-current` come before the count. Pins: `rekey_keeps_the_actor_and_retires_the_old_key`,
