@@ -98,6 +98,32 @@ fn every_sentence_is_plain_and_names_no_value() {
     }
 }
 
+/// Same order as the enrol: held key wiped, then the shared enrol-purpose release, then the re-key.
+#[test]
+fn the_rekey_runs_its_steps_in_order() {
+    let body: String = crate::source_guard::rust_fn(include_str!("rekey.rs"), "rekey_member_impl")
+        .split_whitespace()
+        .collect();
+    let order = [
+        "check_rekey_form(&member)",
+        "state.forget_held_key().await;",
+        "release_enrol_key(",
+        "cairn_node::vault_admin::rekey_member(",
+    ];
+    let at: Vec<usize> = order
+        .iter()
+        .map(|shape| {
+            body.find(shape)
+                .unwrap_or_else(|| panic!("{shape}\n{body}"))
+        })
+        .collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{body}");
+    assert!(
+        !body.contains("signer_for_act") && !body.contains("session"),
+        "{body}"
+    );
+}
+
 /// DB-gated (run locally, #905): an enroller re-keys a clinician from the window and the OLD
 /// passphrase is then told `Replaced`. Self-skips without `CAIRN_TEST_PG`.
 #[tokio::test]

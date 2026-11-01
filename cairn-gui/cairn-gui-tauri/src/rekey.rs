@@ -13,15 +13,14 @@
 //!
 //! A superuser is never re-keyed from the window (console only): the floor refuses, and the
 //! sentence is the generic [`RekeyRefusal::NotRecorded`]. Approver refusals reuse
-//! [`EnrolRefusal`](crate::enrol::EnrolRefusal), decided by reads the window can make before the
-//! release, never by parsing a floor message.
+//! [`EnrolRefusal`](crate::enrol::EnrolRefusal), decided by the grant-panel read the window can make
+//! (`enrol::release_enrol_key`), never by parsing a floor message.
 //!
 //! No secret in any output: sentences are built from enums alone; a database error's text goes
 //! to the operator's stderr only.
-use crate::enrol::{precheck_approver, refused_purpose};
-use crate::signer::{from_release, Credential, KeyRefusal};
+use crate::enrol::{optional, release_enrol_key};
+use crate::signer::Credential;
 use crate::state::AppState;
-use cairn_node::vault::{Purpose, Release};
 use cairn_node::vault_admin::Rekey;
 use serde::Deserialize;
 use zeroize::Zeroizing;
@@ -109,11 +108,6 @@ pub fn check_rekey_form(form: &RekeyForm) -> Result<(), RekeyRefusal> {
     Ok(())
 }
 
-/// `None` for a blank optional field, else the trimmed text.
-fn optional(s: &str) -> Option<&str> {
-    Some(s.trim()).filter(|t| !t.is_empty())
-}
-
 #[tauri::command]
 pub async fn rekey_member(
     state: tauri::State<'_, AppState>,
@@ -146,40 +140,14 @@ pub async fn rekey_member_impl(
         RekeyRefusal::NotRecorded.sentence()
     };
     let db = db.lock().await.map_err(|lost| fault(lost.into()))?;
-    if let Some(r) = precheck_approver(&db, &credential.staff_id, &member.role)
-        .await
-        .map_err(|e| fault(db.explain(e)))?
-    {
-        return Err(r.sentence());
-    }
     // Released, used once below, dropped at the end of this function. Never stored.
-    let key = match cairn_node::vault::release_for_act(
+    let key = release_enrol_key(
         &db,
-        &credential.staff_id,
-        &credential.passphrase,
-        Purpose::Enrol,
+        &credential,
+        &member.role,
+        &RekeyRefusal::NotRecorded.sentence(),
     )
-    .await
-    .map_err(|e| fault(db.explain(e)))?
-    {
-        Release::Released { key, .. } => key,
-        Release::RefusedPurpose => {
-            return Err(refused_purpose(&db, &credential.staff_id)
-                .await
-                .map_err(|e| fault(db.explain(e)))?
-                .sentence())
-        }
-        Release::OverPowered { why } => {
-            eprintln!("the window's connection is over-powered: {why}");
-            return Err(KeyRefusal::OverPowered.sentence());
-        }
-        other => {
-            return Err(from_release(other)
-                .err()
-                .unwrap_or(KeyRefusal::Fault)
-                .sentence())
-        }
-    };
+    .await?;
     let r = Rekey {
         staff_id: member.staff_id.trim(),
         role: member.role.trim(),

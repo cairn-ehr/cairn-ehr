@@ -173,7 +173,7 @@ fn the_enrolment_runs_its_steps_in_order() {
         "if!credential.has_passphrase(){",
         "state.forget_held_key().await;",
         "cairn_node::vault::staff_id_taken(",
-        "cairn_node::vault::release_for_act(",
+        "release_enrol_key(",
         "cairn_node::vault::enrol_member(",
     ];
     let at: Vec<usize> = order
@@ -485,4 +485,61 @@ fn the_new_refusals_name_no_field_and_no_passphrase() {
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
         assert!(!s.to_lowercase().contains("passphrase"), "{s}");
     }
+}
+
+fn row(id: &str, enroller: bool) -> cairn_node::vault_admin::EnrollerRow {
+    cairn_node::vault_admin::EnrollerRow {
+        staff_id: id.into(),
+        display_name: "Test Person".into(),
+        enroller,
+    }
+}
+
+/// The grant panel lists non-superusers only: absent means superuser.
+#[test]
+fn standing_reads_the_grant_panel_rows() {
+    let rows = [row("en1", true), row("cl1", false)];
+    assert_eq!(standing(&rows, "en1"), Standing::Granted);
+    assert_eq!(standing(&rows, " EN1 "), Standing::Granted);
+    assert_eq!(standing(&rows, "cl1"), Standing::NotGranted);
+    assert_eq!(standing(&rows, "boss"), Standing::NotListed);
+}
+
+/// M2: the pre-check decisions, with no database. After a key was released, only an enroller is
+/// ever refused, and only for superuser/admin; a superuser (even with a stray grant, who is
+/// still absent from the non-superuser list) is never refused.
+#[test]
+fn the_precheck_refuses_only_an_enroller_aiming_high() {
+    use EnrolRefusal::ApproverMayNotEnrolThisRole as No;
+    assert_eq!(precheck_decision(Standing::Granted, "admin"), Some(No));
+    assert_eq!(precheck_decision(Standing::Granted, "superuser"), Some(No));
+    assert_eq!(precheck_decision(Standing::Granted, "nurse"), None);
+    assert_eq!(precheck_decision(Standing::NotListed, "admin"), None);
+    assert_eq!(precheck_decision(Standing::NotListed, "superuser"), None);
+}
+
+/// A refused enrol purpose: a granted-but-unconfirmed enroller is told to wait; a clinician or an
+/// unknown ID gets the plain refusal.
+#[test]
+fn a_refused_purpose_tells_an_unconfirmed_enroller_from_a_clinician() {
+    assert_eq!(
+        refused_purpose_decision(Standing::Granted),
+        EnrolRefusal::ApproverNotConfirmed
+    );
+    for s in [Standing::NotGranted, Standing::NotListed] {
+        assert_eq!(refused_purpose_decision(s), EnrolRefusal::NotForEnrolment);
+    }
+}
+
+/// The shared release helper releases with `Purpose::Enrol` and never touches the held session.
+#[test]
+fn the_shared_release_is_enrol_purpose_and_never_held() {
+    let body: String = crate::source_guard::rust_fn(include_str!("enrol.rs"), "release_enrol_key")
+        .split_whitespace()
+        .collect();
+    assert!(body.contains("Purpose::Enrol"), "{body}");
+    assert!(
+        !body.contains("signer_for_act") && !body.contains("session"),
+        "{body}"
+    );
 }

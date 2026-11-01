@@ -177,44 +177,107 @@ pub fn role_needs_superuser(role: &str) -> bool {
     matches!(role.trim(), "superuser" | "admin")
 }
 
-/// Courtesy pre-check BEFORE the approver's key is released: an enroller (holds a current
-/// confirmed grant) asking for a superuser/admin role is told so without a release attempt. A
-/// superuser holds no grant, so `cairn_vault_is_enroller` is false for them. The floor stays the
-/// authority; a floor message is never parsed (it carries no scope).
-pub async fn precheck_approver(
-    db: &tokio_postgres::Client,
-    approver: &str,
-    role: &str,
-) -> anyhow::Result<Option<EnrolRefusal>> {
-    if !role_needs_superuser(role) {
-        return Ok(None);
-    }
-    let is_enroller: bool = db
-        .query_one("SELECT cairn_vault_is_enroller($1)", &[&approver])
-        .await?
-        .get(0);
-    Ok(is_enroller.then_some(EnrolRefusal::ApproverMayNotEnrolThisRole))
+/// What the grant panel's read (`vault_admin::enrollers`, which lists NON-superusers only) says
+/// about the approver. Pure over the rows, so the decisions below are testable without a database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// Not in the list: a superuser (or unknown, which the vault would not have released for).
+    NotListed,
+    /// A non-superuser holding the enroller grant now.
+    Granted,
+    /// A non-superuser without the grant (a clinician, say).
+    NotGranted,
 }
 
-/// After the vault refused the enrol purpose: a member holding the grant whose key is not yet
-/// confirmed is told to wait for a superuser; anyone else (a clinician) gets the plain refusal.
-pub async fn refused_purpose(
-    db: &tokio_postgres::Client,
-    approver: &str,
-) -> anyhow::Result<EnrolRefusal> {
-    let granted = cairn_node::vault_admin::enrollers(db)
-        .await?
+pub fn standing(rows: &[cairn_node::vault_admin::EnrollerRow], approver: &str) -> Standing {
+    match rows
         .iter()
-        .any(|r| r.enroller && r.staff_id.eq_ignore_ascii_case(approver.trim()));
-    Ok(if granted {
+        .find(|r| r.staff_id.eq_ignore_ascii_case(approver.trim()))
+    {
+        None => Standing::NotListed,
+        Some(r) if r.enroller => Standing::Granted,
+        Some(_) => Standing::NotGranted,
+    }
+}
+
+/// Pure: AFTER the vault released the approver's enrol key (so they are a superuser or a confirmed
+/// enroller), may they vouch for this role? A superuser always may (never refused here, even with
+/// a stray grant: the floor lets a superuser approve first); an enroller may not for superuser/admin.
+pub fn precheck_decision(standing: Standing, role: &str) -> Option<EnrolRefusal> {
+    (standing != Standing::NotListed && role_needs_superuser(role))
+        .then_some(EnrolRefusal::ApproverMayNotEnrolThisRole)
+}
+
+/// Pure: the vault refused the enrol purpose. A member holding the grant is waiting on a
+/// superuser's confirmation of their key; anyone else gets the plain refusal.
+pub fn refused_purpose_decision(standing: Standing) -> EnrolRefusal {
+    if standing == Standing::Granted {
         EnrolRefusal::ApproverNotConfirmed
     } else {
         EnrolRefusal::NotForEnrolment
-    })
+    }
+}
+
+/// Release the approver's key with `Purpose::Enrol` for ONE use by the caller (enrol or re-key);
+/// the caller drops it. Shared so the two commands cannot drift. `not_recorded` is the caller's
+/// own sentence for a database fault; every `Err` is a finished sentence. The courtesy refusal
+/// for superuser/admin targets runs after the release (see [`precheck_decision`]); the floor
+/// stays the authority and a floor message is never parsed.
+pub async fn release_enrol_key(
+    db: &cairn_gui_live::ConnectionGuard<'_>,
+    credential: &Credential,
+    role: &str,
+    not_recorded: &str,
+) -> Result<cairn_event::SigningKey, String> {
+    let fault = |e: anyhow::Error| {
+        let e = db.explain(e);
+        eprintln!(
+            "an enrol-purpose release could not be completed: {}",
+            cairn_node::db_diagnosis::operator_chain(&e)
+        );
+        not_recorded.to_string()
+    };
+    let released = cairn_node::vault::release_for_act(
+        db,
+        &credential.staff_id,
+        &credential.passphrase,
+        Purpose::Enrol,
+    )
+    .await
+    .map_err(fault)?;
+    let key = match released {
+        Release::Released { key, .. } => key,
+        Release::RefusedPurpose => {
+            let rows = cairn_node::vault_admin::enrollers(db)
+                .await
+                .map_err(fault)?;
+            return Err(refused_purpose_decision(standing(&rows, &credential.staff_id)).sentence());
+        }
+        Release::OverPowered { why } => {
+            // Operator diagnostics, as the clinical signer gives; `why` is a fixed sentence.
+            eprintln!("the window's connection is over-powered: {why}");
+            return Err(KeyRefusal::OverPowered.sentence());
+        }
+        other => {
+            return Err(from_release(other)
+                .err()
+                .unwrap_or(KeyRefusal::Fault)
+                .sentence())
+        }
+    };
+    if role_needs_superuser(role) {
+        let rows = cairn_node::vault_admin::enrollers(db)
+            .await
+            .map_err(fault)?;
+        if let Some(r) = precheck_decision(standing(&rows, &credential.staff_id), role) {
+            return Err(r.sentence());
+        }
+    }
+    Ok(key)
 }
 
 /// `None` for a blank optional field, else the trimmed text.
-fn optional(s: &str) -> Option<&str> {
+pub fn optional(s: &str) -> Option<&str> {
     Some(s.trim()).filter(|t| !t.is_empty())
 }
 
@@ -265,41 +328,14 @@ pub async fn enrol_member_impl(
     {
         return Err(EnrolRefusal::AlreadyEnrolled.sentence());
     }
-    if let Some(r) = precheck_approver(&db, &credential.staff_id, &member.role)
-        .await
-        .map_err(|e| fault(db.explain(e)))?
-    {
-        return Err(r.sentence());
-    }
     // Released, used once below, dropped at the end of this function. Never stored.
-    let released = cairn_node::vault::release_for_act(
+    let key = release_enrol_key(
         &db,
-        &credential.staff_id,
-        &credential.passphrase,
-        Purpose::Enrol,
+        &credential,
+        &member.role,
+        &EnrolRefusal::NotRecorded.sentence(),
     )
-    .await
-    .map_err(|e| fault(db.explain(e)))?;
-    let key = match released {
-        Release::Released { key, .. } => key,
-        Release::RefusedPurpose => {
-            return Err(refused_purpose(&db, &credential.staff_id)
-                .await
-                .map_err(|e| fault(db.explain(e)))?
-                .sentence())
-        }
-        Release::OverPowered { why } => {
-            // Operator diagnostics, as the clinical signer gives; `why` is a fixed sentence.
-            eprintln!("the window's connection is over-powered: {why}");
-            return Err(KeyRefusal::OverPowered.sentence());
-        }
-        other => {
-            return Err(from_release(other)
-                .err()
-                .unwrap_or(KeyRefusal::Fault)
-                .sentence())
-        }
-    };
+    .await?;
     let new = NewMember {
         staff_id: member.staff_id.trim(),
         display_name: member.display_name.trim(),
