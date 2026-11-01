@@ -38,14 +38,17 @@ use cairn_node::medication::{
     WithholdMedicationInput,
 };
 use cairn_node::vault::{self, NewMember, Purpose, Release};
-use cairn_patient_search::{CandidateList, SearchQuery};
+use cairn_patient_search::SearchQuery;
 use common::{cs, enroll_human, link_assertion_event, seed_proposal, setup, window_login};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 /// The identity and proposal tables the link/duplicate walks write; cleared by `setup`.
-const TABLES: [&str; 6] = [
+/// `patient_name` too: the search walk expects "nothing found" before it registers, which a
+/// previous run's registered name would otherwise break (#583's shape).
+const TABLES: [&str; 7] = [
+    "patient_name",
     "patient_link",
     "person_member",
     "identity_projection_flag",
@@ -81,6 +84,17 @@ fn assert_not_denied<T>(entry: &str, result: &anyhow::Result<T>) {
         !format!("{e:#}").contains("permission denied"),
         "{entry}: the window's role lacks a grant this command needs (permission denied)"
     );
+}
+
+/// [`assert_not_denied`], and then the call must have SUCCEEDED. A read that fails after its
+/// first statement would skip the statements after it, and hide any grant they need; so every
+/// read on a fixture that should satisfy it goes through here, not through the bare check.
+fn expect_as_window<T>(entry: &str, result: anyhow::Result<T>) -> T {
+    assert_not_denied(entry, &result);
+    match result {
+        Ok(value) => value,
+        Err(_) => panic!("{entry}: failed on the window's login (not a privilege refusal)"),
+    }
 }
 
 /// The owner connection (schema loaded, setup runs here) and the window's own connection,
@@ -146,35 +160,32 @@ async fn the_windows_reads_and_registration_run_under_its_own_login() {
         )
         .await
         .map_err(anyhow::Error::from);
-    assert_not_denied("reopen: own backend", &backend);
-    let r = cairn_node::identity::load_local(&window).await;
-    assert_not_denied("identity::load_local", &r);
+    expect_as_window("reopen: own backend", backend);
+    // `load_local` errors on a node `cairn-node init` never provisioned (this test database);
+    // `load_local_opt` runs the SAME query and answers `None` instead, so it can be expected.
+    let r = cairn_node::identity::load_local_opt(&window).await;
+    expect_as_window("identity::load_local", r);
     let r = cairn_node::actor_enrolment::device_actor_standing(&window, &kid).await;
-    assert_not_denied("actor_enrolment::device_actor_standing", &r);
+    expect_as_window("actor_enrolment::device_actor_standing", r);
     let r = cairn_node::actor_enrolment::require_device_actor(&window, &kid).await;
-    assert_not_denied("actor_enrolment::require_device_actor", &r);
+    expect_as_window("actor_enrolment::require_device_actor", r);
 
-    // The funnel: search, then register what was searched.
-    let query = SearchQuery::new("window-probe", None, &[]);
+    // The funnel: search (nothing yet), then register what was searched.
+    let query = SearchQuery::new("Window Probe", None, &[]);
     let found = cairn_node::patient::search::search_patients(&window, &query, &today).await;
-    assert_not_denied("patient::search::search_patients", &found);
-    let nothing = CandidateList {
-        people: vec![],
-        incomplete: false,
-        incomplete_reason: None,
-    };
+    let found = expect_as_window("patient::search::search_patients (empty)", found);
+    assert!(found.people.is_empty(), "nothing is registered yet");
     let registered = cairn_node::patient::register::register_patient(
         &mut window,
         &sk,
         &kid,
         ORIGIN,
-        None,
+        Some("Window Probe"),
         &query,
-        &nothing,
+        &found,
     )
     .await;
-    assert_not_denied("patient::register::register_patient", &registered);
-    let p = registered.expect("registration is admitted");
+    let p = expect_as_window("patient::register::register_patient", registered);
 
     // A second chart, a machine link between them and an open proposal, so the chart reads
     // below have an edge, a standing link and a duplicate entry to find.
@@ -186,49 +197,75 @@ async fn the_windows_reads_and_registration_run_under_its_own_login() {
     common::submit_registration(&owner, &sk, &kid, r_other, 2).await;
     seed_proposal(&owner, p, r_other, "pending").await;
 
+    // Search again: now the match runs its deep path (the person's charts, their doubt mark,
+    // display facts and retained names), with the linked chart q joining p's row.
+    let found = cairn_node::patient::search::search_patients(&window, &query, &today).await;
+    let found = expect_as_window("patient::search::search_patients (a match)", found);
+    assert_eq!(found.people.len(), 1, "the registered patient is found");
+    assert_eq!(
+        found.people[0].members().len(),
+        2,
+        "p's row carries its linked chart q"
+    );
+
     let r = cairn_node::patient::candidate_read::candidates_by_id(&window, &[p], &today).await;
-    assert_not_denied("patient::candidate_read::candidates_by_id", &r);
-    let charts = cairn_node::patient::person::person_charts(&window, p).await;
-    assert_not_denied("patient::person::person_charts", &charts);
-    let charts = charts.unwrap();
+    assert!(!expect_as_window("patient::candidate_read::candidates_by_id", r).is_empty());
+    let r = cairn_node::patient::person::person_charts(&window, p).await;
+    let charts = expect_as_window("patient::person::person_charts", r);
+    assert_eq!(
+        charts,
+        ChartSet::new([p, q]).unwrap(),
+        "p's record is p and q"
+    );
     let other = ChartSet::single(r_other);
     let r = cairn_node::patient::person::chart_identities(&window, &charts).await;
-    assert_not_denied("patient::person::chart_identities", &r);
+    expect_as_window("patient::person::chart_identities", r);
     let r = cairn_node::patient::compare::chart_facts(&window, &charts).await;
-    assert_not_denied("patient::compare::chart_facts", &r);
+    expect_as_window("patient::compare::chart_facts", r);
     let r = cairn_node::patient::compare::cross_vetoes(&window, &charts, &other).await;
-    assert_not_denied("patient::compare::cross_vetoes", &r);
+    expect_as_window("patient::compare::cross_vetoes", r);
     let r = cairn_node::patient::edges::record_edges(&window, &charts).await;
-    assert_not_denied("patient::edges::record_edges", &r);
+    assert!(!expect_as_window("patient::edges::record_edges", r).is_empty());
     let r = cairn_node::patient::edges::record_doubts(&window, &charts).await;
-    assert_not_denied("patient::edges::record_doubts", &r);
+    expect_as_window("patient::edges::record_doubts", r);
     let r = cairn_node::patient::edges::record_unverified_links(&window, &charts).await;
-    assert_not_denied("patient::edges::record_unverified_links", &r);
+    expect_as_window("patient::edges::record_unverified_links", r);
     let r = cairn_node::patient::edges::record_is_doubted(&window, &charts).await;
-    assert_not_denied("patient::edges::record_is_doubted", &r);
+    expect_as_window("patient::edges::record_is_doubted", r);
     let (lo, hi) = canonical_pair(p, q);
     let r = standing_link(&window, lo, hi).await;
-    assert_not_denied("chart_link::standing_link", &r);
-    let r = list_patient_medications(&window, p).await;
-    assert_not_denied("medication::read::list_patient_medications", &r);
+    assert!(expect_as_window("chart_link::standing_link", r).is_some());
+    // (`list_patient_medications` over a chart WITH medications is walked in the medication test.)
 
     // The duplicate banner and the worklist.
     let r = cairn_node::duplicate_review::possible_duplicates(&window, &charts).await;
-    assert_not_denied("duplicate_review::possible_duplicates", &r);
+    assert!(!expect_as_window("duplicate_review::possible_duplicates", r).is_empty());
     let r = cairn_node::duplicate_review::open_pairs_between(&window, &charts, &other).await;
-    assert_not_denied("duplicate_review::open_pairs_between", &r);
+    assert!(!expect_as_window("duplicate_review::open_pairs_between", r).is_empty());
     let r = cairn_node::duplicate_review::worklist::worklist(&window, 25).await;
-    assert_not_denied("duplicate_review::worklist::worklist", &r);
+    let list = expect_as_window("duplicate_review::worklist::worklist", r);
+    assert!(
+        !list.items.is_empty(),
+        "the open proposal is on the worklist"
+    );
+    // `worklist` folds each side's record read into a per-item String, so a denial there never
+    // reaches the outer Result: both sides must have READ.
+    for item in &list.items {
+        assert!(
+            item.newer.is_ok() && item.older.is_ok(),
+            "duplicate_review::worklist::worklist: a side's record failed on the window's login"
+        );
+    }
     let r = cairn_node::duplicate_review::worklist::worklist_count(&window).await;
-    assert_not_denied("duplicate_review::worklist::worklist_count", &r);
+    assert!(expect_as_window("duplicate_review::worklist::worklist_count", r) >= 1);
     let r = cairn_node::duplicate_check::read_snapshot(&window).await;
-    assert_not_denied("duplicate_check::read_snapshot", &r);
+    expect_as_window("duplicate_check::read_snapshot", r);
     let r = cairn_node::duplicate_check::chart_check_pending(&window, p).await;
-    assert_not_denied("duplicate_check::chart_check_pending", &r);
+    expect_as_window("duplicate_check::chart_check_pending", r);
 
     // The paper-parity timer every gesture feeds.
     let r = cairn_node::ui_timing::record_gesture(&window, "signoff", 3, 120).await;
-    assert_not_denied("ui_timing::record_gesture", &r);
+    expect_as_window("ui_timing::record_gesture", r);
 }
 
 /// "Same person", the review panel's confirm and unlink, and "Different people" — the four
@@ -349,6 +386,12 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
         basis: None,
         note: None,
     };
+    // The chart's medication list over a chart that HAS a line, so the group, conflict and
+    // stray-chart reads behind it run (an empty chart returns before them).
+    let r = list_patient_medications(&window, patient).await;
+    let list = expect_as_window("medication::read::list_patient_medications", r);
+    assert!(!list.rows.is_empty(), "the asserted line is listed");
+
     let shown = ChartSet::single(patient);
     let r =
         sign_off_medication_list(&mut window, &sk, ORIGIN, &attest, patient, Some(&shown)).await;
