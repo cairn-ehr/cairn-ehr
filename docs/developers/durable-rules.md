@@ -32,9 +32,18 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   unconfirmed. Repudiation is final for the key (a later confirm is refused) and never revokes the actor. Pins:
   `confirmation_has_one_definition`, `a_superuser_enrolment_is_confirmed_at_once`, `bootstrap_writes_a_confirm_row`,
   `a_repudiated_enrollers_unconfirmed_members_are_doubtful`, `rekey_after_repudiation_restores_the_actor`.
-- **Unconfirmed never blocks signing by itself.** Only a repudiation, a revoke or a site's own expiry stops a key, and
-  the expiry is OFF by default (`vault_policy` empty). **Tempting wrong fix:** refuse an unconfirmed key "to be safe" —
+- **Unconfirmed never blocks signing by itself.** Only a repudiation or a revoke stops a key from signing. A site's
+  own expiry stops the vault RELEASING the key, not the key signing: a seed already released, or a key the window
+  holds, signs until it is dropped (`submit_event` does not read `vault_policy`). The expiry is OFF by default
+  (`vault_policy` empty). **Tempting wrong fix:** refuse an unconfirmed key "to be safe" —
   it sends the newcomer back to paper or to a shared login. Pins: `no_expiry_by_default`, `a_confirmed_key_never_expires`.
+- **`cairn_actor_append` refuses a clock behind the actor's latest registry row** (every op). Readers order by
+  `recorded_at` first and a restore keeps the original timestamps, so a slow replacement machine would otherwise
+  write a `rotate-key` that leaves the old key current, or a withdrawal that does nothing. Equal is allowed (`seq`
+  breaks the tie). Pin: `a_clock_behind_the_registry_is_refused`.
+- **A re-key with no member row (after a restore) needs a superuser or the console, and a person's actor**
+  (`cairn_vault_install_key`). A CLI-enrolled human has the same `{role, handle}` shape, so letting an enroller take
+  that branch hands them any such actor. Pin: `rekey_without_a_member_row_needs_a_superuser_and_a_person`.
 - **The approver rule lives only in `cairn_vault_approver_ok`, and an enroller's act needs a current grant AND a
   confirmed (or `outside`) key** (`cairn_vault_enroller_problem`). Dropping the confirmed-key clause re-opens the
   impostor chain. An enroller never enrols or re-keys a `superuser` or an `admin`, grants, or judges; nobody re-keys a
