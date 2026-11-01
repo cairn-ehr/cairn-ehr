@@ -122,8 +122,9 @@ $$;
 --     would be another actor); NULL display name / phone / email keep the stored ones; key, blob
 --     and hint are replaced; the failure count is reset (success_mark moves up to every attempt
 --     consumed so far — the counters are sequences, db/061 promise 4, so they never go back).
---   * With NO member row (after a restore, §5.8): the actor {role, handle = staff ID} must be in
---     the registry; a display name is required, and the table's CHECK requires a contact.
+--   * With NO member row (after a restore, §5.8): only a superuser or the console (p_confirm)
+--     may approve; the actor {role, handle = staff ID} must be in the registry and be a PERSON
+--     (kind 'human'); a display name is required, and the table's CHECK requires a contact.
 -- Either way a `rotate-key` row carries the new key and the approval (db/004 refuses a revoked or
 -- superseded actor and any key ever held before), plus a `confirm` row when p_confirm (approved
 -- by a superuser or the console). Invoker rights, revoked from PUBLIC.
@@ -153,12 +154,23 @@ BEGIN
                 v_staff, v_role, COALESCE(p_role, 'NULL');
         END IF;
     ELSE
+        -- Nothing but the {role, handle} shape ties this staff ID to the actor, and a CLI-enrolled
+        -- person (enroll.rs) carries the same shape — so only a superuser (or the console; both
+        -- confirm at once, hence p_confirm) may take this branch, never an enroller.
+        IF NOT p_confirm THEN
+            RAISE EXCEPTION 'vault re-key refused: % has no member row (as after a restore) — only a superuser may re-create one on an existing actor; ask a superuser', v_staff;
+        END IF;
         IF NULLIF(btrim(p_display_name), '') IS NULL THEN
             RAISE EXCEPTION 'vault re-key refused: % has no member row (as after a restore), so a display name is required to re-create it', v_staff;
         END IF;
         v_actor := cairn_actor_id(jsonb_build_object('role', p_role, 'handle', v_staff));
         IF NOT EXISTS (SELECT 1 FROM actor_event e WHERE e.actor_id = v_actor AND e.op = 'enroll') THEN
             RAISE EXCEPTION 'vault re-key refused: no % actor with the handle % is in the registry — a person never enrolled here needs an enrolment, not a re-key',
+                COALESCE(p_role, 'NULL'), v_staff;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM actor_event e WHERE e.actor_id = v_actor AND e.op = 'enroll'
+                       AND e.kind = 'human') THEN
+            RAISE EXCEPTION 'vault re-key refused: the % actor with the handle % is not a person — only a person''s actor is re-keyed into the vault',
                 COALESCE(p_role, 'NULL'), v_staff;
         END IF;
     END IF;

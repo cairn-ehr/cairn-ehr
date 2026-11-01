@@ -22,7 +22,8 @@ type AppendRow<'a> = (
     Option<&'a Vec<u8>>,
 );
 
-/// Registry with enroll (approved), rotate-key, confirm, repudiate, grant-enroller rows.
+/// Registry with enroll (approved), rotate-key, confirm, repudiate, grant-enroller and
+/// withdraw-enroller rows — every op cairn_actor_append writes.
 async fn build_registry(c: &tokio_postgres::Client) {
     c.batch_execute(
         "DELETE FROM local_node;
@@ -40,11 +41,12 @@ async fn build_registry(c: &tokio_postgres::Client) {
         .await
         .unwrap()
         .get(0);
-    let ops: [AppendRow; 4] = [
+    let ops: [AppendRow; 5] = [
         ("rotate-key", Some(&k2), None, None),
         ("confirm", Some(&k2), Some(&su), Some(&token)),
         ("repudiate", Some(&k1), Some(&su), None),
         ("grant-enroller", None, Some(&su), None),
+        ("withdraw-enroller", None, Some(&su), None),
     ];
     for (op, kid, by, appr) in ops {
         c.execute(
@@ -103,7 +105,7 @@ async fn the_new_ops_survive_a_restore() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     build_registry(&c).await;
     let before = dump(&c).await;
-    assert!(before.len() >= 5, "fixture too small: {before:?}");
+    assert!(before.len() >= 6, "fixture too small: {before:?}");
     let json = export_json(&c).await;
     clear(&c).await;
     let n: i32 = c
@@ -120,8 +122,9 @@ async fn the_new_ops_survive_a_restore() {
     clear(&c).await;
 }
 
-#[tokio::test]
-async fn a_present_row_with_a_different_approval_is_refused() {
+/// Tamper one present row's `field` in the export and replay it: the door must refuse, naming the
+/// field (db/052's field-for-field comparison — one arm per column).
+async fn tampered_replay_is_refused(field: &str, value: serde_json::Value) {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -131,29 +134,35 @@ async fn a_present_row_with_a_different_approval_is_refused() {
     build_registry(&c).await;
     let json = export_json(&c).await;
     c.batch_execute("DELETE FROM local_node").await.unwrap();
-    // Tamper: the enroll row's approval token changes; the present row must be refused.
     let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let row = v
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|r| r.get("approval").is_some())
-        .expect("fixture has an approved row");
-    row["approval"] = serde_json::json!("00ff00ff");
+        .find(|r| r.get(field).is_some_and(|f| !f.is_null()))
+        .expect("fixture has a row carrying the field");
+    row[field] = value;
     let err = c
         .query_one(
             "SELECT restore_actor_registry($1::text::jsonb)",
             &[&v.to_string()],
         )
         .await
-        .expect_err("a different approval must be refused");
+        .expect_err("a tampered present row must be refused");
     let msg = err
         .as_db_error()
         .map(|d| d.message().to_string())
         .unwrap_or_default();
-    assert!(
-        msg.contains("approval"),
-        "refusal must name the field: {msg}"
-    );
+    assert!(msg.contains(field), "refusal must name {field}: {msg}");
     clear(&c).await;
+}
+
+#[tokio::test]
+async fn a_present_row_with_a_different_approval_is_refused() {
+    tampered_replay_is_refused("approval", serde_json::json!("00ff00ff")).await;
+}
+
+#[tokio::test]
+async fn a_present_row_with_a_different_approver_is_refused() {
+    tampered_replay_is_refused("approved_by", serde_json::json!(key())).await;
 }

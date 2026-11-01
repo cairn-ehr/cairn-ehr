@@ -69,16 +69,14 @@ ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS approval    BYTEA;
 -- the shape constraint's existence so a second replay is a true no-op (no re-validation, no
 -- ACCESS EXCLUSIVE lock on every connect). A LATER change to either definition therefore needs
 -- a new guard (e.g. on the new definition's text), not an edit here.
+--
+-- ADD CONSTRAINT validates every EXISTING row, so a pre-#666 row of the wrong shape (say a
+-- supersede that carried a key) would fail this load on every connect with Postgres's bare
+-- "is violated by some row". So the rows that break it are found first, with the SAME expression
+-- (held once, in v_shape), and named in a refusal that says what to do.
 DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conrelid = 'actor_event'::regclass
-                     AND conname = 'actor_event_op_shape') THEN
-        ALTER TABLE actor_event DROP CONSTRAINT IF EXISTS actor_event_op_check;
-        ALTER TABLE actor_event ADD CONSTRAINT actor_event_op_check CHECK (op IN (
-            'enroll','supersede','revoke','rotate-key','confirm','repudiate',
-            'grant-enroller','withdraw-enroller'));
-        ALTER TABLE actor_event ADD CONSTRAINT actor_event_op_shape CHECK (CASE
+DECLARE
+    v_shape TEXT := $shape$CASE
             WHEN op IN ('enroll','rotate-key')
                 THEN signing_key_id IS NOT NULL AND superseded_by IS NULL
             WHEN op = 'supersede'
@@ -90,7 +88,22 @@ BEGIN
             WHEN op IN ('grant-enroller','withdraw-enroller')
                 THEN signing_key_id IS NULL AND approved_by IS NOT NULL
             ELSE false
-        END);
+        END$shape$;
+    v_bad TEXT;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid = 'actor_event'::regclass
+                     AND conname = 'actor_event_op_shape') THEN
+        EXECUTE format('SELECT string_agg(actor_event_id::text || '' ('' || op || '')'', '', '' ORDER BY seq)
+                          FROM actor_event WHERE NOT (%s)', v_shape) INTO v_bad;
+        IF v_bad IS NOT NULL THEN
+            RAISE EXCEPTION 'actor_event: these registry rows break the per-op shape rule (#666) and must be corrected by the node''s owner before the schema can load: %. A supersede row carries no key (its key belongs on the new actor''s enroll row) and a revoke row carries none; actor_event is append-only, so the owner disables actor_event_no_update, clears the stray column on exactly these rows, and re-enables it', v_bad;
+        END IF;
+        ALTER TABLE actor_event DROP CONSTRAINT IF EXISTS actor_event_op_check;
+        ALTER TABLE actor_event ADD CONSTRAINT actor_event_op_check CHECK (op IN (
+            'enroll','supersede','revoke','rotate-key','confirm','repudiate',
+            'grant-enroller','withdraw-enroller'));
+        EXECUTE format('ALTER TABLE actor_event ADD CONSTRAINT actor_event_op_shape CHECK (%s)', v_shape);
     END IF;
 END $$;
 
@@ -147,6 +160,9 @@ WHERE l.op <> 'supersede'
 -- difference from actor_current. For readers that RE-JUDGE an already-admitted event; a write
 -- door asks actor_current instead. DISTINCT: an idempotent re-enroll writes a second identical
 -- row, and a reader's `count(*) = 1` guard must not see two.
+-- A SUPERSEDED actor's keys still vouch here (only revoke and repudiate remove a key). No
+-- supersede writer exists yet; the first supersede door owes the decision whether a superseded
+-- actor's keys should keep vouching for what they signed, and must change this view if not.
 CREATE OR REPLACE VIEW actor_key_vouches AS
 SELECT DISTINCT ae.actor_id, ae.kind, ae.signing_key_id
 FROM actor_event ae
@@ -309,10 +325,16 @@ $$;
 --     columns whichever key-bearing row is latest.
 --   * confirm / repudiate: the key must be one this actor holds or held.
 --   * the per-op shape CHECK (actor_event_op_shape) refuses a missing key or approver.
+--   * every op: this machine's clock must not read EARLIER than the actor's latest row. Readers
+--     (actor_current, cairn_vault_latest_grant) order by recorded_at first, and a restore keeps
+--     each row's original recorded_at — so on a replacement machine whose clock is behind the
+--     backup, a new row would sort BEFORE the restored ones: a rotate-key would leave the old key
+--     current, a withdrawal would change nothing, each while "succeeding". Refused, naming the
+--     clock. An EQUAL timestamp is fine: the seq tiebreak puts the new row last (issue #99).
 CREATE OR REPLACE FUNCTION cairn_actor_append(p_actor_id BYTEA, p_op TEXT, p_key TEXT,
                                               p_approved_by TEXT, p_approval BYTEA)
 RETURNS void LANGUAGE plpgsql AS $$
-DECLARE v_kind TEXT; v_pinned JSONB;
+DECLARE v_kind TEXT; v_pinned JSONB; v_latest TIMESTAMPTZ; v_now TIMESTAMPTZ;
 BEGIN
     IF p_op IS NULL OR p_op NOT IN
        ('rotate-key','confirm','repudiate','grant-enroller','withdraw-enroller') THEN
@@ -329,6 +351,12 @@ BEGIN
     ORDER BY seq LIMIT 1;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'cairn_actor_append: actor_id % was never enrolled', encode(p_actor_id, 'hex');
+    END IF;
+    SELECT max(recorded_at) INTO v_latest FROM actor_event WHERE actor_id = p_actor_id;
+    v_now := clock_timestamp();
+    IF v_now < v_latest THEN
+        RAISE EXCEPTION 'cairn_actor_append: this machine''s clock reads %, earlier than the actor''s latest registry row (%) — a row written now would sort before it and be overruled; set the clock, then retry',
+            v_now, v_latest;
     END IF;
     IF p_op = 'rotate-key' THEN
         IF EXISTS (SELECT 1 FROM actor_event WHERE actor_id = p_actor_id
