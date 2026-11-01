@@ -394,6 +394,11 @@ const SCHEMA: &[(&str, &str)] = &[
     // for one act by passphrase, never its wrapping. Node-only: the vault is local key custody,
     // not something cairn-sync serves.
     ("061_vault", include_str!("../../../db/061_vault.sql")),
+    // db/062 (#898): the window's own NOLOGIN group role. Node-only, like the vault it fences off.
+    (
+        "062_window_role",
+        include_str!("../../../db/062_window_role.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
