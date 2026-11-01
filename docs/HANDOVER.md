@@ -260,7 +260,9 @@ about where a machine sits or who installs it; long term every terminal is a nod
   undoes it and the owner's password stays in a copyable string. The hole is the credential HANDED OUT.
 - **⇒ `has_*_privilege` and `pg_has_role(…, 'USAGE')` see only INHERITED power.** A `WITH INHERIT FALSE` member can
   still `SET ROLE` into the owner or `cairn_node`. Judge every fact over every role the login is a MEMBER of
-  (the plan's own `'USAGE'` was the defect; the task review caught it).
+  (the plan's own `'USAGE'` was the defect; the task review caught it). **And judge `session_user`, never
+  `current_user`:** a connection string's `options='-c role=…'` changes `current_user` without changing the login — the
+  final review passed the check on the OWNER's login that way (fixed before merge).
 - **⇒ A permission walk that runs a read on EMPTY data proves nothing** — search before anything is registered
   returns after its first query. Drive each call to success on a fixture that reaches its deep path.
 - **⇒ An owner verb that takes a role name must refuse an existing role that is not exactly what it makes** — the
