@@ -35,7 +35,7 @@
 --     whole twin dispatch is refusal-safe to fork on.
 --
 -- KNOWN LIMITATION (deliberate, documented): actor enrollment is resolved against the
--- LOCAL registry (actor_current), exactly as at the authoring door. Actor-registry
+-- LOCAL registry (actor_key_vouches — see step 2 for why not actor_current). Actor-registry
 -- replication is not yet built (ADR-0011 future work), so today an event authored on a
 -- peer applies only once its signer is enrolled here too (an operator ceremony). A
 -- refused-but-valid event freezes the puller's watermark (cairn-sync A1 discipline)
@@ -167,8 +167,18 @@ BEGIN
     PERFORM cairn_check_contributors(b, 'apply_remote_event', false);
 
     -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked)
-    --    and RECORD the resolution (issue #99). The admission GATE is actor_current,
-    --    exactly as at the authoring door. The attribution STAMP, though, must be
+    --    and RECORD the resolution (issue #99). The admission GATE is actor_key_vouches, NOT
+    --    actor_current as at the authoring door (sign-in slice 2). This door receives events
+    --    that were signed ELSEWHERE OR EARLIER — a peer's, a medium's, this node's own backup
+    --    on restore (restore/clinical.rs replays every record through here) — so it asks "did
+    --    this key legitimately belong to a not-revoked actor", not "may it sign something new
+    --    here". Rotation is not compromise: a re-keyed clinician's K1 events must still apply,
+    --    or a restore after any re-key pens the clinic's own history. Repudiation IS
+    --    compromise: a repudiated key is not in actor_key_vouches and is refused. submit_event
+    --    stays on actor_current — a rotated-away key authors nothing new at this node.
+    --    RESIDUAL RISK, accepted: a leaked, rotated-away, NOT-repudiated key can still land an
+    --    event here via a paired peer or a medium. The remedy is to repudiate it; rotation
+    --    alone does not retire a key from history. The attribution STAMP, though, must be
     --    resolved against the key's ENTIRE local registry history, not its current
     --    state: a replicated event was authored under whatever epoch its origin node
     --    held AT AUTHORING TIME, which this node cannot know (the signed bytes carry
@@ -180,7 +190,7 @@ BEGIN
     --    over-selected at recall, never missed). Node-local derived state — the
     --    signed bytes are untouched, so set-union convergence is unaffected.
     --    See the KNOWN LIMITATION note in the header: local registry, by design for now.
-    IF NOT EXISTS (SELECT 1 FROM actor_current WHERE signing_key_id = b ->> 'signer_key_id') THEN
+    IF NOT EXISTS (SELECT 1 FROM actor_key_vouches WHERE signing_key_id = b ->> 'signer_key_id') THEN
         RAISE EXCEPTION 'apply_remote_event: signer % is not an enrolled, non-revoked actor', b ->> 'signer_key_id';
     END IF;
     SELECT array_agg(DISTINCT ae.actor_id) INTO v_actor_ids
@@ -262,7 +272,10 @@ BEGIN
         IF NOT cairn_attestation_ok(p_attestation, v_ca, p_attester_key) THEN
             RAISE EXCEPTION 'apply_remote_event: attestation token invalid or not bound to this event';
         END IF;
-        IF NOT EXISTS (SELECT 1 FROM actor_current
+        -- actor_key_vouches, like the signer gate in step 2 and for the same reason: an
+        -- attestation made by a since-rotated key is still that human's (rotation is not
+        -- compromise); a repudiated attester is refused.
+        IF NOT EXISTS (SELECT 1 FROM actor_key_vouches
                        WHERE signing_key_id = encode(p_attester_key,'hex') AND kind = 'human') THEN
             RAISE EXCEPTION 'apply_remote_event: attester is not an enrolled human actor (forged human author refused)';
         END IF;

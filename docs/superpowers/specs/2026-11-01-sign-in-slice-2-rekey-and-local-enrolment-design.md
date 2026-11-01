@@ -146,7 +146,9 @@ passphrase and optional hint; the node generates the key and seals it — with t
   - **Repudiation lowers what the floor already granted** *(my call, the consequence of "everything it signed is
     shown as repudiated")*: a reader that re-judges a stored event asks "was the key current WHEN RECORDED **and is
     it not repudiated**". So a rotation keeps K1's legitimate work, and a repudiation demotes an impostor's
-    attested suppressions and links (`cairn_claim_authority`, db/005) as well as its display.
+    sensitivity withdrawals (`cairn_claim_authority`, db/005, the only re-grade of an attested act). An
+    attested `patient_link` is **not** re-graded: a repudiated key's links are shown as repudiated only
+    through the author display (slice 3), not demoted *(corrected during the build, Task 2)*.
 - **Cascade:** if a superuser repudiates an **enroller's** key, every still-unconfirmed key that enroller approved
   is shown as **doubtful** — derived when read, no extra acts. Keys a superuser already confirmed stay confirmed.
 - **A superuser's worklist** in the window lists every unconfirmed key: who, approved by whom, when (and on which

@@ -368,10 +368,10 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --      authority. Pinned by actor_readers_after_rotation.rs.
 --
 --      The revoke case was confirmed by a throwaway check in a scratch database during the
---      build — not by a committed test (no revoke-then-reread scenario is covered). The direction is SAFE
---      (protection is
---      restored, never removed), so this is a declared consequence of read-time authority
---      rather than a defect — but whether it is RIGHT is undecided and is issue #409
+--      build — not by a committed test (no revoke-then-reread scenario is covered). The
+--      direction is SAFE (protection is restored, never removed), so this is a declared
+--      consequence of read-time authority rather than a defect — but whether it is RIGHT
+--      is undecided and is issue #409
 --      (contamination cascade says authority follows revocation; a clinician merely leaving
 --      should probably not silently re-seal charts they lawfully opened). Do not "fix" it
 --      here without reading that issue: the healing in axis 1 and the re-raise in axis 2

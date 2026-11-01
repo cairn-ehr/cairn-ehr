@@ -25,7 +25,7 @@ use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use common::{
     apply_remote_attested, apply_remote_raw, assert_chart_grade, bearing_withdrawal_body,
     body_from_spec, content_address_of, cs, db_msg, enroll_human, enroll_human_with_role, setup,
-    submit_attested, submit_registration, submit_signed, EventSpec,
+    submit_attested, submit_registration, submit_signed, withdrawal_body_with_id, EventSpec,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -265,6 +265,90 @@ async fn the_worklist_still_names_a_rotated_attester() {
     );
 }
 
+/// A self-withdrawal (R2, un-attested — the remote door is the only one that admits it).
+async fn self_withdraw(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    p: Uuid,
+    a: Uuid,
+    wall: i64,
+) -> Uuid {
+    let withdraws_hex = hex::encode(content_address_of(c, a).await);
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &withdraws_hex,
+        rationale: "mine to lower",
+    };
+    let wid = Uuid::now_v7();
+    apply_remote_raw(c, sk, withdrawal_body_with_id(p, wid, kid, &w, wall))
+        .await
+        .expect("an un-attested self-withdrawal lands at the remote door");
+    wid
+}
+
+/// R2 is about the PERSON: Dr A asserts with K1, is re-keyed, and withdraws with K2 — 'self'.
+#[tokio::test]
+async fn a_rekeyed_human_withdrawing_their_own_assertion_is_self() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, SENSITIVITY).await;
+    let (sk_1, kid_1) = enroll_human(&c).await;
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_chart_grade(&c, &sk_1, &kid_1, p, 10, "sequestered").await;
+    let (sk_2, kid_2) = rotate(&c, &actor_of(&c, &kid_1).await).await;
+
+    let w = self_withdraw(&c, &sk_2, &kid_2, p, a, 20).await;
+    assert_eq!(authority(&c, w, a).await, "self");
+}
+
+/// R2's key join: the withdrawal's OWN signing key must still vouch. An impostor re-keyed as
+/// Dr A (K2) self-withdraws Dr A's assertion; once K2 is repudiated that withdrawal is
+/// 'unverified', while Dr A's own K1 self-withdrawal stays 'self'. Joining on the actor alone
+/// would keep the impostor's 'self' — Dr A's actor still vouches through K1.
+#[tokio::test]
+async fn a_repudiated_keys_self_withdrawal_is_unverified_but_the_owners_stays_self() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, SENSITIVITY).await;
+    let (sk_1, kid_1) = enroll_human(&c).await;
+    let aid = actor_of(&c, &kid_1).await;
+    let (p1, p2) = (Uuid::now_v7(), Uuid::now_v7());
+    submit_registration(&c, &sk, &kid, p1, 1).await;
+    submit_registration(&c, &sk, &kid, p2, 2).await;
+    let a1 = assert_chart_grade(&c, &sk_1, &kid_1, p1, 10, "sequestered").await;
+    let a2 = assert_chart_grade(&c, &sk_1, &kid_1, p2, 11, "sequestered").await;
+    let w1 = self_withdraw(&c, &sk_1, &kid_1, p1, a1, 20).await;
+    let (sk_2, kid_2) = rotate(&c, &aid).await;
+    let w2 = self_withdraw(&c, &sk_2, &kid_2, p2, a2, 30).await;
+    assert_eq!(authority(&c, w2, a2).await, "self", "precondition");
+
+    repudiate(&c, &aid, &kid_2).await;
+
+    assert_eq!(
+        authority(&c, w2, a2).await,
+        "unverified",
+        "a repudiated key's self-withdrawal loses its authority"
+    );
+    assert_eq!(
+        authority(&c, w1, a1).await,
+        "self",
+        "the real owner's own self-withdrawal is untouched"
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // ADMISSION: the write doors refuse a rotated-away or repudiated key
 // ---------------------------------------------------------------------------------------------
@@ -333,9 +417,120 @@ async fn a_repudiated_key_cannot_submit() {
         db_msg(&e)
     );
     // No fall-back: the key the rotation retired does not become current again.
-    submit_signed(&c, &sk_1, &kid_1, note_spec(p, 11))
+    let e = submit_signed(&c, &sk_1, &kid_1, note_spec(p, 11))
         .await
         .expect_err("repudiating the latest key leaves the actor with NO current key");
+    assert!(
+        db_msg(&e).contains("not an enrolled, non-revoked actor"),
+        "{}",
+        db_msg(&e)
+    );
+}
+
+/// The remote door re-admits what was signed ELSEWHERE OR EARLIER — a peer's event, a medium,
+/// this node's own backup on restore (`restore/clinical.rs` replays every record through
+/// `apply_remote_event`). So its signer and attester gates ask `actor_key_vouches`, not
+/// `actor_current`: rotation is not compromise, and after a re-key a restore must not pen the
+/// clinic's own K1 history. (`submit_event` stays on `actor_current`: see the test above.)
+/// The restore CLI itself is not driven here — it needs a full medium fixture; this door is
+/// the only actor check on its path.
+#[tokio::test]
+async fn a_rotated_away_keys_past_event_is_admitted_by_remote_apply() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, SENSITIVITY).await;
+    let (sk_1, kid_1) = enroll_human(&c).await;
+    let (p, a) = sequestered_chart(&c, &sk, &kid, 1).await;
+    // Both events exist (signed by K1) before the rotation; they arrive after it.
+    let n = note(p, &kid_1, 10);
+    rotate(&c, &actor_of(&c, &kid_1).await).await;
+
+    apply_remote_raw(&c, &sk_1, n)
+        .await
+        .expect("a K1-signed event must still apply after K1 was rotated away (signer gate)");
+    let wid = attested_withdrawal(&c, &sk, &kid, &sk_1, &kid_1, p, a, 20).await;
+    assert_eq!(
+        authority(&c, wid, a).await,
+        "attested",
+        "and a K1 attestation still clears the attester gate and grades as attested"
+    );
+}
+
+/// db/043 deferred gate 1 mirrors db/020's attester gate: an event attested by K1, deferred
+/// (its type unknown here), then promoted after K1 was rotated away, must promote — not stay
+/// deferred forever. A probe type of this file's own, de-classified first so a predecessor
+/// that died mid-test cannot leave it classified.
+#[tokio::test]
+async fn a_deferred_event_attested_by_a_rotated_away_key_still_promotes() {
+    const PROBE: &str = "cairn_test.rotation_deferred_probe";
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let _ = setup(&c, &[]).await;
+    c.execute(
+        "DELETE FROM event_type_class WHERE event_type = $1",
+        &[&PROBE],
+    )
+    .await
+    .unwrap();
+    let (sk_1, kid_1) = enroll_human(&c).await;
+    let mut b = body_from_spec(
+        Uuid::now_v7(),
+        &kid_1,
+        EventSpec {
+            patient: Uuid::now_v7(),
+            event_type: PROBE,
+            schema_version: "future/1",
+            payload: serde_json::json!({ "probe": "deferred, then promoted" }),
+            plaintext_twin: None,
+            wall: 10,
+        },
+    );
+    // A responsibility-bearing contributor, so gate 1 (the attester check) actually runs.
+    b.contributors = serde_json::json!([{
+        "actor_id": kid_1, "role": "authored", "responsibility": {"held_by": kid_1}
+    }]);
+    apply_remote_attested(&c, &sk_1, b, &sk_1, &kid_1)
+        .await
+        .expect("an unclassified type is admitted uninterpreted (ADR-0056)");
+    rotate(&c, &actor_of(&c, &kid_1).await).await;
+
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ($1, 'additive', FALSE) ON CONFLICT DO NOTHING",
+        &[&PROBE],
+    )
+    .await
+    .unwrap();
+    let promoted = c
+        .query(
+            "SELECT promoted_type FROM cairn_readjudicate_deferred()",
+            &[],
+        )
+        .await
+        .unwrap()
+        .len();
+    c.execute(
+        "DELETE FROM event_type_class WHERE event_type = $1",
+        &[&PROBE],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        promoted, 1,
+        "an attestation made by a since-rotated key still vouches at re-adjudication"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -316,8 +316,9 @@ BEGIN
         RETURN;
     END IF;
     -- A key that is not current (its actor revoked or superseded, the key rotated away or
-    -- repudiated — ADMISSION, so actor_current, never actor_key_vouches) signs nothing the floor will
-    -- accept, so it is not released: the member is told why, instead of seeing every act fail.
+    -- repudiated — ADMISSION, so actor_current, never actor_key_vouches) signs nothing the
+    -- floor will accept, so it is not released: the member is told why, instead of seeing
+    -- every act fail.
     -- Before the count, like the purpose: it reveals nothing a guess would.
     IF NOT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = v_member.signing_key_id) THEN
         RETURN QUERY SELECT 'not-current'::text, NULL::bytea, NULL::text, NULL::bigint;

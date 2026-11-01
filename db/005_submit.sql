@@ -677,8 +677,9 @@ REVOKE EXECUTE ON FUNCTION cairn_twin_is_present(text) FROM PUBLIC;
 --
 -- The target's human authors = {signer_key_id if it EVER resolved to a kind='human'
 -- actor} ∪ {hex(attester_key) if a human attestation is stored}. Empty set ⇒
--- agent/un-owned ⇒ permitted. Non-empty ⇒ permitted only if the attester is in it.
--- STABLE (reads event_log + actor_event). Shared by BOTH doors so a replicated
+-- agent/un-owned ⇒ permitted. Non-empty ⇒ permitted only if the attester's ACTOR (exactly
+-- one, through actor_key_vouches) is the actor behind one of those keys.
+-- STABLE (reads event_log, actor_event, actor_key_vouches). Shared by BOTH doors so a replicated
 -- cross-human suppress faces the identical refusal (principle 12). Safe direction:
 -- an unknown/ambiguous attester on human-authored content refuses, never permits.
 --
@@ -741,9 +742,26 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL
           AND cairn_attestation_vouched(p_target)
+    ),
+    -- The ACTORS behind those keys, from the same monotonic history (sign-in slice 2). Owner
+    -- means the same PERSON, not the same key: after a re-key (rotate-key, same actor) Dr A's
+    -- K2 must still be able to suppress the note Dr A signed with K1, or every re-keyed
+    -- clinician loses that power over their own past work (paper-parity, design §5.3/§5.6).
+    author_actors AS (
+        SELECT DISTINCT ae.actor_id
+        FROM actor_event ae JOIN human_authors h ON ae.signing_key_id = h.kid
+        WHERE ae.op IN ('enroll','rotate-key')
+    ),
+    -- The suppressor's actor: its key must resolve to EXACTLY ONE actor that still vouches
+    -- (not revoked, key not repudiated). Zero or several resolve to NULL and match nothing —
+    -- #152's uniqueness, and the safe direction: an ambiguous or repudiated attester refuses.
+    attester_actor AS (
+        SELECT CASE WHEN count(*) = 1 THEN max(v.actor_id) END AS actor_id
+        FROM actor_key_vouches v
+        WHERE v.signing_key_id = encode(p_attester_key, 'hex')
     )
     SELECT NOT EXISTS (SELECT 1 FROM human_authors)
-        OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));
+        OR EXISTS (SELECT 1 FROM author_actors a JOIN attester_actor t ON a.actor_id = t.actor_id);
 $$;
 
 -- Fail-closed suppression target resolution (issue #191, finding A3). The floor contract
