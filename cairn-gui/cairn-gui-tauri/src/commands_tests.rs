@@ -370,6 +370,7 @@ fn every_command_the_webview_calls_is_registered() {
         ("signer.js", include_str!("../src-ui/signer.js")),
         ("enrol.js", include_str!("../src-ui/enrol.js")),
         ("rekey.js", include_str!("../src-ui/rekey.js")),
+        ("superuser.js", include_str!("../src-ui/superuser.js")),
         ("reseal.js", include_str!("../src-ui/reseal.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
         ("holds.js", include_str!("../src-ui/holds.js")),

@@ -111,6 +111,19 @@
         </form>
       </details>
 
+      <!-- The superuser's panel (sign-in slice 2). Grants and the unconfirmed-keys worklist; the
+           superuser authenticates through the signer strip (superuser.js). -->
+      <details id="superuser-panel">
+        <summary>Superuser: enrollers and keys</summary>
+        <p>A superuser enters their own staff ID and passphrase in the signer strip above, then presses a button.</p>
+        <h3>Who can enrol staff</h3>
+        <ul id="superuser-grants"></ul>
+        <h3>Keys waiting for a superuser</h3>
+        <ul id="superuser-keys"></ul>
+        <p id="superuser-keys-empty" hidden>No keys are waiting.</p>
+        <p id="superuser-status" role="status" aria-live="polite" hidden></p>
+      </details>
+
       <!-- Change my passphrase (sign-in slice 2). The member's own current passphrase goes through
            the counted door; all three passphrases are emptied after every attempt (reseal.js). -->
       <details id="change-passphrase">
@@ -349,6 +362,7 @@
     <script src="signer.js"></script>
     <script src="enrol.js"></script>
     <script src="rekey.js"></script>
+    <script src="superuser.js"></script>
     <script src="reseal.js"></script>
     <script src="stop_reasons.js"></script>
     <script src="holds.js"></script>

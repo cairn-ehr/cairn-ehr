@@ -48,6 +48,7 @@ mod signer_webview_tests;
 #[cfg(test)]
 mod source_guard;
 mod state;
+mod superuser_panel;
 #[cfg(test)]
 mod waiting_webview_tests;
 mod worklist;
@@ -132,6 +133,10 @@ fn main() -> anyhow::Result<()> {
             commands::cease,
             enrol::enrol_member,
             rekey::rekey_member,
+            superuser_panel::list_unconfirmed,
+            superuser_panel::list_enrollers,
+            superuser_panel::set_enroller,
+            superuser_panel::judge_key,
             reseal::change_passphrase,
             hold::withhold,
             hold::release,
