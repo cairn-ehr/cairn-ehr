@@ -21,19 +21,37 @@ and needs a JS-toolchain decision this slice deliberately did not take.
 
 ## 0. Prerequisites
 
-A node database with `cairn_pgx` installed, and this node's key. For a throwaway rig — every
-command below was run end-to-end on 2026-08-03, so the flags are the real ones:
+A node database with `cairn_pgx` installed, and this node's key. The rig is a throwaway Postgres cluster
+of its OWN, on another port, made with a password and `scram-sha-256` from its first start: never switch the
+shared development cluster (:5532, also `CAIRN_TEST_PG`, see getting-started) away from `trust`, because every
+DB-gated test suite connects to it with no password. The binaries are the PG18 install `cairn_pgx` was installed
+into (`pg_config --bindir`), so `CREATE EXTENSION cairn_pgx` works in the new cluster too. The `init` and later
+`cairn-node` flags were run end-to-end on 2026-08-03 against a `trust` rig; the cluster steps (`initdb` to `start`)
+and the window's own login (below) were written on 2026-11-01 for #898/#899 and have not yet been run end-to-end,
+so a first run that needs a change is a finding:
 
 ```bash
-export CONN="host=127.0.0.1 port=5532 user=$USER dbname=cairn_measure"
+export PGBIN="$(pg_config --bindir)"     # the PG18 install cairn_pgx is installed into
+export MDATA=/tmp/cairn-measure-pg MPORT=5533
+read -rs OWNER_PW && export OWNER_PW     # the owner's password; no spaces or quotes (it goes in a connection string)
+( umask 077; printf '%s\n' "$OWNER_PW" > "$MDATA.pw" )
+# The owner's password is set, and every pg_hba.conf line is scram-sha-256, before the server first starts.
+"$PGBIN/initdb" -D "$MDATA" -U "$USER" --auth=scram-sha-256 --pwfile="$MDATA.pw"
+rm "$MDATA.pw"
+"$PGBIN/pg_ctl" -D "$MDATA" -o "-p $MPORT" -l "$MDATA.log" start
+
+export PGPASSWORD="$OWNER_PW"            # psql reads it; tokio-postgres (cairn-node, the window) does not
+export CONN="host=127.0.0.1 port=$MPORT user=$USER password=$OWNER_PW dbname=cairn_measure"
 export NODE_KEY=/tmp/measure-node.key
 
-psql -h 127.0.0.1 -p 5532 -d postgres -c "CREATE DATABASE cairn_measure"
-psql "$CONN" -c "CREATE EXTENSION IF NOT EXISTS cairn_pgx"
+"$PGBIN/psql" -h 127.0.0.1 -p "$MPORT" -d postgres -c "CREATE DATABASE cairn_measure"
+"$PGBIN/psql" "$CONN" -c "CREATE EXTENSION IF NOT EXISTS cairn_pgx"
 
 cairn-node --conn "$CONN" --key "$NODE_KEY" \
     init --name measure-rig --address 127.0.0.1:0 --insecure-plaintext   # test rig only
 ```
+
+When the measurement is done: `"$PGBIN/pg_ctl" -D "$MDATA" stop && rm -rf "$MDATA" "$MDATA.log"`.
 
 > `--key` is a **global** flag: it comes before the subcommand, not after it. Every command
 > below follows that shape.
@@ -43,12 +61,8 @@ cairn-node --conn "$CONN" --key "$NODE_KEY" \
 
 1. **The cluster must not trust anyone.** `provision-window-role` refuses while any `pg_hba.conf` rule (an included
    file's too) says `trust` (it names the file and line), and refuses rules changed since the server last loaded
-   them. Do these IN THIS ORDER, or you lock yourself out of a trust-only rig: (a) give the owner a password with
-   psql's `\password` (`psql -h 127.0.0.1 -p 5532 -d postgres`, then `\password`), so the cleartext is not in a
-   logged statement; (b) only then edit `pg_hba.conf` to `scram-sha-256`; (c) reload (`SELECT pg_reload_conf()`).
-   `tokio-postgres` does not read `PGPASSWORD`, so put the password in the string and use it for `CONN` instead of the
-   one above: `export CONN="host=127.0.0.1 port=5532 user=$USER password=… dbname=cairn_measure"`. `psql` (unlike
-   `cairn-node`) reads `PGPASSWORD`, so export it too for the `psql` lines.
+   them. The cluster above is made that way from its first start, so neither refusal should fire; if one does, the
+   cluster is not the one this section made.
 2. **The owner provisions the window's login once**, after `init` (it also installs or upgrades the schema, which the
    window never does). The owner must be a database superuser (it reads `pg_hba_file_rules`). Choose the window's
    password and export it for the step (otherwise it is prompted for, twice):
@@ -56,14 +70,17 @@ cairn-node --conn "$CONN" --key "$NODE_KEY" \
    ```bash
    export CAIRN_WINDOW_DB_PASSWORD='…'
    cairn-node --conn "$CONN" provision-window-role --role cairn_window_login
-   export WINDOW_CONN="host=127.0.0.1 port=5532 user=cairn_window_login password=$CAIRN_WINDOW_DB_PASSWORD dbname=cairn_measure"
+   export WINDOW_CONN="host=127.0.0.1 port=$MPORT user=cairn_window_login password=$CAIRN_WINDOW_DB_PASSWORD dbname=cairn_measure"
    ```
 
    Re-run it after every schema-changing build: a window refuses to start on a database its build has not been
    prepared for, and names this command.
 3. **Every window launch below uses `"$WINDOW_CONN"`**; every `cairn-node` and `psql` step keeps the owner `"$CONN"`.
+   The window gets it as `CAIRN_CONN="$WINDOW_CONN" cargo run …`, not `--conn`: the string carries a password, and a
+   command-line argument is visible to every account on the machine (`ps`), an environment variable only to yours (and root).
+   `cairn-node` reads `CAIRN_CONN` too; on a machine other people log into, run its lines the same way.
    The connection must be on this machine (`127.0.0.1`, `localhost` or a socket): the window refuses any other host.
-   A window started with `"$CONN"` still opens and reads, but every signature and "Enrol staff" is refused with
+   A window started with `CAIRN_CONN="$CONN"` still opens and reads, but every signature and "Enrol staff" is refused with
    "more access than a window may have", and the reason is printed on the terminal's stderr.
 
 ## 1. Enrol the clinician who will sign
@@ -150,8 +167,8 @@ timing a gesture over a chart the node already says is incomplete.
 
 ```bash
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$PATIENT" --conn "$WINDOW_CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$PATIENT" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -259,7 +276,7 @@ SEED
 reported separately and never merged):
 
 ```bash
-cargo run --release -p cairn-gui-tauri -- --conn "$WINDOW_CONN" --key "$NODE_KEY"
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- --key "$NODE_KEY"
 cargo run --release -p cairn-gui-tauri -- --mock
 ```
 
@@ -298,8 +315,8 @@ opened (a plausible duplicate — same or a near-miss name):
 ```bash
 cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$PATIENT" --conn "$WINDOW_CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$PATIENT" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -377,8 +394,8 @@ A=$(reg); B=$(reg); C=$(reg)
 cnode link-charts "$A" "$B" --attester-key /tmp/dr-a.key
 cnode link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$WINDOW_CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -456,8 +473,8 @@ A=$(reg); B=$(reg)
 [ -n "$A" ] && [ -n "$B" ] || { echo "registration failed" >&2; exit 1; }
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$WINDOW_CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -558,7 +575,7 @@ Emery Elmsworth|1965-05-15
 SEED
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- --conn "$WINDOW_CONN" --key "$NODE_KEY" --key-hold-seconds 900
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 The front door shows **"Possible duplicates (5)"** below the registration form (more if section 11's
@@ -651,8 +668,8 @@ cnode link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cnode link-charts "$A" "$C" --attester-key /tmp/dr-a.key
 cnode unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$WINDOW_CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -800,7 +817,7 @@ window: it is observable only with fault injection or the headless mock walk, ne
 for it in this pass.
 
 (c) A lost CONNECTION (#807). The window reopens its one connection when it is lost. With the chart open,
-restart the node's Postgres (`pg_ctl restart -D <data dir>`, or the Postgres app's Stop then Start), then
+restart the node's Postgres (`"$PGBIN/pg_ctl" restart -D "$MDATA"`, section 0's cluster), then
 press **Read this chart again**: the list draws, with no window restart. The window's terminal shows "the
 database connection was lost; reopened it". Pressed while Postgres is still down, it fails and the screen
 says why: "…could not be reopened: connecting to the database: …" with the cause (#876). A press within
