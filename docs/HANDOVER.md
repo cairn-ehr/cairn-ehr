@@ -22,7 +22,7 @@
 > `db/061`, `cairn_pgx` **0.4.0**): the key vault, per-act signing (`--key-hold-seconds`, 0 = shared terminal), the
 > signer strip, the terminal lock, "Enrol staff", the `vault-*` console verbs, one `EventSigner` seam.
 >
-> **#898 + #899 BUILT in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
+> **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
 > [ADR-0084](spec/decisions/0084-the-window-never-holds-the-owners-keys.md), spec **v0.86**, `db/062`,
 > `SCHEMA_GENERATION` **62**). The window runs on its own login (`cairn_window`: inherits `cairn_agent`, never
@@ -75,7 +75,9 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review / merge PR #911 (#898 + #899), then brainstorm slice 2 (re-key; #247 and #664 first).** The
+> 1. **Slice 2 (in-person enrolment by an enroller, re-key, change of passphrase; #247 and #664 first) — design
+>    written 2026-11-01** (`superpowers/specs/2026-11-01-sign-in-slice-2-rekey-and-local-enrolment-design.md`,
+>    branch `design/sign-in-slice-2-rekey`); next its plan, then the build. The
 >    maintainer picks the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK §16** (sign ≤ 3 s, next-nurse
 >    switch, VoiceOver/keyboard on the strip, the terminal lock). Still owed from
