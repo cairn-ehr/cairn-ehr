@@ -2871,7 +2871,9 @@ async fn run() -> anyhow::Result<()> {
                     ))?);
                     let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
                     if first != again {
-                        anyhow::bail!("the two entries differ; nothing was changed");
+                        anyhow::bail!(
+                            "the two entries differ; the window login was not created or changed"
+                        );
                     }
                     Some(first)
                 }

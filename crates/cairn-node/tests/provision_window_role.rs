@@ -174,6 +174,7 @@ fn the_verb_refuses_before_it_mutates_in_source_order() {
         "require_local",
         "db::connect(",
         "read_hba_rules",
+        "hba_file_is_stale",
         "hba_verdict",
         "connect_and_load_schema",
         "provision_window_login",

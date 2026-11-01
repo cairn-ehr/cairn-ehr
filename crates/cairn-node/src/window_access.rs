@@ -68,6 +68,8 @@ pub fn hba_freshness(file_newer_than_load: bool) -> Result<(), String> {
 
 /// Has `pg_hba.conf` been modified since the server last (re)loaded its configuration?
 pub async fn hba_file_is_stale(db: &Client) -> anyhow::Result<bool> {
+    // shortcut: file mtime has 1 s resolution vs the load time's microseconds, so an edit within the
+    // same second as a reload reads fresh; upgrade by comparing the file's content hash instead.
     let row = db
         .query_one(
             "SELECT (pg_stat_file(current_setting('hba_file'))).modification > pg_conf_load_time()",
@@ -151,7 +153,7 @@ pub fn existing_role_refusal(f: &RoleFacts, posture_why: Option<&str>) -> Option
 
 fn refusal_text(why: &str) -> String {
     format!(
-        "that role already exists and is not a window login ({why}); nothing was changed. \
+        "that role already exists and is not a window login ({why}); the window login was not created or changed. \
          Choose a new name, or the existing window login."
     )
 }

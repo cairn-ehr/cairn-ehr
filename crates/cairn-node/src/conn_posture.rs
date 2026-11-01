@@ -136,7 +136,7 @@ pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureF
             &[&role],
         )
         .await
-        .context("reading what this connection's login may do")?;
+        .context("reading what this role may do")?;
     Ok(PostureFacts {
         superuser: row.get(0),
         owns_cairn_table: row.get(1),
