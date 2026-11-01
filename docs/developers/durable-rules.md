@@ -210,8 +210,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   after it answers; what it waits on, `LiveData::standing`, runs as a task of its own, so giving up never drops a
   connection guard mid-query (PR #892 review): pin `funnel_status_probes_the_live_node_afresh_and_bounded`.
 - **The reopen is `cairn_node::db::connect_with_task`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
-  replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication; a restart
-  still runs it. Unpinned — the tempting "keep it the same as launch" fix.
+  replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication, and since
+  ADR-0084 so does the window's launch: only one-off loader verbs run it (#912). Unpinned — the tempting "keep it the same as launch" fix.
 - **`LiveData::new` is `NodeConnection::fixed`**: a caller-made client may carry session state (`lost_commit.rs`'s
   kill switch is a `SET`) that a fresh one would silently lack. Only the window's launch uses `reopening`.
 - Not checked on reopen: that the database is still the SAME node. Writes there are expected to be refused if this

@@ -54,17 +54,24 @@ connection, and the owner must be a database superuser because it reads `pg_hba_
 to 4 come before the schema load and the role DDL:
 
 1. The connection must be local (decision 5).
-2. It reads the server's access rules. A non-superuser gets "run this step as a database superuser".
+2. It reads the server's access rules. A non-superuser gets "run this step as the schema owner, who must be a
+   database superuser for it" (never just "as a superuser": a different superuser's replay would own the schema).
 3. It refuses if `pg_hba.conf`, or any file it `include`s, was modified after the server last loaded its
    configuration (an operator who removed `trust` but did not reload would otherwise pass on the file's text).
 4. It refuses if **any** rule is `trust`, whatever its connection type, database or user, and any rule the server
-   could not parse; each refusal names the file and the line (PG16+ lists included files' rules too). A `peer` rule with no `map=` only prints a warning.
+   could not parse; each refusal names the file and the line (PG16+ lists included files' rules too). A `trust`
+   refusal says to give every login that connects through that line a password FIRST (the owner, the daemon's
+   login), then change it to `scram-sha-256`: switching first locks out a passwordless owner. A `peer` rule with no
+   `map=` only prints a warning.
 5. It loads or upgrades the schema (`connect_and_load_schema`). This is how a node is installed and upgraded: the
    window itself no longer does it (decision 4).
 6. It creates the login, or refreshes it, and grants it `cairn_window`. The password comes from
    `CAIRN_WINDOW_DB_PASSWORD`, or, for a NEW role only, a prompt asked twice (rotating an existing login's password
    needs the variable; with neither, the existing login and its verifier are kept), and reaches the server only as a SCRAM-SHA-256 verifier
-   computed in the process.
+   computed in the process. The login also gets `idle_in_transaction_session_timeout = '60s'`: `node_hlc_tick()`
+   takes `hlc_state`'s one row `FOR UPDATE`, so a window login idling in an open transaction would stall every
+   writer's tick (db/062 records it). 60 s is well above the window's own 15 s cut on a command, so it ends only an
+   abandoned transaction.
 7. An **existing** role of that name is taken over only if it is exactly a window login: it can log in, has none of
    superuser, createrole, createdb, replication or bypassrls, it is a direct member of no role other than `cairn_window` (no membership at all is also accepted), and it
    is not over-powered by decision 3's facts. Otherwise the verb refuses and changes nothing about that role.
@@ -77,13 +84,20 @@ database also refuses), because the rule that matters is that no one can name th
 ### 3. A key is released only over a connection that holds no more than a window may
 
 - On **every** `release_for_act`, before anything is sent to the vault, the window reads its own login's power and
-  refuses if it has any of: superuser; ownership of a relation in `public` (or membership of the role that owns one);
+  refuses if it has any of: superuser, or a power that reaches the sealed blobs outside every grant (`REPLICATION`,
+  which carries `vault_member` in a base backup or the WAL, and membership of `pg_read_server_files`,
+  `pg_write_server_files` or `pg_execute_server_program`); ownership of a relation in `public` (or membership of the role that owns one);
   `SELECT` on any column of `vault_member`; `INSERT` on any column of `event_log`; `EXECUTE` on `apply_remote_event`,
   `submit_node_event` or `cairn_vault_unseal`. The answer is `Release::OverPowered`.
 - It is judged over **every role the login is a member of**, itself included, in one query, including memberships
   that pass no inherited privilege: a member can `SET ROLE` into a role and take its whole power. It is therefore
   over-inclusive on purpose: a membership with `INHERIT FALSE` and `SET FALSE` also counts, and the check fails
   closed (the objects are named schema-qualified, so a missing one is an error, never a pass).
+- The login judged is `session_user`, the one that authenticated, never `current_user`. A connection string can
+  start a session already `SET ROLE` elsewhere (`options='-c role=cairn_window'`, or an `ALTER ROLE … SET role`), so
+  the owner's login would read as a window and `SET ROLE NONE` back once the key is out
+  (`a_startup_role_option_does_not_hide_the_owner_login`). Every role the login could `SET ROLE` into is already in
+  its member set, and the server ignores a startup `session_authorization`.
 - The verdict is **never cached**. An operator may fix the login while the window's connection stays open (#807);
   the next release reads again (`a_member_of_the_owner_role_is_refused_until_the_membership_is_revoked`).
 - It covers the clinical signature (`state.rs`) and "Enrol staff" (`enrol.rs`), the two call sites of
@@ -96,13 +110,19 @@ database also refuses), because the rule that matters is that no one can name th
   (`a_wrong_passphrase_over_an_over_powered_connection_is_never_counted`).
 - This is the window refusing before it sends a secret. The vault's own doors are unchanged and remain the defence in
   depth.
+- The **terminal lock is not refused** over an over-powered connection, a deliberate departure from the design's D4
+  (which listed it among the readers of the verdict). Its check is local: the window reads the stored PHC hash and
+  verifies the passphrase in its own process, so no secret is sent; what it opens is reading, which an over-powered
+  window may do anyway, and every signature behind it still meets this refusal. Refusing it would protect nothing.
 
 ### 4. The window never loads the schema
 
 The window's launch connects with the non-loading `db::connect`, reads the `node_schema` stamp and applies the same
 test the loader's replay gate uses (`window_schema_verdict`). If the stamp is not exactly this build's, the **launch**
 is refused: a database newer than the window says to install the matching window; an older or unstamped one names
-`cairn-node provision-window-role` with the owner's connection. Reading through code that does not match the schema
+`cairn-node provision-window-role` with the owner's connection; one at the SAME generation but stamped by a different
+build (another hash or loader) names "the cairn-node built with this window", since any other build would stamp
+itself again. Reading through code that does not match the schema
 risks a wrong rendering, and the remedy is one command.
 
 **A consequence, stated plainly:** `connect_and_load_schema` also re-adjudicates deferred events on EVERY connect,
@@ -131,6 +151,8 @@ that ends at `localhost` on the terminal's machine is accepted.
 
 - **The daemon's login is outside this.** `provision-runtime-role` still creates the `cairn_node` login with no
   password and does not run decision 2's `pg_hba` check (the check itself is about the whole cluster, not one login).
+  So once the operator removes `trust` for decision 2, the daemon's login stops connecting (and sync stops) until it
+  is given a password; the `trust` refusal says so.
 - **Deferred events heal later** ([#912](https://github.com/cairn-ehr/cairn-ehr/issues/912)): the window and the
   daemon's `serve`/`run` no longer run the deferred-event re-adjudication; only one-off loader verbs do.
 - **The connection is still not encrypted.** The `cairn-node` daemon, `cairn-sync`, the matcher and the test rigs are
@@ -142,7 +164,9 @@ that ends at `localhost` on the terminal's machine is accepted.
   because nothing clinical runs yet.
 - **The `pg_hba` check reads the files, with limits.** It judges the rules the server parsed from the file as it is
   now, included files too (PG16+). The staleness test compares each file's modification time (one-second
-  resolution) with the server's load time, so an edit within the same second as a reload reads fresh. `ident` on a `host` line is close to `trust` and is **not**
+  resolution) with the server's load time, so an edit within the same second as a reload reads fresh. A file deleted
+  from an `include_dir` after the last reload is missed: the server's rules still list it, and the directories'
+  own modification times are not checked. `ident` on a `host` line is close to `trust` and is **not**
   refused; only `trust` is. A `peer` rule with no `map=` is reported, not refused.
 - **"Refuse before mutating" holds for the role DDL, not for the schema load.** The refusal of an existing
   non-window role, and of an unsafe role name (`is_safe_role_ident`), come after the (idempotent) schema load.

@@ -140,7 +140,10 @@ slice 5's brainstorm.
 - The window role's name and the exact verb shape of D1.
 - How DB-gated window tests run under the limited role. `SET ROLE` is acceptable IN TESTS (the threat is a
   production connection string, not a test session); the over-power predicate reads `current_user`, which
-  `SET ROLE` changes.
+  `SET ROLE` changes. *(Corrected 2026-11-01, final review: reading `current_user` was a hole, since a production
+  connection string can start the session `SET ROLE`d (`options='-c role=cairn_window'`). The predicate reads
+  `session_user`, which `SET ROLE` does not change, so the tests run under real window logins instead; see
+  ADR-0084 decision 3.)*
 - The on-screen wording of the D2/D4 refusals, under the house rules: say what the USER must do, name the lightest
   command, walk the sentence through every state it is shown in.
 - Whether `cairn-node`'s own console verbs also refuse on an over-powered connection. They are run by the owner by
