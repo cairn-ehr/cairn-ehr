@@ -32,9 +32,16 @@ const NOINHERIT_OWNER_PROBE: &str = "cairn_window_probe_noinherit_owner";
 const NOINHERIT_NODE_PROBE: &str = "cairn_window_probe_noinherit_node";
 /// A login granted, one object at a time, each power a window must not have.
 const DIRECT_GRANTS_PROBE: &str = "cairn_window_probe_direct_grants";
-/// Logins given a power that reaches the sealed blobs outside every grant (server files, WAL).
-const SERVER_FILES_PROBE: &str = "cairn_window_probe_server_files";
-const REPLICATION_PROBE: &str = "cairn_window_probe_replication";
+
+/// The window's own facts: none of the powers.
+const NONE: PostureFacts = PostureFacts {
+    superuser: false,
+    owns_cairn_table: false,
+    shapes_schema: false,
+    reads_vault: false,
+    inserts_event_log: false,
+    runs_peer_door: false,
+};
 
 /// Serialised, freshly-loaded owner connection with an empty vault.
 async fn fresh(base: &str) -> (Client, Client) {
@@ -130,16 +137,7 @@ async fn the_window_login_has_none_of_the_powers() {
         .await
         .unwrap();
     let facts = read_posture(&window).await.unwrap();
-    assert_eq!(
-        facts,
-        PostureFacts {
-            superuser: false,
-            owns_cairn_table: false,
-            reads_vault: false,
-            inserts_event_log: false,
-            runs_peer_door: false,
-        }
-    );
+    assert_eq!(facts, NONE);
     assert_eq!(over_powered(&facts), None);
 }
 
@@ -180,57 +178,78 @@ async fn a_membership_that_does_not_inherit_still_counts() {
     let facts = facts_of(&owner, &base, NOINHERIT_NODE_PROBE, &node_grant).await;
     assert!(facts.runs_peer_door, "{facts:?}");
     assert!(over_powered(&facts).is_some(), "{facts:?}");
+
+    // Neither inherit nor SET: the membership still counts (ADR-0084). Over-cautious on purpose: a
+    // membership is one ALTER of its options away from being either.
+    let bare_grant =
+        format!("GRANT cairn_node TO {NOINHERIT_NODE_PROBE} WITH INHERIT FALSE, SET FALSE;");
+    let facts = facts_of(&owner, &base, NOINHERIT_NODE_PROBE, &bare_grant).await;
+    assert!(facts.runs_peer_door, "{facts:?}");
 }
 
-/// Each of the three object grants is seen on its own, so none of those facts is a constant
-/// `false` that a test of the owner (who has everything) could never tell apart. The vault grant
-/// is column-level on purpose: one column of the sealed table is already too much.
+/// Every power the check judges, granted ALONE, flips exactly its own fact: so no fact is a
+/// constant `false` that a test of the owner (who has everything) could never tell apart, and no
+/// term of the query can be deleted or mistyped without a failing row here. The vault grant is
+/// column-level on purpose: one column of the sealed table is already too much.
+///
+/// Not here: ownership of the schema `public` (in PG15+ the database owner's, via
+/// `pg_database_owner`). Testing it would mean changing the shared test database's owner, and a
+/// crashed run's cleanup (`DROP OWNED`) would then drop `public` itself. That owner holds `CREATE`
+/// on `public` by the schema's default ACL, which the `CREATE` row below covers.
 #[tokio::test]
-async fn each_direct_grant_of_a_power_is_seen() {
+async fn each_power_alone_is_seen() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
     let (_g, owner) = fresh(&base).await;
-    let grants = format!(
-        "GRANT SELECT (staff_id) ON vault_member TO {DIRECT_GRANTS_PROBE}; \
-         GRANT INSERT ON event_log TO {DIRECT_GRANTS_PROBE}; \
-         GRANT EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) TO {DIRECT_GRANTS_PROBE};"
-    );
-    let facts = facts_of(&owner, &base, DIRECT_GRANTS_PROBE, &grants).await;
-    // The window role holds none of the doors (pinned above), so `runs_peer_door` here can only
-    // come from the `cairn_vault_unseal` grant.
-    assert_eq!(
-        facts,
-        PostureFacts {
-            superuser: false,
-            owns_cairn_table: false,
-            reads_vault: true,
-            inserts_event_log: true,
-            runs_peer_door: true,
-        }
-    );
-}
-
-/// Some powers reach the sealed keys without any grant on `vault_member`: reading the data
-/// files (`pg_read_server_files`, or writing/executing on the server to the same end) or taking
-/// a base backup / streaming the WAL (`REPLICATION`). They count as the superuser fact.
-#[tokio::test]
-async fn powers_that_reach_the_files_outside_grants_are_over_powered() {
-    let Some(base) = cs() else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let (_g, owner) = fresh(&base).await;
-    let grant = format!("GRANT pg_read_server_files TO {SERVER_FILES_PROBE};");
-    let facts = facts_of(&owner, &base, SERVER_FILES_PROBE, &grant).await;
-    assert!(facts.superuser, "{facts:?}");
-    assert!(over_powered(&facts).is_some(), "{facts:?}");
-
-    let alter = format!("ALTER ROLE {REPLICATION_PROBE} REPLICATION;");
-    let facts = facts_of(&owner, &base, REPLICATION_PROBE, &alter).await;
-    assert!(facts.superuser, "{facts:?}");
-    assert!(over_powered(&facts).is_some(), "{facts:?}");
+    // (the grant, with `{p}` for the probe login; the one fact it must turn on)
+    type Row = (&'static str, fn(&mut PostureFacts));
+    let rows: [Row; 14] = [
+        ("GRANT SELECT (staff_id) ON vault_member TO {p}", |f| f.reads_vault = true),
+        ("GRANT pg_read_all_data TO {p}", |f| f.reads_vault = true),
+        ("GRANT INSERT ON event_log TO {p}", |f| f.inserts_event_log = true),
+        ("GRANT pg_write_all_data TO {p}", |f| f.inserts_event_log = true),
+        (
+            "GRANT EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) TO {p}",
+            |f| f.runs_peer_door = true,
+        ),
+        (
+            "GRANT EXECUTE ON FUNCTION apply_remote_event(bytea, bytea, bytea, bytea) TO {p}",
+            |f| f.runs_peer_door = true,
+        ),
+        (
+            "GRANT EXECUTE ON FUNCTION submit_node_event(bytea) TO {p}",
+            |f| f.runs_peer_door = true,
+        ),
+        // Reading the data files, or writing/executing on the server to the same end, or taking a
+        // base backup / streaming the WAL: no grant on `vault_member` needed. The superuser fact.
+        ("GRANT pg_read_server_files TO {p}", |f| f.superuser = true),
+        ("GRANT pg_write_server_files TO {p}", |f| f.superuser = true),
+        ("GRANT pg_execute_server_program TO {p}", |f| f.superuser = true),
+        ("ALTER ROLE {p} REPLICATION", |f| f.superuser = true),
+        // Planting an object the vault's definers resolve, or replacing one of its functions.
+        ("GRANT CREATE ON SCHEMA public TO {p}", |f| f.shapes_schema = true),
+        (
+            "CREATE FUNCTION public.cairn_probe_owned_fn() RETURNS int LANGUAGE sql AS 'SELECT 1'; \
+             ALTER FUNCTION public.cairn_probe_owned_fn() OWNER TO {p}",
+            |f| f.shapes_schema = true,
+        ),
+        // A table the login owns is the owner fact even when it is not one of the node's.
+        (
+            "CREATE TABLE public.cairn_probe_owned_table (); \
+             ALTER TABLE public.cairn_probe_owned_table OWNER TO {p}",
+            |f| f.owns_cairn_table = true,
+        ),
+    ];
+    for (grant, set) in rows {
+        let grant = grant.replace("{p}", DIRECT_GRANTS_PROBE);
+        let facts = facts_of(&owner, &base, DIRECT_GRANTS_PROBE, &format!("{grant};")).await;
+        let mut expected = NONE;
+        set(&mut expected);
+        assert_eq!(facts, expected, "{grant}");
+        assert!(over_powered(&facts).is_some(), "{grant}");
+    }
 }
 
 /// Focus 3 and focus 1 on one login. A MEMBER of the owner role is not itself a superuser and
@@ -359,6 +378,41 @@ async fn a_startup_role_option_does_not_hide_the_owner_login() {
 
     let facts = read_posture(&disguised).await.unwrap();
     assert!(over_powered(&facts).is_some(), "{facts:?}");
+    let refused = release_for_act(&disguised, "nobody", &pass("x"), Purpose::Clinical)
+        .await
+        .unwrap();
+    assert!(
+        matches!(refused, Release::OverPowered { .. }),
+        "{refused:?}"
+    );
+}
+
+/// The other half of the `session_user` argument: a startup `session_authorization` cannot make
+/// the owner's login authenticate as someone else. The server sets that parameter itself from the
+/// authenticated login, at a priority a client's startup options cannot outrank.
+#[tokio::test]
+async fn a_startup_session_authorization_does_not_change_the_login() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, owner) = fresh(&base).await;
+    let me: String = owner
+        .query_one("SELECT session_user::text", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let disguised = db::connect(&format!(
+        "{base} options='-c session_authorization=cairn_window'"
+    ))
+    .await
+    .unwrap();
+    let login: String = disguised
+        .query_one("SELECT session_user::text", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(login, me, "the startup option was ignored");
     let refused = release_for_act(&disguised, "nobody", &pass("x"), Purpose::Clinical)
         .await
         .unwrap();

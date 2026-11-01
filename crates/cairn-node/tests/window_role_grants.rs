@@ -3,7 +3,7 @@
 //! # Why this file exists
 //!
 //! db/062 gives the reference window a least-privilege group role, `cairn_window` (it inherits
-//! `cairn_agent`, the runtime role, plus two node reads). Every other suite connects as the
+//! `cairn_agent`, the advisory-actor role, plus the narrow grants db/062 lists one by one). Every other suite connects as the
 //! schema OWNER, so until now nothing showed which grants that role actually lacks: a missing
 //! one would surface only in production, as a clinician's command failing with
 //! `permission denied`. Here each `cairn_node` entry point the window calls (the list is

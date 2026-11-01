@@ -37,7 +37,7 @@
 > > **NOT YET GUARANTEED — gates on any pilot:** until **#909** (pinned, installer-generated TLS) or slice 5 (every
 > > terminal its own node) lands, a facility has ONE usable terminal: the one on the database's machine. **#912**: no
 > > long-running process re-adjudicates deferred events (the window's launch used to, incidentally). **#910**: a
-> > Cairn-installed Postgres (brainstorm first). **#913**: PR #911's wording residuals (RUNBOOK §0's `pg_config` may be PG16 on this Mac; a db/062 overclaim; two ADR-0084 errata). **Slice 5's design must answer** (design §4): synced sealed blobs on a
+> > Cairn-installed Postgres (brainstorm first). From PR #911's second review: **#914** (say "cannot sign" at launch, not at the first signature) · **#915** (the posture check's routes are a hand-kept list) · **#916** (small robustness residuals); #913 was fixed in the PR. **Slice 5's design must answer** (design §4): synced sealed blobs on a
 > > stolen terminal disk can be guessed offline, and the attempt counter is per node. Open from slice 1: **#900**
 > > (a superuser key could sign a clinical event) · **#901** (bound stored Argon2 parameters) · **#902** (handle case) ·
 > > **#903** (another's guesses can hold a member at the 300 s cap — a decision) · **#904** (an unreadable blob counts
@@ -270,6 +270,12 @@ about where a machine sits or who installs it; long term every terminal is a nod
   (compare `pg_stat_file(hba_file).modification` with `pg_conf_load_time()`).
 - **⇒ Removing a call removes its side effects:** the window's `connect_and_load_schema` was, incidentally, the only
   routine runner of the deferred-event re-adjudication (#912). Grep what a function does before dropping its caller.
+- **⇒ Table ownership is not the only owner power (second review).** Every vault door is `SECURITY DEFINER` with
+  `search_path = public, pg_temp` and calls helpers by bare name, so the owner of `public` (the database owner, via
+  `pg_database_owner`), a holder of `CREATE` on it (every login on a cluster upgraded from PG ≤14) or a function's
+  owner can make a door run its code. Now the `shapes_schema` fact; db/062 revokes `CREATE` from `PUBLIC`.
+- **⇒ Several DDL statements an operator step depends on go in ONE `batch_execute`** (one implicit transaction): sent
+  separately, a failed `GRANT` left a passwordless LOGIN that the re-run reported as provisioned.
 
 ### 2026-10-31 → 11-01 — GUI sign-in slice 1 (PR [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)): brainstorm → design → plan → SDD
 

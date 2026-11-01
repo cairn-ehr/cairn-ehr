@@ -1194,8 +1194,8 @@ pub async fn seed_proposal(c: &Client, a: Uuid, b: Uuid, status: &str) {
 /// The `CREATE ROLE` is guarded like db/004's and also tolerates a concurrent creator: a role
 /// is cluster-wide, while `test_serial_guard`'s lock is per-database.
 ///
-/// DUPLICATED, deliberately, in `cairn-gui/cairn-gui-live/tests/common/mod.rs` (and Task 4's
-/// copy in `cairn-gui-tauri`): three test trees cannot share a test module, and a library fn
+/// DUPLICATED, deliberately, in `cairn-gui/cairn-gui-live/tests/common/mod.rs` and
+/// `cairn-gui/cairn-gui-tauri/src/enrol_tests.rs`: three test trees cannot share a test module, and a library fn
 /// that mints passwordless logins is not something to ship. Keep the copies identical.
 pub async fn window_login(owner: &Client, cs: &str) -> String {
     owner

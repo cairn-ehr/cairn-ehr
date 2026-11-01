@@ -242,7 +242,7 @@ pub async fn release_for_act(
     }
     let row = db
         .query_one(
-            "SELECT outcome, seed, signing_key_id, retry_after_ms FROM cairn_vault_release($1, $2, $3)",
+            "SELECT outcome, seed, signing_key_id, retry_after_ms FROM public.cairn_vault_release($1, $2, $3)",
             &[&staff_id, &passphrase, &purpose.as_sql()],
         )
         .await

@@ -27,9 +27,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **`cairn_window` never gains a vault read, `cairn_vault_unseal`, `INSERT` on `event_log`, or a peer door**, and never
   inherits `cairn_node`. A missing grant is added narrowly (a column list, not the table) with its reason, and the
   entry point is added to `window_role_grants.rs`. Pins: `the_window_login_has_none_of_the_powers`,
-  `each_direct_grant_of_a_power_is_seen`, and the four `the_windows_*_run_under_its_own_login` tests.
-- **`provision-window-role` refuses BEFORE it mutates, and never touches an existing role that is not a window
-  login.** Order: `require_local`, the rules read, freshness, the `trust` verdict, THEN the schema load and the role
+  `each_power_alone_is_seen`, and the four `the_windows_*_run_under_its_own_login` tests.
+- **`provision-window-role` refuses a cluster BEFORE it mutates, and never touches an existing role that is not a window
+  login.** Its role DDL is one transaction, so a failed step leaves no half-made login. Order: `require_local`, the rules read, freshness, the `trust` verdict, THEN the schema load and the role
   DDL. `trust` is refused whatever its line's type or database; `peer` without a map only warns. No override flag, for
   this refusal or for `require_local`. Pins: `the_verb_refuses_before_it_mutates_in_source_order`,
   `the_verb_refuses_a_trusting_cluster_and_changes_nothing`,
@@ -209,7 +209,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   node's answer as well. The probe is bounded (`probe_within`, `PROBE_WITHIN`, twice a reopen's wait) because `boot()` shows the front door only
   after it answers; what it waits on, `LiveData::standing`, runs as a task of its own, so giving up never drops a
   connection guard mid-query (PR #892 review): pin `funnel_status_probes_the_live_node_afresh_and_bounded`.
-- **The reopen is `cairn_node::db::connect_with_task`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
+- **The reopen is `cairn_node::db::connect_with_task`, not `connect_and_load_schema`.** The schema was checked (never loaded) at launch, and a
   replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication, and since
   ADR-0084 so does the window's launch: only one-off loader verbs run it (#912). Unpinned — the tempting "keep it the same as launch" fix.
 - **`LiveData::new` is `NodeConnection::fixed`**: a caller-made client may carry session state (`lost_commit.rs`'s

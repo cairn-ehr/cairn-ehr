@@ -2,9 +2,10 @@
 //!
 //! The window must never connect as the owner or as the node's runtime role: it gets its own
 //! LOGIN role that is only a member of `cairn_window` (db/062). This module is the owner-run half:
-//! a pure verdict on the server's `pg_hba.conf` rules (a cluster that lets anyone in with no
-//! password makes the window's password pointless, so we refuse to provision on one), plus the two
-//! DB functions the `provision-window-role` verb orchestrates. `main.rs` only sequences them.
+//! pure verdicts on the server's `pg_hba.conf` rules (a cluster that lets anyone in with no
+//! password makes the window's password pointless, so we refuse to provision on one), on their
+//! freshness, and on whether an existing role may be taken over; plus the DB reads and the one
+//! write the `provision-window-role` verb orchestrates. `main.rs` only sequences them.
 
 use crate::conn_posture::{over_powered, read_posture_of};
 use crate::db::is_safe_role_ident;
@@ -143,6 +144,8 @@ pub struct RoleFacts {
     pub has_attribute_power: bool,
     /// a direct membership in any role other than `cairn_window`.
     pub other_membership: bool,
+    /// other roles are members of this one, so a grant to it would reach them too.
+    pub has_members: bool,
 }
 
 /// Pure: why an existing role may not be taken over as the window login, or `None` if it may.
@@ -153,6 +156,8 @@ pub fn existing_role_refusal(f: &RoleFacts, posture_why: Option<&str>) -> Option
         "it has superuser, createrole, createdb, replication or bypassrls"
     } else if f.other_membership {
         "it is a member of roles other than cairn_window"
+    } else if f.has_members {
+        "other roles are members of it"
     } else if let Some(w) = posture_why {
         return Some(refusal_text(w.trim_end_matches('.')));
     } else {
@@ -174,7 +179,8 @@ async fn read_role_facts(db: &Client, role: &str) -> anyhow::Result<RoleFacts> {
             "SELECT r.rolcanlogin, \
                     (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls), \
                     EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid \
-                             WHERE m.member = r.oid AND g.rolname <> 'cairn_window') \
+                             WHERE m.member = r.oid AND g.rolname <> 'cairn_window'), \
+                    EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = r.oid) \
                FROM pg_roles r WHERE r.rolname = $1",
             &[&role],
         )
@@ -184,6 +190,7 @@ async fn read_role_facts(db: &Client, role: &str) -> anyhow::Result<RoleFacts> {
         can_login: r.get(0),
         has_attribute_power: r.get(1),
         other_membership: r.get(2),
+        has_members: r.get(3),
     })
 }
 
@@ -193,6 +200,11 @@ async fn read_role_facts(db: &Client, role: &str) -> anyhow::Result<RoleFacts> {
 /// cleartext never reaches the server (or its logs). With none on an existing role the stored
 /// verifier is left alone. Precondition: the schema is loaded (db/062 creates `cairn_window`).
 /// The password is never logged and never put in an error.
+///
+/// All of the DDL is ONE multi-statement message, which the server runs as one transaction: a
+/// step that fails leaves nothing behind. (Sent one statement at a time, a failed GRANT would
+/// leave a LOGIN with no password, and a re-run, which asks for none on an existing role, would
+/// then report it provisioned.)
 pub async fn provision_window_login(
     db: &Client,
     role: &str,
@@ -218,37 +230,43 @@ pub async fn provision_window_login(
     if !exists && password.is_none() {
         anyhow::bail!("role {role} does not exist yet, so it needs a password; none was given");
     }
-    let ddl = |sql: String| async move {
-        db.batch_execute(&sql).await.map_err(|e| {
-            anyhow::anyhow!("provisioning window role {role}: {}", legible_db_error(&e))
-        })
+    let mut ddl = Vec::new();
+    let password_clause = match password {
+        Some(pw) => {
+            let verifier = postgres_protocol::password::scram_sha_256(pw.as_bytes());
+            // CREATE/ALTER ROLE ... PASSWORD takes no bind parameter, so the verifier is
+            // interpolated. It is not the password: it is base64 plus `$ : =`, which we assert (no
+            // quote can occur), so no escaping is needed.
+            if !verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "$:=+/-".contains(c))
+            {
+                anyhow::bail!(
+                    "internal error: unexpected characters in the generated password verifier"
+                );
+            }
+            format!(" PASSWORD '{verifier}'")
+        }
+        None => String::new(),
     };
-    if !exists {
-        ddl(format!("CREATE ROLE {role} LOGIN")).await?;
+    if exists {
+        if !password_clause.is_empty() {
+            ddl.push(format!("ALTER ROLE {role}{password_clause}"));
+        }
+    } else {
+        ddl.push(format!("CREATE ROLE {role} LOGIN{password_clause}"));
     }
-    ddl(format!("GRANT cairn_window TO {role}")).await?;
+    ddl.push(format!("GRANT cairn_window TO {role}"));
     // A window login holding a transaction open holds hlc_state's tick lock and stalls every
     // writer (db/062). The window cuts each command off after 15 s (cairn-gui-live's
-    // `NodeConnection::ANSWER_WITHIN`), so 60 s never ends a live command, only an abandoned one.
-    ddl(format!(
+    // `NodeConnection::ANSWER_WITHIN`), so a live transaction never sits idle for 60 s between
+    // statements; only an abandoned one is ended.
+    ddl.push(format!(
         "ALTER ROLE {role} SET idle_in_transaction_session_timeout = '60s'"
-    ))
-    .await?;
-    if let Some(pw) = password {
-        let verifier = postgres_protocol::password::scram_sha_256(pw.as_bytes());
-        // ALTER ROLE ... PASSWORD takes no bind parameter, so the verifier is interpolated. It is
-        // not the password: it is base64 plus `$ : =`, which we assert (no quote can occur), so
-        // no escaping is needed.
-        if !verifier
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "$:=+/-".contains(c))
-        {
-            anyhow::bail!(
-                "internal error: unexpected characters in the generated password verifier"
-            );
-        }
-        ddl(format!("ALTER ROLE {role} PASSWORD '{verifier}'")).await?;
-    }
+    ));
+    db.batch_execute(&ddl.join("; ")).await.map_err(|e| {
+        anyhow::anyhow!("provisioning window role {role}: {}", legible_db_error(&e))
+    })?;
     Ok(())
 }
 

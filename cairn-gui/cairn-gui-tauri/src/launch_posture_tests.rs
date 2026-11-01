@@ -12,14 +12,25 @@ fn the_remote_refusal_comes_before_any_connect() {
     assert!(position(body, "require_local(") < position(body, "db::connect("));
 }
 
+/// The stamp is judged before the window reads anything else, so a window on a database not
+/// prepared for it refuses at launch instead of running against the wrong generation.
+#[test]
+fn the_schema_stamp_is_judged_before_anything_is_read() {
+    let body = rust_fn(MAIN, "build_live_state");
+    assert!(position(body, "window_schema_verdict(") < position(body, "load_local("));
+}
+
 #[test]
 fn the_window_never_loads_the_schema() {
-    // Every non-test source file under src/ (`*tests.rs` fixtures legitimately load the schema).
+    // Every non-test source file of this crate and of `cairn-gui-live`, whose connection the
+    // window reopens (#807); `*tests.rs` fixtures legitimately load the schema.
     let mut files = vec![];
-    sources(
-        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
-        &mut files,
-    );
+    for dir in ["/src", "/../cairn-gui-live/src"] {
+        sources(
+            std::path::Path::new(&format!("{}{dir}", env!("CARGO_MANIFEST_DIR"))),
+            &mut files,
+        );
+    }
     assert!(files.len() > 20, "the walk found the crate's sources");
     for (name, src) in files {
         // main.rs's comment names the loader to explain its absence; code lines must not.

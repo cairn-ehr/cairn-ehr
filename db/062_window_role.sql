@@ -4,13 +4,13 @@
 -- sealed key blobs (vault_member) and call every door. cairn_window is NOLOGIN; a login
 -- (made by `cairn-node provision-window-role`) is granted it, and the window runs as that login.
 --
--- WHY IT INHERITS cairn_agent AND NEVER cairn_node: cairn_agent is the runtime/advisory role —
--- it may call the validated submit doors and read projections, with no direct write to the event
+-- WHY IT INHERITS cairn_agent AND NEVER cairn_node: cairn_agent is the advisory-actor role (db/004)
+-- — it may call the validated submit doors and read projections, with no direct write to the event
 -- log. cairn_node additionally holds the peer-apply doors (apply_remote_event, submit_node_event),
 -- which a clinician's window must never reach.
 -- Design: docs/superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md (D1).
 --
--- Replay-safe: this file re-runs on every connect (guarded CREATE, idempotent GRANTs).
+-- Replay-safe: this file re-runs on every schema replay (guarded CREATE, idempotent GRANT/REVOKE).
 -- The narrow grants below the role's creation each carry a one-line reason.
 
 DO $$ BEGIN
@@ -36,8 +36,10 @@ GRANT SELECT ON local_node, node_schema TO cairn_window;
 -- Residual, stated plainly: the tick takes hlc_state's one row FOR UPDATE (db/007), so a window
 -- login that holds a transaction open after a tick stalls EVERY writer's next tick (the daemon's
 -- sync included) until it lets go. That is a denial of service by someone who already holds the
--- window's login, never a bypass; provision-window-role bounds it by giving each window login
--- `idle_in_transaction_session_timeout` (crates/cairn-node/src/window_access.rs).
+-- window's login, never a bypass. provision-window-role gives each window login
+-- `idle_in_transaction_session_timeout` (crates/cairn-node/src/window_access.rs), which ends an
+-- ABANDONED transaction only: the setting is USERSET (a hostile holder can SET it to 0), and an
+-- active statement never trips it, so a hostile holder of the login is not bounded.
 GRANT EXECUTE ON FUNCTION node_hlc_tick() TO cairn_window;
 
 -- The window's start-up check of its own node key ("Retired" vs "never enrolled",
@@ -59,3 +61,11 @@ GRANT SELECT (subject, value) ON name_repudiation TO cairn_window;
 -- UPDATE may move only the aggregate, never re-key a cell.
 GRANT SELECT, INSERT ON ui_gesture_timing TO cairn_window;
 GRANT UPDATE (n, p50_ms, p95_ms) ON ui_gesture_timing TO cairn_window;
+
+-- No login creates in the node's schema. Every vault door is SECURITY DEFINER with
+-- `search_path = public, pg_temp` and calls its helpers by bare name (db/061), so an object a
+-- caller planted in `public` would run with the owner's power over vault_member. PG15+ already
+-- withholds this from PUBLIC; a cluster pg_upgraded from PG14 or older still grants it. (Should
+-- the replaying owner not own `public`, this is only a warning; the window's posture check then
+-- refuses every key release over such a login and says why, conn_posture.rs.)
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;

@@ -9,6 +9,9 @@
 //! window may have (#898)? The vault's protections (counted guesses, purpose checks) hold only
 //! against a connection that cannot read the sealed keys or write around the floor itself, so a
 //! release over such a connection is refused before any passphrase is sent ([`over_powered`]).
+//!
+//! And a third, for the window's launch: was this database prepared for exactly this build
+//! ([`window_schema_verdict`])? The window's login cannot load the schema itself.
 use crate::db::{
     embedded_schema_hash, embedded_schema_version, replay_can_be_skipped, SchemaStamp, LOADER_BUILD,
 };
@@ -26,8 +29,9 @@ fn is_local_host(host: &str) -> bool {
 
 /// Refuse a connection string that reaches a database on another machine.
 ///
-/// A `hostaddr` is what libpq actually dials, so when present it wins over `host`. A Unix-socket
-/// path, or no host at all (the local default), is local. The error names the offending host but
+/// A `hostaddr` is what is actually dialled, so when present it wins over `host`. A Unix-socket
+/// path is local. No host at all names nothing to dial (tokio-postgres then refuses to connect),
+/// so it is not refused here. The error names the offending host but
 /// never the connection string, which can carry a password.
 pub fn require_local(conn: &str) -> anyhow::Result<()> {
     // Parse errors can quote the input; say only that it failed.
@@ -40,7 +44,9 @@ pub fn require_local(conn: &str) -> anyhow::Result<()> {
             .iter()
             .filter_map(|h| match h {
                 Host::Tcp(name) => Some(name.clone()),
-                Host::Unix(_) => None,
+                // `Host::Unix` exists only on unix targets; any other variant is not a wire.
+                #[allow(unreachable_patterns)]
+                _ => None,
             })
             .collect()
     } else {
@@ -66,15 +72,23 @@ pub struct PostureFacts {
     /// `pg_read_server_files`, `pg_write_server_files` or `pg_execute_server_program` (read the
     /// data files, or get a superuser to run code that does).
     pub superuser: bool,
-    /// The login owns, or is a member of the role that owns, a relation in `public`. An owner
-    /// can read the vault and disable its triggers, whatever was granted.
+    /// The login owns, or is a member of the role that owns, a relation in `public` (any one,
+    /// not only the node's: the owner of the node's tables is the usual case). That owner can
+    /// read the vault and disable its triggers, whatever was granted.
     pub owns_cairn_table: bool,
+    /// The login can shape the schema the vault's doors resolve names in: it owns `public`
+    /// (in PG15+ the database owner does, through `pg_database_owner`), may `CREATE` in it, or
+    /// owns a function in it. Every vault door is `SECURITY DEFINER` with `search_path = public,
+    /// pg_temp` and calls helpers by bare name, so a planted or replaced function runs with the
+    /// owner's power over `vault_member` (db/061).
+    pub shapes_schema: bool,
     /// The login can `SELECT` from `vault_member` (any column): the sealed keys themselves.
     pub reads_vault: bool,
     /// The login can `INSERT` into `event_log` (any column): writes around the validated doors.
     pub inserts_event_log: bool,
-    /// The login can run a peer's admission door (`apply_remote_event`, `submit_node_event`) or
-    /// `cairn_vault_unseal` directly, skipping the vault's count.
+    /// The login can run a peer's admission door (`apply_remote_event`, `submit_node_event`:
+    /// writes the floor admits from a peer, not from a window), or `cairn_vault_unseal` directly
+    /// (an unseal that skips the vault's count).
     pub runs_peer_door: bool,
 }
 
@@ -88,7 +102,11 @@ pub fn over_powered(f: &PostureFacts) -> Option<&'static str> {
         ),
         (
             f.owns_cairn_table,
-            "the login owns the node's tables, or is a member of the role that does.",
+            "the login owns tables in the node's schema, or is a member of the role that does.",
+        ),
+        (
+            f.shapes_schema,
+            "the login can create or replace objects in the node's schema.",
         ),
         (f.reads_vault, "the login can read the vault's sealed keys."),
         (
@@ -104,7 +122,8 @@ pub fn over_powered(f: &PostureFacts) -> Option<&'static str> {
     .find_map(|(has, why)| has.then_some(why))
 }
 
-/// Read this connection's [`PostureFacts`] in ONE query, as its own login (`session_user`).
+/// Read this connection's [`PostureFacts`] as its own login (`session_user`): the login's name,
+/// then every fact in one query ([`read_posture_of`]).
 ///
 /// `session_user`, not `current_user`: the current role is whatever the session last `SET ROLE`
 /// to, and a connection string can start it there (`options='-c role=cairn_window'`, or an
@@ -142,6 +161,11 @@ pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureF
                     coalesce(bool_or(EXISTS ( \
                         SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                          WHERE n.nspname = 'public' AND c.relowner = r.oid)), true), \
+                    coalesce(bool_or(has_schema_privilege(r.oid, 'public', 'CREATE') \
+                        OR EXISTS (SELECT 1 FROM pg_namespace n \
+                                    WHERE n.nspname = 'public' AND n.nspowner = r.oid) \
+                        OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+                                    WHERE n.nspname = 'public' AND p.proowner = r.oid)), true), \
                     coalesce(bool_or(has_any_column_privilege(r.oid, 'public.vault_member', 'SELECT')), true), \
                     coalesce(bool_or(has_any_column_privilege(r.oid, 'public.event_log', 'INSERT')), true), \
                     coalesce(bool_or( \
@@ -156,9 +180,10 @@ pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureF
     Ok(PostureFacts {
         superuser: row.get(0),
         owns_cairn_table: row.get(1),
-        reads_vault: row.get(2),
-        inserts_event_log: row.get(3),
-        runs_peer_door: row.get(4),
+        shapes_schema: row.get(2),
+        reads_vault: row.get(3),
+        inserts_event_log: row.get(4),
+        runs_peer_door: row.get(5),
     })
 }
 

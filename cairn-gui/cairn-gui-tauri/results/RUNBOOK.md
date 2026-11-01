@@ -25,13 +25,15 @@ A node database with `cairn_pgx` installed, and this node's key. The rig is a th
 of its OWN, on another port, made with a password and `scram-sha-256` from its first start: never switch the
 shared development cluster (:5532, also `CAIRN_TEST_PG`, see getting-started) away from `trust`, because every
 DB-gated test suite connects to it with no password. The binaries are the PG18 install `cairn_pgx` was installed
-into (`pg_config --bindir`), so `CREATE EXTENSION cairn_pgx` works in the new cluster too. The `init` and later
+into (pgrx's `pg18` entry in `~/.pgrx/config.toml`), so `CREATE EXTENSION cairn_pgx` works in the new cluster too.
+Not the `pg_config` on `PATH`, which may be another major version (on the maintainer's Mac it is PG 16). The `init` and later
 `cairn-node` flags were run end-to-end on 2026-08-03 against a `trust` rig; the cluster steps (`initdb` to `start`)
 and the window's own login (below) were written on 2026-11-01 for #898/#899 and have not yet been run end-to-end,
 so a first run that needs a change is a finding:
 
 ```bash
-export PGBIN="$(pg_config --bindir)"     # the PG18 install cairn_pgx is installed into
+# The PG18 install cairn_pgx is installed into: pgrx's pg18 pg_config, never the one on PATH.
+export PGBIN="$("$(sed -n 's/^pg18 = "\(.*\)"$/\1/p' ~/.pgrx/config.toml)" --bindir)"
 export MDATA=/tmp/cairn-measure-pg MPORT=5533
 read -rs OWNER_PW && export OWNER_PW     # the owner's password; no spaces or quotes (it goes in a connection string)
 ( umask 077; printf '%s\n' "$OWNER_PW" > "$MDATA.pw" )
@@ -65,11 +67,14 @@ When the measurement is done: `"$PGBIN/pg_ctl" -D "$MDATA" stop && rm -rf "$MDAT
    cluster is not the one this section made.
 2. **The owner provisions the window's login once**, after `init` (it also installs or upgrades the schema, which the
    window never does). The owner must be a database superuser (it reads `pg_hba_file_rules`). Choose the window's
-   password and export it for the step (otherwise it is prompted for, twice):
+   password and export it for the step (otherwise it is prompted for, twice). Like the owner's, it goes into a
+   connection string, so no spaces or quotes. Run the `cairn-node` built from THIS checkout: the window refuses a
+   database stamped by any other build ("prepared by a different build"), and a `cairn-node` on `PATH` from an
+   older checkout is exactly that:
 
    ```bash
-   export CAIRN_WINDOW_DB_PASSWORD='…'
-   cairn-node --conn "$CONN" provision-window-role --role cairn_window_login
+   export CAIRN_WINDOW_DB_PASSWORD='…'     # no spaces or quotes
+   cargo run -p cairn-node --release -- --conn "$CONN" provision-window-role --role cairn_window_login
    export WINDOW_CONN="host=127.0.0.1 port=$MPORT user=cairn_window_login password=$CAIRN_WINDOW_DB_PASSWORD dbname=cairn_measure"
    ```
 
@@ -78,7 +83,10 @@ When the measurement is done: `"$PGBIN/pg_ctl" -D "$MDATA" stop && rm -rf "$MDAT
 3. **Every window launch below uses `"$WINDOW_CONN"`**; every `cairn-node` and `psql` step keeps the owner `"$CONN"`.
    The window gets it as `CAIRN_CONN="$WINDOW_CONN" cargo run …`, not `--conn`: the string carries a password, and a
    command-line argument is visible to every account on the machine (`ps`), an environment variable only to yours (and root).
-   `cairn-node` reads `CAIRN_CONN` too; on a machine other people log into, run its lines the same way.
+   `cairn-node` reads `CAIRN_CONN` too. This rig's own `cairn-node` and `psql "$CONN"` lines pass the owner's string
+   as an argument for brevity, which is acceptable only on a machine no one else logs into; on a shared machine,
+   drop `--conn "$CONN"` and give `cairn-node` `CAIRN_CONN="$CONN"` in its environment instead, and give `psql`
+   `-h 127.0.0.1 -p "$MPORT" -d cairn_measure` (it already reads `PGPASSWORD`).
    The connection must be on this machine (`127.0.0.1`, `localhost` or a socket): the window refuses any other host.
    A window started with `CAIRN_CONN="$CONN"` still opens and reads, but every signature and "Enrol staff" is refused with
    "more access than a window may have", and the reason is printed on the terminal's stderr.
@@ -824,7 +832,7 @@ says why: "…could not be reopened: connecting to the database: …" with the c
 two seconds of that tries nothing and says so ("reopening it failed 0.8 s ago, so this press tried
 nothing (press again in 1.2 s to retry)"); a later press tries again. Nothing retries on its own. A list that never comes back without a window restart is a finding, and so is a
 failure that says only "connection closed". A node that ANSWERS and refuses (#880): restart Postgres,
-and before pressing, rename the window's database from another one, `psql -d postgres -c 'ALTER DATABASE
+and before pressing, rename the window's database from another one, `psql -h 127.0.0.1 -p "$MPORT" -d postgres -c 'ALTER DATABASE
 <db> RENAME TO <db>_away'` (the window's reopen is then refused whatever the auth method, a superuser's
 included, unlike a `REVOKE CONNECT`; stop any other node process on that database first, or the rename
 is refused). Press **Read this chart again**: the screen names `[3D000]` and says "pressing again fails

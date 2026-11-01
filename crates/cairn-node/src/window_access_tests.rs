@@ -81,6 +81,7 @@ fn existing_role_refusals() {
         can_login: true,
         has_attribute_power: false,
         other_membership: false,
+        has_members: false,
     };
     assert!(r(&ok, None).is_none());
     assert!(r(
@@ -107,6 +108,16 @@ fn existing_role_refusals() {
         None
     )
     .is_some());
+    // A role others are members of: granting it cairn_window would hand that to all of them.
+    assert!(r(
+        &RoleFacts {
+            has_members: true,
+            ..ok
+        },
+        None
+    )
+    .unwrap()
+    .contains("other roles are members of it"));
     assert!(r(&ok, Some("the login is a database superuser."))
         .unwrap()
         .contains("Choose a new name"));

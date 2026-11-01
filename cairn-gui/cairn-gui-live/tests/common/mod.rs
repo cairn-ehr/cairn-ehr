@@ -92,7 +92,8 @@ pub async fn connect_for_live(cs: &str) -> Client {
 /// key (pinned by `node_reads.rs`). The `CREATE ROLE` is guarded like db/004's and tolerates a
 /// concurrent creator: a role is cluster-wide, the test lock is per-database.
 ///
-/// DUPLICATED, deliberately, from `crates/cairn-node/tests/common/mod.rs`: three test trees
+/// DUPLICATED, deliberately, from `crates/cairn-node/tests/common/mod.rs` (a third copy is in
+/// `cairn-gui/cairn-gui-tauri/src/enrol_tests.rs`): three test trees
 /// cannot share a test module, and a library fn that mints passwordless logins is not something
 /// to ship. Keep the copies identical.
 pub async fn window_login(owner: &Client, cs: &str) -> String {

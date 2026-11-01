@@ -1633,7 +1633,8 @@ enum Cmd {
     /// server whose pg_hba.conf lets anyone in with no password, loads/upgrades the schema,
     /// then creates or refreshes a LOGIN role granted `cairn_window`. Run with the OWNER's
     /// connection (a database superuser: it reads pg_hba_file_rules). The password comes from
-    /// `CAIRN_WINDOW_DB_PASSWORD` or a prompt, and reaches the server only as a SCRAM verifier.
+    /// `CAIRN_WINDOW_DB_PASSWORD`, or for a NEW login a prompt (an existing login keeps its own
+    /// when none is given), and reaches the server only as a SCRAM verifier.
     ProvisionWindowRole {
         #[arg(long, default_value = "cairn_window_login")]
         role: String,
@@ -2849,7 +2850,23 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::ProvisionWindowRole { role } => {
             use cairn_node::window_access as wa;
-            // Order matters: refuse BEFORE anything is mutated (the schema load is a mutation).
+            // Order matters: refuse the cluster BEFORE anything is mutated (the schema load is a
+            // mutation). The role name and an existing role are judged after the load, inside
+            // provision_window_login, still before any of ITS DDL.
+            let unchanged = "the window login was not created or changed";
+            let given = match std::env::var("CAIRN_WINDOW_DB_PASSWORD") {
+                Err(std::env::VarError::NotPresent) => None,
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    anyhow::bail!("CAIRN_WINDOW_DB_PASSWORD is not valid text; {unchanged}")
+                }
+                // Set but empty is a mistake (a failed `$(cat file)`), never "keep the old one".
+                Ok(p) if p.trim().is_empty() => anyhow::bail!(
+                    "CAIRN_WINDOW_DB_PASSWORD is set but empty; give the password, or unset it \
+                     (a new login is then asked for one, an existing login keeps its own); \
+                     {unchanged}"
+                ),
+                Ok(p) => Some(Zeroizing::new(p)),
+            };
             cairn_node::conn_posture::require_local(&cli.conn)?;
             let owner = cairn_node::db::connect(&cli.conn).await?;
             let rules = wa::read_hba_rules(&owner).await?;
@@ -2860,11 +2877,8 @@ async fn run() -> anyhow::Result<()> {
             }
             drop(owner);
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
-            let given = std::env::var("CAIRN_WINDOW_DB_PASSWORD")
-                .ok()
-                .filter(|p| !p.is_empty());
             let password = match given {
-                Some(p) => Some(Zeroizing::new(p)),
+                Some(p) => Some(p),
                 None if !wa::role_exists(&db, &role).await? => {
                     // Twice: a typo here makes a login nobody can use, and a re-run would not ask.
                     let first = Zeroizing::new(rpassword::prompt_password(format!(
@@ -2885,8 +2899,15 @@ async fn run() -> anyhow::Result<()> {
             }
             wa::provision_window_login(&db, &role, password.as_ref().map(|p| p.as_str())).await?;
             println!(
-                "window login '{role}' provisioned and granted cairn_window\n\
-                 start the window with --conn \"<this connection> user={role} password=…\""
+                "window login '{role}' provisioned and granted cairn_window ({})\n\
+                 start the window with CAIRN_CONN=\"<this connection> user={role} password=…\" \
+                 in its environment, not --conn: a command-line argument is visible to every \
+                 account on this machine",
+                if password.is_some() {
+                    "password set"
+                } else {
+                    "password unchanged"
+                }
             );
         }
         Cmd::Status { passphrase } => {

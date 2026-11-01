@@ -102,6 +102,29 @@ async fn the_verb_refuses_a_trusting_cluster_and_changes_nothing() {
         .unwrap());
 }
 
+/// A set-but-empty password (a failed `$(cat file)`) is refused before anything, never read as
+/// "keep the old one".
+#[tokio::test]
+async fn an_empty_password_variable_is_refused_before_anything() {
+    let Some(cs) = common::cs() else {
+        eprintln!("skipped: no CAIRN_TEST_PG");
+        return;
+    };
+    let db = cairn_node::db::test_serial_guard(&cs).await.unwrap();
+    drop_role(&db).await;
+    let out = Command::new(env!("CARGO_BIN_EXE_cairn-node"))
+        .args(["--conn", &cs, "provision-window-role", "--role", ROLE])
+        .env("CAIRN_WINDOW_DB_PASSWORD", "  ")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("set but empty"), "{err}");
+    assert!(!cairn_node::window_access::role_exists(&db, ROLE)
+        .await
+        .unwrap());
+}
+
 #[tokio::test]
 async fn an_existing_role_that_is_not_a_window_login_is_refused_and_untouched() {
     let Some(cs) = common::cs() else {
@@ -167,6 +190,57 @@ async fn an_existing_role_that_is_not_a_window_login_is_refused_and_untouched() 
         db.batch_execute(&format!("DROP ROLE {r}")).await.unwrap();
     }
 
+    // A plain login whose only excess is an object grant: only the posture check can refuse it,
+    // and it must leave the login alone (it has no password, so a refresh would give it one).
+    let reader = "cairn_wtest_reader";
+    db.batch_execute(&format!(
+        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='{reader}') THEN \
+           EXECUTE 'DROP OWNED BY {reader}'; EXECUTE 'DROP ROLE {reader}'; END IF; END $$; \
+         CREATE ROLE {reader} LOGIN; GRANT SELECT (staff_id) ON vault_member TO {reader}"
+    ))
+    .await
+    .unwrap();
+    let why = provision_window_login(&db, reader, Some(&pw))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(why.contains("can read the vault's sealed keys"), "{why}");
+    let untouched: bool = db
+        .query_one(
+            "SELECT rolpassword IS NULL AND NOT pg_has_role(rolname, 'cairn_window', 'MEMBER') \
+               FROM pg_authid WHERE rolname = $1",
+            &[&reader],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(untouched, "the refused login was changed");
+    db.batch_execute(&format!("DROP OWNED BY {reader}; DROP ROLE {reader}"))
+        .await
+        .unwrap();
+
+    // A login other roles are members of: a GRANT to it would reach every member.
+    let group = "cairn_wtest_group";
+    let in_group = "cairn_wtest_in_group";
+    for r in [in_group, group] {
+        db.batch_execute(&format!("DROP ROLE IF EXISTS {r}"))
+            .await
+            .unwrap();
+    }
+    db.batch_execute(&format!(
+        "CREATE ROLE {group} LOGIN; CREATE ROLE {in_group} NOLOGIN; GRANT {group} TO {in_group}"
+    ))
+    .await
+    .unwrap();
+    let why = provision_window_login(&db, group, Some(&pw))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(why.contains("other roles are members of it"), "{why}");
+    for r in [in_group, group] {
+        db.batch_execute(&format!("DROP ROLE {r}")).await.unwrap();
+    }
+
     // The upgrade path: an existing window login is still refreshed.
     drop_role(&db).await;
     provision_window_login(&db, ROLE, Some(&pw)).await.unwrap();
@@ -174,16 +248,80 @@ async fn an_existing_role_that_is_not_a_window_login_is_refused_and_untouched() 
     drop_role(&db).await;
 }
 
+/// Right after a reload the files are not newer than what the server loaded. (The stale side
+/// needs the server's own files edited, which no test may do; `hba_freshness` pins its verdict.)
 #[tokio::test]
-async fn the_hba_freshness_query_runs() {
+async fn the_hba_files_read_fresh_after_a_reload() {
     let Some(cs) = common::cs() else {
         eprintln!("skipped: no CAIRN_TEST_PG");
         return;
     };
     let db = cairn_node::db::connect(&cs).await.unwrap();
-    cairn_node::window_access::hba_file_is_stale(&db)
+    let before: std::time::SystemTime = db
+        .query_one("SELECT pg_conf_load_time()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    db.batch_execute("SELECT pg_reload_conf()").await.unwrap();
+    // The postmaster reloads asynchronously; a new backend shows its new load time.
+    let mut fresh = None;
+    for _ in 0..50 {
+        let probe = cairn_node::db::connect(&cs).await.unwrap();
+        let now: std::time::SystemTime = probe
+            .query_one("SELECT pg_conf_load_time()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        if now > before {
+            fresh = Some(probe);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let probe = fresh.expect("the server reloaded within 5 s");
+    assert!(!cairn_node::window_access::hba_file_is_stale(&probe)
+        .await
+        .unwrap());
+}
+
+/// All of the role's DDL is one transaction: a step that fails leaves no half-made LOGIN behind
+/// (one with no password, which a re-run would then report as provisioned). A CREATEROLE login
+/// with no ADMIN on `cairn_window` can CREATE the role but not GRANT it, so the GRANT fails.
+#[tokio::test]
+async fn a_failed_step_leaves_no_half_made_login() {
+    let Some(cs) = common::cs() else {
+        eprintln!("skipped: no CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
+    let owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
+    drop_role(&owner).await;
+    let creator = "cairn_wtest_creator";
+    owner
+        .batch_execute(&format!(
+            "DROP ROLE IF EXISTS {creator}; CREATE ROLE {creator} LOGIN CREATEROLE"
+        ))
         .await
         .unwrap();
+    let db = cairn_node::db::connect(&format!("{cs} user={creator}"))
+        .await
+        .unwrap();
+    let pw = format!("{}-{}", "a long enough", "test phrase");
+    let err = provision_window_login(&db, ROLE, Some(&pw))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("provisioning window role"), "{err}");
+    drop(db);
+    let left = cairn_node::window_access::role_exists(&owner, ROLE)
+        .await
+        .unwrap();
+    drop_role(&owner).await;
+    owner
+        .batch_execute(&format!("DROP ROLE {creator}"))
+        .await
+        .unwrap();
+    assert!(!left, "the failed provisioning left the login behind");
 }
 
 /// A login that may not read `pg_hba_file_rules` is told to run the step as the schema owner,

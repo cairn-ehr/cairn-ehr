@@ -44,11 +44,12 @@ fn unparsable_is_refused() {
     assert!(require_local("port=notanumber").is_err());
 }
 
-/// The window's own login: none of the five powers.
+/// The window's own login: none of the six powers.
 fn window() -> PostureFacts {
     PostureFacts {
         superuser: false,
         owns_cairn_table: false,
+        shapes_schema: false,
         reads_vault: false,
         inserts_event_log: false,
         runs_peer_door: false,
@@ -62,9 +63,10 @@ fn a_window_connection_is_not_over_powered() {
 
 #[test]
 fn each_power_alone_is_over_powered() {
-    let each: [fn(&mut PostureFacts); 5] = [
+    let each: [fn(&mut PostureFacts); 6] = [
         |f| f.superuser = true,
         |f| f.owns_cairn_table = true,
+        |f| f.shapes_schema = true,
         |f| f.reads_vault = true,
         |f| f.inserts_event_log = true,
         |f| f.runs_peer_door = true,
