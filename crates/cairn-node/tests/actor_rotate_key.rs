@@ -400,6 +400,85 @@ async fn a_rotation_never_resurrects() {
     );
 }
 
+/// Final review I3: actor_current and the grant state order by recorded_at first, and a restore
+/// keeps each row's original recorded_at. On a machine whose clock is BEHIND the latest row, a
+/// new row would sort BEFORE it: a rotate-key would leave the old key current, a withdrawal would
+/// do nothing — both while "succeeding". The append door refuses instead, naming the clock.
+#[tokio::test]
+async fn a_clock_behind_the_registry_is_refused() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let (k1, k2) = (key(), key());
+    // What a restore onto a slow-clocked machine leaves: an enroll row dated after "now".
+    let pinned = r#"{"role":"clinician","handle":"A"}"#;
+    let a: Vec<u8> = c
+        .query_one(
+            "INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id, recorded_at) \
+             VALUES (cairn_actor_id($1::text::jsonb), 'enroll', 'human', $1::text::jsonb, $2, \
+                     clock_timestamp() + interval '1 hour') RETURNING actor_id",
+            &[&pinned, &k1],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let console = "console".to_string();
+    for (op, kid) in [
+        ("rotate-key", Some(&k2)),
+        ("confirm", Some(&k1)),
+        ("grant-enroller", None),
+    ] {
+        let e = append(&c, &a, op, kid, Some(&console)).await.expect_err(op);
+        assert!(db_msg(&e).contains("clock"), "{op}: {}", db_msg(&e));
+    }
+    assert_eq!(current_keys(&c, &a).await, vec![k1.clone()]);
+
+    // The normal path: a clock ahead of every row appends.
+    let (k3, k4) = (key(), key());
+    let b = enroll(&c, "B", &k3).await;
+    append(&c, &b, "rotate-key", Some(&k4), None).await.unwrap();
+    assert_eq!(current_keys(&c, &b).await, vec![k4]);
+}
+
+/// Final review M4: adding the #666 shape CHECK validates every existing row, so a pre-#666 row
+/// of the wrong shape must fail the load with a sentence naming the row and the remedy — not
+/// Postgres's bare "violated by some row". The test recreates such a database by dropping the
+/// constraint, and puts everything back BEFORE asserting, so a failure cannot strand the shared DB.
+#[tokio::test]
+async fn a_misshapen_legacy_row_is_named_when_the_shape_check_is_added() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let (k1, k2) = (key(), key());
+    let a = enroll(&c, "A", &k1).await;
+    let b = enroll(&c, "B", &k2).await;
+    c.batch_execute("ALTER TABLE actor_event DROP CONSTRAINT actor_event_op_shape")
+        .await
+        .unwrap();
+    let bad: String = c
+        .query_one(
+            "INSERT INTO actor_event (actor_id, op, signing_key_id, superseded_by) \
+             VALUES ($1, 'supersede', $2, $3) RETURNING actor_event_id::text",
+            &[&a, &k1, &b],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let schema = include_str!("../../../db/004_actors.sql");
+    let replay = c.batch_execute(schema).await;
+    // Restore the shared database first: drop the bad row, replay so the constraint is back.
+    c.batch_execute("ROLLBACK").await.unwrap();
+    reset(&c).await;
+    c.batch_execute(schema).await.unwrap();
+
+    let e = replay.expect_err("a misshapen row must stop the load");
+    let m = db_msg(&e);
+    assert!(m.contains(&bad), "names the row: {m}");
+    assert!(m.contains("supersede row carries no key"), "says why: {m}");
+}
+
 #[tokio::test]
 async fn the_three_arg_enroll_still_works() {
     let Some(base) = cs() else { return };

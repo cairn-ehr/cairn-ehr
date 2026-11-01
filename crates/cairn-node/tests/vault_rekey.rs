@@ -241,6 +241,56 @@ async fn rekey_without_a_member_row_recreates_it() {
     );
 }
 
+/// Final review I4: the no-member-row branch re-creates custody on an EXISTING actor from nothing
+/// but its `{role, handle}` shape — which a CLI-enrolled human (enroll.rs) shares. So only a
+/// superuser may take it (an enroller would otherwise take over any such actor), and only for a
+/// person's actor (never a device or agent that happens to carry that pinned shape).
+#[tokio::test]
+async fn rekey_without_a_member_row_needs_a_superuser_and_a_person() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    staff(&c).await;
+    c.batch_execute(
+        "DELETE FROM vault_attempt WHERE staff_id = 'jsmith'; DELETE FROM vault_member WHERE staff_id = 'jsmith'",
+    )
+    .await
+    .unwrap();
+    let e = rekey(
+        &c,
+        "jsmith",
+        "clinician",
+        Some("Dr J Smith"),
+        Some("j@example.org"),
+        JSMITH2,
+        "bwong",
+        BWONG,
+    )
+    .await
+    .expect_err("an enroller may not re-create a member row");
+    assert!(msg(&e).contains("superuser"), "{}", msg(&e));
+
+    // A device carrying the pinned shape of a person is no person: refused even for a superuser.
+    c.execute(
+        "SELECT enroll_actor('device', $1::text::jsonb, $2)",
+        &[&pinned("clinician", "dev1"), &kid_of(ANURSE)],
+    )
+    .await
+    .unwrap();
+    let e = rekey(
+        &c,
+        "dev1",
+        "clinician",
+        Some("Device"),
+        Some("d@example.org"),
+        BNURSE,
+        "boss",
+        BOSS,
+    )
+    .await
+    .expect_err("a non-human actor is never re-keyed into the vault");
+    assert!(msg(&e).contains("person"), "{}", msg(&e));
+}
+
 #[tokio::test]
 async fn reseal_needs_the_members_own_proof() {
     db_gated!();
