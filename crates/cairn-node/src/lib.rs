@@ -4,6 +4,7 @@ pub mod auto_apply;
 pub mod backup;
 pub mod capture;
 pub mod chart_link;
+pub mod conn_posture;
 pub mod db;
 pub mod db_diagnosis;
 pub mod duplicate_check;

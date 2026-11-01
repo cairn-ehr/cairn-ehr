@@ -4739,6 +4739,8 @@ async fn run() -> anyhow::Result<()> {
             hint,
             passphrase,
         } => {
+            // Before the passphrase prompt and before any connect: these verbs carry a secret.
+            cairn_node::conn_posture::require_local(&cli.conn)?;
             let pass = resolve_new_vault_passphrase(passphrase)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
             let kid = cairn_node::vault::bootstrap_superuser(
@@ -4757,6 +4759,8 @@ async fn run() -> anyhow::Result<()> {
             println!("enrolled superuser {staff_id} (key {kid})");
         }
         Cmd::VaultSetTerminalPassphrase { passphrase } => {
+            // Before the passphrase prompt and before any connect: these verbs carry a secret.
+            cairn_node::conn_posture::require_local(&cli.conn)?;
             let pass = resolve_new_vault_passphrase(passphrase)?;
             let phc = cairn_node::vault::terminal_phc(&pass)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
