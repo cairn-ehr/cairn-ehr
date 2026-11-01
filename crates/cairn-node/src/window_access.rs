@@ -39,7 +39,7 @@ pub fn hba_verdict(rules: &[HbaRule]) -> Result<Vec<String>, String> {
             ));
         } else if r.auth_method == "trust" {
             refusals.push(format!(
-                "{}, line {}: '{}' connections are let in with no password (trust). Change it to scram-sha-256, reload the server, and run this again.",
+                "{}, line {}: '{}' connections are let in with no password (trust). First give every login that connects through this line a password (the schema owner, and the node daemon's login), then change it to scram-sha-256, reload the server, and run this again.",
                 r.file_name, r.line_number, r.kind
             ));
         } else if r.auth_method == "peer"
@@ -91,7 +91,9 @@ pub async fn hba_file_is_stale(db: &Client) -> anyhow::Result<bool> {
 /// `pg_hba_file_rules` shows the FILE as it is now, not the rules in force: pair this with
 /// [`hba_file_is_stale`]. On PG16+ lines pulled in by an `include` directive appear here too (with
 /// their own `file_name`), so they are judged like any other.
-/// Only a superuser may; a 42501 becomes an instruction.
+/// Only a superuser may; a 42501 becomes an instruction to run as the schema OWNER (who must be a
+/// superuser for this step), never "as a superuser", which could steer a non-superuser owner into
+/// running the schema replay as some other role that would then own it.
 pub async fn read_hba_rules(db: &Client) -> anyhow::Result<Vec<HbaRule>> {
     let rows = db
         .query(
@@ -102,7 +104,7 @@ pub async fn read_hba_rules(db: &Client) -> anyhow::Result<Vec<HbaRule>> {
         .map_err(|e| {
             if e.code().map(|c| c.code()) == Some("42501") {
                 anyhow::anyhow!(
-                    "could not read this server's access rules; run this step as a database superuser"
+                    "could not read this server's access rules; run this step as the schema owner, who must be a database superuser for it"
                 )
             } else {
                 anyhow::anyhow!("reading the server's access rules: {}", legible_db_error(&e))
@@ -225,6 +227,13 @@ pub async fn provision_window_login(
         ddl(format!("CREATE ROLE {role} LOGIN")).await?;
     }
     ddl(format!("GRANT cairn_window TO {role}")).await?;
+    // A window login holding a transaction open holds hlc_state's tick lock and stalls every
+    // writer (db/062). The window cuts each command off after 15 s (cairn-gui-live's
+    // `NodeConnection::ANSWER_WITHIN`), so 60 s never ends a live command, only an abandoned one.
+    ddl(format!(
+        "ALTER ROLE {role} SET idle_in_transaction_session_timeout = '60s'"
+    ))
+    .await?;
     if let Some(pw) = password {
         let verifier = postgres_protocol::password::scram_sha_256(pw.as_bytes());
         // ALTER ROLE ... PASSWORD takes no bind parameter, so the verifier is interpolated. It is

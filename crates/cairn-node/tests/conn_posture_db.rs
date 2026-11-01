@@ -32,6 +32,9 @@ const NOINHERIT_OWNER_PROBE: &str = "cairn_window_probe_noinherit_owner";
 const NOINHERIT_NODE_PROBE: &str = "cairn_window_probe_noinherit_node";
 /// A login granted, one object at a time, each power a window must not have.
 const DIRECT_GRANTS_PROBE: &str = "cairn_window_probe_direct_grants";
+/// Logins given a power that reaches the sealed blobs outside every grant (server files, WAL).
+const SERVER_FILES_PROBE: &str = "cairn_window_probe_server_files";
+const REPLICATION_PROBE: &str = "cairn_window_probe_replication";
 
 /// Serialised, freshly-loaded owner connection with an empty vault.
 async fn fresh(base: &str) -> (Client, Client) {
@@ -209,6 +212,27 @@ async fn each_direct_grant_of_a_power_is_seen() {
     );
 }
 
+/// Some powers reach the sealed keys without any grant on `vault_member`: reading the data
+/// files (`pg_read_server_files`, or writing/executing on the server to the same end) or taking
+/// a base backup / streaming the WAL (`REPLICATION`). They count as the superuser fact.
+#[tokio::test]
+async fn powers_that_reach_the_files_outside_grants_are_over_powered() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, owner) = fresh(&base).await;
+    let grant = format!("GRANT pg_read_server_files TO {SERVER_FILES_PROBE};");
+    let facts = facts_of(&owner, &base, SERVER_FILES_PROBE, &grant).await;
+    assert!(facts.superuser, "{facts:?}");
+    assert!(over_powered(&facts).is_some(), "{facts:?}");
+
+    let alter = format!("ALTER ROLE {REPLICATION_PROBE} REPLICATION;");
+    let facts = facts_of(&owner, &base, REPLICATION_PROBE, &alter).await;
+    assert!(facts.superuser, "{facts:?}");
+    assert!(over_powered(&facts).is_some(), "{facts:?}");
+}
+
 /// Focus 3 and focus 1 on one login. A MEMBER of the owner role is not itself a superuser and
 /// owns nothing by `relowner`, so a check of the login's own row alone would miss it; judging
 /// the roles it is a member of catches it. Then the operator
@@ -309,4 +333,37 @@ async fn a_wrong_passphrase_over_an_over_powered_connection_is_never_counted() {
         .unwrap();
     assert!(matches!(counted, Release::Wrong { .. }), "{counted:?}");
     assert_eq!(attempts(&owner, "boss").await.0, before.0 + 1);
+}
+
+/// A connection string can change the CURRENT role without changing the login:
+/// `options='-c role=cairn_window'` starts the owner's session already `SET ROLE cairn_window`,
+/// so a judgement of `current_user` would read the window's empty powers and release a key over
+/// a session that `SET ROLE NONE` turns straight back into the owner. The posture is therefore
+/// judged on `session_user`, the authenticated login, which no startup option can change.
+#[tokio::test]
+async fn a_startup_role_option_does_not_hide_the_owner_login() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, _owner) = fresh(&base).await;
+    let disguised = db::connect(&format!("{base} options='-c role=cairn_window'"))
+        .await
+        .unwrap();
+    let current: String = disguised
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(current, "cairn_window", "the startup option took effect");
+
+    let facts = read_posture(&disguised).await.unwrap();
+    assert!(over_powered(&facts).is_some(), "{facts:?}");
+    let refused = release_for_act(&disguised, "nobody", &pass("x"), Purpose::Clinical)
+        .await
+        .unwrap();
+    assert!(
+        matches!(refused, Release::OverPowered { .. }),
+        "{refused:?}"
+    );
 }

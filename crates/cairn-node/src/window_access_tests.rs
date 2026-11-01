@@ -31,6 +31,9 @@ fn one_trust_line_is_refused_by_line_number() {
     .unwrap_err();
     assert!(e.contains("line 7") && e.contains("'local'") && e.contains("trust"));
     assert!(!e.contains("line 1:"));
+    // Switching a passwordless owner (or the daemon's login) to scram first would lock it out.
+    let pw = e.find("give every login").expect("passwords come first");
+    assert!(pw < e.find("scram-sha-256").unwrap());
 }
 
 #[test]

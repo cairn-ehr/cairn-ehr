@@ -20,6 +20,9 @@
 //! it, and a grant those statements need would stay hidden. Where a call is expected to
 //! succeed it is `expect`ed, so a fixture that stops reaching the deep path fails loudly.
 //!
+//! The vault doors the window calls are walked the same way in `window_role_vault_doors.rs`
+//! (split out to keep each file under 500 lines); the shared checks live in `tests/common`.
+//!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`. Key material and
 //! passphrases are minted at runtime.
 mod common;
@@ -37,10 +40,11 @@ use cairn_node::medication::{
     AssertMedicationInput, AttestParams, AuthorParams, CeaseMedicationInput,
     WithholdMedicationInput,
 };
-use cairn_node::vault::{self, NewMember, Purpose, Release};
 use cairn_patient_search::SearchQuery;
-use common::{cs, enroll_human, link_assertion_event, seed_proposal, setup, window_login};
-use tokio_postgres::error::SqlState;
+use common::{
+    assert_not_denied, cs, enroll_human, link_assertion_event, owner_and_window, seed_proposal,
+    setup,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -59,33 +63,6 @@ const TABLES: [&str; 7] = [
 
 const ORIGIN: &str = "window-role-grants";
 
-/// Fail if `result` is a privilege refusal. Any other outcome — success or an ordinary floor
-/// refusal — is fine here; the caller asserts more where the walk depends on success.
-///
-/// Two checks, because not every `cairn_node` path keeps the `tokio_postgres::Error` in its
-/// chain: some render the database's message into a string (`db_text`, `legible_db_error`),
-/// which drops the SQLSTATE. Postgres words every 42501 "permission denied for …", so the
-/// text check catches those. The message names only `entry` — never the error, which can carry
-/// identity-built or credential-adjacent text. To see the object, rerun with `-- --nocapture`
-/// after adding an `eprintln!` locally, or `SET ROLE cairn_window` in psql and run the SQL.
-fn assert_not_denied<T>(entry: &str, result: &anyhow::Result<T>) {
-    let Err(e) = result else { return };
-    let code = e.chain().find_map(|cause| {
-        cause
-            .downcast_ref::<tokio_postgres::Error>()
-            .and_then(|pg| pg.code().cloned())
-    });
-    assert_ne!(
-        code,
-        Some(SqlState::INSUFFICIENT_PRIVILEGE),
-        "{entry}: the window's role lacks a grant this command needs (SQLSTATE 42501)"
-    );
-    assert!(
-        !format!("{e:#}").contains("permission denied"),
-        "{entry}: the window's role lacks a grant this command needs (permission denied)"
-    );
-}
-
 /// [`assert_not_denied`], and then the call must have SUCCEEDED. A read that fails after its
 /// first statement would skip the statements after it, and hide any grant they need; so every
 /// read on a fixture that should satisfy it goes through here, not through the bare check.
@@ -95,16 +72,6 @@ fn expect_as_window<T>(entry: &str, result: anyhow::Result<T>) -> T {
         Ok(value) => value,
         Err(_) => panic!("{entry}: failed on the window's login (not a privilege refusal)"),
     }
-}
-
-/// The owner connection (schema loaded, setup runs here) and the window's own connection,
-/// opened with the NON-loading `db::connect` exactly as the window opens it.
-async fn owner_and_window(base: &str) -> (Client, Client) {
-    let owner = db::connect_and_load_schema(base).await.unwrap();
-    let window = db::connect(&window_login(&owner, base).await)
-        .await
-        .expect("the window's login connects");
-    (owner, window)
 }
 
 /// The window really is connected as its own role, not as the owner: a walk that silently ran
@@ -451,67 +418,4 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     .await;
     assert_not_denied("medication::cease_medication", &r);
     r.expect("the cessation is recorded");
-}
-
-/// The vault the window talks to: the terminal lock's stored hash, a staff member's hint, the
-/// duplicate-ID check, an enrolment, and the release of a key for one act.
-#[tokio::test]
-async fn the_windows_vault_doors_run_under_its_own_login() {
-    let Some(base) = cs() else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let _g = db::test_serial_guard(&base).await.unwrap();
-    let (owner, window) = owner_and_window(&base).await;
-    setup(&owner, &[]).await;
-    owner
-        .batch_execute("TRUNCATE vault_attempt, vault_member, vault_terminal CASCADE")
-        .await
-        .unwrap();
-    let su_pass = format!("su-{}", Uuid::now_v7());
-    let member = |staff_id, role, passphrase| NewMember {
-        staff_id,
-        display_name: "Test Person",
-        role,
-        phone: None,
-        email: Some("t@example.org"),
-        passphrase,
-        hint: Some("a hint"),
-    };
-    // The first superuser is bootstrapped by the owner's console verb, never by the window.
-    vault::bootstrap_superuser(&owner, &member("boss", "superuser", &su_pass))
-        .await
-        .unwrap();
-
-    let terminal = window
-        .query_one("SELECT cairn_vault_terminal_phc()", &[])
-        .await
-        .map_err(anyhow::Error::from);
-    assert_not_denied("terminal lock: cairn_vault_terminal_phc", &terminal);
-    let hint = window
-        .query_one("SELECT cairn_vault_hint($1)", &[&"boss"])
-        .await
-        .map_err(anyhow::Error::from);
-    assert_not_denied("sign-in hint: cairn_vault_hint", &hint);
-    let r = vault::staff_id_taken(&window, "jsmith").await;
-    assert_not_denied("vault::staff_id_taken", &r);
-
-    let r = vault::release_for_act(&window, "boss", &su_pass, Purpose::Enrol).await;
-    assert_not_denied("vault::release_for_act", &r);
-    let Release::Released { key: su, .. } = r.unwrap() else {
-        panic!("the superuser's key is released for an enrolment")
-    };
-    let clin_pass = format!("clin-{}", Uuid::now_v7());
-    let r = vault::enrol_member(
-        &window,
-        &member("jsmith", "clinician", &clin_pass),
-        "boss",
-        &su,
-    )
-    .await;
-    assert_not_denied("vault::enrol_member", &r);
-    r.expect("the enrolment is recorded");
-
-    // Pure, but the window calls it: hashing the terminal passphrase touches no table.
-    assert!(vault::terminal_phc(&clin_pass).is_ok());
 }

@@ -61,6 +61,10 @@ pub fn require_local(conn: &str) -> anyhow::Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostureFacts {
     /// The login is, or is a member of, a database superuser: every check below is moot for it.
+    /// Powers that reach the sealed keys outside every grant count here too: `REPLICATION` (a
+    /// base backup or the WAL carries `vault_member`'s rows) and membership of
+    /// `pg_read_server_files`, `pg_write_server_files` or `pg_execute_server_program` (read the
+    /// data files, or get a superuser to run code that does).
     pub superuser: bool,
     /// The login owns, or is a member of the role that owns, a relation in `public`. An owner
     /// can read the vault and disable its triggers, whatever was granted.
@@ -78,7 +82,10 @@ pub struct PostureFacts {
 /// or `None` when it has none of them. The order is the order of [`PostureFacts`]' fields.
 pub fn over_powered(f: &PostureFacts) -> Option<&'static str> {
     [
-        (f.superuser, "the login is a database superuser."),
+        (
+            f.superuser,
+            "the login is a database superuser, or can read the server's files or WAL.",
+        ),
         (
             f.owns_cairn_table,
             "the login owns the node's tables, or is a member of the role that does.",
@@ -97,7 +104,14 @@ pub fn over_powered(f: &PostureFacts) -> Option<&'static str> {
     .find_map(|(has, why)| has.then_some(why))
 }
 
-/// Read this connection's [`PostureFacts`] in ONE query, as its own login (`current_user`).
+/// Read this connection's [`PostureFacts`] in ONE query, as its own login (`session_user`).
+///
+/// `session_user`, not `current_user`: the current role is whatever the session last `SET ROLE`
+/// to, and a connection string can start it there (`options='-c role=cairn_window'`, or an
+/// `ALTER ROLE … SET role`), so the owner's login could present the window's empty powers and
+/// `SET ROLE NONE` back after the key is released. `session_user` is the login that authenticated;
+/// a startup `-c session_authorization=` is ignored by the server. Every role the login could
+/// `SET ROLE` into is already in its MEMBER set below, and a superuser is caught by `rolsuper`.
 ///
 /// Every fact is judged over EVERY role the login is a member of, itself included
 /// (`pg_has_role(…, 'MEMBER')`), not over the login's own privileges alone. A member can take a
@@ -109,7 +123,7 @@ pub fn over_powered(f: &PostureFacts) -> Option<&'static str> {
 /// the set is never empty; were it empty, `coalesce(…, true)` would refuse rather than pass.)
 pub async fn read_posture(db: &Client) -> anyhow::Result<PostureFacts> {
     let me: String = db
-        .query_one("SELECT current_user::text", &[])
+        .query_one("SELECT session_user::text", &[])
         .await
         .context("reading this connection's login")?
         .get(0);
@@ -122,7 +136,9 @@ pub async fn read_posture(db: &Client) -> anyhow::Result<PostureFacts> {
 pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureFacts> {
     let row = db
         .query_one(
-            "SELECT coalesce(bool_or(r.rolsuper), true), \
+            "SELECT coalesce(bool_or(r.rolsuper OR r.rolreplication OR r.rolname IN ( \
+                        'pg_read_server_files', 'pg_write_server_files', \
+                        'pg_execute_server_program')), true), \
                     coalesce(bool_or(EXISTS ( \
                         SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                          WHERE n.nspname = 'public' AND c.relowner = r.oid)), true), \
@@ -162,6 +178,13 @@ pub fn window_schema_verdict(stamp: Option<&SchemaStamp>) -> Result<(), String> 
             "This window is older than the node's database (generation {} against {ours}). \
              Install the window that matches the node.",
             s.version
+        )),
+        // Same generation, different build (hash or loader): any other cairn-node would stamp
+        // its own build again, so only the one built with this window can satisfy it.
+        Some(s) if s.version == ours => Err(format!(
+            "The node's database was prepared by a different build (generation {ours}, but not \
+             this window's build). At the node, run provision-window-role with the cairn-node \
+             built with this window and the owner's connection, then start this window again."
         )),
         _ => {
             let db = stamp.map_or("none".to_string(), |s| s.version.to_string());

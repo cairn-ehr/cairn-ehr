@@ -65,7 +65,13 @@ struct Cli {
     patient: Option<uuid::Uuid>,
 
     /// PostgreSQL connection string for this node's database.
-    #[arg(long, env = "CAIRN_CONN", default_value = "host=/tmp dbname=cairn")]
+    // The value can carry a password, so `--help` never prints it.
+    #[arg(
+        long,
+        env = "CAIRN_CONN",
+        hide_env_values = true,
+        default_value = "host=/tmp dbname=cairn"
+    )]
     conn: String,
 
     /// The NODE's signing key — holds custody of every sealed body it writes (ADR-0052).

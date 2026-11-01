@@ -11,7 +11,7 @@
 -- Design: docs/superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md (D1).
 --
 -- Replay-safe: this file re-runs on every connect (guarded CREATE, idempotent GRANTs).
--- Task 3 appends further narrow grants BELOW, each with a one-line reason.
+-- The narrow grants below the role's creation each carry a one-line reason.
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_window') THEN
@@ -33,6 +33,11 @@ GRANT SELECT ON local_node, node_schema TO cairn_window;
 
 -- Every window write (registration, a link judgement, a medication act) stamps its HLC through
 -- this SECURITY DEFINER tick; the table it advances stays unwritable.
+-- Residual, stated plainly: the tick takes hlc_state's one row FOR UPDATE (db/007), so a window
+-- login that holds a transaction open after a tick stalls EVERY writer's next tick (the daemon's
+-- sync included) until it lets go. That is a denial of service by someone who already holds the
+-- window's login, never a bypass; provision-window-role bounds it by giving each window login
+-- `idle_in_transaction_session_timeout` (crates/cairn-node/src/window_access.rs).
 GRANT EXECUTE ON FUNCTION node_hlc_tick() TO cairn_window;
 
 -- The window's start-up check of its own node key ("Retired" vs "never enrolled",

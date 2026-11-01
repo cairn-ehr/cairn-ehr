@@ -1552,7 +1552,8 @@ struct Cli {
     /// `GRANT cairn_node TO <that role>`, then point `--conn`/`CAIRN_CONN` at it.
     /// `status` reports whether the gate actually binds the connected role
     /// (`db_floor ENFORCED` vs `BYPASSABLE`). See `db/007_node_federation.sql`.
-    #[arg(long, env = "CAIRN_CONN")]
+    // The value can carry a password, so `--help` never prints it.
+    #[arg(long, env = "CAIRN_CONN", hide_env_values = true)]
     conn: String,
     #[arg(long, default_value = "node.key")]
     key: PathBuf,

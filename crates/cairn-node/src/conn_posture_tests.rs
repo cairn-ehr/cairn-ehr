@@ -123,3 +123,21 @@ fn every_other_mismatch_sends_the_operator_to_provision_window_role() {
         assert!(!e.contains("older than"));
     }
 }
+
+/// At the SAME generation the database was prepared by a different build (another hash or
+/// loader): only the cairn-node built with this window can stamp what it expects, so say so.
+#[test]
+fn a_same_generation_mismatch_names_the_cairn_node_built_with_this_window() {
+    let v = embedded_schema_version();
+    let h = embedded_schema_hash().to_vec();
+    for s in [
+        stamp(v, LOADER_BUILD, None),
+        stamp(v, LOADER_BUILD, Some(vec![0; h.len()])),
+        stamp(v, "cairn-sync 0.0.0", Some(h.clone())),
+    ] {
+        let e = window_schema_verdict(Some(&s)).unwrap_err();
+        assert!(e.contains("the cairn-node built with this window"), "{e}");
+    }
+    let older = window_schema_verdict(Some(&stamp(v - 1, LOADER_BUILD, Some(h)))).unwrap_err();
+    assert!(!older.contains("built with this window"), "{older}");
+}

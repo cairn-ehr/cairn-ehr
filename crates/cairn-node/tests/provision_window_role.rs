@@ -44,6 +44,21 @@ async fn creates_scram_login_in_cairn_window_and_rerun_keeps_it() {
     provision_window_login(&db, ROLE, Some(&pw)).await.unwrap();
     let v1 = verifier(&db).await.unwrap();
     assert!(v1.starts_with("SCRAM-SHA-256$"));
+    // An idle open transaction would hold hlc_state's row lock and stall every writer (db/062).
+    let settings: Vec<String> = db
+        .query_one(
+            "SELECT coalesce(s.setconfig, '{}') FROM pg_roles r \
+               LEFT JOIN pg_db_role_setting s ON s.setrole = r.oid AND s.setdatabase = 0 \
+              WHERE r.rolname = $1",
+            &[&ROLE],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        settings.contains(&"idle_in_transaction_session_timeout=60s".to_string()),
+        "{settings:?}"
+    );
     let member: bool = db
         .query_one("SELECT pg_has_role($1, 'cairn_window', 'MEMBER')", &[&ROLE])
         .await
@@ -110,7 +125,11 @@ async fn an_existing_role_that_is_not_a_window_login_is_refused_and_untouched() 
         .unwrap()
         .get(0);
     // The owner's own login (a superuser).
-    assert!(provision_window_login(&db, &me, Some(&pw)).await.is_err());
+    let why = provision_window_login(&db, &me, Some(&pw))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(why.contains("is not a window login") && why.contains("superuser"));
     let after: Option<String> = db
         .query_one(
             "SELECT rolpassword FROM pg_authid WHERE rolname = current_user",
@@ -134,12 +153,16 @@ async fn an_existing_role_that_is_not_a_window_login_is_refused_and_untouched() 
     ))
     .await
     .unwrap();
-    assert!(provision_window_login(&db, nologin, Some(&pw))
+    let why = provision_window_login(&db, nologin, Some(&pw))
         .await
-        .is_err());
-    assert!(provision_window_login(&db, node_login, Some(&pw))
+        .unwrap_err()
+        .to_string();
+    assert!(why.contains("is not a window login") && why.contains("it cannot log in"));
+    let why = provision_window_login(&db, node_login, Some(&pw))
         .await
-        .is_err());
+        .unwrap_err()
+        .to_string();
+    assert!(why.contains("is not a window login") && why.contains("other than cairn_window"));
     for r in [nologin, node_login] {
         db.batch_execute(&format!("DROP ROLE {r}")).await.unwrap();
     }
@@ -161,6 +184,26 @@ async fn the_hba_freshness_query_runs() {
     cairn_node::window_access::hba_file_is_stale(&db)
         .await
         .unwrap();
+}
+
+/// A login that may not read `pg_hba_file_rules` is told to run the step as the schema owner,
+/// never steered to some other superuser (whose replay would own the schema instead).
+#[tokio::test]
+async fn reading_the_access_rules_without_the_power_names_the_schema_owner() {
+    let Some(cs) = common::cs() else {
+        eprintln!("skipped: no CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
+    let owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
+    let window = cairn_node::db::connect(&common::window_login(&owner, &cs).await)
+        .await
+        .unwrap();
+    let why = cairn_node::window_access::read_hba_rules(&window)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(why.contains("as the schema owner"), "{why}");
 }
 
 /// The verb must refuse before it mutates: each step appears in this order in its match arm.
