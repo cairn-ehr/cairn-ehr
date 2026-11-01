@@ -17,7 +17,7 @@
 > **Its sign-in / authorship part:** design
 > [`superpowers/specs/2026-10-31-gui-sign-in-and-authorship-design.md`](superpowers/specs/2026-10-31-gui-sign-in-and-authorship-design.md)
 > (builds ADR-0008 §5.11; slices 1 sign-in → 2 re-key (#247, #664 first) → 3 drafts + `Asserted` grade + its display →
-> 4 emergency key → 5 autonomous terminal nodes that sync credentials with specified nodes). **Slice 1 is BUILT in PR
+> 4 emergency key → 5 autonomous terminal nodes that sync credentials with specified nodes). **Slice 1 is MERGED (2026-10-31) in PR
 > [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)** (plan `superpowers/plans/2026-10-31-gui-sign-in-slice-1.md`,
 > [ADR-0083](spec/decisions/0083-the-human-key-vault.md), spec **v0.85**, `db/061`, `SCHEMA_GENERATION` **61**,
 > `cairn_pgx` **0.4.0**): a key vault in the node's database; the window signs EVERY act with staff ID + passphrase
@@ -75,7 +75,7 @@ member's key answers `not-current`, a damaged terminal PHC is a fault, db/061 re
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review / merge PR #897 (sign-in slice 1), then #898 + #899 (they gate any multi-machine terminal), then
+> 1. **#898 + #899 (they gate any multi-machine terminal; design `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`), then
 >    brainstorm slice 2 (re-key; #247 and #664 first).** Owed by a human: **RUNBOOK §16** (sign ≤ 3 s, next-nurse
 >    switch, VoiceOver/keyboard on the strip, the terminal lock). Still owed from
 >    PR #895 (merged): run #838's RUNBOOK §15 (now incl. #861's current-line check) and
