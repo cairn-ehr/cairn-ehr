@@ -117,6 +117,8 @@ DECLARE
     v_pinned    JSONB;
     v_key       TEXT;
     v_succ      BYTEA;
+    v_by        TEXT;
+    v_appr      BYTEA;
     v_at        TIMESTAMPTZ;
     v_present   actor_event%ROWTYPE;
     v_differs   TEXT;
@@ -174,9 +176,11 @@ BEGIN
         -- re-adjudicate). Each check names its field, because a restore mid-disaster is the
         -- worst possible moment for an illegible refusal.
         v_op := v_row ->> 'op';
-        IF v_op IS NULL OR v_op NOT IN ('enroll', 'supersede', 'revoke') THEN
+        IF v_op IS NULL OR v_op NOT IN ('enroll', 'supersede', 'revoke', 'rotate-key', 'confirm',
+                                       'repudiate', 'grant-enroller', 'withdraw-enroller') THEN
             RAISE EXCEPTION 'restore_actor_registry: row % carries op %, not one of '
-                'enroll/supersede/revoke (the closed actor-event algebra, ADR-0011)',
+                'enroll/supersede/revoke/rotate-key/confirm/repudiate/grant-enroller/'
+                'withdraw-enroller (the closed actor-event algebra, ADR-0011 + sign-in slice 2)',
                 COALESCE(v_row ->> 'actor_event_id', '(no actor_event_id)'),
                 COALESCE(v_op, 'NULL');
         END IF;
@@ -201,11 +205,16 @@ BEGIN
         v_succ   := CASE WHEN v_row ->> 'superseded_by' IS NULL THEN NULL
                          ELSE cairn_decode_hex_or_raise('superseded_by', v_row ->> 'superseded_by',
                                                         'restore_actor_registry') END;
+        v_by     := v_row ->> 'approved_by';
+        v_appr   := CASE WHEN v_row ->> 'approval' IS NULL THEN NULL
+                         ELSE cairn_decode_hex_or_raise('approval', v_row ->> 'approval',
+                                                        'restore_actor_registry') END;
         v_at     := v_recorded::TIMESTAMPTZ;
 
         INSERT INTO actor_event
-            (actor_event_id, actor_id, op, kind, pinned, signing_key_id, superseded_by, recorded_at)
-        VALUES (v_id, v_actor, v_op, v_kind, v_pinned, v_key, v_succ, v_at)
+            (actor_event_id, actor_id, op, kind, pinned, signing_key_id, superseded_by,
+             approved_by, approval, recorded_at)
+        VALUES (v_id, v_actor, v_op, v_kind, v_pinned, v_key, v_succ, v_by, v_appr, v_at)
         -- Idempotent by row identity, which is what makes a resume safe to re-run any number
         -- of times. Fence 2 has already established that every row present belongs to this
         -- set BY ID; whether it is the SAME row is checked just below.
@@ -229,6 +238,8 @@ BEGIN
                 WHEN v_present.pinned         IS DISTINCT FROM v_pinned THEN 'pinned'
                 WHEN v_present.signing_key_id IS DISTINCT FROM v_key    THEN 'signing_key_id'
                 WHEN v_present.superseded_by  IS DISTINCT FROM v_succ   THEN 'superseded_by'
+                WHEN v_present.approved_by    IS DISTINCT FROM v_by     THEN 'approved_by'
+                WHEN v_present.approval       IS DISTINCT FROM v_appr   THEN 'approval'
                 WHEN v_present.recorded_at    IS DISTINCT FROM v_at     THEN 'recorded_at'
             END;
             IF v_differs IS NOT NULL THEN
