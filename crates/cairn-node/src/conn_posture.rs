@@ -57,10 +57,10 @@ pub fn require_local(conn: &str) -> anyhow::Result<()> {
 /// [`over_powered`]; split so the judgement is a pure function tested without a database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostureFacts {
-    /// The login is a database superuser: every check below is moot for it.
+    /// The login is, or is a member of, a database superuser: every check below is moot for it.
     pub superuser: bool,
-    /// The login owns, or is a member of the role that owns, a table in `public`. An owner can
-    /// read the vault and disable its triggers, whatever was granted.
+    /// The login owns, or is a member of the role that owns, a relation in `public`. An owner
+    /// can read the vault and disable its triggers, whatever was granted.
     pub owns_cairn_table: bool,
     /// The login can `SELECT` from `vault_member` (any column): the sealed keys themselves.
     pub reads_vault: bool,
@@ -96,23 +96,28 @@ pub fn over_powered(f: &PostureFacts) -> Option<&'static str> {
 
 /// Read this connection's [`PostureFacts`] in ONE query, as its own login (`current_user`).
 ///
-/// Ownership is `pg_has_role(…, 'USAGE')`, not `relowner = current_user`: a login that merely
-/// inherits the owner role through membership has the owner's power too. The object names are
-/// given as `public.`-qualified text, so a missing one is an error (no key released), never a
-/// silent "no", and no `search_path` can point a check at a decoy.
+/// Every fact is judged over EVERY role the login is a member of, itself included
+/// (`pg_has_role(…, 'MEMBER')`), not over the login's own privileges alone. A member can take a
+/// role's whole power with `SET ROLE` even when the grant passes nothing on (`WITH INHERIT
+/// FALSE`; PG16+ keeps the SET option by default), so a member of the owner role, of a superuser
+/// or of `cairn_node` is as over-powered as that role. The object names are given as
+/// `public.`-qualified text, so a missing one is an error (no key released), never a silent "no",
+/// and no `search_path` can point a check at a decoy. (The login is always a member of itself, so
+/// the set is never empty; were it empty, `coalesce(…, true)` would refuse rather than pass.)
 pub async fn read_posture(db: &Client) -> anyhow::Result<PostureFacts> {
     let row = db
         .query_one(
-            "SELECT r.rolsuper, \
-                    EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
-                             WHERE n.nspname = 'public' \
-                               AND pg_has_role(current_user, c.relowner, 'USAGE')), \
-                    has_any_column_privilege('public.vault_member', 'SELECT'), \
-                    has_any_column_privilege('public.event_log', 'INSERT'), \
-                    has_function_privilege('public.apply_remote_event(bytea, bytea, bytea, bytea)', 'EXECUTE') \
-                    OR has_function_privilege('public.submit_node_event(bytea)', 'EXECUTE') \
-                    OR has_function_privilege('public.cairn_vault_unseal(bytea, text)', 'EXECUTE') \
-               FROM pg_roles r WHERE r.rolname = current_user",
+            "SELECT coalesce(bool_or(r.rolsuper), true), \
+                    coalesce(bool_or(EXISTS ( \
+                        SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                         WHERE n.nspname = 'public' AND c.relowner = r.oid)), true), \
+                    coalesce(bool_or(has_any_column_privilege(r.oid, 'public.vault_member', 'SELECT')), true), \
+                    coalesce(bool_or(has_any_column_privilege(r.oid, 'public.event_log', 'INSERT')), true), \
+                    coalesce(bool_or( \
+                        has_function_privilege(r.oid, 'public.apply_remote_event(bytea, bytea, bytea, bytea)', 'EXECUTE') \
+                        OR has_function_privilege(r.oid, 'public.submit_node_event(bytea)', 'EXECUTE') \
+                        OR has_function_privilege(r.oid, 'public.cairn_vault_unseal(bytea, text)', 'EXECUTE')), true) \
+               FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'MEMBER')",
             &[],
         )
         .await
