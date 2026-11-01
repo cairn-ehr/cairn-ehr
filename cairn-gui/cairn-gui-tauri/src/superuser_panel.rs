@@ -199,7 +199,7 @@ pub async fn set_enroller_impl(
             write_failure(&e).to_string()
         })?;
     Ok(if grant {
-        format!("{staff_id} can now enrol staff, once a superuser has confirmed their key.")
+        format!("{staff_id} can now enrol staff.")
     } else {
         format!("{staff_id} can no longer enrol staff.")
     })

@@ -1,5 +1,5 @@
 //! Tests for `superuser_panel.rs`. The pure ones need no database; the DB-gated ones
-//! (`a_superuser_grants_and_an_enroller_then_enrols`, `a_repudiated_key_leaves_the_worklist_for_good`)
+//! (`a_superuser_grants_and_an_enroller_then_rekeys`, `a_repudiated_key_leaves_the_worklist_for_good`)
 //! self-skip without `CAIRN_TEST_PG`.
 use super::*;
 use crate::signer::Credential;
@@ -198,24 +198,48 @@ async fn world() -> Option<(impl Sized, AppState, String, String)> {
     Some((guard, state, su_p, en_p))
 }
 
-/// DB-gated (run locally): grant, list, confirm, then the enroller enrols someone.
+/// DB-gated helper: `boss` grants `enrol1` (superuser-approved, so confirmed at once, which db/061
+/// requires of an enroller), then `enrol1` re-keys `nurse1`. An enroller-approved key stays
+/// UNCONFIRMED (db/061 `cairn_vault_enrol`), so `nurse1`'s new key is on the worklist.
+async fn nurse_rekeyed_by_an_enroller(state: &AppState, su_p: &str, en_p: &str) {
+    set_enroller_impl(state, credential("boss", su_p), "enrol1", true)
+        .await
+        .expect("granted");
+    let new_p = pass("new");
+    let form = crate::rekey::RekeyForm {
+        staff_id: "nurse1".into(),
+        role: "clinician".into(),
+        display_name: String::new(),
+        phone: String::new(),
+        email: String::new(),
+        passphrase: Zeroizing::new(new_p.clone()),
+        passphrase_again: Zeroizing::new(new_p),
+        hint: String::new(),
+    };
+    crate::rekey::rekey_member_impl(state, credential("enrol1", en_p), form)
+        .await
+        .expect("an enroller re-keys a clinician");
+}
+
+/// DB-gated (run locally): a non-superuser is refused, a grant is listed, the enroller's re-key
+/// lands on the worklist naming the enroller, and Confirm takes it off.
 #[tokio::test]
-async fn a_superuser_grants_and_an_enroller_then_enrols() {
+async fn a_superuser_grants_and_an_enroller_then_rekeys() {
     let Some((_g, state, su_p, en_p)) = world().await else {
         return;
     };
     // A non-superuser is told so before the vault is asked.
     let refused = set_enroller_impl(&state, credential("enrol1", &en_p), "nurse1", true).await;
     assert_eq!(refused.unwrap_err(), ONLY_SUPERUSER);
-    set_enroller_impl(&state, credential("boss", &su_p), "enrol1", true)
-        .await
-        .expect("granted");
+    nurse_rekeyed_by_an_enroller(&state, &su_p, &en_p).await;
     let granted = list_enrollers_impl(&state).await.unwrap();
     assert!(granted.iter().any(|r| r.staff_id == "enrol1" && r.enroller));
     let work = list_unconfirmed_impl(&state).await.unwrap();
     let mine = work
         .iter()
-        .find(|u| u.text.starts_with("Test Person (enrol1)"))
+        .find(|u| {
+            u.text.starts_with("Test Person (nurse1)") && u.text.contains("approved by enrol1")
+        })
         .expect("on the worklist");
     judge_key_impl(&state, credential("boss", &su_p), &mine.kid, true)
         .await
@@ -230,11 +254,17 @@ async fn a_superuser_grants_and_an_enroller_then_enrols() {
 /// DB-gated: a repudiated key leaves the worklist, and cannot then be confirmed.
 #[tokio::test]
 async fn a_repudiated_key_leaves_the_worklist_for_good() {
-    let Some((_g, state, su_p, _en_p)) = world().await else {
+    let Some((_g, state, su_p, en_p)) = world().await else {
         return;
     };
+    nurse_rekeyed_by_an_enroller(&state, &su_p, &en_p).await;
     let work = list_unconfirmed_impl(&state).await.unwrap();
-    let kid = work[0].kid.clone();
+    let kid = work
+        .iter()
+        .find(|u| u.text.starts_with("Test Person (nurse1)"))
+        .expect("on the worklist")
+        .kid
+        .clone();
     judge_key_impl(&state, credential("boss", &su_p), &kid, false)
         .await
         .expect("repudiated");

@@ -10,7 +10,13 @@ function superuserButton(label, onPress) {
   const b = document.createElement("button");
   b.type = "button";
   b.textContent = label;
-  b.addEventListener("click", onPress);
+  b.addEventListener("click", () => {
+    // In-flight guard: a fast double-click must not send the act twice. The refresh that follows
+    // the act redraws the row, which re-enables its buttons.
+    const row = b.parentElement;
+    row.querySelectorAll("button").forEach((x) => (x.disabled = true));
+    onPress();
+  });
   return b;
 }
 
@@ -36,10 +42,12 @@ async function superuserAct(command, args) {
   // Whatever happened, the superuser's passphrase leaves the screen. `false`: not a clinical act.
   clearSigner(false);
   setMessage(el("superuser-status"), said);
-  await superuserRefresh();
+  // A failed refresh appends to the outcome sentence; it must never replace it (an
+  // "it may have been made" answer would be lost).
+  await superuserRefresh(said);
 }
 
-async function superuserRefresh() {
+async function superuserRefresh(outcome) {
   const grants = el("superuser-grants");
   const keys = el("superuser-keys");
   try {
@@ -64,7 +72,8 @@ async function superuserRefresh() {
     );
     el("superuser-keys-empty").hidden = waiting.length > 0;
   } catch (failure) {
-    setMessage(el("superuser-status"), typeof failure === "string" ? failure : failureText(failure));
+    const why = typeof failure === "string" ? failure : failureText(failure);
+    setMessage(el("superuser-status"), outcome ? outcome + " " + why : why);
   }
 }
 
