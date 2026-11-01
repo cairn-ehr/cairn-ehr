@@ -4,6 +4,7 @@
 //! of node calls inside a command — invisible to every pure test — is pinned by reading the
 //! command's source instead. Each such guard says in its doc comment why no behavioural test can
 //! reach the property; this module only finds the text.
+use std::path::Path;
 
 /// The body of Rust function `name` in `src`, to the first line that is a lone `}` (rustfmt
 /// closes every top-level fn that way).
@@ -46,4 +47,20 @@ pub fn js_const(src: &str, name: &str) -> String {
 pub fn position(body: &str, needle: &str) -> usize {
     body.find(needle)
         .unwrap_or_else(|| panic!("`{needle}` is called in:\n{body}"))
+}
+
+/// Every non-test `.rs` file under `dir`, as (path, source). Files named `*tests.rs` are skipped.
+pub fn sources(dir: &Path, out: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(dir).expect("the source dir reads") {
+        let path = entry.expect("a dir entry").path();
+        let name = path.to_string_lossy().into_owned();
+        if path.is_dir() {
+            sources(&path, out);
+        } else if name.ends_with(".rs") && !name.ends_with("tests.rs") {
+            out.push((
+                name,
+                std::fs::read_to_string(&path).expect("the file reads"),
+            ));
+        }
+    }
 }
