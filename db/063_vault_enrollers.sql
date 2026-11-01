@@ -32,38 +32,30 @@
 -- door, purpose 'reseal'); refusals never echo a token or a blob; every door is SECURITY
 -- DEFINER with `SET search_path = public, pg_temp`, revoked from PUBLIC.
 --
--- LOAD ORDER. db/061's release and enrol doors call functions defined here (the purpose map,
--- the enroller test, the 'replaced' notice, the approver rule). PL/pgSQL binds those names when
--- it RUNS, not when it is created, so 061 loads cleanly first; on a brand-new database the doors
--- are callable once this file has loaded, which is before anyone can call them.
+-- WHAT LIVES IN db/061 INSTEAD. The release and enrol doors (db/061) call the purpose map, the
+-- enroller rule, the approver rule and the 'replaced' notice, so those are defined in db/061,
+-- AHEAD of the doors: on any replay (an upgrade from 62 included) a door and everything it calls
+-- then change in one transaction, and a concurrent sign-in can never meet a door calling a
+-- function not yet defined (db/061 promise 2). This file holds the doors only the window calls.
 
 BEGIN;
-
--- The release door's role → purpose map (§5.1), as a pure function so the SQL mirror can pin it:
---   * 'reseal' (re-wrap my own key under a new passphrase, §5.4) — every role;
---   * superuser and admin — administrative acts ('enrol'), never 'clinical' (db/061 promise 3);
---   * everyone else — 'clinical', and 'enrol' only while an enroller (p_enroller).
--- Anything else, NULL included, is refused. Pure and IMMUTABLE.
-CREATE OR REPLACE FUNCTION cairn_vault_purpose_allowed(p_role text, p_enroller boolean, p_purpose text)
-RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT COALESCE(CASE
-        WHEN p_purpose = 'reseal' THEN true
-        WHEN p_role IN ('superuser', 'admin') THEN p_purpose = 'enrol'
-        ELSE p_purpose = 'clinical' OR (p_purpose = 'enrol' AND p_enroller)
-    END, false);
-$$;
 
 -- The addresses each signed act is bound to. All four follow cairn_vault_enrol_address (db/061):
 -- '\x1220' || sha256 of newline-joined fields, the first a domain tag, staff IDs normalised. A
 -- NULL field makes the address NULL, which no token verifies against. The window asks these for
 -- the bytes to sign; the SQL mirror (db/tests/063) restates each formula.
 
--- A re-key: this staff ID gets this new key. The key is fresh and single-use (db/004 refuses a
--- key any actor ever held), so the token is good once.
-CREATE OR REPLACE FUNCTION cairn_vault_rekey_address(p_staff_id text, p_new_key text)
+-- A re-key: this staff ID, holding this role, gets this new key. The role is bound so that,
+-- with no member row to check it against (after a restore), a token cannot be spent on another
+-- {role, handle} actor of the same staff ID. The key is fresh and single-use (db/004 refuses a key
+-- any actor ever held), so the token is good once. The first version took no role: dropped, so no
+-- stale 2-argument overload survives a replay.
+DROP FUNCTION IF EXISTS cairn_vault_rekey_address(text, text);
+CREATE OR REPLACE FUNCTION cairn_vault_rekey_address(p_staff_id text, p_role text, p_new_key text)
 RETURNS bytea LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT '\x1220'::bytea || sha256(convert_to(
-        'cairn-vault-rekey' || E'\n' || cairn_vault_staff_id(p_staff_id) || E'\n' || p_new_key, 'UTF8'));
+        'cairn-vault-rekey' || E'\n' || cairn_vault_staff_id(p_staff_id) || E'\n' || p_role
+        || E'\n' || p_new_key, 'UTF8'));
 $$;
 
 -- A grant or withdrawal of the enroller role. p_prior is the `seq` of the member's latest
@@ -98,96 +90,12 @@ RETURNS bytea LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_
       FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
 $$;
 
--- An actor's latest grant-enroller / withdraw-enroller row: its seq, and whether it is a grant.
--- No row = never granted. Latest is (recorded_at, seq), as actor_current orders. Invoker, owner only.
-CREATE OR REPLACE FUNCTION cairn_vault_latest_grant(p_actor_id bytea)
-RETURNS TABLE(seq bigint, granted boolean) LANGUAGE sql STABLE AS $$
-    SELECT e.seq, e.op = 'grant-enroller' FROM actor_event e
-     WHERE e.actor_id = p_actor_id AND e.op IN ('grant-enroller', 'withdraw-enroller')
-     ORDER BY e.recorded_at DESC, e.seq DESC LIMIT 1;
-$$;
-
 -- The p_prior the window must sign a grant/withdraw over (see cairn_vault_grant_address). The
 -- window cannot read actor_event, so it asks this. 0 for no grant history or no such member.
 CREATE OR REPLACE FUNCTION cairn_vault_grant_prior(p_staff_id text)
 RETURNS bigint LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT COALESCE((SELECT g.seq FROM vault_member m, cairn_vault_latest_grant(m.actor_id) g
                       WHERE m.staff_id = cairn_vault_staff_id(p_staff_id)), 0);
-$$;
-
--- THE enroller rule (§5.1), in words: NULL when the member may approve as an enroller, else the
--- reason. A member may when (in this order) they hold a current grant, their key is the actor's
--- current key, and that key is confirmed (or predates the mechanism, 'outside') — an enroller
--- re-keyed by another enroller cannot enrol until a superuser confirms them (Review Focus 3).
--- Both cairn_vault_is_enroller and cairn_vault_approver_ok ask this, so they cannot disagree.
-CREATE OR REPLACE FUNCTION cairn_vault_enroller_problem(p_staff_id text)
-RETURNS text LANGUAGE sql STABLE AS $$
-    SELECT CASE
-        WHEN m.staff_id IS NULL THEN 'is not an enrolled member'
-        WHEN (SELECT g.granted FROM cairn_vault_latest_grant(m.actor_id) g) IS NOT TRUE
-            THEN 'holds no current enroller grant'
-        WHEN NOT EXISTS (SELECT 1 FROM actor_current a
-                         WHERE a.actor_id = m.actor_id AND a.signing_key_id = m.signing_key_id)
-            THEN 'has a key that is not current (revoked, superseded, rotated away or repudiated)'
-        WHEN cairn_key_confirmation(m.signing_key_id) NOT IN ('confirmed', 'outside')
-            THEN 'has a key that is ' || cairn_key_confirmation(m.signing_key_id)
-                 || ' — an enroller act needs a confirmed key, so a superuser must confirm it first'
-    END
-    FROM (SELECT 1) one
-    LEFT JOIN vault_member m ON m.staff_id = cairn_vault_staff_id(p_staff_id);
-$$;
-
--- May this member approve an enrolment or re-key right now? The release door asks it for the
--- 'enrol' purpose; the window may ask it to offer "Enrol staff". Reveals one boolean per staff ID.
-CREATE OR REPLACE FUNCTION cairn_vault_is_enroller(p_staff_id text)
-RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT cairn_vault_enroller_problem(p_staff_id) IS NULL;
-$$;
-
--- THE APPROVER RULE — the one place it lives; every door that needs an approval calls this.
--- Returns 'superuser' or 'enroller', or RAISES naming the failed check:
---   * the approver must be a vault member;
---   * a superuser approves if their key is current (enrolled, not revoked/rotated/repudiated);
---   * anyone else approves only when p_may_enroller (enrol, re-key) AND the enroller rule holds;
---   * and p_token must be the approver's own valid attestation over p_address — so it covers
---     exactly this request.
--- The door then applies its own limits on what an enroller may do (never a superuser or admin
--- target). Invoker rights, revoked from PUBLIC: reached only from inside the definer doors.
--- Refusals never echo the token.
-CREATE OR REPLACE FUNCTION cairn_vault_approver_ok(p_approver_staff_id text, p_address bytea,
-                                                   p_token bytea, p_may_enroller boolean)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_staff   text := cairn_vault_staff_id(p_approver_staff_id);
-    v_role    text;
-    v_key     text;
-    v_kind    text;
-    v_problem text;
-BEGIN
-    SELECT m.role, m.signing_key_id INTO v_role, v_key FROM vault_member m WHERE m.staff_id = v_staff;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'vault approval refused: % is not an enrolled superuser or enroller', v_staff;
-    END IF;
-    IF v_role = 'superuser' THEN
-        IF NOT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = v_key) THEN
-            RAISE EXCEPTION 'vault approval refused: superuser %''s key is not a current (enrolled, non-revoked) actor', v_staff;
-        END IF;
-        v_kind := 'superuser';
-    ELSIF p_may_enroller IS NOT TRUE THEN
-        RAISE EXCEPTION 'vault approval refused: % is not a superuser — only a superuser may do this', v_staff;
-    ELSE
-        v_problem := cairn_vault_enroller_problem(v_staff);
-        IF v_problem IS NOT NULL THEN
-            RAISE EXCEPTION 'vault approval refused: % is not a superuser and, as an enroller, %', v_staff, v_problem;
-        END IF;
-        v_kind := 'enroller';
-    END IF;
-    -- IS NOT TRUE: a NULL token or address yields NULL, which must refuse.
-    IF cairn_attestation_ok(p_token, p_address, decode(v_key, 'hex')) IS NOT TRUE THEN
-        RAISE EXCEPTION 'vault approval refused: the approver''s attestation is invalid or does not cover this request';
-    END IF;
-    RETURN v_kind;
-END;
 $$;
 
 -- The member row's custody columns, rewritten (a re-key or a reseal). Like db/061's
@@ -293,7 +201,7 @@ BEGIN
         RAISE EXCEPTION 'cairn_vault_rekey: a superuser is re-keyed only at the node''s console (vault-rekey-superuser), never by another member';
     END IF;
     v_kind := cairn_vault_approver_ok(p_approver_staff_id,
-                                      cairn_vault_rekey_address(p_staff_id, p_new_key), p_token, true);
+                                      cairn_vault_rekey_address(p_staff_id, p_role, p_new_key), p_token, true);
     IF v_kind = 'enroller' AND p_role = 'admin' THEN
         RAISE EXCEPTION 'cairn_vault_rekey: an enroller may not re-key a superuser or an admin — ask a superuser';
     END IF;
@@ -421,19 +329,6 @@ BEGIN
 END;
 $$;
 
--- Who stands behind a key, as actor_event.approved_by records an approver: the member filed under
--- the actor that holds or held it — or, with no member row (after a restore), that actor's pinned
--- handle and no display name. 'console' answers for an owner-console act. Invoker, owner only.
-CREATE OR REPLACE FUNCTION cairn_vault_key_holder(p_key text)
-RETURNS TABLE(staff_id text, display_name text) LANGUAGE sql STABLE AS $$
-    SELECT 'console', 'the node''s console' WHERE p_key = 'console'
-    UNION ALL
-    SELECT COALESCE(m.staff_id, e.pinned ->> 'handle'), m.display_name
-      FROM (SELECT ae.actor_id, ae.pinned FROM actor_event ae
-             WHERE ae.signing_key_id = p_key AND ae.op IN ('enroll', 'rotate-key') LIMIT 1) e
-      LEFT JOIN vault_member m ON m.actor_id = e.actor_id;
-$$;
-
 -- The superuser's worklist (§5.5): every CURRENT key still unconfirmed or doubtful, who approved
 -- it and when. A key whose member row is gone (after a restore) is still listed, by its handle.
 CREATE OR REPLACE FUNCTION cairn_vault_unconfirmed()
@@ -465,38 +360,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
       FROM vault_member m WHERE m.role <> 'superuser' ORDER BY m.staff_id;
 $$;
 
--- The facts of the "your passphrase was replaced" sentence (§5.3): when the member's CURRENT key
--- was put in by a re-key, and by whom — a row only while the notice applies: the re-key is at
--- most 14 days old, or its key is still unconfirmed (or doubtful). The release door answers
--- 'replaced' instead of 'wrong' exactly when this has a row, so the rule has ONE home.
--- 14 days is the slice-2 plan's call: long enough to cover a fortnight's roster, short enough
--- that a confirmed re-key stops being announced. It is not a site policy (yet).
-CREATE OR REPLACE FUNCTION cairn_vault_replaced_notice(p_staff_id text)
-RETURNS TABLE(replaced_at timestamptz, approver_display_name text)
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT r.recorded_at,
-           (SELECT h.display_name FROM cairn_vault_key_holder(r.approved_by) h LIMIT 1)
-      FROM vault_member m
-      CROSS JOIN LATERAL (
-          SELECT e.recorded_at, e.approved_by FROM actor_event e
-           WHERE e.actor_id = m.actor_id AND e.op = 'rotate-key'
-             AND e.signing_key_id = m.signing_key_id
-           ORDER BY e.seq DESC LIMIT 1) r
-     WHERE m.staff_id = cairn_vault_staff_id(p_staff_id)
-       AND (r.recorded_at > now() - interval '14 days'
-            OR cairn_key_confirmation(m.signing_key_id) IN ('unconfirmed', 'doubtful'));
-$$;
-
 -- Grants. Every definer and internal helper is first revoked from PUBLIC; the window (cairn_agent,
 -- which cairn_window inherits, db/062) gets exactly the doors it calls. The pure address and
 -- purpose functions keep PUBLIC EXECUTE, as cairn_vault_enrol_address does: they read nothing.
 -- cairn_vault_bootstrap_rekey has NO grant: the console's alone.
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_vault_latest_grant(bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_grant_prior(text) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_vault_enroller_problem(text) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_vault_is_enroller(text) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_vault_approver_ok(text, bytea, bytea, boolean) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_update_custody(text, text, bytea, text, text, text, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_install_key(text, text, text, text, text, text, bytea, text, text, bytea, boolean, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_rekey(text, text, text, text, text, text, bytea, text, text, bytea) FROM PUBLIC;
@@ -504,20 +373,16 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_bootstrap_rekey(text, text, text, bytea, 
 REVOKE EXECUTE ON FUNCTION cairn_vault_set_enroller(text, boolean, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_vault_key_holder(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_enrollers() FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_vault_replaced_notice(text) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_grant_prior(text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_is_enroller(text) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_rekey(text, text, text, text, text, text, bytea, text, text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_set_enroller(text, boolean, text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed() TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_enrollers() TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_replaced_notice(text) TO cairn_agent;
 
 COMMIT;

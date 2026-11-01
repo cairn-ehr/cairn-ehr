@@ -14,8 +14,13 @@ DO $$
 DECLARE
     k text := repeat('ab', 32);
 BEGIN
-    ASSERT cairn_vault_rekey_address(' JSmith ', k) = '\x1220'::bytea || sha256(convert_to(
-        'cairn-vault-rekey' || E'\n' || 'jsmith' || E'\n' || k, 'UTF8')), 'the re-key preimage';
+    ASSERT cairn_vault_rekey_address(' JSmith ', 'clinician', k) = '\x1220'::bytea || sha256(convert_to(
+        'cairn-vault-rekey' || E'\n' || 'jsmith' || E'\n' || 'clinician' || E'\n' || k, 'UTF8')),
+        'the re-key preimage';
+    ASSERT cairn_vault_rekey_address('jsmith', 'clinician', k) <> cairn_vault_rekey_address('jsmith', 'nurse', k),
+        'the re-key binds the role';
+    ASSERT to_regprocedure('cairn_vault_rekey_address(text, text)') IS NULL,
+        'no stale 2-argument re-key address survives';
     ASSERT cairn_vault_grant_address(' JSmith ', true, 0) = '\x1220'::bytea || sha256(convert_to(
         'cairn-vault-grant' || E'\n' || 'jsmith' || E'\n' || 'grant' || E'\n' || '0', 'UTF8')),
         'the grant preimage';
@@ -43,7 +48,7 @@ BEGIN
         || E'\n' || encode(sha256('\x0304'), 'hex'), 'UTF8')), 'the reseal preimage';
 END $$;
 
--- 3. The release door's purpose map (§5.1).
+-- 3. The release door's purpose map (§5.1; defined in db/061, ahead of the door that calls it).
 DO $$
 BEGIN
     ASSERT cairn_vault_purpose_allowed('superuser', false, 'enrol')

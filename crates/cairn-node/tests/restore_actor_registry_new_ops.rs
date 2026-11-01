@@ -14,6 +14,14 @@ fn key() -> String {
     generate_key().unwrap().1
 }
 
+/// One `cairn_actor_append` call: (op, key, approved_by, approval).
+type AppendRow<'a> = (
+    &'a str,
+    Option<&'a String>,
+    Option<&'a String>,
+    Option<&'a Vec<u8>>,
+);
+
 /// Registry with enroll (approved), rotate-key, confirm, repudiate, grant-enroller rows.
 async fn build_registry(c: &tokio_postgres::Client) {
     c.batch_execute(
@@ -32,7 +40,7 @@ async fn build_registry(c: &tokio_postgres::Client) {
         .await
         .unwrap()
         .get(0);
-    let ops: [(&str, Option<&String>, Option<&String>, Option<&Vec<u8>>); 4] = [
+    let ops: [AppendRow; 4] = [
         ("rotate-key", Some(&k2), None, None),
         ("confirm", Some(&k2), Some(&su), Some(&token)),
         ("repudiate", Some(&k1), Some(&su), None),

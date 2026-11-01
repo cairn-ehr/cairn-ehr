@@ -224,7 +224,7 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
     let (new_sk, new_kid) = generate_key().unwrap();
     let t = signed(
         &window,
-        "SELECT cairn_vault_rekey_address('anurse', $1)",
+        "SELECT cairn_vault_rekey_address('anurse', 'nurse', $1)",
         &[&new_kid],
         &su,
     )
