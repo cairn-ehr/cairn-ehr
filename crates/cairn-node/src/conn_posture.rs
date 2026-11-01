@@ -9,6 +9,9 @@
 //! window may have (#898)? The vault's protections (counted guesses, purpose checks) hold only
 //! against a connection that cannot read the sealed keys or write around the floor itself, so a
 //! release over such a connection is refused before any passphrase is sent ([`over_powered`]).
+use crate::db::{
+    embedded_schema_hash, embedded_schema_version, replay_can_be_skipped, SchemaStamp, LOADER_BUILD,
+};
 use anyhow::{anyhow, bail, Context};
 use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config};
@@ -129,6 +132,34 @@ pub async fn read_posture(db: &Client) -> anyhow::Result<PostureFacts> {
         inserts_event_log: row.get(3),
         runs_peer_door: row.get(4),
     })
+}
+
+/// May the reference window start against this database's schema stamp? **Pure.**
+///
+/// The window's own login cannot replay DDL (db/062), so it never loads the schema; it only
+/// checks that the owner's install/upgrade step left a stamp for exactly this build. `Ok` iff the
+/// loader's own skip test would pass. A database newer than this window is told apart from one
+/// not yet prepared, because the remedies differ (install a newer window vs. run the owner step).
+pub fn window_schema_verdict(stamp: Option<&SchemaStamp>) -> Result<(), String> {
+    let ours = embedded_schema_version();
+    if replay_can_be_skipped(stamp, ours, LOADER_BUILD, &embedded_schema_hash()) {
+        return Ok(());
+    }
+    match stamp {
+        Some(s) if s.version > ours => Err(format!(
+            "This window is older than the node's database (generation {} against {ours}). \
+             Install the window that matches the node.",
+            s.version
+        )),
+        _ => {
+            let db = stamp.map_or("none".to_string(), |s| s.version.to_string());
+            Err(format!(
+                "The node's database has not been prepared for this window (generation {db} \
+                 against {ours}). At the node, run cairn-node provision-window-role with the \
+                 owner's connection, then start this window again."
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

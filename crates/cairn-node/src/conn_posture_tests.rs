@@ -1,4 +1,5 @@
-use super::{over_powered, require_local, PostureFacts};
+use super::{over_powered, require_local, window_schema_verdict, PostureFacts};
+use crate::db::{embedded_schema_hash, embedded_schema_version, SchemaStamp, LOADER_BUILD};
 
 #[test]
 fn local_forms_pass() {
@@ -73,5 +74,52 @@ fn each_power_alone_is_over_powered() {
         set(&mut f);
         let why = over_powered(&f).unwrap_or_else(|| panic!("power {i} alone was let through"));
         assert!(why.ends_with('.') && !why.is_empty(), "{why}");
+    }
+}
+
+fn stamp(version: i32, loader: &str, hash: Option<Vec<u8>>) -> SchemaStamp {
+    SchemaStamp {
+        version,
+        loader_build: loader.into(),
+        schema_hash: hash,
+    }
+}
+
+#[test]
+fn a_matching_stamp_lets_the_window_start() {
+    let s = stamp(
+        embedded_schema_version(),
+        LOADER_BUILD,
+        Some(embedded_schema_hash().to_vec()),
+    );
+    assert!(window_schema_verdict(Some(&s)).is_ok());
+}
+
+#[test]
+fn a_newer_database_says_the_window_is_older() {
+    let s = stamp(
+        embedded_schema_version() + 1,
+        LOADER_BUILD,
+        Some(embedded_schema_hash().to_vec()),
+    );
+    assert!(window_schema_verdict(Some(&s))
+        .unwrap_err()
+        .contains("older than"));
+}
+
+#[test]
+fn every_other_mismatch_sends_the_operator_to_provision_window_role() {
+    let v = embedded_schema_version();
+    let h = embedded_schema_hash().to_vec();
+    let cases = [
+        None,
+        Some(stamp(v - 1, LOADER_BUILD, Some(h.clone()))),
+        Some(stamp(v, LOADER_BUILD, None)),
+        Some(stamp(v, "cairn-sync 0.0.0", Some(h))),
+    ];
+    for c in cases {
+        let e = window_schema_verdict(c.as_ref()).unwrap_err();
+        assert!(e.contains("provision-window-role"));
+        assert!(!e.contains("older than"));
     }
 }
