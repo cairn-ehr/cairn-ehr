@@ -37,7 +37,7 @@
 > > **NOT YET GUARANTEED — gates on any pilot:** until **#909** (pinned, installer-generated TLS) or slice 5 (every
 > > terminal its own node) lands, a facility has ONE usable terminal: the one on the database's machine. **#912**: no
 > > long-running process re-adjudicates deferred events (the window's launch used to, incidentally). **#910**: a
-> > Cairn-installed Postgres (brainstorm first). **Slice 5's design must answer** (design §4): synced sealed blobs on a
+> > Cairn-installed Postgres (brainstorm first). **#913**: PR #911's wording residuals (RUNBOOK §0's `pg_config` may be PG16 on this Mac; a db/062 overclaim; two ADR-0084 errata). **Slice 5's design must answer** (design §4): synced sealed blobs on a
 > > stolen terminal disk can be guessed offline, and the attempt counter is per node. Open from slice 1: **#900**
 > > (a superuser key could sign a clinical event) · **#901** (bound stored Argon2 parameters) · **#902** (handle case) ·
 > > **#903** (another's guesses can hold a member at the 300 s cap — a decision) · **#904** (an unreadable blob counts
