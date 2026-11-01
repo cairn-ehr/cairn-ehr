@@ -31,6 +31,7 @@ pub mod sync;
 pub mod transport;
 pub mod ui_timing;
 pub mod vault;
+pub mod window_access;
 
 // The at-rest key-file layer now lives in its own crate so `cairn-sync` can load the
 // same sealed files this node writes (issue #503) without depending on a node
