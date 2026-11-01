@@ -46,6 +46,11 @@ CREATE TRIGGER recall_overlay_no_update BEFORE UPDATE OR DELETE ON recall_overla
 -- skill_epoch, the OLD epoch's events must remain selectable forever. The previous
 -- actor_current join returned NOTHING for a superseded epoch — a production recall
 -- would silently under-select (issue #99, the dangerous direction).
+-- The key-bearing rows are enroll and rotate-key (#666: a supersede row carries no key, so
+-- it never matched p_key anyway). A rotate-key row copies its actor's pinned set, so a
+-- ROTATED-IN key's events are selectable under the actor's epoch, and the rotated-away key
+-- keeps its own enroll row, so its events stay selectable too (sign-in slice 2; pinned by
+-- actor_readers_after_rotation.rs). A repudiated key stays selectable: a recall over-selects.
 --
 -- Selection is exact where attribution is exact, conservative where it is not:
 --   * 'pinned'           — the event's admission-time attribution stamp
@@ -79,12 +84,12 @@ CREATE TRIGGER recall_overlay_no_update BEFORE UPDATE OR DELETE ON recall_overla
 --
 -- Integrity caveat (PR #106 review finding 3, theoretical today): epoch membership
 -- trusts actor_event.pinned as written. enroll_actor derives
--- actor_id = cairn_actor_id(pinned) in-DB (enforced, not asserted), but there is no
--- supersede door yet, so a hand-inserted supersede row whose pinned disagrees with
--- its actor_id could make one stamped event report 'pinned' under two epochs.
--- Owner-ceremony-only today, and the failure direction is over-selection (safe);
--- a future supersede door must enforce the same actor_id = cairn_actor_id(pinned)
--- invariant enroll_actor does.
+-- actor_id = cairn_actor_id(pinned) in-DB (enforced, not asserted), and
+-- cairn_actor_append copies a rotate-key row's pinned from the actor's enroll row; but a
+-- hand-inserted key-bearing row whose pinned disagrees with its actor_id could make one
+-- stamped event report 'pinned' under two epochs. Owner-ceremony-only today, and the
+-- failure direction is over-selection (safe); any future writer of a key-bearing row must
+-- keep the same actor_id = cairn_actor_id(pinned) invariant enroll_actor does.
 -- (DROP first: the return shape gained the attribution column, which
 --  CREATE OR REPLACE cannot change.)
 DROP FUNCTION IF EXISTS events_by_actor_epoch(text, text);
@@ -93,7 +98,7 @@ RETURNS TABLE(event_id UUID, event_type TEXT, attribution TEXT) LANGUAGE sql STA
     WITH epoch_regs AS (
         SELECT ae.actor_id, ae.recorded_at
         FROM actor_event ae
-        WHERE ae.op IN ('enroll','supersede')
+        WHERE ae.op IN ('enroll','rotate-key')
           AND ae.signing_key_id = p_key
           AND ae.pinned ->> 'skill_epoch' = p_epoch
     )

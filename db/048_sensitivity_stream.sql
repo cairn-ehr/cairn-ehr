@@ -354,21 +354,21 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --      stamped-at-apply verdict to go stale (claim_authority.rs's Task 3 pins this).
 --
 --   2. ACTOR-REGISTRY STATE CHANGING AFTER ADMISSION (does NOT heal). Both R1 and R2
---      resolve their actor through `actor_current` (db/005), which EXCLUDES a revoked actor
---      (db/004:64-68). So revoking an attester — or the self-withdrawer — AFTER their
---      withdrawal landed flips it to 'unverified', the withdrawal drops out of the set
---      difference below, the assertion RE-STANDS and the grade goes back UP.
+--      resolve their actor through `actor_key_vouches` (db/004, since sign-in slice 2),
+--      which EXCLUDES a revoked actor and a repudiated key. So revoking an attester — or the
+--      self-withdrawer — AFTER their withdrawal landed flips it to 'unverified', the
+--      withdrawal drops out of the set difference below, the assertion RE-STANDS and the
+--      grade goes back UP. A repudiation of the signing/attesting KEY does the same, by
+--      design (§5.5: "everything it signed is shown as repudiated").
 --
---      `supersede` DOES THIS TOO, by a different route, and #409 does not currently name it:
---      `actor_current` is `DISTINCT ON (actor_id)` over `op IN ('enroll','supersede')` taking
---      the latest row, and a supersede row carries neither `signing_key_id` nor `kind`
---      (db/004) — so R1's key match finds nothing and R2's `kind = 'human'` goes NULL. Both
---      fall to 'unverified', identically to a revoke. Latent only because no rotate-key door
---      exists yet, but an ADR-0029 skill-epoch bump is exactly the routine, benign event that
---      would trigger it the day one is built (#410 review finding).
+--      A ROTATION and a SUPERSEDE do NOT (they did while R1/R2 read `actor_current`, whose
+--      latest-row-wins drops every key but the newest — the #410 review finding this
+--      paragraph used to carry): `actor_key_vouches` keeps every key that ever legitimately
+--      belonged to a not-revoked actor, so a re-keyed clinician's past withdrawals keep their
+--      authority. Pinned by actor_readers_after_rotation.rs.
 --
---      Confirmed by a throwaway check in a scratch database during the build — not by a
---      committed test (no revoke-then-reread scenario is covered). The direction is SAFE
+--      The revoke case was confirmed by a throwaway check in a scratch database during the
+--      build — not by a committed test (no revoke-then-reread scenario is covered). The direction is SAFE
 --      (protection is
 --      restored, never removed), so this is a declared consequence of read-time authority
 --      rather than a defect — but whether it is RIGHT is undecided and is issue #409
@@ -895,7 +895,8 @@ GRANT EXECUTE ON FUNCTION cairn_thread_patient(uuid) TO cairn_agent;
 -- widening, not read it as drift.
 --
 -- WHO IS "THE ACCOUNTABLE ACTOR": for R1 ('attested'), the VOUCHED attester — resolved
--- from `attester_key` through `actor_current`. NOTE this is NOT byte-for-byte
+-- from `attester_key` through `actor_key_vouches` (the same RE-GRADE read R1 makes since
+-- sign-in slice 2, so a re-keyed attester is still named). NOTE this is NOT byte-for-byte
 -- `cairn_claim_authority`'s own R1 test, despite resolving the same key: R1 counts ALL
 -- actors mapped to the key and requires them ALL to be human
 -- (`count(*) = 1 AND bool_and(kind = 'human')`, db/005) — so a key mapped to one human AND
@@ -1005,7 +1006,7 @@ WITH judged AS (
            -- below because that actor authored the target itself).
            COALESCE(
                (SELECT CASE WHEN count(*) = 1 THEN max(act.actor_id) END
-                  FROM event_log le, actor_current act
+                  FROM event_log le, actor_key_vouches act
                  WHERE le.event_id = w.event_id
                    AND le.attester_key IS NOT NULL
                    AND act.signing_key_id = encode(le.attester_key, 'hex')

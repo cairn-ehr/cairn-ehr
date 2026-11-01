@@ -185,7 +185,7 @@ BEGIN
     END IF;
     SELECT array_agg(DISTINCT ae.actor_id) INTO v_actor_ids
         FROM actor_event ae
-        WHERE ae.op IN ('enroll','supersede')
+        WHERE ae.op IN ('enroll','rotate-key')   -- the key-bearing ops (#666, slice 2)
           AND ae.signing_key_id = b ->> 'signer_key_id';
     v_actor_id := CASE WHEN array_length(v_actor_ids, 1) = 1 THEN v_actor_ids[1] END;
 

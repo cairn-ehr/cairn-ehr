@@ -61,55 +61,41 @@ const DEVICE_ACTOR_ROLE: &str = "registration-desk";
 /// for the second is a dead end for the first. See [`ActorStanding::Retired`] and
 /// [`ActorStanding::Ambiguous`].
 ///
-/// # ⚠️ WHAT A SUPERSEDED KEY CLASSIFIES AS IS UNDECIDED, BECAUSE db/004 CONTRADICTS ITSELF
+/// # What a superseded, rotated-away or repudiated key classifies as (#664, settled)
 ///
-/// This classification keys on **`signing_key_id`**, not on `actor_id`. So what a superseded key
-/// reads depends entirely on whether a `supersede` row carries a key — and db/004 says both:
+/// This classification keys on **`signing_key_id`**, not on `actor_id`. Sign-in slice 2 settled
+/// which registry rows carry a key (#666; db/004's header table, enforced by its
+/// `actor_event_op_shape` CHECK): `enroll` and `rotate-key` carry the actor's key, `supersede`
+/// and `revoke` carry **none**, and `confirm`/`repudiate` name a key the same actor already held.
+/// `actor_current` keeps, per actor, only the latest `enroll`/`rotate-key` row, and drops it if
+/// the actor is superseded or revoked or that key is repudiated. Working the cases through:
 ///
-/// - around line 80 (`cairn_actor_id_key_conflict`): *"revoke and supersede rows carry no
-///   `signing_key_id`"*;
-/// - around line 112 (`cairn_key_actor_id_conflict`): *"`op IN ('enroll','supersede')` restricts
-///   to the key-bearing ops"*.
+/// - **revoked** — no `actor_current` row; the key's `enroll` row survives → [`ActorStanding::Retired`].
+/// - **superseded** — the `supersede` row on the OLD actor is the latest and is dropped; the
+///   key's `enroll` row survives → `Retired` (pinned by `a_superseded_key_classifies_as_retired`).
+/// - **rotated away** — the actor's `rotate-key` row now carries the current key; the old key's
+///   `enroll` row survives → `Retired`, and the new key reads `Enrolled` (pinned by
+///   `a_rotated_away_key_classifies_as_retired_and_its_successor_as_enrolled`).
+/// - **repudiated** — no current row for that key, its introducing row survives → `Retired`.
 ///
-/// `actor_event.signing_key_id` is a bare nullable `TEXT` with no per-`op` CHECK, so the schema
-/// settles nothing. Working the branches through:
+/// Every branch is fail-closed. **Do not "fix" `Retired` by consulting `actor_id` or
+/// `superseded_by`** — that is precisely how a retired key would get to keep authoring.
 ///
-/// - **supersede carries NULL, or carries the NEW key** — the old key matches no `actor_current`
-///   row, the `actor_event` EXISTS arm fires on its surviving `enroll` row, and it reads
-///   [`ActorStanding::Retired`]. Fail-closed, but the remedy is wrong: `retired_actor_refusal`
-///   tells the operator their node needs a NEW signing key, which is an identity-level decision
-///   handed to somebody whose node is in a state the design considers normal.
-/// - **supersede carries the OLD key** (or a determinant bump that keeps the same key) — the key
-///   matches two view rows and reads [`ActorStanding::Ambiguous`], refusing every write on a
-///   legitimately rotated node.
-///
-/// **An earlier version of this doc asserted, in capitals, that a superseded key would read
-/// [`ActorStanding::Enrolled`] and keep authoring. There is no branch on which that happens**,
-/// and the claim is dangerous in a specific way: the natural "fix" for the symptom it described
-/// is to make this classifier consult `actor_id`/`superseded_by`, which is precisely how a
-/// superseded key *would* get to keep authoring. Every branch above is fail-closed today.
-///
-/// Note also that a supersede row is **replayable today** even though nothing authors one:
-/// db/052's `restore_actor_registry` accepts `op = 'supersede'` and deliberately bypasses
-/// db/004's collision guards (it replays, it does not re-adjudicate). So this is not purely a
-/// future concern — a restored node can carry supersede rows now.
-///
-/// Whoever writes the rotate-key door must settle the convention first
-/// ([#666](https://github.com/cairn-ehr/cairn-ehr/issues/666)) and then revisit this function
-/// ([#664](https://github.com/cairn-ehr/cairn-ehr/issues/664)). (PR #661 review, converged on by
-/// three reviewers.)
+/// A supersede row is **replayable today** even though nothing authors one: db/052's
+/// `restore_actor_registry` accepts `op = 'supersede'` and deliberately bypasses db/004's
+/// collision guards (it replays, it does not re-adjudicate). The shape CHECK still refuses a
+/// supersede row that carries a key, so a restored one classifies as above. (PR #661 review;
+/// the earlier doc here recorded db/004 contradicting itself, which #666's settlement removed.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorStanding {
     /// Resolvable to a current actor. It may author.
     Enrolled,
     /// No row in the registry mentions this key at all. `enroll-device-actor` fixes it.
     NeverEnrolled,
-    /// This key HAS registry history — enrolled once, then **revoked** — and is not current.
-    ///
-    /// A *superseded* key may also land here, depending on a db/004 convention that is not yet
-    /// settled: see the enum doc and [#666](https://github.com/cairn-ehr/cairn-ehr/issues/666).
-    /// That is why `retired_actor_refusal` says "revoked **or superseded**" — the message an
-    /// operator reads must not claim a precision the classification does not have.
+    /// This key HAS registry history and is not current: its actor was **revoked** or
+    /// **superseded**, or the key was **rotated away** or **repudiated** (see the enum doc).
+    /// `retired_actor_refusal` names all four because this classification does not tell them
+    /// apart — the message an operator reads must not claim a precision it does not have.
     ///
     /// **`enroll-device-actor` cannot fix this, and must not be offered.** db/004's
     /// `cairn_actor_id_key_conflict` refuses a fresh enroll onto an `actor_id` carrying prior
@@ -153,10 +139,12 @@ pub enum ActorStanding {
 /// [#670](https://github.com/cairn-ehr/cairn-ehr/issues/670) carries the fix (return the kid
 /// beside the standing).
 ///
-/// The `actor_event` arm keys on `signing_key_id`, which only `enroll`/`supersede` rows carry —
-/// a `revoke` row has a NULL key by design (db/004) — so it answers *"was this key ever
-/// enrolled?"* rather than *"was it ever revoked?"*, which is the question that distinguishes
-/// `Retired` from `NeverEnrolled` once `actor_current` has already said "not now".
+/// The `actor_event` arm keys on `signing_key_id`, which only `enroll`/`rotate-key` rows carry
+/// for an actor (plus `confirm`/`repudiate`, which only name a key the actor already held) — a
+/// `revoke` or `supersede` row has a NULL key by design (db/004's shape CHECK, #666) — so it
+/// answers *"was this key ever enrolled?"* rather than *"was it ever revoked?"*, which is the
+/// question that distinguishes `Retired` from `NeverEnrolled` once `actor_current` has already
+/// said "not now".
 pub async fn device_actor_standing(
     db: &tokio_postgres::Client,
     kid: &str,
@@ -205,9 +193,10 @@ pub async fn device_actor_standing(
 /// that command cannot help, and what the operator meets if they try.
 pub fn retired_actor_refusal(kid: &str) -> anyhow::Error {
     crate::db_diagnosis::node_state_refusal(format!(
-        "this node's signing key {kid} was enrolled as an actor and has since been revoked or \
-         superseded, so it may not author clinical events. `cairn-node enroll-device-actor` \
-         will NOT help and is not the remedy: re-enrolling a retired actor id is refused on \
+        "this node's signing key {kid} was enrolled as an actor and has since been revoked, \
+         superseded, rotated away or repudiated, so it may not author clinical events. \
+         `cairn-node enroll-device-actor` will NOT help and is not the remedy: re-enrolling a \
+         retired actor id is refused on \
          purpose, because it would silently resurrect the retired actor (issue #152). This \
          node needs a NEW signing key, enrolled afresh — which is a decision about who is \
          accountable for what this node writes, not a command to run blind."
