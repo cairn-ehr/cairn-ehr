@@ -145,7 +145,7 @@ Paper-parity: not clinical-surface — connection and install posture; a correct
 - Produces: `pub struct PostureFacts { pub superuser: bool, pub owns_cairn_table: bool, pub reads_vault: bool,
   pub inserts_event_log: bool, pub runs_peer_door: bool }`; pure `pub fn over_powered(f: &PostureFacts) ->
   Option<&'static str>` (the first reason, plain words); `pub async fn read_posture(db: &Client) -> anyhow::Result<PostureFacts>`
-  (ONE query; `owns_cairn_table` = any `public` relation whose owner `pg_has_role(current_user, relowner, 'USAGE')`;
+  (ONE query, every fact judged over EVERY role the login is a member of — `pg_has_role(current_user, r.oid, 'MEMBER')`, `bool_or` — because a non-inheriting member can still `SET ROLE` into it (Task 4 review); `owns_cairn_table` = any `public` relation whose owner the login is a MEMBER of;
   `runs_peer_door` also covers `cairn_vault_unseal`).
 - Produces: `Release::OverPowered { why: &'static str }`; `KeyRefusal::OverPowered`, sentence: `"This workstation is
   connected to the node with more access than a window may have, so it cannot sign. Nothing was signed. Ask your IT
