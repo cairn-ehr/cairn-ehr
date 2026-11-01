@@ -129,6 +129,9 @@ pub enum KeyRefusal {
     NotForClinicalActs,
     /// This member's key was revoked or replaced: it can sign nothing here.
     NotCurrent,
+    /// The window's connection has more power than a window may have (#898), so no passphrase
+    /// was sent. The fix is the operator's: give the window its own login.
+    OverPowered,
     /// The node could not be asked, or answered something we will not sign with. The detail is
     /// on the operator's stderr.
     Fault,
@@ -160,6 +163,12 @@ impl KeyRefusal {
                  superuser to enrol you again."
                     .into()
             }
+            KeyRefusal::OverPowered => {
+                "This workstation is connected to the node with more access than a window may \
+                 have, so it cannot sign. Nothing was signed. Ask your IT support to run \
+                 cairn-node provision-window-role and start this window with its login."
+                    .into()
+            }
             KeyRefusal::Fault => {
                 "Your passphrase could not be checked. Nothing was signed. Try again, and if it \
                  fails again, ask your IT support."
@@ -183,6 +192,7 @@ pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), Key
         Release::Unknown => Err(KeyRefusal::Unknown),
         Release::RefusedPurpose => Err(KeyRefusal::NotForClinicalActs),
         Release::NotCurrent => Err(KeyRefusal::NotCurrent),
+        Release::OverPowered { .. } => Err(KeyRefusal::OverPowered),
     }
 }
 

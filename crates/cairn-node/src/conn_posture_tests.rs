@@ -1,4 +1,4 @@
-use super::require_local;
+use super::{over_powered, require_local, PostureFacts};
 
 #[test]
 fn local_forms_pass() {
@@ -41,4 +41,37 @@ fn password_never_echoed() {
 #[test]
 fn unparsable_is_refused() {
     assert!(require_local("port=notanumber").is_err());
+}
+
+/// The window's own login: none of the five powers.
+fn window() -> PostureFacts {
+    PostureFacts {
+        superuser: false,
+        owns_cairn_table: false,
+        reads_vault: false,
+        inserts_event_log: false,
+        runs_peer_door: false,
+    }
+}
+
+#[test]
+fn a_window_connection_is_not_over_powered() {
+    assert_eq!(over_powered(&window()), None);
+}
+
+#[test]
+fn each_power_alone_is_over_powered() {
+    let each: [fn(&mut PostureFacts); 5] = [
+        |f| f.superuser = true,
+        |f| f.owns_cairn_table = true,
+        |f| f.reads_vault = true,
+        |f| f.inserts_event_log = true,
+        |f| f.runs_peer_door = true,
+    ];
+    for (i, set) in each.iter().enumerate() {
+        let mut f = window();
+        set(&mut f);
+        let why = over_powered(&f).unwrap_or_else(|| panic!("power {i} alone was let through"));
+        assert!(why.ends_with('.') && !why.is_empty(), "{why}");
+    }
 }
