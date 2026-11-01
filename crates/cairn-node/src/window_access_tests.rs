@@ -2,6 +2,7 @@ use super::{hba_verdict, HbaRule};
 
 fn rule(n: i32, kind: &str, method: &str, options: Option<&[&str]>) -> HbaRule {
     HbaRule {
+        file_name: "pg_hba.conf".into(),
         line_number: n,
         kind: kind.into(),
         auth_method: method.into(),
@@ -106,4 +107,12 @@ fn existing_role_refusals() {
     assert!(r(&ok, Some("the login is a database superuser."))
         .unwrap()
         .contains("Choose a new name"));
+}
+
+#[test]
+fn a_refusal_names_the_included_file_it_is_in() {
+    let mut r = rule(2, "host", "trust", None);
+    r.file_name = "/etc/postgresql/extra.conf".into();
+    let e = hba_verdict(&[r]).unwrap_err();
+    assert!(e.contains("/etc/postgresql/extra.conf") && e.contains("line 2"));
 }

@@ -33,15 +33,15 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   DDL. `trust` is refused whatever its line's type or database; `peer` without a map only warns. No override flag, for
   this refusal or for `require_local`. Pins: `the_verb_refuses_before_it_mutates_in_source_order`,
   `the_verb_refuses_a_trusting_cluster_and_changes_nothing`,
-  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`,
-  `the_remote_refusal_comes_before_any_connect`.
+  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`; the window's own launch refuses a remote
+  database first (`the_remote_refusal_comes_before_any_connect`).
 
 **⇒ GUI SIGN-IN SLICE 1 — THE HUMAN KEY VAULT (ADR-0083, db/061) — do not undo** (pins:
 `crates/cairn-node/tests/vault_floor.rs`, `vault_lib.rs`, `secret32_conversions_are_named.rs`;
 `cairn-gui-tauri/src/{signer_tests,enrol_tests}.rs` and `state.rs`'s held-key tests):
 - **Never grant a read of `vault_member`** (nor of `vault_attempt`/`vault_terminal`), and never add a function, view
   or door that returns `sealed`. A blob that leaves the database is an OFFLINE guessing target no back-off reaches.
-  (No grant binds the owner or a PostgreSQL superuser, and the window connects as the owner today, #898.)
+  (No grant binds the owner or a PostgreSQL superuser. The window connected as the owner when this slice shipped; since ADR-0084 it runs on its own login — see that block above.)
   `cairn_vault_unseal` stays revoked from PUBLIC: for every role but the owner, `cairn_vault_release` is its only
   door, and db/061 refuses to load if that REVOKE did not take (a non-owner loader's REVOKE is a no-op; pin `the_schema_refuses_to_load_while_the_runtime_role_can_unseal`). Defence in depth (the runtime role cannot read a blob to feed it), and only on a replay: a `cairn_pgx` reinstall re-grants PUBLIC unseen (#908). Pin:
   `the_runtime_role_cannot_read_the_vault`. **Tempting wrong fix:** a "roster" view for an admin screen that

@@ -147,8 +147,8 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))
 }
 
-/// Connect, load the schema, and read this node's identity — everything a writing window needs
-/// before it shows anything.
+/// Refuse a remote database, check (never load) the schema stamp, and read this node's identity —
+/// everything a writing window needs before it shows anything.
 ///
 /// The node key is loaded UP FRONT and fails the launch if it cannot be: a window that
 /// opens and only discovers at sign-off time that it can never seal anything has wasted
@@ -163,7 +163,8 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     cairn_node::conn_posture::require_local(&cli.conn)?;
     // The window's own login cannot replay DDL (db/062), so it CHECKS the stamp the owner's
     // install/upgrade step left instead of loading the schema (#898). That also means it no
-    // longer runs the deferred-event re-adjudication connect_and_load_schema did; the daemon does.
+    // longer runs the deferred-event re-adjudication connect_and_load_schema did on every connect;
+    // serve/run do not run it either; only one-off loader verbs do (#912).
     let checker = cairn_node::db::connect(&cli.conn).await?;
     let stamp = cairn_node::db::read_schema_stamp(&checker).await?;
     if let Err(refusal) = cairn_node::conn_posture::window_schema_verdict(stamp.as_ref()) {

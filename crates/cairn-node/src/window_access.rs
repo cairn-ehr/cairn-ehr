@@ -14,6 +14,8 @@ use tokio_postgres::Client;
 /// One row of `pg_hba_file_rules`, reduced to what the verdict reads.
 #[derive(Debug, Clone)]
 pub struct HbaRule {
+    /// The file the line is in: `pg_hba.conf` itself, or a file it `include`s (PG16+ lists those rules too).
+    pub file_name: String,
     pub line_number: i32,
     /// `local`, `host`, `hostssl`, ...
     pub kind: String,
@@ -32,20 +34,20 @@ pub fn hba_verdict(rules: &[HbaRule]) -> Result<Vec<String>, String> {
     for r in rules {
         if let Some(e) = &r.error {
             refusals.push(format!(
-                "line {}: the server could not read this access rule ({e}); fix pg_hba.conf, reload the server, and run this again.",
-                r.line_number
+                "{}, line {}: the server could not read this access rule ({e}); fix it, reload the server, and run this again.",
+                r.file_name, r.line_number
             ));
         } else if r.auth_method == "trust" {
             refusals.push(format!(
-                "line {}: '{}' connections are let in with no password (trust). Change it to scram-sha-256 in pg_hba.conf, reload the server, and run this again.",
-                r.line_number, r.kind
+                "{}, line {}: '{}' connections are let in with no password (trust). Change it to scram-sha-256, reload the server, and run this again.",
+                r.file_name, r.line_number, r.kind
             ));
         } else if r.auth_method == "peer"
             && !r.options.iter().flatten().any(|o| o.starts_with("map="))
         {
             warnings.push(format!(
-                "line {}: '{}' uses peer authentication with no map; any process running as the matching operating-system account is let in.",
-                r.line_number, r.kind
+                "{}, line {}: '{}' uses peer authentication with no map; any process running as the matching operating-system account is let in.",
+                r.file_name, r.line_number, r.kind
             ));
         }
     }
@@ -56,23 +58,27 @@ pub fn hba_verdict(rules: &[HbaRule]) -> Result<Vec<String>, String> {
     }
 }
 
-/// Pure: the on-disk `pg_hba.conf` is newer than what the server loaded, so the rules we read
-/// are not the rules in force (an operator who removed `trust` but did not reload would pass).
+/// Pure: an on-disk access-rules file (`pg_hba.conf` or one it includes) is newer than what the
+/// server loaded, so the rules we read are not the rules in force (an operator who removed `trust`
+/// but did not reload would pass).
 pub fn hba_freshness(file_newer_than_load: bool) -> Result<(), String> {
     if file_newer_than_load {
-        Err("pg_hba.conf changed since the server last read it. Reload the server, and run this again.".into())
+        Err("The access rules (pg_hba.conf or a file it includes) changed since the server last read them. Reload the server, and run this again.".into())
     } else {
         Ok(())
     }
 }
 
-/// Has `pg_hba.conf` been modified since the server last (re)loaded its configuration?
+/// Has `pg_hba.conf`, or any file it includes, been modified since the server last (re)loaded its
+/// configuration? One query: the main file plus every distinct `pg_hba_file_rules.file_name`.
 pub async fn hba_file_is_stale(db: &Client) -> anyhow::Result<bool> {
     // shortcut: file mtime has 1 s resolution vs the load time's microseconds, so an edit within the
     // same second as a reload reads fresh; upgrade by comparing the file's content hash instead.
     let row = db
         .query_one(
-            "SELECT (pg_stat_file(current_setting('hba_file'))).modification > pg_conf_load_time()",
+            "SELECT coalesce(bool_or((pg_stat_file(f)).modification > pg_conf_load_time()), true) \
+               FROM (SELECT current_setting('hba_file') AS f \
+                     UNION SELECT file_name FROM pg_hba_file_rules WHERE file_name IS NOT NULL) t",
             &[],
         )
         .await
@@ -83,12 +89,13 @@ pub async fn hba_file_is_stale(db: &Client) -> anyhow::Result<bool> {
 /// Read the server's parsed `pg_hba.conf`.
 ///
 /// `pg_hba_file_rules` shows the FILE as it is now, not the rules in force: pair this with
-/// [`hba_file_is_stale`]. Lines pulled in by an `include` directive are not judged here.
+/// [`hba_file_is_stale`]. On PG16+ lines pulled in by an `include` directive appear here too (with
+/// their own `file_name`), so they are judged like any other.
 /// Only a superuser may; a 42501 becomes an instruction.
 pub async fn read_hba_rules(db: &Client) -> anyhow::Result<Vec<HbaRule>> {
     let rows = db
         .query(
-            "SELECT line_number, type, auth_method, options, error FROM pg_hba_file_rules ORDER BY rule_number",
+            "SELECT file_name, line_number, type, auth_method, options, error FROM pg_hba_file_rules ORDER BY rule_number",
             &[],
         )
         .await
@@ -104,11 +111,12 @@ pub async fn read_hba_rules(db: &Client) -> anyhow::Result<Vec<HbaRule>> {
     Ok(rows
         .iter()
         .map(|r| HbaRule {
-            line_number: r.get::<_, Option<i32>>(0).unwrap_or(0),
-            kind: r.get::<_, Option<String>>(1).unwrap_or_default(),
-            auth_method: r.get::<_, Option<String>>(2).unwrap_or_default(),
-            options: r.get(3),
-            error: r.get(4),
+            file_name: r.get::<_, Option<String>>(0).unwrap_or_default(),
+            line_number: r.get::<_, Option<i32>>(1).unwrap_or(0),
+            kind: r.get::<_, Option<String>>(2).unwrap_or_default(),
+            auth_method: r.get::<_, Option<String>>(3).unwrap_or_default(),
+            options: r.get(4),
+            error: r.get(5),
         })
         .collect())
 }
