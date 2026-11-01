@@ -151,6 +151,8 @@ fn every_sentence_is_plain_and_names_no_value() {
         EnrolRefusal::Fixture,
         EnrolRefusal::AlreadyEnrolled,
         EnrolRefusal::NeedSuperuser,
+        EnrolRefusal::ApproverMayNotEnrolThisRole,
+        EnrolRefusal::ApproverNotConfirmed,
     ] {
         let s = r.sentence();
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
@@ -456,5 +458,31 @@ async fn a_staff_id_alone_asks_for_a_superuser_and_never_reaches_the_vault() {
         .await
         .expect_err("refused");
         assert_eq!(said, EnrolRefusal::NeedSuperuser.sentence(), "{blank:?}");
+    }
+}
+
+/// Only a superuser vouches for a superuser or an admin; an enroller may not (the floor says the
+/// same, this is the courtesy that spares them a release attempt).
+#[test]
+fn only_a_superuser_may_enrol_the_powerful_roles() {
+    for (role, restricted) in [
+        ("superuser", true),
+        (" admin ", true),
+        ("clinician", false),
+        ("nurse", false),
+    ] {
+        assert_eq!(role_needs_superuser(role), restricted, "{role}");
+    }
+}
+
+#[test]
+fn the_new_refusals_name_no_field_and_no_passphrase() {
+    for r in [
+        EnrolRefusal::ApproverMayNotEnrolThisRole,
+        EnrolRefusal::ApproverNotConfirmed,
+    ] {
+        let s = r.sentence();
+        assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
+        assert!(!s.to_lowercase().contains("passphrase"), "{s}");
     }
 }

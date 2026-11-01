@@ -207,7 +207,7 @@ fn the_enrol_panel_is_labelled_warns_about_the_hint_and_clears_both_ways() {
             "{id} needs a <label for>"
         );
     }
-    for role in ["clinician", "nurse", "superuser"] {
+    for role in ["clinician", "nurse", "admin", "superuser"] {
         assert!(INDEX_HTML.contains(&format!("<option value=\"{role}\">")));
     }
     assert!(
@@ -234,6 +234,44 @@ fn the_enrol_panel_is_labelled_warns_about_the_hint_and_clears_both_ways() {
         !body.contains("clearSigner(true)"),
         "an enrol is not a signed act"
     );
+}
+
+const REKEY_JS: &str = include_str!("../src-ui/rekey.js");
+
+/// Slice 2, Task 6: the "Forgotten passphrase" panel is labelled, sends the strip's credential,
+/// and empties both new passphrases and the strip on both ways out (never remembering the approver).
+#[test]
+fn the_rekey_panel_is_labelled_and_clears_both_ways() {
+    assert!(INDEX_HTML.contains("<details id=\"rekey-staff\">"));
+    assert!(INDEX_HTML.contains("<script src=\"rekey.js\"></script>"));
+    for id in [
+        "rekey-staff-id",
+        "rekey-role",
+        "rekey-passphrase",
+        "rekey-passphrase-again",
+        "rekey-hint",
+    ] {
+        assert!(
+            INDEX_HTML.contains(&format!("<label for=\"{id}\"")),
+            "{id} needs a <label for>"
+        );
+    }
+    // A superuser is re-keyed at the console, so the window does not offer the role.
+    assert!(!INDEX_HTML.contains("id=\"rekey-role\"><option value=\"superuser\""));
+    let body = js_fn(REKEY_JS, "rekeyStaff");
+    assert!(body.contains("credential: signerCredential()"), "{body}");
+    let after = &body[position(body, "catch (failure) {")..];
+    for clear in [
+        "el(\"rekey-passphrase\").value = \"\";",
+        "el(\"rekey-passphrase-again\").value = \"\";",
+        "clearSigner(false);",
+    ] {
+        assert!(
+            after.contains(clear),
+            "{clear} missing after the catch: {body}"
+        );
+    }
+    assert!(!REKEY_JS.contains("confirm("));
 }
 
 /// Lock empties the strip BEFORE it asks Rust, so a Lock whose call fails still leaves no typed

@@ -57,7 +57,7 @@
       <details id="enrol-staff">
         <summary>Enrol staff</summary>
         <form id="enrol-form" autocomplete="off">
-          <p>The superuser enters their own staff ID and passphrase in the signer strip above. The new member types their own new passphrase below.</p>
+          <p>A superuser or an enroller enters their own staff ID and passphrase in the signer strip above. The new member types their own new passphrase below. Only a superuser can enrol an admin or a superuser.</p>
           <label for="enrol-staff-id">New staff ID</label>
           <input id="enrol-staff-id" type="text" autocomplete="off" />
           <label for="enrol-name">Display name</label>
@@ -66,6 +66,7 @@
           <select id="enrol-role">
             <option value="clinician">clinician</option>
             <option value="nurse">nurse</option>
+            <option value="admin">admin</option>
             <option value="superuser">superuser</option>
           </select>
           <label for="enrol-phone">Phone (a phone or an email is needed)</label>
@@ -81,6 +82,32 @@
           <p id="enrol-hint-warning">Colleagues at a shared terminal can read this hint.</p>
           <button type="submit">Enrol</button>
           <p id="enrol-status" role="status" aria-live="polite" hidden></p>
+        </form>
+      </details>
+
+      <!-- Forgotten passphrase (sign-in slice 2). A superuser or an enroller vouches through the
+           signer strip; the member types a NEW passphrase twice. Emptied after every attempt
+           (rekey.js). A superuser is re-keyed at the console, never here. -->
+      <details id="rekey-staff">
+        <summary>Forgotten passphrase</summary>
+        <form id="rekey-form" autocomplete="off">
+          <p>A superuser or an enroller enters their own staff ID and passphrase in the signer strip above. The member types a new passphrase below. Their old passphrase stops working.</p>
+          <label for="rekey-staff-id">Staff ID</label>
+          <input id="rekey-staff-id" type="text" autocomplete="off" />
+          <label for="rekey-role">Role</label>
+          <select id="rekey-role">
+            <option value="clinician">clinician</option>
+            <option value="nurse">nurse</option>
+            <option value="admin">admin</option>
+          </select>
+          <label for="rekey-passphrase">New passphrase</label>
+          <input id="rekey-passphrase" type="password" autocomplete="off" />
+          <label for="rekey-passphrase-again">New passphrase again</label>
+          <input id="rekey-passphrase-again" type="password" autocomplete="off" />
+          <label for="rekey-hint">Passphrase hint (optional)</label>
+          <input id="rekey-hint" type="text" autocomplete="off" />
+          <button type="submit">Give a new key</button>
+          <p id="rekey-status" role="status" aria-live="polite" hidden></p>
         </form>
       </details>
 
@@ -301,6 +328,7 @@
     <script src="main.js"></script>
     <script src="signer.js"></script>
     <script src="enrol.js"></script>
+    <script src="rekey.js"></script>
     <script src="stop_reasons.js"></script>
     <script src="holds.js"></script>
     <script src="chart_stale.js"></script>

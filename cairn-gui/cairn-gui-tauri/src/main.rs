@@ -38,6 +38,7 @@ mod link;
 mod node_lock_explains_tests;
 #[cfg(test)]
 mod read_again_webview_tests;
+mod rekey;
 #[cfg(test)]
 mod reread_webview_tests;
 mod signer;
@@ -129,6 +130,7 @@ fn main() -> anyhow::Result<()> {
             commands::sign_off,
             commands::cease,
             enrol::enrol_member,
+            rekey::rekey_member,
             hold::withhold,
             hold::release,
             funnel::commands::funnel_status,

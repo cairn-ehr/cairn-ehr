@@ -1,4 +1,4 @@
-//! A superuser enrols a staff member from the window (sign-in slice 1, Task 7).
+//! A superuser, or an enroller, enrols a staff member from the window (sign-in slice 1, Task 7).
 //!
 //! # The flow, for a reader new to it
 //!
@@ -84,6 +84,11 @@ pub enum EnrolRefusal {
     AlreadyEnrolled,
     /// No superuser credential was typed.
     NeedSuperuser,
+    /// An enroller tried to enrol (or re-key) a superuser or an admin: only a superuser may.
+    ApproverMayNotEnrolThisRole,
+    /// The approver holds the enroller grant but their own key still awaits a superuser's
+    /// confirmation, so the floor will not take their word yet.
+    ApproverNotConfirmed,
 }
 
 impl EnrolRefusal {
@@ -104,7 +109,15 @@ impl EnrolRefusal {
                 "Enter the new member's staff ID, name and role. Nobody was enrolled.".into()
             }
             EnrolRefusal::NotForEnrolment => {
-                "Only a superuser can enrol staff. Enter a superuser's staff ID and passphrase above."
+                "Only a superuser or an enroller can enrol staff. Enter their staff ID and passphrase above."
+                    .into()
+            }
+            EnrolRefusal::ApproverMayNotEnrolThisRole => {
+                "Only a superuser can enrol a superuser or an admin. Ask a superuser to do it."
+                    .into()
+            }
+            EnrolRefusal::ApproverNotConfirmed => {
+                "Your own key is waiting for a superuser to confirm it, so you cannot enrol staff yet. Ask a superuser."
                     .into()
             }
             EnrolRefusal::NotRecorded => {
@@ -159,6 +172,47 @@ pub fn enrol_failure(e: &anyhow::Error) -> EnrolRefusal {
     }
 }
 
+/// Pure: roles only a superuser may vouch for (the floor's rule, db/063; this is the courtesy copy).
+pub fn role_needs_superuser(role: &str) -> bool {
+    matches!(role.trim(), "superuser" | "admin")
+}
+
+/// Courtesy pre-check BEFORE the approver's key is released: an enroller (holds a current
+/// confirmed grant) asking for a superuser/admin role is told so without a release attempt. A
+/// superuser holds no grant, so `cairn_vault_is_enroller` is false for them. The floor stays the
+/// authority; a floor message is never parsed (it carries no scope).
+pub async fn precheck_approver(
+    db: &tokio_postgres::Client,
+    approver: &str,
+    role: &str,
+) -> anyhow::Result<Option<EnrolRefusal>> {
+    if !role_needs_superuser(role) {
+        return Ok(None);
+    }
+    let is_enroller: bool = db
+        .query_one("SELECT cairn_vault_is_enroller($1)", &[&approver])
+        .await?
+        .get(0);
+    Ok(is_enroller.then_some(EnrolRefusal::ApproverMayNotEnrolThisRole))
+}
+
+/// After the vault refused the enrol purpose: a member holding the grant whose key is not yet
+/// confirmed is told to wait for a superuser; anyone else (a clinician) gets the plain refusal.
+pub async fn refused_purpose(
+    db: &tokio_postgres::Client,
+    approver: &str,
+) -> anyhow::Result<EnrolRefusal> {
+    let granted = cairn_node::vault_admin::enrollers(db)
+        .await?
+        .iter()
+        .any(|r| r.enroller && r.staff_id.eq_ignore_ascii_case(approver.trim()));
+    Ok(if granted {
+        EnrolRefusal::ApproverNotConfirmed
+    } else {
+        EnrolRefusal::NotForEnrolment
+    })
+}
+
 /// `None` for a blank optional field, else the trimmed text.
 fn optional(s: &str) -> Option<&str> {
     Some(s.trim()).filter(|t| !t.is_empty())
@@ -211,6 +265,12 @@ pub async fn enrol_member_impl(
     {
         return Err(EnrolRefusal::AlreadyEnrolled.sentence());
     }
+    if let Some(r) = precheck_approver(&db, &credential.staff_id, &member.role)
+        .await
+        .map_err(|e| fault(db.explain(e)))?
+    {
+        return Err(r.sentence());
+    }
     // Released, used once below, dropped at the end of this function. Never stored.
     let released = cairn_node::vault::release_for_act(
         &db,
@@ -222,7 +282,12 @@ pub async fn enrol_member_impl(
     .map_err(|e| fault(db.explain(e)))?;
     let key = match released {
         Release::Released { key, .. } => key,
-        Release::RefusedPurpose => return Err(EnrolRefusal::NotForEnrolment.sentence()),
+        Release::RefusedPurpose => {
+            return Err(refused_purpose(&db, &credential.staff_id)
+                .await
+                .map_err(|e| fault(db.explain(e)))?
+                .sentence())
+        }
         Release::OverPowered { why } => {
             // Operator diagnostics, as the clinical signer gives; `why` is a fixed sentence.
             eprintln!("the window's connection is over-powered: {why}");
