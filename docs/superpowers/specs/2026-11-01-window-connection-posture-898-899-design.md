@@ -66,10 +66,14 @@ design does NOT build that. It makes the window safe on the node it is on, until
 
 **D1. Install provisions the window's login.** The owner-run install step (`cairn-node init`, or a verb beside it;
 builder's choice) creates one login role for windows, granted ONE new NOLOGIN group role defined in a new `db/`
-file that holds exactly the window's grants (D3). *Designer's call:* not `cairn_agent` (shared with the matcher, so
-the window would be indistinguishable from the advisory actor) and not `cairn_node` (it carries the peer-admission
-doors `apply_remote_event` / `submit_node_event`; `apply_remote_event` legitimately skips the registration-first
-rule, #345, so a window must never hold it). It sits alongside the
+file that holds exactly the window's grants (D3). *Designer's call (revised at planning, 2026-11-01):* the new role
+**inherits `cairn_agent`** (the clinical runtime grants every door already tests against) **plus** the few node
+reads only `cairn_node` holds (`local_node`, `node_schema`) and whatever D3's inventory finds. It is NOT `cairn_node`
+(the peer-admission doors `apply_remote_event` / `submit_node_event`; `apply_remote_event` legitimately skips the
+registration-first rule, #345, so a window must never hold it). The first draft refused `cairn_agent` too, so the
+window would not share the matcher's grants; the cost of that was a from-scratch inventory of ~25 entry points
+where every missed grant fails only in production. Least privilege that matters (no vault, no peer door, no
+floor bypass) is held by D4's predicate and pinned refused in tests. It sits alongside the
 existing `provision_runtime_role` (which provisions the daemon's `cairn_node` login, `db.rs`). The connection
 string the operator gives the window names that role, and the role has **its own password** (SCRAM), so the
 owner's password stays with whoever installed the node.
