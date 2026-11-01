@@ -21,22 +21,75 @@ and needs a JS-toolchain decision this slice deliberately did not take.
 
 ## 0. Prerequisites
 
-A node database with `cairn_pgx` installed, and this node's key. For a throwaway rig — every
-command below was run end-to-end on 2026-08-03, so the flags are the real ones:
+A node database with `cairn_pgx` installed, and this node's key. The rig is a throwaway Postgres cluster
+of its OWN, on another port, made with a password and `scram-sha-256` from its first start: never switch the
+shared development cluster (:5532, also `CAIRN_TEST_PG`, see getting-started) away from `trust`, because every
+DB-gated test suite connects to it with no password. The binaries are the PG18 install `cairn_pgx` was installed
+into (pgrx's `pg18` entry in `~/.pgrx/config.toml`), so `CREATE EXTENSION cairn_pgx` works in the new cluster too.
+Not the `pg_config` on `PATH`, which may be another major version (on the maintainer's Mac it is PG 16). The `init` and later
+`cairn-node` flags were run end-to-end on 2026-08-03 against a `trust` rig; the cluster steps (`initdb` to `start`)
+and the window's own login (below) were written on 2026-11-01 for #898/#899 and have not yet been run end-to-end,
+so a first run that needs a change is a finding:
 
 ```bash
-export CONN="host=127.0.0.1 port=5532 user=$USER dbname=cairn_measure"
+# The PG18 install cairn_pgx is installed into: pgrx's pg18 pg_config, never the one on PATH.
+export PGBIN="$("$(sed -n 's/^pg18 = "\(.*\)"$/\1/p' ~/.pgrx/config.toml)" --bindir)"
+export MDATA=/tmp/cairn-measure-pg MPORT=5533
+read -rs OWNER_PW && export OWNER_PW     # the owner's password; no spaces or quotes (it goes in a connection string)
+( umask 077; printf '%s\n' "$OWNER_PW" > "$MDATA.pw" )
+# The owner's password is set, and every pg_hba.conf line is scram-sha-256, before the server first starts.
+"$PGBIN/initdb" -D "$MDATA" -U "$USER" --auth=scram-sha-256 --pwfile="$MDATA.pw"
+rm "$MDATA.pw"
+"$PGBIN/pg_ctl" -D "$MDATA" -o "-p $MPORT" -l "$MDATA.log" start
+
+export PGPASSWORD="$OWNER_PW"            # psql reads it; tokio-postgres (cairn-node, the window) does not
+export CONN="host=127.0.0.1 port=$MPORT user=$USER password=$OWNER_PW dbname=cairn_measure"
 export NODE_KEY=/tmp/measure-node.key
 
-psql -h 127.0.0.1 -p 5532 -d postgres -c "CREATE DATABASE cairn_measure"
-psql "$CONN" -c "CREATE EXTENSION IF NOT EXISTS cairn_pgx"
+"$PGBIN/psql" -h 127.0.0.1 -p "$MPORT" -d postgres -c "CREATE DATABASE cairn_measure"
+"$PGBIN/psql" "$CONN" -c "CREATE EXTENSION IF NOT EXISTS cairn_pgx"
 
 cairn-node --conn "$CONN" --key "$NODE_KEY" \
     init --name measure-rig --address 127.0.0.1:0 --insecure-plaintext   # test rig only
 ```
 
+When the measurement is done: `"$PGBIN/pg_ctl" -D "$MDATA" stop && rm -rf "$MDATA" "$MDATA.log"`.
+
 > `--key` is a **global** flag: it comes before the subcommand, not after it. Every command
 > below follows that shape.
+
+**The window runs on its own login, not the owner's** ([ADR-0084](../../../docs/spec/decisions/0084-the-window-never-holds-the-owners-keys.md),
+#898/#899). Three consequences for this rig:
+
+1. **The cluster must not trust anyone.** `provision-window-role` refuses while any `pg_hba.conf` rule (an included
+   file's too) says `trust` (it names the file and line), and refuses rules changed since the server last loaded
+   them. The cluster above is made that way from its first start, so neither refusal should fire; if one does, the
+   cluster is not the one this section made.
+2. **The owner provisions the window's login once**, after `init` (it also installs or upgrades the schema, which the
+   window never does). The owner must be a database superuser (it reads `pg_hba_file_rules`). Choose the window's
+   password and export it for the step (otherwise it is prompted for, twice). Like the owner's, it goes into a
+   connection string, so no spaces or quotes. Run the `cairn-node` built from THIS checkout: the window refuses a
+   database stamped by any other build ("prepared by a different build"), and a `cairn-node` on `PATH` from an
+   older checkout is exactly that:
+
+   ```bash
+   export CAIRN_WINDOW_DB_PASSWORD='…'     # no spaces or quotes
+   cargo run -p cairn-node --release -- --conn "$CONN" provision-window-role --role cairn_window_login
+   export WINDOW_CONN="host=127.0.0.1 port=$MPORT user=cairn_window_login password=$CAIRN_WINDOW_DB_PASSWORD dbname=cairn_measure"
+   ```
+
+   Re-run it after every schema-changing build: a window refuses to start on a database its build has not been
+   prepared for, and names this command.
+3. **Every window launch below uses `"$WINDOW_CONN"`**; every `cairn-node` and `psql` step keeps the owner `"$CONN"`.
+   The window gets it as `CAIRN_CONN="$WINDOW_CONN" cargo run …`, not `--conn`: the string carries a password, and a
+   command-line argument is visible to every account on the machine (`ps`), an environment variable only to yours (and root).
+   `cairn-node` reads `CAIRN_CONN` too. This rig's own `cairn-node` and `psql "$CONN"` lines pass the owner's string
+   as an argument for brevity, which is acceptable only on a machine no one else logs into; on a shared machine,
+   drop `--conn "$CONN"` and give `cairn-node` `CAIRN_CONN="$CONN"` in its environment instead, and give `psql`
+   `-h 127.0.0.1 -p "$MPORT" -d cairn_measure` (it already reads `PGPASSWORD`).
+   The connection must be on this machine (`127.0.0.1`, `localhost` or a socket): the window refuses any other host.
+   A window started with `CAIRN_CONN="$CONN"` still opens and reads, but every signature and "Enrol staff" is refused with
+   "more access than a window may have", and the reason is printed on the terminal's stderr.
 
 ## 1. Enrol the clinician who will sign
 
@@ -74,24 +127,24 @@ search-before-create funnel and prints the new chart id on the line that starts
 by that prefix, never by `tail -1`).
 
 ```bash
-NODE="cairn-node --conn $CONN --key $NODE_KEY"
-PATIENT=$($NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+cnode() { cairn-node --conn "$CONN" --key "$NODE_KEY" "$@"; }   # a function: an unquoted $CONN would word-split
+PATIENT=$(cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 \
     --confirm-new | sed -n 's/^registered patient //p')
 [ -n "$PATIENT" ] || { echo "registration failed — read the output above" >&2; exit 1; }
 
 # Three lines nobody has signed.
-$NODE medication-assert "$PATIENT" \
+cnode medication-assert "$PATIENT" \
     --term atorvastatin --dose-amount 40 --dose-unit mg --formulation tablet
-$NODE medication-assert "$PATIENT" \
+cnode medication-assert "$PATIENT" \
     --term metformin --dose-amount 1 --dose-unit g --formulation tablet
-$NODE medication-assert "$PATIENT" \
+cnode medication-assert "$PATIENT" \
     --term sertraline --dose-amount 50 --dose-unit mg --formulation tablet
 
 # Two lines Dr B has already signed — author-time attestation in one act.
-$NODE medication-assert "$PATIENT" \
+cnode medication-assert "$PATIENT" \
     --term amlodipine --dose-amount 5 --dose-unit mg --formulation tablet \
     --attest-as /tmp/dr-b.key
-$NODE medication-assert "$PATIENT" \
+cnode medication-assert "$PATIENT" \
     --term perindopril --dose-amount 4 --dose-unit mg --formulation tablet \
     --attest-as /tmp/dr-b.key
 
@@ -102,7 +155,7 @@ Confirm the chart before measuring anything — if it does not read the way you 
 measurement measures the wrong thing:
 
 ```bash
-$NODE medication-list "$PATIENT"
+cnode medication-list "$PATIENT"
 ```
 
 Expect exactly this shape — five lines, two carrying Dr B's short key id:
@@ -122,8 +175,8 @@ timing a gesture over a chart the node already says is incomplete.
 
 ```bash
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$PATIENT" --conn "$CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$PATIENT" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -217,7 +270,7 @@ pass without ranking doing anything.
 
 ```bash
 while IFS='|' read -r n dob; do
-    $NODE patient-register --name "$n" --birth-date "$dob" --confirm-new
+    cnode patient-register --name "$n" --birth-date "$dob" --confirm-new
 done <<'SEED'
 Samantha Michaelowski|1975-02-02
 John Smith|1968-11-30
@@ -231,7 +284,7 @@ SEED
 reported separately and never merged):
 
 ```bash
-cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY"
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- --key "$NODE_KEY"
 cargo run --release -p cairn-gui-tauri -- --mock
 ```
 
@@ -268,10 +321,10 @@ section 3) — finding the chart is measured separately, in section 8.
 opened (a plausible duplicate — same or a near-miss name):
 
 ```bash
-$NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new
+cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$PATIENT" --conn "$CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$PATIENT" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -337,20 +390,20 @@ The repair path's second §1.2 figure. **Live only** — fixture charts are neve
 chart has no "How these charts are linked" list and nothing to unlink; there is no `--mock` variant to
 time. Set up a wrongly linked pair, then open one of its charts:
 
-`$NODE` is section 2's (`cairn-node --conn $CONN --key $NODE_KEY`); `link-charts` takes only the
-human's `--attester-key` (the top-level `--key` is already in `$NODE`). Register three charts, then
+`cnode` is section 2's function (`cairn-node --conn "$CONN" --key "$NODE_KEY"`); `link-charts` takes only the
+human's `--attester-key` (the top-level `--key` is already in `cnode`). Register three charts, then
 chain them A–B and B–C so that the wrong link (B–C) is the one that does not touch the chart you open:
 
 ```bash
-reg() { $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+reg() { cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 \
     --confirm-new | sed -n 's/^registered patient //p'; }
 A=$(reg); B=$(reg); C=$(reg)
 [ -n "$A" ] && [ -n "$B" ] && [ -n "$C" ] || { echo "registration failed" >&2; exit 1; }
-$NODE link-charts "$A" "$B" --attester-key /tmp/dr-a.key
-$NODE link-charts "$B" "$C" --attester-key /tmp/dr-a.key
+cnode link-charts "$A" "$B" --attester-key /tmp/dr-a.key
+cnode link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -422,14 +475,14 @@ error — see `docs/developers/running-the-duplicate-check.md`); anything but 0 
 about to time may be missing, so fix that first:
 
 ```bash
-reg() { $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+reg() { cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 \
     --confirm-new | sed -n 's/^registered patient //p'; }
 A=$(reg); B=$(reg)
 [ -n "$A" ] && [ -n "$B" ] || { echo "registration failed" >&2; exit 1; }
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -518,7 +571,7 @@ active medication first (section 2's seeding). Launch WITHOUT `--patient`, with 
 ```bash
 while IFS='|' read -r n dob; do
     for _ in 1 2; do
-        $NODE patient-register --name "$n" --birth-date "$dob" --confirm-new >/dev/null \
+        cnode patient-register --name "$n" --birth-date "$dob" --confirm-new >/dev/null \
             || echo "registration failed: $n" >&2
     done
 done <<'SEED'
@@ -530,7 +583,7 @@ Emery Elmsworth|1965-05-15
 SEED
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY" --key-hold-seconds 900
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
 The front door shows **"Possible duplicates (5)"** below the registration form (more if section 11's
@@ -594,8 +647,7 @@ judged, so the sign-off hold (R1b) lifts. **Live only** — fixture charts are n
 
 **Setup A — a doubted machine link.** Two charts joined by an **un-attested** link (the matcher's)
 that this node's hard identity check now finds a clash on (db/054's `clash`). Make the link with
-section 11's pair: one drain of the duplicate-check worker, then `cairn-node --conn <owner conn> --key
-$NODE_KEY apply-auto-candidates` — an OWNER role, not `$CONN`'s (the command's own help says why). Its
+section 11's pair: one drain of the duplicate-check worker, then `cnode apply-auto-candidates` (the owner's `$CONN`, not the window's `$WINDOW_CONN`: the command's own help says why). Its
 summary line must read `auto-apply: applied 1 …`; a pair the worker scored for human review is not
 linked. The clash itself needs a **verified** (provenance rank ≥ 60) date of birth or sex at birth that
 differs between the two charts, or disjoint normalized identifiers in one system (db/016's hard veto) —
@@ -615,17 +667,17 @@ those figures with the doubted ones.
 clinician's "different people" on A–C: the record still joins A and C through B (StillJoined).
 
 ```bash
-reg() { $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+reg() { cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 \
     --confirm-new | sed -n 's/^registered patient //p'; }
 A=$(reg); B=$(reg); C=$(reg)
 [ -n "$A" ] && [ -n "$B" ] && [ -n "$C" ] || { echo "registration failed" >&2; exit 1; }
-$NODE link-charts "$A" "$B" --attester-key /tmp/dr-a.key
-$NODE link-charts "$B" "$C" --attester-key /tmp/dr-a.key
-$NODE link-charts "$A" "$C" --attester-key /tmp/dr-a.key
-$NODE unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
+cnode link-charts "$A" "$B" --attester-key /tmp/dr-a.key
+cnode link-charts "$B" "$C" --attester-key /tmp/dr-a.key
+cnode link-charts "$A" "$C" --attester-key /tmp/dr-a.key
+cnode unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
-cargo run --release -p cairn-gui-tauri -- \
-    --patient "$A" --conn "$CONN" \
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" \
     --key "$NODE_KEY" --key-hold-seconds 900
 ```
 
@@ -724,8 +776,8 @@ colleague has meanwhile written a new one; the two are reconciled.
 
 **Setup.** Two charts A and B, registered with section 13's `reg()` helper and **not** linked, at least one
 unsigned line on A, the window open on A with dr-a's key held. A second node, or `cairn-node` on this same
-node as another clinician, is ready to run `$NODE link-charts "$A" "$B" --attester-key <the other
-clinician's key>` (`$NODE` as in section 13). Check the window shows no "How these charts are linked" line before you start.
+node as another clinician, is ready to run `cnode link-charts "$A" "$B" --attester-key <the other
+clinician's key>` (`cnode` as in section 13). Check the window shows no "How these charts are linked" line before you start.
 
 **Measurement 1 — the refusal and the re-read.** Start the stopwatch at the press of **Sign off** (step 3);
 stop it when the outcome line has finished saying "Now part of it: B.".
@@ -773,14 +825,14 @@ window: it is observable only with fault injection or the headless mock walk, ne
 for it in this pass.
 
 (c) A lost CONNECTION (#807). The window reopens its one connection when it is lost. With the chart open,
-restart the node's Postgres (`pg_ctl restart -D <data dir>`, or the Postgres app's Stop then Start), then
+restart the node's Postgres (`"$PGBIN/pg_ctl" restart -D "$MDATA"`, section 0's cluster), then
 press **Read this chart again**: the list draws, with no window restart. The window's terminal shows "the
 database connection was lost; reopened it". Pressed while Postgres is still down, it fails and the screen
 says why: "…could not be reopened: connecting to the database: …" with the cause (#876). A press within
 two seconds of that tries nothing and says so ("reopening it failed 0.8 s ago, so this press tried
 nothing (press again in 1.2 s to retry)"); a later press tries again. Nothing retries on its own. A list that never comes back without a window restart is a finding, and so is a
 failure that says only "connection closed". A node that ANSWERS and refuses (#880): restart Postgres,
-and before pressing, rename the window's database from another one, `psql -d postgres -c 'ALTER DATABASE
+and before pressing, rename the window's database from another one, `psql -h 127.0.0.1 -p "$MPORT" -d postgres -c 'ALTER DATABASE
 <db> RENAME TO <db>_away'` (the window's reopen is then refused whatever the auth method, a superuser's
 included, unlike a `REVOKE CONNECT`; stop any other node process on that database first, or the rename
 is refused). Press **Read this chart again**: the screen names `[3D000]` and says "pressing again fails
@@ -860,12 +912,12 @@ chart needs at least two **current** drugs; section 2's five-drug chart is fine,
 against a fresh database, same shape as sections 0–2):
 
 ```bash
-NODE="cairn-node --conn $CONN --key $NODE_KEY"
-PATIENT=$($NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+cnode() { cairn-node --conn "$CONN" --key "$NODE_KEY" "$@"; }   # a function: an unquoted $CONN would word-split
+PATIENT=$(cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 \
     --confirm-new | sed -n 's/^registered patient //p')
-$NODE medication-assert "$PATIENT" --term atorvastatin --dose-amount 40 --dose-unit mg --formulation tablet
-$NODE medication-assert "$PATIENT" --term metformin --dose-amount 1 --dose-unit g --formulation tablet
-$NODE medication-list "$PATIENT"     # two lines, both [current] — unsigned
+cnode medication-assert "$PATIENT" --term atorvastatin --dose-amount 40 --dose-unit mg --formulation tablet
+cnode medication-assert "$PATIENT" --term metformin --dose-amount 1 --dose-unit g --formulation tablet
+cnode medication-list "$PATIENT"     # two lines, both [current] — unsigned
 ```
 
 **Measurement 1 — Withhold.** Start the stopwatch when the window appears (as section 4). Enter the staff ID and
@@ -916,15 +968,15 @@ database shows `(0 rows)` until then; the check constraint admits all four kinds
 ```bash
 psql "$CONN" -At -c "SELECT event_type, count(*) FROM event_log
                      WHERE event_type LIKE 'clinical.medication-withhold%' GROUP BY 1"
-$NODE medication-list "$PATIENT"
+cnode medication-list "$PATIENT"
 ```
 
 Expect one `clinical.medication-withhold.asserted` per press of *Withhold* and one
 `clinical.medication-withhold-release.asserted` per thread released. While a hold is live `medication-list`
 prints under its line `    W withheld until reviewed: <reason> (by <kid>) [withhold <event id> on thread <id>]`;
 after a release the line is bare again. To exercise the CLI half without the window (this is how the commands
-above were checked): `$NODE medication-withhold "$PATIENT" <thread> --reason "NBM" --until reviewed`, then
-`$NODE medication-release "$PATIENT" <thread> --withhold <event id>`.
+above were checked): `cnode medication-withhold "$PATIENT" <thread> --reason "NBM" --until reviewed`, then
+`cnode medication-release "$PATIENT" <thread> --withhold <event id>`.
 
 **Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only; `--mock` is enough):
 
@@ -970,9 +1022,9 @@ read for a script from `CAIRN_VAULT_PASSPHRASE` (the superuser's) and `CAIRN_TER
 They are two variables on purpose: one exported for both would make the shared terminal passphrase the superuser's):
 
 ```bash
-NODE="cairn-node --conn $CONN --key $NODE_KEY"
-$NODE vault-bootstrap-superuser --staff-id boss --display-name "Site Admin" --email it@example.invalid
-$NODE vault-set-terminal-passphrase
+cnode() { cairn-node --conn "$CONN" --key "$NODE_KEY" "$@"; }   # a function: an unquoted $CONN would word-split
+cnode vault-bootstrap-superuser --staff-id boss --display-name "Site Admin" --email it@example.invalid
+cnode vault-set-terminal-passphrase
 psql "$CONN" -At -c "SELECT staff_id, role, enrolled_by FROM vault_member"   # boss|superuser|console
 ```
 
@@ -1001,7 +1053,8 @@ psql "$CONN" -At -c "SELECT staff_id, role, enrolled_by FROM vault_member"   # b
 > [!WARNING]
 > **The window's connection is not encrypted** (ADR-0083 decision 3). A window on the node's own machine, connected
 > over loopback (`host=127.0.0.1`, as in section 0) or a Unix socket, is fine. A window on another machine sends the passphrase and receives the signing key
-> in clear: measure over a LAN only through an encrypted tunnel.
+> in clear. Since ADR-0084 the window refuses any database that is not on its own machine, so measure only on the
+> node's machine, or through a tunnel that ends at `localhost`.
 
 Launch the window as section 3, with **no** `--key-hold-seconds` (the default 0, a shared terminal) unless a step
 says otherwise.
@@ -1034,7 +1087,7 @@ first keystroke in Staff ID; stop at the outcome line. Five runs (re-seed or Sto
 Then:
 
 - [ ] The passphrase field is empty after the act; with a key hold of 0 the Staff ID is empty too.
-- [ ] `$NODE medication-list "$PATIENT"` shows the act signed by nurse-a's key
+- [ ] `cnode medication-list "$PATIENT"` shows the act signed by nurse-a's key
       (`psql "$CONN" -At -c "SELECT staff_id, left(signing_key_id, 8) FROM vault_member"` maps key to person).
 - [ ] `boss` and its passphrase on a clinical write: "A superuser cannot sign a clinical act. Enter your own staff
       ID." Nothing is signed.

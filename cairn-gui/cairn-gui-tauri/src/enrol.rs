@@ -223,6 +223,11 @@ pub async fn enrol_member_impl(
     let key = match released {
         Release::Released { key, .. } => key,
         Release::RefusedPurpose => return Err(EnrolRefusal::NotForEnrolment.sentence()),
+        Release::OverPowered { why } => {
+            // Operator diagnostics, as the clinical signer gives; `why` is a fixed sentence.
+            eprintln!("the window's connection is over-powered: {why}");
+            return Err(KeyRefusal::OverPowered.sentence());
+        }
         other => {
             return Err(from_release(other)
                 .err()

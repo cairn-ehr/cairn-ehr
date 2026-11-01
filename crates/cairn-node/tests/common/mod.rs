@@ -1180,3 +1180,72 @@ pub async fn seed_proposal(c: &Client, a: Uuid, b: Uuid, status: &str) {
     .await
     .unwrap();
 }
+
+/// A connection string that logs in as the reference window does (#898): a
+/// `cairn_window_probe` LOGIN granted db/062's `cairn_window` group role, never the owner.
+///
+/// Why it exists: every suite connects as the schema OWNER, so no test showed which grants
+/// the window's own role lacks — a missing one would fail only in production. A suite runs
+/// its setup on `owner` (a schema-loaded connection) and the entry point under test on
+/// `cairn_node::db::connect(&window_login(&owner, &base).await)`. Never load the schema on it.
+///
+/// No password: the test clusters use `trust`. Appending `user=` works because
+/// tokio-postgres keeps the LAST value of a repeated key (pinned in `window_role_grants.rs`).
+/// The `CREATE ROLE` is guarded like db/004's and also tolerates a concurrent creator: a role
+/// is cluster-wide, while `test_serial_guard`'s lock is per-database.
+///
+/// DUPLICATED, deliberately, in `cairn-gui/cairn-gui-live/tests/common/mod.rs` and
+/// `cairn-gui/cairn-gui-tauri/src/enrol_tests.rs`: three test trees cannot share a test module, and a library fn
+/// that mints passwordless logins is not something to ship. Keep the copies identical.
+pub async fn window_login(owner: &Client, cs: &str) -> String {
+    owner
+        .batch_execute(
+            "DO $$ BEGIN \
+               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_window_probe') THEN \
+                 CREATE ROLE cairn_window_probe LOGIN; \
+               END IF; \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$; \
+             GRANT cairn_window TO cairn_window_probe;",
+        )
+        .await
+        .expect("the window's probe login");
+    format!("{cs} user=cairn_window_probe")
+}
+
+/// Fail if `result` is a privilege refusal. Any other outcome — success or an ordinary floor
+/// refusal — is fine here; the caller asserts more where the walk depends on success.
+///
+/// Two checks, because not every `cairn_node` path keeps the `tokio_postgres::Error` in its
+/// chain: some render the database's message into a string (`db_text`, `legible_db_error`),
+/// which drops the SQLSTATE. Postgres words every 42501 "permission denied for …", so the
+/// text check catches those. The message names only `entry` — never the error, which can carry
+/// identity-built or credential-adjacent text. To see the object, rerun with `-- --nocapture`
+/// after adding an `eprintln!` locally, or `SET ROLE cairn_window` in psql and run the SQL.
+pub fn assert_not_denied<T>(entry: &str, result: &anyhow::Result<T>) {
+    let Err(e) = result else { return };
+    let code = e.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(|pg| pg.code().cloned())
+    });
+    assert_ne!(
+        code,
+        Some(tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE),
+        "{entry}: the window's role lacks a grant this command needs (SQLSTATE 42501)"
+    );
+    assert!(
+        !format!("{e:#}").contains("permission denied"),
+        "{entry}: the window's role lacks a grant this command needs (permission denied)"
+    );
+}
+
+/// The owner connection (schema loaded, setup runs here) and the window's own connection,
+/// opened with the NON-loading `cairn_node::db::connect` exactly as the window opens it.
+pub async fn owner_and_window(base: &str) -> (Client, Client) {
+    let owner = cairn_node::db::connect_and_load_schema(base).await.unwrap();
+    let window = cairn_node::db::connect(&window_login(&owner, base).await)
+        .await
+        .expect("the window's login connects");
+    (owner, window)
+}

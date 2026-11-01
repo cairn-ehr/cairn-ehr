@@ -361,7 +361,14 @@ impl AppState {
             .map_err(|e| db.explain(e)),
         };
         let (key, kid) = match released {
-            Ok(release) => from_release(release)?,
+            Ok(release) => {
+                // Operator diagnostics: the screen says "ask IT"; IT needs the reason. `why` is
+                // a fixed sentence from `cairn_node::conn_posture`, never a credential.
+                if let cairn_node::vault::Release::OverPowered { why } = &release {
+                    eprintln!("the window's connection is over-powered: {why}");
+                }
+                from_release(release)?
+            }
             Err(e) => {
                 // Operator diagnostics, as `record_timing` does. `release_for_act` never puts the
                 // passphrase in an error (cairn_node::vault's house rules).

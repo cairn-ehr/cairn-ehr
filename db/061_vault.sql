@@ -23,7 +23,8 @@
 -- THE FOUR PROMISES THIS FILE KEEPS (and how):
 --
 --   1. The wrapped key never leaves the database — for every role but the owner (and PostgreSQL
---      superusers, whom no grant binds; the window connects as the owner today, #898).
+--      superusers, whom no grant binds; the window connected as the owner when this was written, and since
+--      ADR-0084 (#898) runs on its own login, cairn_window, db/062).
 --      `vault_member` has NO grant to anyone (not PUBLIC, not cairn_agent, not cairn_node), and no
 --      function, view or door returns the `sealed` column. Even the door that checks a passphrase (`cairn_vault_release`) returns
 --      the unwrapped seed — for one act — never the blob. Why it matters: a sealed blob that

@@ -9,6 +9,7 @@
 //! failure that comes back inside an `Ok` outcome, say) passes; those are pinned one by one
 //! where they are fixed (`each_judged_pair_failure_is_explained`, `a_cut_off_sign_off_names_the_cut`,
 //! `a_side_the_window_cut_off_names_the_cut`).
+use crate::source_guard::sources;
 use std::path::Path;
 
 /// Functions that lock the node connection but word no error a cut could cause, each with why.
@@ -21,22 +22,6 @@ const EXEMPT: &[&str] = &[
 /// `explain`, a `CutWatch` taken from it, its `cut_off()` question, or `link`'s `as_text` (which
 /// explains).
 const EXPLAINS: &[&str] = &["explain(", "cut_watch()", "cut_off()", "as_text("];
-
-/// Every non-test `.rs` file under `dir`, as (path, source).
-fn sources(dir: &Path, out: &mut Vec<(String, String)>) {
-    for entry in std::fs::read_dir(dir).expect("the source dir reads") {
-        let path = entry.expect("a dir entry").path();
-        let name = path.to_string_lossy().into_owned();
-        if path.is_dir() {
-            sources(&path, out);
-        } else if name.ends_with(".rs") && !name.ends_with("tests.rs") {
-            out.push((
-                name,
-                std::fs::read_to_string(&path).expect("the file reads"),
-            ));
-        }
-    }
-}
 
 /// Each function in `src` as (name, code with all whitespace and comment lines removed), from
 /// its declaration to the next one. A file's `#[cfg(test)] mod tests` block is left out.

@@ -192,10 +192,46 @@ fn the_enrolment_runs_its_steps_in_order() {
 
 const SU_STAFF: &str = "boss";
 
+/// A connection string that logs in as the reference window does (#898): a
+/// `cairn_window_probe` LOGIN granted db/062's `cairn_window` group role, never the owner.
+/// `release_for_act` refuses the owner's connection, so the window under test must use this.
+///
+/// DUPLICATED, deliberately, from `crates/cairn-node/tests/common/mod.rs` (and
+/// `cairn-gui/cairn-gui-live/tests/common/mod.rs`): this is a src unit-test module with no
+/// `tests/common` to import, three test trees cannot share a test module, and a library fn that
+/// mints passwordless logins is not something to ship. Keep the copies identical.
+async fn window_login(owner: &tokio_postgres::Client, cs: &str) -> String {
+    owner
+        .batch_execute(
+            "DO $$ BEGIN \
+               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_window_probe') THEN \
+                 CREATE ROLE cairn_window_probe LOGIN; \
+               END IF; \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$; \
+             GRANT cairn_window TO cairn_window_probe;",
+        )
+        .await
+        .expect("the window's probe login");
+    format!("{cs} user=cairn_window_probe")
+}
+
+/// The window's connection, as `AppState` holds it.
+fn node(conn: tokio_postgres::Client) -> Option<std::sync::Arc<cairn_gui_live::NodeConnection>> {
+    Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
+        conn,
+    )))
+}
+
 /// A state over the real test database with a superuser `boss` and a clinician `nurse1`
 /// enrolled, on a 900 s terminal (the longest hold: the case "never held" must survive).
+/// The state's connection is the WINDOW's login (#898); the second client is the owner's, for
+/// setup and for reading what the window may not (the vault's tables, its attempt counts).
 /// Returns the serial guard too: bind it, or another suite interleaves its TRUNCATE.
-async fn live(su_pass: &str, clin_pass: &str) -> Option<(tokio_postgres::Client, AppState)> {
+async fn live(
+    su_pass: &str,
+    clin_pass: &str,
+) -> Option<(tokio_postgres::Client, tokio_postgres::Client, AppState)> {
     let cs = std::env::var("CAIRN_TEST_PG").ok()?;
     let guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
@@ -217,8 +253,9 @@ async fn live(su_pass: &str, clin_pass: &str) -> Option<(tokio_postgres::Client,
     bootstrap_superuser(&c, &member(SU_STAFF, "superuser", su_pass))
         .await
         .unwrap();
+    let window = window_login(&c, &cs).await;
     let su = match cairn_node::vault::release_for_act(
-        &c,
+        &cairn_node::db::connect(&window).await.unwrap(),
         SU_STAFF,
         su_pass,
         cairn_node::vault::Purpose::Enrol,
@@ -233,18 +270,15 @@ async fn live(su_pass: &str, clin_pass: &str) -> Option<(tokio_postgres::Client,
         .await
         .unwrap();
     let mut state = AppState::mock(None);
-    let conn = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
-    state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
-        conn,
-    )));
+    state.db = node(cairn_node::db::connect(&window).await.unwrap());
     state.key_hold = Duration::from_secs(900);
-    Some((guard, state))
+    Some((guard, c, state))
 }
 
 #[tokio::test]
 async fn a_clinician_credential_cannot_enrol() {
     let (su_p, cl_p) = (pass("su"), pass("cl"));
-    let Some((_g, state)) = live(&su_p, &cl_p).await else {
+    let Some((_g, _owner, state)) = live(&su_p, &cl_p).await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
@@ -262,7 +296,7 @@ async fn a_clinician_credential_cannot_enrol() {
 #[tokio::test]
 async fn the_superuser_key_is_never_held() {
     let (su_p, cl_p, new_p) = (pass("su"), pass("cl"), pass("new"));
-    let Some((_g, state)) = live(&su_p, &cl_p).await else {
+    let Some((_g, _owner, state)) = live(&su_p, &cl_p).await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
@@ -298,7 +332,7 @@ async fn the_superuser_key_is_never_held() {
 #[tokio::test]
 async fn a_wrong_superuser_passphrase_enrols_nobody_and_echoes_nothing() {
     let (su_p, cl_p, new_p, wrong) = (pass("su"), pass("cl"), pass("new"), pass("bad"));
-    let Some((_g, state)) = live(&su_p, &cl_p).await else {
+    let Some((_g, owner, state)) = live(&su_p, &cl_p).await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
@@ -309,8 +343,7 @@ async fn a_wrong_superuser_passphrase_enrols_nobody_and_echoes_nothing() {
     for secret in [&su_p, &new_p, &wrong] {
         assert!(!said.contains(secret.as_str()));
     }
-    let db = state.db.as_ref().unwrap().lock().await.unwrap();
-    let n: i64 = db
+    let n: i64 = owner
         .query_one(
             "SELECT count(*) FROM vault_member WHERE staff_id = 'newbie'",
             &[],
@@ -328,7 +361,7 @@ async fn a_wrong_superuser_passphrase_enrols_nobody_and_echoes_nothing() {
 #[tokio::test]
 async fn a_duplicate_staff_id_is_named_before_the_superuser_key_is_released() {
     let (su_p, cl_p, wrong) = (pass("su"), pass("cl"), pass("bad"));
-    let Some((_g, state)) = live(&su_p, &cl_p).await else {
+    let Some((_g, owner, state)) = live(&su_p, &cl_p).await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
@@ -341,8 +374,7 @@ async fn a_duplicate_staff_id_is_named_before_the_superuser_key_is_released() {
             .expect_err("a duplicate is refused");
         assert_eq!(said, EnrolRefusal::AlreadyEnrolled.sentence(), "{role}");
     }
-    let db = state.db.as_ref().unwrap().lock().await.unwrap();
-    let failures: i64 = db
+    let failures: i64 = owner
         .query_one(
             "SELECT coalesce(sum(failures), 0)::bigint FROM cairn_vault_attempt_state('boss')",
             &[],
@@ -351,6 +383,49 @@ async fn a_duplicate_staff_id_is_named_before_the_superuser_key_is_released() {
         .unwrap()
         .get(0);
     assert_eq!(failures, 0, "the superuser's key was never asked for");
+}
+
+/// #898: a window on the OWNER's connection enrols nobody and says why in plain words; the
+/// superuser's passphrase never reached the vault, so it was not counted either.
+#[tokio::test]
+async fn an_over_powered_connection_enrols_nobody_and_says_so() {
+    let (su_p, cl_p, new_p) = (pass("su"), pass("cl"), pass("new"));
+    let Some((_g, owner, mut state)) = live(&su_p, &cl_p).await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let cs = std::env::var("CAIRN_TEST_PG").unwrap();
+    state.db = node(cairn_node::db::connect(&cs).await.unwrap());
+    let before: i64 = owner
+        .query_one(
+            "SELECT coalesce(sum(failures), 0)::bigint FROM cairn_vault_attempt_state('boss')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let said = enrol_member_impl(
+        &state,
+        credential(SU_STAFF, &pass("bad")),
+        form(&new_p, &new_p),
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(said, crate::signer::KeyRefusal::OverPowered.sentence());
+    let row = owner
+        .query_one(
+            "SELECT (SELECT count(*) FROM vault_member WHERE staff_id = 'newbie'), \
+                    (SELECT coalesce(sum(failures), 0)::bigint FROM cairn_vault_attempt_state('boss'))",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), 0, "nobody was enrolled");
+    assert_eq!(
+        row.get::<_, i64>(1),
+        before,
+        "the wrong guess was never counted"
+    );
 }
 
 #[tokio::test]

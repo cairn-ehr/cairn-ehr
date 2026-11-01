@@ -31,6 +31,8 @@ mod funnel;
 mod hold;
 #[cfg(test)]
 mod holds_webview_tests;
+#[cfg(test)]
+mod launch_posture_tests;
 mod link;
 #[cfg(test)]
 mod node_lock_explains_tests;
@@ -63,7 +65,13 @@ struct Cli {
     patient: Option<uuid::Uuid>,
 
     /// PostgreSQL connection string for this node's database.
-    #[arg(long, env = "CAIRN_CONN", default_value = "host=/tmp dbname=cairn")]
+    // The value can carry a password, so `--help` never prints it.
+    #[arg(
+        long,
+        env = "CAIRN_CONN",
+        hide_env_values = true,
+        default_value = "host=/tmp dbname=cairn"
+    )]
     conn: String,
 
     /// The NODE's signing key — holds custody of every sealed body it writes (ADR-0052).
@@ -95,8 +103,8 @@ fn main() -> anyhow::Result<()> {
     // THIS BINDING IS LOAD-BEARING — do not inline it into the `block_on` below. Commands do
     // NOT run on it (Tauri drives those on its own `tauri::async_runtime`); what it hosts is
     // the `tokio::spawn`ed tokio_postgres connection task of the window's working connection
-    // (`connect_with_task` in `build_live_state`; the schema loader's connection is dropped
-    // once loaded). Drop this runtime and that task stops being polled, so every query for the rest
+    // (`connect_with_task` in `build_live_state`; the schema check's connection is dropped
+    // once read). Drop this runtime and that task stops being polled, so every query for the rest
     // of the session hangs or fails. Keeping it alive until `main` returns is the point.
     // (A connection REOPENED after a loss, #807, spawns its task on Tauri's runtime instead,
     // because the reopen runs inside a command; that runtime lives as long as the app.)
@@ -145,8 +153,8 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))
 }
 
-/// Connect, load the schema, and read this node's identity — everything a writing window needs
-/// before it shows anything.
+/// Refuse a remote database, check (never load) the schema stamp, and read this node's identity —
+/// everything a writing window needs before it shows anything.
 ///
 /// The node key is loaded UP FRONT and fails the launch if it cannot be: a window that
 /// opens and only discovers at sign-off time that it can never seal anything has wasted
@@ -156,9 +164,20 @@ fn main() -> anyhow::Result<()> {
 /// chart needs no actor. The front door asks on every `funnel_status` and says, in the chrome,
 /// what an operator must do (`FunnelBackend::provisioning`, #654 option 2, #882).
 async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
-    let loader = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
-    let identity = cairn_node::identity::load_local(&loader).await?;
-    drop(loader);
+    // Refuse a remote database BEFORE any connect: this window sends passphrases and signing
+    // keys over the connection (#899).
+    cairn_node::conn_posture::require_local(&cli.conn)?;
+    // The window's own login cannot replay DDL (db/062), so it CHECKS the stamp the owner's
+    // install/upgrade step left instead of loading the schema (#898). That also means it no
+    // longer runs the deferred-event re-adjudication connect_and_load_schema did on every connect;
+    // serve/run do not run it either; only one-off loader verbs do (#912).
+    let checker = cairn_node::db::connect(&cli.conn).await?;
+    let stamp = cairn_node::db::read_schema_stamp(&checker).await?;
+    if let Err(refusal) = cairn_node::conn_posture::window_schema_verdict(stamp.as_ref()) {
+        anyhow::bail!(refusal);
+    }
+    let identity = cairn_node::identity::load_local(&checker).await?;
+    drop(checker);
     let node_sk = cairn_node::keystore::load(
         &cli.key,
         std::env::var("CAIRN_KEY_PASSPHRASE").ok().as_deref(),

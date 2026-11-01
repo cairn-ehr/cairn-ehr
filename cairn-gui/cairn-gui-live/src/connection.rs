@@ -64,9 +64,10 @@
 //!   pinned for every lock by `cairn-gui-tauri`'s `node_lock_explains_tests.rs`).
 //!
 //! The reopen uses `cairn_node::db::connect_with_task`, not `connect_and_load_schema`: the schema
-//! was loaded at launch, and replaying every `db/*.sql` file takes locks a read never needs
-//! (#726). It also skips the deferred-event re-adjudication `connect_and_load_schema` runs; a
-//! window restart, or any other node process connecting, still does that.
+//! was checked (never loaded) at launch, the window's own login cannot replay it (ADR-0084), and
+//! replaying every `db/*.sql` file takes locks a read never needs (#726). It also skips the
+//! deferred-event re-adjudication `connect_and_load_schema` runs; since ADR-0084 so does the
+//! window's launch, and only the one-off loader verbs still run it (#912).
 use cairn_gui_data::port::DataError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

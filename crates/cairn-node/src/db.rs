@@ -394,6 +394,11 @@ const SCHEMA: &[(&str, &str)] = &[
     // for one act by passphrase, never its wrapping. Node-only: the vault is local key custody,
     // not something cairn-sync serves.
     ("061_vault", include_str!("../../../db/061_vault.sql")),
+    // db/062 (#898): the window's own NOLOGIN group role. Node-only, like the vault it fences off.
+    (
+        "062_window_role",
+        include_str!("../../../db/062_window_role.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
@@ -682,7 +687,8 @@ pub fn embedded_schema_version() -> i32 {
 /// crate's loader (cairn-node, the reference window, …) stamps the same string, because
 /// `env!` is evaluated here, in cairn-node — and they all replay the same embedded list.
 /// cairn-sync stamps its own name, which is how a gated connect tells its subset stamp apart.
-const LOADER_BUILD: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
+pub(crate) const LOADER_BUILD: &str =
+    concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
 /// The sha2-256 of exactly the migration texts this binary replays, in order (#726). See
 /// `cairn_event::schema_generation::schema_content_hash` for the encoding and for why it is
@@ -772,43 +778,12 @@ pub async fn load_migration(client: &Client, name: &str, sql: &str) -> anyhow::R
         .map_err(|e| anyhow::anyhow!("loading {name}: {}", legible_db_error(&e)))
 }
 
-/// Connect and replay every embedded migration — guarded against DOWNGRADE (#188), and
-/// SKIPPED when nothing changed (#726).
+/// Read what the last loader recorded in `node_schema` (db/038, db/058), without loading
+/// anything. `None` is a database never stamped (fresh, hand-loaded, or pre-#188).
 ///
-/// The replay runs only when the `node_schema` stamp does not say that this loader already
-/// replayed exactly these files at this generation ([`replay_can_be_skipped`]). An idempotent
-/// replay still takes strong DDL locks, so an unconditional one let any connect stall
-/// clinical writes behind an ordinary long reader. Re-adjudication of deferred events runs
-/// on every connect regardless (it is driven by data, not by the schema).
-///
-/// The replay is idempotent for a database at or below this binary's generation. But
-/// `CREATE OR REPLACE` cuts both ways: replayed by an OLDER binary against a NEWER
-/// database it silently rewrites newer function bodies — including the in-DB
-/// safety-floor checks — back to their older versions. So before replaying, read the
-/// generation the last successful loader recorded (db/038 `node_schema`) and refuse
-/// when it exceeds ours; after a successful replay, stamp our own. An absent table or
-/// row means "generation unknown" (a pre-#188 database, or a rig loaded by hand via
-/// psql) and the replay proceeds — the guard stops known downgrades, it does not lock
-/// out hand-built rigs. First brick of the ADR-0012 code plane.
-pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
-    let client = connect(conn).await?;
-    let embedded = embedded_schema_version();
-    // Serialize the whole check→replay→stamp against every OTHER loader on this
-    // database (2026-07-19 review of PR #251, finding 1). Without it the guard is
-    // check-then-act: an old and a new binary connecting together can interleave so
-    // the old one reads a stale generation, passes, and still replays over the
-    // schema the new one just loaded. BLOCKING and session-level: a concurrent
-    // loader waits its turn, then reads the now-current record. Released explicitly
-    // after the stamp — this client lives on as the daemon's connection, and a lock
-    // held for its lifetime would park every later loader forever. Error paths drop
-    // the client, and the session close releases the lock.
-    client
-        .execute(
-            "SELECT pg_advisory_lock($1)",
-            &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {}", legible_db_error(&e)))?;
+/// Shared by [`connect_and_load_schema`] (to decide whether to replay) and by the reference
+/// window (to CHECK the stamp, since its own login cannot replay DDL, #898).
+pub async fn read_schema_stamp(client: &Client) -> anyhow::Result<Option<SchemaStamp>> {
     // Two round-trips, not one CASE: SQL references to node_schema are checked at
     // plan time, so a single statement naming the table errors on a database that
     // does not have it yet (fresh, or pre-#188) — exactly the databases that must
@@ -853,6 +828,47 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     } else {
         None
     };
+    Ok(stamp)
+}
+
+/// Connect and replay every embedded migration — guarded against DOWNGRADE (#188), and
+/// SKIPPED when nothing changed (#726).
+///
+/// The replay runs only when the `node_schema` stamp does not say that this loader already
+/// replayed exactly these files at this generation ([`replay_can_be_skipped`]). An idempotent
+/// replay still takes strong DDL locks, so an unconditional one let any connect stall
+/// clinical writes behind an ordinary long reader. Re-adjudication of deferred events runs
+/// on every connect regardless (it is driven by data, not by the schema).
+///
+/// The replay is idempotent for a database at or below this binary's generation. But
+/// `CREATE OR REPLACE` cuts both ways: replayed by an OLDER binary against a NEWER
+/// database it silently rewrites newer function bodies — including the in-DB
+/// safety-floor checks — back to their older versions. So before replaying, read the
+/// generation the last successful loader recorded (db/038 `node_schema`) and refuse
+/// when it exceeds ours; after a successful replay, stamp our own. An absent table or
+/// row means "generation unknown" (a pre-#188 database, or a rig loaded by hand via
+/// psql) and the replay proceeds — the guard stops known downgrades, it does not lock
+/// out hand-built rigs. First brick of the ADR-0012 code plane.
+pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
+    let client = connect(conn).await?;
+    let embedded = embedded_schema_version();
+    // Serialize the whole check→replay→stamp against every OTHER loader on this
+    // database (2026-07-19 review of PR #251, finding 1). Without it the guard is
+    // check-then-act: an old and a new binary connecting together can interleave so
+    // the old one reads a stale generation, passes, and still replays over the
+    // schema the new one just loaded. BLOCKING and session-level: a concurrent
+    // loader waits its turn, then reads the now-current record. Released explicitly
+    // after the stamp — this client lives on as the daemon's connection, and a lock
+    // held for its lifetime would park every later loader forever. Error paths drop
+    // the client, and the session close releases the lock.
+    client
+        .execute(
+            "SELECT pg_advisory_lock($1)",
+            &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {}", legible_db_error(&e)))?;
+    let stamp = read_schema_stamp(&client).await?;
     let recorded: Option<i32> = stamp.as_ref().map(|s| s.version);
     if let Some(recorded) = recorded {
         if recorded > embedded {

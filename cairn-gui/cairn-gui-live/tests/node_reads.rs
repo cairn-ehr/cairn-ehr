@@ -87,3 +87,14 @@ async fn the_connection_is_shared_not_copied() {
     let live = LiveData::sharing(shared.clone(), sk, &common::identity(ORIGIN));
     assert!(std::sync::Arc::ptr_eq(&shared, &live.connection()));
 }
+
+/// The connection-string trick `common::window_login` relies on: a repeated key's LAST value
+/// wins. If tokio-postgres ever kept the first, every "window" test here would quietly run as
+/// the owner and prove nothing about the window's own grants (#898).
+#[test]
+fn a_repeated_user_keeps_the_last_value() {
+    let cfg: tokio_postgres::Config = "host=127.0.0.1 user=owner dbname=d user=cairn_window_probe"
+        .parse()
+        .unwrap();
+    assert_eq!(cfg.get_user(), Some("cairn_window_probe"));
+}

@@ -53,9 +53,19 @@ pub async fn connect(cs: &str) -> (Client, Client) {
 
 /// The window's kind of connection (#807, #875): open on `cs`, reopened from `reopen_from` when
 /// it is lost, and cut off after `NodeConnection::ANSWER_WITHIN`. The schema is loaded by
-/// [`connect`]'s reader, as the window loads it on a connection of its own at launch.
+/// [`connect`]'s reader, never here.
+///
+/// Both the first connection and every reopen log in as the WINDOW's own role
+/// ([`window_login`]), never the owner: the window runs on a least-privilege login (#898), so a
+/// test here that ran as the owner would pass over a grant the window lacks. Connected with the
+/// NON-loading `connect_with_task`, as the window connects.
 pub async fn reopening(cs: &str, reopen_from: String) -> cairn_gui_live::NodeConnection {
-    let (client, task) = cairn_node::db::connect_with_task(cs)
+    let owner = cairn_node::db::connect(cs)
+        .await
+        .expect("an owner connection");
+    let window = window_login(&owner, cs).await;
+    let reopen_from = window_login(&owner, &reopen_from).await;
+    let (client, task) = cairn_node::db::connect_with_task(&window)
         .await
         .expect("a connection with its task's handle");
     cairn_gui_live::NodeConnection::reopening(client, task, reopen_from)
@@ -63,11 +73,43 @@ pub async fn reopening(cs: &str, reopen_from: String) -> cairn_gui_live::NodeCon
         .expect("the connection's backend")
 }
 
-/// A second schema-loaded connection, for the `LiveData` under test to own.
+/// A second connection, for the `LiveData` under test to own — logged in as the window's own
+/// role ([`window_login`]) and NOT schema-loading, as the window connects. [`connect`]'s reader
+/// has already loaded the schema.
 pub async fn connect_for_live(cs: &str) -> Client {
-    cairn_node::db::connect_and_load_schema(cs)
+    let owner = cairn_node::db::connect(cs)
         .await
-        .expect("schema-loaded connection for the port")
+        .expect("an owner connection");
+    cairn_node::db::connect(&window_login(&owner, cs).await)
+        .await
+        .expect("the window's own connection for the port")
+}
+
+/// A connection string that logs in as the reference window does (#898): a
+/// `cairn_window_probe` LOGIN granted db/062's `cairn_window` group role, never the owner.
+/// Ensured on `owner` (role creation is owner work). No password: the test clusters use
+/// `trust`. Appending `user=` works because tokio-postgres keeps the LAST value of a repeated
+/// key (pinned by `node_reads.rs`). The `CREATE ROLE` is guarded like db/004's and tolerates a
+/// concurrent creator: a role is cluster-wide, the test lock is per-database.
+///
+/// DUPLICATED, deliberately, from `crates/cairn-node/tests/common/mod.rs` (a third copy is in
+/// `cairn-gui/cairn-gui-tauri/src/enrol_tests.rs`): three test trees
+/// cannot share a test module, and a library fn that mints passwordless logins is not something
+/// to ship. Keep the copies identical.
+pub async fn window_login(owner: &Client, cs: &str) -> String {
+    owner
+        .batch_execute(
+            "DO $$ BEGIN \
+               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_window_probe') THEN \
+                 CREATE ROLE cairn_window_probe LOGIN; \
+               END IF; \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$; \
+             GRANT cairn_window TO cairn_window_probe;",
+        )
+        .await
+        .expect("the window's probe login");
+    format!("{cs} user=cairn_window_probe")
 }
 
 /// Clear every per-patient projection, and enrol a signer.

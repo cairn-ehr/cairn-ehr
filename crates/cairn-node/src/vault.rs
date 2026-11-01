@@ -189,6 +189,11 @@ pub enum Release {
     RefusedPurpose,
     /// The member's actor is revoked or superseded: its key would sign nothing the floor accepts.
     NotCurrent,
+    /// The connection has more power than a window may have (#898), so the vault was never
+    /// asked and the passphrase never sent. `why` is the first reason, for the operator.
+    OverPowered {
+        why: &'static str,
+    },
 }
 
 impl std::fmt::Debug for Release {
@@ -210,21 +215,34 @@ impl std::fmt::Debug for Release {
             Release::Unknown => f.write_str("Unknown"),
             Release::RefusedPurpose => f.write_str("RefusedPurpose"),
             Release::NotCurrent => f.write_str("NotCurrent"),
+            Release::OverPowered { why } => {
+                f.debug_struct("OverPowered").field("why", why).finish()
+            }
         }
     }
 }
 
 /// Ask the vault for `staff_id`'s key for ONE act. A wrong passphrase is an answer, not an error;
 /// an outcome string we do not know, or a seed that does not belong to its key id, IS an error.
+///
+/// First, on EVERY call (never a cached verdict: an operator may fix the login while the window's
+/// connection stays open, #807), the connection's own power is read: over a connection that could
+/// read the sealed keys or write around the floor, the answer is [`Release::OverPowered`] and
+/// nothing is sent (`crate::conn_posture`, #898). So a refused guess is never counted either.
 pub async fn release_for_act(
     db: &Client,
     staff_id: &str,
     passphrase: &str,
     purpose: Purpose,
 ) -> anyhow::Result<Release> {
+    if let Some(why) =
+        crate::conn_posture::over_powered(&crate::conn_posture::read_posture(db).await?)
+    {
+        return Ok(Release::OverPowered { why });
+    }
     let row = db
         .query_one(
-            "SELECT outcome, seed, signing_key_id, retry_after_ms FROM cairn_vault_release($1, $2, $3)",
+            "SELECT outcome, seed, signing_key_id, retry_after_ms FROM public.cairn_vault_release($1, $2, $3)",
             &[&staff_id, &passphrase, &purpose.as_sql()],
         )
         .await

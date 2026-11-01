@@ -10,12 +10,38 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ THE WINDOW'S OWN LOGIN (ADR-0084, db/062, #898/#899) — do not undo** (pins:
+`crates/cairn-node/tests/{conn_posture_db,window_role_grants,provision_window_role}.rs`,
+`crates/cairn-node/src/{conn_posture,window_access}_tests.rs`, `cairn-gui-tauri/src/launch_posture_tests.rs`):
+- **The over-power check runs on EVERY `release_for_act`, is never cached, and is judged over EVERY role the login is
+  a MEMBER of** (`pg_has_role(…, 'MEMBER')`, so a `NOINHERIT` membership counts: a member can `SET ROLE`). An operator
+  fixes a login while the window's connection stays open (#807). **Tempting wrong fixes:** read the facts once at
+  launch "to save a query"; test the login's own privileges only (a member of the owner role passes). Pins:
+  `a_member_of_the_owner_role_is_refused_until_the_membership_is_revoked`,
+  `a_membership_that_does_not_inherit_still_counts`. The refusal comes BEFORE the passphrase is sent
+  (`a_wrong_passphrase_over_an_over_powered_connection_is_never_counted`).
+- **The window never calls `connect_and_load_schema`** (its login cannot replay DDL; it reads the stamp and refuses
+  the LAUNCH on a mismatch). A reintroduced loader also silently restores owner-level use. Pin:
+  `the_window_never_loads_the_schema` (walks every non-test source of `cairn-gui-tauri`). The window no longer runs
+  the loader's deferred re-adjudication pass; that is the loader's, not a bug to patch back into the window.
+- **`cairn_window` never gains a vault read, `cairn_vault_unseal`, `INSERT` on `event_log`, or a peer door**, and never
+  inherits `cairn_node`. A missing grant is added narrowly (a column list, not the table) with its reason, and the
+  entry point is added to `window_role_grants.rs`. Pins: `the_window_login_has_none_of_the_powers`,
+  `each_power_alone_is_seen`, and the four `the_windows_*_run_under_its_own_login` tests.
+- **`provision-window-role` refuses a cluster BEFORE it mutates, and never touches an existing role that is not a window
+  login.** Its role DDL is one transaction, so a failed step leaves no half-made login. Order: `require_local`, the rules read, freshness, the `trust` verdict, THEN the schema load and the role
+  DDL. `trust` is refused whatever its line's type or database; `peer` without a map only warns. No override flag, for
+  this refusal or for `require_local`. Pins: `the_verb_refuses_before_it_mutates_in_source_order`,
+  `the_verb_refuses_a_trusting_cluster_and_changes_nothing`,
+  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`; the window's own launch refuses a remote
+  database first (`the_remote_refusal_comes_before_any_connect`).
+
 **⇒ GUI SIGN-IN SLICE 1 — THE HUMAN KEY VAULT (ADR-0083, db/061) — do not undo** (pins:
 `crates/cairn-node/tests/vault_floor.rs`, `vault_lib.rs`, `secret32_conversions_are_named.rs`;
 `cairn-gui-tauri/src/{signer_tests,enrol_tests}.rs` and `state.rs`'s held-key tests):
 - **Never grant a read of `vault_member`** (nor of `vault_attempt`/`vault_terminal`), and never add a function, view
   or door that returns `sealed`. A blob that leaves the database is an OFFLINE guessing target no back-off reaches.
-  (No grant binds the owner or a PostgreSQL superuser, and the window connects as the owner today, #898.)
+  (No grant binds the owner or a PostgreSQL superuser. The window connected as the owner when this slice shipped; since ADR-0084 it runs on its own login — see that block above.)
   `cairn_vault_unseal` stays revoked from PUBLIC: for every role but the owner, `cairn_vault_release` is its only
   door, and db/061 refuses to load if that REVOKE did not take (a non-owner loader's REVOKE is a no-op; pin `the_schema_refuses_to_load_while_the_runtime_role_can_unseal`). Defence in depth (the runtime role cannot read a blob to feed it), and only on a replay: a `cairn_pgx` reinstall re-grants PUBLIC unseen (#908). Pin:
   `the_runtime_role_cannot_read_the_vault`. **Tempting wrong fix:** a "roster" view for an admin screen that
@@ -183,9 +209,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   node's answer as well. The probe is bounded (`probe_within`, `PROBE_WITHIN`, twice a reopen's wait) because `boot()` shows the front door only
   after it answers; what it waits on, `LiveData::standing`, runs as a task of its own, so giving up never drops a
   connection guard mid-query (PR #892 review): pin `funnel_status_probes_the_live_node_afresh_and_bounded`.
-- **The reopen is `cairn_node::db::connect_with_task`, not `connect_and_load_schema`.** The schema was loaded at launch, and a
-  replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication; a restart
-  still runs it. Unpinned — the tempting "keep it the same as launch" fix.
+- **The reopen is `cairn_node::db::connect_with_task`, not `connect_and_load_schema`.** The schema was checked (never loaded) at launch, and a
+  replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication, and since
+  ADR-0084 so does the window's launch: only one-off loader verbs run it (#912). Unpinned — the tempting "keep it the same as launch" fix.
 - **`LiveData::new` is `NodeConnection::fixed`**: a caller-made client may carry session state (`lost_commit.rs`'s
   kill switch is a `SET`) that a fresh one would silently lack. Only the window's launch uses `reopening`.
 - Not checked on reopen: that the database is still the SAME node. Writes there are expected to be refused if this

@@ -70,6 +70,14 @@ fn member<'a>(staff_id: &'a str, role: &'a str, passphrase: &'a str) -> NewMembe
     }
 }
 
+/// The window's own login (#898). `release_for_act` refuses the owner's connection
+/// (`Release::OverPowered`), so every release here runs as the window does; setup stays on the owner.
+async fn window(owner: &Client) -> Client {
+    db::connect(&common::window_login(owner, &cs().expect("guarded by caller")).await)
+        .await
+        .unwrap()
+}
+
 const SU_PASS: &str = "boss passphrase";
 const CLIN_PASS: &str = "nurse passphrase";
 
@@ -78,7 +86,7 @@ async fn boss(c: &Client) -> cairn_event::SigningKey {
     bootstrap_superuser(c, &member("boss", "superuser", SU_PASS))
         .await
         .unwrap();
-    match release_for_act(c, "boss", SU_PASS, Purpose::Enrol)
+    match release_for_act(&window(c).await, "boss", SU_PASS, Purpose::Enrol)
         .await
         .unwrap()
     {
@@ -100,13 +108,14 @@ async fn a_vault_key_signs_an_event_the_floor_accepts() {
         .unwrap();
 
     // Case/whitespace in the typed staff ID must still find the member.
-    let (key, kid) = match release_for_act(&c, " jsmith ", CLIN_PASS, Purpose::Clinical)
-        .await
-        .unwrap()
-    {
-        Release::Released { key, kid } => (key, kid),
-        other => panic!("expected release, got {other:?}"),
-    };
+    let (key, kid) =
+        match release_for_act(&window(&c).await, " jsmith ", CLIN_PASS, Purpose::Clinical)
+            .await
+            .unwrap()
+        {
+            Release::Released { key, kid } => (key, kid),
+            other => panic!("expected release, got {other:?}"),
+        };
 
     let patient = Uuid::now_v7();
     common::submit_registration(&c, &node_sk, &node_kid, patient, 0).await;
@@ -166,20 +175,21 @@ async fn an_outcome_per_answer_and_a_superuser_is_not_a_clinician() {
     enrol_member(&c, &member("jsmith", "clinician", CLIN_PASS), "boss", &su)
         .await
         .unwrap();
+    let w = window(&c).await;
     assert!(matches!(
-        release_for_act(&c, "jsmith", "not it", Purpose::Clinical)
+        release_for_act(&w, "jsmith", "not it", Purpose::Clinical)
             .await
             .unwrap(),
         Release::Wrong { retry_after: None }
     ));
     assert!(matches!(
-        release_for_act(&c, "nobody", "x", Purpose::Clinical)
+        release_for_act(&w, "nobody", "x", Purpose::Clinical)
             .await
             .unwrap(),
         Release::Unknown
     ));
     assert!(matches!(
-        release_for_act(&c, "boss", SU_PASS, Purpose::Clinical)
+        release_for_act(&w, "boss", SU_PASS, Purpose::Clinical)
             .await
             .unwrap(),
         Release::RefusedPurpose
@@ -252,7 +262,7 @@ async fn a_seed_that_does_not_match_its_key_id_is_never_handed_out() {
         .await
         .unwrap();
     r.expect("the owner can corrupt a row for this test");
-    let err = release_for_act(&c, "jsmith", CLIN_PASS, Purpose::Clinical)
+    let err = release_for_act(&window(&c).await, "jsmith", CLIN_PASS, Purpose::Clinical)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("does not match"), "{err}");

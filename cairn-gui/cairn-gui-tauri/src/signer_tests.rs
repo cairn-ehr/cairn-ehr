@@ -116,6 +116,7 @@ fn refusal_sentences_never_echo_the_passphrase() {
         KeyRefusal::Unknown,
         KeyRefusal::NotForClinicalActs,
         KeyRefusal::NotCurrent,
+        KeyRefusal::OverPowered,
         KeyRefusal::Fault,
     ];
     for refusal in &every {
@@ -142,6 +143,13 @@ fn refusal_sentences_never_echo_the_passphrase() {
     assert_eq!(
         KeyRefusal::Wrong { retry_after: None }.sentence(),
         "That passphrase is not right."
+    );
+    // #898: the window tells the clinician what to ask for, in the brief's words.
+    assert_eq!(
+        KeyRefusal::OverPowered.sentence(),
+        "This workstation is connected to the node with more access than a window may have, so \
+         it cannot sign. Nothing was signed. Ask your IT support to run cairn-node \
+         provision-window-role and start this window with its login."
     );
 }
 
@@ -193,6 +201,10 @@ fn each_vault_answer_maps_to_its_refusal() {
     assert_eq!(
         from_release(Release::NotCurrent).unwrap_err(),
         KeyRefusal::NotCurrent
+    );
+    assert_eq!(
+        from_release(Release::OverPowered { why: "any reason." }).unwrap_err(),
+        KeyRefusal::OverPowered
     );
     let key = SessionKey::for_test(Now::read()).signing_key();
     let kid = hex::encode(key.verifying_key().to_bytes());

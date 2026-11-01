@@ -596,6 +596,7 @@ dependencies = [
  "clap",
  "getrandom 0.4.3",
  "hex",
+ "postgres-protocol",
  "rcgen",
  "rpassword",
  "rustls",

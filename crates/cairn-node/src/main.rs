@@ -1552,7 +1552,8 @@ struct Cli {
     /// `GRANT cairn_node TO <that role>`, then point `--conn`/`CAIRN_CONN` at it.
     /// `status` reports whether the gate actually binds the connected role
     /// (`db_floor ENFORCED` vs `BYPASSABLE`). See `db/007_node_federation.sql`.
-    #[arg(long, env = "CAIRN_CONN")]
+    // The value can carry a password, so `--help` never prints it.
+    #[arg(long, env = "CAIRN_CONN", hide_env_values = true)]
     conn: String,
     #[arg(long, default_value = "node.key")]
     key: PathBuf,
@@ -1626,6 +1627,16 @@ enum Cmd {
     /// with DDL privileges, then point `--conn`/`CAIRN_CONN` at `user=<role>`).
     ProvisionRuntimeRole {
         #[arg(long, default_value = "cairn_runtime")]
+        role: String,
+    },
+    /// Install or upgrade the reference window's own database login (#898/#899): refuses a
+    /// server whose pg_hba.conf lets anyone in with no password, loads/upgrades the schema,
+    /// then creates or refreshes a LOGIN role granted `cairn_window`. Run with the OWNER's
+    /// connection (a database superuser: it reads pg_hba_file_rules). The password comes from
+    /// `CAIRN_WINDOW_DB_PASSWORD`, or for a NEW login a prompt (an existing login keeps its own
+    /// when none is given), and reaches the server only as a SCRAM verifier.
+    ProvisionWindowRole {
+        #[arg(long, default_value = "cairn_window_login")]
         role: String,
     },
     /// Print this node's honest assembly state (peers, keystore health, DR escrow stub).
@@ -2835,6 +2846,68 @@ async fn run() -> anyhow::Result<()> {
                 "runtime role '{role}' provisioned and granted cairn_node\n\
                  point the daemon at it, e.g. CAIRN_CONN=\"… user={role}\" cairn-node … run …\n\
                  (set a password with `ALTER ROLE {role} PASSWORD …` for a networked deployment)"
+            );
+        }
+        Cmd::ProvisionWindowRole { role } => {
+            use cairn_node::window_access as wa;
+            // Order matters: refuse the cluster BEFORE anything is mutated (the schema load is a
+            // mutation). The role name and an existing role are judged after the load, inside
+            // provision_window_login, still before any of ITS DDL.
+            let unchanged = "the window login was not created or changed";
+            let given = match std::env::var("CAIRN_WINDOW_DB_PASSWORD") {
+                Err(std::env::VarError::NotPresent) => None,
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    anyhow::bail!("CAIRN_WINDOW_DB_PASSWORD is not valid text; {unchanged}")
+                }
+                // Set but empty is a mistake (a failed `$(cat file)`), never "keep the old one".
+                Ok(p) if p.trim().is_empty() => anyhow::bail!(
+                    "CAIRN_WINDOW_DB_PASSWORD is set but empty; give the password, or unset it \
+                     (a new login is then asked for one, an existing login keeps its own); \
+                     {unchanged}"
+                ),
+                Ok(p) => Some(Zeroizing::new(p)),
+            };
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let owner = cairn_node::db::connect(&cli.conn).await?;
+            let rules = wa::read_hba_rules(&owner).await?;
+            wa::hba_freshness(wa::hba_file_is_stale(&owner).await?)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            for w in wa::hba_verdict(&rules).map_err(|e| anyhow::anyhow!(e))? {
+                eprintln!("warning: {w}");
+            }
+            drop(owner);
+            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            let password = match given {
+                Some(p) => Some(p),
+                None if !wa::role_exists(&db, &role).await? => {
+                    // Twice: a typo here makes a login nobody can use, and a re-run would not ask.
+                    let first = Zeroizing::new(rpassword::prompt_password(format!(
+                        "password for {role}: "
+                    ))?);
+                    let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
+                    if first != again {
+                        anyhow::bail!(
+                            "the two entries differ; the window login was not created or changed"
+                        );
+                    }
+                    Some(first)
+                }
+                None => None,
+            };
+            if password.as_ref().is_some_and(|p| p.trim().is_empty()) {
+                anyhow::bail!("no password provided (spaces alone are not one)");
+            }
+            wa::provision_window_login(&db, &role, password.as_ref().map(|p| p.as_str())).await?;
+            println!(
+                "window login '{role}' provisioned and granted cairn_window ({})\n\
+                 start the window with CAIRN_CONN=\"<this connection> user={role} password=…\" \
+                 in its environment, not --conn: a command-line argument is visible to every \
+                 account on this machine",
+                if password.is_some() {
+                    "password set"
+                } else {
+                    "password unchanged"
+                }
             );
         }
         Cmd::Status { passphrase } => {
@@ -4739,6 +4812,8 @@ async fn run() -> anyhow::Result<()> {
             hint,
             passphrase,
         } => {
+            // Before the passphrase prompt and before any connect: these verbs carry a secret.
+            cairn_node::conn_posture::require_local(&cli.conn)?;
             let pass = resolve_new_vault_passphrase(passphrase)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
             let kid = cairn_node::vault::bootstrap_superuser(
@@ -4757,6 +4832,8 @@ async fn run() -> anyhow::Result<()> {
             println!("enrolled superuser {staff_id} (key {kid})");
         }
         Cmd::VaultSetTerminalPassphrase { passphrase } => {
+            // Before the passphrase prompt and before any connect: these verbs carry a secret.
+            cairn_node::conn_posture::require_local(&cli.conn)?;
             let pass = resolve_new_vault_passphrase(passphrase)?;
             let phc = cairn_node::vault::terminal_phc(&pass)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
