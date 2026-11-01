@@ -1,8 +1,9 @@
 // The superuser's panel (sign-in slice 2, Task 8). Classic script, loaded after rekey.js (uses
 // `signerCredential`, `clearSigner`, and main.js's `el`, `setMessage`, `invoke`, `failureText`).
 //
-// Two lists, re-read after every write: the members who can be given or lose the enroller role,
-// and the keys awaiting a superuser's judgement. The superuser authenticates through the signer
+// Two lists, re-read after every write: the members who can be given or lose the enroller role
+// (each row also offers Repudiate on that member's current key), and the keys awaiting a
+// superuser's judgement. The superuser authenticates through the signer
 // strip. Repudiate asks NO question (principle 3, paper-parity): the act is signed, audited, and
 // repaired by a re-key, so a dialog would only slow the one person who knows what they are doing.
 
@@ -58,6 +59,10 @@ async function superuserRefresh(outcome) {
           superuserButton(m.enroller ? "Withdraw" : "Grant", () =>
             superuserAct("set_enroller", { staffId: m.staff_id, grant: !m.enroller }),
           ),
+          // The member's CURRENT key, carried by the row: a confirmed key (an impostor found
+          // later) or an enroller's own is never on the worklist below (§5.5). No question asked.
+          ...(m.kid ? [superuserButton("Repudiate key", () =>
+            superuserAct("judge_key", { kid: m.kid, confirm: false }))] : []),
         ]),
       ),
     );

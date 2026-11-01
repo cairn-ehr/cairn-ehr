@@ -1,5 +1,8 @@
 //! The superuser's panel (sign-in slice 2, Task 8): grant or withdraw the enroller role, and judge
-//! the keys that await a superuser (Confirm or Repudiate).
+//! the keys that await a superuser (Confirm or Repudiate). Each grant-list row also offers
+//! Repudiate on that member's CURRENT key: a confirmed key (an impostor found later) and an
+//! enroller's own key (which must be confirmed to approve anyone) are never on the worklist, and
+//! repudiating an enroller's key is what turns their unconfirmed approvals doubtful (§5.5).
 //!
 //! # The flow, for a reader new to it
 //!
@@ -47,12 +50,15 @@ pub struct UnconfirmedView {
     pub doubtful: bool,
 }
 
-/// One non-superuser member in the grant list, as the page shows it.
+/// One non-superuser member in the grant list, as the page shows it. `kid` is the member's
+/// CURRENT key, offered to Repudiate (a confirmed key is never on the worklist, so this is the
+/// only way to reach it); `None` when there is nothing to repudiate.
 #[derive(Serialize, Debug, PartialEq, Eq)]
 pub struct EnrollerView {
     pub staff_id: String,
     pub text: String,
     pub enroller: bool,
+    pub kid: Option<String>,
 }
 
 /// Pure: the sentence for one worklist row. `now` supplies the local time zone. An approver who
@@ -102,6 +108,21 @@ pub fn enroller_text(r: &EnrollerRow) -> String {
         "cannot enrol staff"
     };
     format!("{} ({}): {can}.", r.display_name, r.staff_id)
+}
+
+/// Pure: one grant-list row as the page shows it. A key already repudiated (final) is said so
+/// and offered no more; the remedy is a re-key, which gives the member a fresh key to judge.
+pub fn enroller_view(r: &EnrollerRow) -> EnrollerView {
+    let mut text = enroller_text(r);
+    if r.key_repudiated {
+        text.push_str(" Their key is repudiated: give them a new key from the re-key form.");
+    }
+    EnrollerView {
+        staff_id: r.staff_id.clone(),
+        text,
+        enroller: r.enroller,
+        kid: r.kid.clone().filter(|_| !r.key_repudiated),
+    }
 }
 
 /// Pure: `Some(sentence)` when the typed ID is in `enrollers()` (which lists non-superusers only).
@@ -173,14 +194,7 @@ pub async fn list_enrollers_impl(state: &AppState) -> Result<Vec<EnrollerView>, 
     let rows = cairn_node::vault_admin::enrollers(&db)
         .await
         .map_err(|e| fault("the grant list", db.explain(e)))?;
-    Ok(rows
-        .iter()
-        .map(|r| EnrollerView {
-            staff_id: r.staff_id.clone(),
-            text: enroller_text(r),
-            enroller: r.enroller,
-        })
-        .collect())
+    Ok(rows.iter().map(enroller_view).collect())
 }
 
 #[tauri::command]

@@ -492,6 +492,8 @@ fn row(id: &str, enroller: bool) -> cairn_node::vault_admin::EnrollerRow {
         staff_id: id.into(),
         display_name: "Test Person".into(),
         enroller,
+        kid: None,
+        key_repudiated: false,
     }
 }
 

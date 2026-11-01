@@ -1149,7 +1149,7 @@ only**, like section 16.
 
 Steps: enrolment paper *N* = 0 → forced *M* = 2 (the enroller's form and signature; the newcomer's passphrase twice),
 once per person per node → bundling target *K* = 2. Re-key paper 0 → *M* = 2 → *K* = 2. Change of passphrase paper 0
-→ *M* = 1 → *K* = 1. Confirm: 1 press per row. **`M > N` is already filed** (the M > N issue named in ADR-0085); record
+→ *M* = 1 → *K* = 1. Confirm: 1 press per row. **`M > N` is already filed** ([#919](https://github.com/cairn-ehr/cairn-ehr/issues/919)); record
 the observed counts against it. **A figure outside its budget is the finding — file an issue; never adjust the
 budget.**
 
@@ -1186,7 +1186,9 @@ line. Three runs (new staff IDs each time).
 *Forgotten passphrase*, types `locum-b`, role *clinician*, and their own credential in the strip; `locum-b` types a
 new passphrase twice and presses *Give a new key*; then signs one act with it. Stop at that act's outcome line.
 
-- [ ] "locum-b has a new key. Their old passphrase no longer works; …"
+- [ ] "locum-b has a new key. Their old passphrase no longer works. A superuser must confirm the new key." (an
+      enroller approved). Re-key another member with `boss` in the strip: the line ends at "no longer works.", since
+      a superuser's approval confirms the key at once.
 - [ ] `locum-b` signing with the OLD passphrase: "This passphrase was replaced on {date}, approved by {dr-a's name}.
       If you didn't ask for that, tell a superuser." It counts as a wrong try: the fourth in a row says "Wait 1 s".
 - [ ] The act signed with the new passphrase is `locum-b`'s, on the same actor
@@ -1194,6 +1196,12 @@ new passphrase twice and presses *Give a new key*; then signs one act with it. S
       `enroll`, then `rotate-key`).
 - [ ] *Role* offers no *superuser*. A superuser is re-keyed only at the console:
       `cnode vault-rekey-superuser --staff-id boss` (passphrase prompted twice), then `boss` signs in with the new one.
+- [ ] **After a restore** (on a throwaway database: `psql "$CONN" -c "TRUNCATE vault_attempt, vault_member CASCADE"`,
+      then `cnode vault-rekey-superuser --staff-id boss --display-name "Site Admin" --email it@example.invalid`):
+      with `boss` in the strip, re-key `dr-a` from the window with name and contact blank: "This staff ID has no vault entry here, as after a
+      restore. Enter the member's display name and a phone or an email, then try again. Nobody was re-keyed." —
+      and `boss`'s release was not spent (no attempt counted). Fill in the name and an email: `dr-a` is re-keyed on
+      the same actor and signs (use `dr-a`'s new passphrase from here on).
 
 **Measurement 4 — change my passphrase (the ≤ 30 s budget).** `dr-a` opens *Change my passphrase*, types staff ID,
 current passphrase and a new one twice, and presses *Change passphrase*.
@@ -1208,12 +1216,13 @@ Time *Confirm* on `locum-b`'s row (five rows: enrol more newcomers first).
 
 - [ ] "The key is confirmed." The row leaves the worklist; the `psql` line says `confirmed`.
 - [ ] *Repudiate* on another newcomer: no question is asked (principle 3). "The key is repudiated. Give the member a
-      new key from the re-key form." That member's next sign: "Your signing key is no longer enrolled here. …"
-- [ ] **The cascade cannot be produced from the window — record it as not run.** An enroller's key must be confirmed
-      to approve anyone, and the panel offers *Repudiate* only on a key that is still waiting, so no enroller's key is
-      ever on the list. The door does it (`a_repudiated_enrollers_unconfirmed_members_are_doubtful`); the window owes a
-      way to repudiate a confirmed key (ADR-0085, "not guaranteed"). The worklist's "Doubtful: approved by a
-      repudiated enroller." wording is pinned by `a_doubtful_row_says_why`.
+      new key from the re-key form." That member's next sign: "Your signing key is no longer enrolled here. Nothing
+      was signed. Ask a superuser or an enroller to re-key you."
+- [ ] **A confirmed key, and the cascade.** Leave one newcomer `dr-a` approved unconfirmed. Under *Who can enrol
+      staff*, press *Repudiate key* on `dr-a`'s row (a confirmed key: it is not on the worklist). No question is
+      asked. `dr-a`'s row then says "Their key is repudiated: give them a new key from the re-key form." with no
+      *Repudiate key*, and every key `dr-a` approved that is still unconfirmed says "Doubtful: approved by a
+      repudiated enroller." Time the press as a confirm row.
 
 **Measurement 6 — the optional expiry.** `cnode vault-set-unconfirmed-expiry --days 5`, then enrol a newcomer
 through `dr-a` (unconfirmed): it stops signing in five days, inside the strip's seven-day warning. To see the stop itself on
@@ -1233,7 +1242,8 @@ re-enables it at once). Never on a real node: the registry is append-only. Then:
 
 - [ ] *Forgotten passphrase*, *Change my passphrase* and the superuser's panel open, fill and submit by keyboard
       alone; *Enrol staff*'s new *admin* role is reachable in its list.
-- [ ] Every field of the two new forms is announced by its label; *Grant*/*Withdraw* and *Confirm*/*Repudiate* are
+- [ ] Every field of the two new forms is announced by its label, and each contact field reads its note ("…it must work without any
+      hospital login."); *Grant*/*Withdraw*, *Repudiate key* and *Confirm*/*Repudiate* are
       announced with the row they belong to (record if VoiceOver reads the button without its row).
 - [ ] Each outcome sentence (re-key, change, grant, confirm, repudiate, "replaced", the expiry warning) is read once,
       whole, from its status line, and none speaks a passphrase.

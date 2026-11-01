@@ -57,6 +57,23 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   `a_wrong_current_passphrase_changes_nothing`.
 - **Every vault answer that becomes a person's sentence goes through `signer::from_release_noting`**, or a replaced
   passphrase reads "not right" again. Pin: `a_vault_answer_reaches_the_person_through_from_release_noting`.
+- **The re-key form asks whether the staff ID has a vault row BEFORE any key is released**
+  (`vault::staff_id_taken`, then `rekey::missing_member_details`): with none (after a restore) a name and a contact
+  are required, refused in a plain sentence, and the approver spends no release. Never decide it by parsing the
+  door's refusal. Blank fields with a row keep the stored values (sent as NULL). Pins:
+  `a_rekey_with_no_member_row_needs_a_name_and_a_contact`, `the_rekey_runs_its_steps_in_order`,
+  `the_rekey_form_sends_its_name_and_contact_fields`. The success line says whether a superuser must still confirm,
+  by who approved (`the_success_line_says_whether_a_superuser_must_still_confirm`).
+- **Every member row of the grant panel offers *Repudiate key* on that member's CURRENT key, carried by the row**
+  (`vault_admin::enrollers` reads `cairn_vault_member_key` and the key's status as companion calls; never widen
+  `cairn_vault_enrollers`' `RETURNS TABLE`). The worklist alone cannot reach a confirmed key or an enroller's own key,
+  so without it the cascade is unreachable from the window. A repudiated key is said so and not offered again.
+  **Tempting wrong fix:** "tidy" the panel to Repudiate from the worklist only. Pins:
+  `the_grant_list_names_each_members_key_so_a_confirmed_key_can_be_repudiated`,
+  `a_grant_row_offers_its_members_key_to_repudiate_unless_already_repudiated`, `a_grant_rows_repudiate_uses_the_rows_own_key`.
+- **A key that is no longer current is told to ask for a re-key**, never to be enrolled again (a new staff ID is a
+  second actor for one person). Pin: `a_key_no_longer_current_is_told_to_ask_for_a_re_key`. Both contact fields say
+  the contact must work without any hospital login (`both_contact_fields_say_it_must_work_without_a_hospital_login`).
 - **Repudiate asks no question** (principle 3). Pin: `repudiate_asks_no_question`. The expiry warning names the staff
   ID and is cleared with it, so the next person never reads it as theirs. Pin:
   `the_expiry_warning_is_asked_for_the_typed_id_before_the_act`.

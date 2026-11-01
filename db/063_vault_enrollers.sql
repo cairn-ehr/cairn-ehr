@@ -364,6 +364,16 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
       FROM vault_member m WHERE m.role <> 'superuser' ORDER BY m.staff_id;
 $$;
 
+-- A member's CURRENT signing key, for the grant panel's Repudiate (§5.5): a superuser must be able
+-- to repudiate a key that is no longer waiting — an impostor found after it was confirmed, or an
+-- enroller whose approvals should turn doubtful (the cascade). The worklist above lists only keys
+-- still waiting, so it cannot reach those. Returns the public key id only, as
+-- cairn_vault_unconfirmed already does; NULL for no such member.
+CREATE OR REPLACE FUNCTION cairn_vault_member_key(p_staff_id text)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT m.signing_key_id FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
+$$;
+
 -- Owner only (the node's console, `cairn-node vault-set-unconfirmed-expiry`): after how many days
 -- an unconfirmed key stops signing (§5.5), or NULL for no expiry — the reference default. Hard
 -- policy, the site's to choose; Cairn ships the mechanism (principle 9). No grant: being able to
@@ -405,6 +415,7 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) FRO
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_enrollers() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_member_key(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_set_unconfirmed_expiry(int) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) FROM PUBLIC;
 
@@ -416,6 +427,7 @@ GRANT EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) TO c
 GRANT EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed() TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_enrollers() TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_vault_member_key(text) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) TO cairn_agent;
 
 COMMIT;

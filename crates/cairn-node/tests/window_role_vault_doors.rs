@@ -161,7 +161,7 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
         .await
         .unwrap();
     let su = released(&window, "boss", &su_pass, Purpose::Enrol).await;
-    vault::enrol_member(
+    let j_kid = vault::enrol_member(
         &window,
         &member("jsmith", "clinician", &j_pass),
         "boss",
@@ -193,6 +193,16 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
             .await
             .len(),
         1
+    );
+    // The grant panel's Repudiate reads the member's current key (driven to a real answer).
+    let listed: Option<String> =
+        door(&window, "SELECT cairn_vault_member_key('jsmith')", &[]).await[0].get(0);
+    assert_eq!(listed.as_deref(), Some(j_kid.as_str()));
+    assert_eq!(
+        cairn_node::vault_admin::enrollers(&window).await.unwrap()[0]
+            .kid
+            .as_deref(),
+        Some(j_kid.as_str())
     );
 
     // The enroller enrols; the worklist shows it; the superuser confirms it.

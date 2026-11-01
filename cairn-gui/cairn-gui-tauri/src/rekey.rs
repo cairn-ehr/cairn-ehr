@@ -4,12 +4,17 @@
 //! Same shape as [`crate::enrol`], and for the same reasons. One press does, in order:
 //!
 //! 1. [`check_rekey_form`] (pure, no database): the two new passphrases match and are usable.
-//! 2. Any held key is wiped (someone new is at the keyboard). The approver's key is released
+//! 2. Any held key is wiped (someone new is at the keyboard). The window asks whether the staff
+//!    ID has a vault row (`vault::staff_id_taken`); with none — after a restore, design §5.8 — the
+//!    door must re-create it and needs a display name and a contact, so [`missing_member_details`]
+//!    refuses a form without them BEFORE any key is released. Then the approver's key is released
 //!    with `Purpose::Enrol`, used ONCE for the re-key, and dropped. Never `signer_for_act`: a
 //!    held approver key would let the next person at the terminal re-key a colleague.
 //! 3. `cairn_node::vault_admin::rekey_member` mints the new key, seals it under the new
 //!    passphrase, and files it with the approver's attestation. The old passphrase then answers
-//!    `Replaced`; the new key is unconfirmed until a superuser confirms it.
+//!    `Replaced`; the new key is unconfirmed until a superuser confirms it, unless a superuser
+//!    approved it. [`rekey_success`] words the success line by who approved (the grant panel's
+//!    read: `enrollers()` lists non-superusers only).
 //!
 //! A superuser is never re-keyed from the window (console only): the floor refuses, and the
 //! sentence is the generic [`RekeyRefusal::NotRecorded`]. Approver refusals reuse
@@ -18,15 +23,16 @@
 //!
 //! No secret in any output: sentences are built from enums alone; a database error's text goes
 //! to the operator's stderr only.
-use crate::enrol::{optional, release_enrol_key};
+use crate::enrol::{optional, release_enrol_key, standing, Standing};
 use crate::signer::Credential;
 use crate::state::AppState;
 use cairn_node::vault_admin::Rekey;
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
-/// What the re-key form sends (camelCase). Optional fields arrive as empty strings, which keep
-/// the stored value. Both passphrases are wiped on drop.
+/// What the re-key form sends (camelCase). Optional fields arrive as empty strings: with a vault
+/// row they keep the stored value; with none (after a restore) the name and a contact are
+/// required. Both passphrases are wiped on drop.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RekeyForm {
@@ -58,6 +64,9 @@ pub enum RekeyRefusal {
     PassphrasesDiffer,
     PassphraseEmpty,
     MissingDetail,
+    /// The staff ID has no vault row (as after a restore), so the door re-creates it and needs a
+    /// display name and a phone or an email. Decided before any key is released.
+    NeedNameAndContact,
     /// The floor or node refused with an answer: nothing was recorded.
     NotRecorded,
     /// No ordinary answer arrived: the key may have been replaced.
@@ -78,6 +87,10 @@ impl RekeyRefusal {
             RekeyRefusal::MissingDetail => {
                 "Enter the member's staff ID and role. Nobody was re-keyed.".into()
             }
+            RekeyRefusal::NeedNameAndContact => "This staff ID has no vault entry here, as after \
+                 a restore. Enter the member's display name and a phone or an email, then try \
+                 again. Nobody was re-keyed."
+                .into(),
             RekeyRefusal::NotRecorded => "The member could not be re-keyed. Nothing was recorded. \
                  A superuser's key can only be replaced at the console. Otherwise try again, and \
                  if it fails again, ask your IT support."
@@ -106,6 +119,29 @@ pub fn check_rekey_form(form: &RekeyForm) -> Result<(), RekeyRefusal> {
         return Err(RekeyRefusal::MissingDetail);
     }
     Ok(())
+}
+
+/// Pure: with no vault row for the staff ID (`has_member_row` false, as after a restore), the
+/// door re-creates the row and needs a display name and a phone or an email (db/063
+/// `cairn_vault_install_key`, the table's contact CHECK). With a row, blank fields keep the
+/// stored values and nothing more is needed.
+pub fn missing_member_details(has_member_row: bool, form: &RekeyForm) -> Option<RekeyRefusal> {
+    let blank = |s: &str| s.trim().is_empty();
+    let incomplete = blank(&form.display_name) || (blank(&form.phone) && blank(&form.email));
+    (!has_member_row && incomplete).then_some(RekeyRefusal::NeedNameAndContact)
+}
+
+/// Pure: the success line, by who approved. `approver` is the approver's standing in the grant
+/// panel's read (`None` when that read failed after the re-key had already landed): listed means
+/// an enroller, so the key is unconfirmed until a superuser confirms it; not listed means a
+/// superuser, whose approval confirmed it at once (db/063 `cairn_vault_rekey`).
+pub fn rekey_success(staff_id: &str, approver: Option<Standing>) -> String {
+    let base = format!("{staff_id} has a new key. Their old passphrase no longer works.");
+    match approver {
+        Some(Standing::NotListed) => base,
+        Some(_) => format!("{base} A superuser must confirm the new key."),
+        None => format!("{base} If an enroller approved it, a superuser must confirm the new key."),
+    }
 }
 
 #[tauri::command]
@@ -140,6 +176,15 @@ pub async fn rekey_member_impl(
         RekeyRefusal::NotRecorded.sentence()
     };
     let db = db.lock().await.map_err(|lost| fault(lost.into()))?;
+    // Asked BEFORE the approver's key is released, so a form missing what a re-created row needs
+    // is told plainly and costs the approver no release. The floor stays the judge: a row
+    // deleted between this read and the write falls to the generic `NotRecorded` sentence.
+    let has_row = cairn_node::vault::staff_id_taken(&db, member.staff_id.trim())
+        .await
+        .map_err(|e| fault(db.explain(e)))?;
+    if let Some(r) = missing_member_details(has_row, &member) {
+        return Err(r.sentence());
+    }
     // Released, used once below, dropped at the end of this function. Never stored.
     let key = release_enrol_key(
         &db,
@@ -172,10 +217,18 @@ pub async fn rekey_member_impl(
             }
             .sentence()
         })?;
-    Ok(format!(
-        "{} has a new key. Their old passphrase no longer works; a superuser must confirm the new key.",
-        r.staff_id
-    ))
+    // The re-key has landed: a failed read here only words the line neutrally, never an error.
+    let approver = match cairn_node::vault_admin::enrollers(&db).await {
+        Ok(rows) => Some(standing(&rows, &credential.staff_id)),
+        Err(e) => {
+            eprintln!(
+                "who approved the re-key could not be read: {}",
+                cairn_node::db_diagnosis::operator_chain(&db.explain(e))
+            );
+            None
+        }
+    };
+    Ok(rekey_success(r.staff_id, approver))
 }
 
 #[cfg(test)]

@@ -247,6 +247,9 @@ fn the_rekey_panel_is_labelled_and_clears_both_ways() {
     for id in [
         "rekey-staff-id",
         "rekey-role",
+        "rekey-name",
+        "rekey-phone",
+        "rekey-email",
         "rekey-passphrase",
         "rekey-passphrase-again",
         "rekey-hint",
@@ -272,6 +275,57 @@ fn the_rekey_panel_is_labelled_and_clears_both_ways() {
         );
     }
     assert!(!REKEY_JS.contains("confirm("));
+}
+
+/// After a restore the re-key form must carry what a re-created member row needs (design §5.8):
+/// it sends the name and contact fields as typed (blank keeps a surviving row's values), and
+/// empties them after a re-key that worked.
+#[test]
+fn the_rekey_form_sends_its_name_and_contact_fields() {
+    let body = js_fn(REKEY_JS, "rekeyStaff");
+    for sent in [
+        "displayName: el(\"rekey-name\").value,",
+        "phone: el(\"rekey-phone\").value,",
+        "email: el(\"rekey-email\").value,",
+    ] {
+        assert!(body.contains(sent), "{sent} missing: {body}");
+    }
+    let success = &body[position(body, "if (rekeyed) {")..];
+    for id in ["rekey-name", "rekey-phone", "rekey-email"] {
+        assert!(
+            success.contains(&format!("\"{id}\"")),
+            "{id} is emptied after a re-key that worked: {body}"
+        );
+    }
+}
+
+/// The contact is where a future token re-key would be sent, so it must work without the hospital
+/// login the newcomer does not have yet (design §1 and §6: the institutional inbox is the circle).
+/// Both forms that take a contact say so, once, beside the fields.
+#[test]
+fn both_contact_fields_say_it_must_work_without_a_hospital_login() {
+    const SAID: &str = "A personal mobile or an outside email address: it must work without any \
+                        hospital login.";
+    for id in ["enrol-contact-note", "rekey-contact-note"] {
+        let at = position(INDEX_HTML, &format!("id=\"{id}\""));
+        assert!(
+            INDEX_HTML[at..].starts_with(&format!("id=\"{id}\">{SAID}<")),
+            "{id}"
+        );
+    }
+    for field in ["enrol-phone", "enrol-email", "rekey-phone", "rekey-email"] {
+        let note = if field.starts_with("enrol") {
+            "enrol-contact-note"
+        } else {
+            "rekey-contact-note"
+        };
+        assert!(
+            INDEX_HTML.contains(&format!(
+                "id=\"{field}\" type=\"text\" autocomplete=\"off\" aria-describedby=\"{note}\""
+            )),
+            "{field} is described by its note"
+        );
+    }
 }
 
 const RESEAL_JS: &str = include_str!("../src-ui/reseal.js");

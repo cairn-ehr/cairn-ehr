@@ -89,6 +89,7 @@ fn every_sentence_is_plain_and_names_no_value() {
         RekeyRefusal::PassphrasesDiffer,
         RekeyRefusal::PassphraseEmpty,
         RekeyRefusal::MissingDetail,
+        RekeyRefusal::NeedNameAndContact,
         RekeyRefusal::NotRecorded,
         RekeyRefusal::OutcomeUnknown,
         RekeyRefusal::Fixture,
@@ -96,6 +97,65 @@ fn every_sentence_is_plain_and_names_no_value() {
         let s = r.sentence();
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
     }
+}
+
+/// After a restore the vault has no row for the person, and the door then needs a display name
+/// and a phone or an email to re-create it (design §5.8). The window asks whether the staff ID
+/// has a row BEFORE any key is released, so a missing detail is told plainly and costs the
+/// approver no release (never by parsing the floor's refusal). With a row, blanks keep the
+/// stored values and nothing more is needed.
+#[test]
+fn a_rekey_with_no_member_row_needs_a_name_and_a_contact() {
+    let mut f = form(&pass("a"), &pass("a"));
+    assert_eq!(
+        missing_member_details(true, &f),
+        None,
+        "a row keeps its values"
+    );
+    assert_eq!(
+        missing_member_details(false, &f),
+        Some(RekeyRefusal::NeedNameAndContact)
+    );
+    f.display_name = "Nurse One".into();
+    assert_eq!(
+        missing_member_details(false, &f),
+        Some(RekeyRefusal::NeedNameAndContact),
+        "a name alone is not enough: the row needs a contact"
+    );
+    f.phone = " 0400 000 000 ".into();
+    assert_eq!(missing_member_details(false, &f), None);
+    f.phone = String::new();
+    f.email = "n1@example.org".into();
+    assert_eq!(missing_member_details(false, &f), None);
+    f.display_name = "   ".into();
+    assert_eq!(
+        missing_member_details(false, &f),
+        Some(RekeyRefusal::NeedNameAndContact)
+    );
+}
+
+/// The success line says who must still act: an enroller's re-key is unconfirmed until a
+/// superuser confirms it; a superuser's is confirmed at once (db/063). Who approved is read from
+/// the grant panel (`enrollers()` lists non-superusers only); a failed read words it neutrally.
+#[test]
+fn the_success_line_says_whether_a_superuser_must_still_confirm() {
+    use crate::enrol::Standing;
+    let enroller = rekey_success("nurse1", Some(Standing::Granted));
+    assert_eq!(
+        enroller,
+        "nurse1 has a new key. Their old passphrase no longer works. A superuser must confirm the \
+         new key."
+    );
+    let superuser = rekey_success("nurse1", Some(Standing::NotListed));
+    assert_eq!(
+        superuser,
+        "nurse1 has a new key. Their old passphrase no longer works."
+    );
+    let unknown = rekey_success("nurse1", None);
+    assert!(
+        unknown.contains("If an enroller approved it, a superuser must confirm the new key."),
+        "{unknown}"
+    );
 }
 
 /// Same order as the enrol: held key wiped, then the shared enrol-purpose release, then the re-key.
@@ -107,8 +167,11 @@ fn the_rekey_runs_its_steps_in_order() {
     let order = [
         "check_rekey_form(&member)",
         "state.forget_held_key().await;",
+        "cairn_node::vault::staff_id_taken(",
+        "missing_member_details(",
         "release_enrol_key(",
         "cairn_node::vault_admin::rekey_member(",
+        "rekey_success(",
     ];
     let at: Vec<usize> = order
         .iter()
@@ -213,6 +276,10 @@ async fn an_enroller_rekeys_from_the_window() {
         return;
     };
     assert!(said.contains("nurse1"), "{said}");
+    assert!(
+        said.ends_with("A superuser must confirm the new key."),
+        "an enroller approved: {said}"
+    );
     let db = state.db.as_ref().unwrap().lock().await.unwrap();
     let old = cairn_node::vault::release_for_act(
         &db,

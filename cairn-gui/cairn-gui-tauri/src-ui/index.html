@@ -72,9 +72,10 @@
             <option value="superuser">superuser</option>
           </select>
           <label for="enrol-phone">Phone (a phone or an email is needed)</label>
-          <input id="enrol-phone" type="text" autocomplete="off" />
+          <input id="enrol-phone" type="text" autocomplete="off" aria-describedby="enrol-contact-note" />
           <label for="enrol-email">Email</label>
-          <input id="enrol-email" type="text" autocomplete="off" />
+          <input id="enrol-email" type="text" autocomplete="off" aria-describedby="enrol-contact-note" />
+          <p id="enrol-contact-note">A personal mobile or an outside email address: it must work without any hospital login.</p>
           <label for="enrol-passphrase">New passphrase</label>
           <input id="enrol-passphrase" type="password" autocomplete="off" />
           <label for="enrol-passphrase-again">New passphrase again</label>
@@ -89,11 +90,12 @@
 
       <!-- Forgotten passphrase (sign-in slice 2). A superuser or an enroller vouches through the
            signer strip; the member types a NEW passphrase twice. Emptied after every attempt
-           (rekey.js). A superuser is re-keyed at the console, never here. -->
+           (rekey.js). A superuser is re-keyed at the console, never here. Name and contact are
+           needed only when the vault has no row for the member (after a restore, §5.8). -->
       <details id="rekey-staff">
         <summary>Forgotten passphrase</summary>
         <form id="rekey-form" autocomplete="off">
-          <p>A superuser or an enroller enters their own staff ID and passphrase in the signer strip above. The member types a new passphrase below. Their old passphrase stops working.</p>
+          <p>A superuser or an enroller enters their own staff ID and passphrase in the signer strip above. The member types a new passphrase below. Their old passphrase stops working. Name and contact may stay blank to keep what is on record; after a restore they are needed.</p>
           <label for="rekey-staff-id">Staff ID</label>
           <input id="rekey-staff-id" type="text" autocomplete="off" />
           <label for="rekey-role">Role</label>
@@ -102,6 +104,13 @@
             <option value="nurse">nurse</option>
             <option value="admin">admin</option>
           </select>
+          <label for="rekey-name">Display name (blank keeps the one on record)</label>
+          <input id="rekey-name" type="text" autocomplete="off" />
+          <label for="rekey-phone">Phone (blank keeps the one on record)</label>
+          <input id="rekey-phone" type="text" autocomplete="off" aria-describedby="rekey-contact-note" />
+          <label for="rekey-email">Email (blank keeps the one on record)</label>
+          <input id="rekey-email" type="text" autocomplete="off" aria-describedby="rekey-contact-note" />
+          <p id="rekey-contact-note">A personal mobile or an outside email address: it must work without any hospital login.</p>
           <label for="rekey-passphrase">New passphrase</label>
           <input id="rekey-passphrase" type="password" autocomplete="off" />
           <label for="rekey-passphrase-again">New passphrase again</label>

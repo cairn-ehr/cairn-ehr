@@ -135,7 +135,8 @@ pub enum KeyRefusal {
     Unknown,
     /// A superuser's key: it confers no clinical authorship (design §5.1), so the vault refused it.
     NotForClinicalActs,
-    /// This member's key was revoked or replaced: it can sign nothing here.
+    /// This member's key was revoked, rotated away or repudiated: it can sign nothing here. The
+    /// remedy is a re-key on the same actor (slice 2), never a new enrolment.
     NotCurrent,
     /// This member's key is still unconfirmed past the site's optional limit (§5.5): a
     /// superuser's confirmation lets it sign again. The strip may have warned a week ahead.
@@ -191,7 +192,7 @@ impl KeyRefusal {
             }
             KeyRefusal::NotCurrent => {
                 "Your signing key is no longer enrolled here. Nothing was signed. Ask a \
-                 superuser to enrol you again."
+                 superuser or an enroller to re-key you."
                     .into()
             }
             KeyRefusal::Expired => {

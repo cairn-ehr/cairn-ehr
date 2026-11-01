@@ -489,3 +489,15 @@ fn an_unconfirmed_key_is_warned_within_seven_days_of_its_expiry() {
         Some("Not yet confirmed by a superuser. anurse's key stops signing on soon.")
     );
 }
+
+/// Since slice 2 a key that is no longer current (rotated away, repudiated) is fixed by a RE-KEY on
+/// the same actor: "enrol you again" would send the person to a new staff ID, a second actor.
+#[test]
+fn a_key_no_longer_current_is_told_to_ask_for_a_re_key() {
+    let s = KeyRefusal::NotCurrent.sentence();
+    assert!(
+        s.contains("Ask a superuser or an enroller to re-key you."),
+        "{s}"
+    );
+    assert!(!s.contains("enrol you again"), "{s}");
+}

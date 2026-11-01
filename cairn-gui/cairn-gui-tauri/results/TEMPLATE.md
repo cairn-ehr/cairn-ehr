@@ -288,7 +288,7 @@ Site expiry during the timed runs: **off** \_\_ · Window on the node's machine:
 
 Steps: enrolment paper *N* = 0 → forced *M* = 2 → observed *K* = \_\_ · re-key paper 0 → *M* = 2 → observed \_\_ ·
 change of passphrase paper 0 → *M* = 1 → observed \_\_ · confirm 1 press per row → observed \_\_. `M > N` is already
-filed (ADR-0085); record the counts against that issue.
+filed (#919); record the counts against that issue.
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
@@ -298,7 +298,9 @@ filed (ADR-0085); record the counts against that issue.
 | Superuser re-keyed only at the console (`vault-rekey-superuser`) | | |
 | Change of passphrase: works; wrong current counted; same-as-current refused | | |
 | Confirm leaves the worklist; Repudiate asks no question and the member is then refused | | |
-| Cascade: not reachable from the window (record as not run) | | |
+| Repudiate key on a confirmed member's row; the row then says repudiated; their unconfirmed approvals turn doubtful | | |
+| After a restore: a re-key without name/contact refused before any release; with them, re-keyed on the same actor | | |
+| Re-key success line: enroller's says a superuser must confirm; superuser's does not | | |
 | Expiry: strip warns naming the ID; worklist shows the stop date; an expired key refused, then confirmed | | |
 | Window DB-gated tests run by hand (#905): no `skipped:`, the four named tests pass | | |
 

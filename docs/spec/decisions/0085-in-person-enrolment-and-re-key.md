@@ -11,7 +11,7 @@
   [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664) (`rotate-key` and `supersede` in `actor_current` —
   closed), [#666](https://github.com/cairn-ehr/cairn-ehr/issues/666) (which row carries a key — settled),
   [#918](https://github.com/cairn-ehr/cairn-ehr/issues/918) (an attested link of a repudiated key keeps its grade);
-  the M > N issue (filed with this ADR); draft PR [#917](https://github.com/cairn-ehr/cairn-ehr/pull/917) (below the
+  [#919](https://github.com/cairn-ehr/cairn-ehr/issues/919) (M > N against paper); draft PR [#917](https://github.com/cairn-ehr/cairn-ehr/pull/917) (below the
   window) and the stacked window PR. Design, approved by the maintainer on 2026-11-01:
   `docs/superpowers/specs/2026-11-01-sign-in-slice-2-rekey-and-local-enrolment-design.md`; plan:
   `docs/superpowers/plans/2026-11-01-sign-in-slice-2-rekey-and-local-enrolment.md`; every reader of the registry:
@@ -161,6 +161,12 @@ enrolled: slice 1 has no "enrolled, credential pending" state.
   the console (`vault-rekey-superuser`, confirmed at once), then everyone else re-keyed in person by a superuser or an
   enroller. Grants and confirmations live in `actor_event`, which the local-state export carries, so they survive the
   restore. One in-person re-key per person after a disk loss is the price the earlier design already accepted.
+- **The window's *Forgotten passphrase* form** carries a display name, a phone and an email. Left blank they keep what a
+  surviving member row holds. Before any key is released the window asks whether the staff ID has a vault row
+  (`cairn_vault_staff_id_taken`); with none, a form without a name and a contact is refused there, in a plain
+  sentence saying to fill them in, so the approver spends no release and no floor message is parsed. The success line
+  says whether a superuser must still confirm the key, by who approved it (the grant panel's read lists
+  non-superusers only).
 
 ### 6. Change my passphrase (db/063)
 
@@ -240,8 +246,15 @@ reading:
 ### 11. The window
 
 - **Enrol staff** takes an enroller as the approver and offers the `admin` role. **Forgotten passphrase** re-keys a
-  clinician, nurse or admin. **Change my passphrase** reseals. **Superuser: enrollers and keys** lists the grants
-  (Grant / Withdraw) and the unconfirmed and doubtful keys, who approved each and when (Confirm / Repudiate).
+  clinician, nurse or admin (decision 5). **Change my passphrase** reseals. **Superuser: enrollers and keys** lists
+  every non-superuser member with *Grant* / *Withdraw* and *Repudiate key*, and the unconfirmed and doubtful keys,
+  who approved each and when (*Confirm* / *Repudiate*). The member row's *Repudiate key* acts on that member's
+  current key, which the row carries (`cairn_vault_member_key`): a confirmed key (an impostor found later) and an
+  enroller's own key (which must be confirmed to approve anyone) are never on the worklist, and repudiating an
+  enroller's key is what sets off the cascade. A key already repudiated is said so on its row and not offered again.
+- The *Enrol staff* and *Forgotten passphrase* forms say, beside their contact fields, that the contact must work
+  without any hospital login (a personal mobile or an outside address). A key that is no longer current is told to
+  ask a superuser or an enroller for a re-key, never to be enrolled again (which would make a second actor).
 - **Repudiate asks no question.** A confirmation dialog fails paper-parity (principle 3) and is not a safety
   mechanism. The act is signed, kept, and repaired by a re-key.
 - Each approver's key is released for one act and dropped, never held. Every vault answer that becomes a sentence for
@@ -263,18 +276,11 @@ why db/061 is long.
   Containment is the unconfirmed status, the `replaced` notice, the superuser's worklist and repudiation, not a check.
 - **That a contact is reachable without a hospital login.** The member row still requires a phone or an email. For
   the token re-key to come, it must be reachable without any hospital or Cairn credential (a personal mobile, an
-  outside address): the institutional inbox is the very circle in the junior doctor's case. Cairn cannot check
-  that, and the *Enrol staff* form does not yet say it.
+  outside address): the institutional inbox is the very circle in the junior doctor's case. The forms say so;
+  Cairn cannot check it.
 - **Re-key by token is not built.** Sending a token to that contact, for a clinician off site, waits for an encrypted
   link for thin terminals ([#909](https://github.com/cairn-ehr/cairn-ehr/issues/909)) or slice 5. Until then the only
   usable terminal is the one on the database's machine (ADR-0084), so nobody can re-key from off site anyway.
-- **The window cannot yet re-key after a restore.** The door can (decision 5), but the *Forgotten passphrase* form
-  sends no display name or contact, which a re-created member row needs, so the door refuses it. Until the form
-  asks for them, after a restore only superusers can be re-keyed, at the console.
-- **The window repudiates only a key that is still waiting.** The door repudiates any key not already repudiated
-  (decision 2), but the superuser's panel offers *Repudiate* only on its worklist of unconfirmed and doubtful keys.
-  So a confirmed key (an impostor found later) and an enroller's own key (which must be confirmed to approve
-  anyone) cannot yet be repudiated from the window, and the cascade cannot be set off from it.
 - **The exports are one-way between builds.** The local-state export now carries `approved_by` and `approval` on
   every registry row, and an older build refuses a row with fields it does not know (`deny_unknown_fields`). An
   export made by this build does not restore on an older one.
@@ -292,7 +298,7 @@ why db/061 is long.
   human runs them, as RUNBOOK §17 says.
 - **More steps than paper.** Paper takes no act before a newcomer's first note; Cairn forces two, once per person per
   node (the enroller's form and signature, the newcomer's passphrase typed twice). By rule 7 that is an architecture
-  defect, filed as the M > N issue (filed with this ADR) for the maintainer to accept or close: it buys a signature
+  defect, filed as [#919](https://github.com/cairn-ehr/cairn-ehr/issues/919) for the maintainer to accept or close: it buys a signature
   that is attributably the newcomer's, which paper never gives, and it replaces 20 minutes on the phone and an
   afternoon's wait.
 
@@ -303,8 +309,8 @@ why db/061 is long.
   longer forces new staff IDs. The record never says the supervisor wrote what the junior did.
 - **Harder.** "Is this key current?" now has three answers, and a new reader must pick the right one: the reader
   table and `docs/developers/durable-rules.md` say which. The registry has five more ops and two more columns, and the
-  restore door's field-by-field check knows them. Twelve more `SECURITY DEFINER` functions are granted to the
-  window's role (one in db/004, two in db/061, nine in db/063); the eleven vault ones are each driven under
+  restore door's field-by-field check knows them. Thirteen more `SECURITY DEFINER` functions are granted to the
+  window's role (one in db/004, two in db/061, ten in db/063); the twelve vault ones are each driven under
   `cairn_window` by `window_role_vault_doors.rs`.
 - **What we are betting on, and how we would know it failed.**
   - That an enroller's signed act plus review afterwards contains an impostor as well as paper's review does. We would

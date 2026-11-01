@@ -102,8 +102,8 @@ weak, so that is a real attack. The vault therefore stays out of backups.
   > superuser or an enroller, with the person present, gives the SAME actor a new key by a `rotate-key` row, and the
   > person keeps their staff ID and history. After a restore the re-key door re-creates the member row on the
   > existing actor: the first superuser is re-keyed at the console (`cairn-node vault-rekey-superuser`), then
-  > everyone else in person (from the window only once its form sends a display name and contact; ADR-0085 says
-  > why). Enrolling under a new staff ID is no longer the path. **Re-key by token** (to an outside contact) is
+  > everyone else in person, from the window's *Forgotten passphrase* form, which then asks for the display name and
+  > contact the re-created row needs. Enrolling under a new staff ID is no longer the path. **Re-key by token** (to an outside contact) is
   > still **not** built: it waits for [#909](https://github.com/cairn-ehr/cairn-ehr/issues/909) or slice 5.
 
 ### 3. Interim: the vault releases the key to the window for one act

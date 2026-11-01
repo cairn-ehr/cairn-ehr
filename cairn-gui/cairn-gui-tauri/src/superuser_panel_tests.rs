@@ -82,13 +82,19 @@ fn a_gone_approver_is_said_so() {
     );
 }
 
-#[test]
-fn a_grant_row_says_what_the_member_can_do() {
-    let r = |enroller| EnrollerRow {
+fn grant_row(enroller: bool, kid: Option<&str>, key_repudiated: bool) -> EnrollerRow {
+    EnrollerRow {
         staff_id: "enrol1".into(),
         display_name: "Eve".into(),
         enroller,
-    };
+        kid: kid.map(String::from),
+        key_repudiated,
+    }
+}
+
+#[test]
+fn a_grant_row_says_what_the_member_can_do() {
+    let r = |enroller| grant_row(enroller, Some("k1"), false);
     assert_eq!(enroller_text(&r(true)), "Eve (enrol1): can enrol staff.");
     assert_eq!(
         enroller_text(&r(false)),
@@ -96,14 +102,29 @@ fn a_grant_row_says_what_the_member_can_do() {
     );
 }
 
+/// §5.5: a confirmed key (an impostor found later) or an enroller's own key is never on the
+/// worklist, so each grant row offers its member's CURRENT key to Repudiate. A key already
+/// repudiated is said so and offered no more (repudiation is final; the remedy is a re-key).
+#[test]
+fn a_grant_row_offers_its_members_key_to_repudiate_unless_already_repudiated() {
+    let live = enroller_view(&grant_row(true, Some("k1"), false));
+    assert_eq!(live.kid.as_deref(), Some("k1"));
+    assert_eq!(live.staff_id, "enrol1");
+    assert!(live.enroller);
+    let gone = enroller_view(&grant_row(true, Some("k1"), true));
+    assert_eq!(gone.kid, None, "nothing left to repudiate");
+    assert_eq!(
+        gone.text,
+        "Eve (enrol1): can enrol staff. Their key is repudiated: give them a new key from the \
+         re-key form."
+    );
+    assert_eq!(enroller_view(&grant_row(false, None, false)).kid, None);
+}
+
 /// `enrollers()` lists non-superusers only, so a listed ID is refused in one plain sentence.
 #[test]
 fn a_listed_member_is_told_only_a_superuser_may() {
-    let rows = vec![EnrollerRow {
-        staff_id: "enrol1".into(),
-        display_name: "Eve".into(),
-        enroller: true,
-    }];
+    let rows = vec![grant_row(true, None, false)];
     assert_eq!(
         superuser_refusal(&rows, " ENROL1 "),
         Some(ONLY_SUPERUSER.to_string())
@@ -159,6 +180,20 @@ fn repudiate_asks_no_question() {
         "no dialog on Repudiate (principle 3)"
     );
     assert!(!js.contains("alert("));
+}
+
+/// The grant row's Repudiate acts on the kid the ROW carries (never one typed or looked up again)
+/// and is drawn only when the row has one; it goes through the same in-flight-guarded button and
+/// the same act-then-refresh path as the worklist's.
+#[test]
+fn a_grant_rows_repudiate_uses_the_rows_own_key() {
+    let js = include_str!("../src-ui/superuser.js");
+    let body = crate::source_guard::js_fn(js, "superuserRefresh");
+    assert!(
+        body.contains("superuserAct(\"judge_key\", { kid: m.kid, confirm: false })"),
+        "{body}"
+    );
+    assert!(body.contains("m.kid ?"), "drawn only with a key: {body}");
 }
 
 /// DB-gated setup: `boss` (superuser), `enrol1` and `nurse1` (clinicians), as the window's login.
