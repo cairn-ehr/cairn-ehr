@@ -77,7 +77,9 @@
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Slice 2 (in-person enrolment by an enroller, re-key, change of passphrase; #247 and #664 first) — design
 >    written 2026-11-01** (`superpowers/specs/2026-11-01-sign-in-slice-2-rekey-and-local-enrolment-design.md`,
->    branch `design/sign-in-slice-2-rekey`); next its plan, then the build. The
+>    APPROVED; plan `superpowers/plans/2026-11-01-sign-in-slice-2-rekey-and-local-enrolment.md`, 10 tasks in two PRs —
+   A = Tasks 1–5 (registry, readers, restore, db/063, `vault_admin`), B = Tasks 6–10 (window, ADR-0085); both on
+   draft PR #917's branch `design/sign-in-slice-2-rekey`). **Next: build Task 1.** The
 >    maintainer picks the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK §16** (sign ≤ 3 s, next-nurse
 >    switch, VoiceOver/keyboard on the strip, the terminal lock). Still owed from

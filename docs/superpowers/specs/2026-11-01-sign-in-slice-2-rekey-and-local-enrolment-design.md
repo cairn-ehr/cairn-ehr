@@ -1,6 +1,6 @@
 # GUI sign-in slice 2 — in-person enrolment, re-key, change of passphrase (design)
 
-**Date:** 2026-11-01 · **Status:** design; its two open questions decided by the maintainer 2026-11-01 (§9); awaiting approval of the written document · **Builds on:** the sign-in design
+**Date:** 2026-11-01 · **Status:** design, APPROVED by the maintainer 2026-11-01 (§9 records the two decisions taken after the builder check) · **Builds on:** the sign-in design
 [`2026-10-31-gui-sign-in-and-authorship-design.md`](2026-10-31-gui-sign-in-and-authorship-design.md) (§5.1, §5.2,
 §5.5 and the slice table), [ADR-0083](../../spec/decisions/0083-the-human-key-vault.md) (the vault, `db/061`),
 [ADR-0084](../../spec/decisions/0084-the-window-never-holds-the-owners-keys.md) (the window's own login, `db/062`),
