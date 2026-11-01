@@ -40,7 +40,9 @@
 > attested link of a later-repudiated key keeps its standing), **#919** (rule 7: enrolment/re-key `M > N` — accept or
 > close), and from the final review **#921** (a restore/sync pens a REPUDIATED key's earlier events — decision) and
 > **#922** (no path repudiates a rotated-away key; repudiation is retroactive — R4's stated remedy is weaker than it
-> reads). Owed by a human: **RUNBOOK §17** (enrol ≤ 2 min, re-key ≤ 1 min, change ≤ 30 s, confirm ≤ 10 s; VoiceOver).
+> reads); **#923** (residuals: the clock guard's remedy, "stops signing" wording, loose test asserts). Also from the final
+> review, FIXED: a registry row under a clock behind the actor's latest row is refused (`cairn_actor_append`), and a
+> re-key with no vault row (after a restore) needs a SUPERUSER and a human actor. Owed by a human: **RUNBOOK §17** (enrol ≤ 2 min, re-key ≤ 1 min, change ≤ 30 s, confirm ≤ 10 s; VoiceOver).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
