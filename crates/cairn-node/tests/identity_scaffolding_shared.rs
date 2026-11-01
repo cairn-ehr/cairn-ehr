@@ -233,6 +233,8 @@ fn derivation_finds_the_expected_helpers() {
             // is its second half, split out for `link_doubts.rs`'s veto-after-link case (#220).
             // `seed_proposal` (R5a): `chart_link.rs`'s fixture, promoted when
             // `match_proposal_open.rs` and `duplicate_review.rs` needed the identical shape.
+            // `window_login` (#898): the window's own login, for any suite that runs an entry
+            // point under the role the window really holds rather than as the schema owner.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -255,6 +257,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn submit_signed_with_id(",
             "async fn trust_of(",
             "async fn vetoed_pair(",
+            "async fn window_login(",
             "fn bearing_withdrawal_body(",
             "fn body_from_spec(",
             "fn link_assertion_event(",

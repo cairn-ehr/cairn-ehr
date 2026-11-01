@@ -1180,3 +1180,35 @@ pub async fn seed_proposal(c: &Client, a: Uuid, b: Uuid, status: &str) {
     .await
     .unwrap();
 }
+
+/// A connection string that logs in as the reference window does (#898): a
+/// `cairn_window_probe` LOGIN granted db/062's `cairn_window` group role, never the owner.
+///
+/// Why it exists: every suite connects as the schema OWNER, so no test showed which grants
+/// the window's own role lacks — a missing one would fail only in production. A suite runs
+/// its setup on `owner` (a schema-loaded connection) and the entry point under test on
+/// `cairn_node::db::connect(&window_login(&owner, &base).await)`. Never load the schema on it.
+///
+/// No password: the test clusters use `trust`. Appending `user=` works because
+/// tokio-postgres keeps the LAST value of a repeated key (pinned in `window_role_grants.rs`).
+/// The `CREATE ROLE` is guarded like db/004's and also tolerates a concurrent creator: a role
+/// is cluster-wide, while `test_serial_guard`'s lock is per-database.
+///
+/// DUPLICATED, deliberately, in `cairn-gui/cairn-gui-live/tests/common/mod.rs` (and Task 4's
+/// copy in `cairn-gui-tauri`): three test trees cannot share a test module, and a library fn
+/// that mints passwordless logins is not something to ship. Keep the copies identical.
+pub async fn window_login(owner: &Client, cs: &str) -> String {
+    owner
+        .batch_execute(
+            "DO $$ BEGIN \
+               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_window_probe') THEN \
+                 CREATE ROLE cairn_window_probe LOGIN; \
+               END IF; \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$; \
+             GRANT cairn_window TO cairn_window_probe;",
+        )
+        .await
+        .expect("the window's probe login");
+    format!("{cs} user=cairn_window_probe")
+}

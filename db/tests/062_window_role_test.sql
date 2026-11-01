@@ -34,6 +34,14 @@ BEGIN
         'window must not call the node-event door';
     ASSERT NOT has_table_privilege('cairn_window', 'event_log', 'INSERT'),
         'window must not write the event log directly';
+
+    -- The inventory's grants (Task 3) stay as narrow as they were written.
+    ASSERT NOT has_column_privilege('cairn_window', 'name_repudiation', 'reason', 'SELECT'),
+        'a repudiation''s reason is forensic free text no runtime role reads (ADR-0006)';
+    ASSERT NOT has_table_privilege('cairn_window', 'ui_gesture_timing', 'DELETE'),
+        'the window may add to the gesture aggregates, never erase them';
+    ASSERT NOT has_table_privilege('cairn_agent', 'ui_gesture_timing', 'INSERT'),
+        'the window''s gesture grant must not leak to the advisory agents (db/044)';
 END $$;
 
 ROLLBACK;

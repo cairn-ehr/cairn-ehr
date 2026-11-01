@@ -83,7 +83,8 @@ async fn a_hold_released_in_time_keeps_the_connection() {
 }
 
 /// The probe table, with a deferred constraint trigger that sleeps `trigger_sleep`, which
-/// makes the COMMIT itself the slow statement.
+/// makes the COMMIT itself the slow statement. The test's own scratch table, so it is granted to
+/// the window's test login here (and dropped at the end), never through db/062.
 async fn slow_commit_table(reader: &tokio_postgres::Client) {
     reader
         .batch_execute(
@@ -92,7 +93,8 @@ async fn slow_commit_table(reader: &tokio_postgres::Client) {
              CREATE OR REPLACE FUNCTION answer_limit_slow() RETURNS trigger
                LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(3); RETURN NULL; END $$;
              CREATE CONSTRAINT TRIGGER answer_limit_slow_commit AFTER INSERT ON answer_limit_probe
-               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION answer_limit_slow();",
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION answer_limit_slow();
+             GRANT SELECT, INSERT ON answer_limit_probe TO cairn_window_probe;",
         )
         .await
         .expect("the probe table");
@@ -117,8 +119,9 @@ async fn probe_rows(db: &NodeConnection) -> i64 {
 async fn a_commit_cut_off_is_not_known_and_its_re_read_is_final() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    slow_commit_table(&reader).await;
+    // Watched FIRST: it ensures the window's login, which the scratch table is granted to.
     let db = watched(&cs).await;
+    slow_commit_table(&reader).await;
 
     let committed = {
         let mut client = db.lock().await.expect("open");

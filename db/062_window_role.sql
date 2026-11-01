@@ -24,3 +24,33 @@ GRANT cairn_agent TO cairn_window;
 
 -- The window shows which node and schema it is on; both are small, non-secret tables.
 GRANT SELECT ON local_node, node_schema TO cairn_window;
+
+-- ---------------------------------------------------------------------------
+-- What the window's own commands need beyond cairn_agent (#898, the grant inventory).
+-- Found by running every cairn_node entry point the window calls as a login granted this
+-- role (crates/cairn-node/tests/window_role_grants.rs); each is the narrowest form that works.
+-- ---------------------------------------------------------------------------
+
+-- Every window write (registration, a link judgement, a medication act) stamps its HLC through
+-- this SECURITY DEFINER tick; the table it advances stays unwritable.
+GRANT EXECUTE ON FUNCTION node_hlc_tick() TO cairn_window;
+
+-- The window's start-up check of its own node key ("Retired" vs "never enrolled",
+-- actor_enrolment::device_actor_standing) asks only whether the key ever appeared.
+GRANT SELECT (signing_key_id) ON actor_event TO cairn_window;
+
+-- Medication writes check the node has an unwrap key before sealing (ensure_unwrap_key asks
+-- only that a row exists); one non-key column is enough, the public key itself is not needed.
+GRANT SELECT (singleton) ON node_unwrap_key TO cairn_window;
+
+-- The "Same person" / review panels' name read (patient::compare::chart_facts) keeps every
+-- retained name but strikes the repudiated ones, so it anti-joins on (subject, value). Those two
+-- columns only: `reason` is forensic free text db/025 deliberately grants to nobody (ADR-0006).
+GRANT SELECT (subject, value) ON name_repudiation TO cairn_window;
+
+-- The §1.2 gesture timer (ui_timing::record_gesture) upserts one aggregate cell per sign-off,
+-- stop, hold and release. db/044 keeps this table from cairn_agent on purpose (an agent could
+-- poison the paper-parity evidence); the window is the one writer it names. No DELETE, and an
+-- UPDATE may move only the aggregate, never re-key a cell.
+GRANT SELECT, INSERT ON ui_gesture_timing TO cairn_window;
+GRANT UPDATE (n, p50_ms, p95_ms) ON ui_gesture_timing TO cairn_window;
