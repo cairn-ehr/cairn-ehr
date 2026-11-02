@@ -253,7 +253,8 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// **MUST run while the database is still un-enrolled and AFTER custody and the actor
 /// registry are installed.** Both halves of that are design §3's reordered ceremony:
 /// `apply_remote_event` wraps each DEK to the registered public half (so custody first), every
-/// apply door resolves its author through `actor_current` (so the registry first), and
+/// apply door admits its author through `actor_key_vouches` — every key that ever legitimately
+/// belonged to an actor, a rotated-away one included (sign-in slice 2) — so the registry first, and
 /// `finalize_identity` runs last so a failure here leaves a database that is still restorable
 /// from the same medium.
 ///
@@ -270,7 +271,7 @@ pub async fn apply_clinical_plane(
 
     // Step 0 — THE REGISTRY PRECONDITION, checked before a single record is offered.
     //
-    // Every apply door resolves its author through `actor_current`, so with no registry the
+    // Every apply door admits its author through `actor_key_vouches`, so with no registry the
     // door refuses this node's own history as an unenrolled signer — every record, one at a
     // time, each one penned with its bytes and its key. That pen cannot be drained:
     // `finalize_identity` runs at the end of the restore and closes `restore_actor_registry`'s

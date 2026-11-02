@@ -188,6 +188,8 @@ pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), Key
     match release {
         Release::Released { key, kid } => Ok((key, kid)),
         Release::Wrong { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
+        // Task 7 gives a replaced key its own sentence; until then it reads as a wrong passphrase.
+        Release::Replaced { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
         Release::Waiting { retry_after } => Err(KeyRefusal::Waiting { retry_after }),
         Release::Unknown => Err(KeyRefusal::Unknown),
         Release::RefusedPurpose => Err(KeyRefusal::NotForClinicalActs),

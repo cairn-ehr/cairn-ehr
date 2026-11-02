@@ -399,6 +399,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "062_window_role",
         include_str!("../../../db/062_window_role.sql"),
     ),
+    // db/063 (GUI sign-in slice 2): the vault's enroller, re-key, judge-a-key and reseal doors.
+    // Node-only, like the vault itself.
+    (
+        "063_vault_enrollers",
+        include_str!("../../../db/063_vault_enrollers.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

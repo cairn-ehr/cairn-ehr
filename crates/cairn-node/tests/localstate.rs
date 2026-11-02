@@ -357,6 +357,8 @@ fn a_fully_populated_row() -> ActorRegistryRow {
         pinned: Some(r#"{"model":"a \"quoted\" name","skill_epoch":7}"#.into()),
         signing_key_id: Some("key-with-a-\"quote\"".into()),
         superseded_by: Some(actor_id_bytes(9)),
+        approved_by: None,
+        approval: None,
         seq: 42,
         recorded_at: "2026-09-11 04:05:06.123456+00".into(),
     }
@@ -421,6 +423,8 @@ fn the_registry_encoder_omits_absent_optionals_rather_than_nulling_them() {
         pinned: None,
         signing_key_id: None,
         superseded_by: None,
+        approved_by: None,
+        approval: None,
         seq: 1,
         recorded_at: "2026-09-11 04:05:06+00".into(),
     };
@@ -428,7 +432,14 @@ fn the_registry_encoder_omits_absent_optionals_rather_than_nulling_them() {
     let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
     let o = parsed.as_array().unwrap()[0].as_object().unwrap();
 
-    for absent in ["kind", "pinned", "signing_key_id", "superseded_by"] {
+    for absent in [
+        "kind",
+        "pinned",
+        "signing_key_id",
+        "superseded_by",
+        "approved_by",
+        "approval",
+    ] {
         assert!(
             !o.contains_key(absent),
             "{absent} must be omitted, not nulled: {o:?}"
@@ -461,4 +472,49 @@ fn the_registry_encoder_preserves_row_order() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["op"], serde_json::json!("enroll"));
     assert_eq!(rows[1]["op"], serde_json::json!("revoke"));
+}
+
+/// Slice 2 (#666): `approval` travels as HEX like `actor_id`, `approved_by` as text, and both
+/// are omitted when absent.
+#[test]
+fn approval_travels_as_hex_and_is_omitted_when_absent() {
+    let mut row = a_fully_populated_row();
+    row.op = "confirm".into();
+    row.approved_by = Some("console".into());
+    row.approval = Some(actor_id_bytes(5));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&actor_registry_rows_to_json(std::slice::from_ref(&row))).unwrap();
+    let o = parsed[0].as_object().unwrap();
+    assert_eq!(o["approved_by"], serde_json::json!("console"));
+    assert_eq!(
+        o["approval"],
+        serde_json::json!(hex::encode(actor_id_bytes(5)))
+    );
+}
+
+/// A row exported before slice 2 has neither new field and must still decode.
+#[test]
+fn an_old_row_without_the_new_fields_still_decodes() {
+    #[derive(serde::Serialize)]
+    struct Old {
+        actor_event_id: String,
+        actor_id: Vec<u8>,
+        op: String,
+        seq: i64,
+        recorded_at: String,
+    }
+    let mut bytes = Vec::new();
+    ciborium::into_writer(
+        &Old {
+            actor_event_id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d".into(),
+            actor_id: actor_id_bytes(1),
+            op: "enroll".into(),
+            seq: 1,
+            recorded_at: "2026-09-11 04:05:06+00".into(),
+        },
+        &mut bytes,
+    )
+    .unwrap();
+    let row = cairn_node::localstate::actor_registry_row_from_cbor(&bytes).unwrap();
+    assert!(row.approved_by.is_none() && row.approval.is_none());
 }

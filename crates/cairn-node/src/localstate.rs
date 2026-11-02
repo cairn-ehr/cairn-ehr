@@ -569,6 +569,12 @@ pub struct ActorRegistryRow {
     pub signing_key_id: Option<String>,
     #[serde(default)]
     pub superseded_by: Option<Vec<u8>>,
+    /// Sign-in slice 2: who judged/granted (hex key or `console`). Travels as text.
+    #[serde(default)]
+    pub approved_by: Option<String>,
+    /// Sign-in slice 2: the approver's attestation token. Travels as HEX in the JSON.
+    #[serde(default)]
+    pub approval: Option<Vec<u8>>,
     pub seq: i64,
     /// Required — see the struct doc. A defaulted value here can re-authorise a
     /// recalled actor.
@@ -617,6 +623,12 @@ pub fn actor_registry_rows_to_json(rows: &[ActorRegistryRow]) -> String {
             }
             if let Some(by) = &r.superseded_by {
                 o.insert("superseded_by".into(), hex::encode(by).into());
+            }
+            if let Some(by) = &r.approved_by {
+                o.insert("approved_by".into(), by.clone().into());
+            }
+            if let Some(a) = &r.approval {
+                o.insert("approval".into(), hex::encode(a).into());
             }
             serde_json::Value::Object(o)
         })

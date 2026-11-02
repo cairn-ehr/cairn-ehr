@@ -124,4 +124,53 @@ BEGIN
     RAISE NOTICE 'issue #166 dual-mapping refusal OK';
 END $$;
 
+-- Sign-in slice 2 (#664/#666): the widened op CHECK, the per-op shape CHECK
+-- (actor_event_op_shape) and actor_current's op list. Mirrors actor_rotate_key.rs.
+DO $$
+DECLARE a bytea; b bytea; k text;
+BEGIN
+    a := enroll_actor('human', '{"role":"clinician","handle":"rot-a"}', 'rotK1');
+    b := enroll_actor('human', '{"role":"clinician","handle":"rot-b"}', 'rotK9');
+    -- rotate-key on the SAME actor: latest-row-wins makes the new key current.
+    PERFORM cairn_actor_append(a, 'rotate-key', 'rotK2', NULL, NULL);
+    SELECT signing_key_id INTO k FROM actor_current WHERE actor_id = a;
+    IF k IS DISTINCT FROM 'rotK2' THEN
+        RAISE EXCEPTION 'rotate-key FAILED: current key is %, want rotK2', k;
+    END IF;
+    IF (SELECT count(*) FROM actor_key_vouches WHERE actor_id = a) <> 2 THEN
+        RAISE EXCEPTION 'actor_key_vouches FAILED: both keys must vouch after a rotation';
+    END IF;
+    -- A repudiated latest key leaves no current key (no fall-back to rotK1).
+    PERFORM cairn_actor_append(a, 'repudiate', 'rotK2', 'su', NULL);
+    IF EXISTS (SELECT 1 FROM actor_current WHERE actor_id = a) THEN
+        RAISE EXCEPTION 'repudiate FAILED: a repudiated latest key must leave no current key';
+    END IF;
+    IF cairn_key_confirmation('rotK2') <> 'repudiated' THEN
+        RAISE EXCEPTION 'cairn_key_confirmation FAILED for a repudiated key';
+    END IF;
+    -- Shape: each op's key/superseded_by/approved_by are fixed (#666).
+    BEGIN
+        INSERT INTO actor_event (actor_id, op, signing_key_id, superseded_by)
+        VALUES (b, 'supersede', 'rotK9', a);
+        RAISE EXCEPTION 'shape FAILED: a supersede row carrying a key was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    BEGIN
+        INSERT INTO actor_event (actor_id, op, signing_key_id) VALUES (b, 'revoke', 'rotK9');
+        RAISE EXCEPTION 'shape FAILED: a revoke row carrying a key was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    BEGIN
+        INSERT INTO actor_event (actor_id, op, signing_key_id) VALUES (b, 'confirm', 'rotK9');
+        RAISE EXCEPTION 'shape FAILED: a confirm row with no approver was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    -- A keyless supersede on the OLD actor_id ends its currency (#664).
+    INSERT INTO actor_event (actor_id, op, superseded_by) VALUES (b, 'supersede', a);
+    IF EXISTS (SELECT 1 FROM actor_current WHERE actor_id = b) THEN
+        RAISE EXCEPTION 'supersede FAILED: a superseded actor is still current';
+    END IF;
+    RAISE NOTICE 'rotate-key / shape / supersede OK';
+END $$;
+
 ROLLBACK;

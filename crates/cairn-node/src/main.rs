@@ -2004,6 +2004,25 @@ enum Cmd {
         passphrase: Option<String>,
     },
 
+    /// Console-only: give a superuser a NEW key with nobody to approve it (a locked-out superuser,
+    /// or the first one back after a restore, db/063). Owner connection; confirmed at once. The
+    /// passphrase is prompted twice, no echo (or CAIRN_VAULT_PASSPHRASE for scripted tests).
+    VaultRekeySuperuser {
+        #[arg(long)]
+        staff_id: String,
+        /// Needed after a restore (no member row left to keep it from).
+        #[arg(long)]
+        display_name: Option<String>,
+        #[arg(long)]
+        phone: Option<String>,
+        #[arg(long)]
+        email: Option<String>,
+        #[arg(long)]
+        hint: Option<String>,
+        #[arg(long, env = "CAIRN_VAULT_PASSPHRASE", hide_env_values = true)]
+        passphrase: Option<String>,
+    },
+
     /// Console-only: set the shared terminal-unlock passphrase (stored only as an Argon2id hash).
     /// Prompted twice, no echo (or CAIRN_TERMINAL_PASSPHRASE). Deliberately NOT the superuser's
     /// variable: one variable exported for both would make the shared passphrase the superuser's.
@@ -4830,6 +4849,33 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             println!("enrolled superuser {staff_id} (key {kid})");
+        }
+        Cmd::VaultRekeySuperuser {
+            staff_id,
+            display_name,
+            phone,
+            email,
+            hint,
+            passphrase,
+        } => {
+            // Before the passphrase prompt and before any connect: these verbs carry a secret.
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let pass = resolve_new_vault_passphrase(passphrase)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let kid = cairn_node::vault_admin::rekey_superuser_from_console(
+                &db,
+                &cairn_node::vault_admin::Rekey {
+                    staff_id: &staff_id,
+                    role: "superuser",
+                    display_name: display_name.as_deref(),
+                    phone: phone.as_deref(),
+                    email: email.as_deref(),
+                    passphrase: &pass,
+                    hint: hint.as_deref(),
+                },
+            )
+            .await?;
+            println!("re-keyed superuser {staff_id} (key {kid})");
         }
         Cmd::VaultSetTerminalPassphrase { passphrase } => {
             // Before the passphrase prompt and before any connect: these verbs carry a secret.

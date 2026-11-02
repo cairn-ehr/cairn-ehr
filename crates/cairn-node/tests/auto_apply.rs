@@ -258,8 +258,9 @@ async fn revoked_matcher_epoch_is_refused_not_resurrected() {
         .await
         .unwrap();
     c.execute(
-        "INSERT INTO actor_event (actor_id, op, kind, signing_key_id) \
-         SELECT actor_id, 'revoke', 'agent', signing_key_id FROM actor_event \
+        // A revoke row carries no key (db/004's actor_event_op_shape, #666).
+        "INSERT INTO actor_event (actor_id, op) \
+         SELECT actor_id, 'revoke' FROM actor_event \
          WHERE signing_key_id=$1 AND op='enroll'",
         &[&kid],
     )

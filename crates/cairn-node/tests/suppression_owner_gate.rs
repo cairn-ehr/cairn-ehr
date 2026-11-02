@@ -279,11 +279,24 @@ async fn cross_human_suppress_refused_at_apply_door() {
     );
 }
 
+/// Re-key `kid`'s actor to a fresh key through db/004's append door (sign-in slice 2's
+/// `rotate-key`: same actor, new key, the old key no longer current). Returns the new key.
+async fn rotate(c: &Client, kid: &str) -> (SigningKey, String) {
+    let (sk2, kid2) = generate_key().unwrap();
+    c.execute(
+        "SELECT cairn_actor_append(actor_id, 'rotate-key', $2, NULL, NULL) \
+         FROM actor_event WHERE signing_key_id = $1 AND op = 'enroll'",
+        &[&kid, &kid2],
+    )
+    .await
+    .unwrap();
+    (sk2, kid2)
+}
+
 /// Guards Finding 1 of the final review: the helper's signer branch must resolve
 /// human-ness from the append-only actor_event HISTORY, not actor_current. A's
-/// original signing key drops out of actor_current the moment A "rotates" (a fresh
-/// enroll_actor row under the SAME pinned identity, modelling supersede/re-enroll or
-/// a departed colleague's key being revoked and replaced). Under the pre-fix helper
+/// original signing key drops out of actor_current the moment A rotates (a `rotate-key`
+/// row on the SAME actor). Under the pre-fix helper
 /// (queried actor_current) A's original note.added would then have an EMPTY
 /// human-author set, flipping the gate open for ANY enrolled human — over-permission
 /// on the safety floor. Under the fix, A stays a human author by history, so B is
@@ -305,25 +318,10 @@ async fn cross_human_suppress_refused_after_author_key_rotation() {
     // target's sole human author-of-record under A's ORIGINAL key (kid_a).
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
 
-    // "Rotate" A's key. rotate-key is not yet an implemented actor op, so simulate its
-    // END-STATE directly: a second actor_event row carrying A's SAME actor_id and a NEW
-    // key (kid_a2). NOTE: we go through a raw INSERT, NOT enroll_actor — since #152 /
-    // ADR-0044 the enroll FRONT DOOR fails closed on a colliding second key (enroll mints
-    // a NEW identity; rotate-key is the sanctioned path to add a key to the SAME actor).
-    // This raw insert is what that future rotate-key door produces internally: actor_current's
-    // DISTINCT ON keeps only the new key, and A's original kid_a drops out of actor_current
-    // but remains human-by-history in actor_event. (Before #152 this test re-enrolled the
-    // identical pinned set to stage the rotation — i.e. it leaned on the very silent-merge
-    // bug #152 fixes; the raw insert stages the same end-state honestly.)
-    let (_sk_a2, kid_a2) = generate_key().unwrap();
-    c.execute(
-        "INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id) \
-         SELECT actor_id, 'enroll', 'human', pinned, $1 \
-         FROM actor_event WHERE signing_key_id = $2 AND op = 'enroll'",
-        &[&kid_a2, &kid_a],
-    )
-    .await
-    .unwrap();
+    // Rotate A's key (sign-in slice 2's rotate-key; until it existed this test staged the
+    // end-state with a raw second enroll row). A's original kid_a drops out of
+    // actor_current but remains human-by-history in actor_event.
+    rotate(&c, &kid_a).await;
 
     // Human B attempts to downgrade A's note, now that A's ORIGINAL authoring key
     // is no longer current (but is still human-by-history in actor_event).
@@ -336,6 +334,58 @@ async fn cross_human_suppress_refused_after_author_key_rotation() {
         r.unwrap_err().contains("cross-author suppression refused"),
         "legible ADR-0043 reason"
     );
+}
+
+/// The other half of a re-key (sign-in slice 2, design §5.3/§5.6): the owner gate compares
+/// PEOPLE, not keys. Dr A, re-keyed K1 → K2, may still downgrade the note Dr A signed with K1.
+/// Comparing keys refused this — over-refusal, but a paper-parity loss for every re-keyed
+/// clinician over their own past work.
+#[tokio::test]
+async fn a_rekeyed_author_may_suppress_their_own_earlier_note() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
+    let tgt = author_note(&c, p, &kid_a, &sk_a).await;
+    let (sk_a2, kid_a2) = rotate(&c, &kid_a).await;
+
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_a2, &sk_a2, &tgt).await;
+    assert!(
+        r.is_ok(),
+        "the same person under a new key owns their old note: {r:?}"
+    );
+}
+
+/// A repudiated key (an impostor's re-key of Dr A) does not stand for Dr A: it may not
+/// suppress Dr A's note, though it sits on Dr A's actor.
+#[tokio::test]
+async fn a_repudiated_key_may_not_suppress_its_actors_note() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
+    let tgt = author_note(&c, p, &kid_a, &sk_a).await;
+    let (sk_a2, kid_a2) = rotate(&c, &kid_a).await;
+    c.execute(
+        "SELECT cairn_actor_append(actor_id, 'repudiate', $1, 'console', NULL) \
+         FROM actor_event WHERE signing_key_id = $1 AND op = 'rotate-key'",
+        &[&kid_a2],
+    )
+    .await
+    .unwrap();
+
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_a2, &sk_a2, &tgt).await;
+    assert!(r.is_err(), "a repudiated key suppresses nothing: {r:?}");
 }
 
 #[tokio::test]

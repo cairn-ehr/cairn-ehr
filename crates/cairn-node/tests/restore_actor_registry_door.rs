@@ -193,6 +193,8 @@ fn registry_row(actor_event_id: &str, actor_id: &[u8], seq: i64) -> ActorRegistr
         pinned: None,
         signing_key_id: Some(format!("beef{seq:02}")),
         superseded_by: None,
+        approved_by: None,
+        approval: None,
         seq,
         recorded_at: format!("2026-01-01 00:00:00.00000{seq}+00"),
     }
