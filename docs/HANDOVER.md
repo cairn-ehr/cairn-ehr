@@ -107,9 +107,12 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Merge PR [#928](https://github.com/cairn-ehr/cairn-ehr/pull/928)** (ADR-0086: #919/#924/#926). Then
->    **brainstorm slice 3** (who's writing / drafts / the `Asserted` grade + the author display, which also owes the
->    per-note "unconfirmed" marker slice 2 deferred, and #918's display half). The
+> 1. PR [#928](https://github.com/cairn-ehr/cairn-ehr/pull/928) (ADR-0086) **MERGED 2026-11-02**. **Slice 3 brainstormed
+>    2026-11-03** → design [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
+>    (the text-only note stream comes WITH it; a "who's here" hot-key switch; durable drafts, 3 h quarantine,
+>    author-signed discard; addendum + compound note; pending-sign-offs menu; students sign their own parts; it also
+>    carries the per-note "unconfirmed" marker and #918's display half). **Next: write its plan** (PRs 3a note
+>    stream → 3b drafts + who's here → 3c addenda + compound + menu). The
 >    maintainer picks the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK §16** (sign ≤ 3 s, next-nurse
 >    switch, VoiceOver/keyboard on the strip, the terminal lock). Still owed from
