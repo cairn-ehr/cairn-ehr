@@ -90,6 +90,8 @@ fn every_sentence_is_plain_and_names_no_value() {
         RekeyRefusal::PassphraseEmpty,
         RekeyRefusal::MissingDetail,
         RekeyRefusal::NeedNameAndContact,
+        RekeyRefusal::NeedSuperuserAfterRestore,
+        RekeyRefusal::NeedApprover,
         RekeyRefusal::NotRecorded,
         RekeyRefusal::OutcomeUnknown,
         RekeyRefusal::Fixture,
@@ -98,6 +100,8 @@ fn every_sentence_is_plain_and_names_no_value() {
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
     }
 }
+
+const SU: crate::enrol::Standing = crate::enrol::Standing::NotListed;
 
 /// After a restore the vault has no row for the person, and the door then needs a display name
 /// and a phone or an email to re-create it (design §5.8). The window asks whether the staff ID
@@ -108,28 +112,28 @@ fn every_sentence_is_plain_and_names_no_value() {
 fn a_rekey_with_no_member_row_needs_a_name_and_a_contact() {
     let mut f = form(&pass("a"), &pass("a"));
     assert_eq!(
-        missing_member_details(true, &f),
+        missing_member_details(true, SU, &f),
         None,
         "a row keeps its values"
     );
     assert_eq!(
-        missing_member_details(false, &f),
+        missing_member_details(false, SU, &f),
         Some(RekeyRefusal::NeedNameAndContact)
     );
     f.display_name = "Nurse One".into();
     assert_eq!(
-        missing_member_details(false, &f),
+        missing_member_details(false, SU, &f),
         Some(RekeyRefusal::NeedNameAndContact),
         "a name alone is not enough: the row needs a contact"
     );
     f.phone = " 0400 000 000 ".into();
-    assert_eq!(missing_member_details(false, &f), None);
+    assert_eq!(missing_member_details(false, SU, &f), None);
     f.phone = String::new();
     f.email = "n1@example.org".into();
-    assert_eq!(missing_member_details(false, &f), None);
+    assert_eq!(missing_member_details(false, SU, &f), None);
     f.display_name = "   ".into();
     assert_eq!(
-        missing_member_details(false, &f),
+        missing_member_details(false, SU, &f),
         Some(RekeyRefusal::NeedNameAndContact)
     );
 }
@@ -166,8 +170,10 @@ fn the_rekey_runs_its_steps_in_order() {
         .collect();
     let order = [
         "check_rekey_form(&member)",
+        "credential.has_passphrase()",
         "state.forget_held_key().await;",
         "cairn_node::vault::staff_id_taken(",
+        "cairn_node::vault_admin::enrollers(",
         "missing_member_details(",
         "release_enrol_key(",
         "cairn_node::vault_admin::rekey_member(",
@@ -222,9 +228,14 @@ async fn rekeyed_world() -> Option<(impl Sized, AppState, String, String)> {
         .await
         .unwrap();
     let (su_p, en_p, old_p, new_p) = (pass("su"), pass("en"), pass("old"), pass("new"));
-    let member = |staff_id, role, passphrase| NewMember {
+    // Each member a distinct name, so the replaced sentence's approver is told apart.
+    let member = |staff_id: &'static str, role, passphrase| NewMember {
         staff_id,
-        display_name: "Test Person",
+        display_name: match staff_id {
+            "enrol1" => "Eve Enroller",
+            "boss" => "Site Boss",
+            _ => "Test Person",
+        },
         role,
         phone: None,
         email: Some("t@example.org"),
@@ -319,7 +330,7 @@ async fn a_replaced_sign_names_the_approver() {
         "{said}"
     );
     assert!(
-        said.contains(", approved by Test Person. If you didn't ask for that, tell a superuser."),
+        said.contains(", approved by Eve Enroller. If you didn't ask for that, tell a superuser."),
         "{said}"
     );
 }
@@ -419,4 +430,58 @@ async fn a_superuser_rekeys_a_restored_member_from_the_window() {
         .await
         .unwrap();
     assert!(matches!(released, Release::Released { .. }), "{released:?}");
+}
+
+/// With no member row only a superuser may re-create it (db/063 `cairn_vault_install_key`). An
+/// enroller is told so BEFORE their key is released, never after filling in a name and contact
+/// only to read "try again, ask IT"; this wins over the missing-details sentence.
+#[test]
+fn an_enroller_cannot_rekey_a_member_with_no_row() {
+    use crate::enrol::Standing;
+    let mut f = form(&pass("a"), &pass("a"));
+    for s in [Standing::Granted, Standing::NotGranted] {
+        assert_eq!(
+            missing_member_details(false, s, &f),
+            Some(RekeyRefusal::NeedSuperuserAfterRestore)
+        );
+        assert_eq!(
+            missing_member_details(true, s, &f),
+            None,
+            "a row: the floor's case"
+        );
+    }
+    f.display_name = "Nurse One".into();
+    f.email = "n1@example.org".into();
+    assert_eq!(
+        missing_member_details(false, Standing::Granted, &f),
+        Some(RekeyRefusal::NeedSuperuserAfterRestore)
+    );
+    assert_eq!(missing_member_details(false, SU, &f), None);
+}
+
+/// A staff ID alone never reaches the vault (a counted wrong guess for the approver). The
+/// sentence is the re-key's own: an enroller is a valid approver here, and nothing is enrolled.
+#[tokio::test]
+async fn a_rekey_with_no_passphrase_never_reaches_the_vault() {
+    let state = AppState::mock(None);
+    let said = rekey_member_impl(
+        &state,
+        credential("enrol1", ""),
+        form(&pass("a"), &pass("a")),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(said, RekeyRefusal::NeedApprover.sentence());
+    assert!(
+        said.contains("enroller") && !said.contains("enrol staff"),
+        "{said}"
+    );
+}
+
+/// The floor's deliberate refusals a retry cannot fix (the role is not the one on record; a
+/// superuser's key) share this sentence; it names what to check, never only "try again".
+#[test]
+fn the_not_recorded_sentence_names_the_role_check() {
+    let said = RekeyRefusal::NotRecorded.sentence();
+    assert!(said.contains("role") && said.contains("console"), "{said}");
 }

@@ -480,6 +480,7 @@ fn the_new_refusals_name_no_field_and_no_passphrase() {
     for r in [
         EnrolRefusal::ApproverMayNotEnrolThisRole,
         EnrolRefusal::ApproverNotConfirmed,
+        EnrolRefusal::ApproverKeyRepudiated,
     ] {
         let s = r.sentence();
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
@@ -507,17 +508,72 @@ fn standing_reads_the_grant_panel_rows() {
     assert_eq!(standing(&rows, "boss"), Standing::NotListed);
 }
 
+/// The vault keys staff IDs by `lower(btrim(x) COLLATE pg_unicode_fast)` (db/061): a full
+/// Unicode lowercase, and only SPACES trimmed. An ASCII-only fold would read "MÜLLER" as not
+/// listed (a superuser), and the re-key's success line would then drop "a superuser must
+/// confirm the new key" for an enroller's approval.
+#[test]
+fn standing_folds_case_as_the_vault_does() {
+    let rows = [row("müller", true), row("émile", false)];
+    assert_eq!(standing(&rows, " MÜLLER "), Standing::Granted);
+    assert_eq!(standing(&rows, "ÉMILE"), Standing::NotGranted);
+    assert_eq!(staff_id_key(" ÄBC "), "äbc");
+    assert_eq!(staff_id_key("\tabc"), "\tabc", "btrim trims spaces only");
+}
+
+/// A granted member whose key was repudiated (final) is not "waiting for a confirmation": the
+/// remedy is a re-key, and the window says so.
+#[test]
+fn a_repudiated_enroller_is_told_to_get_a_new_key() {
+    let mut r = row("en1", true);
+    r.key_repudiated = true;
+    assert_eq!(standing(&[r], "en1"), Standing::GrantedKeyRepudiated);
+    assert_eq!(
+        refused_purpose_decision(Standing::GrantedKeyRepudiated),
+        EnrolRefusal::ApproverKeyRepudiated
+    );
+    let said = EnrolRefusal::ApproverKeyRepudiated.sentence();
+    assert!(
+        said.contains("re-key") && !said.contains("confirm"),
+        "{said}"
+    );
+}
+
 /// M2: the pre-check decisions, with no database. After a key was released, only an enroller is
 /// ever refused, and only for superuser/admin; a superuser (even with a stray grant, who is
 /// still absent from the non-superuser list) is never refused.
 #[test]
 fn the_precheck_refuses_only_an_enroller_aiming_high() {
     use EnrolRefusal::ApproverMayNotEnrolThisRole as No;
-    assert_eq!(precheck_decision(Standing::Granted, "admin"), Some(No));
-    assert_eq!(precheck_decision(Standing::Granted, "superuser"), Some(No));
-    assert_eq!(precheck_decision(Standing::Granted, "nurse"), None);
-    assert_eq!(precheck_decision(Standing::NotListed, "admin"), None);
-    assert_eq!(precheck_decision(Standing::NotListed, "superuser"), None);
+    assert_eq!(
+        precheck_decision(Standing::Granted, Some("admin")),
+        Some(No)
+    );
+    assert_eq!(
+        precheck_decision(Standing::Granted, Some("superuser")),
+        Some(No)
+    );
+    assert_eq!(precheck_decision(Standing::Granted, Some("nurse")), None);
+    assert_eq!(precheck_decision(Standing::Granted, None), None);
+    assert_eq!(precheck_decision(Standing::NotListed, Some("admin")), None);
+    assert_eq!(
+        precheck_decision(Standing::NotListed, Some("superuser")),
+        None
+    );
+    assert_eq!(precheck_decision(Standing::NotListed, None), None);
+}
+
+/// An admin's role serves the enrol purpose, so the vault releases an admin's key; but the floor
+/// takes an approval only from a superuser or a member holding the grant. An admin without it is
+/// told so plainly, not with "try again, ask IT" after the floor refuses.
+#[test]
+fn a_listed_member_without_the_grant_is_refused_after_the_release() {
+    for role in [Some("clinician"), Some("admin"), None] {
+        assert_eq!(
+            precheck_decision(Standing::NotGranted, role),
+            Some(EnrolRefusal::NotForEnrolment)
+        );
+    }
 }
 
 /// A refused enrol purpose: a granted-but-unconfirmed enroller is told to wait; a clinician or an

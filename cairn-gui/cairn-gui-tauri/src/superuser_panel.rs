@@ -6,11 +6,13 @@
 //!
 //! # The flow, for a reader new to it
 //!
-//! Both lists are plain reads (`vault_admin::enrollers`, `vault_admin::unconfirmed`); the page
-//! re-reads them after every write. A WRITE (`set_enroller`, `judge_key`) is a superuser act:
+//! Both lists are plain reads (`vault_admin::enrollers`, `vault_admin::unconfirmed`), made with no
+//! credential; the page re-reads them after every write, and a failed re-read says so in its own
+//! sentence ([`READ_FAILED`]), never "nothing was recorded". A WRITE (`set_enroller`, `judge_key`)
+//! is a superuser act:
 //!
-//! 1. Any held key is wiped (someone new may be at the keyboard) and a credential with no
-//!    passphrase is refused before the vault sees it (it would count as a wrong guess).
+//! 1. A credential with no passphrase is refused before the vault sees it (it would count as a
+//!    wrong guess); then any held key is wiped (someone new may be at the keyboard).
 //! 2. [`superuser_refusal`] (pure over `enrollers()`, which lists NON-superusers only): a typed
 //!    ID found there is not a superuser, so it is told so in one plain sentence BEFORE the vault
 //!    is asked. The floor still refuses an enroller; this is only the courtesy copy, and no floor
@@ -30,7 +32,7 @@ use crate::enrol::{release_enrol_key, standing, Standing};
 use crate::signer::{local_at, Credential};
 use crate::state::AppState;
 use cairn_node::vault_admin::{EnrollerRow, Unconfirmed};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The sentence for "this credential belongs to someone who is not a superuser".
 pub const ONLY_SUPERUSER: &str =
@@ -39,8 +41,26 @@ const NOT_RECORDED: &str = "That could not be done. Nothing was recorded. Try ag
      fails again, ask your IT support.";
 const OUTCOME_UNKNOWN: &str = "The node did not confirm the change, so it may have been made. \
      Look at the lists again before trying twice.";
+/// The floor refused on purpose (a `RAISE`): the row was out of date (a re-key since the lists
+/// were read, a grant already given) or the act no longer applies. The page re-reads the lists.
+const REFUSED: &str = "The node refused this, so nothing was recorded. The lists may have been \
+     out of date: they are read again below. Check the row before trying again.";
+/// A list read failed. It runs AFTER every write, so it must never say "nothing was recorded":
+/// the write before it may have landed.
+const READ_FAILED: &str = "The lists could not be read again. Close and reopen this panel to see \
+     where things stand.";
 const FIXTURE: &str = "This window is showing sample data. Nothing can be changed here.";
 const NEED_SUPERUSER: &str = "Enter a superuser's staff ID and passphrase to do this.";
+
+/// What a superuser decides about one key. Named on the wire ("confirm" / "repudiate"), never a
+/// bare boolean: repudiation is final and asks no question (principle 3), so the request itself
+/// must say which act it is, and serde refuses anything else before a key is released.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Judgement {
+    Confirm,
+    Repudiate,
+}
 
 /// One key on the worklist, as the page shows it.
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -61,8 +81,10 @@ pub struct EnrollerView {
     pub kid: Option<String>,
 }
 
-/// Pure: the sentence for one worklist row. `now` supplies the local time zone. An approver who
-/// is no longer in the vault is said so, never left blank (principle 4). Under a site expiry the
+/// Pure: the sentence for one worklist row. `now` supplies the local time zone. The approver is
+/// named by their vault staff ID, or by their registry handle when their member row is gone (as
+/// after a restore, `cairn_vault_key_holder`); only when no registry row carries the approving
+/// key is it "someone no longer in the vault", never left blank (principle 4). Under a site expiry the
 /// row also says when the key stops (or stopped) signing.
 pub fn unconfirmed_text<Tz: chrono::TimeZone>(u: &Unconfirmed, now: &chrono::DateTime<Tz>) -> String
 where
@@ -100,14 +122,15 @@ where
     text
 }
 
-/// Pure: the sentence for one grant-list row.
+/// Pure: the sentence for one grant-list row. It says whether the member HAS the role, never
+/// that they "can enrol": the floor also wants their own key confirmed and current
+/// (`cairn_vault_enroller_problem`, db/061), which a grant alone does not make true.
 pub fn enroller_text(r: &EnrollerRow) -> String {
-    let can = if r.enroller {
-        "can enrol staff"
-    } else {
-        "cannot enrol staff"
-    };
-    format!("{} ({}): {can}.", r.display_name, r.staff_id)
+    let has = if r.enroller { "has" } else { "does not have" };
+    format!(
+        "{} ({}): {has} the enroller role.",
+        r.display_name, r.staff_id
+    )
 }
 
 /// Pure: one grant-list row as the page shows it. A key already repudiated (final) is said so
@@ -130,6 +153,7 @@ pub fn superuser_refusal(rows: &[EnrollerRow], staff_id: &str) -> Option<String>
     (standing(rows, staff_id) != Standing::NotListed).then(|| ONLY_SUPERUSER.to_string())
 }
 
+/// A failure BEFORE any write (the connection, the courtesy read): nothing was recorded.
 fn fault(what: &str, e: anyhow::Error) -> String {
     eprintln!(
         "{what} could not be completed: {}",
@@ -138,13 +162,31 @@ fn fault(what: &str, e: anyhow::Error) -> String {
     NOT_RECORDED.to_string()
 }
 
-/// Pure: a failed write is "nothing recorded" only on an ordinary ERROR answer; else unknown.
-fn write_failure(e: &anyhow::Error) -> &'static str {
-    if cairn_node::db_diagnosis::answered_with_error(e) {
-        NOT_RECORDED
-    } else {
-        OUTCOME_UNKNOWN
+/// A failed list read. Its own sentence, because it follows every write (see [`READ_FAILED`]).
+fn read_fault(what: &str, e: anyhow::Error) -> String {
+    eprintln!(
+        "{what} could not be read: {}",
+        cairn_node::db_diagnosis::operator_chain(&e)
+    );
+    READ_FAILED.to_string()
+}
+
+/// Pure: the sentence for a failed write. `deliberate`: the floor refused on purpose (SQLSTATE
+/// P0001); `answered`: an ordinary ERROR answer came back, so the statement rolled back. Without
+/// an answer the write may have landed.
+pub fn write_failure_sentence(deliberate: bool, answered: bool) -> &'static str {
+    match (deliberate, answered) {
+        (true, _) => REFUSED,
+        (false, true) => NOT_RECORDED,
+        (false, false) => OUTCOME_UNKNOWN,
     }
+}
+
+fn write_failure(e: &anyhow::Error) -> &'static str {
+    write_failure_sentence(
+        cairn_gui_live::error::refusal_is_deliberate(cairn_gui_live::error::sqlstate_of(e)),
+        cairn_node::db_diagnosis::answered_with_error(e),
+    )
 }
 
 #[tauri::command]
@@ -161,10 +203,10 @@ pub async fn list_unconfirmed_impl(state: &AppState) -> Result<Vec<UnconfirmedVi
     let db = db
         .lock()
         .await
-        .map_err(|l| fault("the worklist", l.into()))?;
+        .map_err(|l| read_fault("the worklist", l.into()))?;
     let rows = cairn_node::vault_admin::unconfirmed(&db)
         .await
-        .map_err(|e| fault("the worklist", db.explain(e)))?;
+        .map_err(|e| read_fault("the worklist", db.explain(e)))?;
     let now = chrono::Local::now();
     Ok(rows
         .iter()
@@ -190,10 +232,10 @@ pub async fn list_enrollers_impl(state: &AppState) -> Result<Vec<EnrollerView>, 
     let db = db
         .lock()
         .await
-        .map_err(|l| fault("the grant list", l.into()))?;
+        .map_err(|l| read_fault("the grant list", l.into()))?;
     let rows = cairn_node::vault_admin::enrollers(&db)
         .await
-        .map_err(|e| fault("the grant list", db.explain(e)))?;
+        .map_err(|e| read_fault("the grant list", db.explain(e)))?;
     Ok(rows.iter().map(enroller_view).collect())
 }
 
@@ -226,7 +268,7 @@ pub async fn set_enroller_impl(
             write_failure(&e).to_string()
         })?;
     Ok(if grant {
-        format!("{staff_id} can now enrol staff.")
+        format!("{staff_id} now has the enroller role. They can enrol staff while their own key is confirmed.")
     } else {
         format!("{staff_id} can no longer enrol staff.")
     })
@@ -237,18 +279,21 @@ pub async fn judge_key(
     state: tauri::State<'_, AppState>,
     credential: Credential,
     kid: String,
-    confirm: bool,
+    judgement: Judgement,
 ) -> Result<String, String> {
-    judge_key_impl(&state, credential, &kid, confirm).await
+    judge_key_impl(&state, credential, &kid, judgement).await
 }
 
-/// Confirm (`true`) or repudiate (`false`) a key. NO confirmation dialog: see the module doc.
+/// Confirm or repudiate a key. NO confirmation dialog: see the module doc. The floor judges only
+/// the person's CURRENT key, so a row read before a re-key is refused ([`REFUSED`]), never
+/// applied to the old key (db/063 `cairn_vault_judge_key`).
 pub async fn judge_key_impl(
     state: &AppState,
     credential: Credential,
     kid: &str,
-    confirm: bool,
+    judgement: Judgement,
 ) -> Result<String, String> {
+    let confirm = judgement == Judgement::Confirm;
     let (db, key) = superuser_key(state, &credential).await?;
     cairn_node::vault_admin::judge_key(&db, kid, confirm, &credential.staff_id, &key)
         .await
@@ -291,8 +336,8 @@ async fn superuser_key<'a>(
     if let Some(said) = superuser_refusal(&rows, &credential.staff_id) {
         return Err(said);
     }
-    // An empty role: this is no enrolment, so the superuser/admin role rule does not apply.
-    let key = release_enrol_key(&db, credential, "", NOT_RECORDED).await?;
+    // No role: this enrols nobody, so the superuser/admin role rule does not apply.
+    let key = release_enrol_key(&db, credential, None, NOT_RECORDED).await?;
     Ok((db, key))
 }
 

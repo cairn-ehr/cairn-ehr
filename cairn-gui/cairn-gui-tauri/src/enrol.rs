@@ -2,27 +2,29 @@
 //!
 //! # The flow, for a reader new to it
 //!
-//! Two people stand at the terminal. The superuser has typed their own staff ID and passphrase
-//! into the signer strip; the new member types THEIR OWN new passphrase, twice, into the
-//! "Enrol staff" form. One press does, in order:
+//! Two people stand at the terminal. The approver (a superuser, or a member holding the enroller
+//! grant) has typed their own staff ID and passphrase into the signer strip; the new member types
+//! THEIR OWN new passphrase, twice, into the "Enrol staff" form. One press does, in order:
 //!
 //! 1. [`check_form`] (pure, no database): the two passphrases match, are usable (not empty, not
 //!    only spaces: `cairn_node::vault::passphrase_is_usable`, the rule sign-in uses), and the form
 //!    carries an ID, a name, a role and at least one of phone/email (the vault's CHECK demands
 //!    a contact). A typo here costs nothing and never touches the vault.
-//! 2. Any key this terminal holds is wiped: a typed passphrase means someone new is at the
-//!    keyboard, as on a clinical act. Then the superuser's key is released with `Purpose::Enrol`, used ONCE to vouch for the
+//! 2. A credential with no passphrase is refused (it would count as a wrong guess). Then any key
+//!    this terminal holds is wiped: a typed passphrase means someone new is at the keyboard, as
+//!    on a clinical act. Then the approver's key is released with `Purpose::Enrol`
+//!    ([`release_enrol_key`], which also gives the courtesy refusals), used ONCE to vouch for the
 //!    enrolment, and dropped. It is never put in the held session, whatever
-//!    `--key-hold-seconds` says: an enrol act is not a clinical act, and a held superuser key
+//!    `--key-hold-seconds` says: an enrol act is not a clinical act, and a held approver key
 //!    would let the next person at a hold terminal enrol staff. That is why this does NOT go
 //!    through `AppState::signer_for_act`, which may hold keys.
 //! 3. `cairn_node::vault::enrol_member` mints the new member's key, seals it under their
-//!    passphrase, and files it with the superuser's attestation.
+//!    passphrase, and files it with the approver's attestation.
 //!
 //! # No secret in any output
 //!
 //! Every refusal sentence comes from [`EnrolRefusal`] or [`KeyRefusal`], built from enums alone
-//! (the success line names the new member, which the superuser just typed). A
+//! (the success line names the new member, which the approver just typed). A
 //! database error's text is never passed on (it goes to the operator's stderr), and neither
 //! passphrase is in any string, `Debug` output or log line this file produces.
 use crate::signer::{from_release_noting, Credential, KeyRefusal};
@@ -38,8 +40,9 @@ use zeroize::Zeroizing;
 pub struct NewMemberForm {
     pub staff_id: String,
     pub display_name: String,
-    /// `clinician`, `nurse` or `superuser` from the form's list. A soft list: the floor accepts
-    /// any role string (#168), so this window only insists it is not blank.
+    /// `clinician`, `nurse`, `admin` or `superuser` from the form's list (only a superuser may
+    /// approve the last two). A soft list: the floor accepts any role string (#168), so this
+    /// window only insists it is not blank.
     pub role: String,
     pub phone: String,
     pub email: String,
@@ -82,13 +85,16 @@ pub enum EnrolRefusal {
     Fixture,
     /// The staff ID is already enrolled (checked before the superuser's key is released).
     AlreadyEnrolled,
-    /// No superuser credential was typed.
+    /// No approver credential (staff ID and passphrase) was typed.
     NeedSuperuser,
     /// An enroller tried to enrol (or re-key) a superuser or an admin: only a superuser may.
     ApproverMayNotEnrolThisRole,
     /// The approver holds the enroller grant but their own key still awaits a superuser's
     /// confirmation, so the floor will not take their word yet.
     ApproverNotConfirmed,
+    /// The approver holds the enroller grant but their own key was repudiated, which is final:
+    /// no confirmation will come, and the remedy is a new key (a re-key).
+    ApproverKeyRepudiated,
 }
 
 impl EnrolRefusal {
@@ -118,6 +124,11 @@ impl EnrolRefusal {
             }
             EnrolRefusal::ApproverNotConfirmed => {
                 "Your own key is waiting for a superuser to confirm it, so you cannot enrol staff yet. Ask a superuser."
+                    .into()
+            }
+            EnrolRefusal::ApproverKeyRepudiated => {
+                "Your own signing key was repudiated, so you cannot approve anyone with it. Ask a \
+                 superuser or an enroller to re-key you."
                     .into()
             }
             EnrolRefusal::NotRecorded => {
@@ -185,48 +196,69 @@ pub enum Standing {
     NotListed,
     /// A non-superuser holding the enroller grant now.
     Granted,
-    /// A non-superuser without the grant (a clinician, say).
+    /// A non-superuser holding the grant whose own key is repudiated (final).
+    GrantedKeyRepudiated,
+    /// A non-superuser without the grant (a clinician or an admin, say).
     NotGranted,
 }
 
+/// Pure: a staff ID as the vault keys it, `lower(btrim(x) COLLATE pg_unicode_fast)` (db/061
+/// `cairn_vault_staff_id`): a full Unicode lowercase, and only spaces trimmed (`btrim`'s
+/// default), so the window finds exactly the row the vault would.
+pub fn staff_id_key(staff_id: &str) -> String {
+    staff_id.trim_matches(' ').to_lowercase()
+}
+
 pub fn standing(rows: &[cairn_node::vault_admin::EnrollerRow], approver: &str) -> Standing {
-    match rows
-        .iter()
-        .find(|r| r.staff_id.eq_ignore_ascii_case(approver.trim()))
-    {
+    let key = staff_id_key(approver);
+    match rows.iter().find(|r| staff_id_key(&r.staff_id) == key) {
         None => Standing::NotListed,
+        Some(r) if r.enroller && r.key_repudiated => Standing::GrantedKeyRepudiated,
         Some(r) if r.enroller => Standing::Granted,
         Some(_) => Standing::NotGranted,
     }
 }
 
-/// Pure: AFTER the vault released the approver's enrol key (so they are a superuser or a confirmed
-/// enroller), may they vouch for this role? A superuser always may (never refused here, even with
-/// a stray grant: the floor lets a superuser approve first); an enroller may not for superuser/admin.
-pub fn precheck_decision(standing: Standing, role: &str) -> Option<EnrolRefusal> {
-    (standing != Standing::NotListed && role_needs_superuser(role))
-        .then_some(EnrolRefusal::ApproverMayNotEnrolThisRole)
-}
-
-/// Pure: the vault refused the enrol purpose. A member holding the grant is waiting on a
-/// superuser's confirmation of their key; anyone else gets the plain refusal.
-pub fn refused_purpose_decision(standing: Standing) -> EnrolRefusal {
-    if standing == Standing::Granted {
-        EnrolRefusal::ApproverNotConfirmed
-    } else {
-        EnrolRefusal::NotForEnrolment
+/// Pure: AFTER the vault released the approver's enrol key, may they vouch for `role` (`None`:
+/// no member is being enrolled, as for the superuser panel's acts)? The vault releases for
+/// enrolment to a superuser, an admin (whatever their grant) or a confirmed enroller; the floor
+/// then takes an approval only from a superuser or a grant holder. So:
+/// * a superuser (not listed) is never refused here, even with a stray grant (the floor lets a
+///   superuser approve first);
+/// * a listed member WITHOUT the grant (an admin) is told plainly they cannot enrol;
+/// * a grant holder may not vouch for a superuser or an admin.
+pub fn precheck_decision(standing: Standing, role: Option<&str>) -> Option<EnrolRefusal> {
+    match standing {
+        Standing::NotListed => None,
+        Standing::NotGranted => Some(EnrolRefusal::NotForEnrolment),
+        Standing::Granted | Standing::GrantedKeyRepudiated => role
+            .is_some_and(role_needs_superuser)
+            .then_some(EnrolRefusal::ApproverMayNotEnrolThisRole),
     }
 }
 
-/// Release the approver's key with `Purpose::Enrol` for ONE use by the caller (enrol or re-key);
-/// the caller drops it. Shared so the two commands cannot drift. `not_recorded` is the caller's
-/// own sentence for a database fault; every `Err` is a finished sentence. The courtesy refusal
-/// for superuser/admin targets runs after the release (see [`precheck_decision`]); the floor
-/// stays the authority and a floor message is never parsed.
+/// Pure: the vault refused the enrol purpose. A member holding the grant is either waiting on a
+/// superuser's confirmation of their key, or their key is repudiated (final: a re-key is the
+/// remedy). The release door checks the purpose BEFORE whether the key is current (db/061), so
+/// a repudiated enroller lands here, not on `not-current`. Anyone else gets the plain refusal.
+pub fn refused_purpose_decision(standing: Standing) -> EnrolRefusal {
+    match standing {
+        Standing::Granted => EnrolRefusal::ApproverNotConfirmed,
+        Standing::GrantedKeyRepudiated => EnrolRefusal::ApproverKeyRepudiated,
+        Standing::NotListed | Standing::NotGranted => EnrolRefusal::NotForEnrolment,
+    }
+}
+
+/// Release the approver's key with `Purpose::Enrol` for ONE use by the caller (enrol, re-key, or
+/// a superuser-panel act); the caller drops it. Shared so the callers cannot drift. `role` is the
+/// role being vouched for (`None` for a panel act, which enrols nobody). `not_recorded` is the
+/// caller's own sentence for a database fault; every `Err` is a finished sentence. The courtesy
+/// refusals run after the release (see [`precheck_decision`]); the floor stays the authority
+/// and a floor message is never parsed.
 pub async fn release_enrol_key(
     db: &cairn_gui_live::ConnectionGuard<'_>,
     credential: &Credential,
-    role: &str,
+    role: Option<&str>,
     not_recorded: &str,
 ) -> Result<cairn_event::SigningKey, String> {
     let fault = |e: anyhow::Error| {
@@ -266,13 +298,11 @@ pub async fn release_enrol_key(
                 .sentence())
         }
     };
-    if role_needs_superuser(role) {
-        let rows = cairn_node::vault_admin::enrollers(db)
-            .await
-            .map_err(fault)?;
-        if let Some(r) = precheck_decision(standing(&rows, &credential.staff_id), role) {
-            return Err(r.sentence());
-        }
+    let rows = cairn_node::vault_admin::enrollers(db)
+        .await
+        .map_err(fault)?;
+    if let Some(r) = precheck_decision(standing(&rows, &credential.staff_id), role) {
+        return Err(r.sentence());
     }
     Ok(key)
 }
@@ -333,7 +363,7 @@ pub async fn enrol_member_impl(
     let key = release_enrol_key(
         &db,
         &credential,
-        &member.role,
+        Some(&member.role),
         &EnrolRefusal::NotRecorded.sentence(),
     )
     .await?;

@@ -3,8 +3,9 @@
 //!
 //! One press does, in order:
 //!
-//! 1. [`check_reseal_form`] (pure, no database): the new passphrase is usable, differs from the
-//!    current one, and matches its repeat. A typo costs nothing and never touches the vault.
+//! 1. [`check_reseal_form`] (pure, no database): a staff ID and a usable current passphrase are
+//!    there, and the new passphrase is usable, differs from the current one, and matches its
+//!    repeat. A typo costs nothing and never touches the vault.
 //! 2. Any held key is wiped (someone new is at the keyboard). The key is NOT put in the held
 //!    session: this is not a clinical act.
 //! 3. `cairn_node::vault_admin::change_passphrase` checks the current passphrase through the
@@ -88,7 +89,9 @@ impl ResealRefusal {
 
 /// Pure: is this form worth sending to the vault? Runs BEFORE any database call.
 pub fn check_reseal_form(form: &ResealForm) -> Result<(), ResealRefusal> {
-    if form.staff_id.trim().is_empty() || form.current.trim_matches(' ').is_empty() {
+    // The current passphrase is held to the sign-in rule too: one the vault could never have
+    // sealed must not reach it as a counted guess.
+    if form.staff_id.trim().is_empty() || !cairn_node::vault::passphrase_is_usable(&form.current) {
         return Err(ResealRefusal::MissingDetail);
     }
     if !cairn_node::vault::passphrase_is_usable(&form.new) {

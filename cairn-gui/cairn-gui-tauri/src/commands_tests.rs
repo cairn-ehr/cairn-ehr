@@ -453,3 +453,11 @@ fn a_failed_phc_read_is_a_fault_never_wrong() {
     let read: Result<Option<String>, ()> = Ok(Some(phc));
     assert_eq!(terminal_read_verdict(read, "other"), TerminalUnlock::Wrong);
 }
+
+/// With no node (sample data) there is nothing to warn about: the expiry warning is `None`, never
+/// an error on screen (a missing warning only; the press still says why an expired key fails).
+#[tokio::test]
+async fn the_expiry_notice_is_silent_without_a_node() {
+    let state = AppState::mock(None);
+    assert_eq!(expiry_notice_impl(&state, "nurse1").await, None);
+}

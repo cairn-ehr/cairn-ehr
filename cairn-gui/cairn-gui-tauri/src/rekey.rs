@@ -4,20 +4,23 @@
 //! Same shape as [`crate::enrol`], and for the same reasons. One press does, in order:
 //!
 //! 1. [`check_rekey_form`] (pure, no database): the two new passphrases match and are usable.
+//!    A credential with no passphrase is refused next (it would count as a wrong guess).
 //! 2. Any held key is wiped (someone new is at the keyboard). The window asks whether the staff
-//!    ID has a vault row (`vault::staff_id_taken`); with none — after a restore, design §5.8 — the
-//!    door must re-create it and needs a display name and a contact, so [`missing_member_details`]
-//!    refuses a form without them BEFORE any key is released. Then the approver's key is released
-//!    with `Purpose::Enrol`, used ONCE for the re-key, and dropped. Never `signer_for_act`: a
-//!    held approver key would let the next person at the terminal re-key a colleague.
+//!    ID has a vault row (`vault::staff_id_taken`); with none — after a restore, design §5.8 —
+//!    only a SUPERUSER may re-create it, and the door needs a display name and a contact, so
+//!    [`missing_member_details`] refuses an enroller, or a form without them, BEFORE any key is
+//!    released. Then the approver's key is released with `Purpose::Enrol`, used ONCE for the
+//!    re-key, and dropped. Never `signer_for_act`: a held approver key would let the next person
+//!    at the terminal re-key a colleague.
 //! 3. `cairn_node::vault_admin::rekey_member` mints the new key, seals it under the new
 //!    passphrase, and files it with the approver's attestation. The old passphrase then answers
-//!    `Replaced`; the new key is unconfirmed until a superuser confirms it, unless a superuser
+//!    `Replaced` (for 14 days, or while the new key is unconfirmed or doubtful); the new key is unconfirmed until a superuser confirms it, unless a superuser
 //!    approved it. [`rekey_success`] words the success line by who approved (the grant panel's
 //!    read: `enrollers()` lists non-superusers only).
 //!
-//! A superuser is never re-keyed from the window (console only): the floor refuses, and the
-//! sentence is the generic [`RekeyRefusal::NotRecorded`]. Approver refusals reuse
+//! A superuser is never re-keyed from the window (console only), and a re-key never changes a
+//! member's role: the floor refuses both, and the sentence is the generic
+//! [`RekeyRefusal::NotRecorded`], which names both checks. Approver refusals reuse
 //! [`EnrolRefusal`](crate::enrol::EnrolRefusal), decided by the grant-panel read the window can make
 //! (`enrol::release_enrol_key`), never by parsing a floor message.
 //!
@@ -67,6 +70,11 @@ pub enum RekeyRefusal {
     /// The staff ID has no vault row (as after a restore), so the door re-creates it and needs a
     /// display name and a phone or an email. Decided before any key is released.
     NeedNameAndContact,
+    /// The staff ID has no vault row and the approver is not a superuser: only a superuser may
+    /// re-create one (db/063). Decided before any key is released.
+    NeedSuperuserAfterRestore,
+    /// No approver passphrase was typed. Decided before the vault is asked.
+    NeedApprover,
     /// The floor or node refused with an answer: nothing was recorded.
     NotRecorded,
     /// No ordinary answer arrived: the key may have been replaced.
@@ -91,9 +99,17 @@ impl RekeyRefusal {
                  a restore. Enter the member's display name and a phone or an email, then try \
                  again. Nobody was re-keyed."
                 .into(),
+            RekeyRefusal::NeedSuperuserAfterRestore => "This staff ID has no vault entry here, as \
+                 after a restore. Only a superuser can re-key them. Ask a superuser. Nobody was \
+                 re-keyed."
+                .into(),
+            RekeyRefusal::NeedApprover => "Enter your own staff ID and passphrase above, as a \
+                 superuser or an enroller, to re-key a member. Nobody was re-keyed."
+                .into(),
             RekeyRefusal::NotRecorded => "The member could not be re-keyed. Nothing was recorded. \
-                 A superuser's key can only be replaced at the console. Otherwise try again, and \
-                 if it fails again, ask your IT support."
+                 Check that the role is the one they are enrolled with: a re-key never changes a \
+                 role. A superuser's key can only be replaced at the console. If it still fails, \
+                 ask your IT support."
                 .into(),
             RekeyRefusal::OutcomeUnknown => {
                 "The node did not confirm the re-key, so the key may have been replaced. Ask the \
@@ -122,13 +138,25 @@ pub fn check_rekey_form(form: &RekeyForm) -> Result<(), RekeyRefusal> {
 }
 
 /// Pure: with no vault row for the staff ID (`has_member_row` false, as after a restore), the
-/// door re-creates the row and needs a display name and a phone or an email (db/063
-/// `cairn_vault_install_key`, the table's contact CHECK). With a row, blank fields keep the
-/// stored values and nothing more is needed.
-pub fn missing_member_details(has_member_row: bool, form: &RekeyForm) -> Option<RekeyRefusal> {
+/// door re-creates the row: only for a superuser (`approver` not listed in the grant panel's
+/// read, which lists non-superusers only), and only with a display name and a phone or an email
+/// (db/063 `cairn_vault_install_key`, the table's contact CHECK). The superuser rule is said
+/// first: an enroller filling in the details would still be refused. With a row, blank fields
+/// keep the stored values and nothing more is needed.
+pub fn missing_member_details(
+    has_member_row: bool,
+    approver: Standing,
+    form: &RekeyForm,
+) -> Option<RekeyRefusal> {
+    if has_member_row {
+        return None;
+    }
+    if approver != Standing::NotListed {
+        return Some(RekeyRefusal::NeedSuperuserAfterRestore);
+    }
     let blank = |s: &str| s.trim().is_empty();
     let incomplete = blank(&form.display_name) || (blank(&form.phone) && blank(&form.email));
-    (!has_member_row && incomplete).then_some(RekeyRefusal::NeedNameAndContact)
+    incomplete.then_some(RekeyRefusal::NeedNameAndContact)
 }
 
 /// Pure: the success line, by who approved. `approver` is the approver's standing in the grant
@@ -162,7 +190,7 @@ pub async fn rekey_member_impl(
     check_rekey_form(&member).map_err(|r| r.sentence())?;
     // A staff ID alone must never reach the vault, where it would count as a wrong guess.
     if !credential.has_passphrase() {
-        return Err(crate::enrol::EnrolRefusal::NeedSuperuser.sentence());
+        return Err(RekeyRefusal::NeedApprover.sentence());
     }
     state.forget_held_key().await;
     let Some(db) = state.db.as_ref() else {
@@ -176,20 +204,25 @@ pub async fn rekey_member_impl(
         RekeyRefusal::NotRecorded.sentence()
     };
     let db = db.lock().await.map_err(|lost| fault(lost.into()))?;
-    // Asked BEFORE the approver's key is released, so a form missing what a re-created row needs
-    // is told plainly and costs the approver no release. The floor stays the judge: a row
-    // deleted between this read and the write falls to the generic `NotRecorded` sentence.
+    // Asked BEFORE the approver's key is released, so an enroller facing a missing row, or a form
+    // missing what a re-created row needs, is told plainly and costs the approver no release.
+    // The floor stays the judge: a row deleted between this read and the write falls to the
+    // generic `NotRecorded` sentence.
     let has_row = cairn_node::vault::staff_id_taken(&db, member.staff_id.trim())
         .await
         .map_err(|e| fault(db.explain(e)))?;
-    if let Some(r) = missing_member_details(has_row, &member) {
+    let rows = cairn_node::vault_admin::enrollers(&db)
+        .await
+        .map_err(|e| fault(db.explain(e)))?;
+    let approver = standing(&rows, &credential.staff_id);
+    if let Some(r) = missing_member_details(has_row, approver, &member) {
         return Err(r.sentence());
     }
     // Released, used once below, dropped at the end of this function. Never stored.
     let key = release_enrol_key(
         &db,
         &credential,
-        &member.role,
+        Some(&member.role),
         &RekeyRefusal::NotRecorded.sentence(),
     )
     .await?;

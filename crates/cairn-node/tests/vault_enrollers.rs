@@ -284,21 +284,28 @@ async fn a_repudiated_enrollers_unconfirmed_members_are_doubtful() {
 // ---- The optional site expiry for unconfirmed keys (§5.5, last bullet) ----
 
 /// Age key `v` by `days`: its introducing (and any confirm) row is back-dated. The registry is
-/// append-only (`actor_event_no_update`), so the owner lifts that trigger for this fixture alone.
+/// append-only (`actor_event_no_update`), so the owner lifts that trigger for this fixture alone,
+/// inside ONE transaction: DDL is transactional in Postgres, so if anything between fails (or the
+/// test panics and drops the connection) the trigger comes back with the rollback, and no later
+/// suite on this shared database runs with the registry left writable.
 async fn age_key(c: &tokio_postgres::Client, v: u8, days: i32) {
-    c.batch_execute("ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update")
+    c.batch_execute("BEGIN; ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update")
         .await
         .unwrap();
-    c.execute(
-        "UPDATE actor_event SET recorded_at = recorded_at - make_interval(days => $2) \
-          WHERE signing_key_id = $1",
-        &[&kid_of(v), &days],
-    )
-    .await
-    .unwrap();
-    c.batch_execute("ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update")
-        .await
-        .unwrap();
+    let aged = c
+        .execute(
+            "UPDATE actor_event SET recorded_at = recorded_at - make_interval(days => $2) \
+              WHERE signing_key_id = $1",
+            &[&kid_of(v), &days],
+        )
+        .await;
+    let end = if aged.is_ok() {
+        "ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update; COMMIT"
+    } else {
+        "ROLLBACK"
+    };
+    c.batch_execute(end).await.unwrap();
+    aged.unwrap();
 }
 
 /// When the window should say signing stops for `staff`, as the window asks it.
@@ -446,7 +453,7 @@ async fn a_confirmed_key_never_expires() {
 async fn a_non_positive_expiry_is_refused() {
     db_gated!();
     let (_g, c, _, _) = fresh().await;
-    for days in [0, -3] {
+    for days in [0, -3, 36501] {
         let e = c
             .execute(
                 "SELECT cairn_vault_set_unconfirmed_expiry($1)",
@@ -456,4 +463,27 @@ async fn a_non_positive_expiry_is_refused() {
             .expect_err("a non-positive limit");
         assert!(msg(&e).contains("at least one day"), "{}", msg(&e));
     }
+}
+
+/// A doubtful key (its approver since repudiated) is still unconfirmed and expires like one: the
+/// more suspect case must never be the one that escapes the site's limit (db/061
+/// `cairn_vault_key_expires_at`, `IN ('unconfirmed', 'doubtful')`).
+#[tokio::test]
+async fn a_doubtful_key_expires_like_an_unconfirmed_one() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    staff(&c).await;
+    enrol(&c, "anurse", "nurse", ANURSE, "jsmith", JSMITH)
+        .await
+        .unwrap();
+    judge(&c, JSMITH, false, "boss", BOSS).await.unwrap();
+    assert_eq!(status(&c, ANURSE).await, "doubtful");
+    age_key(&c, ANURSE, 10).await;
+    set_expiry(&c, Some(5)).await;
+    assert!(expires_at(&c, "anurse").await.is_some());
+    assert_eq!(
+        release(&c, "anurse", &pass_of(ANURSE), "clinical").await.0,
+        "expired"
+    );
+    set_expiry(&c, None).await;
 }

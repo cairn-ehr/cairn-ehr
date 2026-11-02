@@ -292,7 +292,7 @@ filed (#919); record the counts against that issue.
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
-| Grant: "can now enrol staff"; a non-superuser's credential refused; strip passphrase emptied | | |
+| Grant: "now has the enroller role"; a non-superuser's credential refused; strip passphrase emptied | | |
 | Enroller enrols a clinician; refused for admin or superuser; newcomer's key on the worklist | | |
 | Re-key: old passphrase answers "replaced on …, approved by …" and counts as a try; same actor (`rotate-key`) | | |
 | Superuser re-keyed only at the console (`vault-rekey-superuser`) | | |

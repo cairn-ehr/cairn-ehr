@@ -84,7 +84,7 @@ Five questions follow:
   superseded actor's keys: no supersede door exists yet, and the first one owes the decision whether they should.
 - `enroll_actor` takes two trailing arguments for the approver and the token. They default to NULL, so a 3-argument
   call still resolves, to the new function; the old 3-argument form is dropped first, so that call is not ambiguous
-  between two overloads. `cairn_actor_append` is the only other writer: it appends the five new ops and
+  between two overloads. `cairn_actor_append` is the only other live writer (the restore door replays rows): it appends the five new ops and
   refuses `enroll`, `supersede` and `revoke`. For a `rotate-key` it refuses a revoked or superseded actor (the row
   would outrank the retirement and resurrect it), a key that binds another actor (#166), and a key this actor already
   held (a rotated-away key never comes back), under the same two advisory locks as `enroll_actor`, in the same order.
@@ -114,12 +114,16 @@ Five questions follow:
 - **A superuser's approval confirms at once.** The enrol and re-key doors write the `confirm` row in the same
   transaction, so a key a superuser (or the console) approved is never unconfirmed. An enroller's approval leaves it
   unconfirmed.
-- **Unconfirmed never blocks signing by itself.** Only a repudiation or a revoke stops a key from signing. A site's
+- **Unconfirmed never blocks signing by itself.** Confirmation status alone never stops a key: only a repudiation,
+  or the key's retirement (a rotation, a revoke, a supersede), does. A site's
   own expiry (decision 10) stops the vault from *releasing* it, which is not the same thing. Paper never refuses a
   newcomer's pen.
-- **A superuser confirms or repudiates** (`cairn_vault_judge_key`), signed and verified in the database. Confirm
-  applies only to an `unconfirmed` or `doubtful` key. Repudiate applies to any person's key not already repudiated, a confirmed
-  one included (an impostor found later). **Repudiation is final for the key**: no later confirm undoes it; the remedy
+- **A superuser confirms or repudiates** (`cairn_vault_judge_key`), signed and verified in the database. Both apply
+  only to the person's **current** key, checked under the same actor lock a rotation takes: the superuser's panel
+  reads its lists once, so a re-key in between leaves a row naming the old key, and judging that would repudiate the
+  genuine person's rotated-away key while the new one (an impostor's, in the case Repudiate exists for) stays live.
+  Confirm applies only to an `unconfirmed` or `doubtful` key. Repudiate applies to any current key not already
+  repudiated, a confirmed one included (an impostor found later). **Repudiation is final for the key**: no later confirm undoes it; the remedy
   is a new re-key. The actor is not revoked, so the real person keeps their identity and history and can be re-keyed.
 - **The cascade.** When an enroller's key is repudiated, every key it approved that is still unconfirmed reads
   `doubtful`. Keys a superuser already confirmed stay confirmed. No extra act is written.
@@ -172,8 +176,9 @@ enrolled: slice 1 has no "enrolled, credential pending" state.
   (`kind = 'human'`); a display name is then required, and the table's CHECK still requires a phone or an email.
   **Only a superuser (or the console) may approve this branch, never an enroller:** nothing but the `{role, handle}`
   shape ties the staff ID to the actor, and a person enrolled from the command line (`cairn-node enroll`) carries the
-  same shape, so an enroller could otherwise take over any such actor. Recovery is: the first superuser re-keyed at
-  the console (`vault-rekey-superuser`, confirmed at once), then everyone else re-keyed in person by a superuser. Grants and confirmations live in `actor_event`, which the local-state export carries, so they survive the
+  same shape, so an enroller could otherwise take over any such actor. Recovery is: every superuser re-keyed at the
+  console (`vault-rekey-superuser`, confirmed at once; the window never re-keys a superuser, decision 3), then everyone
+  else re-keyed in person by a superuser from the window. Grants and confirmations live in `actor_event`, which the local-state export carries, so they survive the
   restore. One in-person re-key per person after a disk loss is the price the earlier design already accepted.
 - **The window's *Forgotten passphrase* form** carries a display name, a phone and an email. Left blank they keep what a
   surviving member row holds. Before any key is released the window asks whether the staff ID has a vault row
@@ -228,8 +233,8 @@ reading:
   `apply_remote_event`. Rotation is not compromise, so an event K1 signed before the re-key still applies after it;
   repudiation is compromise, so a repudiated key is refused. This was a build-time ruling, flagged to the maintainer
   on 2026-11-01. **The residual risk:** a leaked key that was rotated away but NOT repudiated can still bring in
-  events through a paired peer or a backup medium. The remedy would be to repudiate it, but neither the window nor
-  the console can repudiate a rotated-away key today ([#922](https://github.com/cairn-ehr/cairn-ehr/issues/922)), and
+  events through a paired peer or a backup medium. The remedy would be to repudiate it, but nothing can repudiate a
+  rotated-away key today: the judgement door takes only a current key (decision 2) ([#922](https://github.com/cairn-ehr/cairn-ehr/issues/922)), and
   repudiation reaches backwards: it removes the key's past authority too, the real person's genuine work included
   ([#921](https://github.com/cairn-ehr/cairn-ehr/issues/921)).
 - **Re-grading reads `actor_key_vouches`.** `cairn_claim_authority` R1 and R2 (db/005) and the sensitivity-withdrawal
@@ -253,12 +258,13 @@ reading:
   node's console: `cairn-node vault-set-unconfirmed-expiry --days N` or `--none`, on the owner's connection and a
   local one (`require_local`).
 - Once a key is still unconfirmed (or doubtful) that many days after the row that introduced it with an approver, the
-  release door answers `expired`, for every purpose including `reseal`. It is checked before the attempt is counted,
-  like `not-current`. A superuser's confirmation lets the vault release the key again.
+  release door answers `expired`, for every purpose the role may serve, `reseal` included. It is checked after the
+  purpose and currency checks and before the attempt is counted, like `not-current`. A superuser's confirmation lets the vault release the key again.
 - **Expiry stops a release, not a signature.** `submit_event` does not read `vault_policy`. A seed released before
   the stop, or a key the window holds for an act, still signs until it is dropped.
 - **Never a surprise at the moment of signing.** The superuser's worklist shows each key's stop date. The signer strip
-  warns, within seven days of the stop, when a staff ID is typed and after an act signed with a held key, naming the
+  warns, within seven days of the stop, when a staff ID is typed and after an act signed with a held key (no ID
+  typed), naming the
   staff ID so the next person on a shared screen never reads it as their own:
   *"Not yet confirmed by a superuser. {staff ID}'s key stops signing on {date}."*
 
@@ -271,9 +277,16 @@ reading:
   current key, which the row carries (`cairn_vault_member_key`): a confirmed key (an impostor found later) and an
   enroller's own key (which must be confirmed to approve anyone) are never on the worklist, and repudiating an
   enroller's key is what sets off the cascade. A key already repudiated is said so on its row and not offered again.
+  The row says whether the member *has the enroller role*, never that they "can enrol": the floor also wants their
+  own key confirmed and current. The page sends a judgement by name (`"confirm"` / `"repudiate"`), never a bare
+  boolean; a stale row is refused by the floor (decision 2) and said so, and a list that cannot be re-read after an
+  act is dropped from the page rather than left to be pressed.
 - The *Enrol staff* and *Forgotten passphrase* forms say, beside their contact fields, that the contact must work
   without any hospital login (a personal mobile or an outside address). A key that is no longer current is told to
-  ask a superuser or an enroller for a re-key, never to be enrolled again (which would make a second actor).
+  ask a superuser or an enroller for a re-key, never to be enrolled again (which would make a second actor); a granted
+  enroller whose own key was repudiated is told the same, not to wait for a confirmation that cannot come. An enroller
+  facing a member with no vault row (after a restore) is told before any release that only a superuser can re-key
+  them.
 - **Repudiate asks no question.** A confirmation dialog fails paper-parity (principle 3) and is not a safety
   mechanism. The act is signed, kept, and repaired by a re-key.
 - Each approver's key is released for one act and dropped, never held. Every vault answer that becomes a sentence for
@@ -308,11 +321,21 @@ why db/061 is long.
   again.
 - **The status is an oracle, accepted as the `replaced` notice and `unknown` already are.** Anyone with the window's
   role can learn whether a staff ID's key is unconfirmed and when it stops (`cairn_vault_unconfirmed_expires_at`, and
-  the `expired` answer, given before any guess is counted).
+  the `expired` answer, given before any guess is counted). The panel's two reads go further, with no credential:
+  every waiting key with its staff ID, approver and date (`cairn_vault_unconfirmed`), and every non-superuser
+  member's grant, current key ID and whether it is repudiated (`cairn_vault_enrollers`, `cairn_vault_member_key`,
+  `cairn_key_confirmation`). Only the panel's writes need a superuser's credential.
+- **An enroller can reset an unconfirmed person's expiry** by re-keying them: each key ages from its own introducing
+  row, so the lever below does not hold against an enroller who keeps re-keying
+  ([#924](https://github.com/cairn-ehr/cairn-ehr/issues/924), to decide).
+- **Who may act after a repudiation is not settled.** Any enroller may re-key a member a superuser has repudiated,
+  and a superuser's key can be repudiated (outside the window) by any superuser, the last one included
+  ([#926](https://github.com/cairn-ehr/cairn-ehr/issues/926)). The re-key form still asks for a role the vault
+  already knows ([#925](https://github.com/cairn-ehr/cairn-ehr/issues/925)).
 - **A rotated-away key is not a repudiated one** (decision 9's residual). Re-admission accepts it; only a repudiation
-  shuts it out — and there is no path in the window or at the console to repudiate a key that is no longer a
-  member's current one (the panel acts on the current key, the worklist lists current keys only;
-  [#922](https://github.com/cairn-ehr/cairn-ehr/issues/922)).
+  shuts it out — and nothing can repudiate a key that is no longer a member's current one: the judgement door refuses
+  it (decision 2), so a prior key needs a door of its own
+  ([#922](https://github.com/cairn-ehr/cairn-ehr/issues/922)).
 - **A repudiated key's earlier events do not come back.** A restore or a sync pens every event a repudiated key
   signed, those signed before the repudiation included, as it already pens a revoked actor's. They are missing from a
   restored chart until [#921](https://github.com/cairn-ehr/cairn-ehr/issues/921) is decided.
@@ -339,7 +362,7 @@ why db/061 is long.
 - **What we are betting on, and how we would know it failed.**
   - That an enroller's signed act plus review afterwards contains an impostor as well as paper's review does. We would
     know it failed if a repudiated key were found to have signed for weeks with nobody looking at the worklist; the
-    site's optional expiry is the lever.
+    site's optional expiry is the lever, though an enroller's re-key resets it today (#924).
   - That rotation is not compromise. We would know it failed if a rotated-away, unrepudiated key brought in events
     through a peer or a medium.
   - That 14 days of `replaced` notices, plus the unconfirmed status, are enough for the real owner to notice an

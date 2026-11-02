@@ -75,3 +75,25 @@ async fn fixture_mode_refuses() {
         .unwrap_err();
     assert_eq!(said, ResealRefusal::Fixture.sentence());
 }
+
+/// Source guard (no DB-free behavioural test can see the ORDER): the form check, then any held
+/// key wiped (whoever typed a passphrase is at the keyboard now), then the vault. Never the
+/// held-session door: a reseal is not a clinical act.
+#[test]
+fn a_reseal_checks_then_wipes_then_asks_the_vault() {
+    let body: String =
+        crate::source_guard::rust_fn(include_str!("reseal.rs"), "change_passphrase_impl")
+            .split_whitespace()
+            .collect();
+    let order = [
+        "check_reseal_form(&form)",
+        "state.forget_held_key().await;",
+        "cairn_node::vault_admin::change_passphrase(",
+    ];
+    let at: Vec<usize> = order
+        .iter()
+        .map(|s| body.find(s).unwrap_or_else(|| panic!("{s}\n{body}")))
+        .collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{body}");
+    assert!(!body.contains("signer_for_act"), "{body}");
+}

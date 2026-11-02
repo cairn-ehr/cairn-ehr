@@ -278,11 +278,16 @@ BEGIN
 END;
 $$;
 
--- Confirm or repudiate one human key (§5.5) — superuser only. Confirm: only a key awaiting it
--- ('unconfirmed' or 'doubtful'). Repudiate: any key not already repudiated — a confirmed one
--- included (an impostor found later). Repudiation is FINAL for that key: nothing confirms it
--- again; the remedy is a new re-key. The key lock (enroll_actor's, same seed) serialises two
--- judgements of one key, so a confirm and a repudiate cannot both read the status first.
+-- Confirm or repudiate one human key (§5.5) — superuser only, and only the key the person signs
+-- with NOW. Confirm: only a key awaiting it ('unconfirmed' or 'doubtful'). Repudiate: any current
+-- key not already repudiated — a confirmed one included (an impostor found later). Repudiation is
+-- FINAL for that key: nothing confirms it again; the remedy is a new re-key.
+-- Why "current": the superuser's panel reads its lists once, so a re-key in between leaves a row
+-- naming the OLD key; judging it would repudiate the genuine person's rotated-away key and leave
+-- the new one (an impostor's, in the case Repudiate exists for) live. No path judges a prior key
+-- (#922). Two locks: the key lock (enroll_actor's, same seed) serialises two judgements of one
+-- key, so a confirm and a repudiate cannot both read the status first; the actor lock (the one a
+-- rotate-key takes, db/004) means a re-key cannot land between the "current" check and the row.
 CREATE OR REPLACE FUNCTION cairn_vault_judge_key(p_signing_key_id text, p_confirm boolean,
                                                  p_superuser_staff_id text, p_token bytea)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -300,9 +305,13 @@ BEGIN
     IF v_actor IS NULL THEN
         RAISE EXCEPTION 'cairn_vault_judge_key: no person''s actor holds or held key %', p_signing_key_id;
     END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended(encode(v_actor, 'hex'), 0));
     v_status := cairn_key_confirmation(p_signing_key_id);
     IF v_status = 'repudiated' THEN
         RAISE EXCEPTION 'cairn_vault_judge_key: key % is repudiated, which is final — the remedy is a new re-key', p_signing_key_id;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = p_signing_key_id) THEN
+        RAISE EXCEPTION 'cairn_vault_judge_key: key % is not the current key of its person (rotated away, or the actor retired) — read the lists again', p_signing_key_id;
     END IF;
     IF p_confirm AND v_status NOT IN ('unconfirmed', 'doubtful') THEN
         RAISE EXCEPTION 'cairn_vault_judge_key: key % is %, not awaiting confirmation', p_signing_key_id, v_status;
@@ -404,8 +413,9 @@ $$;
 
 -- When this member's signing stops because their key is still unconfirmed (§5.5), or NULL when
 -- it never will (no limit set, or the key is confirmed — db/061's cairn_vault_key_expires_at).
--- The window asks once after a signed act, to warn days ahead: never a surprise at the moment of
--- signing. Reveals one date per staff ID, as cairn_vault_replaced_notice does.
+-- The window asks when a staff ID is typed (and after an act signed with a held key, none typed),
+-- to warn days ahead: never a surprise at the moment of signing. Reveals one date per staff ID,
+-- as cairn_vault_replaced_notice does.
 CREATE OR REPLACE FUNCTION cairn_vault_unconfirmed_expires_at(p_staff_id text)
 RETURNS timestamptz LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT cairn_vault_key_expires_at(m.signing_key_id)

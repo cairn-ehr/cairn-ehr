@@ -101,8 +101,8 @@ weak, so that is a real attack. The vault therefore stays out of backups.
   > token ([ADR-0085](0085-in-person-enrolment-and-re-key.md) decision 5). A forgotten passphrase is a re-key: a
   > superuser or an enroller, with the person present, gives the SAME actor a new key by a `rotate-key` row, and the
   > person keeps their staff ID and history. After a restore the re-key door re-creates the member row on the
-  > existing actor: the first superuser is re-keyed at the console (`cairn-node vault-rekey-superuser`), then
-  > everyone else in person, from the window's *Forgotten passphrase* form, which then asks for the display name and
+  > existing actor: every superuser is re-keyed at the console (`cairn-node vault-rekey-superuser`; the window never
+  > re-keys a superuser), then everyone else in person by a superuser, from the window's *Forgotten passphrase* form, which then asks for the display name and
   > contact the re-created row needs. Enrolling under a new staff ID is no longer the path. **Re-key by token** (to an outside contact) is
   > still **not** built: it waits for [#909](https://github.com/cairn-ehr/cairn-ehr/issues/909) or slice 5.
 
@@ -191,7 +191,8 @@ Two more facts belong to this interim, and the in-database signer must cover the
   > open (no door wrote a `supersede` then). Since sign-in
   > slice 2 (db/004) it drops a superseded actor, and `not-current` also covers a key that was **rotated away** or
   > **repudiated** ([ADR-0085](0085-in-person-enrolment-and-re-key.md) decision 1). The door also gained two answers,
-  > `replaced` and `expired` (ADR-0085 decisions 7 and 10); the order of checks and counting above is unchanged.
+  > `replaced` and `expired` (ADR-0085 decisions 7 and 10); step 1 gains the expiry check, after the purpose and currency checks
+  > and before the count, and the lock, count and unseal order above is unchanged.
 - **The residual, stated plainly.** A raw-SQL client that calls the door and then keeps its transaction open holds
   that row lock, and delays that one member's next sign-in until it lets go; each press meanwhile fails when the
   window cuts its own command off (`ANSWER_WITHIN`, 15 s). That is a denial of service by someone who already holds

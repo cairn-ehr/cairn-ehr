@@ -13,7 +13,7 @@ function superuserButton(label, onPress) {
   b.textContent = label;
   b.addEventListener("click", () => {
     // In-flight guard: a fast double-click must not send the act twice. The refresh that follows
-    // the act redraws the row, which re-enables its buttons.
+    // the act redraws the row, which re-enables its buttons (a failed refresh drops the rows).
     const row = b.parentElement;
     row.querySelectorAll("button").forEach((x) => (x.disabled = true));
     onPress();
@@ -62,7 +62,7 @@ async function superuserRefresh(outcome) {
           // The member's CURRENT key, carried by the row: a confirmed key (an impostor found
           // later) or an enroller's own is never on the worklist below (§5.5). No question asked.
           ...(m.kid ? [superuserButton("Repudiate key", () =>
-            superuserAct("judge_key", { kid: m.kid, confirm: false }))] : []),
+            superuserAct("judge_key", { kid: m.kid, judgement: "repudiate" }))] : []),
         ]),
       ),
     );
@@ -70,13 +70,16 @@ async function superuserRefresh(outcome) {
     keys.replaceChildren(
       ...waiting.map((k) =>
         superuserItem(k.text, [
-          superuserButton("Confirm", () => superuserAct("judge_key", { kid: k.kid, confirm: true })),
-          superuserButton("Repudiate", () => superuserAct("judge_key", { kid: k.kid, confirm: false })),
+          superuserButton("Confirm", () => superuserAct("judge_key", { kid: k.kid, judgement: "confirm" })),
+          superuserButton("Repudiate", () => superuserAct("judge_key", { kid: k.kid, judgement: "repudiate" })),
         ]),
       ),
     );
     el("superuser-keys-empty").hidden = waiting.length > 0;
   } catch (failure) {
+    // Rows that could not be re-read are dropped: a stale row's key must not be pressed.
+    grants.replaceChildren();
+    keys.replaceChildren();
     const why = typeof failure === "string" ? failure : failureText(failure);
     setMessage(el("superuser-status"), outcome ? outcome + " " + why : why);
   }

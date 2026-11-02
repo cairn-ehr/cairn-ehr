@@ -60,7 +60,8 @@ pub async fn replaced_notice(
 
 /// When `staff_id`'s signing stops because their key is still unconfirmed under the site's
 /// optional expiry (§5.5), as RFC 3339 UTC — or `None` when it never will (no limit set, the key
-/// is confirmed, or no such member). The window asks once after a signed act, to warn days ahead.
+/// is confirmed, or no such member). The window asks when a staff ID is typed in the signer strip
+/// (and after an act signed with a held key, none typed), to warn days ahead.
 pub async fn unconfirmed_expires_at(db: &Client, staff_id: &str) -> anyhow::Result<Option<String>> {
     let row = db
         .query_one(

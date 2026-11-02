@@ -2035,7 +2035,12 @@ enum Cmd {
     /// (`--days N`), or never (`--none`, the default). The window warns its holder a week ahead.
     VaultSetUnconfirmedExpiry {
         /// Whole days from the key's approval, 1 to 36500.
-        #[arg(long, required_unless_present = "none", conflicts_with = "none")]
+        #[arg(
+            long,
+            required_unless_present = "none",
+            conflicts_with = "none",
+            value_parser = clap::value_parser!(i32).range(1..=36500)
+        )]
         days: Option<i32>,
         /// No expiry: unconfirmed keys sign until confirmed or repudiated.
         #[arg(long)]

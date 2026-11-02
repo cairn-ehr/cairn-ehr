@@ -259,8 +259,12 @@ fn the_rekey_panel_is_labelled_and_clears_both_ways() {
             "{id} needs a <label for>"
         );
     }
-    // A superuser is re-keyed at the console, so the window does not offer the role.
-    assert!(!INDEX_HTML.contains("id=\"rekey-role\"><option value=\"superuser\""));
+    // A superuser is re-keyed at the console, so the window does not offer the role. Read the
+    // select's own options (whitespace between the tags must not hide one).
+    let select = &INDEX_HTML[position(INDEX_HTML, "<select id=\"rekey-role\">")..];
+    let select = &select[..position(select, "</select>")];
+    assert!(select.contains("<option value=\"clinician\">"), "{select}");
+    assert!(!select.contains("value=\"superuser\""), "{select}");
     let body = js_fn(REKEY_JS, "rekeyStaff");
     assert!(body.contains("credential: signerCredential()"), "{body}");
     let after = &body[position(body, "catch (failure) {")..];

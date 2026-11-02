@@ -12,7 +12,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 **⇒ GUI SIGN-IN SLICE 2 — IN-PERSON ENROLMENT AND RE-KEY (ADR-0085, db/004, db/061, db/063) — do not undo** (pins:
 `crates/cairn-node/tests/{actor_rotate_key,actor_readers_after_rotation,suppression_owner_gate,vault_enrollers,vault_rekey,vault_admin_lib,restore_actor_registry_new_ops,window_role_vault_doors,device_actor_enrolment}.rs`,
-`db/tests/{004_actors,063_vault_enrollers}_test.sql`, `cairn-gui-tauri/src/{signer,rekey,reseal,superuser_panel}_tests.rs`;
+`db/tests/{004_actors,063_vault_enrollers}_test.sql`, `cairn-gui-tauri/src/{signer,signer_webview,enrol,rekey,reseal,superuser_panel}_tests.rs`;
 which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-actor-reader-table.md`):
 - **"Is this key current?" has three answers; ask the one you mean.** A door that lets a key author something NEW
   here reads `actor_current`. A gate that RE-ADMITS an event signed elsewhere or earlier (`apply_remote_event`, db/043's
@@ -32,11 +32,13 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   unconfirmed. Repudiation is final for the key (a later confirm is refused) and never revokes the actor. Pins:
   `confirmation_has_one_definition`, `a_superuser_enrolment_is_confirmed_at_once`, `bootstrap_writes_a_confirm_row`,
   `a_repudiated_enrollers_unconfirmed_members_are_doubtful`, `rekey_after_repudiation_restores_the_actor`.
-- **Unconfirmed never blocks signing by itself.** Only a repudiation or a revoke stops a key from signing. A site's
+- **Unconfirmed never blocks signing by itself.** Confirmation status alone never stops a key; only a repudiation, or
+  the key's retirement (a rotation, a revoke, a supersede), does. A site's
   own expiry stops the vault RELEASING the key, not the key signing: a seed already released, or a key the window
   holds, signs until it is dropped (`submit_event` does not read `vault_policy`). The expiry is OFF by default
   (`vault_policy` empty). **Tempting wrong fix:** refuse an unconfirmed key "to be safe" —
-  it sends the newcomer back to paper or to a shared login. Pins: `no_expiry_by_default`, `a_confirmed_key_never_expires`.
+  it sends the newcomer back to paper or to a shared login. Pins: `no_expiry_by_default`, `a_confirmed_key_never_expires`,
+  `a_doubtful_key_expires_like_an_unconfirmed_one`.
 - **`cairn_actor_append` refuses a clock behind the actor's latest registry row** (every op). Readers order by
   `recorded_at` first and a restore keeps the original timestamps, so a slow replacement machine would otherwise
   write a `rotate-key` that leaves the old key current, or a withdrawal that does nothing. Equal is allowed (`seq`
@@ -68,10 +70,12 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
 - **Every vault answer that becomes a person's sentence goes through `signer::from_release_noting`**, or a replaced
   passphrase reads "not right" again. Pin: `a_vault_answer_reaches_the_person_through_from_release_noting`.
 - **The re-key form asks whether the staff ID has a vault row BEFORE any key is released**
-  (`vault::staff_id_taken`, then `rekey::missing_member_details`): with none (after a restore) a name and a contact
-  are required, refused in a plain sentence, and the approver spends no release. Never decide it by parsing the
+  (`vault::staff_id_taken`, then `rekey::missing_member_details`): with none (after a restore) only a superuser may
+  re-key, and a name and a contact are required; either is refused in a plain sentence, and the approver spends no
+  release. Never decide it by parsing the
   door's refusal. Blank fields with a row keep the stored values (sent as NULL). Pins:
-  `a_rekey_with_no_member_row_needs_a_name_and_a_contact`, `the_rekey_runs_its_steps_in_order`,
+  `a_rekey_with_no_member_row_needs_a_name_and_a_contact`, `an_enroller_cannot_rekey_a_member_with_no_row`,
+  `the_rekey_runs_its_steps_in_order`,
   `the_rekey_form_sends_its_name_and_contact_fields`. The success line says whether a superuser must still confirm,
   by who approved (`the_success_line_says_whether_a_superuser_must_still_confirm`).
 - **Every member row of the grant panel offers *Repudiate key* on that member's CURRENT key, carried by the row**
@@ -81,6 +85,20 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   **Tempting wrong fix:** "tidy" the panel to Repudiate from the worklist only. Pins:
   `the_grant_list_names_each_members_key_so_a_confirmed_key_can_be_repudiated`,
   `a_grant_row_offers_its_members_key_to_repudiate_unless_already_repudiated`, `a_grant_rows_repudiate_uses_the_rows_own_key`.
+- **A judgement acts only on the person's CURRENT key** (`cairn_vault_judge_key`, under the actor lock a rotation
+  takes). The panel reads its lists once; a re-key in between leaves a row naming the old key, and judging it would
+  repudiate the genuine person's rotated-away key and leave the new one live. The page names the judgement
+  (`"confirm"` / `"repudiate"`, `superuser_panel::Judgement`), never a bare boolean; a floor refusal gets its own
+  sentence (`REFUSED`, "the lists may have been out of date"), and a failed list re-read never says "nothing was
+  recorded" (`READ_FAILED`) and drops the rows. **Tempting wrong fix:** let the floor judge any key the person ever
+  held "so #922 has a path" — a prior key needs its own door. Pins: `a_rotated_away_key_cannot_be_judged`,
+  `repudiate_on_a_stale_row_is_refused_and_says_so`, `a_judgement_is_named_never_a_boolean`,
+  `a_failed_write_says_which_kind_of_failure`, `a_failed_list_read_never_says_nothing_was_recorded`.
+- **The window finds the approver's grant row by the vault's own key** (`enrol::staff_id_key`: full Unicode lowercase,
+  spaces trimmed, as `cairn_vault_staff_id`), never an ASCII-only fold. A granted enroller whose key was repudiated
+  is told to get a re-key, not to wait for a confirmation; a listed member without the grant (an admin, whose role
+  serves the enrol purpose) is told plainly after the release. Pins: `standing_folds_case_as_the_vault_does`,
+  `a_repudiated_enroller_is_told_to_get_a_new_key`, `a_listed_member_without_the_grant_is_refused_after_the_release`.
 - **A key that is no longer current is told to ask for a re-key**, never to be enrolled again (a new staff ID is a
   second actor for one person). Pin: `a_key_no_longer_current_is_told_to_ask_for_a_re_key`. Both contact fields say
   the contact must work without any hospital login (`both_contact_fields_say_it_must_work_without_a_hospital_login`).

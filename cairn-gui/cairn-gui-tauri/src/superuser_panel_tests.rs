@@ -95,10 +95,14 @@ fn grant_row(enroller: bool, kid: Option<&str>, key_repudiated: bool) -> Enrolle
 #[test]
 fn a_grant_row_says_what_the_member_can_do() {
     let r = |enroller| grant_row(enroller, Some("k1"), false);
-    assert_eq!(enroller_text(&r(true)), "Eve (enrol1): can enrol staff.");
+    // "has the role", never "can enrol": the floor also wants their own key confirmed and current.
+    assert_eq!(
+        enroller_text(&r(true)),
+        "Eve (enrol1): has the enroller role."
+    );
     assert_eq!(
         enroller_text(&r(false)),
-        "Eve (enrol1): cannot enrol staff."
+        "Eve (enrol1): does not have the enroller role."
     );
 }
 
@@ -115,8 +119,8 @@ fn a_grant_row_offers_its_members_key_to_repudiate_unless_already_repudiated() {
     assert_eq!(gone.kid, None, "nothing left to repudiate");
     assert_eq!(
         gone.text,
-        "Eve (enrol1): can enrol staff. Their key is repudiated: give them a new key from the \
-         re-key form."
+        "Eve (enrol1): has the enroller role. Their key is repudiated: give them a new key from \
+         the re-key form."
     );
     assert_eq!(enroller_view(&grant_row(false, None, false)).kid, None);
 }
@@ -139,7 +143,13 @@ async fn no_passphrase_and_no_database_are_refused_plainly() {
     let state = AppState::mock(None);
     let none = set_enroller_impl(&state, credential("boss", ""), "x", true).await;
     assert_eq!(none.unwrap_err(), NEED_SUPERUSER);
-    let fixture = judge_key_impl(&state, credential("boss", &pass("s")), "k", false).await;
+    let fixture = judge_key_impl(
+        &state,
+        credential("boss", &pass("s")),
+        "k",
+        Judgement::Repudiate,
+    )
+    .await;
     assert_eq!(fixture.unwrap_err(), FIXTURE);
 }
 
@@ -190,7 +200,7 @@ fn a_grant_rows_repudiate_uses_the_rows_own_key() {
     let js = include_str!("../src-ui/superuser.js");
     let body = crate::source_guard::js_fn(js, "superuserRefresh");
     assert!(
-        body.contains("superuserAct(\"judge_key\", { kid: m.kid, confirm: false })"),
+        body.contains("superuserAct(\"judge_key\", { kid: m.kid, judgement: \"repudiate\" })"),
         "{body}"
     );
     assert!(body.contains("m.kid ?"), "drawn only with a key: {body}");
@@ -299,9 +309,14 @@ async fn a_superuser_grants_and_an_enroller_then_rekeys() {
             u.text.starts_with("Test Person (nurse1)") && u.text.contains("approved by enrol1")
         })
         .expect("on the worklist");
-    judge_key_impl(&state, credential("boss", &su_p), &mine.kid, true)
-        .await
-        .expect("confirmed");
+    judge_key_impl(
+        &state,
+        credential("boss", &su_p),
+        &mine.kid,
+        Judgement::Confirm,
+    )
+    .await
+    .expect("confirmed");
     assert!(list_unconfirmed_impl(&state)
         .await
         .unwrap()
@@ -323,14 +338,118 @@ async fn a_repudiated_key_leaves_the_worklist_for_good() {
         .expect("on the worklist")
         .kid
         .clone();
-    judge_key_impl(&state, credential("boss", &su_p), &kid, false)
-        .await
-        .expect("repudiated");
+    judge_key_impl(
+        &state,
+        credential("boss", &su_p),
+        &kid,
+        Judgement::Repudiate,
+    )
+    .await
+    .expect("repudiated");
     assert!(list_unconfirmed_impl(&state)
         .await
         .unwrap()
         .iter()
         .all(|u| u.kid != kid));
-    let again = judge_key_impl(&state, credential("boss", &su_p), &kid, true).await;
-    assert!(again.is_err(), "confirm after repudiate is refused");
+    let again = judge_key_impl(&state, credential("boss", &su_p), &kid, Judgement::Confirm).await;
+    assert_eq!(
+        again.unwrap_err(),
+        REFUSED,
+        "confirm after repudiate is the floor's refusal, not a fault"
+    );
+}
+
+/// A final act is never behind a bare `false`: the page names the judgement, and anything else
+/// (a boolean, a typo) is refused by serde before a key is released.
+#[test]
+fn a_judgement_is_named_never_a_boolean() {
+    let j = |s: &str| serde_json::from_str::<Judgement>(s);
+    assert_eq!(j("\"confirm\"").unwrap(), Judgement::Confirm);
+    assert_eq!(j("\"repudiate\"").unwrap(), Judgement::Repudiate);
+    for bad in ["false", "true", "\"Repudiate\"", "\"\""] {
+        assert!(j(bad).is_err(), "{bad}");
+    }
+    let js = include_str!("../src-ui/superuser.js");
+    assert!(
+        !js.contains("confirm: "),
+        "no boolean judgement left in the page"
+    );
+}
+
+/// Three answers to a failed write, three sentences: the floor refused on purpose (the row was
+/// out of date, or the act no longer applies), the node failed with an answer, or no answer came.
+#[test]
+fn a_failed_write_says_which_kind_of_failure() {
+    assert_eq!(write_failure_sentence(true, true), REFUSED);
+    assert_eq!(write_failure_sentence(false, true), NOT_RECORDED);
+    assert_eq!(write_failure_sentence(false, false), OUTCOME_UNKNOWN);
+    assert!(REFUSED.contains("nothing was recorded") && REFUSED.contains("lists"));
+}
+
+/// A list read happens AFTER a write; if it fails, the write's outcome must not be contradicted
+/// by "Nothing was recorded" (the superuser would press again).
+#[test]
+fn a_failed_list_read_never_says_nothing_was_recorded() {
+    assert!(!READ_FAILED.contains("recorded"), "{READ_FAILED}");
+    for f in ["list_unconfirmed_impl", "list_enrollers_impl"] {
+        let b = crate::source_guard::rust_fn(include_str!("superuser_panel.rs"), f);
+        assert!(
+            b.contains("read_fault(") && !b.contains(" fault("),
+            "{f}: {b}"
+        );
+    }
+    // The page drops rows it could not re-read, so no stale key is left to press.
+    let js = include_str!("../src-ui/superuser.js");
+    let body = crate::source_guard::js_fn(js, "superuserRefresh");
+    let catch = &body[body.find("catch").expect("a catch")..];
+    assert!(
+        catch.contains("grants.replaceChildren()") && catch.contains("keys.replaceChildren()"),
+        "{catch}"
+    );
+}
+
+/// Whatever the act's outcome, the superuser's passphrase leaves the strip: the clear runs
+/// AFTER the try/catch, never inside it, or a failed act would leave it for the next person.
+#[test]
+fn a_superuser_act_clears_the_strip_both_ways() {
+    let js = include_str!("../src-ui/superuser.js");
+    let body = crate::source_guard::js_fn(js, "superuserAct");
+    let clear = body.find("clearSigner(false)").expect("clears the strip");
+    let catch_end = body.rfind("failureText(failure)").expect("the catch");
+    assert!(clear > catch_end, "{body}");
+    assert!(body[..clear].matches("clearSigner").count() == 0, "{body}");
+}
+
+/// DB-gated (run locally, #905): the race the floor now closes. The superuser reads the grant
+/// list (nurse1's key K1), then an enroller re-keys nurse1 (K2), then the superuser presses
+/// Repudiate on the stale row. The floor refuses K1, the page says the lists were out of date,
+/// and K2 is still on the worklist, unjudged.
+#[tokio::test]
+async fn repudiate_on_a_stale_row_is_refused_and_says_so() {
+    let Some((_g, state, su_p, en_p)) = world().await else {
+        return;
+    };
+    let stale = list_enrollers_impl(&state)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.staff_id == "nurse1")
+        .and_then(|r| r.kid)
+        .expect("nurse1's key, as listed");
+    nurse_rekeyed_by_an_enroller(&state, &su_p, &en_p).await;
+    let said = judge_key_impl(
+        &state,
+        credential("boss", &su_p),
+        &stale,
+        Judgement::Repudiate,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(said, REFUSED);
+    let work = list_unconfirmed_impl(&state).await.unwrap();
+    assert!(
+        work.iter()
+            .any(|u| u.text.starts_with("Test Person (nurse1)") && u.kid != stale),
+        "the new key is still waiting: {work:?}"
+    );
 }

@@ -146,7 +146,8 @@ async function showExpiryNotice(staffId) {
     said = await invoke("expiry_notice", { staffId: staffId });
   } catch (e) {
     // Only an IPC-level failure lands here (Rust answers None for a failed read); an expired
-    // key's refusal still says why at the press.
+    // key's refusal still says why at the press. Logged, never swallowed without a trace.
+    console.error("expiry_notice failed", e);
   }
   if (staffId === (el("staff-id").value.trim() || heldBy)) setMessage(el("signer-notice"), said);
 }

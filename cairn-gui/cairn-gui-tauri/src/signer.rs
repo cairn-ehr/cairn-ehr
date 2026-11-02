@@ -135,8 +135,11 @@ pub enum KeyRefusal {
     Unknown,
     /// A superuser's key: it confers no clinical authorship (design §5.1), so the vault refused it.
     NotForClinicalActs,
-    /// This member's key was revoked, rotated away or repudiated: it can sign nothing here. The
-    /// remedy is a re-key on the same actor (slice 2), never a new enrolment.
+    /// This member's key was revoked, rotated away or repudiated: it can sign nothing here. For a
+    /// rotated-away or repudiated key the remedy is a re-key on the same actor (slice 2), never a
+    /// new enrolment. A revoked or superseded actor cannot be re-keyed (db/004 refuses the
+    /// rotation), and a superuser is re-keyed at the console; the sentence does not yet say so
+    /// (#927).
     NotCurrent,
     /// This member's key is still unconfirmed past the site's optional limit (§5.5): a
     /// superuser's confirmation lets it sign again. The strip may have warned a week ahead.

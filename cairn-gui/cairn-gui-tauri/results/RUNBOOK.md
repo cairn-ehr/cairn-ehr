@@ -1145,7 +1145,7 @@ only**, like section 16.
 | Enrolment by an enroller | the newcomer says "I'm new" | the outcome line after the newcomer's **first own signature** | **≤ 2 min** |
 | Re-key in person | *Forgotten passphrase* opened | the member's first signature with the new passphrase | **≤ 1 min** |
 | Change my passphrase | *Change my passphrase* opened | "Your passphrase is changed." | **≤ 30 s** |
-| Superuser confirm | Confirm pressed (credential already in the strip) | the row leaves the worklist | **≤ 10 s per row** |
+| Superuser confirm | the superuser starts typing their passphrase in the strip (it is emptied after every press) | the row leaves the worklist | **≤ 10 s per row** |
 
 Steps: enrolment paper *N* = 0 → forced *M* = 2 (the enroller's form and signature; the newcomer's passphrase twice),
 once per person per node → bundling target *K* = 2. Re-key paper 0 → *M* = 2 → *K* = 2. Change of passphrase paper 0
@@ -1167,7 +1167,8 @@ psql "$CONN" -At -c "SELECT m.staff_id, cairn_key_confirmation(m.signing_key_id)
 **Measurement 1 — grant the enroller role.** Open *Superuser: enrollers and keys*. Type `boss` and its passphrase
 into the strip; press *Grant* beside `dr-a`.
 
-- [ ] "dr-a can now enrol staff." The row now says "can enrol staff" and offers *Withdraw*.
+- [ ] "dr-a now has the enroller role. They can enrol staff while their own key is confirmed." The row now says
+      "has the enroller role" and offers *Withdraw*.
 - [ ] `dr-a`'s own credential and *Grant* beside another member: "Only a superuser can do this. …" Nothing changes.
 - [ ] The strip's passphrase is empty after every press, success or refusal.
 
@@ -1196,6 +1197,9 @@ new passphrase twice and presses *Give a new key*; then signs one act with it. S
       `enroll`, then `rotate-key`).
 - [ ] *Role* offers no *superuser*. A superuser is re-keyed only at the console:
       `cnode vault-rekey-superuser --staff-id boss` (passphrase prompted twice), then `boss` signs in with the new one.
+- [ ] Leave *Role* on *clinician* and re-key a *nurse*: "… Check that the role is the one they are enrolled with: a
+      re-key never changes a role. …" Nothing changes.
+
 **Measurement 4 — change my passphrase (the ≤ 30 s budget).** `dr-a` opens *Change my passphrase*, types staff ID,
 current passphrase and a new one twice, and presses *Change passphrase*.
 
@@ -1211,11 +1215,16 @@ Time *Confirm* on `locum-b`'s row (five rows: enrol more newcomers first).
 - [ ] *Repudiate* on another newcomer: no question is asked (principle 3). "The key is repudiated. Give the member a
       new key from the re-key form." That member's next sign: "Your signing key is no longer enrolled here. Nothing
       was signed. Ask a superuser or an enroller to re-key you."
-- [ ] **A confirmed key, and the cascade.** Leave one newcomer `dr-a` approved unconfirmed. Under *Who can enrol
-      staff*, press *Repudiate key* on `dr-a`'s row (a confirmed key: it is not on the worklist). No question is
+- [ ] **A stale row is refused.** Keep the panel open, re-key a newcomer from *Forgotten passphrase* with `dr-a` in
+      the strip, then press *Repudiate* on that newcomer's OLD row without reopening the panel: "The node refused
+      this, so nothing was recorded. The lists may have been out of date …". The lists redraw with the new key.
+- [ ] **A confirmed key, and the cascade.** Leave one newcomer `dr-a` approved unconfirmed. Under *Who has the
+      enroller role*, press *Repudiate key* on `dr-a`'s row (a confirmed key: it is not on the worklist). No question is
       asked. `dr-a`'s row then says "Their key is repudiated: give them a new key from the re-key form." with no
       *Repudiate key*, and every key `dr-a` approved that is still unconfirmed says "Doubtful: approved by a
-      repudiated enroller." Time the press as a confirm row.
+      repudiated enroller." Time the press as a confirm row. `dr-a` trying to enrol now: "Your own signing key was
+      repudiated, so you cannot approve anyone with it. …". Then re-key `dr-a` with `boss` in the strip (a
+      superuser's re-key is confirmed at once, and the grant is kept), so Measurement 6 can enrol through `dr-a`.
 
 **Measurement 6 — the optional expiry.** `cnode vault-set-unconfirmed-expiry --days 5`, then enrol a newcomer
 through `dr-a` (unconfirmed): it stops signing in five days, inside the strip's seven-day warning. To see the stop itself on
