@@ -47,8 +47,8 @@
 > failed re-read their own sentences; a repudiated enroller is told to get a re-key; staff IDs fold Unicode case as the
 > vault does. Filed from it: **#925** (the re-key form asks for a role the vault knows), **#927** (residuals);
 > **#924** (an enroller's re-key restarts the expiry clock) ACCEPTED and **#926** DECIDED 2026-11-02 in
-> [ADR-0086](spec/decisions/0086-who-may-act-after-a-repudiation.md) (spec **v0.88**, branch
-> `docs/slice-2-merged-next`): only a superuser re-keys a member whose current key was repudiated; the window never
+> [ADR-0086](spec/decisions/0086-who-may-act-after-a-repudiation.md) (spec **v0.88**, PR #928):
+> only a superuser re-keys a member whose current key was repudiated; the window never
 > repudiates a superuser's key — the owner runs **`cairn-node vault-repudiate-superuser-key --staff-id <id>`**, then
 > `vault-rekey-superuser`.
 > Owed by a human: **RUNBOOK §17** (enrol ≤ 2 min, re-key ≤ 1 min, change ≤ 30 s, confirm ≤ 10 s; VoiceOver).
@@ -106,7 +106,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Merge the ADR-0086 PR** (#919/#924/#926, branch `docs/slice-2-merged-next`). Then
+> 1. **Merge PR [#928](https://github.com/cairn-ehr/cairn-ehr/pull/928)** (ADR-0086: #919/#924/#926). Then
 >    **brainstorm slice 3** (who's writing / drafts / the `Asserted` grade + the author display, which also owes the
 >    per-note "unconfirmed" marker slice 2 deferred, and #918's display half). The
 >    maintainer picks the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
