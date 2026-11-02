@@ -281,6 +281,25 @@ async fn a_repudiated_enrollers_unconfirmed_members_are_doubtful() {
     assert_eq!(status(&c, ANURSE).await, "confirmed");
 }
 
+/// ADR-0086 decision 1 covers a REPUDIATED key only: a member whose key is merely doubtful (its
+/// enroller since repudiated) can still be re-keyed by another enroller, as at 2 am with no
+/// superuser on site.
+#[tokio::test]
+async fn an_enroller_may_rekey_a_doubtful_member() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    staff(&c).await;
+    enrol(&c, "anurse", "nurse", ANURSE, "jsmith", JSMITH)
+        .await
+        .unwrap();
+    judge(&c, JSMITH, false, "boss", BOSS).await.unwrap();
+    assert_eq!(status(&c, ANURSE).await, "doubtful");
+    rekey(&c, "anurse", "nurse", None, None, ANURSE2, "bwong", BWONG)
+        .await
+        .unwrap();
+    assert_eq!(status(&c, ANURSE2).await, "unconfirmed");
+}
+
 // ---- The optional site expiry for unconfirmed keys (§5.5, last bullet) ----
 
 /// Age key `v` by `days`: its introducing (and any confirm) row is back-dated. The registry is

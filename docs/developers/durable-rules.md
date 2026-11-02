@@ -51,6 +51,17 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   impostor chain. An enroller never enrols or re-keys a `superuser` or an `admin`, grants, or judges; nobody re-keys a
   superuser outside the console. Pins: `an_unconfirmed_enroller_cannot_enrol`, `an_enroller_cannot_enrol_a_superuser_or_an_admin`,
   `an_enroller_cannot_grant_or_judge`, `a_stale_grant_token_is_refused`.
+- **After a repudiation only a superuser re-keys, and a superuser's key is repudiated only at the console**
+  ([ADR-0086](../spec/decisions/0086-who-may-act-after-a-repudiation.md), #926). `cairn_vault_rekey` reads the target's
+  confirmation UNDER the actor lock (key-then-actor, `cairn_actor_append`'s order), so it cannot race the judgement,
+  and locks the member ROW before both, as a superuser's re-key does (`cairn_vault_install_key`), or the two deadlock;
+  `cairn_vault_judge_key` refuses `repudiate` on any actor whose pinned role is `superuser`; the owner's
+  `cairn_vault_bootstrap_repudiate` (`vault-repudiate-superuser-key`) is the only way. **Tempting wrong fixes:** read
+  the status before taking the lock ("it is only a read"); let a superuser repudiate a fellow superuser from the panel
+  "for convenience" (one stolen key then strips every other superuser). Pins: `rekey_after_repudiation_restores_the_actor`,
+  `a_repudiation_landing_mid_rekey_is_seen` (fails on the read-before-lock fix), `an_enrollers_rekey_takes_the_row_lock_first`,
+  `a_superusers_key_is_repudiated_only_at_the_console`, `an_enroller_may_rekey_a_doubtful_member`,
+  `the_console_repudiates_a_superusers_key`.
 - **Every administrative act is signed over its own domain-separated address**, computed in SQL and fetched by Rust
   (`cairn_vault_{enrol,rekey,grant,judge,reseal}_address`). The re-key address binds the ROLE (a restored node has no
   member row to check it against); the grant address binds the prior grant `seq`; the reseal address binds the old

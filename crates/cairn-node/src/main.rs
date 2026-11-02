@@ -2023,6 +2023,14 @@ enum Cmd {
         passphrase: Option<String>,
     },
 
+    /// Console-only: repudiate a superuser's current key (a stolen or misused one). The window
+    /// never repudiates a superuser's key (db/063, ADR-0086); give them a new one afterwards with
+    /// `vault-rekey-superuser`. Owner connection.
+    VaultRepudiateSuperuserKey {
+        #[arg(long)]
+        staff_id: String,
+    },
+
     /// Console-only: set the shared terminal-unlock passphrase (stored only as an Argon2id hash).
     /// Prompted twice, no echo (or CAIRN_TERMINAL_PASSPHRASE). Deliberately NOT the superuser's
     /// variable: one variable exported for both would make the shared passphrase the superuser's.
@@ -4892,6 +4900,14 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             println!("re-keyed superuser {staff_id} (key {kid})");
+        }
+        Cmd::VaultRepudiateSuperuserKey { staff_id } => {
+            // An owner act at the node's own console, like its siblings (#899).
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let kid =
+                cairn_node::vault_admin::repudiate_superuser_from_console(&db, &staff_id).await?;
+            println!("repudiated superuser {staff_id}'s key {kid}; give them a new one with vault-rekey-superuser");
         }
         Cmd::VaultSetTerminalPassphrase { passphrase } => {
             // Before the passphrase prompt and before any connect: these verbs carry a secret.

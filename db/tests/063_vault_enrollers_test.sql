@@ -95,6 +95,7 @@ BEGIN
     END LOOP;
     FOREACH f IN ARRAY ARRAY[
         'cairn_vault_bootstrap_rekey(text, text, text, bytea, text, text, text)',
+        'cairn_vault_bootstrap_repudiate(text)',
         'cairn_vault_approver_ok(text, bytea, bytea, boolean)',
         'cairn_vault_set_unconfirmed_expiry(integer)',
         'cairn_vault_key_expires_at(text)'

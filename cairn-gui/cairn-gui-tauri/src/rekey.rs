@@ -18,9 +18,10 @@
 //!    approved it. [`rekey_success`] words the success line by who approved (the grant panel's
 //!    read: `enrollers()` lists non-superusers only).
 //!
-//! A superuser is never re-keyed from the window (console only), and a re-key never changes a
-//! member's role: the floor refuses both, and the sentence is the generic
-//! [`RekeyRefusal::NotRecorded`], which names both checks. Approver refusals reuse
+//! A superuser is never re-keyed from the window (console only), a re-key never changes a member's
+//! role, and an enroller may not re-key a member whose key a superuser repudiated (#926,
+//! ADR-0086): the floor refuses all three, and the sentence is the generic
+//! [`RekeyRefusal::NotRecorded`], which names each. Approver refusals reuse
 //! [`EnrolRefusal`](crate::enrol::EnrolRefusal), decided by the grant-panel read the window can make
 //! (`enrol::release_enrol_key`), never by parsing a floor message.
 //!
@@ -108,8 +109,9 @@ impl RekeyRefusal {
                 .into(),
             RekeyRefusal::NotRecorded => "The member could not be re-keyed. Nothing was recorded. \
                  Check that the role is the one they are enrolled with: a re-key never changes a \
-                 role. A superuser's key can only be replaced at the console. If it still fails, \
-                 ask your IT support."
+                 role. A superuser's key can only be replaced at the console. If a superuser \
+                 repudiated the member's key, only a superuser can re-key them. If it still \
+                 fails, ask your IT support."
                 .into(),
             RekeyRefusal::OutcomeUnknown => {
                 "The node did not confirm the re-key, so the key may have been replaced. Ask the \

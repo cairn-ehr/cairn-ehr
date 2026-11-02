@@ -41,6 +41,16 @@ fn bootstrap_superuser_refuses_a_remote_database() {
     );
 }
 
+/// No secret either, but repudiating a superuser's key is the owner's act at the node's own
+/// console (ADR-0086), never across the network.
+#[test]
+fn repudiate_superuser_key_refuses_a_remote_database() {
+    refuses(
+        &["vault-repudiate-superuser-key", "--staff-id", "s1"],
+        "CAIRN_VAULT_PASSPHRASE",
+    );
+}
+
 /// No secret here, but the same posture as its siblings: a site's policy is set at the node's
 /// own console, never across the network.
 #[test]
