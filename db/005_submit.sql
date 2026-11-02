@@ -677,8 +677,9 @@ REVOKE EXECUTE ON FUNCTION cairn_twin_is_present(text) FROM PUBLIC;
 --
 -- The target's human authors = {signer_key_id if it EVER resolved to a kind='human'
 -- actor} ∪ {hex(attester_key) if a human attestation is stored}. Empty set ⇒
--- agent/un-owned ⇒ permitted. Non-empty ⇒ permitted only if the attester is in it.
--- STABLE (reads event_log + actor_event). Shared by BOTH doors so a replicated
+-- agent/un-owned ⇒ permitted. Non-empty ⇒ permitted only if the attester's ACTOR (exactly
+-- one, through actor_key_vouches) is the actor behind one of those keys.
+-- STABLE (reads event_log, actor_event, actor_key_vouches). Shared by BOTH doors so a replicated
 -- cross-human suppress faces the identical refusal (principle 12). Safe direction:
 -- an unknown/ambiguous attester on human-authored content refuses, never permits.
 --
@@ -687,12 +688,16 @@ REVOKE EXECUTE ON FUNCTION cairn_twin_is_present(text) FROM PUBLIC;
 -- Authorship is an immutable historical fact: a plain note.added stores no
 -- attester_key, so its ONLY human-author signal is the signer's registry kind AT
 -- AUTHORING TIME. If a departed/rotated author's key later drops out of
--- actor_current (revoke, or supersede onto a new key), querying actor_current here
+-- actor_current (revoke, supersede, rotate-key, repudiate), querying actor_current here
 -- would silently empty the human-author set and flip the gate open — over-permission
 -- on the safety floor (any enrolled human could then suppress a departed colleague's
 -- notes), which contradicts ADR-0043's never-over-permission invariant. actor_event
 -- is append-only, so this branch is monotonic: a key that was ever human stays human
 -- for this check forever. Wrong direction is over-refusal, never over-permission.
+-- The key-bearing ops are enroll and rotate-key (sign-in slice 2; a supersede row carries no
+-- key, #666): a rotated-in key has NO enroll row, so counting only enroll would leave its
+-- notes with no human author and the gate open. A repudiated key stays human here too —
+-- monotonic, the over-refusal direction. Pinned by actor_readers_after_rotation.rs.
 CREATE OR REPLACE FUNCTION cairn_suppression_author_ok(p_target UUID, p_attester_key BYTEA)
 RETURNS boolean LANGUAGE sql STABLE AS $$
     WITH tgt AS (
@@ -703,7 +708,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         SELECT t.signer_key_id AS kid FROM tgt t
         WHERE EXISTS (SELECT 1 FROM actor_event ae
                       WHERE ae.signing_key_id = t.signer_key_id
-                        AND ae.op IN ('enroll','supersede')
+                        AND ae.op IN ('enroll','rotate-key')   -- the key-bearing ops (#666)
                         AND ae.kind = 'human')
         UNION
         -- ADR-0056 (issue #265, PR #302 review finding F2): count this arm only when the
@@ -737,9 +742,26 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL
           AND cairn_attestation_vouched(p_target)
+    ),
+    -- The ACTORS behind those keys, from the same monotonic history (sign-in slice 2). Owner
+    -- means the same PERSON, not the same key: after a re-key (rotate-key, same actor) Dr A's
+    -- K2 must still be able to suppress the note Dr A signed with K1, or every re-keyed
+    -- clinician loses that power over their own past work (paper-parity, design §5.3/§5.6).
+    author_actors AS (
+        SELECT DISTINCT ae.actor_id
+        FROM actor_event ae JOIN human_authors h ON ae.signing_key_id = h.kid
+        WHERE ae.op IN ('enroll','rotate-key')
+    ),
+    -- The suppressor's actor: its key must resolve to EXACTLY ONE actor that still vouches
+    -- (not revoked, key not repudiated). Zero or several resolve to NULL and match nothing —
+    -- #152's uniqueness, and the safe direction: an ambiguous or repudiated attester refuses.
+    attester_actor AS (
+        SELECT CASE WHEN count(*) = 1 THEN max(v.actor_id) END AS actor_id
+        FROM actor_key_vouches v
+        WHERE v.signing_key_id = encode(p_attester_key, 'hex')
     )
     SELECT NOT EXISTS (SELECT 1 FROM human_authors)
-        OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));
+        OR EXISTS (SELECT 1 FROM author_actors a JOIN attester_actor t ON a.actor_id = t.actor_id);
 $$;
 
 -- Fail-closed suppression target resolution (issue #191, finding A3). The floor contract
@@ -1022,6 +1044,14 @@ $$;
 -- resolve to EXACTLY ONE actor and that actor must be human. Principle 4: uncertainty
 -- withholds power, it never confers it. Not a fix to db/020 — a different question.
 --
+-- RE-GRADE, NOT ADMISSION (sign-in slice 2, design §5.5). Both routes resolve the actor
+-- through actor_key_vouches, never actor_current: this function re-judges an event ALREADY
+-- admitted, so the question is "did this key legitimately belong to the actor, and is it not
+-- repudiated" — not "may it sign something new". A rotation (rotate-key, same actor) therefore
+-- keeps K1's past authority; a repudiation of K2 demotes what K2 signed; a revoke still
+-- demotes everything the actor signed (#409, unchanged). Pinned by
+-- actor_readers_after_rotation.rs.
+--
 -- FIXED ARITY. Never widen this argument list: Postgres OVERLOADS on a changed list rather
 -- than replacing, and migration replay never drops what a file stops creating, so a stale
 -- definition would survive in every existing database and silently serve any call site
@@ -1043,14 +1073,17 @@ AS $$
                AND e.attester_key IS NOT NULL          -- load-bearing; see header
                AND cairn_attestation_vouched(e.event_id)
                AND (SELECT count(*) = 1 AND bool_and(a.kind = 'human')
-                      FROM actor_current a
+                      FROM actor_key_vouches a
                      WHERE a.signing_key_id = encode(e.attester_key, 'hex')))
         THEN 'attested'
-        -- R2 — the human who made the claim is withdrawing their own.
+        -- R2 — the human who made the claim is withdrawing their own. The withdrawal's OWN
+        -- signing key must still vouch for the actor: an impostor's re-key, once repudiated,
+        -- loses its self-withdrawals too, while the actor's other keys keep theirs.
         WHEN p_target_event_id IS NOT NULL AND EXISTS (
             SELECT 1 FROM event_log c
               JOIN event_log t ON t.event_id = p_target_event_id
-              JOIN actor_current a ON a.actor_id = c.actor_id
+              JOIN actor_key_vouches a ON a.actor_id = c.actor_id
+                                      AND a.signing_key_id = c.signer_key_id
              WHERE c.event_id = p_event_id
                AND c.actor_id IS NOT NULL              -- NULL = a key on several actors,
                AND t.actor_id IS NOT NULL              -- i.e. attribution honestly unknown

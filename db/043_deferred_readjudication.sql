@@ -195,7 +195,13 @@ BEGIN
                 IF NOT cairn_attestation_ok(r.attestation, r.content_address, r.attester_key) THEN
                     RAISE EXCEPTION 'attestation token invalid or not bound to this event';
                 END IF;
-                IF NOT EXISTS (SELECT 1 FROM actor_current
+                -- actor_key_vouches, mirroring db/020's attester gate (sign-in slice 2): the
+                -- event was attested before it was deferred, so a key rotated away since then
+                -- still vouches — rotation is not compromise, and actor_current here would keep
+                -- such an event deferred forever. A repudiated key does not vouch and stays
+                -- refused. Residual risk as db/020 step 2: a leaked, rotated-away,
+                -- unrepudiated key arriving via a paired peer or a medium.
+                IF NOT EXISTS (SELECT 1 FROM actor_key_vouches
                                WHERE signing_key_id = encode(r.attester_key,'hex')
                                  AND kind = 'human') THEN
                     RAISE EXCEPTION 'attester is not an enrolled human actor (forged human author refused)';

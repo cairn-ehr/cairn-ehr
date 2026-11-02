@@ -219,7 +219,8 @@ BEGIN
             -- (field the present row disagrees on, present key, present recorded_at, present op)
             ('signing_key_id', 'dead99', '2026-01-01 00:00:00.000001+00'::timestamptz, 'enroll'),
             ('recorded_at',    'beef01', '2026-01-01 00:00:05+00'::timestamptz,        'enroll'),
-            ('op',             'beef01', '2026-01-01 00:00:00.000001+00'::timestamptz, 'supersede')
+            -- rotate-key, not supersede: a supersede row carries no key (db/004's shape CHECK, #666)
+            ('op',             'beef01', '2026-01-01 00:00:00.000001+00'::timestamptz, 'rotate-key')
         ) AS t(field, key, at, op)
     LOOP
         ok := FALSE;

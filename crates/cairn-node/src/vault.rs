@@ -1,7 +1,7 @@
 //! The Rust side of the clinicians' key vault (db/061).
 //!
 //! A clinician's Ed25519 key lives in the database, sealed under their own passphrase. This module is
-//! the thin client over the three SQL doors: enrol (a superuser vouches), bootstrap (console only) and
+//! the thin client over the SQL doors: enrol (a superuser vouches), bootstrap (console only) and
 //! release (the passphrase is checked INSIDE Postgres, and the seed comes back for ONE act).
 //!
 //! House rules held here: the passphrase never appears in an error, a `Debug` impl or a log line; the
@@ -41,19 +41,26 @@ pub fn passphrase_is_usable(passphrase: &str) -> bool {
     !passphrase.trim_matches(' ').is_empty()
 }
 
-/// Mint a key for `new`, seal its seed under their passphrase, and return `(kid, sealed blob)`.
+/// Seal a 32-byte seed under `passphrase` and return the CBOR blob the vault stores. The one place
+/// a seed is wrapped, shared by minting a new key and by a change of passphrase.
 /// Refuses an unusable passphrase, whichever door called it.
-fn mint_sealed(new: &NewMember<'_>) -> anyhow::Result<(String, Vec<u8>)> {
-    if !passphrase_is_usable(new.passphrase) {
+pub(crate) fn seal_seed(seed: &[u8; 32], passphrase: &str) -> anyhow::Result<Vec<u8>> {
+    if !passphrase_is_usable(passphrase) {
         bail!("a new passphrase must not be empty or only spaces");
     }
+    // The recovery wrap is unused (slice 2 re-keys by a signed approval, not a recovery code), but
+    // the sealed format still carries one; the code is generated and dropped, never shown.
+    let recovery = Zeroizing::new(seal::generate_recovery_code());
+    let sealed = seal::seal(&Secret32::from_bytes(*seed), passphrase, &recovery)
+        .map_err(|e| anyhow!("sealing the key failed: {e}"))?;
+    Ok(seal::to_cbor(&sealed))
+}
+
+/// Mint a key, seal its seed under `passphrase`, and return `(kid, sealed blob)`.
+pub(crate) fn mint_sealed(passphrase: &str) -> anyhow::Result<(String, Vec<u8>)> {
     let (sk, kid) = generate_key().map_err(|e| anyhow!("key generation failed: {e}"))?;
     let seed = Zeroizing::new(sk.to_bytes());
-    // shortcut: the vault re-keys by token (slice 2), so the recovery wrap is unused; drop it if slice 2 does not want it.
-    let recovery = Zeroizing::new(seal::generate_recovery_code());
-    let sealed = seal::seal(&Secret32::from_bytes(*seed), new.passphrase, &recovery)
-        .map_err(|e| anyhow!("sealing the key failed: {e}"))?;
-    Ok((kid, seal::to_cbor(&sealed)))
+    Ok((kid, seal_seed(&seed, passphrase)?))
 }
 
 /// The pinned determinant set both enrolment doors insist on: `{role, handle}`, the handle being
@@ -78,7 +85,7 @@ pub async fn enrol_member(
     superuser_staff_id: &str,
     superuser: &dyn EventSigner,
 ) -> anyhow::Result<String> {
-    let (kid, sealed) = mint_sealed(new)?;
+    let (kid, sealed) = mint_sealed(new.passphrase)?;
     let row = db
         .query_one(
             "SELECT cairn_vault_enrol_address($1, $2, $3), cairn_vault_staff_id($1)",
@@ -128,7 +135,7 @@ pub async fn bootstrap_superuser(db: &Client, new: &NewMember<'_>) -> anyhow::Re
         .context("normalising the staff ID")?
         .get(0);
     let pinned = vault_pinned("superuser", &normalised)?;
-    let (kid, sealed) = mint_sealed(new)?;
+    let (kid, sealed) = mint_sealed(new.passphrase)?;
     db.query_one(
         "SELECT cairn_vault_bootstrap($1, $2, $3::text::jsonb, $4, $5, $6, $7, $8)",
         &[
@@ -160,6 +167,8 @@ fn db_text(e: &tokio_postgres::Error) -> String {
 pub enum Purpose {
     Clinical,
     Enrol,
+    /// Re-wrap my own key under a new passphrase (every role may).
+    Reseal,
 }
 
 impl Purpose {
@@ -167,6 +176,7 @@ impl Purpose {
         match self {
             Purpose::Clinical => "clinical",
             Purpose::Enrol => "enrol",
+            Purpose::Reseal => "reseal",
         }
     }
 }
@@ -187,8 +197,14 @@ pub enum Release {
     },
     Unknown,
     RefusedPurpose,
-    /// The member's actor is revoked or superseded: its key would sign nothing the floor accepts.
+    /// The member's actor is revoked, or its key was rotated away or repudiated: that key would
+    /// sign nothing the floor accepts.
     NotCurrent,
+    /// A wrong passphrase, but the member's current key came from a recent or still-unconfirmed
+    /// re-key: the real owner learns their key was replaced. Counted exactly like `Wrong`.
+    Replaced {
+        retry_after: Option<Duration>,
+    },
     /// The connection has more power than a window may have (#898), so the vault was never
     /// asked and the passphrase never sent. `why` is the first reason, for the operator.
     OverPowered {
@@ -206,6 +222,10 @@ impl std::fmt::Debug for Release {
                 .finish(),
             Release::Wrong { retry_after } => f
                 .debug_struct("Wrong")
+                .field("retry_after", retry_after)
+                .finish(),
+            Release::Replaced { retry_after } => f
+                .debug_struct("Replaced")
                 .field("retry_after", retry_after)
                 .finish(),
             Release::Waiting { retry_after } => f
@@ -287,6 +307,7 @@ fn release_from_row(
             })
         }
         "wrong" => Ok(Release::Wrong { retry_after: retry }),
+        "replaced" => Ok(Release::Replaced { retry_after: retry }),
         "waiting" => Ok(Release::Waiting {
             retry_after: retry.ok_or_else(|| anyhow!("vault said wait without saying how long"))?,
         }),
@@ -388,7 +409,7 @@ mod tests {
             passphrase: "   ",
             hint: None,
         };
-        assert!(mint_sealed(&new).is_err());
+        assert!(mint_sealed(new.passphrase).is_err());
     }
 
     fn seed_of(v: u8) -> [u8; 32] {
@@ -430,6 +451,10 @@ mod tests {
         assert!(matches!(
             release_from_row("not-current", None, None, None).unwrap(),
             Release::NotCurrent
+        ));
+        assert!(matches!(
+            release_from_row("replaced", None, None, Some(2000)).unwrap(),
+            Release::Replaced { retry_after: Some(d) } if d == Duration::from_secs(2)
         ));
         assert!(release_from_row("bogus", None, None, None).is_err());
     }

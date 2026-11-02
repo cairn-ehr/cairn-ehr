@@ -358,6 +358,72 @@ async fn a_revoked_actor_is_not_told_to_re_enrol_a_key_that_cannot_be_resurrecte
     );
 }
 
+/// #664 item 3: a door that can write a `supersede` row owes a test for the `Retired` arm.
+///
+/// Under the settled convention (#666, db/004's shape CHECK) a supersede row carries NO key and
+/// sits on the OLD actor, so the old key matches no `actor_current` row while its `enroll` row
+/// survives — `Retired`, and never `Enrolled` (the "superseded key keeps authoring" hole) nor
+/// `Ambiguous` (a legitimately superseded node refused as dual-mapped).
+#[tokio::test]
+async fn a_superseded_key_classifies_as_retired() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let _ = setup(&c, &[]).await;
+    let kid = a_key_id("superseded");
+    assert!(enroll_device_actor(&c, &kid).await.unwrap());
+    c.execute(
+        "INSERT INTO actor_event (actor_id, op, superseded_by) \
+         SELECT DISTINCT actor_id, 'supersede', cairn_actor_id('{\"successor\":\"of-this-node\"}') \
+         FROM actor_event WHERE signing_key_id = $1",
+        &[&kid],
+    )
+    .await
+    .expect("supersede the actor this key is enrolled under");
+
+    assert_eq!(
+        device_actor_standing(&c, &kid).await.unwrap(),
+        ActorStanding::Retired
+    );
+    require_device_actor(&c, &kid)
+        .await
+        .expect_err("a superseded key may not author");
+}
+
+/// The other retirement slice 2 makes writable: a `rotate-key` on the same actor. The old key
+/// reads `Retired` (it may sign nothing new); the new one reads `Enrolled`, once.
+#[tokio::test]
+async fn a_rotated_away_key_classifies_as_retired_and_its_successor_as_enrolled() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let _ = setup(&c, &[]).await;
+    let (old, new) = (a_key_id("rotated-away"), a_key_id("rotated-in"));
+    assert!(enroll_device_actor(&c, &old).await.unwrap());
+    c.execute(
+        "SELECT cairn_actor_append(actor_id, 'rotate-key', $2, NULL, NULL) \
+         FROM actor_event WHERE signing_key_id = $1 AND op = 'enroll'",
+        &[&old, &new],
+    )
+    .await
+    .expect("rotate the device actor to a new key");
+
+    assert_eq!(
+        device_actor_standing(&c, &old).await.unwrap(),
+        ActorStanding::Retired
+    );
+    assert_eq!(
+        device_actor_standing(&c, &new).await.unwrap(),
+        ActorStanding::Enrolled
+    );
+}
+
 /// ⚠️ A SOURCE GUARD, BECAUSE `init` HAS NO BEHAVIOURAL TEST AND DELETING ONE LINE IS SILENT.
 ///
 /// `Cmd::Init` calls `enroll_device_actor`, and that call is what keeps the paper-parity count
