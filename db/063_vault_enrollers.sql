@@ -13,7 +13,9 @@
 --   * a superuser CONFIRMS or REPUDIATES a key (§5.5); repudiation is final for that key;
 --   * a member may RESEAL their own key under a new passphrase (§5.4);
 --   * after a restore the vault is empty but the registry is not: the re-key door re-creates the
---     member row on the existing actor (§5.8).
+--     member row on the existing actor (§5.8);
+--   * a site MAY make an unconfirmed key stop signing after a set number of days (§5.5, off by
+--     default): the console sets it, the window reads the date to warn days ahead.
 --
 -- THE TRUST BOUNDARY. Every door below is reachable by cairn_agent (the window) — so by any
 -- raw-SQL client holding it. None may act without a SIGNED approval verified HERE:
@@ -36,7 +38,9 @@
 -- enroller rule, the approver rule and the 'replaced' notice, so those are defined in db/061,
 -- AHEAD of the doors: on any replay (an upgrade from 62 included) a door and everything it calls
 -- then change in one transaction, and a concurrent sign-in can never meet a door calling a
--- function not yet defined (db/061 promise 2). This file holds the doors only the window calls.
+-- function not yet defined (db/061 promise 2). The same goes for the expiry: its policy table
+-- and the expiry rule (cairn_vault_key_expires_at) are db/061's, because the release door reads
+-- them. This file holds the doors only the window and the console call.
 
 BEGIN;
 
@@ -274,11 +278,16 @@ BEGIN
 END;
 $$;
 
--- Confirm or repudiate one human key (§5.5) — superuser only. Confirm: only a key awaiting it
--- ('unconfirmed' or 'doubtful'). Repudiate: any key not already repudiated — a confirmed one
--- included (an impostor found later). Repudiation is FINAL for that key: nothing confirms it
--- again; the remedy is a new re-key. The key lock (enroll_actor's, same seed) serialises two
--- judgements of one key, so a confirm and a repudiate cannot both read the status first.
+-- Confirm or repudiate one human key (§5.5) — superuser only, and only the key the person signs
+-- with NOW. Confirm: only a key awaiting it ('unconfirmed' or 'doubtful'). Repudiate: any current
+-- key not already repudiated — a confirmed one included (an impostor found later). Repudiation is
+-- FINAL for that key: nothing confirms it again; the remedy is a new re-key.
+-- Why "current": the superuser's panel reads its lists once, so a re-key in between leaves a row
+-- naming the OLD key; judging it would repudiate the genuine person's rotated-away key and leave
+-- the new one (an impostor's, in the case Repudiate exists for) live. No path judges a prior key
+-- (#922). Two locks: the key lock (enroll_actor's, same seed) serialises two judgements of one
+-- key, so a confirm and a repudiate cannot both read the status first; the actor lock (the one a
+-- rotate-key takes, db/004) means a re-key cannot land between the "current" check and the row.
 CREATE OR REPLACE FUNCTION cairn_vault_judge_key(p_signing_key_id text, p_confirm boolean,
                                                  p_superuser_staff_id text, p_token bytea)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -296,9 +305,13 @@ BEGIN
     IF v_actor IS NULL THEN
         RAISE EXCEPTION 'cairn_vault_judge_key: no person''s actor holds or held key %', p_signing_key_id;
     END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended(encode(v_actor, 'hex'), 0));
     v_status := cairn_key_confirmation(p_signing_key_id);
     IF v_status = 'repudiated' THEN
         RAISE EXCEPTION 'cairn_vault_judge_key: key % is repudiated, which is final — the remedy is a new re-key', p_signing_key_id;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = p_signing_key_id) THEN
+        RAISE EXCEPTION 'cairn_vault_judge_key: key % is not the current key of its person (rotated away, or the actor retired) — read the lists again', p_signing_key_id;
     END IF;
     IF p_confirm AND v_status NOT IN ('unconfirmed', 'doubtful') THEN
         RAISE EXCEPTION 'cairn_vault_judge_key: key % is %, not awaiting confirmation', p_signing_key_id, v_status;
@@ -372,10 +385,47 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
       FROM vault_member m WHERE m.role <> 'superuser' ORDER BY m.staff_id;
 $$;
 
+-- A member's CURRENT signing key, for the grant panel's Repudiate (§5.5): a superuser must be able
+-- to repudiate a key that is no longer waiting — an impostor found after it was confirmed, or an
+-- enroller whose approvals should turn doubtful (the cascade). The worklist above lists only keys
+-- still waiting, so it cannot reach those. Returns the public key id only, as
+-- cairn_vault_unconfirmed already does; NULL for no such member.
+CREATE OR REPLACE FUNCTION cairn_vault_member_key(p_staff_id text)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT m.signing_key_id FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
+$$;
+
+-- Owner only (the node's console, `cairn-node vault-set-unconfirmed-expiry`): after how many days
+-- an unconfirmed key stops signing (§5.5), or NULL for no expiry — the reference default. Hard
+-- policy, the site's to choose; Cairn ships the mechanism (principle 9). No grant: being able to
+-- run this IS the authority, as for cairn_vault_set_terminal_phc. The table's CHECK bounds it
+-- too; this says it in words first.
+CREATE OR REPLACE FUNCTION cairn_vault_set_unconfirmed_expiry(p_days int)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF p_days NOT BETWEEN 1 AND 36500 THEN
+        RAISE EXCEPTION 'cairn_vault_set_unconfirmed_expiry: the limit must be at least one day and at most 36500 days; NULL means no expiry';
+    END IF;
+    INSERT INTO vault_policy (singleton, unconfirmed_expiry_days) VALUES (true, p_days)
+    ON CONFLICT (singleton) DO UPDATE SET unconfirmed_expiry_days = EXCLUDED.unconfirmed_expiry_days;
+END;
+$$;
+
+-- When this member's signing stops because their key is still unconfirmed (§5.5), or NULL when
+-- it never will (no limit set, or the key is confirmed — db/061's cairn_vault_key_expires_at).
+-- The window asks when a staff ID is typed (and after an act signed with a held key, none typed),
+-- to warn days ahead: never a surprise at the moment of signing. Reveals one date per staff ID,
+-- as cairn_vault_replaced_notice does.
+CREATE OR REPLACE FUNCTION cairn_vault_unconfirmed_expires_at(p_staff_id text)
+RETURNS timestamptz LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT cairn_vault_key_expires_at(m.signing_key_id)
+      FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
+$$;
+
 -- Grants. Every definer and internal helper is first revoked from PUBLIC; the window (cairn_agent,
 -- which cairn_window inherits, db/062) gets exactly the doors it calls. The pure address and
 -- purpose functions keep PUBLIC EXECUTE, as cairn_vault_enrol_address does: they read nothing.
--- cairn_vault_bootstrap_rekey has NO grant: the console's alone.
+-- cairn_vault_bootstrap_rekey and cairn_vault_set_unconfirmed_expiry have NO grant: the console's alone.
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_grant_prior(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_update_custody(text, text, bytea, text, text, text, text) FROM PUBLIC;
@@ -387,6 +437,9 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) FRO
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_enrollers() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_member_key(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_set_unconfirmed_expiry(int) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_grant_prior(text) TO cairn_agent;
@@ -396,5 +449,7 @@ GRANT EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) TO c
 GRANT EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed() TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_vault_enrollers() TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_vault_member_key(text) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) TO cairn_agent;
 
 COMMIT;

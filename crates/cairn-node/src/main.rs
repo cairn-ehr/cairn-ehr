@@ -2031,6 +2031,22 @@ enum Cmd {
         passphrase: Option<String>,
     },
 
+    /// Console-only: after how many days a key no superuser has confirmed stops signing
+    /// (`--days N`), or never (`--none`, the default). The window warns its holder a week ahead.
+    VaultSetUnconfirmedExpiry {
+        /// Whole days from the key's approval, 1 to 36500.
+        #[arg(
+            long,
+            required_unless_present = "none",
+            conflicts_with = "none",
+            value_parser = clap::value_parser!(i32).range(1..=36500)
+        )]
+        days: Option<i32>,
+        /// No expiry: unconfirmed keys sign until confirmed or repudiated.
+        #[arg(long)]
+        none: bool,
+    },
+
     /// Record clinician-observed identity evidence on an existing chart (§5.4): an
     /// estimated age (-> a year-range dob) and/or an observed sex (-> administrative-sex),
     /// both provenance `clinician-observed`. Supply at least one of --age / --sex.
@@ -4886,6 +4902,17 @@ async fn run() -> anyhow::Result<()> {
             db.execute("SELECT cairn_vault_set_terminal_phc($1)", &[&phc])
                 .await?;
             println!("terminal-unlock passphrase set");
+        }
+        Cmd::VaultSetUnconfirmedExpiry { days, none: _ } => {
+            // The site's policy is set at its own console, like its siblings (#899).
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            db.execute("SELECT cairn_vault_set_unconfirmed_expiry($1)", &[&days])
+                .await?;
+            match days {
+                Some(n) => println!("unconfirmed keys stop signing {n} days after approval"),
+                None => println!("unconfirmed keys never expire"),
+            }
         }
         Cmd::AssertObservedEvidence {
             patient,

@@ -124,7 +124,7 @@ pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
 ///     at a DIFFERENT read: whether a claim over an EXISTING event (e.g. a sensitivity
 ///     withdrawal) is authoritative. The two read DISJOINT inputs — this function reads
 ///     `contributors`/`signer_key_id`, `cairn_claim_authority`'s R1 branch reads only
-///     `attester_key`/`cairn_attestation_vouched`/`actor_current` and never looks at
+///     `attester_key`/`cairn_attestation_vouched`/`actor_key_vouches` and never looks at
 ///     `contributors` at all — so "mirror" overstates it, and it is not a full mapping
 ///     either: its R2 ('self': a human withdrawing their own claim) has no Rust counterpart
 ///     here; this function's `Device` (no responsibility-bearing contributor at all) has no

@@ -53,7 +53,7 @@ async fn fresh() -> (Client, Client) {
     let guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     c.batch_execute(
-        "TRUNCATE vault_attempt, vault_member, vault_terminal, event_log, actor_event, patient_chart CASCADE",
+        "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, patient_chart CASCADE",
     )
     .await
     .unwrap();

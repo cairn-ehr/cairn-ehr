@@ -92,7 +92,7 @@ pub async fn fresh() -> (Client, Client, SigningKey, String) {
     let guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     c.batch_execute(
-        "TRUNCATE vault_attempt, vault_member, vault_terminal, event_log, actor_event, \
+        "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, \
          patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
     )
     .await

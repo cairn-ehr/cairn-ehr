@@ -207,7 +207,7 @@ fn the_enrol_panel_is_labelled_warns_about_the_hint_and_clears_both_ways() {
             "{id} needs a <label for>"
         );
     }
-    for role in ["clinician", "nurse", "superuser"] {
+    for role in ["clinician", "nurse", "admin", "superuser"] {
         assert!(INDEX_HTML.contains(&format!("<option value=\"{role}\">")));
     }
     assert!(
@@ -236,6 +236,137 @@ fn the_enrol_panel_is_labelled_warns_about_the_hint_and_clears_both_ways() {
     );
 }
 
+const REKEY_JS: &str = include_str!("../src-ui/rekey.js");
+
+/// Slice 2, Task 6: the "Forgotten passphrase" panel is labelled, sends the strip's credential,
+/// and empties both new passphrases and the strip on both ways out (never remembering the approver).
+#[test]
+fn the_rekey_panel_is_labelled_and_clears_both_ways() {
+    assert!(INDEX_HTML.contains("<details id=\"rekey-staff\">"));
+    assert!(INDEX_HTML.contains("<script src=\"rekey.js\"></script>"));
+    for id in [
+        "rekey-staff-id",
+        "rekey-role",
+        "rekey-name",
+        "rekey-phone",
+        "rekey-email",
+        "rekey-passphrase",
+        "rekey-passphrase-again",
+        "rekey-hint",
+    ] {
+        assert!(
+            INDEX_HTML.contains(&format!("<label for=\"{id}\"")),
+            "{id} needs a <label for>"
+        );
+    }
+    // A superuser is re-keyed at the console, so the window does not offer the role. Read the
+    // select's own options (whitespace between the tags must not hide one).
+    let select = &INDEX_HTML[position(INDEX_HTML, "<select id=\"rekey-role\">")..];
+    let select = &select[..position(select, "</select>")];
+    assert!(select.contains("<option value=\"clinician\">"), "{select}");
+    assert!(!select.contains("value=\"superuser\""), "{select}");
+    let body = js_fn(REKEY_JS, "rekeyStaff");
+    assert!(body.contains("credential: signerCredential()"), "{body}");
+    let after = &body[position(body, "catch (failure) {")..];
+    for clear in [
+        "el(\"rekey-passphrase\").value = \"\";",
+        "el(\"rekey-passphrase-again\").value = \"\";",
+        "clearSigner(false);",
+    ] {
+        assert!(
+            after.contains(clear),
+            "{clear} missing after the catch: {body}"
+        );
+    }
+    assert!(!REKEY_JS.contains("confirm("));
+}
+
+/// After a restore the re-key form must carry what a re-created member row needs (design §5.8):
+/// it sends the name and contact fields as typed (blank keeps a surviving row's values), and
+/// empties them after a re-key that worked.
+#[test]
+fn the_rekey_form_sends_its_name_and_contact_fields() {
+    let body = js_fn(REKEY_JS, "rekeyStaff");
+    for sent in [
+        "displayName: el(\"rekey-name\").value,",
+        "phone: el(\"rekey-phone\").value,",
+        "email: el(\"rekey-email\").value,",
+    ] {
+        assert!(body.contains(sent), "{sent} missing: {body}");
+    }
+    let success = &body[position(body, "if (rekeyed) {")..];
+    for id in ["rekey-name", "rekey-phone", "rekey-email"] {
+        assert!(
+            success.contains(&format!("\"{id}\"")),
+            "{id} is emptied after a re-key that worked: {body}"
+        );
+    }
+}
+
+/// The contact is where a future token re-key would be sent, so it must work without the hospital
+/// login the newcomer does not have yet (design §1 and §6: the institutional inbox is the circle).
+/// Both forms that take a contact say so, once, beside the fields.
+#[test]
+fn both_contact_fields_say_it_must_work_without_a_hospital_login() {
+    const SAID: &str = "A personal mobile or an outside email address: it must work without any \
+                        hospital login.";
+    for id in ["enrol-contact-note", "rekey-contact-note"] {
+        let at = position(INDEX_HTML, &format!("id=\"{id}\""));
+        assert!(
+            INDEX_HTML[at..].starts_with(&format!("id=\"{id}\">{SAID}<")),
+            "{id}"
+        );
+    }
+    for field in ["enrol-phone", "enrol-email", "rekey-phone", "rekey-email"] {
+        let note = if field.starts_with("enrol") {
+            "enrol-contact-note"
+        } else {
+            "rekey-contact-note"
+        };
+        assert!(
+            INDEX_HTML.contains(&format!(
+                "id=\"{field}\" type=\"text\" autocomplete=\"off\" aria-describedby=\"{note}\""
+            )),
+            "{field} is described by its note"
+        );
+    }
+}
+
+const RESEAL_JS: &str = include_str!("../src-ui/reseal.js");
+
+/// Slice 2, Task 7: "Change my passphrase" is labelled, and empties all three passphrases on
+/// both ways out of the call.
+#[test]
+fn the_change_passphrase_panel_is_labelled_and_clears_both_ways() {
+    assert!(INDEX_HTML.contains("<details id=\"change-passphrase\">"));
+    assert!(INDEX_HTML.contains("<script src=\"reseal.js\"></script>"));
+    for id in [
+        "reseal-staff-id",
+        "reseal-current",
+        "reseal-new",
+        "reseal-new-again",
+        "reseal-hint",
+    ] {
+        assert!(
+            INDEX_HTML.contains(&format!("<label for=\"{id}\"")),
+            "{id} needs a <label for>"
+        );
+    }
+    let body = js_fn(RESEAL_JS, "changePassphrase");
+    let after = &body[position(body, "catch (failure) {")..];
+    for clear in [
+        "el(\"reseal-current\").value = \"\";",
+        "el(\"reseal-new\").value = \"\";",
+        "el(\"reseal-new-again\").value = \"\";",
+    ] {
+        assert!(
+            after.contains(clear),
+            "{clear} missing after the catch: {body}"
+        );
+    }
+    assert!(!RESEAL_JS.contains("confirm("));
+}
+
 /// Lock empties the strip BEFORE it asks Rust, so a Lock whose call fails still leaves no typed
 /// credential for the next person's press to sign with (PR #897 review).
 #[test]
@@ -260,5 +391,43 @@ fn a_failed_hint_read_is_shown_not_hidden() {
     assert!(
         hint.contains("failureText(e)"),
         "a failed hint read must show its refusal: {hint}"
+    );
+}
+
+/// §5.5 ("never a surprise at the moment of signing"): the expiry warning is asked for when a
+/// staff ID is typed, BEFORE the act — the change handler first clears the last ID's warning.
+/// After the act it is asked only for a held-key act with no ID typed, so a sign costs at most
+/// one read. A shared terminal clears the warning with the ID (I2).
+#[test]
+fn the_expiry_warning_is_asked_for_the_typed_id_before_the_act() {
+    let change = js_fn(SIGNER_JS, "onStaffIdChange");
+    let wipe = position(change, "setMessage(el(\"signer-notice\"), \"\");");
+    let ask = position(change, "void showExpiryNotice(staffId);");
+    assert!(wipe < ask, "{change}");
+    assert!(change.contains("void showSignerHint();"), "{change}");
+    assert!(
+        SIGNER_JS.contains("el(\"staff-id\").addEventListener(\"change\", onStaffIdChange);"),
+        "the staff ID's change handler asks"
+    );
+    let clear = js_fn(SIGNER_JS, "clearSigner");
+    assert!(
+        clear.contains("if (signed && typed === \"\" && heldBy) void showExpiryNotice(heldBy);"),
+        "{clear}"
+    );
+    let shared = &clear[position(clear, "if (keyHoldSecs === 0) {")..];
+    assert!(
+        shared[..position(shared, "}")].contains("setMessage(el(\"signer-notice\"), \"\");"),
+        "a shared terminal clears the warning with the ID: {clear}"
+    );
+    let show = js_fn(SIGNER_JS, "showExpiryNotice");
+    assert!(
+        show.contains("if (staffId === (el(\"staff-id\").value.trim() || heldBy))"),
+        "a late answer never labels the next person: {show}"
+    );
+    assert_eq!(SIGNER_JS.matches("invoke(\"expiry_notice\"").count(), 1);
+    assert_eq!(SIGNER_JS.matches("showExpiryNotice(").count(), 3);
+    assert!(
+        INDEX_HTML.contains("<p id=\"signer-notice\" role=\"status\" hidden></p>"),
+        "the warning has its own announced line in the strip"
     );
 }

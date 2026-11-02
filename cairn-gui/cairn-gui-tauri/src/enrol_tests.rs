@@ -151,6 +151,8 @@ fn every_sentence_is_plain_and_names_no_value() {
         EnrolRefusal::Fixture,
         EnrolRefusal::AlreadyEnrolled,
         EnrolRefusal::NeedSuperuser,
+        EnrolRefusal::ApproverMayNotEnrolThisRole,
+        EnrolRefusal::ApproverNotConfirmed,
     ] {
         let s = r.sentence();
         assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
@@ -171,7 +173,7 @@ fn the_enrolment_runs_its_steps_in_order() {
         "if!credential.has_passphrase(){",
         "state.forget_held_key().await;",
         "cairn_node::vault::staff_id_taken(",
-        "cairn_node::vault::release_for_act(",
+        "release_enrol_key(",
         "cairn_node::vault::enrol_member(",
     ];
     let at: Vec<usize> = order
@@ -236,7 +238,7 @@ async fn live(
     let guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
     c.batch_execute(
-        "TRUNCATE vault_attempt, vault_member, vault_terminal, event_log, actor_event, \
+        "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, \
          patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
     )
     .await
@@ -457,4 +459,145 @@ async fn a_staff_id_alone_asks_for_a_superuser_and_never_reaches_the_vault() {
         .expect_err("refused");
         assert_eq!(said, EnrolRefusal::NeedSuperuser.sentence(), "{blank:?}");
     }
+}
+
+/// Only a superuser vouches for a superuser or an admin; an enroller may not (the floor says the
+/// same, this is the courtesy that spares them a release attempt).
+#[test]
+fn only_a_superuser_may_enrol_the_powerful_roles() {
+    for (role, restricted) in [
+        ("superuser", true),
+        (" admin ", true),
+        ("clinician", false),
+        ("nurse", false),
+    ] {
+        assert_eq!(role_needs_superuser(role), restricted, "{role}");
+    }
+}
+
+#[test]
+fn the_new_refusals_name_no_field_and_no_passphrase() {
+    for r in [
+        EnrolRefusal::ApproverMayNotEnrolThisRole,
+        EnrolRefusal::ApproverNotConfirmed,
+        EnrolRefusal::ApproverKeyRepudiated,
+    ] {
+        let s = r.sentence();
+        assert!(!s.is_empty() && !s.contains('\u{2014}'), "{s}");
+        assert!(!s.to_lowercase().contains("passphrase"), "{s}");
+    }
+}
+
+fn row(id: &str, enroller: bool) -> cairn_node::vault_admin::EnrollerRow {
+    cairn_node::vault_admin::EnrollerRow {
+        staff_id: id.into(),
+        display_name: "Test Person".into(),
+        enroller,
+        kid: None,
+        key_repudiated: false,
+    }
+}
+
+/// The grant panel lists non-superusers only: absent means superuser.
+#[test]
+fn standing_reads_the_grant_panel_rows() {
+    let rows = [row("en1", true), row("cl1", false)];
+    assert_eq!(standing(&rows, "en1"), Standing::Granted);
+    assert_eq!(standing(&rows, " EN1 "), Standing::Granted);
+    assert_eq!(standing(&rows, "cl1"), Standing::NotGranted);
+    assert_eq!(standing(&rows, "boss"), Standing::NotListed);
+}
+
+/// The vault keys staff IDs by `lower(btrim(x) COLLATE pg_unicode_fast)` (db/061): a full
+/// Unicode lowercase, and only SPACES trimmed. An ASCII-only fold would read "MÜLLER" as not
+/// listed (a superuser), and the re-key's success line would then drop "a superuser must
+/// confirm the new key" for an enroller's approval.
+#[test]
+fn standing_folds_case_as_the_vault_does() {
+    let rows = [row("müller", true), row("émile", false)];
+    assert_eq!(standing(&rows, " MÜLLER "), Standing::Granted);
+    assert_eq!(standing(&rows, "ÉMILE"), Standing::NotGranted);
+    assert_eq!(staff_id_key(" ÄBC "), "äbc");
+    assert_eq!(staff_id_key("\tabc"), "\tabc", "btrim trims spaces only");
+}
+
+/// A granted member whose key was repudiated (final) is not "waiting for a confirmation": the
+/// remedy is a re-key, and the window says so.
+#[test]
+fn a_repudiated_enroller_is_told_to_get_a_new_key() {
+    let mut r = row("en1", true);
+    r.key_repudiated = true;
+    assert_eq!(standing(&[r], "en1"), Standing::GrantedKeyRepudiated);
+    assert_eq!(
+        refused_purpose_decision(Standing::GrantedKeyRepudiated),
+        EnrolRefusal::ApproverKeyRepudiated
+    );
+    let said = EnrolRefusal::ApproverKeyRepudiated.sentence();
+    assert!(
+        said.contains("re-key") && !said.contains("confirm"),
+        "{said}"
+    );
+}
+
+/// M2: the pre-check decisions, with no database. After a key was released, only an enroller is
+/// ever refused, and only for superuser/admin; a superuser (even with a stray grant, who is
+/// still absent from the non-superuser list) is never refused.
+#[test]
+fn the_precheck_refuses_only_an_enroller_aiming_high() {
+    use EnrolRefusal::ApproverMayNotEnrolThisRole as No;
+    assert_eq!(
+        precheck_decision(Standing::Granted, Some("admin")),
+        Some(No)
+    );
+    assert_eq!(
+        precheck_decision(Standing::Granted, Some("superuser")),
+        Some(No)
+    );
+    assert_eq!(precheck_decision(Standing::Granted, Some("nurse")), None);
+    assert_eq!(precheck_decision(Standing::Granted, None), None);
+    assert_eq!(precheck_decision(Standing::NotListed, Some("admin")), None);
+    assert_eq!(
+        precheck_decision(Standing::NotListed, Some("superuser")),
+        None
+    );
+    assert_eq!(precheck_decision(Standing::NotListed, None), None);
+}
+
+/// An admin's role serves the enrol purpose, so the vault releases an admin's key; but the floor
+/// takes an approval only from a superuser or a member holding the grant. An admin without it is
+/// told so plainly, not with "try again, ask IT" after the floor refuses.
+#[test]
+fn a_listed_member_without_the_grant_is_refused_after_the_release() {
+    for role in [Some("clinician"), Some("admin"), None] {
+        assert_eq!(
+            precheck_decision(Standing::NotGranted, role),
+            Some(EnrolRefusal::NotForEnrolment)
+        );
+    }
+}
+
+/// A refused enrol purpose: a granted-but-unconfirmed enroller is told to wait; a clinician or an
+/// unknown ID gets the plain refusal.
+#[test]
+fn a_refused_purpose_tells_an_unconfirmed_enroller_from_a_clinician() {
+    assert_eq!(
+        refused_purpose_decision(Standing::Granted),
+        EnrolRefusal::ApproverNotConfirmed
+    );
+    for s in [Standing::NotGranted, Standing::NotListed] {
+        assert_eq!(refused_purpose_decision(s), EnrolRefusal::NotForEnrolment);
+    }
+}
+
+/// The shared release helper releases with `Purpose::Enrol` and never touches the held session.
+#[test]
+fn the_shared_release_is_enrol_purpose_and_never_held() {
+    let body: String = crate::source_guard::rust_fn(include_str!("enrol.rs"), "release_enrol_key")
+        .split_whitespace()
+        .collect();
+    assert!(body.contains("Purpose::Enrol"), "{body}");
+    assert!(
+        !body.contains("signer_for_act") && !body.contains("session"),
+        "{body}"
+    );
 }

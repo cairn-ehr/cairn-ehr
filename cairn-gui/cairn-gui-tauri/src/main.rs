@@ -38,14 +38,17 @@ mod link;
 mod node_lock_explains_tests;
 #[cfg(test)]
 mod read_again_webview_tests;
+mod rekey;
 #[cfg(test)]
 mod reread_webview_tests;
+mod reseal;
 mod signer;
 #[cfg(test)]
 mod signer_webview_tests;
 #[cfg(test)]
 mod source_guard;
 mod state;
+mod superuser_panel;
 #[cfg(test)]
 mod waiting_webview_tests;
 mod worklist;
@@ -124,11 +127,18 @@ fn main() -> anyhow::Result<()> {
             commands::med_list,
             commands::lock_state,
             commands::vault_hint,
+            commands::expiry_notice,
             commands::terminal_unlock,
             commands::forget_held_key,
             commands::sign_off,
             commands::cease,
             enrol::enrol_member,
+            rekey::rekey_member,
+            superuser_panel::list_unconfirmed,
+            superuser_panel::list_enrollers,
+            superuser_panel::set_enroller,
+            superuser_panel::judge_key,
+            reseal::change_passphrase,
             hold::withhold,
             hold::release,
             funnel::commands::funnel_status,

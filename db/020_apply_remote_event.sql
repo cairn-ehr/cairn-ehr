@@ -177,8 +177,10 @@ BEGIN
     --    compromise: a repudiated key is not in actor_key_vouches and is refused. submit_event
     --    stays on actor_current — a rotated-away key authors nothing new at this node.
     --    RESIDUAL RISK, accepted: a leaked, rotated-away, NOT-repudiated key can still land an
-    --    event here via a paired peer or a medium. The remedy is to repudiate it; rotation
-    --    alone does not retire a key from history. The attribution STAMP, though, must be
+    --    event here via a paired peer or a medium. Rotation alone does not retire a key from
+    --    history; repudiation does, but no window or console path repudiates a rotated-away key
+    --    yet (#922), and repudiation also pens the key's genuine past events (#921). The
+    --    attribution STAMP, though, must be
     --    resolved against the key's ENTIRE local registry history, not its current
     --    state: a replicated event was authored under whatever epoch its origin node
     --    held AT AUTHORING TIME, which this node cannot know (the signed bytes carry

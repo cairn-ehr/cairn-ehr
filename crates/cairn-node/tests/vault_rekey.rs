@@ -384,3 +384,29 @@ async fn reseal_releases_the_key_for_reseal_only() {
         );
     }
 }
+
+/// A judgement acts only on the key the person signs with NOW (the floor, so two terminals
+/// cannot race it). The superuser's panel reads its lists once; a re-key in between leaves the
+/// row naming the OLD key. Repudiating that would hit the genuine person's rotated-away key and
+/// leave the new one (an impostor's, in the case the button exists for) live and unjudged.
+#[tokio::test]
+async fn a_rotated_away_key_cannot_be_judged() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    staff(&c).await;
+    for (new, approver, by) in [(JSMITH2, "bwong", BWONG), (JSMITH3, "bwong", BWONG)] {
+        rekey(&c, "jsmith", "clinician", None, None, new, approver, by)
+            .await
+            .unwrap();
+    }
+    // JSMITH (confirmed) and JSMITH2 (unconfirmed) are both rotated away; JSMITH3 is current.
+    for (old, confirm) in [(JSMITH, false), (JSMITH2, false), (JSMITH2, true)] {
+        let e = judge(&c, old, confirm, "boss", BOSS).await.unwrap_err();
+        assert!(msg(&e).contains("not the current key"), "{}", msg(&e));
+    }
+    assert_eq!(status(&c, JSMITH).await, "confirmed");
+    assert_eq!(status(&c, JSMITH2).await, "unconfirmed");
+    assert_eq!(status(&c, JSMITH3).await, "unconfirmed");
+    judge(&c, JSMITH3, false, "boss", BOSS).await.unwrap();
+    assert_eq!(status(&c, JSMITH3).await, "repudiated");
+}

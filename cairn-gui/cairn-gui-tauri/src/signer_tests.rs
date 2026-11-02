@@ -116,6 +116,7 @@ fn refusal_sentences_never_echo_the_passphrase() {
         KeyRefusal::Unknown,
         KeyRefusal::NotForClinicalActs,
         KeyRefusal::NotCurrent,
+        KeyRefusal::Expired,
         KeyRefusal::OverPowered,
         KeyRefusal::Fault,
     ];
@@ -201,6 +202,10 @@ fn each_vault_answer_maps_to_its_refusal() {
     assert_eq!(
         from_release(Release::NotCurrent).unwrap_err(),
         KeyRefusal::NotCurrent
+    );
+    assert_eq!(
+        from_release(Release::Expired).unwrap_err(),
+        KeyRefusal::Expired
     );
     assert_eq!(
         from_release(Release::OverPowered { why: "any reason." }).unwrap_err(),
@@ -341,4 +346,158 @@ fn an_empty_passphrase_is_never_sent_to_the_vault() {
             }
         }
     }
+}
+
+/// The maintainer's sentence (2026-11-01), byte for byte.
+#[test]
+fn the_replaced_sentence_is_exact() {
+    let r = KeyRefusal::Replaced {
+        at: "Sun 1 Nov 2026 14:05".into(),
+        approver: "Dr Smith".into(),
+        retry_after: None,
+    };
+    assert_eq!(
+        r.sentence(),
+        "This passphrase was replaced on Sun 1 Nov 2026 14:05, approved by Dr Smith. If you \
+         didn't ask for that, tell a superuser."
+    );
+}
+
+/// An approver no longer in the vault arrives as "": never "approved by ."
+#[test]
+fn a_departed_approver_still_reads_sensibly() {
+    let s = KeyRefusal::Replaced {
+        at: "Sun 1 Nov 2026 14:05".into(),
+        approver: String::new(),
+        retry_after: None,
+    }
+    .sentence();
+    assert!(
+        s.contains("approved by someone no longer enrolled here."),
+        "{s}"
+    );
+    assert!(!s.contains("by ."), "{s}");
+}
+
+/// A replaced answer is still a counted wrong guess: the back-off wording keeps parity.
+#[test]
+fn a_replaced_answer_keeps_the_back_off() {
+    let s = KeyRefusal::Replaced {
+        at: "x".into(),
+        approver: "y".into(),
+        retry_after: Some(Duration::from_millis(1200)),
+    }
+    .sentence();
+    assert!(
+        s.ends_with("tell a superuser. Wait 2 s, then try again."),
+        "{s}"
+    );
+}
+
+#[test]
+fn a_local_time_is_date_and_time_in_the_given_zone() {
+    use chrono::{FixedOffset, TimeZone};
+    let zone = FixedOffset::east_opt(10 * 3600).unwrap();
+    let now = zone.with_ymd_and_hms(2026, 11, 1, 9, 0, 0).unwrap();
+    assert_eq!(
+        local_at("2026-11-01T04:05:00Z", &now),
+        "Sun 1 Nov 2026 14:05"
+    );
+    assert_eq!(local_at("not a time", &now), "not a time");
+}
+
+fn notice(approver: &str) -> cairn_node::vault_admin::ReplacedNotice {
+    cairn_node::vault_admin::ReplacedNotice {
+        at: "2026-11-01T04:05:00Z".into(),
+        approver: approver.into(),
+    }
+}
+
+fn utc_now() -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Utc.with_ymd_and_hms(2026, 11, 1, 9, 0, 0).unwrap()
+}
+
+/// A notice becomes the Replaced refusal; no notice or a failed lookup degrades to Wrong with
+/// the same back-off (never an error, never a blank).
+#[test]
+fn a_notice_names_the_approver_and_its_absence_degrades_to_wrong() {
+    let wait = Some(Duration::from_secs(3));
+    assert_eq!(
+        noting(wait, Ok(Some(notice("Dr Smith"))), &utc_now()),
+        KeyRefusal::Replaced {
+            at: "Sun 1 Nov 2026 04:05".into(),
+            approver: "Dr Smith".into(),
+            retry_after: wait
+        }
+    );
+    assert_eq!(
+        noting(wait, Ok(None), &utc_now()),
+        KeyRefusal::Wrong { retry_after: wait }
+    );
+    assert_eq!(
+        noting(None, Err(anyhow::anyhow!("lookup failed")), &utc_now()),
+        KeyRefusal::Wrong { retry_after: None }
+    );
+}
+
+/// The window has no DB-backed test rig in this suite (#738), so the WIRING is pinned by source:
+/// every place a vault answer becomes a refusal for a person must use `from_release_noting`, or
+/// a replaced passphrase silently reads "not right" again.
+#[test]
+fn a_vault_answer_reaches_the_person_through_from_release_noting() {
+    use crate::source_guard::rust_fn;
+    for (src, name) in [
+        (include_str!("state.rs"), "signer_for_act"),
+        (include_str!("reseal.rs"), "change_passphrase_impl"),
+        (include_str!("enrol.rs"), "release_enrol_key"),
+    ] {
+        let body = rust_fn(src, name);
+        assert!(body.contains("from_release_noting("), "{name}: {body}");
+        assert!(!body.contains("from_release("), "{name}: {body}");
+    }
+}
+
+/// An expired unconfirmed key (the site's optional limit, §5.5) is told what fixes it.
+#[test]
+fn an_expired_key_is_told_to_ask_a_superuser_to_confirm_it() {
+    let s = KeyRefusal::Expired.sentence();
+    assert!(s.contains("Nothing was signed."), "{s}");
+    assert!(s.contains("Ask a superuser to confirm your key."), "{s}");
+}
+
+/// The warning days ahead (§5.5: never a surprise at the moment of signing): shown when signing
+/// stops within 7 days, in the clinician's local time, naming the staff ID; silent with no limit
+/// or a later one. An instant that does not parse is still warned about, as recorded (principle 4).
+#[test]
+fn an_unconfirmed_key_is_warned_within_seven_days_of_its_expiry() {
+    let now = utc_now(); // Sun 1 Nov 2026 09:00 UTC
+    assert_eq!(
+        expiry_notice(" anurse ", Some("2026-11-05T04:05:00Z"), &now).as_deref(),
+        Some(
+            "Not yet confirmed by a superuser. anurse's key stops signing on Thu 5 Nov 2026 04:05."
+        )
+    );
+    assert!(expiry_notice("anurse", Some("2026-11-08T08:59:00Z"), &now).is_some());
+    assert_eq!(
+        expiry_notice("anurse", Some("2026-11-08T09:01:00Z"), &now),
+        None
+    );
+    assert_eq!(expiry_notice("anurse", None, &now), None);
+    assert_eq!(
+        expiry_notice("anurse", Some("soon"), &now).as_deref(),
+        Some("Not yet confirmed by a superuser. anurse's key stops signing on soon.")
+    );
+}
+
+/// Since slice 2 a key that is no longer current (rotated away, repudiated) is fixed by a RE-KEY on
+/// the same actor: "enrol you again" would send the person to a new staff ID, a second actor.
+#[test]
+fn a_key_no_longer_current_is_told_to_ask_for_a_re_key() {
+    let s = KeyRefusal::NotCurrent.sentence();
+    assert!(
+        s.contains("Ask a superuser or an enroller to re-key you."),
+        "{s}"
+    );
+    assert!(!s.contains("enrol you again"), "{s}");
 }

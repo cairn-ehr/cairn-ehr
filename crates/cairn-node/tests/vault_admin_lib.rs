@@ -23,7 +23,7 @@ async fn fresh() -> (Client, Client) {
     let guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     c.batch_execute(
-        "TRUNCATE vault_attempt, vault_member, vault_terminal, actor_event, event_log CASCADE",
+        "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, actor_event, event_log CASCADE",
     )
     .await
     .unwrap();
@@ -243,4 +243,53 @@ async fn grants_and_judgements_round_trip() {
         .any(|u| u.kid == kid && u.approver_staff_id == "jsmith"));
     judge_key(&w, &kid, true, "boss", &su).await.unwrap();
     assert!(unconfirmed(&w).await.unwrap().iter().all(|u| u.kid != kid));
+}
+
+/// The grant list carries each member's CURRENT key, so a superuser can repudiate a key that is
+/// no longer waiting: here a confirmed enroller's. That sets off the cascade (§5.5): what the
+/// enroller approved and nobody confirmed turns doubtful. The row then says the key is
+/// repudiated, so the panel does not offer to repudiate it twice.
+#[tokio::test]
+async fn the_grant_list_names_each_members_key_so_a_confirmed_key_can_be_repudiated() {
+    let Some(_) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let su = world(&c, "old pass phrase").await;
+    let w = window(&c).await;
+    set_enroller(&w, "jsmith", true, "boss", &su).await.unwrap();
+    let (jkey, jkid) = released(&w, "jsmith", "old pass phrase", Purpose::Enrol).await;
+    let nurse_kid = enrol_member(
+        &w,
+        &member("nurse", "clinician", "nurse pass"),
+        "jsmith",
+        &jkey,
+    )
+    .await
+    .unwrap();
+    let rows = enrollers(&w).await.unwrap();
+    let j = rows.iter().find(|e| e.staff_id == "jsmith").unwrap();
+    assert_eq!(
+        j.kid.as_deref(),
+        Some(jkid.as_str()),
+        "the member's current key"
+    );
+    assert!(!j.key_repudiated);
+    // jsmith's key was confirmed at enrolment (a superuser approved it): not on the worklist.
+    assert!(unconfirmed(&w).await.unwrap().iter().all(|u| u.kid != jkid));
+
+    judge_key(&w, &jkid, false, "boss", &su).await.unwrap();
+    let todo = unconfirmed(&w).await.unwrap();
+    assert!(
+        todo.iter().any(|u| u.kid == nurse_kid && u.doubtful),
+        "the cascade: the repudiated enroller's unconfirmed approval is doubtful"
+    );
+    let rows = enrollers(&w).await.unwrap();
+    assert!(
+        rows.iter()
+            .find(|e| e.staff_id == "jsmith")
+            .unwrap()
+            .key_repudiated
+    );
 }

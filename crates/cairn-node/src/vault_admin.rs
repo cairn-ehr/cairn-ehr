@@ -58,6 +58,22 @@ pub async fn replaced_notice(
     }))
 }
 
+/// When `staff_id`'s signing stops because their key is still unconfirmed under the site's
+/// optional expiry (§5.5), as RFC 3339 UTC — or `None` when it never will (no limit set, the key
+/// is confirmed, or no such member). The window asks when a staff ID is typed in the signer strip
+/// (and after an act signed with a held key, none typed), to warn days ahead.
+pub async fn unconfirmed_expires_at(db: &Client, staff_id: &str) -> anyhow::Result<Option<String>> {
+    let row = db
+        .query_one(
+            "SELECT to_char(cairn_vault_unconfirmed_expires_at($1) AT TIME ZONE 'UTC', \
+                            'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
+            &[&staff_id],
+        )
+        .await
+        .context("reading when an unconfirmed key stops signing")?;
+    Ok(row.get(0))
+}
+
 /// Sign `addr` as `signer`: the approval token every approver-gated door takes.
 fn approve(addr: &[u8], signer: &dyn EventSigner) -> anyhow::Result<Vec<u8>> {
     let kid = hex::encode(signer.verifying_key().to_bytes());
@@ -244,15 +260,22 @@ pub struct Unconfirmed {
     /// RFC 3339 (UTC).
     pub approved_at: String,
     pub doubtful: bool,
+    /// When it stops signing under the site's optional expiry (§5.5), RFC 3339 (UTC); `None`
+    /// with no limit set.
+    pub stops_at: Option<String>,
 }
 
-/// The superuser's worklist: current keys still unconfirmed or doubtful, oldest first.
+/// The superuser's worklist: current keys still unconfirmed or doubtful, oldest first, each
+/// with its expiry date (a companion call per row in the same statement, so
+/// `cairn_vault_unconfirmed`'s columns stay as they are).
 pub async fn unconfirmed(db: &Client) -> anyhow::Result<Vec<Unconfirmed>> {
     let rows = db
         .query(
             "SELECT staff_id, COALESCE(display_name, ''), signing_key_id, \
                     COALESCE(approver_staff_id, ''), \
-                    to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), doubtful \
+                    to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), doubtful, \
+                    to_char(cairn_vault_unconfirmed_expires_at(staff_id) AT TIME ZONE 'UTC', \
+                            'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
                FROM cairn_vault_unconfirmed()",
             &[],
         )
@@ -267,6 +290,7 @@ pub async fn unconfirmed(db: &Client) -> anyhow::Result<Vec<Unconfirmed>> {
             approver_staff_id: r.get(3),
             approved_at: r.get(4),
             doubtful: r.get(5),
+            stops_at: r.get(6),
         })
         .collect())
 }
@@ -276,13 +300,23 @@ pub struct EnrollerRow {
     pub staff_id: String,
     pub display_name: String,
     pub enroller: bool,
+    /// The member's CURRENT key (`cairn_vault_member_key`), which the panel's Repudiate acts on:
+    /// the worklist lists only keys still waiting, so a confirmed key is reachable only here.
+    pub kid: Option<String>,
+    /// That key is already repudiated (final), so there is nothing left to repudiate.
+    pub key_repudiated: bool,
 }
 
-/// Every non-superuser member and whether they hold the enroller grant now.
+/// Every non-superuser member, whether they hold the enroller grant now, and their current key
+/// with whether it is repudiated (companion calls in the same statement, so
+/// `cairn_vault_enrollers`'s columns stay as they are).
 pub async fn enrollers(db: &Client) -> anyhow::Result<Vec<EnrollerRow>> {
     let rows = db
         .query(
-            "SELECT staff_id, display_name, enroller FROM cairn_vault_enrollers()",
+            "SELECT e.staff_id, e.display_name, e.enroller, k.kid, \
+                    cairn_key_confirmation(k.kid) = 'repudiated' \
+               FROM cairn_vault_enrollers() e \
+               CROSS JOIN LATERAL cairn_vault_member_key(e.staff_id) AS k(kid)",
             &[],
         )
         .await
@@ -293,6 +327,8 @@ pub async fn enrollers(db: &Client) -> anyhow::Result<Vec<EnrollerRow>> {
             staff_id: r.get(0),
             display_name: r.get(1),
             enroller: r.get(2),
+            kid: r.get(3),
+            key_repudiated: r.get(4),
         })
         .collect())
 }

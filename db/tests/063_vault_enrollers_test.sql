@@ -35,6 +35,7 @@ BEGIN
         'cairn-vault-judge' || E'\n' || k || E'\n' || 'repudiate', 'UTF8')), 'the repudiate preimage';
     ASSERT cairn_vault_reseal_address('nobody-here', '\x00') IS NULL,
         'no member, no address (nothing to sign over)';
+    ASSERT cairn_vault_member_key('nobody-here') IS NULL, 'no member, no key';
 END $$;
 
 -- 2. The reseal address binds the CURRENT stored blob and the new one, by digest only.
@@ -46,6 +47,8 @@ BEGIN
     ASSERT cairn_vault_reseal_address(' Mirror-Reseal ', '\x0304') = '\x1220'::bytea || sha256(convert_to(
         'cairn-vault-reseal' || E'\n' || 'mirror-reseal' || E'\n' || encode(sha256('\x0102'), 'hex')
         || E'\n' || encode(sha256('\x0304'), 'hex'), 'UTF8')), 'the reseal preimage';
+    ASSERT cairn_vault_member_key(' Mirror-Reseal ') = repeat('ef', 32),
+        'the grant panel reads the member''s current key, staff ID normalised';
 END $$;
 
 -- 3. The release door's purpose map (§5.1; defined in db/061, ahead of the door that calls it).
@@ -84,17 +87,24 @@ BEGIN
         'cairn_vault_is_enroller(text)',
         'cairn_vault_unconfirmed()',
         'cairn_vault_enrollers()',
-        'cairn_vault_replaced_notice(text)'
+        'cairn_vault_member_key(text)',
+        'cairn_vault_replaced_notice(text)',
+        'cairn_vault_unconfirmed_expires_at(text)'
     ] LOOP
         ASSERT has_function_privilege('cairn_agent', f, 'EXECUTE'), format('the window must reach %s', f);
     END LOOP;
     FOREACH f IN ARRAY ARRAY[
         'cairn_vault_bootstrap_rekey(text, text, text, bytea, text, text, text)',
-        'cairn_vault_approver_ok(text, bytea, bytea, boolean)'
+        'cairn_vault_approver_ok(text, bytea, bytea, boolean)',
+        'cairn_vault_set_unconfirmed_expiry(integer)',
+        'cairn_vault_key_expires_at(text)'
     ] LOOP
         ASSERT NOT has_function_privilege('cairn_agent', f, 'EXECUTE'), format('%s is the owner''s alone', f);
         ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), format('%s is revoked from PUBLIC', f);
     END LOOP;
+    -- The site's policy (§5.5) is custody state, the owner's alone, like vault_terminal.
+    ASSERT NOT has_table_privilege('cairn_agent', 'vault_policy', 'SELECT')
+       AND NOT has_table_privilege('cairn_agent', 'vault_policy', 'UPDATE'), 'vault_policy is the owner''s';
 END $$;
 
 ROLLBACK;
