@@ -139,7 +139,12 @@ async fn change_passphrase_keeps_the_key() {
     )
     .await
     .unwrap();
-    assert!(matches!(r, Reseal::Done), "{r:?}");
+    // A fixed message: CodeQL's cleartext-logging query treats anything a "passphrase"-named
+    // call returns as sensitive, so the result is never echoed.
+    assert!(
+        matches!(r, Reseal::Done),
+        "a change of passphrase completes"
+    );
     let (_, after) = released(&w, "jsmith", "new pass phrase", Purpose::Clinical).await;
     assert_eq!(before, after);
     assert!(matches!(
@@ -170,7 +175,10 @@ async fn a_wrong_current_passphrase_changes_nothing() {
     let r = change_passphrase(&w, "jsmith", "not it", "new pass phrase", None)
         .await
         .unwrap();
-    assert!(matches!(r, Reseal::Refused(Release::Wrong { .. })), "{r:?}");
+    assert!(
+        matches!(r, Reseal::Refused(Release::Wrong { .. })),
+        "a wrong current passphrase is refused as wrong"
+    );
     let after: Vec<u8> = c
         .query_one(
             "SELECT sealed FROM vault_member WHERE staff_id = 'jsmith'",
