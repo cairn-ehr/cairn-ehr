@@ -209,7 +209,9 @@ $$;
 -- ADR-0086): repudiation is a superuser's judgement, and an enroller's fresh key a minute later
 -- would undo it (the impostor case). The check runs under the actor lock cairn_vault_judge_key
 -- takes (and in cairn_actor_append's key-then-actor order), so a repudiation landing at the same
--- moment is either seen here or refused there as "not the current key".
+-- moment is either seen here or refused there as "not the current key". The member ROW is locked
+-- before both, as a superuser's re-key locks it (cairn_vault_install_key's FOR UPDATE, then the
+-- rotate-key's key and actor locks): taken the other way round, the two deadlock on one person.
 CREATE OR REPLACE FUNCTION cairn_vault_rekey(
     p_staff_id text, p_role text, p_display_name text, p_phone text, p_email text,
     p_new_key text, p_sealed bytea, p_hint text, p_approver_staff_id text, p_token bytea)
@@ -228,7 +230,8 @@ BEGIN
         RAISE EXCEPTION 'cairn_vault_rekey: an enroller may not re-key a superuser or an admin — ask a superuser';
     END IF;
     IF v_kind = 'enroller' THEN
-        SELECT m.actor_id INTO v_actor FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
+        SELECT m.actor_id INTO v_actor FROM vault_member m
+         WHERE m.staff_id = cairn_vault_staff_id(p_staff_id) FOR UPDATE;
         IF FOUND THEN
             PERFORM pg_advisory_xact_lock(hashtextextended(p_new_key, 1));
             PERFORM pg_advisory_xact_lock(hashtextextended(encode(v_actor, 'hex'), 0));
@@ -330,7 +333,8 @@ $$;
 -- rotate-key takes, db/004) means a re-key cannot land between the "current" check and the row.
 -- A SUPERUSER's key is never repudiated here, their own included (#926, ADR-0086): one stolen
 -- superuser key could otherwise strip every other superuser. That is the console's act,
--- cairn_vault_bootstrap_repudiate. (Confirming one is refused anyway: it was confirmed at once.)
+-- cairn_vault_bootstrap_repudiate. (Confirming one is refused anyway: only an unconfirmed or doubtful
+-- key is confirmed, and a superuser's key is neither — the vault confirms it as it issues it.)
 CREATE OR REPLACE FUNCTION cairn_vault_judge_key(p_signing_key_id text, p_confirm boolean,
                                                  p_superuser_staff_id text, p_token bytea)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -472,7 +476,8 @@ $$;
 -- Grants. Every definer and internal helper is first revoked from PUBLIC; the window (cairn_agent,
 -- which cairn_window inherits, db/062) gets exactly the doors it calls. The pure address and
 -- purpose functions keep PUBLIC EXECUTE, as cairn_vault_enrol_address does: they read nothing.
--- cairn_vault_bootstrap_rekey and cairn_vault_set_unconfirmed_expiry have NO grant: the console's alone.
+-- cairn_vault_bootstrap_rekey, cairn_vault_bootstrap_repudiate and cairn_vault_set_unconfirmed_expiry
+-- have NO grant: the console's alone.
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_grant_prior(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_update_custody(text, text, bytea, text, text, text, text) FROM PUBLIC;

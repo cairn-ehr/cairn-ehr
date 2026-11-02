@@ -39,7 +39,8 @@ them:
    `cairn-node vault-repudiate-superuser-key --staff-id <id>` (db/063 `cairn_vault_bootstrap_repudiate`, approved by
    `console`, no token, owner-only like `cairn_vault_bootstrap_rekey`), which repudiates that superuser's *current*
    key and prints it. The remedy is the console re-key, `vault-rekey-superuser`. Confirming a superuser's key was
-   already refused, because a superuser's key is confirmed when it is issued.
+   already refused: only an unconfirmed or doubtful key is confirmed, and a superuser's key is neither (the
+   vault confirms it as it issues it; one enrolled outside the vault is `outside`).
 3. **#924 is accepted as a limit, not fixed.** An enroller's re-key restarts the expiry clock for an unconfirmed
    person. Expiry is off by default. A forgotten passphrase at 2 am must stay fixable without a superuser. The new
    key is still unconfirmed and still on the superuser's worklist. So the expiry is a prompt to confirm, not a bound
@@ -55,6 +56,9 @@ them:
   repudiate a stolen superuser key at all. This is the same reach `vault-rekey-superuser` already needs.
 - **Only the current key.** The console verb, like the window's judgement, repudiates a superuser's *current* key.
   A rotated-away key still needs the door #922 asks for.
+- **Only a `{role, handle}` superuser.** The console verb finds the actor from the staff ID, so a superuser enrolled
+  from the command line with another pinned shape (a `registration_id`, an un-normalised handle) can be repudiated
+  by no door ([#929](https://github.com/cairn-ehr/cairn-ehr/issues/929)).
 - **Doubtful is not repudiated.** Decision 1 does not stop an enroller from re-keying a member whose key is doubtful.
 - **The expiry bounds nothing against an enroller** (decision 3). A site that needs a hard bound must confirm or
   repudiate from the worklist.
@@ -66,6 +70,8 @@ them:
 - **Harder.** A repudiated member waits for a superuser, not for any enroller on shift. A stolen superuser key needs
   the owner at the console. Both are rare and both are the point.
 - **Pinned by** `crates/cairn-node/tests/vault_rekey.rs` (`rekey_after_repudiation_restores_the_actor`,
-  `a_superusers_key_is_repudiated_only_at_the_console`), `vault_admin_lib.rs`
+  `a_repudiation_landing_mid_rekey_is_seen`, `an_enrollers_rekey_takes_the_row_lock_first`,
+  `a_superusers_key_is_repudiated_only_at_the_console` — own key and a fellow superuser's, both ways round),
+  `vault_enrollers.rs` (`an_enroller_may_rekey_a_doubtful_member`), `vault_admin_lib.rs`
   (`the_console_repudiates_a_superusers_key`) and `db/tests/063_vault_enrollers_test.sql` (the console door is the
   owner's alone).

@@ -28,6 +28,8 @@ pub const ADMIN: u8 = 6;
 pub const JSMITH2: u8 = 7;
 pub const JSMITH3: u8 = 8;
 pub const BOSS2: u8 = 9;
+pub const SU2: u8 = 10;
+pub const ANURSE2: u8 = 11;
 
 pub fn kid_of(v: u8) -> String {
     hex::encode(

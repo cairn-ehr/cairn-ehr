@@ -439,9 +439,25 @@ async fn a_superusers_key_is_repudiated_only_at_the_console() {
     let (_g, c, _, _) = fresh().await;
     staff(&c).await;
     let actor = actor_of(&c, "boss").await;
-    let e = judge(&c, BOSS, false, "boss", BOSS).await.unwrap_err();
-    assert!(msg(&e).contains("console"), "{}", msg(&e));
+    enrol(&c, "su2", "superuser", SU2, "boss", BOSS)
+        .await
+        .unwrap();
+    let su2 = actor_of(&c, "su2").await;
+    // Own key, a fellow superuser's either way round: all refused, both keys still current.
+    for (key, su, by) in [
+        (BOSS, "boss", BOSS),
+        (SU2, "boss", BOSS),
+        (BOSS, "su2", SU2),
+    ] {
+        let e = judge(&c, key, false, su, by).await.unwrap_err();
+        assert!(
+            msg(&e).contains("vault-repudiate-superuser-key"),
+            "{}",
+            msg(&e)
+        );
+    }
     assert_eq!(current_key(&c, &actor).await, Some(kid_of(BOSS)));
+    assert_eq!(current_key(&c, &su2).await, Some(kid_of(SU2)));
 
     let door = "SELECT cairn_vault_bootstrap_repudiate($1)";
     let kid: String = c.query_one(door, &[&" Boss "]).await.unwrap().get(0);
@@ -478,4 +494,102 @@ async fn a_superusers_key_is_repudiated_only_at_the_console() {
     .await
     .unwrap();
     assert_eq!(current_key(&c, &actor).await, Some(kid_of(BOSS2)));
+    // The door repudiates the CURRENT key, never the one it repudiated before.
+    let kid: String = c.query_one(door, &[&"boss"]).await.unwrap().get(0);
+    assert_eq!(kid, kid_of(BOSS2));
+}
+
+/// Waits until backend `pid` is blocked on a lock (the `vault_floor.rs` concurrency pattern).
+async fn wait_until_blocked(pid: i32) {
+    let observer = cairn_node::db::connect(&cs().unwrap()).await.unwrap();
+    for _ in 0..500 {
+        let row = observer
+            .query_one(
+                "SELECT coalesce(wait_event_type, '') FROM pg_stat_activity WHERE pid = $1",
+                &[&pid],
+            )
+            .await
+            .unwrap();
+        if row.get::<_, String>(0) == "Lock" {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("backend {pid} never waited on a lock");
+}
+
+/// An enroller's re-key on a second terminal, with its backend pid, so a test can hold a lock on
+/// the first terminal and watch the re-key wait for it.
+async fn enroller_rekey_elsewhere(
+    new: u8,
+) -> (
+    i32,
+    tokio::task::JoinHandle<Result<Vec<u8>, tokio_postgres::Error>>,
+) {
+    let c2 = cairn_node::db::connect(&cs().unwrap()).await.unwrap();
+    let pid: i32 = c2
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let task = tokio::spawn(async move {
+        rekey(&c2, "jsmith", "clinician", None, None, new, "bwong", BWONG).await
+    });
+    (pid, task)
+}
+
+/// #926 race: a repudiation committing WHILE an enroller's re-key waits is seen by that re-key,
+/// because the re-key reads the confirmation only once it holds the actor lock. The tempting
+/// wrong fix — reading the status before taking the lock — passes every other test and fails this.
+#[tokio::test]
+async fn a_repudiation_landing_mid_rekey_is_seen() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    staff(&c).await;
+    let actor = actor_of(&c, "jsmith").await;
+    c.batch_execute("BEGIN").await.unwrap();
+    judge(&c, JSMITH, false, "boss", BOSS).await.unwrap(); // holds the actor lock, uncommitted
+    let (pid, second) = enroller_rekey_elsewhere(JSMITH2).await;
+    wait_until_blocked(pid).await;
+    c.batch_execute("COMMIT").await.unwrap();
+    let e = second.await.unwrap().unwrap_err();
+    assert!(msg(&e).contains("only a superuser"), "{}", msg(&e));
+    assert_eq!(current_key(&c, &actor).await, None);
+}
+
+/// #928 review: an enroller's re-key takes the member's ROW lock before the actor lock — the order
+/// a superuser's re-key takes them (`cairn_vault_install_key`'s `FOR UPDATE`, then
+/// `cairn_actor_append`). In the opposite order the two deadlock when they re-key one person at the
+/// same moment. Here terminal 1 holds the row, as a superuser's re-key would; the enroller's re-key
+/// must wait for it holding nothing, so terminal 1 can still take the actor lock.
+#[tokio::test]
+async fn an_enrollers_rekey_takes_the_row_lock_first() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    staff(&c).await;
+    let actor = actor_of(&c, "jsmith").await;
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute(
+        "SELECT 1 FROM vault_member WHERE staff_id = 'jsmith' FOR UPDATE",
+        &[],
+    )
+    .await
+    .unwrap();
+    let (pid, second) = enroller_rekey_elsewhere(JSMITH2).await;
+    wait_until_blocked(pid).await;
+    let free: bool = c
+        .query_one(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))",
+            &[&actor],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        free,
+        "the enroller's re-key holds the actor lock while it waits for the row — a deadlock"
+    );
+    c.batch_execute("COMMIT").await.unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(current_key(&c, &actor).await, Some(kid_of(JSMITH2)));
 }

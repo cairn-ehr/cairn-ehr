@@ -333,8 +333,8 @@ why db/061 is long.
   ([#926](https://github.com/cairn-ehr/cairn-ehr/issues/926)). The re-key form still asks for a role the vault
   already knows ([#925](https://github.com/cairn-ehr/cairn-ehr/issues/925)).
 
-  > **Erratum E1 (2026-11-02) — factual; the decision is unchanged.** The two bullets above and the `M > N` bullet
-  > below are no longer open: [ADR-0086](0086-who-may-act-after-a-repudiation.md) decides #926 (only a superuser
+  > **Erratum E1 (2026-11-02) — factual; the decision is unchanged.** The #926 and #924 halves of the two bullets above,
+  > and the `M > N` bullet below, are no longer open (#925 still is): [ADR-0086](0086-who-may-act-after-a-repudiation.md) decides #926 (only a superuser
   > re-keys a repudiated member; a superuser's key is repudiated only at the console) and accepts #924 and #919.
 
 - **A rotated-away key is not a repudiated one** (decision 9's residual). Re-admission accepts it; only a repudiation
