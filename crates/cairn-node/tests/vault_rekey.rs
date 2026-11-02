@@ -164,6 +164,24 @@ async fn rekey_after_repudiation_restores_the_actor() {
     let e = judge(&c, JSMITH2, true, "boss", BOSS).await.unwrap_err();
     assert!(msg(&e).contains("final"), "{}", msg(&e));
 
+    // #926: a repudiation is a superuser's judgement, so an ENROLLER may not undo it a minute
+    // later with a fresh key for the same handle. The refused attempt wrote nothing (JSMITH3 is
+    // still a new key for the superuser's re-key below).
+    let e = rekey(
+        &c,
+        "jsmith",
+        "clinician",
+        None,
+        None,
+        JSMITH3,
+        "bwong",
+        BWONG,
+    )
+    .await
+    .unwrap_err();
+    assert!(msg(&e).contains("only a superuser"), "{}", msg(&e));
+    assert_eq!(current_key(&c, &actor).await, None);
+
     assert_eq!(
         rekey(&c, "jsmith", "clinician", None, None, JSMITH3, "boss", BOSS)
             .await
@@ -409,4 +427,55 @@ async fn a_rotated_away_key_cannot_be_judged() {
     assert_eq!(status(&c, JSMITH3).await, "unconfirmed");
     judge(&c, JSMITH3, false, "boss", BOSS).await.unwrap();
     assert_eq!(status(&c, JSMITH3).await, "repudiated");
+}
+
+/// #926: a superuser's key is never repudiated from the window — not their own, not another
+/// superuser's — so a stolen superuser key cannot strip every other superuser and leave itself
+/// the only one. The owner's console does it (`vault-repudiate-superuser-key`), and the remedy is
+/// the console re-key, as for a locked-out superuser.
+#[tokio::test]
+async fn a_superusers_key_is_repudiated_only_at_the_console() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    staff(&c).await;
+    let actor = actor_of(&c, "boss").await;
+    let e = judge(&c, BOSS, false, "boss", BOSS).await.unwrap_err();
+    assert!(msg(&e).contains("console"), "{}", msg(&e));
+    assert_eq!(current_key(&c, &actor).await, Some(kid_of(BOSS)));
+
+    let door = "SELECT cairn_vault_bootstrap_repudiate($1)";
+    let kid: String = c.query_one(door, &[&" Boss "]).await.unwrap().get(0);
+    assert_eq!(kid, kid_of(BOSS), "the console names the key it repudiated");
+    assert_eq!(status(&c, BOSS).await, "repudiated");
+    assert_eq!(current_key(&c, &actor).await, None);
+    assert_eq!(
+        release(&c, "boss", &pass_of(BOSS), "enrol").await.0,
+        "not-current"
+    );
+    let rows: Vec<String> = c
+        .query(
+            "SELECT approved_by FROM actor_event WHERE op = 'repudiate' AND signing_key_id = $1",
+            &[&kid_of(BOSS)],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(rows, ["console"]);
+
+    // Nothing current is left to repudiate; a clinician is no superuser actor.
+    let e = c.query_one(door, &[&"boss"]).await.unwrap_err();
+    assert!(msg(&e).contains("no current key"), "{}", msg(&e));
+    let e = c.query_one(door, &[&"jsmith"]).await.unwrap_err();
+    assert!(msg(&e).contains("no current key"), "{}", msg(&e));
+
+    // The remedy: the console re-key, on the same actor.
+    c.query_one(
+        "SELECT cairn_vault_bootstrap_rekey('boss', NULL, $1, $2, NULL, NULL, NULL)",
+        &[&kid_of(BOSS2), &blob(BOSS2)],
+    )
+    .await
+    .unwrap();
+    assert_eq!(current_key(&c, &actor).await, Some(kid_of(BOSS2)));
 }

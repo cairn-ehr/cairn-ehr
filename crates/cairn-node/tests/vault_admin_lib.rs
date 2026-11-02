@@ -7,7 +7,7 @@ use cairn_node::vault::{
 };
 use cairn_node::vault_admin::{
     change_passphrase, enrollers, judge_key, rekey_member, rekey_superuser_from_console,
-    replaced_notice, set_enroller, unconfirmed, Rekey, Reseal,
+    replaced_notice, repudiate_superuser_from_console, set_enroller, unconfirmed, Rekey, Reseal,
 };
 use tokio_postgres::Client;
 
@@ -210,6 +210,31 @@ async fn the_console_rekeys_a_restored_superuser() {
     let kid = rekey_superuser_from_console(&c, &r).await.unwrap();
     let (_, got) = released(&window(&c).await, "boss", "boss pass two", Purpose::Enrol).await;
     assert_eq!(got, kid);
+}
+
+/// #926: the console repudiates a superuser's current key (the window may not) and names it; a
+/// second call has nothing current left to repudiate, and the console re-key is the remedy.
+#[tokio::test]
+async fn the_console_repudiates_a_superusers_key() {
+    let Some(_) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (_g, c) = fresh().await;
+    let kid = bootstrap_superuser(&c, &member("boss", "superuser", "boss pass one"))
+        .await
+        .unwrap();
+    assert_eq!(
+        repudiate_superuser_from_console(&c, "boss").await.unwrap(),
+        kid
+    );
+    let e = repudiate_superuser_from_console(&c, "boss")
+        .await
+        .unwrap_err();
+    assert!(format!("{e:#}").contains("no current key"), "{e:#}");
+    rekey_superuser_from_console(&c, &rekey("boss", "superuser", "boss pass two"))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

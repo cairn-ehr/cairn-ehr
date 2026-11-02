@@ -205,13 +205,19 @@ $$;
 -- `superuser` target (a locked-out superuser is the console's, cairn_vault_bootstrap_rekey) and,
 -- for an enroller, an `admin` target. p_role is checked against the member row when one exists,
 -- so the limits apply to the role the person really holds.
+-- An enroller also may not re-key a member whose current key a superuser REPUDIATED (#926,
+-- ADR-0086): repudiation is a superuser's judgement, and an enroller's fresh key a minute later
+-- would undo it (the impostor case). The check runs under the actor lock cairn_vault_judge_key
+-- takes (and in cairn_actor_append's key-then-actor order), so a repudiation landing at the same
+-- moment is either seen here or refused there as "not the current key".
 CREATE OR REPLACE FUNCTION cairn_vault_rekey(
     p_staff_id text, p_role text, p_display_name text, p_phone text, p_email text,
     p_new_key text, p_sealed bytea, p_hint text, p_approver_staff_id text, p_token bytea)
 RETURNS bytea LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
-    v_kind text;
-    v_key  text;
+    v_kind  text;
+    v_key   text;
+    v_actor bytea;
 BEGIN
     IF p_role = 'superuser' THEN
         RAISE EXCEPTION 'cairn_vault_rekey: a superuser is re-keyed only at the node''s console (vault-rekey-superuser), never by another member';
@@ -220,6 +226,18 @@ BEGIN
                                       cairn_vault_rekey_address(p_staff_id, p_role, p_new_key), p_token, true);
     IF v_kind = 'enroller' AND p_role = 'admin' THEN
         RAISE EXCEPTION 'cairn_vault_rekey: an enroller may not re-key a superuser or an admin — ask a superuser';
+    END IF;
+    IF v_kind = 'enroller' THEN
+        SELECT m.actor_id INTO v_actor FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
+        IF FOUND THEN
+            PERFORM pg_advisory_xact_lock(hashtextextended(p_new_key, 1));
+            PERFORM pg_advisory_xact_lock(hashtextextended(encode(v_actor, 'hex'), 0));
+            IF cairn_key_confirmation((SELECT m.signing_key_id FROM vault_member m
+                                        WHERE m.actor_id = v_actor)) = 'repudiated' THEN
+                RAISE EXCEPTION 'cairn_vault_rekey: a superuser repudiated the current key of %, so only a superuser may give them a new one — ask a superuser',
+                    cairn_vault_staff_id(p_staff_id);
+            END IF;
+        END IF;
     END IF;
     SELECT m.signing_key_id INTO v_key
       FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_approver_staff_id);
@@ -239,6 +257,28 @@ CREATE OR REPLACE FUNCTION cairn_vault_bootstrap_rekey(
 RETURNS bytea LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT cairn_vault_install_key(p_staff_id, 'superuser', p_display_name, p_phone, p_email,
                                    p_new_key, p_sealed, p_hint, 'console', NULL, true, 'console');
+$$;
+
+-- Owner only (the node's console): repudiate a SUPERUSER's current key (#926, ADR-0086) — the one
+-- judgement the window may not make (cairn_vault_judge_key). Approved by 'console', no token, as
+-- cairn_vault_bootstrap_rekey; the remedy afterwards is that same console re-key. Returns the key
+-- it repudiated. The actor lock is the one a rotate-key and a judgement take, so a re-key cannot
+-- land between reading the current key and the row. No grant: running it IS the authority.
+CREATE OR REPLACE FUNCTION cairn_vault_bootstrap_repudiate(p_staff_id text)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+    v_staff text  := cairn_vault_staff_id(p_staff_id);
+    v_actor bytea := cairn_actor_id(jsonb_build_object('role', 'superuser', 'handle', v_staff));
+    v_key   text;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended(encode(v_actor, 'hex'), 0));
+    SELECT a.signing_key_id INTO v_key FROM actor_current a WHERE a.actor_id = v_actor;
+    IF v_key IS NULL THEN
+        RAISE EXCEPTION 'cairn_vault_bootstrap_repudiate: the staff ID % has no current key as a superuser (never enrolled as one, or already repudiated)', v_staff;
+    END IF;
+    PERFORM cairn_actor_append(v_actor, 'repudiate', v_key, 'console', NULL);
+    RETURN v_key;
+END;
 $$;
 
 -- Grant or withdraw the enroller role (§5.1) — superuser only, signed over the member's CURRENT
@@ -288,22 +328,29 @@ $$;
 -- (#922). Two locks: the key lock (enroll_actor's, same seed) serialises two judgements of one
 -- key, so a confirm and a repudiate cannot both read the status first; the actor lock (the one a
 -- rotate-key takes, db/004) means a re-key cannot land between the "current" check and the row.
+-- A SUPERUSER's key is never repudiated here, their own included (#926, ADR-0086): one stolen
+-- superuser key could otherwise strip every other superuser. That is the console's act,
+-- cairn_vault_bootstrap_repudiate. (Confirming one is refused anyway: it was confirmed at once.)
 CREATE OR REPLACE FUNCTION cairn_vault_judge_key(p_signing_key_id text, p_confirm boolean,
                                                  p_superuser_staff_id text, p_token bytea)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_actor  bytea;
+    v_role   text;
     v_status text;
     v_su_key text;
 BEGIN
     PERFORM cairn_vault_approver_ok(p_superuser_staff_id,
                                     cairn_vault_judge_address(p_signing_key_id, p_confirm), p_token, false);
     PERFORM pg_advisory_xact_lock(hashtextextended(p_signing_key_id, 1));
-    SELECT e.actor_id INTO v_actor FROM actor_event e
+    SELECT e.actor_id, e.pinned ->> 'role' INTO v_actor, v_role FROM actor_event e
      WHERE e.signing_key_id = p_signing_key_id AND e.op IN ('enroll', 'rotate-key') AND e.kind = 'human'
      LIMIT 1;
     IF v_actor IS NULL THEN
         RAISE EXCEPTION 'cairn_vault_judge_key: no person''s actor holds or held key %', p_signing_key_id;
+    END IF;
+    IF NOT p_confirm AND v_role = 'superuser' THEN
+        RAISE EXCEPTION 'cairn_vault_judge_key: key % is a superuser''s — a superuser''s key is repudiated only at the node''s console (vault-repudiate-superuser-key), never from the window', p_signing_key_id;
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended(encode(v_actor, 'hex'), 0));
     v_status := cairn_key_confirmation(p_signing_key_id);
@@ -432,6 +479,7 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_update_custody(text, text, bytea, text, t
 REVOKE EXECUTE ON FUNCTION cairn_vault_install_key(text, text, text, text, text, text, bytea, text, text, bytea, boolean, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_rekey(text, text, text, text, text, text, bytea, text, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_bootstrap_rekey(text, text, text, bytea, text, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_bootstrap_repudiate(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_set_enroller(text, boolean, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) FROM PUBLIC;

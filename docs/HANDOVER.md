@@ -22,9 +22,8 @@
 > `db/061`, `cairn_pgx` **0.4.0**): the key vault, per-act signing (`--key-hold-seconds`, 0 = shared terminal), the
 > signer strip, the terminal lock, "Enrol staff", the `vault-*` console verbs, one `EventSigner` seam.
 >
-> **Slice 2 BUILT 2026-11-01 — PR [#917](https://github.com/cairn-ehr/cairn-ehr/pull/917) (A: Tasks 1–5) + PR
-> [#920](https://github.com/cairn-ehr/cairn-ehr/pull/920) (B: Tasks 6–10, stacked on A — retarget to `main` after A
-> merges)** ([ADR-0085](spec/decisions/0085-in-person-enrolment-and-re-key.md), spec **v0.87**, `db/063`,
+> **Slice 2 MERGED 2026-11-01 — PR [#917](https://github.com/cairn-ehr/cairn-ehr/pull/917) (A: Tasks 1–5) + PR
+> [#920](https://github.com/cairn-ehr/cairn-ehr/pull/920) (B: Tasks 6–10)** ([ADR-0085](spec/decisions/0085-in-person-enrolment-and-re-key.md), spec **v0.87**, `db/063`,
 > `SCHEMA_GENERATION` **63**; design + plan `superpowers/{specs,plans}/2026-11-01-sign-in-slice-2-rekey-and-local-enrolment*`;
 > reader table `superpowers/plans/2026-11-01-slice-2-actor-reader-table.md`). An *enroller* (a grant a superuser
 > assigns, clinician or `admin`) enrols a newcomer or re-keys a forgotten passphrase IN PERSON; what an enroller issues
@@ -103,7 +102,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review / merge PR #917, then retarget PR #920 to `main` and merge it** (slice 2; above). Decide **#919**, **#924** and **#926**. Then
+> 1. **Decide #919, #924 and #926** (slice 2's open decisions; PRs #917 + #920 are merged). Then
 >    **brainstorm slice 3** (who's writing / drafts / the `Asserted` grade + the author display, which also owes the
 >    per-note "unconfirmed" marker slice 2 deferred, and #918's display half). The
 >    maintainer picks the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.

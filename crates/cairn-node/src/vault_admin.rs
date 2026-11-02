@@ -1,6 +1,7 @@
 //! The Rust side of the vault's slice-2 doors (db/063): re-key, grants, judging a key, change of
-//! passphrase, and the two worklists. The window calls only this module; the console verb
-//! `vault-rekey-superuser` calls [`rekey_superuser_from_console`].
+//! passphrase, and the two worklists. The window calls only this module; the console verbs
+//! `vault-rekey-superuser` and `vault-repudiate-superuser-key` call [`rekey_superuser_from_console`]
+//! and [`repudiate_superuser_from_console`].
 //!
 //! Same shape as `vault::enrol_member`: every address to sign comes FROM THE DATABASE (so staff-ID
 //! normalisation has one home), the signature is a `sign_attestation` over it, and every write is
@@ -142,6 +143,21 @@ pub async fn rekey_superuser_from_console(db: &Client, r: &Rekey<'_>) -> anyhow:
     )
     .await
     .map_err(|e| LocalDbFault::new("console re-key", e))?;
+    Ok(kid)
+}
+
+/// Console-only (owner connection): repudiate superuser `staff_id`'s current key, which the window
+/// may never do (#926, ADR-0086). Returns the key repudiated; the remedy is
+/// [`rekey_superuser_from_console`].
+pub async fn repudiate_superuser_from_console(
+    db: &Client,
+    staff_id: &str,
+) -> anyhow::Result<String> {
+    let kid: String = db
+        .query_one("SELECT cairn_vault_bootstrap_repudiate($1)", &[&staff_id])
+        .await
+        .map_err(|e| LocalDbFault::new("console repudiation", e))?
+        .get(0);
     Ok(kid)
 }
 
