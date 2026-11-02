@@ -275,6 +275,42 @@ acts \_\_. `M > N` is an architecture defect (file it).
 | Each refusal and back-off sentence read once, whole; no passphrase spoken | | |
 | "Signed in for the next act" announced; nothing takes focus on its own | | |
 
+## Enrol in person, re-key, change a passphrase, confirm (GUI sign-in slice 2, runbook §17)
+
+Site expiry during the timed runs: **off** \_\_ · Window on the node's machine: \_\_
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| Enrolment by an enroller: "I'm new" → the newcomer's first own signature | | | | ≤ 2 min | |
+| Re-key in person: form opened → first signature with the new passphrase | | | | ≤ 1 min | |
+| Change my passphrase: form opened → "Your passphrase is changed." | | | | ≤ 30 s | |
+| Superuser confirm: press → row leaves the worklist | | | | ≤ 10 s per row | |
+
+Steps: enrolment paper *N* = 0 → forced *M* = 2 → observed *K* = \_\_ · re-key paper 0 → *M* = 2 → observed \_\_ ·
+change of passphrase paper 0 → *M* = 1 → observed \_\_ · confirm 1 press per row → observed \_\_. `M > N` is already
+filed (#919); record the counts against that issue.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Grant: "now has the enroller role"; a non-superuser's credential refused; strip passphrase emptied | | |
+| Enroller enrols a clinician; refused for admin or superuser; newcomer's key on the worklist | | |
+| Re-key: old passphrase answers "replaced on …, approved by …" and counts as a try; same actor (`rotate-key`) | | |
+| Superuser re-keyed only at the console (`vault-rekey-superuser`) | | |
+| Change of passphrase: works; wrong current counted; same-as-current refused | | |
+| Confirm leaves the worklist; Repudiate asks no question and the member is then refused | | |
+| Repudiate key on a confirmed member's row; the row then says repudiated; their unconfirmed approvals turn doubtful | | |
+| Re-key success line: enroller's says a superuser must confirm; superuser's does not | | |
+| Expiry: strip warns naming the ID; worklist shows the stop date; an expired key refused, then confirmed | | |
+| Measurement 7, run LAST (empties the vault): a re-key without name/contact refused before any release; with them, re-keyed on the same actor, superuser wording | | |
+| Window DB-gated tests run by hand (#905): no `skipped:`, the five named tests pass | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Both new forms and the panel complete by keyboard alone; `admin` reachable in Enrol staff | | |
+| Every new field announced by its label; row buttons announced with their row | | |
+| Every outcome sentence read once, whole; no passphrase spoken | | |
+| A double press on Confirm sends one act; nothing takes focus when the worklist redraws | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

@@ -89,7 +89,8 @@
 --     cairn_vault_terminal_phc, cairn_vault_enrol (which itself demands a superuser's or a
 --     confirmed enroller's token), and slice 2's doors in db/063.
 --   * owner only (the node's console, `cairn-node vault-bootstrap-superuser` and friends):
---     cairn_vault_bootstrap, cairn_vault_set_terminal_phc, and db/063's cairn_vault_bootstrap_rekey.
+--     cairn_vault_bootstrap, cairn_vault_set_terminal_phc, and db/063's cairn_vault_bootstrap_rekey
+--     and cairn_vault_set_unconfirmed_expiry.
 --   * `cairn_vault_unseal` itself is REVOKED from PUBLIC below, so the back-off cannot be skipped
 --     by calling the primitive directly: for every role but the owner, cairn_vault_release (a
 --     SECURITY DEFINER) is its only door. The load refuses if that REVOKE did not take.
@@ -247,9 +248,24 @@ CREATE TABLE IF NOT EXISTS vault_terminal (
     unlock_phc text NOT NULL
 );
 
+-- The site's vault policy (sign-in slice 2, §5.5): at most one row. Today one setting — after how
+-- many days an UNCONFIRMED key stops signing; NULL, or no row at all, is no expiry (the reference
+-- default; mechanism, not policy — principle 9). Set only at the node's console
+-- (cairn_vault_set_unconfirmed_expiry, db/063). Defined here, not in db/063, because the release
+-- door below reads it (the slice-2 rules banner explains why). Like vault_terminal it is custody
+-- state, not the record, so it is outside the backups: a restore comes back with no expiry, which
+-- fails toward availability — every key signs until the site sets its limit again.
+CREATE TABLE IF NOT EXISTS vault_policy (
+    singleton               boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    -- At most 100 years: the door adds this to a timestamp, and a sum out of range would RAISE
+    -- inside the door that must never raise (promise 2).
+    unconfirmed_expiry_days int CONSTRAINT vault_policy_expiry_in_range
+                                CHECK (unconfirmed_expiry_days BETWEEN 1 AND 36500)
+);
+
 -- No table is readable or writable by anyone but the owner. Stated explicitly (the db/004
 -- trust-anchor posture), so a stray GRANT stands out in review; the doors below are the only way in.
-REVOKE ALL ON vault_member, vault_attempt, vault_terminal FROM PUBLIC, cairn_agent, cairn_node;
+REVOKE ALL ON vault_member, vault_attempt, vault_terminal, vault_policy FROM PUBLIC, cairn_agent, cairn_node;
 
 -- The address a superuser's attestation token signs to approve ONE enrolment: a sha2-256
 -- multihash (the 0x12 0x20 prefix, as every Cairn content address) over the normalised staff ID,
@@ -271,8 +287,8 @@ $$;
 -- PL/pgSQL binds a called name only when it runs, so a door replayed here calling a function that
 -- a LATER file defines would, on the upgrade replay, raise "function does not exist" at a
 -- concurrent sign-in until that file committed — breaking promise 2. Here, the door and its rules
--- change in one transaction. They read only tables that exist by now (vault_member above,
--- actor_event and db/004's views).
+-- change in one transaction. They read only tables that exist by now (vault_member and
+-- vault_policy above, actor_event and db/004's views).
 -- ============================================================================================
 
 -- The release door's role → purpose map (§5.1), as a pure function so the SQL mirror can pin it:
@@ -408,6 +424,27 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
             OR cairn_key_confirmation(m.signing_key_id) IN ('unconfirmed', 'doubtful'));
 $$;
 
+-- When an UNCONFIRMED key stops signing under the site's optional expiry (§5.5), or NULL when no
+-- expiry applies: no limit set (the default), or the key is confirmed, 'outside' the mechanism,
+-- repudiated or unknown. The age
+-- runs from the row that introduced the key with an approver — the "approved at" the superuser's
+-- worklist shows (cairn_vault_unconfirmed, db/063), so the two can never disagree. A 'doubtful'
+-- key (its approver since repudiated) is still unconfirmed and expires like one. The release door
+-- answers 'expired' once this is past; the window warns days ahead
+-- (cairn_vault_unconfirmed_expires_at, db/063). Invoker, owner only.
+CREATE OR REPLACE FUNCTION cairn_vault_key_expires_at(p_key text)
+RETURNS timestamptz LANGUAGE sql STABLE AS $$
+    SELECT i.recorded_at + make_interval(days => p.unconfirmed_expiry_days)
+      FROM vault_policy p
+      CROSS JOIN LATERAL (
+          SELECT e.recorded_at FROM actor_event e
+           WHERE e.signing_key_id = p_key AND e.op IN ('enroll', 'rotate-key')
+             AND e.approved_by IS NOT NULL
+           ORDER BY e.recorded_at DESC, e.seq DESC LIMIT 1) i
+     WHERE p.unconfirmed_expiry_days IS NOT NULL
+       AND cairn_key_confirmation(p_key) IN ('unconfirmed', 'doubtful');
+$$;
+
 -- The release door: check a passphrase and, for the ONE purpose this member's role may serve,
 -- hand back their seed. NEVER RAISES (see the header, promise 2): every outcome is a row.
 --
@@ -430,11 +467,15 @@ $$;
 --   'not-current'    NULL                    NULL   (the member's actor is revoked or superseded:
 --                                                    its key signs nothing the floor accepts;
 --                                                    checked before counting, like the purpose)
+--   'expired'        NULL                    NULL   (the key is still unconfirmed past the site's
+--                                                    optional limit, cairn_vault_key_expires_at;
+--                                                    off by default; checked before counting)
 --
 -- The order is the whole point (promise 4). Steps 2–4 run under the attempt row's FOR UPDATE lock
 -- (taken at step 2), so two terminals guessing the same staff ID at once are serialised and cannot
 -- both slip past one wait:
---   1. look up the member, check the purpose and that its actor is current — no writes, no lock;
+--   1. look up the member, check the purpose, that its actor is current and that its key has
+--      not expired unconfirmed — no writes, no lock;
 --   2. take the lock; read failures and the last attempt's time from the sequences — no writes;
 --      still inside the wait → 'waiting' (no unsealing, no counting);
 --   3. CONSUME an attempt number and stamp the clock — non-transactional, so from here on the
@@ -480,6 +521,12 @@ BEGIN
     -- Before the count, like the purpose: it reveals nothing a guess would.
     IF NOT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = v_member.signing_key_id) THEN
         RETURN QUERY SELECT 'not-current'::text, NULL::bytea, NULL::text, NULL::bigint;
+        RETURN;
+    END IF;
+    -- §5.5: an unconfirmed key past the site's limit (NULL — no limit, or not unconfirmed — never
+    -- expires). Before the count too: the window warned days ahead, and a guess learns nothing.
+    IF cairn_vault_key_expires_at(v_member.signing_key_id) <= now() THEN
+        RETURN QUERY SELECT 'expired'::text, NULL::bytea, NULL::text, NULL::bigint;
         RETURN;
     END IF;
 
@@ -696,6 +743,7 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_is_enroller(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_approver_ok(text, bytea, bytea, boolean) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_key_holder(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_replaced_notice(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_key_expires_at(text) FROM PUBLIC;
 -- The unwrapping primitive: unthrottled (one Argon2id per call), so reachable only through the
 -- release door, which counts and backs off.
 REVOKE EXECUTE ON FUNCTION cairn_vault_unseal(bytea, text) FROM PUBLIC;

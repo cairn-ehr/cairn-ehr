@@ -121,14 +121,29 @@ pub enum KeyRefusal {
     NeedCredential,
     /// The passphrase did not match; `retry_after` is the back-off before the next try, if any.
     Wrong { retry_after: Option<Duration> },
+    /// The passphrase typed is the one this member had BEFORE a re-key (still a counted wrong
+    /// guess, so `retry_after` is the same back-off). `at` is already a local date and time;
+    /// `approver` is a display name, or "" when that person is no longer in the vault.
+    Replaced {
+        at: String,
+        approver: String,
+        retry_after: Option<Duration>,
+    },
     /// Too many wrong tries: the vault will not check another for `retry_after`.
     Waiting { retry_after: Duration },
     /// No one with that staff ID is enrolled on this node.
     Unknown,
     /// A superuser's key: it confers no clinical authorship (design §5.1), so the vault refused it.
     NotForClinicalActs,
-    /// This member's key was revoked or replaced: it can sign nothing here.
+    /// This member's key was revoked, rotated away or repudiated: it can sign nothing here. For a
+    /// rotated-away or repudiated key the remedy is a re-key on the same actor (slice 2), never a
+    /// new enrolment. A revoked or superseded actor cannot be re-keyed (db/004 refuses the
+    /// rotation), and a superuser is re-keyed at the console; the sentence does not yet say so
+    /// (#927).
     NotCurrent,
+    /// This member's key is still unconfirmed past the site's optional limit (§5.5): a
+    /// superuser's confirmation lets it sign again. The strip may have warned a week ahead.
+    Expired,
     /// The window's connection has more power than a window may have (#898), so no passphrase
     /// was sent. The fix is the operator's: give the window its own login.
     OverPowered,
@@ -150,6 +165,26 @@ impl KeyRefusal {
                 "That passphrase is not right. Wait {} s, then try again.",
                 seconds(*wait)
             ),
+            KeyRefusal::Replaced {
+                at,
+                approver,
+                retry_after,
+            } => {
+                // An approver who has left the vault must not read as "approved by ."
+                let who = if approver.is_empty() {
+                    "someone no longer enrolled here"
+                } else {
+                    approver
+                };
+                let base = format!(
+                    "This passphrase was replaced on {at}, approved by {who}. If you didn't ask \
+                     for that, tell a superuser."
+                );
+                match retry_after {
+                    None => base,
+                    Some(wait) => format!("{base} Wait {} s, then try again.", seconds(*wait)),
+                }
+            }
             KeyRefusal::Waiting { retry_after } => format!(
                 "Too many tries. Wait {} s, then try again.",
                 seconds(*retry_after)
@@ -160,7 +195,12 @@ impl KeyRefusal {
             }
             KeyRefusal::NotCurrent => {
                 "Your signing key is no longer enrolled here. Nothing was signed. Ask a \
-                 superuser to enrol you again."
+                 superuser or an enroller to re-key you."
+                    .into()
+            }
+            KeyRefusal::Expired => {
+                "No superuser has confirmed your signing key, and this site stops unconfirmed keys \
+                 signing after a set time. Nothing was signed. Ask a superuser to confirm your key."
                     .into()
             }
             KeyRefusal::OverPowered => {
@@ -188,14 +228,101 @@ pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), Key
     match release {
         Release::Released { key, kid } => Ok((key, kid)),
         Release::Wrong { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
-        // Task 7 gives a replaced key its own sentence; until then it reads as a wrong passphrase.
+        // Pure, so no notice to quote: reads as a wrong passphrase. Callers holding the database
+        // use `from_release_noting`, which gives a replaced key its own sentence.
         Release::Replaced { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
         Release::Waiting { retry_after } => Err(KeyRefusal::Waiting { retry_after }),
         Release::Unknown => Err(KeyRefusal::Unknown),
         Release::RefusedPurpose => Err(KeyRefusal::NotForClinicalActs),
         Release::NotCurrent => Err(KeyRefusal::NotCurrent),
+        Release::Expired => Err(KeyRefusal::Expired),
         Release::OverPowered { .. } => Err(KeyRefusal::OverPowered),
     }
+}
+
+/// [`from_release`], except that a `Replaced` answer is looked up once: the member is told when
+/// their passphrase was replaced and who approved it (see [`noting`] for the degrade rules).
+pub(crate) async fn from_release_noting(
+    db: &tokio_postgres::Client,
+    staff_id: &str,
+    release: Release,
+) -> Result<(SigningKey, String), KeyRefusal> {
+    let Release::Replaced { retry_after } = release else {
+        return from_release(release);
+    };
+    let notice = cairn_node::vault_admin::replaced_notice(db, staff_id).await;
+    Err(noting(retry_after, notice, &chrono::Local::now()))
+}
+
+/// Pure: the refusal for a `Replaced` answer, given what the notice lookup returned. A notice
+/// names the date and approver; no notice, or a failed lookup (logged to stderr), degrades to
+/// the plain wrong-passphrase refusal with the SAME back-off, never to an error.
+pub(crate) fn noting<Tz: chrono::TimeZone>(
+    retry_after: Option<Duration>,
+    notice: anyhow::Result<Option<cairn_node::vault_admin::ReplacedNotice>>,
+    now: &chrono::DateTime<Tz>,
+) -> KeyRefusal
+where
+    Tz::Offset: std::fmt::Display,
+{
+    match notice {
+        Ok(Some(n)) => KeyRefusal::Replaced {
+            at: local_at(&n.at, now),
+            approver: n.approver,
+            retry_after,
+        },
+        Ok(None) => KeyRefusal::Wrong { retry_after },
+        Err(e) => {
+            eprintln!("the replaced-key notice could not be read: {e:#}");
+            KeyRefusal::Wrong { retry_after }
+        }
+    }
+}
+
+/// Pure: an RFC 3339 instant as a local date and time ("Sun 1 Nov 2026 14:05"), in `now`'s zone.
+/// Text that does not parse is returned as recorded, never blank (principle 4).
+pub(crate) fn local_at<Tz: chrono::TimeZone>(utc: &str, now: &chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    match chrono::DateTime::parse_from_rfc3339(utc) {
+        Ok(t) => t
+            .with_timezone(&now.timezone())
+            .format("%a %-d %b %Y %H:%M")
+            .to_string(),
+        Err(_) => utc.to_string(),
+    }
+}
+
+/// How far ahead the strip warns that an unconfirmed key will stop signing (§5.5: "days ahead,
+/// never a surprise at the moment of signing"). A week covers a roster's days off.
+const EXPIRY_WARNING: chrono::TimeDelta = chrono::TimeDelta::days(7);
+
+/// Pure: the strip's warning for `staff_id`, given when their unconfirmed key stops signing
+/// (`cairn_node::vault_admin::unconfirmed_expires_at`, RFC 3339 UTC): a sentence when that is
+/// within [`EXPIRY_WARNING`] of `now`, else `None` (no limit, a confirmed key, or later). It
+/// names the staff ID, so on a shared screen it is never read as the next person's. Full stops,
+/// not dashes, for the screen reader. An instant that does not parse is still warned about,
+/// quoted as recorded (principle 4).
+pub(crate) fn expiry_notice<Tz: chrono::TimeZone>(
+    staff_id: &str,
+    expires_at: Option<&str>,
+    now: &chrono::DateTime<Tz>,
+) -> Option<String>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let at = expires_at?;
+    let near = chrono::DateTime::parse_from_rfc3339(at)
+        .map(|t| t.signed_duration_since(now) <= EXPIRY_WARNING)
+        .unwrap_or(true);
+    near.then(|| {
+        format!(
+            "Not yet confirmed by a superuser. {}'s key stops signing on {}.",
+            staff_id.trim(),
+            local_at(at, now)
+        )
+    })
 }
 
 /// clap's parser for `--key-hold-seconds`: whole seconds, at most `IDLE_TIMEOUT`. Refused at

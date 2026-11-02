@@ -369,6 +369,9 @@ fn every_command_the_webview_calls_is_registered() {
         ("main.js", include_str!("../src-ui/main.js")),
         ("signer.js", include_str!("../src-ui/signer.js")),
         ("enrol.js", include_str!("../src-ui/enrol.js")),
+        ("rekey.js", include_str!("../src-ui/rekey.js")),
+        ("superuser.js", include_str!("../src-ui/superuser.js")),
+        ("reseal.js", include_str!("../src-ui/reseal.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
         ("holds.js", include_str!("../src-ui/holds.js")),
         ("chart_stale.js", include_str!("../src-ui/chart_stale.js")),
@@ -449,4 +452,12 @@ fn a_failed_phc_read_is_a_fault_never_wrong() {
     let phc = cairn_node::vault::terminal_phc("shared pass").unwrap();
     let read: Result<Option<String>, ()> = Ok(Some(phc));
     assert_eq!(terminal_read_verdict(read, "other"), TerminalUnlock::Wrong);
+}
+
+/// With no node (sample data) there is nothing to warn about: the expiry warning is `None`, never
+/// an error on screen (a missing warning only; the press still says why an expired key fails).
+#[tokio::test]
+async fn the_expiry_notice_is_silent_without_a_node() {
+    let state = AppState::mock(None);
+    assert_eq!(expiry_notice_impl(&state, "nurse1").await, None);
 }
