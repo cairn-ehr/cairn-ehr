@@ -31,7 +31,7 @@
 > is *unconfirmed* (never blocks signing) until a superuser confirms or repudiates it (cascade: a repudiated enroller's
 > unconfirmed keys read *doubtful*). `rotate-key` keeps the actor (#247 decided: key id in the body, resolved on read;
 > #664 + #666 closed in db/004). "Change my passphrase"; the "replaced" notice on a FAILED sign; re-key after a restore
-> (console for the first superuser: `vault-rekey-superuser`); optional expiry of unconfirmed keys, OFF by default
+> (every superuser at the console: `vault-rekey-superuser`); optional expiry of unconfirmed keys, OFF by default
 > (`vault-set-unconfirmed-expiry`). **⚠️ Security posture to know (Ruling R4, ADR-0085):** remote apply and deferred
 > re-adjudication now admit any key in `actor_key_vouches` (a rotated-away, unrepudiated key) so a restore/sync of
 > pre-rotation events is not refused; local `submit_event` stays on `actor_current`. Residual: a leaked, rotated-away,
@@ -42,7 +42,13 @@
 > **#922** (no path repudiates a rotated-away key; repudiation is retroactive — R4's stated remedy is weaker than it
 > reads); **#923** (residuals: the clock guard's remedy, "stops signing" wording, loose test asserts). Also from the final
 > review, FIXED: a registry row under a clock behind the actor's latest row is refused (`cairn_actor_append`), and a
-> re-key with no vault row (after a restore) needs a SUPERUSER and a human actor. Owed by a human: **RUNBOOK §17** (enrol ≤ 2 min, re-key ≤ 1 min, change ≤ 30 s, confirm ≤ 10 s; VoiceOver).
+> re-key with no vault row (after a restore) needs a SUPERUSER and a human actor. **PR #920's review (2026-11-02), FIXED:**
+> `cairn_vault_judge_key` judges only the person's CURRENT key (a panel row read before a re-key no longer repudiates the
+> genuine person's old key while the new one stays live); the panel names its judgement, gives a floor refusal and a
+> failed re-read their own sentences; a repudiated enroller is told to get a re-key; staff IDs fold Unicode case as the
+> vault does. Filed from it: **#924** (an enroller's re-key resets the expiry clock — decision), **#925** (the re-key
+> form asks for a role the vault knows), **#926** (who may act after a repudiation — decision), **#927** (residuals).
+> Owed by a human: **RUNBOOK §17** (enrol ≤ 2 min, re-key ≤ 1 min, change ≤ 30 s, confirm ≤ 10 s; VoiceOver).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -97,7 +103,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review / merge PR #917, then retarget PR #920 to `main` and merge it** (slice 2; above). Decide **#919**. Then
+> 1. **Review / merge PR #917, then retarget PR #920 to `main` and merge it** (slice 2; above). Decide **#919**, **#924** and **#926**. Then
 >    **brainstorm slice 3** (who's writing / drafts / the `Asserted` grade + the author display, which also owes the
 >    per-note "unconfirmed" marker slice 2 deferred, and #918's display half). The
 >    maintainer picks the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
