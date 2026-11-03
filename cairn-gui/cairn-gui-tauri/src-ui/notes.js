@@ -7,7 +7,7 @@
 // signing — never escape here); every time of recording (the save door stamps them from the
 // database's clock — the only time sent is the writer's STATED one); and whether a draft is this
 // terminal's to edit (`draft.here`). What IS decided here, each pinned in notes_webview_tests.rs:
-// the debounce, that Sign cancels a pending save, that a failed save keeps the text and says so,
+// the save rhythm (ruling R14), that Sign cancels a pending save, that a failed save keeps the text and says so,
 // and that a draft started elsewhere is shown read-only.
 //
 // No browser storage, on purpose: a draft lives in the node, behind definer doors. A copy in
@@ -21,7 +21,7 @@
 // `refresh` calls `readNotes`; its `clearChart` calls `clearNotes`.
 "use strict";
 
-/** One save a second while the clinician types: often enough to lose little, rarely enough to be cheap. */
+/** At most one save a second while the clinician types: often enough to lose little, rarely enough to be cheap. */
 const NOTE_SAVE_DEBOUNCE_MS = 1000;
 /** Said when a save could not reach the node. The next keystroke tries again. */
 const NOT_SAVED = "not saved yet — your text is still here";
@@ -37,6 +37,8 @@ const PARTLY_TYPED_TIME =
  */
 let noteDraft = null;
 let noteSaveTimer = null;
+/** When the last save was sent (`performance.now()`); -Infinity for a draft not yet saved. */
+let noteLastSave = -Infinity;
 /**
  * Saves go out one after another, so an older text can never land after a newer one. It never
  * rejects (`sendDraft` catches everything): closing a chart awaits it (`notesSaved`).
@@ -104,8 +106,11 @@ function openDraft(draft) {
   el("note-text").value = draft.narrative;
   el("note-when").value = draft.stated_time || "";
   showEditor(true);
-  noteStatus(draft.words); // "unsigned draft · started … · last typed …"
-  saveSaid = draft.words; // the first save makes "last typed" untrue, so it takes it down
+  // "unsigned draft · started … · last typed …", added to — never in place of — what the same
+  // gesture said: a Sign that worked reopens the next draft here, and "Signed" must stay seen.
+  const said = el("note-status").textContent;
+  noteStatus(said ? said + " · " + draft.words : draft.words);
+  saveSaid = el("note-status").textContent; // the first save makes "last typed" untrue, so it takes it down
 }
 
 /** Start a note: a fresh draft id, minted here; nothing is saved until something is typed. */
@@ -117,11 +122,19 @@ function newNote() {
   el("note-text").focus();
 }
 
-/** A keystroke in the note or its time: save once the typing pauses. */
+/**
+ * A keystroke in the note or its time (ruling R14): the first of a burst saves at once, so the
+ * node stamps `recording_started` when writing began; later ones wait until a second has passed
+ * since the last save. The timer is never pushed back by the next keystroke, so continuous typing
+ * still saves every second (a power cut loses at most that), and it reads the fields when it
+ * fires, so it is also the save after the last keystroke.
+ */
 function onNoteInput() {
   noteUnsaved = true;
-  clearTimeout(noteSaveTimer);
-  noteSaveTimer = setTimeout(saveNoteNow, NOTE_SAVE_DEBOUNCE_MS);
+  if (noteSaveTimer !== null) return; // a save is already due, and will carry this keystroke
+  const wait = noteLastSave + NOTE_SAVE_DEBOUNCE_MS - performance.now();
+  if (wait <= 0) void saveNoteNow();
+  else noteSaveTimer = setTimeout(saveNoteNow, wait);
 }
 
 /**
@@ -133,6 +146,7 @@ function saveNoteNow() {
   noteSaveTimer = null;
   const held = noteDraft;
   if (held === null) return noteSaveQueue;
+  noteLastSave = performance.now();
   const when = el("note-when");
   const sent = {
     held: held,
@@ -269,6 +283,7 @@ function closeEditor() {
   noteSaveTimer = null;
   noteDraft = null;
   noteUnsaved = false;
+  noteLastSave = -Infinity;
   el("note-text").value = "";
   const when = el("note-when");
   when.value = "";

@@ -116,16 +116,53 @@ fn a_here_draft_reopens_and_another_terminals_draft_is_read_only() {
     );
 }
 
-/// One save a second while typing; a new draft's id is minted in the window.
+/// Ruling R14 (final review M1): at most one save a second WHILE typing, never only after a
+/// pause. The first keystroke of a burst saves at once (so `recording_started` is when writing
+/// began); later ones wait for the second since the last save to pass, and the timer they set is
+/// never reset by the next keystroke, so continuous typing still saves every second (design
+/// §3.2: a power cut loses at most that interval). The timer, read when it fires, is the trailing
+/// save after the last keystroke. A new draft's id is minted in the window.
 #[test]
-fn the_debounce_is_one_second_and_draft_ids_are_minted_here() {
+fn saves_go_out_once_a_second_while_typing_and_draft_ids_are_minted_here() {
     assert!(NOTES_JS.contains("const NOTE_SAVE_DEBOUNCE_MS = 1000;"));
     let input = js_fn(NOTES_JS, "onNoteInput");
+    for line in [
+        "if (noteSaveTimer !== null) return;",
+        "const wait = noteLastSave + NOTE_SAVE_DEBOUNCE_MS - performance.now();",
+        "if (wait <= 0) void saveNoteNow();",
+        "else noteSaveTimer = setTimeout(saveNoteNow, wait);",
+    ] {
+        assert!(input.contains(line), "{input}");
+    }
     assert!(
-        input.contains("setTimeout(saveNoteNow, NOTE_SAVE_DEBOUNCE_MS)"),
-        "{input}"
+        !input.contains("clearTimeout"),
+        "a keystroke never pushes the pending save back: {input}"
     );
+    assert!(js_fn(NOTES_JS, "saveNoteNow").contains("noteLastSave = performance.now();"));
+    // A fresh draft's first keystroke saves at once, whenever the last draft's save went.
+    assert!(js_fn(NOTES_JS, "closeEditor").contains("noteLastSave = -Infinity;"));
     assert!(js_fn(NOTES_JS, "newNote").contains("crypto.randomUUID()"));
+}
+
+/// Final review M7: after a Sign that worked, the re-read may reopen another of this terminal's
+/// drafts on the chart. Its words are ADDED to the status line, never put in place of "Signed —
+/// the note is on the chart.", so the clinician still sees that the sign landed.
+#[test]
+fn a_reopened_draft_never_hides_the_signed_confirmation() {
+    let open = js_fn(NOTES_JS, "openDraft");
+    assert!(
+        open.contains("noteStatus(said ? said + \" · \" + draft.words : draft.words);"),
+        "{open}"
+    );
+    assert!(!open.contains("noteStatus(draft.words)"), "{open}");
+    let sign = js_fn(NOTES_JS, "signNote");
+    assert!(
+        position(sign, "noteStatus(report.text); // worded in Rust")
+            < sign
+                .rfind("await refresh(report.text, report.behind_the_record);")
+                .unwrap(),
+        "the confirmation is said before the re-read that may reopen a draft: {sign}"
+    );
 }
 
 /// Every chart read reads the notes too, and a chart change takes the pane (and the editor's
