@@ -156,7 +156,7 @@ pub async fn lookup_class(
 /// the consequence is bounded: a stale rung is displayed at the grade the READER's node
 /// licenses, never at the stale one.
 pub async fn prospective_rung(
-    client: &tokio_postgres::Client,
+    client: &(impl tokio_postgres::GenericClient + Sync),
     patient: Uuid,
     thread: Option<Uuid>,
 ) -> anyhow::Result<SafetyRung> {

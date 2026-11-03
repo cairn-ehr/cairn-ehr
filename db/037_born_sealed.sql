@@ -341,6 +341,12 @@ BEGIN
         IF to_regclass('public.medication_coding') IS NOT NULL THEN
             DELETE FROM medication_coding WHERE content_address = v_ca;
         END IF;
+        -- The progress note (db/064, ADR-0041): the narrative IS clinical plaintext, one row per
+        -- note event, keyed here by THIS event's CA. Guarded like its siblings: the table is
+        -- created by a later file, and is absent on a projection-less node.
+        IF to_regclass('public.clinical_note') IS NOT NULL THEN
+            DELETE FROM clinical_note WHERE content_address = v_ca;
+        END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;

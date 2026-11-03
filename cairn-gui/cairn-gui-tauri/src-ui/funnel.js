@@ -440,6 +440,8 @@ async function closeChart() {
   if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
   if (typeof closeUnlinkPanel === "function" && !el("unlink-panel").hidden) closeUnlinkPanel(false);
   say("");
+  // Every queued note save lands while the node still shows this chart (sent first is not enough).
+  if (typeof notesSaved === "function") await notesSaved();
   try {
     await invoke("close_chart");
   } catch (failure) {

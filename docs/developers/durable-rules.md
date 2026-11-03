@@ -10,6 +10,37 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3a — THE NOTE STREAM AND ITS DRAFT (ADR-0087, db/064, db/065, db/044 + db/037 in place) — do
+not undo** (pins: `crates/cairn-event/src/note.rs`'s tests, `db/tests/{064_clinical_note,065_note_draft}_test.sql`,
+`crates/cairn-node/tests/{note_floor,note_sign,note_read,window_role_grants_notes}.rs`,
+`cairn-gui-tauri/src/{notes,notes_webview}_tests.rs`):
+- **Two replay traps: db/044 and db/037 are edited IN PLACE.** Every `db/*.sql` replays on a schema change. The
+  `note-sign` widening of `ui_gesture_timing_kind_ck` lives in db/044 itself, in BOTH its `CREATE TABLE` line and its
+  drop/re-add: a widening in a later file is undone when 044 replays, and the re-add then fails on a stored
+  `note-sign` row. The note's shred hook is the `to_regclass`-guarded `DELETE FROM clinical_note` inside db/037's
+  `cairn_execute_shred`, beside the medication tables'. **Tempting wrong fix:** "tidy" either into db/064/065. Pins:
+  db/tests/065's replay of the real db/044 over a stored row; `note_floor.rs::a_shred_scrubs_the_note_projection`.
+- **A spend needs its note, in the same transaction.** db/065's deferred trigger accepts a spend only if its
+  `clinical.note.asserted` of the same chart has `xmin` = this transaction's id, and `note_draft_spent.event_id` is
+  `UNIQUE`. So `sign_note` submits with **no savepoint**: a nested `transaction()` around `submit_event` gives the
+  row a subtransaction id and every sign is refused at COMMIT. **Tempting wrong fixes:** wrap the submit "for error
+  handling"; relax the check to "any note of this chart" (an old note then wipes every draft on the chart). Pins:
+  db/tests/065's committed-earlier case; `note_sign.rs`'s `a_signed_note_is_attested_and_spends_its_draft`,
+  `a_failed_submit_leaves_the_draft_in_place`, `a_second_sign_of_the_same_draft_is_refused_spent_and_writes_one_note`.
+- **Drafts have no table grant.** `note_draft` and `note_draft_spent` are `REVOKE ALL … FROM PUBLIC` and granted to
+  nobody; the doors are definers granted to `cairn_window` only. Never `GRANT SELECT` to `cairn_agent` "for a simpler
+  read", and never keep a copy in browser storage (draft prose on disk in the clear). Drafts are in no backup or
+  export (ADR-0087 decision 9). Pins: db/tests/065's grant block and its `cairn_window` probe;
+  `notes_js_never_touches_browser_storage`; `window_role_grants_notes.rs`.
+- **Never `innerHTML` a note.** A note's text is drawn through `cell` (`textContent`), never parsed as HTML or
+  markdown by this window: it is shown exactly as typed. Pin: `notes_and_drafts_are_drawn_as_text` (no `innerHTML`,
+  `outerHTML`, `insertAdjacentHTML`, `document.write` in notes.js).
+- **Escape once, at signing; read only the projection.** Drafts hold the RAW text; `sign_note` escapes the spent
+  row's text once. Escaping in the window too would double every backslash. Notes are read only from
+  `clinical_note`, never from `event_clear` or `event_log`: the projection is what keeps a peer's unchecked `/2` body
+  off the screen (ruling R8). `clinical.note.asserted` stays OFF db/048's no-thread list. Pins:
+  `sign.rs::the_body_is_the_spent_row_escaped_once`, db/tests/064 (R8, the no-thread assert).
+
 **⇒ GUI SIGN-IN SLICE 2 — IN-PERSON ENROLMENT AND RE-KEY (ADR-0085, db/004, db/061, db/063) — do not undo** (pins:
 `crates/cairn-node/tests/{actor_rotate_key,actor_readers_after_rotation,suppression_owner_gate,vault_enrollers,vault_rekey,vault_admin_lib,restore_actor_registry_new_ops,window_role_vault_doors,device_actor_enrolment}.rs`,
 `db/tests/{004_actors,063_vault_enrollers}_test.sql`, `cairn-gui-tauri/src/{signer,signer_webview,enrol,rekey,reseal,superuser_panel}_tests.rs`;

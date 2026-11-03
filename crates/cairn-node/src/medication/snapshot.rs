@@ -17,8 +17,11 @@ use tokio_postgres::{Client, IsolationLevel, Transaction};
 /// Run `read` against a `REPEATABLE READ READ ONLY` transaction opened on `client`, then end it.
 ///
 /// The production list readers (the CLI's `medication-list` and `medication-cease` notes, the
-/// window's chart read, the sign-off's two reads) go through here. Tests may still call the
-/// readers on a bare client or an aborted transaction (their failure seam).
+/// window's chart read, the sign-off's two reads) go through here, and so does the window's note
+/// pane (`note::read::list_patient_notes`, ruling R12: read across two statements, a sign landing
+/// between them showed the clinician neither the note nor its draft). Its error words name "the
+/// chart", not one list, for that reason. Tests may still call the readers on a bare client or an
+/// aborted transaction (their failure seam).
 pub async fn in_snapshot<T>(
     client: &mut Client,
     read: impl AsyncFnOnce(&Transaction<'_>) -> anyhow::Result<T>,
@@ -29,12 +32,12 @@ pub async fn in_snapshot<T>(
         .read_only(true)
         .start()
         .await
-        .context("could not open a consistent read of the medication list")?;
+        .context("could not open a consistent read of the chart")?;
     let out = read(&tx).await?;
     // Nothing was written; COMMIT just ends the transaction (an Err path drops `tx`, which
     // rolls back the same nothing).
     tx.commit()
         .await
-        .context("could not finish the read of the medication list")?;
+        .context("could not finish the read of the chart")?;
     Ok(out)
 }

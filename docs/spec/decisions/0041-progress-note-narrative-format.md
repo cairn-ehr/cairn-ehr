@@ -1,6 +1,6 @@
 # ADR-0041 — The progress-note narrative format: one signed event, markdown narrative, and manifest-keyed media anchors
 
-- **Status:** Accepted
+- **Status:** Accepted; decisions 1 and 2 partly superseded by [ADR-0087](0087-the-first-note-stream-and-its-draft.md)
 - **Date:** 2026-07-04
 - **Refines:** [ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md) (legibility twin),
   [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md) (attachment reference shape),

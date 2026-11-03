@@ -78,7 +78,9 @@ pub fn apply_author<'a>(
 /// DB backup alone still cannot unwrap a DEK. `db/005`'s `submit_event` enforces the same
 /// requirement at the floor — this check is the legible, remedy-naming failure one layer
 /// up, never a substitute for it.
-pub async fn ensure_unwrap_key(client: &tokio_postgres::Client) -> anyhow::Result<()> {
+pub async fn ensure_unwrap_key(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+) -> anyhow::Result<()> {
     let registered: bool = client
         .query_one("SELECT EXISTS (SELECT 1 FROM node_unwrap_key)", &[])
         .await?
@@ -149,7 +151,7 @@ pub fn seal_and_sign(
 /// `seal_and_sign` (which consumes the body) stays in the caller, where it is already
 /// written once.
 async fn apply_safety_rung(
-    client: &tokio_postgres::Client,
+    client: &(impl tokio_postgres::GenericClient + Sync),
     body: &mut cairn_event::EventBody,
 ) -> anyhow::Result<()> {
     // Cloned out first so the immutable borrow of `body.payload` ends before we write
@@ -257,29 +259,27 @@ fn thread_id_of(body: &EventBody) -> anyhow::Result<uuid::Uuid> {
         .context("seal_sign_submit: payload.medication_id is not a valid uuid")
 }
 
-/// Seal, sign, register the unwrap key, and submit a CLEAR clinical body through the
-/// strict door — the single-thread path shared by assert / cessation / dose-change /
-/// dose-correction (and any future single-thread clinical verb).
+/// A clinical body sealed, signed and ready for the strict door: its id (what a lost commit
+/// names), the signed wire bytes, and the DEK the door needs as its 4th argument.
+pub(crate) struct Prepared {
+    pub event_id: uuid::Uuid,
+    pub signed_bytes: Vec<u8>,
+    pub dek: cairn_event::seal::Secret32,
+}
+
+/// Everything a single-thread clinical write does BEFORE it knocks on the strict door: apply the
+/// human author, choose the clear §5.9 rung, seal-then-sign, and verify the node's unwrap key.
 ///
-/// `attest = None` → device-additive: one 4-arg `submit_event` call (auto-commit), no
-/// attestation. Unchanged clinical semantics, now sealed.
-///
-/// `attest = Some` → the verb's submit AND the human's responsibility attestation for the
-/// thread the body names run in ONE transaction (the atomic author-time shape
-/// `assert_medication` used before ADR-0052), so the attestation's commitment sees the
-/// content event just submitted. A rejected attestation rolls the whole verb back with it.
-///
-/// Returns the content event's id (`body.event_id`). The routing facts (event id,
-/// patient, node origin, and — only when attesting — the thread) are read out of the
-/// CLEAR body before it is consumed by the seal, so the verb call sites keep the tidy
-/// `(client, node_sk, body, author, attest)` shape.
-pub async fn seal_sign_submit(
-    client: &mut tokio_postgres::Client,
+/// Split out of `seal_sign_submit` so a caller that must submit inside a transaction of ITS OWN
+/// (the progress note, `note::sign`, which spends its draft in the same transaction) gets the
+/// identical prefix without a second copy of it. Takes any `GenericClient`, so a `Transaction`
+/// serves as well as a `Client`. It writes nothing.
+pub(crate) async fn prepare_sealed(
+    client: &(impl tokio_postgres::GenericClient + Sync),
     node_sk: &SigningKey,
     body: EventBody,
     author: Option<&AuthorParams<'_>>,
-    attest: Option<&super::AttestParams<'_>>,
-) -> anyhow::Result<uuid::Uuid> {
+) -> anyhow::Result<Prepared> {
     // ADR-0053: when a human authors, rewrite the device-shaped body so the human is
     // an `authored` contributor AND the signer; the node stays `recorded` + custodian.
     let (mut body, signing_sk) = apply_author(body, author, node_sk);
@@ -298,12 +298,48 @@ pub async fn seal_sign_submit(
     // must be decided together and frozen into the signed bytes.
     apply_safety_rung(client, &mut body).await?;
 
-    let event_id: uuid::Uuid = body.event_id.parse().with_context(|| {
-        format!(
-            "seal_sign_submit: event_id {:?} is not a uuid",
-            body.event_id
-        )
-    })?;
+    let event_id: uuid::Uuid = body
+        .event_id
+        .parse()
+        .with_context(|| format!("prepare_sealed: event_id {:?} is not a uuid", body.event_id))?;
+
+    let (signed_bytes, dek) = seal_and_sign(body, signing_sk)?;
+    // Custody is the NODE's regardless of who signed (born-sealed erasability, ADR-0052).
+    // VERIFY the node's provisioned unwrap key is registered (ADR-0066 decision 6): the
+    // door needs it committed and visible so it can wrap this event's DEK into recoverable
+    // custody, and a node without one must be refused rather than write a body it could
+    // never crypto-shred.
+    ensure_unwrap_key(client).await?;
+    Ok(Prepared {
+        event_id,
+        signed_bytes,
+        dek,
+    })
+}
+
+/// Seal, sign, register the unwrap key, and submit a CLEAR clinical body through the
+/// strict door — the single-thread path shared by assert / cessation / dose-change /
+/// dose-correction (and any future single-thread clinical verb).
+///
+/// `attest = None` → device-additive: one 4-arg `submit_event` call (auto-commit), no
+/// attestation. Unchanged clinical semantics, now sealed.
+///
+/// `attest = Some` → the verb's submit AND the human's responsibility attestation for the
+/// thread the body names run in ONE transaction (the atomic author-time shape
+/// `assert_medication` used before ADR-0052), so the attestation's commitment sees the
+/// content event just submitted. A rejected attestation rolls the whole verb back with it.
+///
+/// Returns the content event's id (`body.event_id`). The routing facts (patient, node
+/// origin, and — only when attesting — the thread) are read out of the CLEAR body before
+/// `prepare_sealed` consumes it, so the verb call sites keep the tidy
+/// `(client, node_sk, body, author, attest)` shape.
+pub async fn seal_sign_submit(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    body: EventBody,
+    author: Option<&AuthorParams<'_>>,
+    attest: Option<&super::AttestParams<'_>>,
+) -> anyhow::Result<uuid::Uuid> {
     let patient: uuid::Uuid = body.patient_id.parse().with_context(|| {
         format!(
             "seal_sign_submit: patient_id {:?} is not a uuid",
@@ -317,13 +353,11 @@ pub async fn seal_sign_submit(
         None => None,
     };
 
-    let (signed_bytes, dek) = seal_and_sign(body, signing_sk)?;
-    // Custody is the NODE's regardless of who signed (born-sealed erasability, ADR-0052).
-    // VERIFY the node's provisioned unwrap key is registered (ADR-0066 decision 6): the
-    // door needs it committed and visible so it can wrap this event's DEK into recoverable
-    // custody, and a node without one must be refused rather than write a body it could
-    // never crypto-shred.
-    ensure_unwrap_key(client).await?;
+    let Prepared {
+        event_id,
+        signed_bytes,
+        dek,
+    } = prepare_sealed(&*client, node_sk, body, author).await?;
 
     match attest {
         // Either arm's final step can be lost mid-flight with the event already written: the
@@ -357,121 +391,5 @@ pub async fn seal_sign_submit(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A minimal, never-submitted `EventBody` — every field is a throwaway placeholder,
-    /// because `apply_safety_rung`'s two early-return branches never read past
-    /// `body.payload` before returning. Kept local to this test module rather than a
-    /// shared fixture, since nothing outside this file needs a bare body like this.
-    fn bare_body(payload: serde_json::Value) -> EventBody {
-        EventBody {
-            event_id: uuid::Uuid::now_v7().to_string(),
-            patient_id: uuid::Uuid::now_v7().to_string(),
-            event_type: "clinical.medication.assert".into(),
-            schema_version: "1".into(),
-            hlc: cairn_event::Hlc {
-                wall: 0,
-                counter: 0,
-                node_origin: "test".into(),
-            },
-            t_effective: None,
-            signer_key_id: "test".into(),
-            contributors: serde_json::json!([]),
-            payload,
-            attachments: vec![],
-            plaintext_twin: None,
-            clock_grade: Default::default(),
-            // Set directly, bypassing every verb builder in this repo (which always
-            // initialise this to `None`) — exactly the "future caller reaching in
-            // directly" scenario the add-on guards against.
-            safety: Some(serde_json::json!({"rung": "precise", "class": "should-not-survive"})),
-        }
-    }
-
-    /// Add-on 1 (task-6 review of #375 Task 5): the two early returns in
-    /// `apply_safety_rung` must clear a caller-supplied `body.safety` rather than leave it
-    /// standing, so "one seam decides the clear field" is a STRUCTURAL guarantee rather
-    /// than a convention every builder happens to follow today.
-    ///
-    /// Branch 1: no `payload.safety` at all — the ordinary case for every non-medication
-    /// clinical verb.
-    #[tokio::test]
-    async fn a_body_with_no_precise_claim_has_its_safety_field_cleared() {
-        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
-            eprintln!("skipped: set CAIRN_TEST_PG");
-            return;
-        };
-        // A bare connect, not `test_serial_guard` / `connect_and_load_schema`: this test
-        // never touches a table (both early-return branches return before any query), so
-        // it needs a live `Client` value only because `apply_safety_rung`'s signature
-        // requires one — there is nothing here to serialize against another suite.
-        let client = crate::db::connect(&base).await.unwrap();
-        let mut body = bare_body(serde_json::json!({}));
-        assert!(body.safety.is_some(), "fixture sets it up wrong otherwise");
-
-        apply_safety_rung(&client, &mut body).await.unwrap();
-
-        assert!(
-            body.safety.is_none(),
-            "no payload.safety in ⇒ the seam must clear a pre-set body.safety, not just \
-             leave it alone"
-        );
-    }
-
-    /// Branch 2: a `payload.safety` claim that IS present but half-formed (blank class) —
-    /// `usable_precise_claim` refuses it (ADR-0060: never cancel the clinical write over a
-    /// misconfigured class-map row), and that refusal must ALSO clear a pre-set
-    /// `body.safety`.
-    #[tokio::test]
-    async fn a_body_with_a_half_formed_claim_has_its_safety_field_cleared() {
-        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
-            eprintln!("skipped: set CAIRN_TEST_PG");
-            return;
-        };
-        let client = crate::db::connect(&base).await.unwrap();
-        let mut body = bare_body(serde_json::json!({"safety": {"class": "", "severity": "high"}}));
-        assert!(body.safety.is_some(), "fixture sets it up wrong otherwise");
-
-        apply_safety_rung(&client, &mut body).await.unwrap();
-
-        assert!(
-            body.safety.is_none(),
-            "a half-formed payload.safety claim ⇒ the seam must clear a pre-set \
-             body.safety, not just leave it alone"
-        );
-    }
-
-    /// A human signer that refuses, as a vault-backed one will when it cannot be reached.
-    struct RefusingSigner(SigningKey);
-
-    impl EventSigner for RefusingSigner {
-        fn verifying_key(&self) -> cairn_event::VerifyingKey {
-            self.0.verifying_key()
-        }
-        fn sign_tbs(&self, _tbs: &[u8]) -> Result<cairn_event::Signature, cairn_event::EventError> {
-            Err(cairn_event::EventError::Seal("the signer refused".into()))
-        }
-    }
-
-    /// The swap seam, pinned at compile time: `AuthorParams` takes ANY `EventSigner`, not a
-    /// `&SigningKey`, so slice 5's in-database signer drops in without touching a call site. And
-    /// its refusal stops the seal-and-sign: no medication event is built around a missing
-    /// signature, and the node's key does not quietly sign in the human's place.
-    #[test]
-    fn a_refusing_human_signer_seals_and_signs_nothing() {
-        let human = RefusingSigner(SigningKey::from_bytes(&std::array::from_fn(|i| {
-            i as u8 ^ 0x5a
-        })));
-        let node_sk = SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_mul(3)));
-        let human_kid = hex::encode(human.verifying_key().to_bytes());
-        let author = AuthorParams {
-            human_sk: &human,
-            human_kid: &human_kid,
-        };
-        let mut body = bare_body(serde_json::json!({"drug": "test"}));
-        body.plaintext_twin = Some("a test twin".into());
-        let (body, signer) = apply_author(body, Some(&author), &node_sk);
-        assert!(seal_and_sign(body, signer).is_err());
-    }
-}
+#[path = "sealed_submit_tests.rs"]
+mod tests;

@@ -792,7 +792,7 @@ async fn read_coding_conflict_groups(
 ///
 /// One Rust spelling of the read: [`crate::patient::edges::record_is_doubted`], which the
 /// duplicate-review tray asks too (a set of one costs no query there either).
-async fn set_has_doubted_link(
+pub(crate) async fn set_has_doubted_link(
     client: &(impl tokio_postgres::GenericClient + Sync),
     charts: &ChartSet,
 ) -> anyhow::Result<bool> {

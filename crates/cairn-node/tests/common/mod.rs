@@ -1240,6 +1240,17 @@ pub fn assert_not_denied<T>(entry: &str, result: &anyhow::Result<T>) {
     );
 }
 
+/// [`assert_not_denied`], and then the call must have SUCCEEDED. A read that fails after its
+/// first statement would skip the statements after it, and hide any grant they need; so every
+/// read on a fixture that should satisfy it goes through here, not through the bare check.
+pub fn expect_as_window<T>(entry: &str, result: anyhow::Result<T>) -> T {
+    assert_not_denied(entry, &result);
+    match result {
+        Ok(value) => value,
+        Err(_) => panic!("{entry}: failed on the window's login (not a privilege refusal)"),
+    }
+}
+
 /// The owner connection (schema loaded, setup runs here) and the window's own connection,
 /// opened with the NON-loading `cairn_node::db::connect` exactly as the window opens it.
 pub async fn owner_and_window(base: &str) -> (Client, Client) {
@@ -1248,4 +1259,40 @@ pub async fn owner_and_window(base: &str) -> (Client, Client) {
         .await
         .expect("the window's login connects");
     (owner, window)
+}
+
+/// The display name [`note_setup`] gives its human author — what a signed note's grade must
+/// read back as ("signed by …").
+pub const NOTE_AUTHOR: &str = "Dr Ada Notewriter";
+
+/// The note suites' fixture (sign-in slice 3a): empty note, draft, link and vault tables; the
+/// medication keys ([`medication_setup`]); the human author named [`NOTE_AUTHOR`] the way the
+/// vault names a member; and one registered chart (#345: a chart's first event is its
+/// registration). Returns `(node sk, node kid, human sk, human kid, chart)`.
+///
+/// The vault row is written directly rather than through `vault::enrol_member`: the note read
+/// only asks `cairn_note_signer_name` who a key stands for, and a real enrolment would cost a
+/// superuser bootstrap and two Argon2id releases to answer that one question. Its `sealed` blob
+/// is a placeholder no test ever releases.
+pub async fn note_setup(c: &Client) -> (SigningKey, String, SigningKey, String, Uuid) {
+    c.batch_execute(
+        "TRUNCATE clinical_note, note_draft, note_draft_spent, vault_member, patient_link, \
+         person_member, link_veto_flag CASCADE",
+    )
+    .await
+    .unwrap();
+    let (node_sk, node_kid, human_sk, human_kid) = medication_setup(c).await;
+    c.execute(
+        "INSERT INTO vault_member (staff_id, display_name, role, actor_id, signing_key_id, \
+                                   sealed, enrolled_by, contact_email) \
+         SELECT 'notewriter', $2, 'clinician', actor_id, $1, '\\x00'::bytea, 'console', \
+                'notes@example.org' \
+           FROM actor_event WHERE signing_key_id = $1 AND op = 'enroll' LIMIT 1",
+        &[&human_kid, &NOTE_AUTHOR],
+    )
+    .await
+    .unwrap();
+    let chart = Uuid::now_v7();
+    submit_registration(c, &node_sk, &node_kid, chart, 0).await;
+    (node_sk, node_kid, human_sk, human_kid, chart)
 }

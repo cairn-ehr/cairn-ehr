@@ -44,6 +44,8 @@ impl AppState {
             // Nothing is held in fixture mode: there is no vault to release a key from.
             key_hold: std::time::Duration::ZERO,
             session: tokio::sync::Mutex::new(Default::default()),
+            // A fixed name: fixture mode writes no draft, so nothing is held under it.
+            terminal_id: "fixture-terminal".to_string().into(),
         }
     }
 

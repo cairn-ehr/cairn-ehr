@@ -359,3 +359,21 @@ h1:focus-visible {
 #unlink-findings li {
   font-weight: 600;
 }
+
+/* ---- Progress notes (slice 3a) ---- */
+
+/* A note is shown exactly as typed: its line breaks and spaces are part of it. */
+.note-text {
+  white-space: pre-wrap;
+}
+
+#note-editor label,
+#note-editor textarea {
+  display: block;
+}
+
+#note-editor textarea {
+  width: 100%;
+  max-width: 48rem;
+  box-sizing: border-box;
+}

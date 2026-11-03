@@ -20,8 +20,9 @@
 //! it, and a grant those statements need would stay hidden. Where a call is expected to
 //! succeed it is `expect`ed, so a fixture that stops reaching the deep path fails loudly.
 //!
-//! The vault doors the window calls are walked the same way in `window_role_vault_doors.rs`
-//! (split out to keep each file under 500 lines); the shared checks live in `tests/common`.
+//! The vault doors the window calls are walked the same way in `window_role_vault_doors.rs`,
+//! and the note pane's calls in `window_role_grants_notes.rs` (each split out to keep every file
+//! under 500 lines); the shared checks live in `tests/common`.
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`. Key material and
 //! passphrases are minted at runtime.
@@ -42,8 +43,8 @@ use cairn_node::medication::{
 };
 use cairn_patient_search::SearchQuery;
 use common::{
-    assert_not_denied, cs, enroll_human, link_assertion_event, owner_and_window, seed_proposal,
-    setup,
+    assert_not_denied, cs, enroll_human, expect_as_window, link_assertion_event, owner_and_window,
+    seed_proposal, setup,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -62,17 +63,6 @@ const TABLES: [&str; 7] = [
 ];
 
 const ORIGIN: &str = "window-role-grants";
-
-/// [`assert_not_denied`], and then the call must have SUCCEEDED. A read that fails after its
-/// first statement would skip the statements after it, and hide any grant they need; so every
-/// read on a fixture that should satisfy it goes through here, not through the bare check.
-fn expect_as_window<T>(entry: &str, result: anyhow::Result<T>) -> T {
-    assert_not_denied(entry, &result);
-    match result {
-        Ok(value) => value,
-        Err(_) => panic!("{entry}: failed on the window's login (not a privilege refusal)"),
-    }
-}
 
 /// The window really is connected as its own role, not as the owner: a walk that silently ran
 /// as the owner would prove nothing.

@@ -357,6 +357,26 @@
         <!-- Outcomes land here rather than in a dialog: an act's result is information, and a
              box the clinician must dismiss is a step paper never charges them (principle 3). -->
         <p id="outcome" role="status" aria-live="polite"></p>
+
+        <!-- The progress notes (slice 3a): the paper chart's progress-note page. Signed notes,
+             then open drafts, then one editor. Saved as it is typed and signed in one press,
+             never behind a dialog (principle 3). notes.js draws and wires it. -->
+        <section id="notes" aria-labelledby="notes-heading">
+          <h2 id="notes-heading">Progress notes</h2>
+          <p id="notes-withheld" hidden></p>
+          <p id="notes-error" role="alert" hidden></p>
+          <ol id="note-list"></ol>
+          <ul id="note-drafts"></ul>
+          <button id="new-note" type="button">New note</button>
+          <div id="note-editor" hidden>
+            <label for="note-text">Progress note</label>
+            <textarea id="note-text" rows="8"></textarea>
+            <label for="note-when">When it happened — leave empty if it is now</label>
+            <input id="note-when" type="datetime-local" />
+            <button id="note-sign" type="button">Sign note</button>
+          </div>
+          <p id="note-status" role="status" aria-live="polite"></p>
+        </section>
       </section>
     </main>
     <!-- The terminal lock screen: shown at launch (live mode) until the shared terminal
@@ -374,6 +394,7 @@
     <script src="waiting.js"></script>
     <script src="main.js"></script>
     <script src="signer.js"></script>
+    <script src="notes.js"></script>
     <script src="enrol.js"></script>
     <script src="rekey.js"></script>
     <script src="superuser.js"></script>
