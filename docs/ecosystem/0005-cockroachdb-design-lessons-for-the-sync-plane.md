@@ -77,7 +77,7 @@ the wire core is the signed event set, not a database protocol).
 The deployment table (deployment §8) names "HA Postgres pair — Patroni-style failover" for the hospital
 core and "Cluster" for regional/national hubs. If a hub ever needs strongly-consistent internal
 replication, that is a **node-internal** concern behind one logical node identity, and the AGPL-compatible
-route is Postgres-native (Patroni, MIT). See the open question in §5, Q4.
+route is Postgres-native (Patroni, MIT). See the open question in §5, [Q4 — HA hub identity](#q4-ha-hub-identity).
 
 ---
 
@@ -128,22 +128,27 @@ comparison against several independent clocks can.
 
 **Cairn today.** `cairn_max_hlc_drift_ms()` (`db/001_envelope.sql`, 24 h) bounds how far a *remote* HLC
 wall may sit ahead of **this node's `clock_timestamp()`**. That is a correct defence against the
-ratchet attack (issue #102): a hostile peer cannot drag the clock to the year 146 million. But both
-doors silently assume the local clock is the trustworthy one:
+ratchet attack (issue #102): a hostile peer cannot drag the clock to the year 146 million. But the same
+raw-`clock_timestamp()` ceiling guards **four** doors, and every one silently assumes the local clock is the
+trustworthy one:
 
 - **Node plane** (`db/007_node_federation.sql`, `apply_remote_node_event`): an event more than 24 h
   "ahead" is **rejected**. It is skipped, advanced past, and re-offered on the next full sweep. The
   comment's own reasoning is *"admitted once local time catches up"*.
 - **Clinical plane** (`db/020_apply_remote_event.sql`): the event is admitted unchanged, but the local
   HLC merge is **clamped** to `now + 24 h`.
+- **Restore** (`db/009_node_supersede_and_restore.sql`, `restore_node_event`, issue #193): an event more
+  than 24 h "ahead" is **refused**, and this door aborts the *whole* restore on any raise.
+- **Local submit** (`db/005_submit.sql`, `submit_event` step 1a, issue #187): a body whose asserted wall is
+  more than 24 h "ahead" is refused at authoring.
 
 > [!IMPORTANT]
 > **F1 (suspected defect — filed as [#935](https://github.com/cairn-ehr/cairn-ehr/issues/935); a reproduction is its first deliverable).** Take the node that ADR-0058 names as a *core* failure
 > mode: an RTC-less Raspberry Pi that boots "decades off true time", or (with `fake-hwclock`) at its last
 > shutdown time. Then put it **offline with no NTP**, the deployment Cairn exists for. Its local clock
 > is *behind* real time by more than 24 h, and "local time catching up" never happens until a human
-> sets the clock. Every **honest** peer then looks like a hostile future-clock peer. Two consequences
-> follow, both from reading the code above (not yet reproduced in a test):
+> sets the clock. Every **honest** peer then looks like a hostile future-clock peer. Four consequences
+> follow, all from reading the code above (none yet reproduced in a test):
 >
 > 1. **The trust plane freezes.** Every node-plane event from a correctly-clocked peer is refused and
 >    re-offered forever: peering, **revocation**, supersede. A revoked node or key is not revoked
@@ -158,6 +163,22 @@ doors silently assume the local clock is the trustworthy one:
 >    on every node. Issue #97 (recency on the t_recorded axis) is related but does not cover it: #97 is
 >    about *honest* clocks ordering on the wrong axis; F1 is about a *dishonest local* clock inverting a
 >    causal edge.
+> 3. **Disaster recovery fails outright on replacement hardware.** The box a node is restored onto is,
+>    very often, exactly this Pi: fresh, RTC-less, booting at its `fake-hwclock` time. `restore_node_event`
+>    (`db/009`) refuses every medium event more than 24 h ahead of that clock, and *any* refusal aborts the
+>    whole restore. So restoring an honest medium onto a box whose clock is behind fails until a human sets
+>    the clock, at the moment the clinic has just lost its node.
+>
+> 4. **The node can refuse its own clinical writes** (found while correcting this eval, not yet reproduced).
+>    The orchestrators stamp their HLC from `node_hlc_tick` (db/007). When the local clock is behind
+>    `hlc_state`, that function returns `hlc_state`'s wall plus a counter step. Take a node that has run at true
+>    time, or synced honest events, and whose clock then *regresses*: the RTC battery dies, and the Pi reboots
+>    decades off. Its `hlc_state` is now more than 24 h ahead of `clock_timestamp()`, so every event it authors
+>    carries a wall that `submit_event` step 1a (`db/005`) refuses as more than 24 h ahead of local time. That
+>    is a **write-availability** failure on the node's own door, the one thing ADR-0001 says must never stop.
+>    `cairn_clock_health` (db/040) already detects the state, since `status` reports the RTC behind the HLC,
+>    but nothing acts on it. A node whose clock was wrong from first boot, and which has never merged a
+>    later wall, is not affected. Nor is a `fake-hwclock` restart, which resumes near its last shutdown.
 >
 > The code comment calls the relaxation "intentionally relaxed for a Byzantine future-claim". F1's peer
 > is not Byzantine. The bound cannot tell the two cases apart, which is exactly CockroachDB's point.
@@ -189,6 +210,14 @@ doors silently assume the local clock is the trustworthy one:
    > (admitted by the clinical door's clamp) would carry the poisoned wall into this node's clock: the
    > ratchet #102 exists to stop. It is safe only *after* step 1, when the ceiling no longer depends on a
    > clock that may itself be wrong.
+
+   > [!WARNING]
+   > **Not covered: consequence 4.** Steps 1 and 2 correct skew only with evidence from peers. A node that
+   > refuses its own writes after its clock regresses is most likely the offline one, with no peers to ask,
+   > so this remedy leaves it refusing indefinitely. The local submit door needs a rule of its own that does
+   > not depend on peers. For example: judge a node-*ticked* body against `GREATEST(clock_timestamp(),
+   > hlc_state)`, which is only safe if `submit_event` never merges a submitted wall forward. Or exempt the
+   > node's own ticks outright. Either way it needs a written no-ratchet argument. **Open**, for #935.
 3. **Never self-terminate.** This is the one place Cairn must deliberately *not* copy CockroachDB. A CP
    database can afford to kill a skewed node; an EHR node must keep writing (ADR-0001 availability
    floor, principle 4). The AP translation of "self-terminate" is *downgrade the grade, widen the
@@ -312,6 +341,9 @@ After full heal, assert:
 4. no power granted before re-adjudication (`cairn_replay_eligible`);
 5. no watermark wedged (every verifiable event applied, or penned and acked).
 
+The harness plan turns these five into its I1–I5 and adds **I6a/I6b**: honest causal order is never inverted,
+and the #102 ratchet defence holds. These are the invariants clock skew violates, and the ones that show up F1.
+
 Shrinking gives minimal counter-examples. Then, CockroachDB-style, put **TLA+ only on the one or two
 protocols that are both safety-critical and liveness-subtle**. The best candidate is the quarantine-floor
 / re-offer watermark: *every verifiable event is eventually applied or recorded-acked; nothing is
@@ -387,7 +419,7 @@ in the erasure ceiling's prose.
 | GLOBAL tables: read-mostly data replicated everywhere, at the cost of commit-wait (~130 ms) | ADR-0016 replicated essential tier; reference data | Same idea (replicate small, read-everywhere data widely), without paying a consistency tax, because Cairn's essential tier is append-only overlays. |
 | Bounded-staleness reads "for availability during partition" | Honest assembly + local projections (sync §6.2) | CockroachDB offers it as an *opt-in, single-statement, enterprise* read mode. In Cairn it is the default and only mode, and it is disclosed. |
 | Loss-of-quorum recovery: named "*Inconsistent* Recovery", `unsafe-remove-dead-replicas`, leaves a marker on the store, warns of "false safety" | Restore ceremonies (ADR-0026, 0067–0072); operator `ack` of penned events | Same honesty discipline, applied more strongly. Cairn's restore *exits incomplete* rather than pretending (ADR-0071). Keep every operator escape hatch leaving a durable, visible marker. |
-| F1-style online schema change, two-version descriptor leases | Additive-only DDL, per-node schema, blue-green extension (ADR-0012) | Not needed: Cairn's DDL is node-local. One small borrow: build a new projection in a shadow, switch reads only when caught up ("backfill → public"), so a Pi mid-reprojection never shows a half-built chart. Worth checking ADR-0057 does this. |
+| Online schema change after Google's F1 paper (two-version descriptor leases; *unrelated to defect F1 in §3.1*) | Additive-only DDL, per-node schema, blue-green extension (ADR-0012) | Not needed: Cairn's DDL is node-local. One small borrow: build a new projection in a shadow, switch reads only when caught up ("backfill → public"), so a Pi mid-reprojection never shows a half-built chart. Worth checking ADR-0057 does this. |
 | Encryption at rest: per-store keys, weekly data-key rotation | ADR-0005/0052 per-episode DEKs, born-sealed bodies, crypto-shred | Cairn is far ahead; nothing to borrow. |
 
 ---
@@ -408,4 +440,23 @@ convergence semantics and needs a system-level test to show set-union survived.
 | 3.4 | One elastic-work governor | [#940](https://github.com/cairn-ehr/cairn-ehr/issues/940) |
 | 3.7 | Surplus-copy GC invariant (≥ k acknowledged custodians) | [#941](https://github.com/cairn-ehr/cairn-ehr/issues/941) |
 | 3.5 | TLA+ model of the quarantine floor | [#942](https://github.com/cairn-ehr/cairn-ehr/issues/942) |
-| 3.7, 4, Q4 | Prose/check batch: erasure remnants, ADR-0057 shadow build, HA hub signing identity | [#943](https://github.com/cairn-ehr/cairn-ehr/issues/943) |
+| 3.7, 4, Q4 | Prose/check batch: erasure remnants, ADR-0057 shadow build, HA hub signing identity (Q4 below) | [#943](https://github.com/cairn-ehr/cairn-ehr/issues/943) |
+
+### Q4 — HA hub identity
+
+*(Open. Carried by #943. The other questions of this eval's first draft became the issues above.)*
+
+A Patroni-style HA pair at the hospital core is one *logical* node. How does it hold **one signing identity
+across failover**, when ADR-0026 wants that key hardware-bound and non-extractable? Two options are visible:
+- a key that both members can use, which weakens hardware-binding;
+- a key per member, which makes the hub **two peered nodes** to the fleet behind one logical service, each
+  authoring under its own identity.
+
+  `supersede` (ADR-0026) does **not** fit here, though it looks like it should. It is a one-way, dead-node
+  replacement: the superseded identity's *future* authority is withheld (ADR-0064). After a failback, the
+  recovered member would be admitted but powerless, and superseding back would be a cycle the algebra does
+  not model. So the per-member option is peering, or a new "HA set" identity construct; it is never
+  supersede per failover.
+
+Neither CockroachDB, whose nodes are interchangeable cluster members with no per-node signing identity, nor
+the spec answers this today. It is worth a sentence in deployment §8 before anyone builds the pair.
