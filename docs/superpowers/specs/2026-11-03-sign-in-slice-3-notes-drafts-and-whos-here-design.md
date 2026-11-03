@@ -125,8 +125,8 @@ countersignature) — their addendum and signature carry the supervisor's respon
 - **Who commits it:** any running window commits overdue drafts on a regular tick, and opening a chart commits
   that chart's overdue drafts first, so its reader sees what is now in the record. If no window runs, the draft
   waits — safe, still shown, marked **overdue** (maintainer accepted). The commit is signed by the **node's** key
-  (today every window holds it, `--key`), contributors `[{writer, "drafted"} …, {node, "recorded"}]`, or
-  `[{node, "recorded"}]` alone for an unknown writer.
+  (today every window holds it, `--key`), one event per writer's part (§4.3), contributors
+  `[{writer, "drafted"}, {node, "recorded"}]`, or `[{node, "recorded"}]` alone for an unknown writer.
 - **The commit is one door in the database that decides "overdue" itself** (review finding): it checks the
   last keystroke against the policy on the node's clock and consumes the draft row in the same statement —
   idempotent, so two windows ticking at once, or a signature racing the timer, can never put two notes in the
@@ -136,10 +136,10 @@ countersignature) — their addendum and signature carry the supervisor's respon
 
 ### 3.4 Signing, finishing, vouching later
 
-- **Signing a draft** is an ordinary per-act signature; the note goes in **attested**. The signer is
-  `authored` if they wrote the whole text, otherwise `attested` with every writer (themselves included, if they
-  typed a part) `drafted` (review finding: ADR-0028's `authored` owns "the exact words as written", which a
-  signer who typed nothing does not). Either way the signer carries responsibility for the whole text.
+- **Signing a draft** is an ordinary per-act signature; the note goes in **attested**. Each writer's part
+  commits as its own event (§4.3): the signer's own parts with the signer `authored`; every other part with its
+  writer `drafted` and the signer `attested` (ADR-0028's `authored` owns "the exact words as written", which a
+  signer does not for someone else's part). Either way the signer carries responsibility for the whole text.
 - **A note that went in unsigned is finished by an addendum** (`refs: [{rel: "addendum-to", event}]`, already in
   ADR-0041 decision 8's closed enum — no wire change for the link). The original is never edited.
 - **Adding stays simple and vouches only for the adder's own words** (maintainer, after the builder check:
@@ -169,8 +169,16 @@ countersignature) — their addendum and signature carry the supervisor's respon
 
 ### 3.5 Discarding a draft
 
-- A draft may be **discarded until it commits (signed, or by the timer), leaving no trace in the record**
-  (maintainer). After it commits, nothing removes it: only an ADR-0020 suppression overlay.
+- A draft may be **discarded until it commits** (signed, or by the timer). After it commits, nothing removes
+  it: only an ADR-0020 suppression overlay.
+- **A discard is auditable** (maintainer, review finding I6): a colleague may have read the draft and acted on
+  it — a doctor orders levels on "took 40 paracetamol at 02:00", then the draft is discarded. There is no audit
+  table in Cairn; the signed log is the audit trail. So *my call:* the discard is itself a **signed, born-sealed
+  event on the chart**, carrying who discarded it, when, the draft's writers and times, and the discarded text.
+  It never displays as a note — only in the chart's audit view. Never erase, always overlay: the draft leaves
+  the notes, not the log. A new event type (pinned counts, §4.3); its shape goes in the ADR.
+- **An empty draft never commits**: a writer who deletes all their own text has abandoned it, with nothing to
+  audit.
 - **Only its author may discard it, and must sign the discard** with staff ID + passphrase (the who's-here pick
   carries no proof). Dr Z may not discard Dr X's draft (maintainer).
 - *My call:* a draft with **several writers** needs **every writer's** signature to discard — the "sole author"
@@ -255,17 +263,22 @@ grades `Attested` or carries a verified vouch — two inputs, one rule, written 
   URL) — safety-critical, in 3a. In this text-only subset any media anchor is refused for want of a manifest
   entry (`media: []`, decision 3), and event anchors are not valid in `clinical.note/1` (decision 9, second
   bullet).
-- **The parts of a multi-writer draft** (§3.2): whether they ride into the committed body as spans or commit as
-  separate parts is a wire decision for the ADR. Either way it bears on ADR-0041 decision 1's bet that sub-note
-  span-level provenance is not needed — the ADR names that falsifier as now in play.
-- **Times — both are captured, because they attest different things** (maintainer; ADR-0003): the writer
-  **may state the time** the note describes (`t_effective` — the author attests when it happened, as a nurse
-  heads a paper entry "03:00"), and `t_recorded` is the commit's HLC (the record attests when it was recorded).
-  Both are true at once; a clash is flagged, never auto-resolved. *My call:* when the writer states no time,
-  `t_effective` defaults to the draft's **first keystroke** as the node observed it (an observed time, not a
-  clinical claim the node invents). The body also carries the draft's **typed-from / typed-until** times so the
-  parts view still shows them once the draft row is gone. A directly signed note and an auto-committed one use
-  the same rule; a time the writer stated in the draft survives the auto-commit.
+- **Authorship is recorded per part** (maintainer, review finding I9). *My call* on how: a multi-writer draft
+  commits as **one event per writer's part** — the first part is the note, each later part an `addendum-to` the
+  part before it. So every event has exactly one writer and an exact contributor set, the compound display
+  (§3.7) already groups them, and nothing new goes on the wire (no span field in `clinical.note/1`). It also
+  keeps ADR-0041 decision 1's bet — that sub-note span-level provenance is not needed — intact: provenance is
+  exact at event granularity. The ADR records this.
+- **Times — each part records three, plus the commit's** (maintainer): **recording started** (the part's first
+  keystroke) and **recording ended** (its last), both stamped by the node — they attest when it was written; and
+  the **time the writer states the event happened** (`t_effective`, ADR-0003 — the author's claim, as a nurse
+  heads a paper entry "03:00"). Time written and time it happened are different things, both true at once; a
+  clash is flagged, never auto-resolved. `t_recorded` is the commit's HLC (when the record took it in).
+  *My call:* when the writer states no time, the body carries none — `t_effective` takes §3.6's default and
+  the display says *time not stated*, never passing a keystroke time off as the event time. Recording
+  started/ended ride in the body, so the parts view shows them once the draft row is gone. A directly signed
+  note and an auto-committed one use the same rule; a time the writer stated in the draft survives the
+  auto-commit.
 - **`note.added` is NOT retired in this slice** (*my call*, builder check): ADR-0041 decision 1 says the
   migration registering `clinical.note.asserted` removes the walking-skeleton `note.added` row, but that event is
   the general test fixture in ~50 files and drives `note_count`; retiring it in 3a would double 3a. The new ADR
@@ -295,11 +308,11 @@ used by `cairn-gui-shell`, not the Tauri window. Reusing or replacing them is th
 
 | PR | Contents |
 |---|---|
-| **3a** | The note stream: `clinical.note.asserted` text-only (floor, twin, projection, born-sealed), "New note" → type → Sign in the window, notes listed on the chart. The ADR (§9). |
-| **3b** | Who's here (hot key, picker, loud bar, bookmark; switching forgets the held key); the idle screensaver (re-lock, clears who's here); the durable draft store (revisions, append-only writers, per-writer parts); the last-keystroke clock + the atomic commit door + the commit runner + the console knob; discard; `Asserted` + its display, with the `?` on claimed names. |
+| **3a** | The note stream: `clinical.note.asserted` text-only (floor, twin, projection, born-sealed), "New note" → type → Sign in the window, the writer's stated time, notes listed on the chart with their grades. **A minimal autosave** (maintainer, review finding I7): the draft store's save and restore doors, so a crash or disconnect loses nothing from day one — one terminal, writer unknown until signed, no timer and no discard yet (an unsigned 3a draft waits, shown, until signed or until 3b's runner commits it). The ADR (§9). |
+| **3b** | Who's here (hot key, picker, loud bar, bookmark; switching forgets the held key); the idle screensaver (re-lock, clears who's here); the rest of the draft store (revisions, append-only writers, per-writer parts, one event per part); the last-keystroke clock + the atomic commit door + the commit runner + the console knob; the audited discard; `Asserted` + its display, with the `?` on claimed names. |
 | **3c** | Addendum (vouches its own writer's parts); "Sign off this note" (co-signs / attests every part); the compound note + "N parts"; the pending-sign-offs menu; the unconfirmed / #918 markers; the `student` role label and "not co-signed". |
 
-3a alone is a usable milestone step (write and sign a note). 3b is the draft half the maintainer asked for.
+3a alone is a usable milestone step (write and sign a note, nothing lost to a crash). 3b is the rest of the draft half the maintainer asked for.
 
 ## 6. Paper-parity benchmark (§1.2) — for the plan to carry per PR
 
@@ -340,12 +353,12 @@ door names; how the note list sits beside the medication list on the chart.
 
 One ADR (in PR 3a, extended in 3b/3c or split as the builder sees fit) recording: the first note stream as
 built (ADR-0041's text-only subset, and the deferred `note.added` retirement); the draft store, its
-last-keystroke quarantine rule, its commit runner and its at-rest posture; the discard rule (author-signed, no
-trace); the `Asserted` grade and the `?` on a claimed name; the two vouching acts (an addendum vouches its own
+last-keystroke quarantine rule, its commit runner and its at-rest posture; the discard rule (author-signed,
+audited as a sealed event); the `Asserted` grade and the `?` on a claimed name; the two vouching acts (an addendum vouches its own
 writer's parts; "sign off this note" co-signs or attests every part) and their overlay shape; the per-writer
 parts of a draft and how they commit (§4.3, ADR-0041's falsifier); the note's times; the who's-here claim (a
 claim, never authentication). Because ADRs are immutable, the deferred `note.added` retirement and the new
-typed-from / typed-until body fields are recorded as a partial supersession of ADR-0041 decisions 1 and 2, not
+recording-started / recording-ended body fields are recorded as a partial supersession of ADR-0041 decisions 1 and 2, not
 an edit.
 
 ## 10. Review findings left open (PR #930 review, 2026-11-03)
@@ -355,15 +368,10 @@ Decide these before or in the plan:
 - **When a continuation is signed before its original commits.** An `addendum-to` ref must name an event that
   already exists (ADR-0041 decision 8), and a draft is not one yet. Does signing the continuation first commit
   the original as it stands (asserted, `?`-named — the page taken out of the folder), or wait for it?
-- **A discard leaves no trace even if someone acted on the draft** (a doctor orders levels after reading it).
-  Keep an audit row (who discarded which draft on which chart, when) outside the clinical record?
-- **3a ships a note editor with no draft store**, so a crash loses an unsigned note until 3b lands — against
-  this slice's own anti-goal. Keep 3a off any pilot, or pull a minimal autosave into 3a?
 - Smaller:
   - Show the "return to my last screen" bookmark as an offer, not an auto-open (a wrong-chart risk, ADR-0008).
   - A draft with an unknown writer can never be discarded, even one typed into the wrong chart — let a signer
     claim it by signing, then discard?
   - Record which terminal an unattributed commit came from.
   - The menu and visible drafts will need visibility gating once sealed sensitive episodes land (§5.9).
-  - 3a's note list must show the existing grades, so a peer's asserted note never looks signed before 3b.
   - "Unknown is allowed" is a deployment policy setting (identity §5.11), default on.
