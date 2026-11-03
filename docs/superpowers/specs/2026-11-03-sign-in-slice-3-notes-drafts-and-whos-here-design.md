@@ -96,6 +96,12 @@ countersignature) — their addendum and signature carry the supervisor's respon
   the network down — so two terminals editing one draft would silently overwrite each other. At any other
   terminal the draft is read-only, and **"Continue" there starts an addendum draft** of that terminal's own.
   The window needs a stable terminal id for this (builder's: where it is kept).
+- **Signing a continuation first commits its original as it stands** (*my call*, maintainer accepted): an
+  `addendum-to` ref must name an event that already exists (ADR-0041 decision 8), and waiting for the original
+  could hold the signature for the whole quarantine. The original goes in through the same atomic commit door —
+  asserted, `?`-named, the page taken out of the folder: its entry ends where it ends. If its writer is still
+  typing at the original terminal, their next save finds the draft consumed, and **their window keeps the
+  unsaved text as a new addendum draft of their own** — nothing typed is lost.
 - A draft belongs to its chart and lists **every writer who typed into it**: when a different "who's here"
   at the same terminal picks a draft up and types, that person is added (maintainer: naming every writer is enough — "whoever finally
   signs has to take responsibility for the content anyway"). This refines §3.10's "keyed by `(author,
@@ -132,6 +138,13 @@ countersignature) — their addendum and signature carry the supervisor's respon
   idempotent, so two windows ticking at once, or a signature racing the timer, can never put two notes in the
   log, and a client on raw SQL cannot commit someone's draft early. A save or a signature on a consumed draft
   is refused.
+- **One clock per draft: the database it lives in** (*my call*, maintainer accepted). Today that is the
+  facility node's Postgres; once slice 5 makes terminals nodes, it is the terminal's own — §3.2 already makes
+  that terminal the draft's only home. **The window never sends a time**: the save door stamps each keystroke
+  save from the database's own clock, and the commit door compares against the same clock, so terminal clocks
+  never enter it. A step in that clock loses nothing — forward only commits early (still honestly *asserted*),
+  backward only delays. The quarantine clock is operational only: it never touches the stated time or
+  `t_recorded`.
 - Until it commits, a draft is only on the facility node: a peer site does not see the note yet.
 
 ### 3.4 Signing, finishing, vouching later
@@ -274,8 +287,11 @@ grades `Attested` or carries a verified vouch — two inputs, one rule, written 
   the **time the writer states the event happened** (`t_effective`, ADR-0003 — the author's claim, as a nurse
   heads a paper entry "03:00"). Time written and time it happened are different things, both true at once; a
   clash is flagged, never auto-resolved. `t_recorded` is the commit's HLC (when the record took it in).
-  *My call:* when the writer states no time, the body carries none — `t_effective` takes §3.6's default and
-  the display says *time not stated*, never passing a keystroke time off as the event time. Recording
+  When the writer states no time, the body says so explicitly — **no stated time** — and the recording time
+  takes its place, **flagged as such** (maintainer): shown *no stated time · writing began 03:12*, never passed
+  off as a stated event time. *My call:* "the recording time" is recording started, not the commit's
+  `t_recorded` — a note written from 03:12 and committed by the timer at 06:15 is about 03:12. How the envelope's
+  `t_effective` carries this (the recording start plus the explicit flag) is the ADR's wire choice. Recording
   started/ended ride in the body, so the parts view shows them once the draft row is gone. A directly signed
   note and an auto-committed one use the same rule; a time the writer stated in the draft survives the
   auto-commit.
@@ -365,9 +381,6 @@ an edit.
 
 Decide these before or in the plan:
 
-- **When a continuation is signed before its original commits.** An `addendum-to` ref must name an event that
-  already exists (ADR-0041 decision 8), and a draft is not one yet. Does signing the continuation first commit
-  the original as it stands (asserted, `?`-named — the page taken out of the folder), or wait for it?
 - Smaller:
   - Show the "return to my last screen" bookmark as an offer, not an auto-open (a wrong-chart risk, ADR-0008).
   - A draft with an unknown writer can never be discarded, even one typed into the wrong chart — let a signer
