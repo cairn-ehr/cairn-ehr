@@ -405,6 +405,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "063_vault_enrollers",
         include_str!("../../../db/063_vault_enrollers.sql"),
     ),
+    // db/064 (sign-in slice 3a, ADR-0041): the text progress note's floor, projection and
+    // shred hook (the hook itself lives in db/037's cairn_execute_shred).
+    (
+        "064_clinical_note",
+        include_str!("../../../db/064_clinical_note.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
