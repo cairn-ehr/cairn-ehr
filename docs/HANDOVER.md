@@ -481,6 +481,22 @@ Code workspace: `/crates` (`cairn-db-keepalive`, `cairn-event`, `cairn-keystore`
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
+- **⇒ Eval 0005 follow-ups (CockroachDB lessons), accepted 2026-11-03 — epic [#933](https://github.com/cairn-ehr/cairn-ehr/issues/933).**
+  Order: the **syncnemesis** convergence harness first ([#934](https://github.com/cairn-ehr/cairn-ehr/issues/934),
+  plan `superpowers/plans/2026-11-03-syncnemesis-harness.md`, slices S0–S6), then **F1**
+  ([#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)). F1: the HLC drift ceiling trusts the local clock, so a
+  node running behind refuses honest node-plane events, revocations included, and mints corrections below their
+  targets. It also aborts a DR restore onto a box whose clock is behind (db/009). And once a clock regresses
+  more than 24 h below the node's own HLC, the node refuses its *own* clinical writes (db/005). That last one
+  surfaced in the PR #932 review, and #935 now carries it as consequence 4, with tests (d)/(e) and design
+  option D. The eval's peer-median remedy does **not** cover it, since an offline node has no peers to ask, so
+  #935's option D (a local-door rule) is open. Its reproduction comes free in harness slices S4/S5.
+
+  **Decision owed before S4 step 2 (plan D7, options A/B/C; B recommended):** where the per-node clock skew
+  lives. A redefined `cairn_wall_ms()` cannot survive, because `cairn-sync` replays every migration on every
+  connect. Nor does extending the #726 replay-skip to cairn-sync fix it: `node_schema` holds one stamp naming
+  one loader, so cairn-node and cairn-sync would hand it back and forth and both keep replaying. ADR threads
+  #937–#939; engineering #936, #940–#943.
 - **⇒ The repair path: the open repair-path issues** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
