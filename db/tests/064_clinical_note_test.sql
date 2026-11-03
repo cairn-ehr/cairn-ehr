@@ -129,6 +129,8 @@ SELECT pg_temp.refuses(pg_temp.said(t), 'raw HTML') FROM unnest(ARRAY[
     '<?xml?>',
     'ok \\<b>',
     '<http://e.org>']) AS t;
+-- An email autolink renders as a mailto: link (fix round 1): `<` then an address local part and `@`.
+SELECT pg_temp.refuses(pg_temp.said('mail <9evil@evil.example> now'), 'autolink');
 
 -- Rule 4: every unescaped link/image target is a cairn:att/<id> anchor.
 SELECT pg_temp.refuses(pg_temp.said(t), 'cairn:att/') FROM unnest(ARRAY[
@@ -137,6 +139,10 @@ SELECT pg_temp.refuses(pg_temp.said(t), 'cairn:att/') FROM unnest(ARRAY[
     '[x](cairn:attx)',
     '[a](cairn:att/m1 [b](http://e.org))',
     'ok [x\\](http://e.org)']) AS t;
+-- Backslash parity decides which `](` is a link: an ODD run escapes the `]`, an even one does not.
+-- Here only `b\\](y)` is unescaped, so the note is refused for target `y)` alone.
+SELECT pg_temp.refuses(pg_temp.said('a\](x) b\\](y) c\\\](z)'), '"y)"');
+SELECT pg_temp.accepts(pg_temp.said('a\](x) c\\\](z)'));
 SELECT pg_temp.refuses(pg_temp.said('![prior ECG](cairn:event/01900000-0000-7000-8000-000000000001)'),
                        'ADR-0041 decision 9');
 
@@ -218,9 +224,45 @@ SELECT pg_temp.refuses(pg_temp.note_body(
     '{"narrative":"![w](cairn:att/m1) and [here](cairn:att/m1)",
       "media":[{"id":"m1","descriptor":"w"}]}'),
     'descriptor');
+-- A valid anchor nested inside an external link or image (fix round 1): the outer `](` starts
+-- right after the inner anchor's `)`, so a pattern that consumed the character before `]` skipped
+-- it. Both render with an external URL — an <img> fetched from a tracker, a badge link.
+SELECT pg_temp.refuses(pg_temp.note_body(jsonb_build_object(
+    'narrative', t, 'media', '[{"id":"m1","descriptor":"w"}]'::jsonb)), 'cairn:att/')
+FROM unnest(ARRAY[
+    '![![w](cairn:att/m1)](http://evil.example/px.gif)',
+    '[![w](cairn:att/m1)](http://evil)']) AS t;
 -- Every other rule still applies at the remote door.
 SELECT pg_temp.refuses(pg_temp.said('pt said <b>'), 'raw HTML');
+-- Ruling R8: a newer profile is carried, not judged. A peer's clinical.note/2 body is admitted
+-- even though it breaks /1's rules (ADR-0041 decision 3: an older node forwards a newer-schema
+-- event byte for byte without being able to profile-check it) ...
+SELECT pg_temp.accepts(pg_temp.said('pt said <b>') || '{"schema_version":"clinical.note/2"}');
 SET LOCAL cairn.remote_apply = '';
+-- ... while this node's own authoring door still writes only /1.
+SELECT pg_temp.refuses(pg_temp.said('pt said <b>') || '{"schema_version":"clinical.note/2"}',
+                       'schema_version');
+
+-- R8's other half: the applier projects /1 only, so relabelling a body /2 at the remote door
+-- gets it carried but never on screen. Two unsealed rows inserted as the owner (the floor is
+-- not under test here; cairn_clear_payload reads an unsealed row's body as its clear payload):
+-- a /1 control that MUST project, proving the applier ran, and a /2 that must not.
+INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall,
+                       hlc_counter, node_origin, t_effective, signed_bytes, content_address,
+                       body, contributors, signer_key_id, plaintext_twin)
+SELECT id::uuid, gen_random_uuid(), 'clinical.note.asserted', v, 2, n, 'n1',
+       '2026-11-03T01:00:00Z', sb, '\x1220'::bytea || digest(sb, 'sha256'),
+       pg_temp.said('pt said <b>') -> 'payload', '[]'::jsonb, 'deadbeef', 'pt said <b>'
+FROM (VALUES ('64646464-0001-7464-8464-646464646464', 'clinical.note/1', 1, '\x6401'::bytea),
+             ('64646464-0002-7464-8464-646464646464', 'clinical.note/2', 2, '\x6402'::bytea))
+     AS r(id, v, n, sb);
+DO $$
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM clinical_note WHERE event_id = '64646464-0001-7464-8464-646464646464'),
+        'the /1 control projects (the applier ran)';
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_note WHERE event_id = '64646464-0002-7464-8464-646464646464'),
+        'a clinical.note/2 event is carried but never projected (ruling R8)';
+END $$;
 
 ROLLBACK;
 \o

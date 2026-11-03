@@ -24,7 +24,9 @@
 -- THE TWO DOORS. A rule that only this window's own output obeys (media empty, encounter null)
 -- is enforced at the AUTHORING door only (`cairn.remote_apply` <> 'on', the db/031 inn_code
 -- idiom): at the remote door a future media-capable peer must never be wedged (ADR-0056), so
--- there the general anchor↔manifest rule applies instead. Every other rule runs at both doors.
+-- there the general anchor↔manifest rule applies instead. Every other rule runs at both doors —
+-- for a /1 body. A NEWER profile arriving at the remote door is carried unchecked and never
+-- projected (ruling R8; the floor's rule (1) and clinical_note_apply say why).
 BEGIN;
 
 -- 1. Register the type in the fail-closed classification registry. Additive, never targeting
@@ -38,10 +40,14 @@ ON CONFLICT (event_type) DO NOTHING;
 -- HOW TO READ THE REGEXES. Every pattern below asks "is this character UNESCAPED?", and in
 -- markdown a character is escaped when an ODD number of backslashes precede it. So each one
 -- opens with the same prefix:
---     (^|[^\\])(\\\\)*      "start of text, or any non-backslash character, followed by an
---                            EVEN run of backslashes (zero included)"
--- With standard_conforming_strings on (the default), a backslash in '…' is literal, so `[^\\]`
--- is the regex "not a backslash" and `(\\\\)*` is "pairs of backslashes".
+--     (?<!\\)(?:\\\\)*       "a point NOT preceded by a backslash, then an EVEN run of
+--                            backslashes (zero included)"
+-- With standard_conforming_strings on (the default), a backslash in '…' is literal, so `(?<!\\)`
+-- is the regex "not after a backslash" and `(?:\\\\)*` is "pairs of backslashes".
+-- WHY A LOOKBEHIND, not `(^|[^\\])`: that older form CONSUMES the character before the run, so
+-- in a global scan a `](` beginning right after the previous match's `)` was skipped —
+-- `![![w](cairn:att/m1)](http://evil)` passed with its outer external URL unseen (fix round 1).
+-- A lookbehind only looks; it never eats the character a following match needs.
 CREATE OR REPLACE FUNCTION cairn_check_note_markup(p_text text)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -51,8 +57,15 @@ BEGIN
     -- (`<b>`, `</div>`), a comment (`<!--`), a processing instruction (`<?`), or an autolink
     -- (`<http://…>`). `BP <90`, `<5 min` and `a < b` pass: a digit or a space after `<` opens
     -- nothing in markdown. The window writes every `<` as `\<`, which this never matches.
-    IF p_text ~ '(^|[^\\])(\\\\)*<[A-Za-z/!?]' THEN
+    IF p_text ~ '(?<!\\)(?:\\\\)*<[A-Za-z/!?]' THEN
         RAISE EXCEPTION 'note assertion: raw HTML is not allowed in clinical.note/1 (ADR-0041 decision 5) — escape `<` as `\<`';
+    END IF;
+    -- Email autolinks: an unescaped `<`, then the characters an address's local part may hold,
+    -- then `@` — `<9evil@evil.example>` renders as a mailto: link, and a local part may start
+    -- with a digit, which the tag rule above lets through. `BP <90` and `<5 min` pass: no `@`
+    -- follows before a space. (`''` is a quote doubled inside the SQL string.)
+    IF p_text ~ '(?<!\\)(?:\\\\)*<[A-Za-z0-9.!#$%&''*+/=?^_`{|}~-]+@' THEN
+        RAISE EXCEPTION 'note assertion: an email autolink (`<name@host>`) is not allowed in clinical.note/1 (ADR-0041 decision 5) — escape `<` as `\<`';
     END IF;
 
     -- Links and images: every unescaped `](` opens a target. The capture is the target up to
@@ -61,7 +74,7 @@ BEGIN
     -- `[a](cairn:att/m1 [b](http://evil))` through, whose inner `[b](http://evil)` a renderer
     -- shows as an external link. The window writes `](` as `]\(`, which this never matches.
     FOR v_target IN
-        SELECT m[1] FROM regexp_matches(p_text, '(?:^|[^\\])(?:\\\\)*\]\(([^)]*\)?)', 'g') AS m
+        SELECT m[1] FROM regexp_matches(p_text, '(?<!\\)(?:\\\\)*\]\(([^)]*\)?)', 'g') AS m
     LOOP
         IF v_target LIKE 'cairn:event/%' THEN
             RAISE EXCEPTION 'note assertion: the event anchor cairn:event/ is reserved and not valid in clinical.note/1, ADR-0041 decision 9';
@@ -74,7 +87,7 @@ BEGIN
 
     -- Reference-style link definitions (ruling R3): `[ref]: http://…` carries an external URL
     -- past the `](` rule above. Refuse any unescaped `]:` — the window writes it as `]\:`.
-    IF p_text ~ '(^|[^\\])(\\\\)*\]:' THEN
+    IF p_text ~ '(?<!\\)(?:\\\\)*\]:' THEN
         RAISE EXCEPTION 'note assertion: a reference-style link definition (`]:`) is not allowed in clinical.note/1 — escape it as `]\:` (ADR-0041 decision 5)';
     END IF;
 END;
@@ -100,7 +113,7 @@ DECLARE
 BEGIN
     FOR v_id, v_anchors IN
         SELECT m[1], count(*)
-          FROM regexp_matches(p_text, '(?:^|[^\\])(?:\\\\)*\]\(cairn:att/([A-Za-z0-9._~-]+)\)', 'g') AS m
+          FROM regexp_matches(p_text, '(?<!\\)(?:\\\\)*\]\(cairn:att/([A-Za-z0-9._~-]+)\)', 'g') AS m
          GROUP BY m[1]
     LOOP
         SELECT count(*), min(e ->> 'descriptor') INTO v_entries, v_desc
@@ -140,10 +153,20 @@ DECLARE
     v_ended    timestamptz;
     v_basis    text;
 BEGIN
+    -- (1) The schema tag IS the narrative profile (ADR-0041 decision 5): one id, one version.
+    --     Ruling R8: at the REMOTE door a newer profile is CARRIED, not judged. A peer's
+    --     clinical.note/2 is admitted and forwarded byte for byte without profile checks
+    --     (ADR-0056; ADR-0041 decision 3: an older node forwards a newer-schema event it cannot
+    --     profile-check) — refusing it would wedge sync on every node older than its author.
+    --     That is safe only because clinical_note_apply projects /1 alone (below): a peer that
+    --     relabels a hostile body /2 gets it carried, never on screen. The AUTHORING door writes
+    --     only what this node's profile knows, so there anything but /1 is refused.
+    IF NOT v_authoring AND b ->> 'schema_version' IS DISTINCT FROM 'clinical.note/1' THEN
+        RETURN;
+    END IF;
     IF p IS NULL THEN
         RAISE EXCEPTION 'note assertion: missing payload';
     END IF;
-    -- (1) The schema tag IS the narrative profile (ADR-0041 decision 5): one id, one version.
     IF b ->> 'schema_version' IS DISTINCT FROM 'clinical.note/1' THEN
         RAISE EXCEPTION 'note assertion: schema_version must be clinical.note/1, got %', b ->> 'schema_version';
     END IF;
@@ -281,6 +304,11 @@ DECLARE
     p jsonb := cairn_clear_payload(e);
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
+    -- Ruling R8: project ONLY the profile this node's floor checked. The remote door admits a
+    -- newer schema_version unchecked (see the floor above), so projecting it would put an
+    -- unvalidated narrative on screen — raw HTML, an external URL — behind a relabelled tag.
+    -- A /2 note is carried and forwarded; a node that knows /2 projects it with its own applier.
+    IF e.schema_version IS DISTINCT FROM 'clinical.note/1' THEN RETURN; END IF;
     INSERT INTO clinical_note
         (event_id, patient_id, narrative, refs, t_effective, effective_basis,
          recording_started, recording_ended, hlc_wall, hlc_counter, origin, content_address)
