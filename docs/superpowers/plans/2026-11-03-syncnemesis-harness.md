@@ -13,7 +13,7 @@ Paper-parity: not clinical-surface — this is test infrastructure that exercise
 
 ---
 
-## 1. Goal and the five invariants
+## 1. Goal and the invariants (I1–I5 here; I6a/I6b arrive with the clock seam in S4)
 
 Cairn's flagship claim is that sync is safe, idempotent set-union and that every node converges (sync §6.1).
 The harness tests that claim as a **system**. It runs *N* real nodes through a seeded random schedule of:
@@ -22,11 +22,14 @@ The harness tests that claim as a **system**. It runs *N* real nodes through a s
 - clock and version skew;
 - sneakernet and destroy-and-restore.
 
-After a final full heal it asserts the invariants below. On failure it prints the seed and a minimised schedule.
+After a final full heal it asserts the invariants below. On failure it prints the seed and writes the minimised
+schedule to a file that replays it exactly (D4).
+S4 adds **I6a/I6b** (causal order under clock skew, defined there), since they need the clock seam to mean
+anything. §5 lists the invariants that later issues add.
 
 | # | Invariant | Checked as |
 |---|---|---|
-| I1 | **Set-union convergence** | Every node's set of `event_log` content addresses is identical. The same holds for `node_event` within the trust neighbourhood. |
+| I1 | **Set-union convergence** | Every node's set of `event_log` content addresses is identical. From S5, when node-plane operations exist, the same holds for `node_event` within the trust neighbourhood. Until then the node plane carries only provisioning, and I1 does not assert it. |
 | I2 | **Projection convergence** | Nodes on the same code read identically through **every registered projection**, enumerated from the projection registry (`db/039`), not a hand-kept list. |
 | I3 | **Custody is total** | Every event the harness authored, per its own ledger, is present on every node whose scope includes it. Nothing is lost across restore (ADR-0072). |
 | I4 | **Power is earned** | No suppression, attestation or permission takes effect on a node before that node has re-adjudicated it (`cairn_replay_eligible`, ADR-0057). Content never waits; permissions always wait (ADR-0054). |
@@ -46,9 +49,20 @@ The harness must drive the real `cairn-sync` binary, and `CARGO_BIN_EXE_*` is on
 tests of the package that defines the binary. `cairn-node` is already a dependency there (`clinical_pull.rs`).
 
 **D2 — Ephemeral per-run databases, not the shared `$CAIRN_TEST_PG`/`$CAIRN_TEST_PG2`.**
-The harness creates `cairn_nem_<pid>_<i>` with `CREATE DATABASE` on the cluster that `$CAIRN_TEST_PG` points at.
-It loads the schema into each one (`db::connect_and_load_schema`) and drops them at the end. A failing run keeps
-them when `SYNCNEMESIS_KEEP=1`, for forensics.
+The harness creates `cairn_nem_<run>_<i>` with `CREATE DATABASE` on the cluster that `$CAIRN_TEST_PG` points at.
+`<run>` is a fresh random id per run (UUIDv7, already a dependency), **not the pid**. A pid recurs across runs
+on a persistent cluster, and across CI jobs that share one. It loads the schema into each one
+(`db::connect_and_load_schema`) and drops them at the end. A failing run keeps them when `SYNCNEMESIS_KEEP=1`,
+for forensics.
+
+A drop that only runs at the end leaks on a panic, an abort, Ctrl-C or a CI timeout, because no destructor
+runs. So the harness also **labels** and **sweeps**:
+- Every database it creates gets `COMMENT ON DATABASE … IS 'syncnemesis run=<run> created=<ts> keep=<bool>'`.
+- At startup it drops every `cairn_nem_%` database whose comment says `keep=false`, that is older than a
+  generous bound (6 h, longer than any nightly budget), and that has **no** connection in `pg_stat_activity`.
+  The last two conditions keep it from dropping a concurrent run's live nodes on a shared cluster.
+- Databases kept under `SYNCNEMESIS_KEEP` are never swept. The failure output names them, and the RUNBOOK entry
+  (S6) says how to drop them.
 
 Why: the shared databases are TRUNCATE-shared and serialised by `test_serial_guard`, and there are only two of
 them. A harness that needs N ≥ 3 nodes and runs for minutes must neither hold the advisory lock that 247 suites
@@ -66,11 +80,23 @@ The cost is one process spawn per pull. Measure it in S1. Extract a seam later *
 forces it, and if the extraction keeps one shared code path (the #227 pattern).
 
 **D4 — Determinism: generate the whole schedule up front from a seed, then execute it sequentially.**
-Use proptest's `TestRunner` API, as `floor_properties.rs` does (MIT/Apache-2.0, already a dev-dependency in the
-workspace). A schedule is a `Vec<Op>`, and proptest shrinks it to a minimal counter-example. The harness runs no
-concurrency of its own inside a schedule. The only real concurrency is `serve` against `pull`, which is the
-concurrency production has. Every failure prints `SYNCNEMESIS_SEED=<n>` and the shrunk schedule. Setting that
-variable replays the run.
+Use proptest's `TestRunner` API, as `floor_properties.rs` does. proptest (MIT/Apache-2.0) is a dev-dependency of
+`cairn-node` but **not yet of `cairn-sync`**, where D1 puts the harness. S0 adds it there at the same `"1"`
+requirement, so the workspace keeps one resolved version and gains no new licence to audit. A schedule is a
+`Vec<Op>`, and proptest shrinks it to a minimal counter-example. The harness runs no concurrency of its own
+inside a schedule. The only real concurrency is `serve` against `pull`, which is the concurrency production has.
+
+**A seed is a search coordinate, not a witness.** `SYNCNEMESIS_SEED=<n>` reproduces a run only while the `Op`
+strategy is unchanged. S2–S5 each add `Op` variants and kinds, and that changes what every existing seed
+generates. So:
+- `Op` derives `serde::Serialize`/`Deserialize` (serde and serde_json are already `cairn-sync` dependencies).
+- Every failure prints the seed **and writes the shrunk schedule as JSON**.
+- The **schedule file is the durable artefact.** `SYNCNEMESIS_SCHEDULE=<file>` replays it directly through the
+  executor and skips the generator. That replay stays valid across any generator change that does not remove
+  or reshape an `Op` variant. Removing or reshaping one makes the corpus load fail with a deserialization error
+  that names the file, so the change is loud, never silent. The corpus loader runs on every PR (S6), and an
+  unloadable schedule fails it. `SYNCNEMESIS_SEED` stays available for re-running the *search* on the current
+  generator.
 
 **D5 — The harness keeps an oracle ledger.**
 Every `Op::Author` records the content address it produced, plus the scope and the node it was authored on.
@@ -81,10 +107,13 @@ Some divergences are known and open today: the node plane skips and advances whe
 (#268); the clinical plane freezes on non-`P0001` failures (#626); the node plane fails closed on unknown types
 (#301); the actor-registry restore discards silently (#569).
 
-Each one gets a `KnownGap { issue, matcher }` entry. Two rules apply:
+Each one gets a `KnownGap { issue, matcher, witness }` entry. `witness` is a checked-in shrunk **schedule file**
+(D4), not a seed: a seed would stop reproducing the gap the moment a later slice extended the generator, and
+rule 2 would then fail a build in which nothing was fixed. Two rules apply:
 - **A divergence that matches no entry fails.**
-- **An entry that no longer reproduces under its pinned seed also fails.** So when an issue is fixed, the
-  harness forces its entry to be removed.
+- **An entry whose witness schedule no longer reproduces its divergence also fails.** So when an issue is fixed,
+  the harness forces its entry to be removed. Because the witness is replayed without the generator, only a
+  change in the system under test can trip this rule.
 
 This is not skipping a test. Every divergence is asserted, named and tied to an issue.
 
@@ -106,9 +135,38 @@ A single-source guard test pins it, so no new raw read can appear on those paths
 The harness then **redefines** `cairn_wall_ms()` per ephemeral database, as `real + offset_i`. This creates no
 new bypass: a database owner can already redefine any function, and the harness owns these throwaway databases.
 
-Caveat to test first: `force_schema_replay` and the schema replay in `connect_and_load_schema` restore the
-original definition. The harness must re-apply its override after every connect it makes, and a harness
-self-test must show that the override is live when a pull runs.
+**The override must survive the binaries' own schema replay, and today it would not.** Every connect a
+`cairn-sync` process makes calls `load_schema` (`cairn-sync/src/main.rs`), which **replays every migration
+unconditionally**. It has no equivalent of cairn-node's #726 replay-skip (`db::replay_can_be_skipped`). So the
+first thing each `cairn-sync pull` does is run db/001's `CREATE OR REPLACE FUNCTION cairn_wall_ms()`, and that
+resets the skewed node to the true clock *inside the very process whose apply doors F1 lives in*. The harness
+cannot re-apply the override there, because D3 makes the binary, not the harness, own that connection. Left
+as it is, S4 would never reproduce F1, and it would pass for the wrong reason. S4 therefore does this, in
+order:
+
+1. **Bring `cairn-sync`'s loader onto the #726 replay-skip, as its own TDD step with its own issue.** One
+   shared predicate, not a copy: cairn-sync calls `replay_can_be_skipped` and stamps `schema_hash` the same
+   way, the #227 single-code-path pattern. This stands on its own as a production fix: today every
+   `cairn-sync` connect takes the schema-load lock and replays all the DDL. It must keep the
+   re-adjudicate-first pass in the position the `load_schema` comment pins, and the cairn-sync stamp tests
+   must stay green. Since the stamp records the *embedded* hash and the harness override changes only
+   `pg_proc`, a current database then skips its replay and the override survives.
+2. **Assert the override after every pull, not once.** After each `Op::Pull`/`Op::FullSweep` the harness
+   re-reads `cairn_wall_ms()`'s definition (`pg_get_functiondef`) and fails if it is not the override. If a
+   replay ever happens again (a forced replay, a stamp mismatch, a later loader change), the run fails loudly
+   at the pull that lost the skew, instead of silently testing true time. The S4 self-test makes a skewed
+   node's *pulled-in* event visible to a clock-bounded door and checks that the bound used the skewed time.
+3. The harness's own connects go through cairn-node's `connect_and_load_schema`, which already skips a
+   current schema. `force_schema_replay` (which `test_serial_guard` calls) clears the stamp, so the harness
+   must never call it on a skewed node. Re-apply the override after any connect the harness cannot rule out
+   replaying.
+
+*Rejected alternatives:* a session or database GUC holding the offset. Any role can `SET` a custom
+placeholder GUC in its own session, so the authoring agent could skew its own drift ceiling, and that
+re-opens #102's ratchet in production. A shadow `cairn_wall_ms()` earlier on `search_path`: the doors are
+`SECURITY DEFINER … SET search_path = public, pg_temp`, so they would never see it, which is the hardening
+working as intended. An offset table read by the production function: it would ship a standing skew lever
+into every node to serve a test.
 
 This seam is also exactly where [#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)'s peer-corrected time
 will plug in, so it is not throwaway work.
@@ -125,14 +183,21 @@ of a raw `SELECT *`.
 1. **Test first.** `nemesis_self_test_creates_and_drops_n_nodes`: create 3 ephemeral databases, load the schema,
    provision each as a node (the `init` / identity path that `clinical_pull.rs` uses), then drop them. Assert
    that they are gone afterwards, and that they survive under `SYNCNEMESIS_KEEP=1`.
-2. Add a `Nemesis` struct holding nodes, keys, listen ports (bind `:0`, so parallel CI jobs never collide), and
-   the ledger.
-3. Add the `Op` enum (initially `Author` and `Noop`), a proptest strategy for it, and an executor.
-4. **Test first.** `same_seed_same_schedule`: the generator is a pure function of the seed. Pin it.
-5. On failure: print the seed, the shrunk schedule, and the names of the kept databases.
+2. **Test first.** `nemesis_sweeps_only_stale_unkept_idle_databases` (D2). Create labelled databases: one
+   stale, one fresh, one stale but `keep=true`, and one stale but holding an open connection. Run the startup
+   sweep and assert it drops only the first. The sweep is a pure function from (name, comment, age,
+   connected) to drop or keep, with a thin SQL wrapper, so the decision is unit-testable without a cluster.
+3. Add `proptest = "1"` to `cairn-sync`'s `[dev-dependencies]` (D4). Add a `Nemesis` struct holding nodes,
+   keys, listen ports (bind `:0`, so parallel CI jobs never collide), and the ledger.
+4. Add the `Op` enum (initially `Author` and `Noop`, deriving serde), a proptest strategy for it, and an
+   executor that takes a `Vec<Op>` from either the strategy or a schedule file (D4).
+5. **Test first.** `same_seed_same_schedule`: the generator is a pure function of the seed. Pin it. And
+   `schedule_file_round_trips`: serialising a schedule and replaying it from the file executes the identical
+   `Vec<Op>`.
+6. On failure: print the seed and the names of the kept databases, and write the shrunk schedule file.
 
 *Rationale:* the scaffolding must itself be trustworthy before it can judge anything else. A harness that
-leaks databases, or cannot replay a seed, produces noise instead of evidence.
+leaks databases, or cannot replay a failure, produces noise instead of evidence.
 
 ### S1 — Author, pull, heal; I1–I3 on 3 nodes in a full mesh
 
@@ -178,7 +243,8 @@ through the parent, which a full mesh hides.
 3. **Tests first.** I4: on every node, after every operation (not only at the end), no suppression or attestation
    is effective unless that node has the attester's registry state, and that state is clean. I5: the set of
    pens left after heal equals exactly the set of expected pens, apart from `KnownGap` entries.
-4. Seed the `KnownGap` registry with #268 / #626 / #301 / #569, each with a seed that reproduces it.
+4. Seed the `KnownGap` registry with #268 / #626 / #301 / #569, each with a checked-in witness schedule that
+   reproduces it (D6).
 
 *Rationale:* I4 is checked **per step** because "power is earned" is a safety property of every intermediate
 state, not just of the end state. The danger is a suppression that hides an allergy for ten minutes before a
@@ -189,15 +255,36 @@ re-adjudication catches up.
 1. **Test first.** The single-source guard: every ordering or bounding clock read on the D7 paths goes through
    `cairn_wall_ms()`. Then do the refactor. It is behaviour-neutral, so the whole existing suite must stay green
    unchanged.
-2. Add a harness override of `cairn_wall_ms()` per node (D7), with the self-test that the override is live during
-   a pull.
-3. Add `Op::Skew { node, offset_ms }`, drawn from {0, ±seconds, ±hours, ±25 h, −months}. Add
-   `Op::DeadRtc { node }`: the node restarts at a fixed old time.
-4. Add invariant I6 — **causal order is never inverted**. For every event with `refs`, its HLC is greater than
-   its target's HLC on every node.
-5. **Expected outcome:** F1 ([#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)) shows up as an I6
+2. **Test first.** `cairn-sync` skips the replay on a current schema (D7 step 1), using the shared
+   `replay_can_be_skipped` predicate. Without this, step 3 cannot work.
+3. Add a harness override of `cairn_wall_ms()` per node (D7). Add the self-test that the override is live
+   *inside* a pull's apply door, and the per-pull check that it survived (D7 step 2).
+4. Add `Op::Skew { node, offset_ms }`, drawn from {0, ±seconds, ±hours, ±25 h, −months}. Add
+   `Op::DeadRtc { node }`: the node restarts at a fixed old time. The ledger records every node's offset over
+   time, so the harness always knows the *true* time at which each event was authored. No node knows that.
+5. Add invariants I6a and I6b. The split exists because the drift clamp *deliberately* inverts causal order for
+   a target that is genuinely far in the future (#102's ratchet defence). An unscoped "a ref always outranks
+   its target" would fail by design, and no fix to #935 could ever make it pass.
+   - **I6a — honest causal order is never inverted.** Take every event *E* with `refs` to a target *T*. Let
+     *a* be the **true** time at which *E*'s authoring node admitted *T*. The clamp acts at admission, not at
+     authoring, so it is admission time that matters. The ledger takes *a* as the start of the pull that
+     delivered *T*, which errs toward demanding the order. If `T.wall ≤ a + cairn_max_hlc_drift_ms()`, then
+     `E.hlc > T.hlc`. Both are the signed HLC values, the same on every node, so this is checked once per
+     event, not per node. This is the property F1 breaks: *T* is honest, and *E*'s author is the one whose
+     clock is behind.
+   - **I6b — the ratchet defence holds.** If `T.wall > a + ceiling`, meaning *T*'s author was more than 24 h
+     ahead of true time, then *E* may order below *T*, and that is expected. What must hold instead is that
+     no node's `hlc_state` ever rises above that node's own (possibly skewed) `cairn_wall_ms()` plus the
+     ceiling. An inversion is excused **only** when the oracle classifies *T* as far-future at its admission.
+     Every other inversion is an I6a failure, so the exemption cannot quietly widen to cover F1.
+6. **Expected outcome:** F1 ([#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)) shows up as an I6a
    failure, and as a node-plane `revoke` that never applies. Register it as a `KnownGap` tied to #935, with its
-   seed. That gives #935 its reproduction for free.
+   witness schedule (D6). That gives #935 its reproduction for free. A `+25 h` author whose events are
+   referenced by honest peers is *not* F1. It must satisfy I6b and must not match the F1 `KnownGap`.
+   Also schedule `DeadRtc` on a node that has already run at true time. Its `hlc_state` is then more than
+   24 h ahead of its clock, and `submit_event` (`db/005`) is expected to refuse the node's *own* authoring
+   (eval 0005 §3.1, consequence 4). The executor must record an authoring refusal as an observed divergence,
+   matched by the #935 `KnownGap`, not as a harness error.
 
 *Rationale:* clocks are the one fault that a set-union design does *not* make harmless, and CockroachDB's
 correctness depends on them. This is the slice that turns eval 0005's main finding into a standing test.
@@ -211,9 +298,13 @@ correctness depends on them. This is the slice that turns eval 0005's main findi
 3. Add `Op::Sneakernet { from, to }`, through `cairn-medium` (a capture on one node, applied on another).
 4. Add `Op::DestroyAndRestore { node }`: the `cairn-node backup` / `restore` ceremony (ADR-0026, 0067–0072).
    The restored node gets a new identity linked by `supersede`. I3 must hold across this.
+   **Combine it with `Op::DeadRtc`:** replacement hardware is very often a fresh RTC-less Pi booting at its
+   `fake-hwclock` time. `restore_node_event` (`db/009`) applies the same raw-clock drift ceiling, and any raise
+   aborts the *whole* restore. So F1 is expected to show up here too, as a disaster-recovery restore that fails
+   outright on a box whose clock is behind. Register it under #935's `KnownGap`, with its own witness schedule.
 5. Add node-plane and actor-plane operations: pair, unpeer, enrol, rotate-key, revoke, suspend. These use the
-   node-plane pull (`cairn_node::sync::pull_into` / `pull_once`). Extend I1 to `node_event` within the trust
-   neighbourhood.
+   node-plane pull (`cairn_node::sync::pull_into` / `pull_once`). I1's `node_event` clause (§1) switches on
+   here, now that the node plane carries more than provisioning.
 
 *Rationale:* each of these is a door on which a past divergence was found by review. Putting them under one
 generator is what makes those divergences findable as a class.
@@ -224,9 +315,12 @@ generator is what makes those divergences findable as a class.
    N = 3. It runs in the existing DB-gated job that already sets `CAIRN_TEST_PG`.
 2. **Nightly budget:** about 30–60 minutes, N = 5, with longer schedules. Add a scheduled workflow. Failures
    upload the shrunk schedule as an artefact.
-3. **Regression corpus:** `crates/cairn-sync/tests/nemesis-seeds.txt`. Every seed that ever failed is replayed
-   on every PR, forever. This is cheap and catches regressions of fixed bugs.
-4. Add a HANDOVER line and a RUNBOOK entry on how to replay a seed and read a kept database.
+3. **Regression corpus:** `crates/cairn-sync/tests/nemesis-corpus/*.json`. It holds every shrunk schedule that
+   ever failed (D4), including the `KnownGap` witnesses, and every one is replayed on every PR, forever. These
+   are schedules, not seeds, so the corpus keeps meaning what it meant when each entry was added, however much
+   the generator has grown since. It is cheap, and it catches regressions of fixed bugs.
+4. Add a HANDOVER line and a RUNBOOK entry covering: replaying a schedule file (and re-running a seed's
+   search), reading a kept database, and dropping kept databases once the forensics are done (D2).
 
 ## 4. Known gaps and non-goals (keep this section current)
 
@@ -249,4 +343,4 @@ generator is what makes those divergences findable as a class.
 | [#938](https://github.com/cairn-ehr/cairn-ehr/issues/938) rule epochs | Same events plus same epochs gives the same display, regardless of when each node upgraded. |
 | [#939](https://github.com/cairn-ehr/cairn-ehr/issues/939) frontiers | A completeness frontier is never claimed beyond what was delivered. |
 | [#941](https://github.com/cairn-ehr/cairn-ehr/issues/941) surplus GC | I3 holds under random GC. |
-| [#935](https://github.com/cairn-ehr/cairn-ehr/issues/935) F1 | The F1 `KnownGap` entry is removed; I6 holds under every skew in S4. |
+| [#935](https://github.com/cairn-ehr/cairn-ehr/issues/935) F1 | The F1 `KnownGap` entries (I6a, the frozen node-plane `revoke`, the self-refused authoring after a clock regression, and the S5 restore) are removed. I6a and I6b hold under every skew in S4. I6b's far-future case stays: it is the #102 defence, not a gap. |

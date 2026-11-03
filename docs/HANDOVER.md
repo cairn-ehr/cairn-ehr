@@ -502,7 +502,12 @@ Code workspace: `/crates` (`cairn-db-keepalive`, `cairn-event`, `cairn-keystore`
   plan `superpowers/plans/2026-11-03-syncnemesis-harness.md`, slices S0–S6), then **F1**
   ([#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)). F1: the HLC drift ceiling trusts the local clock, so a
   node running behind refuses honest node-plane events, revocations included, and mints corrections below their
-  targets. Its reproduction comes free in harness slice S4. ADR threads #937–#939; engineering #936, #940–#943.
+  targets. It also aborts a DR restore onto a box whose clock is behind (db/009). And once a clock regresses
+  more than 24 h below the node's own HLC, the node refuses its *own* clinical writes (db/005). That last one
+  surfaced in the PR #932 review and is **not yet in #935's body**: add it there. Its reproduction comes free
+  in harness slices S4/S5. **S4 has a prerequisite:** `cairn-sync` replays every migration on every connect,
+  which would wipe the harness's clock override, so it first needs the #726 replay-skip (plan D7). ADR threads
+  #937–#939; engineering #936, #940–#943.
 - **⇒ The repair path: the open repair-path issues** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
