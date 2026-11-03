@@ -256,6 +256,9 @@ pub struct AppState {
     /// `IDLE_TIMEOUT`). Zero, the default, holds nothing: every act carries a credential.
     pub key_hold: Duration,
     pub session: tokio::sync::Mutex<Held>,
+    /// This terminal's stable id (`crate::terminal_id`): what a note draft is held by, so a draft
+    /// is edited only at the terminal it was started on (design §3.2).
+    pub terminal_id: String,
 }
 
 impl AppState {

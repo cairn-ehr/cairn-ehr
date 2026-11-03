@@ -82,8 +82,9 @@ where
 }
 
 /// `HH:MM` in `tz`, prefixed `"2 Nov "` on another day, `"2 Nov 2025 "` in another year — a
-/// date in another year must not read as that month of this year.
-fn instant<Tz: TimeZone>(t: DateTime<Utc>, tz: &Tz, today: NaiveDate) -> String
+/// date in another year must not read as that month of this year. Public so the window words a
+/// draft's start and last keystroke by the same rule as a note's time.
+pub fn instant<Tz: TimeZone>(t: DateTime<Utc>, tz: &Tz, today: NaiveDate) -> String
 where
     Tz::Offset: std::fmt::Display,
 {

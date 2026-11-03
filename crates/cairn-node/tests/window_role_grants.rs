@@ -40,6 +40,9 @@ use cairn_node::medication::{
     AssertMedicationInput, AttestParams, AuthorParams, CeaseMedicationInput,
     WithholdMedicationInput,
 };
+use cairn_node::note::draft::{open_drafts, save_draft, SaveOutcome};
+use cairn_node::note::read::list_patient_notes;
+use cairn_node::note::sign::{sign_note, SignNoteInput};
 use cairn_patient_search::SearchQuery;
 use common::{
     assert_not_denied, cs, enroll_human, link_assertion_event, owner_and_window, seed_proposal,
@@ -418,4 +421,76 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     .await;
     assert_not_denied("medication::cease_medication", &r);
     r.expect("the cessation is recorded");
+}
+
+/// The note pane (sign-in slice 3a): save a draft, list it, sign it, and read the notes back —
+/// over one chart, then over a linked set, undoubted and doubted, so the cross-chart read and
+/// its withholding both run under the window's login (Task 4 read only an unlinked chart).
+#[tokio::test]
+async fn the_windows_note_calls_run_under_its_own_login() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, mut window) = owner_and_window(&base).await;
+    let (sk, kid, sk_h, kid_h, a) = common::note_setup(&owner).await;
+    let author = AuthorParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let x = Uuid::now_v7();
+    common::submit_registration(&owner, &sk, &kid, x, 1).await;
+
+    // Sign one note on each chart, each from a saved draft, all on the window's login.
+    for (chart, text) in [(a, "BP <90 [L] arm (R)"), (x, "note on X")] {
+        let draft = Uuid::now_v7();
+        let r = save_draft(&window, draft, chart, "pc-window", text, None).await;
+        assert_eq!(
+            expect_as_window("note::draft::save_draft", r),
+            SaveOutcome::Saved
+        );
+        let r = open_drafts(&window, chart).await;
+        assert_eq!(expect_as_window("note::draft::open_drafts", r).len(), 1);
+        let input = SignNoteInput {
+            draft,
+            patient: chart,
+            terminal: "pc-window",
+            narrative: text,
+            stated: None,
+            node_origin: ORIGIN,
+        };
+        let r = sign_note(&mut window, &sk, &input, &author).await;
+        expect_as_window("note::sign::sign_note", r).expect("the note is signed");
+    }
+    let one = expect_as_window(
+        "note::read::list_patient_notes (one chart)",
+        list_patient_notes(&window, a).await,
+    );
+    assert_eq!(one.notes.len(), 1, "A alone holds its own note");
+    assert_eq!(one.notes[0].text, "BP <90 [L] arm (R)", "shown as typed");
+
+    // Linked: X's note joins the read; flagged in doubt, it is counted and withheld instead.
+    common::submit_link_event(&owner, &sk, &kid, a, x, 10, true).await;
+    let linked = expect_as_window(
+        "note::read::list_patient_notes (linked)",
+        list_patient_notes(&window, a).await,
+    );
+    assert_eq!(linked.notes.len(), 2, "the linked chart's note is read");
+    let (lo, hi) = canonical_pair(a, x);
+    owner
+        .execute(
+            "INSERT INTO link_veto_flag (low, high, content_address) \
+             SELECT low, high, content_address FROM patient_link \
+             WHERE low = $1::text::uuid AND high = $2::text::uuid",
+            &[&lo.to_string(), &hi.to_string()],
+        )
+        .await
+        .unwrap();
+    let doubted = expect_as_window(
+        "note::read::list_patient_notes (doubted)",
+        list_patient_notes(&window, a).await,
+    );
+    assert_eq!(doubted.notes.len(), 1, "X's note is withheld");
+    assert_eq!(doubted.withheld_on_linked, 1, "and counted");
 }

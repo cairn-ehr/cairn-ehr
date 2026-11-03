@@ -36,6 +36,7 @@ mod launch_posture_tests;
 mod link;
 #[cfg(test)]
 mod node_lock_explains_tests;
+mod notes;
 #[cfg(test)]
 mod read_again_webview_tests;
 mod rekey;
@@ -49,6 +50,7 @@ mod signer_webview_tests;
 mod source_guard;
 mod state;
 mod superuser_panel;
+mod terminal_id;
 #[cfg(test)]
 mod waiting_webview_tests;
 mod worklist;
@@ -56,6 +58,7 @@ mod write_failure;
 
 use clap::Parser;
 use state::AppState;
+use tauri::Manager;
 
 #[derive(Parser)]
 #[command(
@@ -113,7 +116,7 @@ fn main() -> anyhow::Result<()> {
     // because the reopen runs inside a command; that runtime lives as long as the app.)
     let runtime = tokio::runtime::Runtime::new()?;
 
-    let app_state = if cli.mock {
+    let mut app_state = if cli.mock {
         // Fixture mode carries NO connection and NO node key — not a flag that says so. The
         // one constructor that builds it is `AppState::mock`, so the two cannot drift apart.
         AppState::mock(cli.patient)
@@ -122,7 +125,14 @@ fn main() -> anyhow::Result<()> {
     };
 
     tauri::Builder::default()
-        .manage(app_state)
+        // Managed in `setup`, not before it: the terminal id lives in the app's config directory,
+        // which only the app handle can name. Setup runs on the main thread before the event loop
+        // serves the webview's first command.
+        .setup(move |app| {
+            app_state.terminal_id = terminal_id_or_ephemeral(app.path().app_config_dir());
+            app.manage(app_state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::med_list,
             commands::lock_state,
@@ -132,6 +142,9 @@ fn main() -> anyhow::Result<()> {
             commands::forget_held_key,
             commands::sign_off,
             commands::cease,
+            notes::note_list,
+            notes::note_draft_save,
+            notes::note_sign,
             enrol::enrol_member,
             rekey::rekey_member,
             superuser_panel::list_unconfirmed,
@@ -161,6 +174,25 @@ fn main() -> anyhow::Result<()> {
         ])
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))
+}
+
+/// This terminal's id from the config directory, or — when that cannot be read or written — a
+/// fresh one for this session only, said on stderr.
+///
+/// Never a failed launch: reading a chart needs no terminal id (availability over consistency),
+/// and a window that cannot open is worse than one whose drafts, after a restart, read as another
+/// terminal's. Those drafts stay visible and readable, just not editable here.
+fn terminal_id_or_ephemeral(dir: tauri::Result<std::path::PathBuf>) -> String {
+    let kept = dir
+        .map_err(|e| std::io::Error::other(e.to_string()))
+        .and_then(|dir| terminal_id::load_or_mint_terminal_id(&dir));
+    kept.unwrap_or_else(|e| {
+        eprintln!(
+            "this terminal's id could not be kept ({e}); using one for this session only — \
+             drafts started now will read as another terminal's after a restart"
+        );
+        uuid::Uuid::now_v7().to_string()
+    })
 }
 
 /// Refuse a remote database, check (never load) the schema stamp, and read this node's identity —
@@ -210,5 +242,7 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         shown: tokio::sync::Mutex::new(Default::default()),
         key_hold: cli.key_hold_seconds,
         session: tokio::sync::Mutex::new(Default::default()),
+        // Read in `main`'s setup hook, which alone can name the config directory.
+        terminal_id: String::new(),
     })
 }
