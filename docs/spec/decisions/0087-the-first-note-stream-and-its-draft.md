@@ -11,7 +11,9 @@
   its note), [#949](https://github.com/cairn-ehr/cairn-ehr/issues/949) (a media descriptor the escape changes),
   [#950](https://github.com/cairn-ehr/cairn-ehr/issues/950) (erasure does not reach an open draft),
   [#945](https://github.com/cairn-ehr/cairn-ehr/issues/945), [#946](https://github.com/cairn-ehr/cairn-ehr/issues/946),
-  [#947](https://github.com/cairn-ehr/cairn-ehr/issues/947) (the editor's open edges).
+  [#947](https://github.com/cairn-ehr/cairn-ehr/issues/947) (the editor's open edges),
+  [#951](https://github.com/cairn-ehr/cairn-ehr/issues/951), [#952](https://github.com/cairn-ehr/cairn-ehr/issues/952),
+  [#953](https://github.com/cairn-ehr/cairn-ehr/issues/953) (found by the final review).
 - **Builds on:** [ADR-0041](0041-progress-note-narrative-format.md) (the note's wire format) ·
   [ADR-0052](0052-born-sealed-clinical-bodies.md) (born sealed) · [ADR-0053](0053-per-write-human-authorship.md) (the
   human signs, the node seals) · [ADR-0003](0003-bitemporal-time-and-acknowledged-uncertainty.md) (stated time) ·
@@ -40,8 +42,9 @@ Four things in ADR-0041 could not be built as written:
 4. **ADR-0041 names the §3.10 draft store but no draft store existed.** ADR-0026 had already promised that drafts
    survive a dead disk in the sealed local-state export (decisions 1 and 3).
 
-The build took thirteen rulings (R1–R13), and the code's comments cite them by number. This ADR is where they are
-recorded: each one that bears on the architecture is stated below under its number (R2 was about process only).
+The build took thirteen rulings (R1–R13) and the final review one more (R14), and the code's comments cite them by
+number. This ADR is where they are recorded: each one that bears on the architecture is stated below under its number
+(R2 was about process only).
 
 ## Decision
 
@@ -57,10 +60,13 @@ recorded: each one that bears on the architecture is stated below under its numb
 2. **Three new body keys: a partial supersession of ADR-0041 decision 2.** `recording_started` and `recording_ended`
    are RFC 3339 instants stamped by the node's database clock, never by the window. `recording_started` is when the
    node first stored the draft (the first autosave, or the Sign itself). `recording_ended` is the draft's last real
-   change. `effective_basis` is `stated` when the writer gave a time and `recording-started` when they did not. The
-   envelope's `t_effective` is **always set**: the stated time, or `recording_started` (principle 4: "no stated time"
-   is said, never passed off as a stated one; the window shows *no stated time · writing began 03:12*). The commit's
-   HLC stays `t_recorded`. Decision 2's `narrative` + `media` body is otherwise unchanged.
+   change. The window autosaves on the **first keystroke** of a burst, then at most once a second while typing goes
+   on, and once more after the last keystroke (ruling R14), so a new draft's first autosave is its first keystroke's
+   and a power cut loses about a second of typing. A trailing-only debounce saved nothing until the typing paused.
+   `effective_basis` is `stated` when the writer gave a time and `recording-started` when they did not. The envelope's
+   `t_effective` is **always set**: the stated time, or `recording_started` (principle 4: "no stated time" is said,
+   never passed off as a stated one; the window shows *no stated time · writing began 03:12*). The commit's HLC stays
+   `t_recorded`. Decision 2's `narrative` + `media` body is otherwise unchanged.
 
 3. **The floor (`cairn_check_note_assertion`) refuses only what ADR-0041 excludes forever, plus what it makes
    integrity.** Its rules, each with its own message:
@@ -140,12 +146,17 @@ recorded: each one that bears on the architecture is stated below under its numb
     `search_path = public, pg_temp`, revoked from PUBLIC and granted to `cairn_window` only. There is no per-save
     encryption: a draft at rest is no more readable than the clear view of the sealed event it becomes.
 
-11. **One draft, one chart, one terminal.** A draft names its patient and the terminal that started it. A save
-    of an existing draft naming another patient or terminal answers `elsewhere` and writes nothing. The terminal id is a UUIDv7 minted
-    once and kept in the window's config directory. A save answers `saved`, `spent`, `elsewhere` or `no-chart`.
-    `last_keystroke` moves only when the text or the stated time really changed (ruling R1), so an idle autosave
-    does not move `recording_ended`. In 3a the writer is not known until the note is signed; the §3.10 store keyed
-    by `(author, patient)` is 3b's.
+11. **One draft, one chart, one terminal.** A draft names its patient and the terminal that started it. A save of an
+    existing draft naming another patient or terminal answers `elsewhere` and writes nothing. The terminal id is a
+    UUIDv7 minted once and kept in the window's config directory. A save answers `saved`, `spent`, `elsewhere` or
+    `no-chart`. `last_keystroke` moves only when the text or the stated time really changed (ruling R1), so an idle
+    autosave does not move `recording_ended`. It is stamped `GREATEST(clock_timestamp(), recording_started)`, never
+    earlier than writing began, and a new draft takes one clock reading for both times. A wall clock stepped back
+    while a draft is open (an NTP step after a long offline spell) would otherwise store a last keystroke before the
+    start, so the note signed from it would end before it began, which rule 8 refuses; and under R1 a Sign with
+    unchanged text never restamps, so the draft would stay unsignable. The recorded end is then a near-truth, "no
+    earlier than writing began", not an untruth (principle 4). In 3a the writer is not known until the note is signed;
+    the §3.10 store keyed by `(author, patient)` is 3b's.
 
 12. **A draft is spent by its own note, at commit.** Sign runs in **one** transaction: it saves the text sent with
     Sign (so the note is that text, never an older autosave), spends the draft, builds the body from the spent row,
@@ -154,7 +165,7 @@ recorded: each one that bears on the architecture is stated below under its numb
     same transaction** (`event_log.xmin = pg_current_xact_id()`, ruling R9), and `note_draft_spent.event_id` is
     unique, so an older note can never justify wiping a draft. A row inserted in a subtransaction carries the
     subtransaction's id, so the sign path submits with no savepoint. A later save of a spent draft answers `spent`
-    and writes nothing, so a debounced save landing after Sign cannot bring the draft back.
+    and writes nothing, so an autosave landing after Sign cannot bring the draft back.
 
 13. **The editor is read-only while a Sign is in flight** (ruling R13). On paper the ink under a signature is fixed.
     Typed text that the sign would not carry must not appear to be kept.
@@ -196,6 +207,15 @@ recorded: each one that bears on the architecture is stated below under its numb
   ([#945](https://github.com/cairn-ehr/cairn-ehr/issues/945)); closing a chart while the node is unreachable loses
   the unsaved text ([#946](https://github.com/cairn-ehr/cairn-ehr/issues/946)); closing a chart waits on its saves
   with no bound or status ([#947](https://github.com/cairn-ehr/cairn-ehr/issues/947)).
+- **Text containing U+0000 or a lone surrogate never saves or signs**
+  ([#951](https://github.com/cairn-ehr/cairn-ehr/issues/951)): PostgreSQL text cannot hold U+0000, and the window's
+  IPC boundary refuses a lone surrogate. The editor keeps the text on screen but says only "not saved yet".
+- **A stated time later than the writing is accepted unflagged**
+  ([#952](https://github.com/cairn-ehr/cairn-ehr/issues/952)): a date slip signs, and, listed newest `t_effective`
+  first, tops the chart until 3c's corrections. ADR-0003's clash flag is owed.
+- **Two windows on one machine share a terminal id** ([#953](https://github.com/cairn-ehr/cairn-ehr/issues/953)): it
+  lives in the per-user config directory, so both windows take a draft as theirs, both reopen it, and their saves
+  overwrite each other, which is what decision 11 exists to prevent.
 
 ## Consequences
 
@@ -208,7 +228,8 @@ recorded: each one that bears on the architecture is stated below under its numb
 - **The bet.** That escaping, not refusing, is the right answer for text that looks like markup. We would know it
   is wrong if a later profile needs a construct the escape has already made inert in signed notes. Those notes would
   still read as typed, just not as the construct.
-- **Pinned by** `crates/cairn-event/src/note.rs` (the escape round trip, exhaustive over a small alphabet),
+- **Pinned by** `crates/cairn-event/src/note.rs` (the escape round trip, exhaustive over a small alphabet, which `note_floor.rs`
+  also runs through the real markup floor),
   `db/tests/064_clinical_note_test.sql` (every floor rule at both doors, R8), `db/tests/065_note_draft_test.sql`
   (the outcomes, R9, the grants, db/044's replay), `crates/cairn-node/tests/{note_floor,note_sign,note_read,window_role_grants_notes}.rs`
   and `cairn-gui-tauri/src/{notes,notes_webview}_tests.rs`. RUNBOOK §18 carries the human measurements.

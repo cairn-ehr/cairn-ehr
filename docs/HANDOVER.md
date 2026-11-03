@@ -45,9 +45,9 @@
 >
 > **Slice 3a BUILT 2026-11-03 — draft PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)** (plan and build
 > in one PR; [ADR-0087](spec/decisions/0087-the-first-note-stream-and-its-draft.md), spec **v0.89**, `db/064` + `db/065`,
-> `SCHEMA_GENERATION` **65**; plan `superpowers/plans/2026-11-03-sign-in-slice-3a-note-stream.md`; the rulings R1–R13
-> the code cites are recorded in the ADR). **New note** → type (autosaved a second
-> after the typing pauses, to a node-side draft) → **Sign note** with the strip; the chart lists its notes with their
+> `SCHEMA_GENERATION` **65**; plan `superpowers/plans/2026-11-03-sign-in-slice-3a-note-stream.md`; the rulings R1–R14
+> the code cites are recorded in the ADR). **New note** → type (autosaved at the first keystroke and then once a
+> second while typing, R14, to a node-side draft) → **Sign note** with the strip; the chart lists its notes with their
 > grade and time, linked charts read as one. **What a 3b/3c author must know** (ADR-0087 has each): the window
 > ESCAPES markup once, at signing, and the twin is the UNESCAPED text (R4); the floor refuses only what ADR-0041
 > excludes forever plus integrity, with the attachment-id grammar `[A-Za-z0-9._~-]+` a wire commitment (R5) and plain
@@ -58,7 +58,9 @@
 > `note.added` is not retired (#364). Follow-ups: **#945** (a stale "already signed" leaves the draft stuck) ·
 > **#946** (closing a chart while the node is unreachable loses unsaved text) · **#947** (closeChart's save wait) ·
 > **#948** (a `refs` target arriving after its note — a decision, live with 3c) · **#949** (a media descriptor the
-> escape changes never matches its anchor — latent) · **#950** (erasure does not reach an open draft). **Owed by a
+> escape changes never matches its anchor — latent) · **#950** (erasure does not reach an open draft) · **#951**
+> (U+0000 or a lone surrogate never saves) · **#952** (a future stated time unflagged) · **#953** (two windows share a
+> terminal id). **Owed by a
 > human: RUNBOOK §18** in the real WebKit window — sign ≤ 3 s, open ≤ 1 s, a hard kill brings the draft back, plus
 > what the Chromium walk could not see: the editor `readOnly` while signing, the partly-typed-time refusal, stated
 > seconds round-tripping, Tauri's argument casing, VoiceOver reading the sign sentence twice (`#note-status` +
