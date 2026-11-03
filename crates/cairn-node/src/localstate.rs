@@ -140,9 +140,11 @@ pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
 ///   first two are the custody that survives a dead disk; the registry is what a restored
 ///   node needs to be ALLOWED to apply that custody again (`actor_current` gates every
 ///   clinical apply door).
-/// - [`Self::node_default_deks`], [`Self::config`] and [`Self::drafts`] are still empty,
-///   legitimately: none of the three has a store anywhere in the built system to be filled
-///   from. Their emptiness is "nothing exists yet", not "we forgot".
+/// - [`Self::node_default_deks`] and [`Self::config`] are still empty, legitimately: neither
+///   has a store anywhere in the built system to be filled from. Their emptiness is "nothing
+///   exists yet", not "we forgot". [`Self::drafts`] is empty BY DECISION: the progress-note
+///   draft store (db/065) exists, but a draft is not the record and is not exported
+///   (ADR-0087 decision 9, partly superseding ADR-0026 decisions 1 and 3).
 ///
 /// The signing key is DELIBERATELY ABSENT (ADR-0026 point 4): a stolen, unsealed export
 /// must grant read access, never a signing identity. Do not add it here. An unwrap secret is
@@ -291,7 +293,7 @@ impl LocalState {
             node_default_deks: Vec::new(), // no node-default keystore exists yet (#495 promise 2)
             episode_deks,
             config: None,       // no node config table exists yet
-            drafts: Vec::new(), // no draft store exists yet
+            drafts: Vec::new(), // note drafts are deliberately not exported (ADR-0087)
             unwrap_secret,
             actor_registry,
         }

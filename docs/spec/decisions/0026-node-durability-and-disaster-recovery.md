@@ -1,6 +1,6 @@
 # ADR-0026 — Node durability and disaster recovery: backup-as-cold-peer, new-identity restore, and shred-aware backups
 
-- **Status:** Accepted
+- **Status:** Accepted; decisions 1 and 3, for progress-note drafts partly superseded by [ADR-0087](0087-the-first-note-stream-and-its-draft.md)
 - **Date:** 2026-06-20
 - **Refines:** [ADR-0005](0005-erasure-key-custody-and-crypto-shredding.md)
 

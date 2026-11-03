@@ -311,6 +311,40 @@ filed (#919); record the counts against that issue.
 | Every outcome sentence read once, whole; no passphrase spoken | | |
 | A double press on Confirm sends one act; nothing takes focus when the worklist redraws | | |
 
+## Write, autosave and sign a progress note (GUI sign-in slice 3a, runbook §18)
+
+Window on the node's machine: \_\_ · Terminal-id file present after first launch: \_\_
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| Open the editor: *New note* → caret in *Progress note* | | | | ≤ 1 s | |
+| Sign a note: first keystroke in Staff ID → "Signed — the note is on the chart." | | | | ≤ 3 s | |
+| Sign a note: press → outcome share | | | | — | |
+| Crash recovery: acts before typing can continue | | | | 0 | |
+
+Steps: writing and signing paper *N* = 3 → forced *M* = 3 → observed *K* = \_\_ · reading the notes 0 → 0 → observed
+\_\_ · after a crash paper — → *M* = 0 → observed \_\_. `note-sign` write cost (section 5): \_\_ ms.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Text that looks like markup signs and reads back exactly as typed; stored escaped | | |
+| No stated time: "no stated time · writing began …", basis `recording-started`; a stated time: "(stated)" | | |
+| `recording_ended` is the last keystroke, not the press | | |
+| A partly typed time refuses Sign with its sentence; the saved stated time is kept | | |
+| The editor and time field are read-only while a Sign is in flight | | |
+| A stated time with seconds survives a reopen and signs with its seconds | | |
+| A hard kill: the draft is back on relaunch; loss within a second of a keystroke: \_\_ | | |
+| Node unreachable: "not saved yet — your text is still here"; Sign says it cannot sign; next keystroke saves | | |
+| Another terminal's draft listed read-only; editable again with the terminal id restored | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| New note, editor, time field and Sign complete by keyboard alone; Enter in the time field signs nothing | | |
+| Editor and time field announced by their labels | | |
+| Each note read with its text, grade and time; the withheld sentence read | | |
+| Sign sentence read once, or twice (`#note-status` + `#outcome`) — record which | | |
+| No dialog; nothing takes focus on its own | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

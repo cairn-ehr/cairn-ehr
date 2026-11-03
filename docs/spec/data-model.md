@@ -280,6 +280,15 @@ Two infrastructure invariants — and their realization — underpin point-of-ca
 - **Drafts are durable and session-decoupled.** An uncommitted write-context survives an authentication-context change: it stays bound to its **subject** (the `patient_uuid` never wavers — you were always writing about this patient), is owned by its **provisional author** (so a draft follows *that clinician* to wherever they re-authenticate, and a "switch" hides but never discards the previous user's draft), and carries a provisional authorship-confidence grade resolved on commit ([identity §5.11](identity.md#511-point-of-care-identity-possession-fast-authentication-and-salvage)). This extends the append-only work-preservation guarantee ([§3.1](#31-append-only-clinical-event-log-source-of-truth)) — which protects *committed* events — to the *pre-commit* side of the commit boundary; the same value (never discard clinician effort) on both sides. The context/draft store is keyed by `(author, patient)`, not by the session, which is also what lets one contended workstation hold several warm, hidden contexts at once.
 - **The invariant is realized at the data/floor/CLI layer: the authoring signature is the per-write attribution act** ([ADR-0053](decisions/0053-per-write-human-authorship.md)). A clinical event may carry an authenticated human author distinct from the recording session: `signer_key_id` is the human, the contributor set is `{human, "authored"}` + `{node, "recorded"}` ([§3.9](#39-authorship-and-accountability)), and the node — the session party — stays `recorded` and keeps body custody (seals the event and holds its DEK, [ADR-0052](decisions/0052-born-sealed-clinical-bodies.md)) regardless of who signs. This is the node-as-session / human-as-author split that makes `session.user ≠ event.author` cryptographic rather than aspirational, on the one clinical stream (medication) that exists. The **durable session-decoupled drafts** and **`sign-as`** stranded-work salvage described above remain **explicitly deferred to the UI layer** — no draft store or session/UI layer exists yet to hang them on; this slice lays down only the can't-retrofit wire shape and floor binding beneath them.
 
+> [!NOTE]
+> **A first draft store exists since sign-in slice 3a** ([ADR-0087](decisions/0087-the-first-note-stream-and-its-draft.md),
+> `db/065`), for progress notes only. It is narrower than the invariant above: a draft is keyed by chart and by the
+> **terminal** that started it, not by `(author, patient)`; its writer is not known until the note is signed; it is
+> reached only through definer doors granted to `cairn_window`; it is spent at commit only by a note submitted in the
+> same transaction; and it is in no backup or export (partly superseding ADR-0026 decisions 1 and 3). Author-owned,
+> session-decoupled drafts and `sign-as` salvage remain deferred (slice 3b,
+> [#243](https://github.com/cairn-ehr/cairn-ehr/issues/243)).
+
 ## 3.11 Notifications as projections, responsibility-routing, and acknowledgment
 > Resolves former open question §11.10 — see [ADR-0009](decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md), canonical design [identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor). Minimal data-model commitments; the clinical model and the *why* live there and in the ADR.
 
@@ -475,3 +484,13 @@ incremental writing lives pre-commit in the durable draft store
 > existence), twin fidelity, and the inherited digest binding — mirrored at the remote-apply door.
 > Every renderer, editor, and player is fit-for-purpose.
 > The profile's austerity is what keeps the floor validator reviewer-legible.
+
+> [!NOTE]
+> **As built (sign-in slice 3a, [ADR-0087](decisions/0087-the-first-note-stream-and-its-draft.md)).** The text-only
+> subset: `media` is `[]` and `encounter` `null` from the window, `refs` `[]`. The body gains three keys,
+> `recording_started` and `recording_ended` (stamped by the node) and `effective_basis` (`stated` |
+> `recording-started`), and the envelope's `t_effective` is always set. The window escapes markup once, at signing,
+> so text that looks like markup signs and reads back as typed; the twin is the narrative with those escapes
+> removed. A newer profile is carried at the remote door but never projected. `note.added` is **not** retired yet
+> ([#364](https://github.com/cairn-ehr/cairn-ehr/issues/364)), contrary to the first paragraph above. The draft
+> store as built is in [§3.10](#310-session-identity-event-authorship-and-draft-durability)'s note.

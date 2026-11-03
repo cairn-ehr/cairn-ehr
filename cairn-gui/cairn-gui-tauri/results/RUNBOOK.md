@@ -1284,3 +1284,94 @@ CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=$USER dbname=cairn_test" \
 **What could not be run here.** Every gesture, stopwatch figure and the VoiceOver pass need the window and a human.
 The doors behind them were run against throwaway databases by the slice's DB-gated tests on 2026-11-01.
 `TEMPLATE.md` carries a matching block (*Enrol in person, re-key, change a passphrase, confirm*).
+
+## 18. Write, autosave and sign a progress note (GUI sign-in slice 3a, ADR-0087)
+
+The slice's gestures: **New note**, typing (saved by itself about a second after the typing pauses), an optional
+**When it happened**, and **Sign note** with the signer strip of section 16. Paper counterpart: the progress sheet in
+the bedside folder: pick it up, write (heading the entry with the time it happened, if not now), sign. **Live only**:
+a `--mock` window lists no notes and refuses every note write ("fixture mode…").
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Open the editor | the press of *New note* | the caret blinking in *Progress note* | **≤ 1 s** |
+| Sign a note, credential included | the first keystroke in the strip's Staff ID | "Signed — the note is on the chart." | **≤ 3 s** |
+| Get a note back after a crash | the window reopened on the chart | the text back in the editor | **0 extra acts** |
+
+Steps: writing and signing paper *N* = 3 (pick up the sheet, write, sign) → forced *M* = 3 (*New note*, type, sign) →
+bundling target *K* = 3; a stated time is part of writing, as on paper. Reading a chart's notes 0 → 0 → 0. Getting a
+note back after a crash: paper has no crash; *M* = 0. The write half of every sign is also timed by the node
+(`gesture_kind = 'note-sign'`, section 5). **A figure outside its budget, or `M > N`, is the finding — file an issue;
+never adjust the budget.**
+
+**Setup.** Section 16's setup (the database with `cairn_pgx` 0.4.0, the owner connection, `cnode`, the logging check,
+a superuser and the terminal passphrase) and `nurse-a` enrolled from the window. The section 2 chart. Launch as
+section 3 with no `--key-hold-seconds`. The window keeps its terminal id in
+`~/Library/Application Support/org.cairn-ehr.med-list/terminal-id` (macOS; the Tauri config directory elsewhere).
+Read what the node holds with the owner connection:
+
+```bash
+notes()  { psql "$CONN" -c "SELECT left(narrative, 40) AS narrative, effective_basis, t_effective, recording_started, recording_ended FROM clinical_note ORDER BY t_effective"; }
+drafts() { psql "$CONN" -c "SELECT left(narrative, 40) AS narrative, terminal_id, stated_time, last_keystroke FROM note_draft"; }
+```
+
+- [ ] **The setup hook filled the terminal id.** After the first launch the file holds one UUID, and it is the same
+      after a relaunch. A note typed straight after launch saves (no "this window is still starting" sentence).
+
+**Measurement 1 — open the editor (≤ 1 s).** Press *New note*. Five runs (sign or reopen between runs: one draft is
+written at a time).
+
+- [ ] The editor shows with the caret in *Progress note*; *New note* is hidden and *Sign note* shown.
+- [ ] Nothing is saved until something is typed (`drafts` lists no row for this press).
+
+**Measurement 2 — write and sign (≤ 3 s).** Type `BP <90, [L] arm (R), see [x](http://example.org) \ ok`. Wait two
+seconds, then type the strip's Staff ID and passphrase and press *Sign note*. Five runs, with and without a time in
+*When it happened*.
+
+- [ ] The listed note reads **exactly as typed**, with "signed by" nurse-a's name. `notes` shows the escaped narrative
+      (`BP \<90, …`). Nothing was refused.
+- [ ] With no time stated: the note reads "no stated time · writing began HH:MM", and `notes` shows
+      `recording-started` with `t_effective` = `recording_started`. With a time: "HH:MM (stated)", basis `stated`.
+- [ ] `recording_ended` is the last keystroke, not the press of Sign (the two-second wait shows as a gap).
+- [ ] The press → outcome share of the gesture, and `ui_gesture_timing`'s `note-sign` row (section 5).
+- [ ] **A partly typed time.** Type only part of *When it happened* (a date with no hour) and press *Sign note*: "the
+      time it happened is only partly typed — finish it, or clear it if the note is about now". Nothing is signed and
+      the text is kept. A saved stated time is not wiped by the partial one (`drafts` still shows it).
+- [ ] **Read-only while signing.** In a second terminal, `psql "$CONN"` as the owner: `BEGIN; LOCK TABLE note_draft IN
+      ACCESS EXCLUSIVE MODE;`. Press *Sign note*, then type in the editor and the time field: nothing appears and Sign
+      is disabled. `ROLLBACK;` within 15 s: the sign completes with the text as it was at the press.
+- [ ] **Stated seconds survive a reopen.** On this throwaway database only, give an open draft a time with seconds
+      (`UPDATE note_draft SET stated_time = '2026-11-03T03:00:15+00' WHERE …`), reopen the chart, and sign without
+      touching the field: `notes` shows `t_effective` at `:15`.
+
+**Measurement 3 — a crash loses nothing.** Type a note, wait two seconds, then kill the window hard
+(`pkill -9 -f cairn-gui-tauri`, so no close-time save can run). Relaunch on the same chart.
+
+- [ ] The draft is back in the editor, with its stated time, and the status line reads "unsigned draft · started … ·
+      last typed …". Count every act before typing can continue (target 0).
+- [ ] Kill it again within a second of a keystroke: record how much of the last typing was lost (the bound is the
+      one-second debounce).
+- [ ] Stop the node's Postgres while typing: "not saved yet — your text is still here" shows and the text stays.
+      *Sign note* says "Could not sign this note: …" and keeps the text. Start Postgres; the next keystroke saves.
+- [ ] **Another terminal's draft.** Quit, move the terminal-id file aside, relaunch: the draft is listed, read-only,
+      "… · being written at another terminal", with nothing to press. Put the file back and relaunch: it reopens in
+      the editor.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] *New note*, *Progress note*, *When it happened* and *Sign note* are reachable and usable by keyboard alone;
+      Enter in the time field signs nothing.
+- [ ] *Progress note* and "When it happened — leave empty if it is now" are announced by their labels.
+- [ ] Each listed note is read with its text, then its grade and time ("signed by …", "authorship claimed, not verified
+      here" or "writer not known"). On a doubted linked pair (section 13's rig), the withheld-notes sentence is read.
+- [ ] The status line (`#note-status`) is read once per change. **Record whether the sign sentence is read twice**:
+      it lands on `#note-status` and on the chart's `#outcome`, both live regions.
+- [ ] No dialog appears at any point, and nothing takes focus on its own after a sign or a re-read.
+
+**What could not be run here.** Every gesture, stopwatch figure and the VoiceOver pass need the real window. The
+editor was walked headlessly in Chromium only (sign-in slice 3a, Task 6): WebKit's `readOnly`, `datetime-local`'s
+partial input and seconds, Tauri's argument casing for `note_draft_save` / `note_sign`, and the setup hook that fills
+the terminal id were never seen in the real window. The doors were run against throwaway databases by the slice's
+DB-gated tests on 2026-11-03. `TEMPLATE.md` carries a matching block (*Write, autosave and sign a progress note*).
