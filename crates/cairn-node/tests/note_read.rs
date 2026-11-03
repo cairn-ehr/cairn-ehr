@@ -135,3 +135,40 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
     assert_eq!(list.notes[0].grade, NoteGrade::WriterNotKnown);
     assert_eq!(grade_words(&list.notes[0].grade), "writer not known");
 }
+
+/// The window reads notes as `cairn_window`, not as the schema owner (ruling R11). The vouch
+/// predicate is closed to that role, so the read must reach it through db/065's definer door;
+/// calling `cairn_attestation_vouched` directly was a 42501 under the window's login.
+#[tokio::test]
+async fn the_window_role_reads_a_charts_notes() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (mut owner, window) = common::owner_and_window(&base).await;
+    let (node_sk, _, human_sk, human_kid, chart) = common::note_setup(&owner).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    sign_on(
+        &mut owner,
+        &node_sk,
+        &author,
+        chart,
+        "seen on the ward round",
+    )
+    .await;
+
+    let list = list_patient_notes(&window, chart).await;
+    common::assert_not_denied("list_patient_notes", &list);
+    let list = list.unwrap();
+    assert_eq!(texts(&list), vec!["seen on the ward round"]);
+    assert_eq!(
+        list.notes[0].grade,
+        NoteGrade::Signed {
+            by: common::NOTE_AUTHOR.into()
+        }
+    );
+}

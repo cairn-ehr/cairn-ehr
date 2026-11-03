@@ -162,9 +162,25 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT COALESCE(h.display_name, h.staff_id) FROM cairn_vault_key_holder(p_key) h LIMIT 1;
 $$;
 
+-- Who VOUCHED for an event, as the hex key the contributor set names: event_log.attester_key,
+-- but ONLY when one is stored AND cairn_attestation_vouched clears it (db/001: db/020's deferred
+-- arm stores a peer's token UNVERIFIED, "carried, not vouched"); NULL otherwise. The note read
+-- (cairn_node::note::read) grades authorship from this, and the window role may not call the
+-- predicate itself (db/001 grants it to no runtime role), hence a definer door (ruling R11).
+-- THE `attester_key IS NOT NULL` GUARD IS LOAD-BEARING: cairn_attestation_vouched is TRUE for an
+-- event carrying no attestation at all ("vouched" = no unvouched marker row), exactly the trap
+-- db/005's cairn_claim_authority header spells out for its R1 arm.
+CREATE OR REPLACE FUNCTION cairn_note_vouched_attester(p_event uuid) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT encode(e.attester_key, 'hex') FROM public.event_log e
+     WHERE e.event_id = p_event
+       AND e.attester_key IS NOT NULL
+       AND cairn_attestation_vouched(e.event_id);
+$$;
+
 REVOKE EXECUTE ON FUNCTION cairn_note_draft_save(uuid, uuid, text, text, timestamptz),
     cairn_note_drafts(uuid), cairn_note_draft_spend(uuid, uuid), cairn_note_signer_name(text),
-    note_draft_spent_names_its_note() FROM PUBLIC;
+    cairn_note_vouched_attester(uuid), note_draft_spent_names_its_note() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_note_draft_save(uuid, uuid, text, text, timestamptz),
-    cairn_note_drafts(uuid), cairn_note_draft_spend(uuid, uuid), cairn_note_signer_name(text)
-    TO cairn_window;
+    cairn_note_drafts(uuid), cairn_note_draft_spend(uuid, uuid), cairn_note_signer_name(text),
+    cairn_note_vouched_attester(uuid) TO cairn_window;

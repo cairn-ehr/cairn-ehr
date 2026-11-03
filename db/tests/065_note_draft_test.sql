@@ -1,6 +1,6 @@
 \set ON_ERROR_STOP on
 \ir _scratch_database_guard.sql
--- db/065 — the progress-note draft store and its five doors (sign-in slice 3a, Task 3).
+-- db/065 — the progress-note draft store and its doors (sign-in slice 3a, Task 3).
 --
 -- WHY: a draft is the one MUTABLE thing next to an append-only record, so the guarantees that
 -- keep it honest are asserted here: one draft = one chart + one terminal, a spent draft can
@@ -191,6 +191,40 @@ BEGIN
     ASSERT (SELECT narrative FROM note_draft WHERE draft_id = d) = 'mine', 'the draft survived the NULL calls';
 END $$;
 
+-- cairn_note_vouched_attester (ruling R11): the attester's key as hex, ONLY when one is stored
+-- AND no carried-not-vouched marker stands. Three fixtures: no attester (vouched would say TRUE —
+-- the NULL guard is what answers NULL), an attester with no marker, an attester with a marker.
+SET LOCAL session_replication_role = replica;
+INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
+                       node_origin, signed_bytes, content_address, body, contributors,
+                       signer_key_id, plaintext_twin, attester_key)
+SELECT ('aaaaaaaa-0000-7000-8000-0000000000c' || i)::uuid, 'bbbbbbbb-0000-7000-8000-000000000001',
+       'note.added', '1', 10 + i, 1, 'n1', ('\xc' || i)::bytea,
+       '\x1220'::bytea || digest(('\xc' || i)::bytea, 'sha256'),
+       '{}'::jsonb, '[]'::jsonb, 'deadbeef', 'attester fixture',
+       CASE WHEN i = 1 THEN NULL ELSE digest('attester-' || i, 'sha256') END
+  FROM generate_series(1, 3) AS i;
+INSERT INTO event_attestation_unvouched (event_id) VALUES ('aaaaaaaa-0000-7000-8000-0000000000c3');
+SET LOCAL session_replication_role = origin;
+DO $$
+BEGIN
+    ASSERT cairn_note_vouched_attester('aaaaaaaa-0000-7000-8000-0000000000c1') IS NULL,
+        'no attester: NULL, although cairn_attestation_vouched is TRUE for it';
+    ASSERT cairn_attestation_vouched('aaaaaaaa-0000-7000-8000-0000000000c1'),
+        'fixture: vouched is TRUE for an unattested event, which is why the door guards NULL';
+    ASSERT cairn_note_vouched_attester('aaaaaaaa-0000-7000-8000-0000000000c2')
+           = encode(digest('attester-2', 'sha256'), 'hex'), 'a vouched attester reads as hex';
+    ASSERT cairn_note_vouched_attester('aaaaaaaa-0000-7000-8000-0000000000c3') IS NULL,
+        'a carried-not-vouched attester reads as NULL';
+    ASSERT cairn_note_vouched_attester('aaaaaaaa-0000-7000-8000-0000000000ff') IS NULL,
+        'an unknown event reads as NULL';
+    ASSERT (SELECT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'] FROM pg_proc
+             WHERE oid = 'cairn_note_vouched_attester(uuid)'::regprocedure),
+        'the door is definer-run with a pinned search_path';
+    ASSERT NOT has_function_privilege('cairn_window', 'cairn_attestation_vouched(uuid)', 'EXECUTE'),
+        'the predicate itself stays closed to the window';
+END $$;
+
 -- Privileges: tables closed to the window, doors closed to PUBLIC and open to the window.
 DO $$
 DECLARE f text;
@@ -198,13 +232,14 @@ BEGIN
     FOREACH f IN ARRAY ARRAY[
         'cairn_note_draft_save(uuid, uuid, text, text, timestamptz)',
         'cairn_note_drafts(uuid)', 'cairn_note_draft_spend(uuid, uuid)',
-        'cairn_note_signer_name(text)', 'note_draft_spent_names_its_note()'] LOOP
+        'cairn_note_signer_name(text)', 'cairn_note_vouched_attester(uuid)',
+        'note_draft_spent_names_its_note()'] LOOP
         ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), f || ' must not be PUBLIC';
     END LOOP;
     FOREACH f IN ARRAY ARRAY[
         'cairn_note_draft_save(uuid, uuid, text, text, timestamptz)',
         'cairn_note_drafts(uuid)', 'cairn_note_draft_spend(uuid, uuid)',
-        'cairn_note_signer_name(text)'] LOOP
+        'cairn_note_signer_name(text)', 'cairn_note_vouched_attester(uuid)'] LOOP
         ASSERT has_function_privilege('cairn_window', f, 'EXECUTE'), f || ' is the window''s';
     END LOOP;
     ASSERT NOT has_any_column_privilege('cairn_window', 'note_draft', 'SELECT'), 'window cannot read note_draft';

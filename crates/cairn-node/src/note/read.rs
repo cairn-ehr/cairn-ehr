@@ -45,15 +45,16 @@ pub struct PatientNoteList {
 
 /// The notes of every chart in `charts`, with what grades their authorship.
 ///
-/// The attester is read only when `cairn_attestation_vouched` clears it: db/020 can store a
-/// peer's attester key UNVERIFIED, and minting a `VerifiedKid` from such a row would re-open
-/// #412 (see `VerifiedKid::from_event_log_column`). `signer_key_id` needs no such check — no
-/// row exists unless the door verified the signature against it.
+/// The attester comes through db/065's `cairn_note_vouched_attester` door, which answers only
+/// for an attester `cairn_attestation_vouched` clears: db/020 can store a peer's attester key
+/// UNVERIFIED, and minting a `VerifiedKid` from such a row would re-open #412 (see
+/// `VerifiedKid::from_event_log_column`). A door, because the window role may not call the
+/// predicate itself (ruling R11). `signer_key_id` needs no such check — no row exists unless
+/// the door verified the signature against it.
 const NOTES_SQL: &str = "\
     SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
-           CASE WHEN e.attester_key IS NOT NULL AND cairn_attestation_vouched(e.event_id) \
-                THEN encode(e.attester_key, 'hex') END, \
+           cairn_note_vouched_attester(e.event_id), \
            cairn_note_signer_name(e.signer_key_id) \
       FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      WHERE n.patient_id = ANY($1::text[]::uuid[])";
@@ -78,7 +79,7 @@ pub async fn list_patient_notes(
         let contributors: serde_json::Value = serde_json::from_str(&r.get::<_, String>(7))?;
         let attester: Option<String> = r.get(8);
         // Both kids come from event_log columns whose existence is a verification: the signer
-        // always, the attester only through the vouch check in NOTES_SQL.
+        // always, the attester only through the vouch door in NOTES_SQL.
         let confidence = classify_authorship_confidence(
             &contributors,
             VerifiedKid::from_event_log_column(&signer),
