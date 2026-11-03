@@ -55,6 +55,7 @@ pub mod identity_evidence;
 pub mod john_doe;
 pub mod keys;
 pub mod medication;
+pub mod note;
 pub mod registration;
 pub mod safety;
 pub mod schema_generation;
