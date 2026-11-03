@@ -35,13 +35,14 @@ use cairn_node::chart_link::{
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::signoff::sign_off_medication_list;
+use cairn_node::medication::snapshot::in_snapshot;
 use cairn_node::medication::{
     assert_medication, cease_medication, release_medication_holds, withhold_medication,
     AssertMedicationInput, AttestParams, AuthorParams, CeaseMedicationInput,
     WithholdMedicationInput,
 };
 use cairn_node::note::draft::{open_drafts, save_draft, SaveOutcome};
-use cairn_node::note::read::list_patient_notes;
+use cairn_node::note::read::{list_patient_notes, PatientNoteList};
 use cairn_node::note::sign::{sign_note, SignNoteInput};
 use cairn_patient_search::SearchQuery;
 use common::{
@@ -423,9 +424,13 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     r.expect("the cessation is recorded");
 }
 
-/// The note pane (sign-in slice 3a): save a draft, list it, sign it, and read the notes back —
-/// over one chart, then over a linked set, undoubted and doubted, so the cross-chart read and
-/// its withholding both run under the window's login (Task 4 read only an unlinked chart).
+/// The note pane's read exactly as `notes::note_list_impl` makes it: in one snapshot (R12).
+async fn note_pane_read(c: &mut Client, chart: Uuid) -> anyhow::Result<PatientNoteList> {
+    in_snapshot(c, async |tx| list_patient_notes(tx, chart).await).await
+}
+
+/// The note pane (slice 3a): save, list drafts, sign, and read back over one chart, then over a
+/// linked set, undoubted and doubted, so withholding runs under the window's login too.
 #[tokio::test]
 async fn the_windows_note_calls_run_under_its_own_login() {
     let Some(base) = cs() else {
@@ -441,8 +446,6 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     };
     let x = Uuid::now_v7();
     common::submit_registration(&owner, &sk, &kid, x, 1).await;
-
-    // Sign one note on each chart, each from a saved draft, all on the window's login.
     for (chart, text) in [(a, "BP <90 [L] arm (R)"), (x, "note on X")] {
         let draft = Uuid::now_v7();
         let r = save_draft(&window, draft, chart, "pc-window", text, None).await;
@@ -465,7 +468,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     }
     let one = expect_as_window(
         "note::read::list_patient_notes (one chart)",
-        list_patient_notes(&window, a).await,
+        note_pane_read(&mut window, a).await,
     );
     assert_eq!(one.notes.len(), 1, "A alone holds its own note");
     assert_eq!(one.notes[0].text, "BP <90 [L] arm (R)", "shown as typed");
@@ -474,7 +477,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     common::submit_link_event(&owner, &sk, &kid, a, x, 10, true).await;
     let linked = expect_as_window(
         "note::read::list_patient_notes (linked)",
-        list_patient_notes(&window, a).await,
+        note_pane_read(&mut window, a).await,
     );
     assert_eq!(linked.notes.len(), 2, "the linked chart's note is read");
     let (lo, hi) = canonical_pair(a, x);
@@ -489,7 +492,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
         .unwrap();
     let doubted = expect_as_window(
         "note::read::list_patient_notes (doubted)",
-        list_patient_notes(&window, a).await,
+        note_pane_read(&mut window, a).await,
     );
     assert_eq!(doubted.notes.len(), 1, "X's note is withheld");
     assert_eq!(doubted.withheld_on_linked, 1, "and counted");

@@ -234,3 +234,15 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
     );
     assert_eq!(none.withheld_sentence, None);
 }
+
+/// The id is filled by `main`'s setup hook, which Tauri runs after it has built the window: a
+/// note command served before that refuses, retryable, rather than writing under a blank name.
+#[test]
+fn a_note_command_before_the_terminal_id_is_read_refuses() {
+    let (mut state, _) = on_screen();
+    assert_eq!(terminal_of(&state).unwrap(), "fixture-terminal");
+    state.terminal_id = std::sync::OnceLock::new();
+    let err = terminal_of(&state).unwrap_err();
+    assert_eq!(err.retry, Retry::Now);
+    assert!(err.text.contains("terminal's id"), "{}", err.text);
+}

@@ -116,7 +116,7 @@ fn main() -> anyhow::Result<()> {
     // because the reopen runs inside a command; that runtime lives as long as the app.)
     let runtime = tokio::runtime::Runtime::new()?;
 
-    let mut app_state = if cli.mock {
+    let app_state = if cli.mock {
         // Fixture mode carries NO connection and NO node key — not a flag that says so. The
         // one constructor that builds it is `AppState::mock`, so the two cannot drift apart.
         AppState::mock(cli.patient)
@@ -125,12 +125,15 @@ fn main() -> anyhow::Result<()> {
     };
 
     tauri::Builder::default()
-        // Managed in `setup`, not before it: the terminal id lives in the app's config directory,
-        // which only the app handle can name. Setup runs on the main thread before the event loop
-        // serves the webview's first command.
-        .setup(move |app| {
-            app_state.terminal_id = terminal_id_or_ephemeral(app.path().app_config_dir());
-            app.manage(app_state);
+        // Managed at builder time, so no command can meet unmanaged state: Tauri 2 creates the
+        // config-declared window BEFORE the setup hook runs (`tauri` 2.11.5 `src/app.rs:2524-2532`).
+        .manage(app_state)
+        // Only the terminal id waits for setup, which alone can name the config directory. A
+        // note command served before it is filled refuses (`notes::terminal_of`).
+        .setup(|app| {
+            let id = terminal_id_or_ephemeral(app.path().app_config_dir());
+            // `set` fails only if already set, and nothing else sets it.
+            let _ = app.state::<AppState>().terminal_id.set(id);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -242,7 +245,7 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         shown: tokio::sync::Mutex::new(Default::default()),
         key_hold: cli.key_hold_seconds,
         session: tokio::sync::Mutex::new(Default::default()),
-        // Read in `main`'s setup hook, which alone can name the config directory.
-        terminal_id: String::new(),
+        // Filled in `main`'s setup hook, which alone can name the config directory.
+        terminal_id: std::sync::OnceLock::new(),
     })
 }

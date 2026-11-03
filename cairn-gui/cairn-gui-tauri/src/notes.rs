@@ -13,9 +13,9 @@
 //! * send a time for recording — the save door stamps `recording_started` and `last_keystroke`
 //!   from the database's clock; the only time sent is the writer's own STATED time;
 //! * decide whether a draft is this terminal's to edit — the door compares the terminal id each
-//!   save names (`AppState::terminal_id`) and answers `elsewhere`.
+//!   save names (`AppState::terminal_id`, read through `terminal_of`) and answers `elsewhere`.
 use crate::commands::record_timing;
-use crate::funnel::view::{ErrorView, Recorded};
+use crate::funnel::view::{ErrorView, Recorded, Retry};
 use crate::link::judgement_view::{refused, stale};
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
@@ -153,13 +153,18 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             drafts: vec![],
         });
     };
-    let db = db.lock().await?;
-    let list = cairn_node::note::read::list_patient_notes(&*db, patient)
-        .await
-        .map_err(|e| chart_read_failed(db.explain(e)))?;
+    let terminal = terminal_of(state)?;
+    let mut db = db.lock().await?;
+    // ONE snapshot (ruling R12): the notes and the drafts are two statements, and a sign
+    // committing between them would show the clinician neither the note nor its draft.
+    let list = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+        cairn_node::note::read::list_patient_notes(tx, patient).await
+    })
+    .await
+    .map_err(|e| chart_read_failed(db.explain(e)))?;
     // The window supplies the zone (ruling R10): the node never knows the terminal's.
     let today = Utc::now().with_timezone(&chrono::Local).date_naive();
-    Ok(note_pane(list, &state.terminal_id, &chrono::Local, today))
+    Ok(note_pane(list, terminal, &chrono::Local, today))
 }
 
 /// Save the text on screen into draft `draft_id` of the chart on screen, held by this terminal.
@@ -180,22 +185,17 @@ pub async fn note_draft_save_impl(
     }
     let draft: Uuid = draft_id.parse().map_err(|_| refused("not a draft id"))?;
     let stated = parse_stated(stated_time).map_err(refused)?;
+    let terminal = terminal_of(state)?;
     let db = state
         .db
         .as_ref()
         .ok_or_else(|| node_cannot_write("no database connection"))?
         .lock()
         .await?;
-    let outcome = cairn_node::note::draft::save_draft(
-        &*db,
-        draft,
-        patient,
-        &state.terminal_id,
-        narrative,
-        stated,
-    )
-    .await
-    .map_err(|e| node_failure(&db.explain(e)))?;
+    let outcome =
+        cairn_node::note::draft::save_draft(&*db, draft, patient, terminal, narrative, stated)
+            .await
+            .map_err(|e| node_failure(&db.explain(e)))?;
     Ok(save_view(outcome))
 }
 
@@ -216,6 +216,7 @@ pub async fn note_sign_impl(
         return Err(refused(FIXTURE));
     }
     let (draft, stated) = sign_checks_before_the_key(draft_id, narrative, stated_time)?;
+    let terminal = terminal_of(state)?;
     let (human_sk, human_kid) = state
         .signer_for_act(credential, Now::read())
         .await
@@ -236,7 +237,7 @@ pub async fn note_sign_impl(
         let input = cairn_node::note::sign::SignNoteInput {
             draft,
             patient,
-            terminal: &state.terminal_id,
+            terminal,
             narrative,
             stated,
             node_origin: &state.node_origin,
@@ -276,6 +277,25 @@ pub async fn note_sign_impl(
         text,
         behind_the_record,
     })
+}
+
+/// This terminal's id, or a refusal while `main`'s setup hook has not yet read it.
+///
+/// Tauri 2 builds the config-declared window BEFORE it runs the setup hook (`tauri` 2.11.5,
+/// `src/app.rs:2524-2532`), and the state is managed at builder time so no command ever meets
+/// unmanaged state; the id alone arrives in setup. Nothing in Tauri's contract says a command
+/// cannot be served in between, so one that is says so rather than writing under a blank name.
+pub(crate) fn terminal_of(state: &AppState) -> Result<&str, ErrorView> {
+    state
+        .terminal_id
+        .get()
+        .map(String::as_str)
+        .ok_or(ErrorView {
+            text: "this window is still starting — it has not yet read this terminal's id; \
+               nothing was done, try again"
+                .to_string(),
+            retry: Retry::Now,
+        })
 }
 
 /// The refusals a sign says before it asks for the key, and the draft id and stated time read

@@ -45,7 +45,7 @@ impl AppState {
             key_hold: std::time::Duration::ZERO,
             session: tokio::sync::Mutex::new(Default::default()),
             // A fixed name: fixture mode writes no draft, so nothing is held under it.
-            terminal_id: "fixture-terminal".into(),
+            terminal_id: "fixture-terminal".to_string().into(),
         }
     }
 

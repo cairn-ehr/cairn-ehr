@@ -257,8 +257,10 @@ pub struct AppState {
     pub key_hold: Duration,
     pub session: tokio::sync::Mutex<Held>,
     /// This terminal's stable id (`crate::terminal_id`): what a note draft is held by, so a draft
-    /// is edited only at the terminal it was started on (design §3.2).
-    pub terminal_id: String,
+    /// is edited only at the terminal it was started on (design §3.2). A `OnceLock` because only
+    /// `main`'s setup hook can name the config directory it lives in, and the state is managed
+    /// before that hook runs; commands read it through `notes::terminal_of`.
+    pub terminal_id: std::sync::OnceLock<String>,
 }
 
 impl AppState {
