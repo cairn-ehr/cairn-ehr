@@ -87,11 +87,17 @@ CREATE CONSTRAINT TRIGGER note_draft_spent_names_its_note
 -- last_keystroke moves only when the text or stated time really changed (ruling R1), so an
 -- idle autosave tick does not drag recording_ended forward. A per-draft advisory lock
 -- serialises save against spend (the spent-check and the insert must not interleave with one).
+-- last_keystroke is never stamped BEFORE recording_started (final review I1): if the wall clock
+-- steps back while a draft is open (an NTP step after a long offline spell, a manual fix), a
+-- plain clock_timestamp() would give recording_ended < recording_started, which floor rule 8
+-- (db/064) refuses -- and under R1 re-pressing Sign with unchanged text never restamps, so the
+-- draft would stay unsignable. GREATEST keeps it a near-truth ("no earlier than writing began").
 CREATE OR REPLACE FUNCTION cairn_note_draft_save(
     p_draft uuid, p_patient uuid, p_terminal text, p_narrative text, p_stated_time timestamptz)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
-    v note_draft%ROWTYPE;
+    v     note_draft%ROWTYPE;
+    v_now timestamptz;
 BEGIN
     -- A NULL is a caller bug, not an outcome: `<> NULL` is NULL, so it would slip past the
     -- 'elsewhere' guard below and overwrite another chart's or terminal's draft.
@@ -110,7 +116,7 @@ BEGIN
         IF v.narrative IS DISTINCT FROM p_narrative OR v.stated_time IS DISTINCT FROM p_stated_time THEN
             UPDATE note_draft
                SET narrative = p_narrative, stated_time = p_stated_time,
-                   last_keystroke = clock_timestamp()
+                   last_keystroke = GREATEST(clock_timestamp(), v.recording_started)
              WHERE draft_id = p_draft;
         END IF;
         RETURN 'saved';
@@ -118,10 +124,11 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM event_log WHERE patient_id = p_patient) THEN
         RETURN 'no-chart';
     END IF;
+    -- ONE clock reading for both, so a fresh draft starts with last_keystroke = recording_started.
+    v_now := clock_timestamp();
     INSERT INTO note_draft (draft_id, patient_id, terminal_id, narrative, stated_time,
                             recording_started, last_keystroke)
-    VALUES (p_draft, p_patient, p_terminal, p_narrative, p_stated_time,
-            clock_timestamp(), clock_timestamp());
+    VALUES (p_draft, p_patient, p_terminal, p_narrative, p_stated_time, v_now, v_now);
     RETURN 'saved';
 END;
 $$;

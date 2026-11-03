@@ -369,3 +369,57 @@ async fn a_stated_time_signs_as_t_effective() {
     assert_eq!(row.effective_basis, "stated");
     assert_eq!(row.t_effective, stated);
 }
+
+/// Final review I1: a backward wall-clock step (an NTP step after a long offline spell) must
+/// never make an honest note unsignable. The step is simulated by pushing the draft's times an
+/// hour into the future, as the owner. Sign's own save of the changed text then stamps
+/// `last_keystroke` no earlier than `recording_started`, so floor rule 8 (`recording_started`
+/// not after `recording_ended`) passes and the note signs.
+#[tokio::test]
+async fn a_backward_clock_step_does_not_make_a_draft_unsignable() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, _, human_sk, human_kid, chart) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let draft = autosave(&c, chart, "written before the step").await;
+    c.execute(
+        "UPDATE note_draft SET recording_started = clock_timestamp() + interval '1 hour', \
+                last_keystroke = clock_timestamp() + interval '1 hour' \
+          WHERE draft_id = $1::text::uuid",
+        &[&draft.to_string()],
+    )
+    .await
+    .unwrap();
+
+    sign_note(
+        &mut c,
+        &node_sk,
+        &input(draft, chart, "written after the step"),
+        &author,
+    )
+    .await
+    .unwrap()
+    .expect("a clock step back must not refuse an honest note");
+
+    let r = c
+        .query_one(
+            "SELECT recording_started, recording_ended FROM clinical_note \
+              WHERE patient_id = $1::text::uuid",
+            &[&chart.to_string()],
+        )
+        .await
+        .unwrap();
+    let started: chrono::DateTime<chrono::Utc> = r.get(0);
+    let ended: chrono::DateTime<chrono::Utc> = r.get(1);
+    assert_eq!(
+        ended, started,
+        "the end is held at the start, never before it"
+    );
+}

@@ -191,6 +191,22 @@ BEGIN
     ASSERT (SELECT narrative FROM note_draft WHERE draft_id = d) = 'mine', 'the draft survived the NULL calls';
 END $$;
 
+-- Final review I1: a backward clock step must not stamp last_keystroke before recording_started
+-- (floor rule 8 would refuse the sign, and R1 means an unchanged re-Sign never restamps). The
+-- step is simulated by pushing recording_started an hour into the future, as the owner.
+DO $$
+DECLARE d uuid := 'dddddddd-0000-7000-8000-0000000000a4'; r record;
+BEGIN
+    ASSERT cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'before', NULL) = 'saved';
+    UPDATE note_draft SET recording_started = clock_timestamp() + interval '1 hour',
+                          last_keystroke = clock_timestamp() + interval '1 hour'
+     WHERE draft_id = d;
+    ASSERT cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'after', NULL) = 'saved';
+    SELECT recording_started, last_keystroke INTO r FROM note_draft WHERE draft_id = d;
+    ASSERT r.last_keystroke >= r.recording_started,
+        'last_keystroke must never fall before recording_started, got ' || r.last_keystroke || ' < ' || r.recording_started;
+END $$;
+
 -- cairn_note_vouched_attester (ruling R11): the attester's key as hex, ONLY when one is stored
 -- AND no carried-not-vouched marker stands. Three fixtures: no attester (vouched would say TRUE —
 -- the NULL guard is what answers NULL), an attester with no marker, an attester with a marker.
