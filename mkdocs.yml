@@ -230,6 +230,7 @@ nav:
       - Eval 0002 · Reasoning-primitive catalog — clinical evidence advisory service: ecosystem/0002-cairn-advisor-reasoning-primitives.md
       - Eval 0003 · External reference-data sourcing — medicines & terminologies: ecosystem/0003-reference-data-sourcing-medicines-and-terminologies.md
       - Eval 0004 · Reference-UI framework — iced vs Tauri (the L3 desktop client): ecosystem/0004-reference-ui-framework-iced-vs-tauri.md
+      - Eval 0005 · CockroachDB — design lessons for the sync plane: ecosystem/0005-cockroachdb-design-lessons-for-the-sync-plane.md
   - Principles:
       - Governance & contributing: principles/GOVERNANCE.md
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md
