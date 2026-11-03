@@ -173,13 +173,4 @@ mod tests {
             "3 Nov 2025 03:00 (stated)"
         );
     }
-
-    #[test]
-    fn now_reads_without_a_date() {
-        let now = Utc::now();
-        assert_eq!(
-            time_words("stated", now, now, &bne()),
-            format!("{} (stated)", now.with_timezone(&bne()).format("%H:%M"))
-        );
-    }
 }

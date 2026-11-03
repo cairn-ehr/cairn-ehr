@@ -298,12 +298,10 @@ pub(crate) async fn prepare_sealed(
     // must be decided together and frozen into the signed bytes.
     apply_safety_rung(client, &mut body).await?;
 
-    let event_id: uuid::Uuid = body.event_id.parse().with_context(|| {
-        format!(
-            "seal_sign_submit: event_id {:?} is not a uuid",
-            body.event_id
-        )
-    })?;
+    let event_id: uuid::Uuid = body
+        .event_id
+        .parse()
+        .with_context(|| format!("prepare_sealed: event_id {:?} is not a uuid", body.event_id))?;
 
     let (signed_bytes, dek) = seal_and_sign(body, signing_sk)?;
     // Custody is the NODE's regardless of who signed (born-sealed erasability, ADR-0052).
