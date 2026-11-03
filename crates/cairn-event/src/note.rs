@@ -56,9 +56,13 @@ pub fn note_t_effective(a: &NoteAssertion) -> String {
     }
 }
 
-/// Legibility twin (ADR-0041 decision 4, no media): the narrative itself.
+/// Legibility twin (ADR-0041 decision 4, no media): the narrative verbatim. The
+/// signed narrative is the ESCAPED text, so "verbatim" means the text as written,
+/// with the markup escapes removed (a mechanical derivation). Text-only nodes,
+/// screen readers and full-text search read the twin (principle 11), so it must
+/// say `BP <90`, not `BP \<90`.
 pub fn render_note_twin(a: &NoteAssertion) -> String {
-    a.narrative.to_string()
+    unescape_note_markup(a.narrative)
 }
 
 /// Make free text inert as markup: `<` -> `\<`, `(` right after `]` -> `\(`
@@ -166,7 +170,13 @@ mod tests {
     }
 
     #[test]
-    fn twin_is_the_narrative() {
+    fn twin_is_the_narrative_as_typed() {
+        for raw in CORPUS {
+            let escaped = escape_note_markup(raw);
+            let mut a = note(StatedTime::NotStated);
+            a.narrative = &escaped;
+            assert_eq!(render_note_twin(&a), raw, "{raw:?}");
+        }
         let a = note(StatedTime::NotStated);
         assert_eq!(render_note_twin(&a), a.narrative);
     }
