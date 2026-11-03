@@ -126,8 +126,8 @@ PR 3a only.** 3b and 3c get their own plans, written against what 3a built. The 
   - `pub fn note_t_effective(a: &NoteAssertion) -> String`: the stated time, else `recording_started`.
   - `pub fn render_note_twin(a: &NoteAssertion) -> String`: the narrative verbatim (ADR-0041 decision 4 with no
     media).
-  - `pub fn escape_note_markup(text: &str) -> String`: backslash-escapes every `<` and every `(` that directly
-    follows `]`, and doubles every existing `\`. Drafts hold the raw text; only signing escapes it.
+  - `pub fn escape_note_markup(text: &str) -> String`: backslash-escapes every `<`, and every `(` or `:` that
+    directly follows `]` (ruling R3), and doubles every existing `\`. Drafts hold the raw text; only signing escapes it.
   - `pub fn unescape_note_markup(text: &str) -> String`: removes a backslash before ASCII punctuation, so the
     window shows what was typed.
 
@@ -183,6 +183,8 @@ PR 3a only.** 3b and 3c get their own plans, written against what 3a built. The 
   3. No unescaped raw HTML: `narrative ~ '(^|[^\\])(\\\\)*<[A-Za-z/!?]'` refuses (comment why `<9` and `< b` pass).
   4. Every unescaped link or image `](target)` has a target starting `cairn:att/`; `cairn:event/` is refused by
      name ("not valid in clinical.note/1, ADR-0041 decision 9").
+  4a. No unescaped link reference definition or reference: `narrative ~ '(^|[^\\])(\\\\)*\]:'` refuses
+     (ruling R3: `[ref]: http://…` is a load-bearing external URL; the window's escape emits `]\:`).
   5. `media` is an array. Authoring door: it must be empty. Both doors: every `![text](cairn:att/<id>)` anchor
      matches exactly one entry whose `id = <id>` and whose `descriptor` is non-empty and equal to `text`.
   6. `refs` is an array of `{rel, event}` with `rel IN ('addendum-to','correction-of','transcript-of')` and
