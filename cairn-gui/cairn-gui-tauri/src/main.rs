@@ -38,6 +38,8 @@ mod link;
 mod node_lock_explains_tests;
 mod notes;
 #[cfg(test)]
+mod notes_webview_tests;
+#[cfg(test)]
 mod read_again_webview_tests;
 mod rekey;
 #[cfg(test)]

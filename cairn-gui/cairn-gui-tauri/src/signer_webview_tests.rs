@@ -13,12 +13,13 @@ const HOLDS_JS: &str = include_str!("../src-ui/holds.js");
 const LINK_JS: &str = include_str!("../src-ui/link.js");
 const UNLINK_JS: &str = include_str!("../src-ui/unlink.js");
 const SIGNER_JS: &str = include_str!("../src-ui/signer.js");
+const NOTES_JS: &str = include_str!("../src-ui/notes.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 
-/// The seven functions that send a signed act (the eighth write, `confirm_link`, is
+/// The eight functions that send a signed act (the eighth write, `confirm_link`, is
 /// `confirmCompared`; `link_records`/`record_different_people` share `sendJudgement`).
-const WRITERS: [(&str, &str, &str); 7] = [
+const WRITERS: [(&str, &str, &str); 8] = [
     ("main.js", "signOff", MAIN_JS),
     ("main.js", "cease", MAIN_JS),
     ("holds.js", "withhold", HOLDS_JS),
@@ -26,6 +27,7 @@ const WRITERS: [(&str, &str, &str); 7] = [
     ("link.js", "sendJudgement", LINK_JS),
     ("unlink.js", "unlinkCompared", UNLINK_JS),
     ("unlink.js", "confirmCompared", UNLINK_JS),
+    ("notes.js", "signNote", NOTES_JS),
 ];
 
 #[test]
