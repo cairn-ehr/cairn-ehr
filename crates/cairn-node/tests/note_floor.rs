@@ -176,3 +176,58 @@ async fn a_shred_scrubs_the_note_projection() {
         "the narrative is clinical plaintext: the shred scrubs its row"
     );
 }
+
+/// Every string of length 0..=5 over `\ < ( ] : a` (9,331 of them): the small alphabet whose
+/// every interleaving `cairn_event::note`'s exhaustive test walks.
+fn small_alphabet_strings() -> Vec<String> {
+    let alphabet = ['\\', '<', '(', ']', ':', 'a'];
+    let mut all = Vec::new();
+    let mut level = vec![String::new()];
+    for _ in 0..=5 {
+        let next = level
+            .iter()
+            .flat_map(|s| alphabet.iter().map(move |c| format!("{s}{c}")))
+            .collect();
+        all.append(&mut level);
+        level = next;
+    }
+    all
+}
+
+/// Final review M6: the Rust escape's inertness test judges "live markup" by its OWN definition,
+/// so this ties it to the REAL floor. Every escaped string of the exhaustive set goes through
+/// db/064's `cairn_check_note_markup` (the markup rules, alone), in a few batched queries, and
+/// none may be refused; what comes back out of PostgreSQL must unescape to the typed string. A
+/// future floor rule the escape does not satisfy fails here, not at a clinician's Sign.
+#[tokio::test]
+async fn every_escaped_string_of_the_small_alphabet_passes_the_real_floor() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let typed = small_alphabet_strings();
+    assert_eq!(typed.len(), 9_331);
+
+    for chunk in typed.chunks(2_000) {
+        let escaped: Vec<String> = chunk.iter().map(|s| escape_note_markup(s)).collect();
+        // The void check in FROM runs once per string; a refusal aborts the batch with its sentence.
+        let rows = c
+            .query(
+                "SELECT t FROM unnest($1::text[]) WITH ORDINALITY AS u(t, i), \
+                        LATERAL cairn_check_note_markup(u.t) ORDER BY u.i",
+                &[&escaped],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("the floor refused an escaped string: {e:?}"));
+        assert_eq!(rows.len(), chunk.len(), "one row back per string");
+        for (row, s) in rows.iter().zip(chunk) {
+            assert_eq!(
+                cairn_event::note::unescape_note_markup(&row.get::<_, String>(0)),
+                *s,
+                "round trip through the floor"
+            );
+        }
+    }
+}
