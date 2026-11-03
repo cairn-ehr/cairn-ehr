@@ -103,6 +103,94 @@ END $$;
 -- The backed spend from the first block passes the same check.
 SET CONSTRAINTS note_draft_spent_names_its_note IMMEDIATE;
 
+-- Review round 1: the commit-time check is hard to fool.
+-- Foreign-xid note events: inserting inside a BEGIN..EXCEPTION block runs in a subtransaction,
+-- so the row's xmin differs from the top transaction's id -- standing in for "committed earlier".
+SET LOCAL session_replication_role = replica;
+DO $$
+BEGIN
+    BEGIN
+        INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
+                               node_origin, signed_bytes, content_address, body, contributors,
+                               signer_key_id, plaintext_twin)
+        SELECT v.id, v.pid, 'clinical.note.asserted', '1', 3, 1, 'n1', v.b,
+               '\x1220'::bytea || digest(v.b, 'sha256'), '{}'::jsonb, '[]'::jsonb, 'deadbeef', 'mirror fixture'
+          FROM (VALUES ('aaaaaaaa-0000-7000-8000-000000000003'::uuid, 'bbbbbbbb-0000-7000-8000-000000000001'::uuid, '\xee'::bytea),
+                       ('aaaaaaaa-0000-7000-8000-000000000004'::uuid, 'bbbbbbbb-0000-7000-8000-000000000009'::uuid, '\xff'::bytea)) v(id, pid, b);
+    EXCEPTION WHEN unique_violation THEN NULL;
+    END;
+END $$;
+SET LOCAL session_replication_role = origin;
+
+DO $$
+DECLARE
+    p uuid := 'bbbbbbbb-0000-7000-8000-000000000001';
+    ev uuid; n int := 0;
+BEGIN
+    ASSERT (SELECT xmin::text <> pg_current_xact_id()::xid::text FROM event_log
+             WHERE event_id = 'aaaaaaaa-0000-7000-8000-000000000003'), 'fixture: the older note has a foreign xid';
+    -- older same-chart note, other-chart note, nonexistent id, and the already-used note 0002 (UNIQUE).
+    FOREACH ev IN ARRAY ARRAY['aaaaaaaa-0000-7000-8000-000000000003', 'aaaaaaaa-0000-7000-8000-000000000004',
+                              'aaaaaaaa-0000-7000-8000-0000000000ff', 'aaaaaaaa-0000-7000-8000-000000000002']::uuid[] LOOP
+        BEGIN
+            PERFORM cairn_note_draft_save('dddddddd-0000-7000-8000-0000000000a1', p, 'term-1', 'x', NULL);
+            PERFORM cairn_note_draft_spend('dddddddd-0000-7000-8000-0000000000a1', ev);
+            SET CONSTRAINTS note_draft_spent_names_its_note IMMEDIATE;
+            RAISE EXCEPTION 'spend backed by % was not refused', ev USING ERRCODE = 'P0002';
+        EXCEPTION WHEN raise_exception OR unique_violation THEN n := n + 1;
+        END;
+    END LOOP;
+    ASSERT n = 4, 'older / other-chart / missing / reused events must each be refused, got ' || n;
+END $$;
+
+-- Deferral is pinned, and the check function is definer-run with a pinned search_path.
+DO $$
+BEGIN
+    ASSERT (SELECT tgdeferrable AND tginitdeferred FROM pg_trigger WHERE tgname = 'note_draft_spent_names_its_note'),
+        'the check must be DEFERRABLE INITIALLY DEFERRED';
+    ASSERT (SELECT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'] FROM pg_proc
+             WHERE proname = 'note_draft_spent_names_its_note'), 'check is SECURITY DEFINER, search_path pinned';
+END $$;
+
+-- A window member's TEMP event_log cannot stand in for the real one.
+CREATE ROLE note_draft_probe2 NOLOGIN;
+GRANT cairn_window TO note_draft_probe2;
+SET LOCAL ROLE note_draft_probe2;
+DO $$
+DECLARE refused boolean := false;
+BEGIN
+    BEGIN
+        CREATE TEMP TABLE event_log (event_id uuid, event_type text, patient_id uuid);
+        INSERT INTO event_log VALUES ('aaaaaaaa-0000-7000-8000-0000000000ee', 'clinical.note.asserted', 'bbbbbbbb-0000-7000-8000-000000000001');
+        PERFORM cairn_note_draft_save('dddddddd-0000-7000-8000-0000000000a2', 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'x', NULL);
+        PERFORM cairn_note_draft_spend('dddddddd-0000-7000-8000-0000000000a2', 'aaaaaaaa-0000-7000-8000-0000000000ee');
+        SET CONSTRAINTS note_draft_spent_names_its_note IMMEDIATE;
+    EXCEPTION WHEN raise_exception THEN refused := true;
+    END;
+    ASSERT refused, 'a temp event_log must not back a spend';
+END $$;
+RESET ROLE;
+
+-- NULLs are caller bugs, refused; they can never overwrite another chart's or terminal's draft.
+DO $$
+DECLARE d uuid := 'dddddddd-0000-7000-8000-0000000000a3'; r text;
+BEGIN
+    ASSERT cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'mine', NULL) = 'saved';
+    BEGIN
+        PERFORM cairn_note_draft_save(d, NULL, 'term-1', 'clobber', NULL);
+        RAISE EXCEPTION 'NULL patient accepted' USING ERRCODE = 'P0002';
+    EXCEPTION WHEN raise_exception THEN NULL; END;
+    BEGIN
+        PERFORM cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', NULL, 'clobber', NULL);
+        RAISE EXCEPTION 'NULL terminal accepted' USING ERRCODE = 'P0002';
+    EXCEPTION WHEN raise_exception THEN NULL; END;
+    BEGIN
+        PERFORM cairn_note_draft_save(NULL, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'x', NULL);
+        RAISE EXCEPTION 'NULL draft accepted' USING ERRCODE = 'P0002';
+    EXCEPTION WHEN raise_exception THEN NULL; END;
+    ASSERT (SELECT narrative FROM note_draft WHERE draft_id = d) = 'mine', 'the draft survived the NULL calls';
+END $$;
+
 -- Privileges: tables closed to the window, doors closed to PUBLIC and open to the window.
 DO $$
 DECLARE f text;
@@ -110,8 +198,13 @@ BEGIN
     FOREACH f IN ARRAY ARRAY[
         'cairn_note_draft_save(uuid, uuid, text, text, timestamptz)',
         'cairn_note_drafts(uuid)', 'cairn_note_draft_spend(uuid, uuid)',
-        'cairn_note_signer_name(text)'] LOOP
+        'cairn_note_signer_name(text)', 'note_draft_spent_names_its_note()'] LOOP
         ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), f || ' must not be PUBLIC';
+    END LOOP;
+    FOREACH f IN ARRAY ARRAY[
+        'cairn_note_draft_save(uuid, uuid, text, text, timestamptz)',
+        'cairn_note_drafts(uuid)', 'cairn_note_draft_spend(uuid, uuid)',
+        'cairn_note_signer_name(text)'] LOOP
         ASSERT has_function_privilege('cairn_window', f, 'EXECUTE'), f || ' is the window''s';
     END LOOP;
     ASSERT NOT has_any_column_privilege('cairn_window', 'note_draft', 'SELECT'), 'window cannot read note_draft';
@@ -138,10 +231,10 @@ RESET ROLE;
 
 -- The new timing kind inserts, and a replay of db/044's constraint pair converges with the row in place.
 INSERT INTO ui_gesture_timing (gesture_kind, size_bucket, n) VALUES ('note-sign', '1-3', 1);
--- (db/044 itself opens its own transaction, so its ALTER pair is replayed verbatim here.)
-ALTER TABLE ui_gesture_timing DROP CONSTRAINT IF EXISTS ui_gesture_timing_kind_ck;
-ALTER TABLE ui_gesture_timing ADD CONSTRAINT ui_gesture_timing_kind_ck
-    CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release', 'note-sign'));
+-- Replay the REAL db/044 with its own BEGIN/COMMIT lines stripped (it would end this test's
+-- transaction); the runner runs from the repo root, so the relative path resolves.
+\set f_044 `sed -e '/^BEGIN;/d' -e '/^COMMIT;/d' db/044_ui_gesture_timing.sql`
+SELECT :'f_044' AS q \gexec
 DO $$
 BEGIN
     ASSERT (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ui_gesture_timing_kind_ck')

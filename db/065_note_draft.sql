@@ -37,23 +37,40 @@ CREATE TABLE IF NOT EXISTS note_draft_spent (
     draft_id   uuid PRIMARY KEY,
     -- Copied from the draft so the commit-time check never has to join to the deleted row.
     patient_id uuid NOT NULL,
-    event_id   uuid NOT NULL,
+    -- UNIQUE: one note event backs exactly one spend, so an existing note can never be reused
+    -- to wipe other drafts on the chart.
+    event_id   uuid NOT NULL UNIQUE,
     spent_at   timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Paired ALTER for a database created before UNIQUE existed (#207's rule). Constraint name is
+-- the one Postgres gives an inline UNIQUE.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'note_draft_spent'::regclass
+                    AND contype = 'u' AND conname = 'note_draft_spent_event_id_key') THEN
+        ALTER TABLE note_draft_spent ADD CONSTRAINT note_draft_spent_event_id_key UNIQUE (event_id);
+    END IF;
+END $$;
+
 REVOKE ALL ON note_draft, note_draft_spent FROM PUBLIC;
 
--- At COMMIT, a spent draft must be backed by its note event in this patient's chart.
--- Deferred so the spend (this table) and the note's submit (event_log) can happen in either
--- order inside one transaction.
+-- At COMMIT, a spent draft must be backed by its note event: right type, this patient's chart,
+-- and INSERTED IN THIS SAME TRANSACTION (xmin = our xid) -- a spend is only ever the sign path's
+-- own submit, so an older note (already committed) must not be able to justify wiping a draft.
+-- Caveat: a row inserted inside a subtransaction carries the subxid, so the sign path must submit
+-- the note without a savepoint around it.
+-- SECURITY DEFINER with a pinned search_path and a qualified table: a caller must not be able to
+-- shadow event_log with a TEMP table and fake the evidence. Deferred so the spend and the note's
+-- submit can happen in either order inside one transaction.
 CREATE OR REPLACE FUNCTION note_draft_spent_names_its_note() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM event_log e
+    IF NOT EXISTS (SELECT 1 FROM public.event_log e
                     WHERE e.event_id = NEW.event_id
                       AND e.event_type = 'clinical.note.asserted'
-                      AND e.patient_id = NEW.patient_id) THEN
-        RAISE EXCEPTION 'a note draft can only be spent by a clinical.note.asserted event in the same chart';
+                      AND e.patient_id = NEW.patient_id
+                      AND e.xmin = pg_current_xact_id()::xid) THEN
+        RAISE EXCEPTION 'a note draft can only be spent by a clinical.note.asserted event of the same chart, submitted in the same transaction';
     END IF;
     RETURN NULL;
 END;
@@ -76,13 +93,18 @@ RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 DECLARE
     v note_draft%ROWTYPE;
 BEGIN
+    -- A NULL is a caller bug, not an outcome: `<> NULL` is NULL, so it would slip past the
+    -- 'elsewhere' guard below and overwrite another chart's or terminal's draft.
+    IF p_draft IS NULL OR p_patient IS NULL OR p_terminal IS NULL THEN
+        RAISE EXCEPTION 'cairn_note_draft_save needs a draft, a patient and a terminal';
+    END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
     IF EXISTS (SELECT 1 FROM note_draft_spent WHERE draft_id = p_draft) THEN
         RETURN 'spent';
     END IF;
     SELECT * INTO v FROM note_draft WHERE draft_id = p_draft FOR UPDATE;
     IF FOUND THEN
-        IF v.patient_id <> p_patient OR v.terminal_id <> p_terminal THEN
+        IF v.patient_id IS DISTINCT FROM p_patient OR v.terminal_id IS DISTINCT FROM p_terminal THEN
             RETURN 'elsewhere';
         END IF;
         IF v.narrative IS DISTINCT FROM p_narrative OR v.stated_time IS DISTINCT FROM p_stated_time THEN
