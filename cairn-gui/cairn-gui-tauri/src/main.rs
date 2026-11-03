@@ -129,7 +129,7 @@ fn main() -> anyhow::Result<()> {
         // config-declared window BEFORE the setup hook runs (`tauri` 2.11.5 `src/app.rs:2524-2532`).
         .manage(app_state)
         // Only the terminal id waits for setup, which alone can name the config directory. A
-        // note command served before it is filled refuses (`notes::terminal_of`).
+        // note write served before it is filled refuses (`notes::terminal_of`).
         .setup(|app| {
             let id = terminal_id_or_ephemeral(app.path().app_config_dir());
             // `set` fails only if already set, and nothing else sets it.

@@ -20,8 +20,9 @@
 //! it, and a grant those statements need would stay hidden. Where a call is expected to
 //! succeed it is `expect`ed, so a fixture that stops reaching the deep path fails loudly.
 //!
-//! The vault doors the window calls are walked the same way in `window_role_vault_doors.rs`
-//! (split out to keep each file under 500 lines); the shared checks live in `tests/common`.
+//! The vault doors the window calls are walked the same way in `window_role_vault_doors.rs`,
+//! and the note pane's calls in `window_role_grants_notes.rs` (each split out to keep every file
+//! under 500 lines); the shared checks live in `tests/common`.
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`. Key material and
 //! passphrases are minted at runtime.
@@ -35,19 +36,15 @@ use cairn_node::chart_link::{
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::signoff::sign_off_medication_list;
-use cairn_node::medication::snapshot::in_snapshot;
 use cairn_node::medication::{
     assert_medication, cease_medication, release_medication_holds, withhold_medication,
     AssertMedicationInput, AttestParams, AuthorParams, CeaseMedicationInput,
     WithholdMedicationInput,
 };
-use cairn_node::note::draft::{open_drafts, save_draft, SaveOutcome};
-use cairn_node::note::read::{list_patient_notes, PatientNoteList};
-use cairn_node::note::sign::{sign_note, SignNoteInput};
 use cairn_patient_search::SearchQuery;
 use common::{
-    assert_not_denied, cs, enroll_human, link_assertion_event, owner_and_window, seed_proposal,
-    setup,
+    assert_not_denied, cs, enroll_human, expect_as_window, link_assertion_event, owner_and_window,
+    seed_proposal, setup,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -66,17 +63,6 @@ const TABLES: [&str; 7] = [
 ];
 
 const ORIGIN: &str = "window-role-grants";
-
-/// [`assert_not_denied`], and then the call must have SUCCEEDED. A read that fails after its
-/// first statement would skip the statements after it, and hide any grant they need; so every
-/// read on a fixture that should satisfy it goes through here, not through the bare check.
-fn expect_as_window<T>(entry: &str, result: anyhow::Result<T>) -> T {
-    assert_not_denied(entry, &result);
-    match result {
-        Ok(value) => value,
-        Err(_) => panic!("{entry}: failed on the window's login (not a privilege refusal)"),
-    }
-}
 
 /// The window really is connected as its own role, not as the owner: a walk that silently ran
 /// as the owner would prove nothing.
@@ -422,78 +408,4 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     .await;
     assert_not_denied("medication::cease_medication", &r);
     r.expect("the cessation is recorded");
-}
-
-/// The note pane's read exactly as `notes::note_list_impl` makes it: in one snapshot (R12).
-async fn note_pane_read(c: &mut Client, chart: Uuid) -> anyhow::Result<PatientNoteList> {
-    in_snapshot(c, async |tx| list_patient_notes(tx, chart).await).await
-}
-
-/// The note pane (slice 3a): save, list drafts, sign, and read back over one chart, then over a
-/// linked set, undoubted and doubted, so withholding runs under the window's login too.
-#[tokio::test]
-async fn the_windows_note_calls_run_under_its_own_login() {
-    let Some(base) = cs() else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let _g = db::test_serial_guard(&base).await.unwrap();
-    let (owner, mut window) = owner_and_window(&base).await;
-    let (sk, kid, sk_h, kid_h, a) = common::note_setup(&owner).await;
-    let author = AuthorParams {
-        human_sk: &sk_h,
-        human_kid: &kid_h,
-    };
-    let x = Uuid::now_v7();
-    common::submit_registration(&owner, &sk, &kid, x, 1).await;
-    for (chart, text) in [(a, "BP <90 [L] arm (R)"), (x, "note on X")] {
-        let draft = Uuid::now_v7();
-        let r = save_draft(&window, draft, chart, "pc-window", text, None).await;
-        assert_eq!(
-            expect_as_window("note::draft::save_draft", r),
-            SaveOutcome::Saved
-        );
-        let r = open_drafts(&window, chart).await;
-        assert_eq!(expect_as_window("note::draft::open_drafts", r).len(), 1);
-        let input = SignNoteInput {
-            draft,
-            patient: chart,
-            terminal: "pc-window",
-            narrative: text,
-            stated: None,
-            node_origin: ORIGIN,
-        };
-        let r = sign_note(&mut window, &sk, &input, &author).await;
-        expect_as_window("note::sign::sign_note", r).expect("the note is signed");
-    }
-    let one = expect_as_window(
-        "note::read::list_patient_notes (one chart)",
-        note_pane_read(&mut window, a).await,
-    );
-    assert_eq!(one.notes.len(), 1, "A alone holds its own note");
-    assert_eq!(one.notes[0].text, "BP <90 [L] arm (R)", "shown as typed");
-
-    // Linked: X's note joins the read; flagged in doubt, it is counted and withheld instead.
-    common::submit_link_event(&owner, &sk, &kid, a, x, 10, true).await;
-    let linked = expect_as_window(
-        "note::read::list_patient_notes (linked)",
-        note_pane_read(&mut window, a).await,
-    );
-    assert_eq!(linked.notes.len(), 2, "the linked chart's note is read");
-    let (lo, hi) = canonical_pair(a, x);
-    owner
-        .execute(
-            "INSERT INTO link_veto_flag (low, high, content_address) \
-             SELECT low, high, content_address FROM patient_link \
-             WHERE low = $1::text::uuid AND high = $2::text::uuid",
-            &[&lo.to_string(), &hi.to_string()],
-        )
-        .await
-        .unwrap();
-    let doubted = expect_as_window(
-        "note::read::list_patient_notes (doubted)",
-        note_pane_read(&mut window, a).await,
-    );
-    assert_eq!(doubted.notes.len(), 1, "X's note is withheld");
-    assert_eq!(doubted.withheld_on_linked, 1, "and counted");
 }

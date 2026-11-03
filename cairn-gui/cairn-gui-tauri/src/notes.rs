@@ -24,7 +24,7 @@ use cairn_node::note::draft::{NoteDraft, SaveOutcome};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::sign::SignRefusal;
 use cairn_node::note::view::{grade_words, instant, time_words};
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -47,7 +47,7 @@ pub struct DraftView {
     /// The RAW text, so a draft of this terminal reopens into the editor as it was typed.
     pub narrative: String,
     /// The writer's stated time as the `datetime-local` field holds it (`2026-11-03T03:00`, this
-    /// machine's zone), `None` when none was stated.
+    /// machine's zone; with seconds when it has them), `None` when none was stated.
     pub stated_time: Option<String>,
     /// Whether the draft was started at THIS terminal — the only place it may be edited.
     pub here: bool,
@@ -131,8 +131,11 @@ pub async fn note_sign(
 
 /// The sentence a save or sign answers when the draft was already signed.
 const SPENT: &str = "this note has already been signed";
-/// … when the draft is another chart's or another terminal's.
+/// … when a SAVE's draft is another chart's or another terminal's.
 const ELSEWHERE: &str = "this draft belongs to another chart or terminal — nothing was saved";
+/// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
+const SIGN_ELSEWHERE: &str =
+    "this draft belongs to another chart or terminal — nothing was signed; your text is still here";
 /// … when no event names the patient on this node.
 const NO_CHART: &str = "this patient has no chart on this node";
 /// … when nothing but whitespace was typed.
@@ -153,7 +156,8 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             drafts: vec![],
         });
     };
-    let terminal = terminal_of(state)?;
+    // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
+    let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;
     // ONE snapshot (ruling R12): the notes and the drafts are two statements, and a sign
     // committing between them would show the clinician neither the note nor its draft.
@@ -284,7 +288,8 @@ pub async fn note_sign_impl(
 /// Tauri 2 builds the config-declared window BEFORE it runs the setup hook (`tauri` 2.11.5,
 /// `src/app.rs:2524-2532`), and the state is managed at builder time so no command ever meets
 /// unmanaged state; the id alone arrives in setup. Nothing in Tauri's contract says a command
-/// cannot be served in between, so one that is says so rather than writing under a blank name.
+/// cannot be served in between, so a WRITE served then says so rather than writing under a blank
+/// name. (`note_list` never waits for it: it shows every draft as another terminal's instead.)
 pub(crate) fn terminal_of(state: &AppState) -> Result<&str, ErrorView> {
     state
         .terminal_id
@@ -335,7 +340,7 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
     match refusal {
         SignRefusal::Empty => refused(EMPTY),
         SignRefusal::Spent => stale(SPENT),
-        SignRefusal::Elsewhere => refused(ELSEWHERE),
+        SignRefusal::Elsewhere => refused(SIGN_ELSEWHERE),
         SignRefusal::NoChart => refused(NO_CHART),
     }
 }
@@ -343,7 +348,7 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
 /// The read as the pane shows it, in zone `tz` with `today` its date. Pure.
 pub(crate) fn note_pane<Tz: TimeZone>(
     list: PatientNoteList,
-    terminal: &str,
+    terminal: Option<&str>,
     tz: &Tz,
     today: NaiveDate,
 ) -> NotePane
@@ -390,14 +395,15 @@ where
 /// One draft's words, and whether it is this terminal's to edit. Pure.
 pub(crate) fn draft_view<Tz: TimeZone>(
     draft: &NoteDraft,
-    terminal: &str,
+    terminal: Option<&str>,
     tz: &Tz,
     today: NaiveDate,
 ) -> DraftView
 where
     Tz::Offset: std::fmt::Display,
 {
-    let here = draft.terminal_id == terminal;
+    // `None`: this terminal's id is not read yet, so no draft can be known to be this one's.
+    let here = terminal == Some(draft.terminal_id.as_str());
     let mut words = format!(
         "unsigned draft · started {} · last typed {}",
         instant(draft.recording_started, tz, today),
@@ -409,12 +415,26 @@ where
     DraftView {
         draft_id: draft.draft_id.to_string(),
         narrative: draft.narrative.clone(),
-        stated_time: draft
-            .stated_time
-            .map(|t| t.with_timezone(tz).format("%Y-%m-%dT%H:%M").to_string()),
+        stated_time: draft.stated_time.map(|t| datetime_local(t, tz)),
         here,
         words,
     }
+}
+
+/// `t` as a `datetime-local` value in `tz`: minutes only when that is exact, else with its seconds
+/// (and any fraction), so a reopened draft sends back the instant it holds, never one rounded to
+/// the minute. Both forms are valid field values and both parse in [`stated_time_in`]. Pure.
+fn datetime_local<Tz: TimeZone>(t: DateTime<Utc>, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    use chrono::Timelike;
+    let format = if t.second() == 0 && t.nanosecond() == 0 {
+        "%Y-%m-%dT%H:%M"
+    } else {
+        "%Y-%m-%dT%H:%M:%S%.f"
+    };
+    t.with_timezone(tz).format(format).to_string()
 }
 
 /// The webview's stated-time field: absent or empty is "not stated" (principle 4), else a time.
@@ -437,21 +457,22 @@ pub(crate) fn stated_time_in<Tz: TimeZone>(s: &str, tz: &Tz) -> Result<DateTime<
     let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
         .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M"))
         .map_err(|_| format!("not a time: {s}"))?;
-    pick_local(s, tz.from_local_datetime(&naive))
+    // At a clock change a wall time can happen twice (clocks go back): `earliest` takes the
+    // first time the clock showed it.
+    pick_local(s, tz.from_local_datetime(&naive).earliest())
 }
 
-/// Which instant a wall-clock time `s` means, given what the zone answers for it. Pure.
+/// The instant a wall-clock time `s` means, given the zone's earliest answer for it. Pure.
 ///
-/// At a clock change a wall time can happen twice (clocks go back): the EARLIER is taken, the
-/// first time the clock showed it. Or not at all (clocks go forward): refused, with a sentence
+/// `None` is a time that never happened (clocks went forward past it): refused, with a sentence
 /// naming it — any instant chosen for it would be a time the clinician never saw on a clock.
 pub(crate) fn pick_local<Tz: TimeZone>(
     s: &str,
-    zoned: LocalResult<DateTime<Tz>>,
+    earliest: Option<DateTime<Tz>>,
 ) -> Result<DateTime<Utc>, String> {
-    match zoned {
-        LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => Ok(t.with_timezone(&Utc)),
-        LocalResult::None => Err(format!(
+    match earliest {
+        Some(t) => Ok(t.with_timezone(&Utc)),
+        None => Err(format!(
             "{s} never happened on this machine's clock — the clocks moved forward past it; \
              choose a time before or after the change"
         )),

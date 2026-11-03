@@ -1240,6 +1240,17 @@ pub fn assert_not_denied<T>(entry: &str, result: &anyhow::Result<T>) {
     );
 }
 
+/// [`assert_not_denied`], and then the call must have SUCCEEDED. A read that fails after its
+/// first statement would skip the statements after it, and hide any grant they need; so every
+/// read on a fixture that should satisfy it goes through here, not through the bare check.
+pub fn expect_as_window<T>(entry: &str, result: anyhow::Result<T>) -> T {
+    assert_not_denied(entry, &result);
+    match result {
+        Ok(value) => value,
+        Err(_) => panic!("{entry}: failed on the window's login (not a privilege refusal)"),
+    }
+}
+
 /// The owner connection (schema loaded, setup runs here) and the window's own connection,
 /// opened with the NON-loading `cairn_node::db::connect` exactly as the window opens it.
 pub async fn owner_and_window(base: &str) -> (Client, Client) {

@@ -4,7 +4,7 @@
 use super::*;
 use crate::funnel::view::Retry;
 use cairn_node::note::view::NoteGrade;
-use chrono::{FixedOffset, NaiveDate};
+use chrono::{FixedOffset, LocalResult, NaiveDate};
 
 fn on_screen() -> (AppState, String) {
     let chart = Uuid::from_u128(7);
@@ -87,7 +87,8 @@ fn sign_words_each_refusal() {
     assert_eq!(spent.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(
         sign_refusal_view(SignRefusal::Elsewhere).text,
-        "this draft belongs to another chart or terminal — nothing was saved"
+        "this draft belongs to another chart or terminal — nothing was signed; your text is \
+         still here"
     );
     assert_eq!(
         sign_refusal_view(SignRefusal::NoChart).text,
@@ -140,8 +141,8 @@ fn an_empty_stated_time_is_none() {
 
 /// Sydney's clock change, as the zone answers it (`LocalResult`): the doubled hour of 5 Apr 2026
 /// (02:30 happens at +11 and again at +10) takes the EARLIER instant; the gap of 4 Oct 2026 (02:30
-/// never happens) is refused with a sentence that says so. Driven through `pick_local`, the rule
-/// `stated_time_in` applies to whatever the zone answers, because no zone with daylight saving
+/// never happens) is refused with a sentence that says so. Driven through `.earliest()` and
+/// `pick_local`, exactly as `stated_time_in` treats whatever the zone answers, because no zone with daylight saving
 /// is in this tree (no chrono-tz) and `Local` is whatever the test machine is set to.
 #[test]
 fn a_clock_change_takes_the_earlier_time_and_refuses_the_gap() {
@@ -153,10 +154,11 @@ fn a_clock_change_takes_the_earlier_time_and_refuses_the_gap() {
     };
     let doubled = LocalResult::Ambiguous(at(11), at(10));
     assert_eq!(
-        pick_local("2026-04-05T02:30", doubled),
+        pick_local("2026-04-05T02:30", doubled.earliest()),
         Ok(utc("2026-04-04T15:30:00Z"))
     );
-    let gap = pick_local::<FixedOffset>("2026-10-04T02:30", LocalResult::None).unwrap_err();
+    let gap =
+        pick_local::<FixedOffset>("2026-10-04T02:30", LocalResult::None.earliest()).unwrap_err();
     assert!(gap.contains("2026-10-04T02:30"), "{gap}");
     assert!(gap.contains("clocks"), "{gap}");
 }
@@ -178,7 +180,7 @@ fn nov(d: u32) -> NaiveDate {
 
 #[test]
 fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
-    let here = draft_view(&draft("pc-1"), "pc-1", &bne(), nov(3));
+    let here = draft_view(&draft("pc-1"), Some("pc-1"), &bne(), nov(3));
     assert!(here.here);
     assert_eq!(
         here.words,
@@ -186,7 +188,7 @@ fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
     );
     assert_eq!(here.narrative, "BP <90", "the raw text, to reopen");
     assert_eq!(here.stated_time.as_deref(), Some("2026-11-03T03:00"));
-    let there = draft_view(&draft("pc-2"), "pc-1", &bne(), nov(4));
+    let there = draft_view(&draft("pc-2"), Some("pc-1"), &bne(), nov(4));
     assert!(!there.here);
     assert_eq!(
         there.words,
@@ -214,7 +216,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
         withheld_on_linked: 2,
         drafts: vec![draft("pc-1")],
     };
-    let pane = note_pane(list, "pc-1", &bne(), nov(3));
+    let pane = note_pane(list, Some("pc-1"), &bne(), nov(3));
     let row = &pane.notes[0];
     assert_eq!(row.text, "BP <90");
     assert_eq!(row.byline, "signed by Dr Ada");
@@ -228,7 +230,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             withheld_on_linked: 0,
             drafts: vec![],
         },
-        "pc-1",
+        Some("pc-1"),
         &bne(),
         nov(3),
     );
@@ -245,4 +247,30 @@ fn a_note_command_before_the_terminal_id_is_read_refuses() {
     let err = terminal_of(&state).unwrap_err();
     assert_eq!(err.retry, Retry::Now);
     assert!(err.text.contains("terminal's id"), "{}", err.text);
+}
+
+/// A reopened draft's stated time comes back as the field holds it, seconds included, so the next
+/// save or Sign sends the same instant — never one silently rounded to the minute.
+#[test]
+fn a_stated_time_with_seconds_survives_reopening() {
+    let mut d = draft("pc-1");
+    d.stated_time = Some(utc("2026-11-02T17:00:30Z"));
+    let view = draft_view(&d, Some("pc-1"), &bne(), nov(3));
+    assert_eq!(view.stated_time.as_deref(), Some("2026-11-03T03:00:30"));
+    let back = stated_time_in(view.stated_time.as_deref().unwrap(), &bne());
+    assert_eq!(back, Ok(utc("2026-11-02T17:00:30Z")));
+}
+
+/// Before setup has read this terminal's id, the list still shows every draft — none as this
+/// terminal's, so none opens for editing here — rather than refusing to show the chart's notes.
+#[test]
+fn without_a_terminal_id_no_draft_is_here() {
+    let list = PatientNoteList {
+        notes: vec![],
+        withheld_on_linked: 0,
+        drafts: vec![draft("pc-1")],
+    };
+    let pane = note_pane(list, None, &bne(), nov(3));
+    assert_eq!(pane.drafts.len(), 1);
+    assert!(!pane.drafts[0].here);
 }

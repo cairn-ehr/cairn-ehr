@@ -238,6 +238,8 @@ fn derivation_finds_the_expected_helpers() {
             // `assert_not_denied` / `owner_and_window` (#898 final review): promoted from
             // `window_role_grants.rs` when its vault-door walk moved to its own file.
             // `note_setup` (sign-in slice 3a): `note_sign.rs` and `note_read.rs` share it.
+            // `expect_as_window` (slice 3a): promoted from `window_role_grants.rs` when its
+            // note walk moved to `window_role_grants_notes.rs`.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -266,6 +268,7 @@ fn derivation_finds_the_expected_helpers() {
             "fn assert_not_denied<T>(",
             "fn bearing_withdrawal_body(",
             "fn body_from_spec(",
+            "fn expect_as_window<T>(",
             "fn link_assertion_event(",
             "fn withdrawal_body_with_id(",
         ],
