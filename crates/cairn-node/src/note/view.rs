@@ -45,22 +45,9 @@ pub fn grade_words(grade: &NoteGrade) -> String {
 /// When the note applies, in words, in time zone `tz` (the window passes `chrono::Local`):
 /// `"03:00 (stated)"` when the writer stated a time, else `"no stated time · writing began
 /// 03:12"` (design §4.3) — never a stated-looking time the writer did not give (principle 4).
-/// A time on another day than today (in `tz`) carries its date.
+/// A time on another day than `today` (in `tz`) carries its date. Pure: the caller reads the
+/// clock once, so every row of one pane is dated against the same day.
 pub fn time_words<Tz: TimeZone>(
-    basis: &str,
-    t_effective: DateTime<Utc>,
-    recording_started: DateTime<Utc>,
-    tz: &Tz,
-) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    let today = Utc::now().with_timezone(tz).date_naive();
-    time_words_on(basis, t_effective, recording_started, tz, today)
-}
-
-/// [`time_words`] against a given `today`, so the date rule is testable.
-fn time_words_on<Tz: TimeZone>(
     basis: &str,
     t_effective: DateTime<Utc>,
     recording_started: DateTime<Utc>,
@@ -147,7 +134,7 @@ mod tests {
         let t = utc("2026-11-02T17:00:00Z");
         let began = utc("2026-11-02T17:12:00Z");
         assert_eq!(
-            time_words_on("stated", t, began, &bne(), nov(3)),
+            time_words("stated", t, began, &bne(), nov(3)),
             "03:00 (stated)"
         );
     }
@@ -156,7 +143,7 @@ mod tests {
     fn no_stated_time_reads_as_when_writing_began() {
         let began = utc("2026-11-02T17:12:00Z");
         assert_eq!(
-            time_words_on("recording-started", began, began, &bne(), nov(3)),
+            time_words("recording-started", began, began, &bne(), nov(3)),
             "no stated time · writing began 03:12"
         );
     }
@@ -165,12 +152,12 @@ mod tests {
     fn another_day_or_year_carries_its_date() {
         let t = utc("2026-11-02T17:00:00Z");
         assert_eq!(
-            time_words_on("stated", t, t, &bne(), nov(4)),
+            time_words("stated", t, t, &bne(), nov(4)),
             "3 Nov 03:00 (stated)"
         );
         let last_year = utc("2025-11-02T17:00:00Z");
         assert_eq!(
-            time_words_on("stated", last_year, last_year, &bne(), nov(3)),
+            time_words("stated", last_year, last_year, &bne(), nov(3)),
             "3 Nov 2025 03:00 (stated)"
         );
     }

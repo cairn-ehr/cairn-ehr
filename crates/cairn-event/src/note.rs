@@ -18,14 +18,39 @@ pub enum StatedTime<'a> {
     NotStated,
 }
 
-/// One note, ready to seal. `narrative` is the already-ESCAPED text
-/// (see [`escape_note_markup`]); drafts hold the raw text, only signing escapes it.
+/// A narrative made inert as markup — built ONLY by [`EscapedNarrative::of_typed`], which
+/// escapes the text as typed exactly once.
+///
+/// Why a type and not a `&str`: the floor (db/064) requires a twin but does not re-derive it,
+/// so nothing else checks that the signed twin is the unescaped narrative. A raw text passed
+/// as the narrative would sign a twin that drops its backslashes; a twice-escaped one would
+/// sign a twin that shows `\<`. Either is frozen under the signature for good.
+///
+/// ```compile_fail
+/// let raw = cairn_event::note::EscapedNarrative("a\\*b".to_string());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EscapedNarrative(String);
+
+impl EscapedNarrative {
+    /// Escape `typed` (the text as the clinician wrote it) with [`escape_note_markup`].
+    pub fn of_typed(typed: &str) -> Self {
+        Self(escape_note_markup(typed))
+    }
+
+    /// The escaped text, as it goes on the wire.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One note, ready to seal. Drafts hold the raw text; only signing escapes it.
 pub struct NoteAssertion<'a> {
-    pub narrative: &'a str,
+    pub narrative: EscapedNarrative,
     pub stated: StatedTime<'a>,
-    /// RFC 3339 UTC, stamped by the node when typing began.
+    /// RFC 3339 UTC: the database clock at the draft's first save (writing began).
     pub recording_started: &'a str,
-    /// RFC 3339 UTC, stamped by the node at the last keystroke.
+    /// RFC 3339 UTC: the last save that changed the text, never before `recording_started`.
     pub recording_ended: &'a str,
 }
 
@@ -38,7 +63,7 @@ pub fn note_payload(a: &NoteAssertion) -> Value {
         StatedTime::NotStated => "recording-started",
     };
     json!({
-        "narrative": a.narrative,
+        "narrative": a.narrative.as_str(),
         "media": [],
         "refs": [],
         "encounter": null,
@@ -62,7 +87,7 @@ pub fn note_t_effective(a: &NoteAssertion) -> String {
 /// screen readers and full-text search read the twin (principle 11), so it must
 /// say `BP <90`, not `BP \<90`.
 pub fn render_note_twin(a: &NoteAssertion) -> String {
-    unescape_note_markup(a.narrative)
+    unescape_note_markup(a.narrative.as_str())
 }
 
 /// Make free text inert as markup: `<` -> `\<`, `(` right after `]` -> `\(`
@@ -122,7 +147,7 @@ mod tests {
 
     fn note(stated: StatedTime<'static>) -> NoteAssertion<'static> {
         NoteAssertion {
-            narrative: "chest clear",
+            narrative: EscapedNarrative::of_typed("chest clear"),
             stated,
             recording_started: "2026-11-03T01:00:00Z",
             recording_ended: "2026-11-03T01:05:00Z",
@@ -172,13 +197,17 @@ mod tests {
     #[test]
     fn twin_is_the_narrative_as_typed() {
         for raw in CORPUS {
-            let escaped = escape_note_markup(raw);
             let mut a = note(StatedTime::NotStated);
-            a.narrative = &escaped;
+            a.narrative = EscapedNarrative::of_typed(raw);
+            assert_eq!(
+                a.narrative.as_str(),
+                escape_note_markup(raw),
+                "escaped once: {raw:?}"
+            );
             assert_eq!(render_note_twin(&a), raw, "{raw:?}");
         }
         let a = note(StatedTime::NotStated);
-        assert_eq!(render_note_twin(&a), a.narrative);
+        assert_eq!(render_note_twin(&a), a.narrative.as_str());
     }
 
     #[test]

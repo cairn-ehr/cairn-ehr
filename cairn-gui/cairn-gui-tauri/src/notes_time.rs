@@ -2,7 +2,7 @@
 //! split out to keep that file small). A `datetime-local` field holds a wall-clock time with no
 //! zone; these pure functions turn it into an instant in this machine's zone and back, refuse a
 //! wall time the clock never showed, and refuse at Sign a year the wire cannot carry.
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, LocalResult, NaiveDateTime, TimeZone, Utc};
 
 /// Whether stated time `t` (typed as `s`) has a year the record can hold, else the sentence. Pure.
 ///
@@ -64,20 +64,21 @@ pub(crate) fn stated_time_in<Tz: TimeZone>(s: &str, tz: &Tz) -> Result<DateTime<
     let naive = parse(s)
         .or_else(|_| parse(&format!("+{s}")))
         .map_err(|_| format!("not a time: {s}"))?;
-    // At a clock change a wall time can happen twice (clocks go back): `earliest` takes the
-    // first time the clock showed it.
-    pick_local(s, tz.from_local_datetime(&naive).earliest())
+    pick_local(s, tz.from_local_datetime(&naive))
 }
 
-/// The instant a wall-clock time `s` means, given the zone's earliest answer for it. Pure.
+/// The instant a wall-clock time `s` means, given everything the zone answers for it. Pure.
 ///
-/// `None` is a time that never happened (clocks went forward past it): refused, with a sentence
-/// naming it — any instant chosen for it would be a time the clinician never saw on a clock.
+/// A time that happened twice (clocks went back) takes the FIRST time the clock showed it —
+/// a choice, not a certainty, recorded in ADR-0087 "What is not guaranteed" (#957 asks whether
+/// it should be flagged instead). A time that never happened (clocks went forward past it) is
+/// refused, with a sentence naming it — any instant chosen for it would be a time the clinician
+/// never saw on a clock.
 pub(crate) fn pick_local<Tz: TimeZone>(
     s: &str,
-    earliest: Option<DateTime<Tz>>,
+    answer: LocalResult<DateTime<Tz>>,
 ) -> Result<DateTime<Utc>, String> {
-    match earliest {
+    match answer.earliest() {
         Some(t) => Ok(t.with_timezone(&Utc)),
         None => Err(format!(
             "{s} never happened on this machine's clock — the clocks moved forward past it; \

@@ -103,3 +103,22 @@ pub async fn list_patient_notes(
         drafts: open_drafts(client, patient).await?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::NOTES_SQL;
+
+    /// #412 guard (PR #931 review): the note list reads the attester ONLY through the vouch
+    /// door. Reading `event_log.attester_key` directly would mint a `VerifiedKid` from a peer's
+    /// unverified token and grade a note "signed by" someone nobody vouched for. (A DB test
+    /// cannot show this on the window's own notes: their human author is the signer, verified
+    /// by the signature itself, so they carry no separate attester.)
+    #[test]
+    fn the_attester_is_read_only_through_the_vouch_door() {
+        assert!(NOTES_SQL.contains("cairn_note_vouched_attester(e.event_id)"));
+        assert!(
+            !NOTES_SQL.contains("attester_key"),
+            "the raw attester column must never reach the classifier: {NOTES_SQL}"
+        );
+    }
+}

@@ -60,7 +60,17 @@
 > **#948** (a `refs` target arriving after its note — a decision, live with 3c) · **#949** (a media descriptor the
 > escape changes never matches its anchor — latent) · **#950** (erasure does not reach an open draft) · **#951**
 > (U+0000 or a lone surrogate never saves) · **#952** (a future stated time unflagged) · **#953** (two windows share a
-> terminal id). **RUNBOOK §18 HALF RUN in the real window 2026-11-03** (results
+> terminal id). **PR-review round 2026-11-04** (five reviewers, fixed on the branch): a stated time the window
+> refuses (the hour skipped when clocks go forward) used to refuse EVERY save of the note under a bare "not saved
+> yet" — now the text is re-saved with the last time the node took and the status line says why; a failed save says
+> its reason; an unknown-outcome Sign keeps the "not saved" warning; the narrative is an `EscapedNarrative` type
+> (only `of_typed` builds one, so a raw or twice-escaped text can never sign a wrong twin); the terminal-id file is
+> written atomically and a replacement is logged; `note_pane` no longer reads the clock per row; new tests pin Sign
+> refusing another terminal's or chart's draft (the spend door names only the draft — Sign's save-first order is
+> the guard) and the vouch-door-only attester read. Filed **#957** (the doubled hour takes the earlier instant —
+> a decision) · **#958** (`elsewhere` merges chart and terminal) · **#959** (unprojected notes uncounted) · **#960**
+> (byline names the signer, not the attester) · **#961** (session-only terminal id said only on stderr) · **#962**
+> (notes.js save-queue guarantees pinned by source text only). **RUNBOOK §18 HALF RUN in the real window 2026-11-03** (results
 > `cairn-gui/cairn-gui-tauri/results/2026-11-03-note-stream-human-pass.md`): terminal id, refusal without a
 > credential, sign (node write p50 10 ms), times and basis, the markup round trip and Tauri's argument casing all
 > PASS; filed **#954** (the signer strip must be an always-visible bottom bar — scrolling to sign is unacceptable) and

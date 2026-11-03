@@ -182,7 +182,7 @@ pub struct LocalState {
     /// Node config blob. None today (no node config table exists yet).
     #[serde(default)]
     config: Option<Vec<u8>>,
-    /// Draft / scratchpad store. Empty today (no draft store exists yet).
+    /// Draft / scratchpad store. Empty BY DECISION: note drafts are not exported (ADR-0087).
     #[serde(default)]
     drafts: Vec<Vec<u8>>,
     /// ADR-0066: this node's INDEPENDENT X25519 unwrap secret, so a restored node inherits
@@ -321,7 +321,7 @@ impl LocalState {
         self.config.as_deref()
     }
 
-    /// The draft/scratchpad store. Empty today: no draft store exists yet.
+    /// The draft/scratchpad store. Empty by decision: note drafts are not exported (ADR-0087).
     pub fn drafts(&self) -> &[Vec<u8>] {
         &self.drafts
     }

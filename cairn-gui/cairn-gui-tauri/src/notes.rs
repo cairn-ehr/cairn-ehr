@@ -372,7 +372,11 @@ where
         )
     });
     NotePane {
-        notes: list.notes.iter().map(|n| note_row_view(n, tz)).collect(),
+        notes: list
+            .notes
+            .iter()
+            .map(|n| note_row_view(n, tz, today))
+            .collect(),
         withheld_sentence,
         drafts: list
             .drafts
@@ -382,8 +386,8 @@ where
     }
 }
 
-/// One note's words. `time_words` takes today from the clock itself.
-fn note_row_view<Tz: TimeZone>(note: &NoteRow, tz: &Tz) -> NoteRowView
+/// One note's words, dated against `today`. Pure.
+fn note_row_view<Tz: TimeZone>(note: &NoteRow, tz: &Tz, today: NaiveDate) -> NoteRowView
 where
     Tz::Offset: std::fmt::Display,
 {
@@ -396,6 +400,7 @@ where
             note.t_effective,
             note.recording_started,
             tz,
+            today,
         ),
     }
 }

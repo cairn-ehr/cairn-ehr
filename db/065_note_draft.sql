@@ -12,8 +12,8 @@
 --     cannot silently overwrite each other's text.
 --   * A spent draft can never come back: spending moves the row into note_draft_spent, and a
 --     later save of that id answers 'spent'. A deferred constraint trigger refuses, at COMMIT,
---     a spend that names no real clinical.note.asserted event for that chart — so a draft
---     cannot be "spent" without a note actually existing.
+--     a spend that names no clinical.note.asserted event of that chart INSERTED IN THE SAME
+--     TRANSACTION (ruling R9) — so a draft cannot be "spent" without the note it became.
 --   * Drafts hold the RAW text as typed (the window escapes markup only when it signs, ADR-0041);
 --     the doors store and return it byte-for-byte.
 --

@@ -8,8 +8,8 @@
 --   media              the attachment manifest — [] from this window
 --   refs               [{rel, event}] inter-event relationships — [] from this window
 --   encounter          the reserved grouping slot — null from this window
---   recording_started  RFC 3339, stamped by the node when typing began
---   recording_ended    RFC 3339, stamped by the node at the last keystroke
+--   recording_started  RFC 3339, the database clock at the draft's first save (writing began)
+--   recording_ended    RFC 3339, the last save that changed the text (never before the start)
 --   effective_basis    'stated' (the writer named a time) | 'recording-started' (they did not)
 -- The envelope's t_effective is ALWAYS set: the stated time, or recording_started.
 --
@@ -191,8 +191,9 @@ BEGIN
     END IF;
     PERFORM cairn_check_note_anchors(v_text, p -> 'media');
 
-    -- (6) refs: a closed rel enum and a target this node holds (ADR-0041 decision 8) — the
-    --     author referenced an event they held, so under causal order it has arrived here too.
+    -- (6) refs: a closed rel enum and a target this node holds (ADR-0041 decision 8). Sync is
+    --     set-union, not causally ordered, so a target that arrives after its note is refused
+    --     at the remote door today (#948).
     IF jsonb_typeof(p -> 'refs') IS DISTINCT FROM 'array' THEN
         RAISE EXCEPTION 'note assertion: refs must be an array';
     END IF;

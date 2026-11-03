@@ -7,11 +7,11 @@
 //! sign leaves the draft exactly as it was, and a draft can never be both spent and unsigned
 //! (db/065's commit-time trigger refuses a spend with no note of the same chart behind it).
 //!
-//! Text is escaped here, once, at signing (`escape_note_markup`): drafts hold the raw text, and
+//! Text is escaped here, once, at signing (`EscapedNarrative::of_typed`): drafts hold the raw text, and
 //! the floor's markup refusals are for raw-SQL clients, never for a clinician's typing.
 use cairn_event::note::{
-    escape_note_markup, note_payload, note_t_effective, render_note_twin, NoteAssertion,
-    StatedTime, NOTE_EVENT_TYPE, NOTE_SCHEMA_VERSION,
+    note_payload, note_t_effective, render_note_twin, EscapedNarrative, NoteAssertion, StatedTime,
+    NOTE_EVENT_TYPE, NOTE_SCHEMA_VERSION,
 };
 use cairn_event::{EventBody, Hlc, SigningKey};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -85,12 +85,11 @@ pub fn note_body(
 /// Build the note from the SPENT draft row (ruling R1): its text escaped here, its recording
 /// times as the database stamped them, `recording_ended` = the last real keystroke.
 fn body_from_spent(event_id: Uuid, spent: &SpentDraft, node_kid: &str, hlc: Hlc) -> EventBody {
-    let narrative = escape_note_markup(&spent.narrative);
     let stated = spent.stated_time.map(rfc3339);
     let started = rfc3339(spent.recording_started);
     let ended = rfc3339(spent.last_keystroke);
     let a = NoteAssertion {
-        narrative: &narrative,
+        narrative: EscapedNarrative::of_typed(&spent.narrative),
         stated: match &stated {
             Some(t) => StatedTime::Stated(t),
             None => StatedTime::NotStated,

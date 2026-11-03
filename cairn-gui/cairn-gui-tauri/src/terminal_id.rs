@@ -21,22 +21,27 @@ const FILE: &str = "terminal-id";
 /// the save door as the terminal's name, and a blank or garbled one is no name at all. Surrounding
 /// whitespace (a newline an editor added) is ignored. A file that cannot be read for any reason
 /// other than its absence or non-UTF-8 content is an error — replacing an id that is merely
-/// unreadable for a moment would orphan every draft held under it.
+/// unreadable for a moment would orphan every draft held under it. A replacement is logged:
+/// drafts held under the old id now read as another terminal's, and someone should know why.
+///
+/// The new id is written to a side file and renamed into place, so a crash mid-write never
+/// leaves a blank `terminal-id` that the next launch would replace (orphaning this one too).
 pub fn load_or_mint_terminal_id(dir: &Path) -> std::io::Result<String> {
     let path = dir.join(FILE);
     match std::fs::read_to_string(&path) {
         Ok(text) if is_usable(text.trim()) => return Ok(text.trim().to_string()),
-        Ok(_) => {}
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
-            ) => {}
+        Ok(_) => eprintln!("{} holds no usable id; minting a new one", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            eprintln!("{} is not text; minting a new one", path.display())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
     let id = uuid::Uuid::now_v7().to_string();
     std::fs::create_dir_all(dir)?;
-    std::fs::write(&path, &id)?;
+    let side = dir.join(format!("{FILE}.new"));
+    std::fs::write(&side, &id)?;
+    std::fs::rename(&side, &path)?;
     Ok(id)
 }
 
@@ -78,7 +83,18 @@ mod tests {
                 "{bad:?} was trusted: {id}"
             );
             assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), id);
+            assert!(
+                !dir.join(format!("{FILE}.new")).exists(),
+                "the side file is renamed away"
+            );
         }
+        // Not text at all: replaced too.
+        std::fs::write(dir.join(FILE), [0xff, 0xfe, 0x00]).unwrap();
+        let id = load_or_mint_terminal_id(&dir).unwrap();
+        assert!(
+            id.parse::<uuid::Uuid>().is_ok(),
+            "non-UTF-8 was trusted: {id}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

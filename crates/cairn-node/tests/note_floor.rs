@@ -9,8 +9,8 @@
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::note::{
-    escape_note_markup, note_payload, note_t_effective, render_note_twin, NoteAssertion,
-    StatedTime, NOTE_EVENT_TYPE, NOTE_SCHEMA_VERSION,
+    escape_note_markup, note_payload, note_t_effective, render_note_twin, EscapedNarrative,
+    NoteAssertion, StatedTime, NOTE_EVENT_TYPE, NOTE_SCHEMA_VERSION,
 };
 use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
@@ -62,9 +62,8 @@ async fn chart_with_one_note(c: &mut Client, typed: &str) -> (Node, Uuid, String
     // #345: a chart's first event is its registration.
     common::submit_registration(c, &node_sk, &node_kid, patient, 0).await;
 
-    let narrative = escape_note_markup(typed);
     let a = NoteAssertion {
-        narrative: &narrative,
+        narrative: EscapedNarrative::of_typed(typed),
         stated: StatedTime::NotStated,
         recording_started: "2026-01-02T03:04:05Z",
         recording_ended: "2026-01-02T03:09:05Z",
@@ -89,7 +88,7 @@ async fn chart_with_one_note(c: &mut Client, typed: &str) -> (Node, Uuid, String
         sk: node_sk,
         kid: node_kid,
     };
-    (node, event_id, narrative)
+    (node, event_id, a.narrative.as_str().to_string())
 }
 
 /// Rows in `clinical_note` for one note.

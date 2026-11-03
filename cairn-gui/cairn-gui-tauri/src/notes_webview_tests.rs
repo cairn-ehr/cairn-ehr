@@ -12,7 +12,7 @@ const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
 
-/// Review Focus 3: a debounced save that fires after Sign must never be sent. `signNote` cancels
+/// Review Focus 3: a pending autosave that fires after Sign must never be sent. `signNote` cancels
 /// the pending timer BEFORE it sends the sign (the node answers `spent` to a late save anyway;
 /// this is the window's half).
 #[test]
@@ -44,7 +44,11 @@ fn a_failed_save_keeps_the_text_and_says_so() {
     );
     let send = js_fn(NOTES_JS, "sendDraft");
     let caught = &send[position(send, "catch (failure) {")..];
-    assert!(caught.contains("saySaved(NOT_SAVED);"), "{send}");
+    // ...and WHY: a refusal no retry can clear must not read as a passing outage (PR #931 review).
+    assert!(
+        caught.contains("saySaved(NOT_SAVED + \" (\" + failureText(failure) + \")\");"),
+        "{send}"
+    );
     assert!(
         !send.contains(".value ="),
         "a save never writes the field: {send}"
@@ -124,11 +128,11 @@ fn a_here_draft_reopens_and_another_terminals_draft_is_read_only() {
 /// save after the last keystroke. A new draft's id is minted in the window.
 #[test]
 fn saves_go_out_once_a_second_while_typing_and_draft_ids_are_minted_here() {
-    assert!(NOTES_JS.contains("const NOTE_SAVE_DEBOUNCE_MS = 1000;"));
+    assert!(NOTES_JS.contains("const NOTE_SAVE_EVERY_MS = 1000;"));
     let input = js_fn(NOTES_JS, "onNoteInput");
     for line in [
         "if (noteSaveTimer !== null) return;",
-        "const wait = noteLastSave + NOTE_SAVE_DEBOUNCE_MS - performance.now();",
+        "const wait = noteLastSave + NOTE_SAVE_EVERY_MS - performance.now();",
         "if (wait <= 0) void saveNoteNow();",
         "else noteSaveTimer = setTimeout(saveNoteNow, wait);",
     ] {
@@ -299,15 +303,25 @@ fn closing_a_chart_waits_for_every_queued_save() {
 }
 
 /// Fix round 1, I2. A partly typed time is never saved as "not stated": the save sends the last
-/// COMPLETE time the draft held — the one it reopened with, or the last complete one typed.
+/// time the node TOOK for the draft — the one it reopened with, or the last one a save kept.
+/// Resolved when the save is SENT (`sendDraft`, in queue order), not when it is queued, so a
+/// save queued behind one still in flight never sends a time older than that one's.
 #[test]
 fn a_partly_typed_time_saves_the_last_complete_one() {
     let save = js_fn(NOTES_JS, "saveNoteNow");
     assert!(
-        save.contains(
-            "statedTime: when.validity.badInput ? held.statedTime : (held.statedTime = when.value),"
-        ),
+        save.contains("statedTime: when.validity.badInput ? null : when.value,"),
         "{save}"
+    );
+    let send = js_fn(NOTES_JS, "sendDraft");
+    assert!(
+        send.contains("const asked = sent.statedTime === null ? taken : sent.statedTime;"),
+        "{send}"
+    );
+    // Only a save the node answered moves the time it holds.
+    assert!(
+        send[..position(send, "catch (failure) {")].contains("sent.held.statedTime = asked;"),
+        "{send}"
     );
     assert!(
         js_fn(NOTES_JS, "openDraft").contains("statedTime: draft.stated_time || \"\""),
@@ -367,4 +381,39 @@ fn unsaved_text_survives_a_chart_change() {
         "if (report.behind_the_record && !(await saveNoteNow())) {",
     );
     assert!(unknown < position(sign, "closeEditor();"), "{sign}");
+    // ...and says BOTH things: the sign's outcome is unknown, and the latest text is only on
+    // screen. The report alone, said over the save's warning, hid the second (PR #931 review).
+    assert!(
+        sign[unknown..].contains("noteStatus(report.text + \" · \" + NOT_SAVED);"),
+        "{sign}"
+    );
+}
+
+/// PR #931 review (critical): a stated time the window refuses (one this machine's clock never
+/// showed — the hour skipped when clocks go forward) must not hold the TEXT back. Every save
+/// carries both, and the door writes both, so a refused time used to refuse every save of the
+/// note while the status line said only "not saved yet". The save is sent again with the last
+/// time the node took, and the status line says the new time was not kept, and why.
+#[test]
+fn a_refused_time_never_holds_the_text_back() {
+    let send = js_fn(NOTES_JS, "sendDraft");
+    let caught = &send[position(send, "catch (failure) {")..];
+    let retried = position(
+        caught,
+        "if (asked !== taken && (await sendDraft({ ...sent, statedTime: taken }))) {",
+    );
+    assert!(
+        retried < position(caught, "noteUnsaved = true;"),
+        "the text is retried before the editor is marked unsaved: {send}"
+    );
+    let kept =
+        &caught[retried..position(caught, "saySaved(TIME_NOT_KEPT + failureText(failure));")];
+    assert!(
+        kept.contains("noteUnsaved = true;"),
+        "the time is not in the node, so the close flush must send it again: {send}"
+    );
+    assert_eq!(
+        js_const(NOTES_JS, "TIME_NOT_KEPT"),
+        "your text is saved, but not the time it happened: "
+    );
 }

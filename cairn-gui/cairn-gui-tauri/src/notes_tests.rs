@@ -163,9 +163,9 @@ fn an_empty_stated_time_is_none() {
 
 /// Sydney's clock change, as the zone answers it (`LocalResult`): the doubled hour of 5 Apr 2026
 /// (02:30 happens at +11 and again at +10) takes the EARLIER instant; the gap of 4 Oct 2026 (02:30
-/// never happens) is refused with a sentence that says so. Driven through `.earliest()` and
-/// `pick_local`, exactly as `stated_time_in` treats whatever the zone answers, because no zone with daylight saving
-/// is in this tree (no chrono-tz) and `Local` is whatever the test machine is set to.
+/// never happens) is refused with a sentence that says so. Driven through `pick_local` with the
+/// zone's whole answer, exactly as `stated_time_in` hands it over, because no zone with daylight
+/// saving is in this tree (no chrono-tz) and `Local` is whatever the test machine is set to.
 #[test]
 fn a_clock_change_takes_the_earlier_time_and_refuses_the_gap() {
     let at = |offset_h: i32| {
@@ -176,11 +176,10 @@ fn a_clock_change_takes_the_earlier_time_and_refuses_the_gap() {
     };
     let doubled = LocalResult::Ambiguous(at(11), at(10));
     assert_eq!(
-        pick_local("2026-04-05T02:30", doubled.earliest()),
+        pick_local("2026-04-05T02:30", doubled),
         Ok(utc("2026-04-04T15:30:00Z"))
     );
-    let gap =
-        pick_local::<FixedOffset>("2026-10-04T02:30", LocalResult::None.earliest()).unwrap_err();
+    let gap = pick_local::<FixedOffset>("2026-10-04T02:30", LocalResult::None).unwrap_err();
     assert!(gap.contains("2026-10-04T02:30"), "{gap}");
     assert!(gap.contains("clocks"), "{gap}");
 }

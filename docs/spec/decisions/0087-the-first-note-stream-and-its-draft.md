@@ -134,8 +134,8 @@ number. This ADR is where they are recorded: each one that bears on the architec
 ### The draft as built (`db/065_note_draft.sql`)
 
 9. **A draft is not the record.** It lives in `note_draft`, a deliberately mutable table beside the append-only
-   log. It is never synced or signed, and it is **not in any backup**: the backup captures the signed event planes
-   only, and the sealed local-state export's draft slot stays empty. That partly supersedes ADR-0026 decisions 1 and
+   log. It is never synced or signed, and it is **not in any backup**: a draft is not an event, so no event plane of
+   the backup holds it, and the sealed local-state export's draft slot stays empty. That partly supersedes ADR-0026 decisions 1 and
    3, which said drafts survive in the export: a dead node loses its unsigned note drafts. Draft prose is clinical
    text in the clear, and an export would carry it to every copy of every medium for the life of the medium, past
    any later erasure. A crashed window, the common case, still gets its draft back from the node.
@@ -185,11 +185,14 @@ number. This ADR is where they are recorded: each one that bears on the architec
 ## What is not guaranteed
 
 - **The terminal id is caller-asserted.** A `cairn_window` client on raw SQL can echo another terminal's id and
-  overwrite that terminal's draft, or spend it with a note it signs in the same transaction. Prose is mutable until
+  overwrite that terminal's draft. It need not even do that to spend one: the spend door names only the draft, so
+  any draft id it has read (`cairn_note_drafts` lists them) can be spent with a note of that chart it signs in the
+  same transaction. The window's own Sign refuses another terminal's draft because it SAVES before it spends
+  (`note_sign.rs` pins the order). Prose is mutable until
   signed; 3b's revision rows will make earlier text recoverable. The id is a label kept stable, not a proof.
 - **A terminal whose id cannot be kept** (an unreadable or unwritable config directory) falls back to an id for one
   session, so the window still opens. Its drafts read as another terminal's after a restart: visible and readable,
-  not editable there.
+  not editable there. Today only stderr says so ([#961](https://github.com/cairn-ehr/cairn-ehr/issues/961)).
 - **Drafts are not backed up**, and **an erasure does not reach an open draft**
   ([#950](https://github.com/cairn-ehr/cairn-ehr/issues/950)): a shred works on an event, and a draft has none.
 - **A `refs` target that arrives after its note at the remote door** is refused, because rule 6 needs the target
@@ -202,14 +205,21 @@ number. This ADR is where they are recorded: each one that bears on the architec
 - **The id grammar of rule 4 is a wire commitment.** A future media slice wanting other characters in an attachment
   id must widen the floor, and an older node will refuse its notes at the remote door.
 - **A `/2` note is held but not shown on a node that knows only `/1`**, and its refs and anchors are not checked
-  there (decision 6).
+  there (decision 6). The pane does not yet say how many it holds but cannot show
+  ([#959](https://github.com/cairn-ehr/cairn-ehr/issues/959)).
 - **The editor's open edges**: a stale "already signed" leaves the draft stuck until the chart is reopened
   ([#945](https://github.com/cairn-ehr/cairn-ehr/issues/945)); closing a chart while the node is unreachable loses
   the unsaved text ([#946](https://github.com/cairn-ehr/cairn-ehr/issues/946)); closing a chart waits on its saves
   with no bound or status ([#947](https://github.com/cairn-ehr/cairn-ehr/issues/947)).
 - **Text containing U+0000 or a lone surrogate never saves or signs**
   ([#951](https://github.com/cairn-ehr/cairn-ehr/issues/951)): PostgreSQL text cannot hold U+0000, and the window's
-  IPC boundary refuses a lone surrogate. The editor keeps the text on screen but says only "not saved yet".
+  IPC boundary refuses a lone surrogate. The editor keeps the text on screen and says "not saved yet", with the
+  reason.
+- **A stated time in the hour that happens twice** (clocks go back) is read as the EARLIER instant, unflagged
+  (`notes_time::pick_local`) — an hour wrong half the time. Refusing it would make that hour unstatable, which paper
+  is not; whether to flag it is [#957](https://github.com/cairn-ehr/cairn-ehr/issues/957). A time in the hour that
+  never happens (clocks go forward) is refused at Sign, and a save keeps the text with the last time the node
+  took.
 - **A stated time later than the writing is accepted unflagged**
   ([#952](https://github.com/cairn-ehr/cairn-ehr/issues/952)): a date slip signs, and, listed newest `t_effective`
   first, tops the chart until 3c's corrections. ADR-0003's clash flag is owed.

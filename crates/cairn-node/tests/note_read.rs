@@ -8,7 +8,7 @@
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard` taken BEFORE connecting.
 mod common;
 
-use cairn_event::note::{NoteAssertion, StatedTime};
+use cairn_event::note::{EscapedNarrative, NoteAssertion, StatedTime};
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
@@ -114,7 +114,7 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (node_sk, node_kid, _, _, chart) = common::note_setup(&c).await;
     let a = NoteAssertion {
-        narrative: "transferred from the district hospital",
+        narrative: EscapedNarrative::of_typed("transferred from the district hospital"),
         stated: StatedTime::NotStated,
         recording_started: "2026-11-02T22:00:00Z",
         recording_ended: "2026-11-02T22:04:00Z",

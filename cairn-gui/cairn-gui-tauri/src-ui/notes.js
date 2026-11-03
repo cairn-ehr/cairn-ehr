@@ -22,16 +22,18 @@
 "use strict";
 
 /** At most one save a second while the clinician types: often enough to lose little, rarely enough to be cheap. */
-const NOTE_SAVE_DEBOUNCE_MS = 1000;
-/** Said when a save could not reach the node. The next keystroke tries again. */
+const NOTE_SAVE_EVERY_MS = 1000;
+/** Said (with the reason) when a save failed. The next keystroke tries again. */
 const NOT_SAVED = "not saved yet — your text is still here";
+/** Said (with the reason) when the text saved but a new stated time was refused. */
+const TIME_NOT_KEPT = "your text is saved, but not the time it happened: ";
 /** Said instead of signing a time the clinician only began to type (a date, no hour). */
 const PARTLY_TYPED_TIME =
   "the time it happened is only partly typed — finish it, or clear it if the note is about now";
 
 /**
  * The draft in the editor, `{ draftId, patientId, statedTime }` — its own chart, never "whatever
- * is open", and the last COMPLETE stated time it holds (a partly typed one is never saved).
+ * is open", and the last stated time the node TOOK for it (a partly typed one is never saved).
  * Read into a local named `held`, never `draft`: `draft` is a Rust `DraftView` here, and the
  * field-drift guard (notes_webview_tests.rs) reads every `draft.<field>` against it.
  */
@@ -132,7 +134,7 @@ function newNote() {
 function onNoteInput() {
   noteUnsaved = true;
   if (noteSaveTimer !== null) return; // a save is already due, and will carry this keystroke
-  const wait = noteLastSave + NOTE_SAVE_DEBOUNCE_MS - performance.now();
+  const wait = noteLastSave + NOTE_SAVE_EVERY_MS - performance.now();
   if (wait <= 0) void saveNoteNow();
   else noteSaveTimer = setTimeout(saveNoteNow, wait);
 }
@@ -151,9 +153,10 @@ function saveNoteNow() {
   const sent = {
     held: held,
     narrative: el("note-text").value,
-    // A partly typed time reads as "" — saved, it would erase the time the draft holds. So the
-    // last COMPLETE time is sent instead, and a complete one becomes the new last one.
-    statedTime: when.validity.badInput ? held.statedTime : (held.statedTime = when.value),
+    // A partly typed time reads as "" — saved, it would erase the time the draft holds. `null`
+    // sends the last time the node took instead, read by `sendDraft` in queue order, after every
+    // earlier save has answered.
+    statedTime: when.validity.badInput ? null : when.value,
   };
   noteSaveQueue = noteSaveQueue.then(() => sendDraft(sent));
   return noteSaveQueue;
@@ -171,23 +174,37 @@ function notesSaved() {
  */
 async function sendDraft(sent) {
   const mine = () => noteDraft === sent.held;
+  const taken = sent.held.statedTime;
+  const asked = sent.statedTime === null ? taken : sent.statedTime;
   try {
     const view = await invoke("note_draft_save", {
       patientId: sent.held.patientId,
       draftId: sent.held.draftId,
       narrative: sent.narrative,
-      statedTime: sent.statedTime,
+      statedTime: asked,
     });
+    sent.held.statedTime = asked;
     if (mine()) {
       noteUnsaved = false;
       saySaved(view.saved ? "" : view.sentence);
     }
     return true;
   } catch (failure) {
+    // A new time the node refused (one this clock never showed) must not hold the TEXT back: the
+    // door writes both, so send the text again with the last time the node took, and say why.
+    // The editor stays UNSAVED (its time is not in the node), so the next save — or the flush
+    // as the chart closes — sends the time again: a passing failure that was not the time heals.
+    if (asked !== taken && (await sendDraft({ ...sent, statedTime: taken }))) {
+      if (mine()) {
+        noteUnsaved = true;
+        saySaved(TIME_NOT_KEPT + failureText(failure));
+      }
+      return true;
+    }
     // Nothing here touches the field: the text stays as typed (Review Focus 2).
     if (mine()) {
       noteUnsaved = true;
-      saySaved(NOT_SAVED);
+      saySaved(NOT_SAVED + " (" + failureText(failure) + ")");
     }
     return false;
   }
@@ -246,7 +263,7 @@ async function signNote() {
   // save that got no answer leaves the text where it is — on screen, with the editor live.
   if (report.behind_the_record && !(await saveNoteNow())) {
     setSigning(false);
-    noteStatus(report.text);
+    noteStatus(report.text + " · " + NOT_SAVED);
     await refresh(report.text, report.behind_the_record);
     return;
   }

@@ -47,7 +47,7 @@ async fn note_count(c: &Client, patient: Uuid) -> i64 {
     .get(0)
 }
 
-/// Autosave `text` into a new draft on `chart`, as the window's debounce would.
+/// Autosave `text` into a new draft on `chart`, as the window's autosave would.
 async fn autosave(c: &Client, chart: Uuid, text: &str) -> Uuid {
     let draft = Uuid::now_v7();
     let saved = save_draft(c, draft, chart, TERMINAL, text, None)
@@ -183,6 +183,56 @@ async fn a_second_sign_of_the_same_draft_is_refused_spent_and_writes_one_note() 
 
     assert!(matches!(again, Err(SignRefusal::Spent)), "{again:?}");
     assert_eq!(note_count(&c, chart).await, 1, "one note, never two");
+}
+
+/// PR #931 review: the spend door names only the draft (db/065), so what keeps another
+/// terminal — or a stale draft id on another chart — from signing a draft is that `sign_note`
+/// SAVES before it spends, and the save answers `elsewhere`. This pins that ordering: either
+/// sign is refused, the draft and its text are untouched, and no note is written anywhere.
+#[tokio::test]
+async fn a_sign_from_another_terminal_or_chart_is_refused_and_leaves_the_draft() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, _, human_sk, human_kid, chart) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let draft = autosave(&c, chart, "held at the ward PC").await;
+    let other_chart = Uuid::now_v7();
+
+    let mut other_terminal = input(draft, chart, "overwritten elsewhere");
+    other_terminal.terminal = "theatre-pc";
+    for (who, attempt) in [
+        ("another terminal", other_terminal),
+        (
+            "another chart",
+            input(draft, other_chart, "on the wrong chart"),
+        ),
+    ] {
+        let refused = sign_note(&mut c, &node_sk, &attempt, &author)
+            .await
+            .unwrap();
+        assert!(
+            matches!(refused, Err(SignRefusal::Elsewhere)),
+            "{who}: {refused:?}"
+        );
+    }
+
+    let drafts = open_drafts(&c, chart).await.unwrap();
+    assert_eq!(drafts.len(), 1, "the draft is still open");
+    assert_eq!(drafts[0].draft_id, draft);
+    assert_eq!(drafts[0].terminal_id, TERMINAL);
+    assert_eq!(
+        drafts[0].narrative, "held at the ward PC",
+        "its text is untouched"
+    );
+    assert_eq!(note_count(&c, chart).await, 0);
+    assert_eq!(note_count(&c, other_chart).await, 0);
 }
 
 /// The node's HLC, read raw: the first thing a sign that reached the database would move.
