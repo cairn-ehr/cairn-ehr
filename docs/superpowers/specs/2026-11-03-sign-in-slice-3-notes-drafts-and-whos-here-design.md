@@ -253,10 +253,14 @@ grades `Attested` or carries a verified vouch — two inputs, one rule, written 
 - **The parts of a multi-writer draft** (§3.2): whether they ride into the committed body as spans or commit as
   separate parts is a wire decision for the ADR. Either way it bears on ADR-0041 decision 1's bet that sub-note
   span-level provenance is not needed — the ADR names that falsifier as now in play.
-- **Times** (*my call*, builder check): `t_effective` is the draft's **first keystroke** as the node observed it
-  (when the writer began recording; principle 4 — an observed time, not a clinical claim the node invents), and
-  the body carries the draft's **typed-from / typed-until** times so the parts view still shows them once the
-  draft row is gone. `t_recorded` is the commit's HLC. A directly signed note uses the same rule.
+- **Times — both are captured, because they attest different things** (maintainer; ADR-0003): the writer
+  **may state the time** the note describes (`t_effective` — the author attests when it happened, as a nurse
+  heads a paper entry "03:00"), and `t_recorded` is the commit's HLC (the record attests when it was recorded).
+  Both are true at once; a clash is flagged, never auto-resolved. *My call:* when the writer states no time,
+  `t_effective` defaults to the draft's **first keystroke** as the node observed it (an observed time, not a
+  clinical claim the node invents). The body also carries the draft's **typed-from / typed-until** times so the
+  parts view still shows them once the draft row is gone. A directly signed note and an auto-committed one use
+  the same rule; a time the writer stated in the draft survives the auto-commit.
 - **`note.added` is NOT retired in this slice** (*my call*, builder check): ADR-0041 decision 1 says the
   migration registering `clinical.note.asserted` removes the walking-skeleton `note.added` row, but that event is
   the general test fixture in ~50 files and drives `note_count`; retiring it in 3a would double 3a. The new ADR
@@ -305,9 +309,10 @@ used by `cairn-gui-shell`, not the Tauri window. Reusing or replacing them is th
   - Countersigning a student's note: 2 (read, sign) → 2 (open, "Sign off this note" + passphrase) → 2.
   - Discarding one's own draft: 1 (tear it up) → 1 (signed discard) → 1. A draft several people wrote needs
     each writer, as a page bearing a colleague's ink would.
-  - Coming back to an idle terminal: 0 → 2 (the shared-terminal unlock + the who's-here pick). **M > N** — the
-    price of a screen that otherwise shows a chart to whoever walks past; owed a decision (justify in the ADR,
-    or file per rule 5).
+  - Resuming work after walking away: 2 (an open record is put away, not left lying in a public space — fetch
+    it, find the page) → 2 (the shared-terminal unlock + the who's-here pick, after which the bookmark reopens
+    the chart at the tab) → 2 (maintainer). The window already knows where the record is and where it was open,
+    so resuming is mostly quicker than paper.
 - **Time + cognitive load:** budgets and their measurement go in each PR's plan section (CLAUDE.md rule 7);
   signing stays within RUNBOOK §16's ≤ 3 s; the first runnable surface owes the human RUNBOOK timing.
 
@@ -348,9 +353,6 @@ Decide these before or in the plan:
   Keep an audit row (who discarded which draft on which chart, when) outside the clinical record?
 - **3a ships a note editor with no draft store**, so a crash loses an unsigned note until 3b lands — against
   this slice's own anti-goal. Keep 3a off any pilot, or pull a minimal autosave into 3a?
-- **`t_effective` = first keystroke takes away the writer's own effective time** (ADR-0003: the asserted,
-  backdatable claim; paper lets a nurse head the entry "03:00"). Keep first keystroke as the auto-commit
-  default, but let a signed note assert its time? Decide in 3a: it is frozen under signatures.
 - Smaller:
   - Show the "return to my last screen" bookmark as an offer, not an auto-open (a wrong-chart risk, ADR-0008).
   - A draft with an unknown writer can never be discarded, even one typed into the wrong chart — let a signer
