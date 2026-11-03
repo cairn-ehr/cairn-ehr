@@ -62,7 +62,9 @@ pub fn render_note_twin(a: &NoteAssertion) -> String {
 }
 
 /// Make free text inert as markup: `<` -> `\<`, `(` right after `]` -> `\(`
-/// (kills `[x](url)` links), and every existing `\` doubled so the escape is
+/// (kills `[x](url)` links), `:` right after `]` -> `\:` (kills reference-style
+/// link definitions `[ref]: http://...`, which would smuggle in an external URL
+/// that ADR-0041 excludes), and every existing `\` doubled so the escape is
 /// reversible on ANY input. Apply exactly once, at signing.
 pub fn escape_note_markup(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -71,7 +73,10 @@ pub fn escape_note_markup(text: &str) -> String {
         match c {
             '\\' => out.push_str("\\\\"),
             '<' => out.push_str("\\<"),
-            '(' if prev == ']' => out.push_str("\\("),
+            '(' | ':' if prev == ']' => {
+                out.push('\\');
+                out.push(c);
+            }
             _ => out.push(c),
         }
         prev = c;
@@ -98,7 +103,7 @@ pub fn unescape_note_markup(text: &str) -> String {
 mod tests {
     use super::*;
 
-    const CORPUS: [&str; 8] = [
+    const CORPUS: [&str; 10] = [
         "BP <90",
         "<5 min",
         "pt said \"<b>\"",
@@ -107,6 +112,8 @@ mod tests {
         "ends with \\",
         "a\\<b",
         "plain",
+        "[ref]: http://e.org",
+        "[sic]: he said",
     ];
 
     fn note(stated: StatedTime<'static>) -> NoteAssertion<'static> {
@@ -180,12 +187,38 @@ mod tests {
                 let tag = b[i] == b'<'
                     && b.get(i + 1)
                         .is_some_and(|c| c.is_ascii_alphabetic() || b"/!?".contains(c));
-                let link = b[i] == b']' && b.get(i + 1) == Some(&b'(');
+                let link = b[i] == b']' && matches!(b.get(i + 1), Some(b'(') | Some(b':'));
                 assert!(
                     !((tag || link) && unescaped_at(b, i)),
                     "live markup at {i} in {e:?} (from {s:?})"
                 );
             }
+        }
+    }
+
+    /// Every string of length 0..=5 over the hostile alphabet: reversible and inert.
+    #[test]
+    fn exhaustive_small_alphabet_round_trips_and_is_inert() {
+        let alphabet = ['\\', '<', '(', ']', ':', 'a'];
+        let mut level: Vec<String> = vec![String::new()];
+        for _ in 0..=5 {
+            for s in &level {
+                let e = escape_note_markup(s);
+                assert_eq!(unescape_note_markup(&e), *s, "round trip {s:?}");
+                let b = e.as_bytes();
+                for i in 0..b.len() {
+                    let live = b[i] == b'<'
+                        || (b[i] == b']' && matches!(b.get(i + 1), Some(b'(') | Some(b':')));
+                    assert!(
+                        !(live && unescaped_at(b, i)),
+                        "live markup in {e:?} from {s:?}"
+                    );
+                }
+            }
+            level = level
+                .iter()
+                .flat_map(|s| alphabet.iter().map(move |c| format!("{s}{c}")))
+                .collect();
         }
     }
 }
