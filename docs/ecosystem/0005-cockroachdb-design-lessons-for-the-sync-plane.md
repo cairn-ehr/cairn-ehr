@@ -1,8 +1,9 @@
 # Ecosystem eval 0005 — CockroachDB: design lessons for Cairn's resilient distributed record
 
 - **Status:** **Evaluation.** Spec unchanged; no ADR minted. One **suspected defect** in the shipped clock
-  handling (§3.1, F1) and several candidate ADR threads (§5) are flagged for the maintainer. Not yet
-  filed as issues.
+  handling (§3.1, F1) and several candidate ADR threads (§5) were flagged. The maintainer accepted all the
+  follow-ups on 2026-11-03. They are filed under epic [#933](https://github.com/cairn-ehr/cairn-ehr/issues/933)
+  (§5), and the harness plan is [`superpowers/plans/2026-11-03-syncnemesis-harness.md`](../superpowers/plans/2026-11-03-syncnemesis-harness.md).
 - **Date:** 2026-11-03
 - **Subject:** [cockroachdb/cockroach](https://github.com/cockroachdb/cockroach). Read from its `docs/`
   tree: `design.md`, `RFCS/` (194 RFCs), `tech-notes/` and `tla-plus/`, at the default-branch HEAD on
@@ -137,7 +138,7 @@ doors silently assume the local clock is the trustworthy one:
   HLC merge is **clamped** to `now + 24 h`.
 
 > [!IMPORTANT]
-> **F1 (suspected defect — verify, then file).** Take the node that ADR-0058 names as a *core* failure
+> **F1 (suspected defect — filed as [#935](https://github.com/cairn-ehr/cairn-ehr/issues/935); a reproduction is its first deliverable).** Take the node that ADR-0058 names as a *core* failure
 > mode: an RTC-less Raspberry Pi that boots "decades off true time", or (with `fake-hwclock`) at its last
 > shutdown time. Then put it **offline with no NTP**, the deployment Cairn exists for. Its local clock
 > is *behind* real time by more than 24 h, and "local time catching up" never happens until a human
@@ -163,24 +164,31 @@ doors silently assume the local clock is the trustworthy one:
 
 **An AP-shaped remedy, in the order I'd do it:**
 
-1. **Explicit causal edges tick past their targets.** When a local event carries `refs` (or overlays a
-   target), mint its HLC as `max(tick(), target.hlc + 1)`. This is just the HLC *receive* rule applied
-   to a causal edge the author actually followed. It is bounded by construction: the target was already
-   admitted and is held locally, and a human deliberately chose to act on it. So it reopens no unbounded
-   ratchet. It closes consequence 2 for addenda, corrections and overlays regardless of what the clock
-   is doing. Cheap, local, in-DB, testable.
-2. **Measure offset at every sync handshake, and keep the evidence.** Each pull already sees a peer's
+1. **Measure offset at every sync handshake, and keep the evidence.** Each pull already sees a peer's
    HLC and wall. Record `(peer, observed_offset, at)`. When **a quorum of distinct admitted peers** (not
    one) agree that *this* node is behind by more than the bound, the honest conclusion is "my clock is
    wrong":
    - downgrade the clock grade (this is issue #282's missing detector, and it works *offline-with-peers*,
      without any anchor plane);
    - raise the clock-sanity alert (#281);
-   - judge the node-plane ceiling against **peer-median-corrected time** instead of raw
+   - judge every drift ceiling against **peer-median-corrected time** instead of raw
      `clock_timestamp()`.
 
    Requiring several independent peers keeps the ratchet defence: one hostile peer cannot move the
-   median, and Roughtime/Marzullo use the same multi-source argument ADR-0027 already adopts.
+   median, and Roughtime/Marzullo use the same multi-source argument ADR-0027 already adopts. This
+   step alone also fixes the case with **no explicit causal edge**: a new demographic value entered on
+   the skewed node, which can only rank correctly once the node's clock does.
+2. **Then, explicit causal edges tick past their targets.** When a local event carries `refs` (or
+   overlays a target), mint its HLC as `max(tick(), target.hlc + 1)`, bounded by the peer-corrected
+   ceiling from step 1. This is the HLC *receive* rule applied to a causal edge the author actually
+   followed.
+
+   > [!CAUTION]
+   > *Correction (2026-11-03).* This eval's first draft put this step first and called it "bounded by
+   > construction". **That was wrong.** On its own, a clinician adding to a Byzantine far-future target
+   > (admitted by the clinical door's clamp) would carry the poisoned wall into this node's clock: the
+   > ratchet #102 exists to stop. It is safe only *after* step 1, when the ceiling no longer depends on a
+   > clock that may itself be wrong.
 3. **Never self-terminate.** This is the one place Cairn must deliberately *not* copy CockroachDB. A CP
    database can afford to kill a skewed node; an EHR node must keep writing (ADR-0001 availability
    floor, principle 4). The AP translation of "self-terminate" is *downgrade the grade, widen the
@@ -384,23 +392,20 @@ in the erasure ceiling's prose.
 
 ---
 
-## 5. For the maintainer — proposed follow-ups
+## 5. Follow-ups (accepted 2026-11-03; filed under epic [#933](https://github.com/cairn-ehr/cairn-ehr/issues/933))
 
-1. **F1** (§3.1): reproduce with a test that sets the node's clock behind real time by more than 24 h,
-   on both planes. If it reproduces, file it; remedy step 1 (refs tick past targets) is small and
-   self-contained.
-2. **Syncnemesis harness** (§3.5): an issue or epic. It would generalise the review-found divergences
-   into a standing test.
-3. **Candidate ADR threads** (each needs a decision, not just code):
-   - overlapping-interval assertions are *concurrent: order unknown* (§3.2), including what finite
-     W(self-asserted) to adopt;
-   - signed per-link completeness frontiers, and whether to add a per-origin gap-detection counter to
-     the envelope (§3.3);
-   - data-keyed rule epochs for projection-rule changes (§3.6);
-   - the surplus-copy GC invariant "≥ k acknowledged custodians" (§3.7).
-4. **Q4 — HA hub identity.** A Patroni-style HA pair at the hospital core is one *logical* node. How does
-   it hold one signing identity across failover, when ADR-0026 wants that key hardware-bound and
-   non-extractable? Neither CockroachDB nor the spec answers this today; it is worth a sentence in
-   deployment §8 before anyone builds the pair.
-5. **Elastic-work governor** (§3.4): fit-for-purpose; can ride the next performance slice (#552 is its
-   natural first customer).
+The epic gives the order and the reasons for it: the harness comes first, because every later item changes
+convergence semantics and needs a system-level test to show set-union survived.
+
+| § | Follow-up | Issue |
+|---|---|---|
+| 3.5 | Syncnemesis harness (plan: [`2026-11-03-syncnemesis-harness.md`](../superpowers/plans/2026-11-03-syncnemesis-harness.md)) | [#934](https://github.com/cairn-ehr/cairn-ehr/issues/934) |
+| 3.1 | F1 — judge skew against peers; reproduction tests first; ADR refining 0027/0058 | [#935](https://github.com/cairn-ehr/cairn-ehr/issues/935) |
+| 3.7 | Age of the oldest quarantine pin as an honest-assembly fact | [#936](https://github.com/cairn-ehr/cairn-ehr/issues/936) |
+| 3.2 | ADR — overlapping intervals read as "order unknown" | [#937](https://github.com/cairn-ehr/cairn-ehr/issues/937) |
+| 3.6 | ADR — data-keyed rule epochs | [#938](https://github.com/cairn-ehr/cairn-ehr/issues/938) |
+| 3.3 | ADR — per-link completeness frontiers and an optional gap counter | [#939](https://github.com/cairn-ehr/cairn-ehr/issues/939) |
+| 3.4 | One elastic-work governor | [#940](https://github.com/cairn-ehr/cairn-ehr/issues/940) |
+| 3.7 | Surplus-copy GC invariant (≥ k acknowledged custodians) | [#941](https://github.com/cairn-ehr/cairn-ehr/issues/941) |
+| 3.5 | TLA+ model of the quarantine floor | [#942](https://github.com/cairn-ehr/cairn-ehr/issues/942) |
+| 3.7, 4, Q4 | Prose/check batch: erasure remnants, ADR-0057 shadow build, HA hub signing identity | [#943](https://github.com/cairn-ehr/cairn-ehr/issues/943) |
