@@ -733,6 +733,7 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/sensitivity/mod.rs",
     "crates/cairn-node/src/shred.rs",
     "crates/cairn-node/src/identity_evidence.rs",
+    "crates/cairn-node/src/note/sign.rs",
 ];
 
 /// Commits inside a MARKED file that write no event, so there is nothing to double: how many,
