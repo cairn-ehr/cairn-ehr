@@ -23,7 +23,8 @@ The harness tests that claim as a **system**. It runs *N* real nodes through a s
 - sneakernet and destroy-and-restore.
 
 After a final full heal it asserts the invariants below. On failure it prints the seed and writes the minimised
-schedule to a file that replays it exactly (D4).
+schedule to a file that replays **the same operations** (D4). The run itself is reproducible only as far as D4's
+determinism rules make it.
 S4 adds **I6a/I6b** (causal order under clock skew, defined there), since they need the clock seam to mean
 anything. §5 lists the invariants that later issues add.
 
@@ -98,6 +99,18 @@ generates. So:
   unloadable schedule fails it. `SYNCNEMESIS_SEED` stays available for re-running the *search* on the current
   generator.
 
+**Replaying the operations is deterministic; the run is not entirely.** A replay also meets values the harness
+does not choose: real wall time (every skew is `real + offset`), the keys and UUIDv7s that production code mints
+during `init` and authoring, the ephemeral ports, and how long each process takes. So:
+- **No invariant may hinge on those values.** Skew draws keep a margin from every bound. `±25 h` sits an hour
+  outside the 24 h ceiling, never within seconds of it. I6a's admission time errs toward demanding the order
+  (S4). Orderings that rest on a UUID tiebreak are compared as *sets*, not as sequences, unless the tiebreak is
+  itself the property under test.
+- **A witness must prove it is deterministic before it is accepted.** Registering a `KnownGap` witness, or a
+  corpus entry, replays it three times, and it must reproduce on all three. A schedule that reproduces only
+  sometimes is not a witness. It is a finding, about nondeterminism in the system or in the harness, and it is
+  filed as one. D6's rule 2 can then trip on a single non-reproduction without being flaky.
+
 **D5 — The harness keeps an oracle ledger.**
 Every `Op::Author` records the content address it produced, plus the scope and the node it was authored on.
 I3 is checked against the ledger, not against any node, because a node cannot be its own witness.
@@ -141,32 +154,72 @@ unconditionally**. It has no equivalent of cairn-node's #726 replay-skip (`db::r
 first thing each `cairn-sync pull` does is run db/001's `CREATE OR REPLACE FUNCTION cairn_wall_ms()`, and that
 resets the skewed node to the true clock *inside the very process whose apply doors F1 lives in*. The harness
 cannot re-apply the override there, because D3 makes the binary, not the harness, own that connection. Left
-as it is, S4 would never reproduce F1, and it would pass for the wrong reason. S4 therefore does this, in
-order:
+as it is, S4 would never reproduce F1, and it would pass for the wrong reason.
 
-1. **Bring `cairn-sync`'s loader onto the #726 replay-skip, as its own TDD step with its own issue.** One
-   shared predicate, not a copy: cairn-sync calls `replay_can_be_skipped` and stamps `schema_hash` the same
-   way, the #227 single-code-path pattern. This stands on its own as a production fix: today every
-   `cairn-sync` connect takes the schema-load lock and replays all the DDL. It must keep the
-   re-adjudicate-first pass in the position the `load_schema` comment pins, and the cairn-sync stamp tests
-   must stay green. Since the stamp records the *embedded* hash and the harness override changes only
-   `pg_proc`, a current database then skips its replay and the override survives.
-2. **Assert the override after every pull, not once.** After each `Op::Pull`/`Op::FullSweep` the harness
-   re-reads `cairn_wall_ms()`'s definition (`pg_get_functiondef`) and fails if it is not the override. If a
-   replay ever happens again (a forced replay, a stamp mismatch, a later loader change), the run fails loudly
-   at the pull that lost the skew, instead of silently testing true time. The S4 self-test makes a skewed
-   node's *pulled-in* event visible to a clock-bounded door and checks that the bound used the skewed time.
-3. The harness's own connects go through cairn-node's `connect_and_load_schema`, which already skips a
-   current schema. `force_schema_replay` (which `test_serial_guard` calls) clears the stamp, so the harness
-   must never call it on a skewed node. Re-apply the override after any connect the harness cannot rule out
-   replaying.
+**Extending the #726 replay-skip to `cairn-sync` does not fix this on its own.** That was this plan's first
+answer, and it is wrong. `node_schema` holds **one** stamp, and that stamp names **one** `loader_build`.
+`replay_can_be_skipped` (`cairn-node/src/db.rs`) refuses to skip on another loader's stamp, deliberately:
+cairn-sync replays only a *subset* of the migrations, so its stamp cannot vouch for cairn-node's files. Every
+harness node is touched by both binaries. The cairn-node orchestrators author, and `cairn-sync` pulls. So the
+two loaders would hand the stamp back and forth: each connect sees the other's name and replays everything,
+the override included.
 
-*Rejected alternatives:* a session or database GUC holding the offset. Any role can `SET` a custom
-placeholder GUC in its own session, so the authoring agent could skew its own drift ceiling, and that
-re-opens #102's ratchet in production. A shadow `cairn_wall_ms()` earlier on `search_path`: the doors are
-`SECURITY DEFINER … SET search_path = public, pg_temp`, so they would never see it, which is the hardening
-working as intended. An offset table read by the production function: it would ship a standing skew lever
-into every node to serve a test.
+> [!IMPORTANT]
+> **Open decision — owed by the maintainer before S4 starts.** Where does the skew live so that it survives
+> both loaders? Each option changes production code, which is why this is not the plan's call to make.
+>
+> - **A. Per-loader stamps, and a skip rule that accepts a superset.** `node_schema` gains a row per loader
+>   (an additive migration). A loader may skip when the last replay, by *any* loader, ran a file set that
+>   contains its own with identical bytes, at the same generation. After cairn-node's first full replay,
+>   cairn-sync would then skip for good, and the override survives.
+>   - *Cost:* a change to the production loader and the stamp shape, with per-file hashes.
+>   - *Bonus:* it removes the same back-and-forth from production. Any node running both binaries on one
+>     database pays a full replay at every alternation today.
+>   - *Hazard to rule out first:* cairn-sync's subset replay running after cairn-node's could re-apply an older
+>     function body that a node-only later migration had superseded (the db/011 → db/013 shape). That hazard
+>     exists in production today, and A would remove it rather than add it, but it has to be checked, not
+>     assumed.
+> - **B. An owner-only offset in the catalog.** `cairn_wall_ms()` returns `clock + offset`, reading the offset
+>   from `pg_db_role_setting` (set with `ALTER DATABASE … SET cairn.clock_offset_ms = …`), **not** from
+>   `current_setting`. So a session's `SET` cannot move it, which closes the GUC objection below. Neither
+>   loader's replay touches the catalog, so the skew survives both.
+>   - *Cost:* a catalog lookup on every clock read. Measure it on `node_hlc_tick` before adopting B.
+>   - *What it adds to production:* a knob that persists, though only a database owner can turn it (see the
+>     correction below).
+>   - *It fits #935:* the peer-corrected time from #935 needs a durable per-node offset anyway, and this is
+>     where that offset would live.
+> - **C. An owner-only offset table**, revoked from every runtime role. It has B's properties, but it is a
+>   schema object: it shows up in table dumps, and it could travel inside a full-database copy onto new
+>   hardware. B's per-database setting does not, unless the copy includes `--create` settings.
+>
+> *Recommendation:* **B**. It needs no change to the loader, it survives both loaders by construction, and it
+> is the natural home for #935's offset. Whichever option is chosen, `cairn_clock_health` (db/040) must
+> report a nonzero offset loudly, as a grade on `status`. And a DB-gated test must assert that the offset is
+> absent on every database that is not a harness node.
+>
+> *Correction to this plan's first draft:* it rejected the table form as "a standing skew lever". That
+> contradicted its own premise, since the owner can already redefine the function. The real difference is
+> **persistence**: a redefinition heals itself at the next replay, while a knob stays until someone removes
+> it. Persistence is answered by visibility (the `status` grade, the absence test), not by ruling the option
+> out.
+
+Whichever option is chosen, these hold:
+1. **Assert the skew after every pull, not once.** After each `Op::Pull`/`Op::FullSweep`, and after each
+   sneakernet apply or restore, the harness checks that the node's effective `cairn_wall_ms()` still carries
+   its scheduled offset. If anything resets it, the run fails loudly at the operation that lost the skew,
+   instead of silently testing true time. The S4 self-test makes a skewed node's *pulled-in* event reach a
+   clock-bounded door, and checks that the bound used the skewed time.
+2. The harness's own connects go through cairn-node's `connect_and_load_schema`. Under option A only,
+   `force_schema_replay` (which `test_serial_guard` calls) would also reset a function-borne skew, so the
+   harness never calls it on a skewed node.
+
+*Rejected outright:*
+- **A session GUC read with `current_setting`.** Any role can `SET` a custom placeholder GUC in its own
+  session, so the authoring agent could skew its own drift ceiling. That re-opens #102's ratchet in
+  production.
+- **A shadow `cairn_wall_ms()` earlier on `search_path`.** The doors are
+  `SECURITY DEFINER … SET search_path = public, pg_temp`, so they would never see it, which is the hardening
+  working as intended.
 
 This seam is also exactly where [#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)'s peer-corrected time
 will plug in, so it is not throwaway work.
@@ -255,10 +308,12 @@ re-adjudication catches up.
 1. **Test first.** The single-source guard: every ordering or bounding clock read on the D7 paths goes through
    `cairn_wall_ms()`. Then do the refactor. It is behaviour-neutral, so the whole existing suite must stay green
    unchanged.
-2. **Test first.** `cairn-sync` skips the replay on a current schema (D7 step 1), using the shared
-   `replay_can_be_skipped` predicate. Without this, step 3 cannot work.
-3. Add a harness override of `cairn_wall_ms()` per node (D7). Add the self-test that the override is live
-   *inside* a pull's apply door, and the per-pull check that it survived (D7 step 2).
+2. **Test first.** The mechanism chosen in D7's open decision (A, B or C), with its own tests: under A, the
+   superset skip rule; under B or C, that a session `SET` cannot move the offset, and that `cairn_clock_health`
+   reports a nonzero offset. **Steps 2 onward wait for that decision.** Step 1 is behaviour-neutral and does
+   not depend on it.
+3. Add the per-node skew (D7). Add the self-test that the skew is live *inside* a pull's apply door, and the
+   per-operation check that it survived (D7, invariant 1).
 4. Add `Op::Skew { node, offset_ms }`, drawn from {0, ±seconds, ±hours, ±25 h, −months}. Add
    `Op::DeadRtc { node }`: the node restarts at a fixed old time. The ledger records every node's offset over
    time, so the harness always knows the *true* time at which each event was authored. No node knows that.
@@ -267,16 +322,30 @@ re-adjudication catches up.
    its target" would fail by design, and no fix to #935 could ever make it pass.
    - **I6a — honest causal order is never inverted.** Take every event *E* with `refs` to a target *T*. Let
      *a* be the **true** time at which *E*'s authoring node admitted *T*. The clamp acts at admission, not at
-     authoring, so it is admission time that matters. The ledger takes *a* as the start of the pull that
-     delivered *T*, which errs toward demanding the order. If `T.wall ≤ a + cairn_max_hlc_drift_ms()`, then
-     `E.hlc > T.hlc`. Both are the signed HLC values, the same on every node, so this is checked once per
+     authoring, so it is admission time that matters. The ledger records *a* as the **start of whichever
+     operation admitted *T* on that node**, which errs toward demanding the order. Every admitting path
+     defines it:
+     - `Op::Pull` / `Op::FullSweep` (the clinical door, db/020);
+     - `Op::Sneakernet` (the medium apply);
+     - `Op::DestroyAndRestore` (the restore doors);
+     - local authoring: if *T* was authored on *E*'s own node, the order is **always** demanded, because both
+       came from that node's own monotone tick and no clamp sits between them.
+
+     An admission the ledger cannot place is a **harness error**, never a skipped check: an undefined *a*
+     must not silently exempt exactly the path it failed to model. If `T.wall ≤ a + cairn_max_hlc_drift_ms()`,
+     then `E.hlc > T.hlc`. Both are the signed HLC values, the same on every node, so this is checked once per
      event, not per node. This is the property F1 breaks: *T* is honest, and *E*'s author is the one whose
      clock is behind.
    - **I6b — the ratchet defence holds.** If `T.wall > a + ceiling`, meaning *T*'s author was more than 24 h
-     ahead of true time, then *E* may order below *T*, and that is expected. What must hold instead is that
-     no node's `hlc_state` ever rises above that node's own (possibly skewed) `cairn_wall_ms()` plus the
-     ceiling. An inversion is excused **only** when the oracle classifies *T* as far-future at its admission.
-     Every other inversion is an I6a failure, so the exemption cannot quietly widen to cover F1.
+     ahead of true time, then *E* may order below *T*, and that is expected. What must hold instead is a
+     bound on every **merge**, not on the state. The harness reads `hlc_state` before and after each operation
+     that admits remote events, and asserts that
+     `hlc_after ≤ max(hlc_before, cairn_wall_ms() + ceiling, the node's own ticks during the operation)`.
+     It must not assert `hlc_state ≤ cairn_wall_ms() + ceiling`. That fails by design after `DeadRtc` regresses
+     a node that has already run at true time: its `hlc_state` then legitimately sits months above its clock,
+     and no merge caused that. An inversion is excused **only** when the oracle classifies *T* as far-future
+     at its admission. Every other inversion is an I6a failure, so the exemption cannot quietly widen to cover
+     F1.
 6. **Expected outcome:** F1 ([#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)) shows up as an I6a
    failure, and as a node-plane `revoke` that never applies. Register it as a `KnownGap` tied to #935, with its
    witness schedule (D6). That gives #935 its reproduction for free. A `+25 h` author whose events are

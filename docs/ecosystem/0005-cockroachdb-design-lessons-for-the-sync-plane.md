@@ -210,6 +210,14 @@ trustworthy one:
    > (admitted by the clinical door's clamp) would carry the poisoned wall into this node's clock: the
    > ratchet #102 exists to stop. It is safe only *after* step 1, when the ceiling no longer depends on a
    > clock that may itself be wrong.
+
+   > [!WARNING]
+   > **Not covered: consequence 4.** Steps 1 and 2 correct skew only with evidence from peers. A node that
+   > refuses its own writes after its clock regresses is most likely the offline one, with no peers to ask,
+   > so this remedy leaves it refusing indefinitely. The local submit door needs a rule of its own that does
+   > not depend on peers. For example: judge a node-*ticked* body against `GREATEST(clock_timestamp(),
+   > hlc_state)`, which is only safe if `submit_event` never merges a submitted wall forward. Or exempt the
+   > node's own ticks outright. Either way it needs a written no-ratchet argument. **Open**, for #935.
 3. **Never self-terminate.** This is the one place Cairn must deliberately *not* copy CockroachDB. A CP
    database can afford to kill a skewed node; an EHR node must keep writing (ADR-0001 availability
    floor, principle 4). The AP translation of "self-terminate" is *downgrade the grade, widen the
@@ -441,7 +449,14 @@ convergence semantics and needs a system-level test to show set-union survived.
 A Patroni-style HA pair at the hospital core is one *logical* node. How does it hold **one signing identity
 across failover**, when ADR-0026 wants that key hardware-bound and non-extractable? Two options are visible:
 - a key that both members can use, which weakens hardware-binding;
-- a key per member, which makes the hub two nodes to the fleet, linked by `supersede` at every failover.
+- a key per member, which makes the hub **two peered nodes** to the fleet behind one logical service, each
+  authoring under its own identity.
+
+  `supersede` (ADR-0026) does **not** fit here, though it looks like it should. It is a one-way, dead-node
+  replacement: the superseded identity's *future* authority is withheld (ADR-0064). After a failback, the
+  recovered member would be admitted but powerless, and superseding back would be a cycle the algebra does
+  not model. So the per-member option is peering, or a new "HA set" identity construct; it is never
+  supersede per failover.
 
 Neither CockroachDB, whose nodes are interchangeable cluster members with no per-node signing identity, nor
 the spec answers this today. It is worth a sentence in deployment §8 before anyone builds the pair.
