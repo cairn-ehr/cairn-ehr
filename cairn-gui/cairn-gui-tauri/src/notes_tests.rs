@@ -1,6 +1,7 @@
 //! Tests for `notes.rs`, the note pane's commands: the wrong-chart and fixture-mode refusals
 //! (against `AppState::mock`, no Tauri runtime, as `commands_tests.rs` does for the medication
 //! writes), and the pure wording and time-reading functions.
+use super::time::{parse_stated, pick_local, stated_time_in};
 use super::*;
 use crate::funnel::view::Retry;
 use cairn_node::note::view::NoteGrade;
@@ -107,6 +108,27 @@ fn an_empty_note_or_a_bad_time_is_refused_before_the_key() {
     let (draft, stated) = sign_checks_before_the_key(&a_draft(), "seen", Some("")).unwrap();
     assert_eq!(draft.to_string(), a_draft());
     assert_eq!(stated, None);
+}
+
+/// Final review M2: `datetime-local` takes years up to 275760, so a slip like "20266" reads as a
+/// time, and the floor's wire pin (db/001 `cairn_t_effective`: a four-digit year; PostgreSQL has
+/// no year 0) would refuse it only AFTER the passphrase. Said before the key, naming the year.
+/// The SAVE still keeps such a time: refusing it there would leave the text unsaved.
+#[test]
+fn a_stated_year_the_record_cannot_hold_is_refused_before_the_key() {
+    let far =
+        sign_checks_before_the_key(&a_draft(), "seen", Some("20266-11-03T03:00")).unwrap_err();
+    assert_eq!(
+        far.text,
+        "the time it happened, 20266-11-03T03:00, has a year the record cannot hold \
+         (years 1 to 9999) — check the year you typed"
+    );
+    assert!(sign_checks_before_the_key(&a_draft(), "seen", Some("0000-06-01T12:00")).is_err());
+    assert!(sign_checks_before_the_key(&a_draft(), "seen", Some("9999-12-31T09:00")).is_ok());
+    assert!(
+        parse_stated(Some("20266-11-03T03:00")).is_ok(),
+        "a save keeps it"
+    );
 }
 
 fn utc(s: &str) -> DateTime<Utc> {

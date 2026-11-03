@@ -24,9 +24,14 @@ use cairn_node::note::draft::{NoteDraft, SaveOutcome};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::sign::SignRefusal;
 use cairn_node::note::view::{grade_words, instant, time_words};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use std::time::Instant;
+use time::{datetime_local, parse_stated, year_the_record_holds};
 use uuid::Uuid;
+
+/// Reading the stated time (`notes_time.rs`).
+#[path = "notes_time.rs"]
+mod time;
 
 /// One signed note, as the pane shows it.
 #[derive(Debug, serde::Serialize)]
@@ -316,6 +321,9 @@ pub(crate) fn sign_checks_before_the_key(
     }
     let draft = draft_id.parse().map_err(|_| refused("not a draft id"))?;
     let stated = parse_stated(stated_time).map_err(refused)?;
+    if let (Some(s), Some(t)) = (stated_time, stated) {
+        year_the_record_holds(s, t).map_err(refused)?;
+    }
     Ok((draft, stated))
 }
 
@@ -418,64 +426,6 @@ where
         stated_time: draft.stated_time.map(|t| datetime_local(t, tz)),
         here,
         words,
-    }
-}
-
-/// `t` as a `datetime-local` value in `tz`: minutes only when that is exact, else with its seconds
-/// (and any fraction), so a reopened draft sends back the instant it holds, never one rounded to
-/// the minute. Both forms are valid field values and both parse in [`stated_time_in`]. Pure.
-fn datetime_local<Tz: TimeZone>(t: DateTime<Utc>, tz: &Tz) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    use chrono::Timelike;
-    let format = if t.second() == 0 && t.nanosecond() == 0 {
-        "%Y-%m-%dT%H:%M"
-    } else {
-        "%Y-%m-%dT%H:%M:%S%.f"
-    };
-    t.with_timezone(tz).format(format).to_string()
-}
-
-/// The webview's stated-time field: absent or empty is "not stated" (principle 4), else a time.
-pub(crate) fn parse_stated(stated_time: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
-    match stated_time {
-        None | Some("") => Ok(None),
-        Some(s) => stated_time_from_local(s).map(Some),
-    }
-}
-
-/// A `datetime-local` value (`"2026-11-03T03:00"`, no zone) read in this machine's zone — the
-/// zone the clinician reads the wall clock in.
-pub fn stated_time_from_local(s: &str) -> Result<DateTime<Utc>, String> {
-    stated_time_in(s, &chrono::Local)
-}
-
-/// [`stated_time_from_local`] in zone `tz`, so the rule is testable without the machine's zone.
-pub(crate) fn stated_time_in<Tz: TimeZone>(s: &str, tz: &Tz) -> Result<DateTime<Utc>, String> {
-    // With or without seconds: a browser sends them when the field's step asks for them.
-    let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
-        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M"))
-        .map_err(|_| format!("not a time: {s}"))?;
-    // At a clock change a wall time can happen twice (clocks go back): `earliest` takes the
-    // first time the clock showed it.
-    pick_local(s, tz.from_local_datetime(&naive).earliest())
-}
-
-/// The instant a wall-clock time `s` means, given the zone's earliest answer for it. Pure.
-///
-/// `None` is a time that never happened (clocks went forward past it): refused, with a sentence
-/// naming it — any instant chosen for it would be a time the clinician never saw on a clock.
-pub(crate) fn pick_local<Tz: TimeZone>(
-    s: &str,
-    earliest: Option<DateTime<Tz>>,
-) -> Result<DateTime<Utc>, String> {
-    match earliest {
-        Some(t) => Ok(t.with_timezone(&Utc)),
-        None => Err(format!(
-            "{s} never happened on this machine's clock — the clocks moved forward past it; \
-             choose a time before or after the change"
-        )),
     }
 }
 
