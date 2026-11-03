@@ -89,11 +89,15 @@ countersignature) — their addendum and signature carry the supervisor's respon
 
 - Starting a note needs a named writer; "unknown" is allowed (anti-goal of the parent design: no field
   satisfiable only by fabrication). If nobody is named, starting a note asks who's here first.
-- Every keystroke is saved to a **durable draft store on the facility node** (every terminal is a window onto
-  it, so a nurse can finish at whichever terminal is free — usually the same one). Debounce interval is the
+- Every keystroke is saved to a **durable draft store on the facility node**. Debounce interval is the
   builder's; a power cut may lose at most that interval.
+- **A draft is edited only at the terminal it was started on** (maintainer, review finding I1): nothing can
+  reliably tell whether someone is still writing in it on another machine — and Cairn must keep working with
+  the network down — so two terminals editing one draft would silently overwrite each other. At any other
+  terminal the draft is read-only, and **"Continue" there starts an addendum draft** of that terminal's own.
+  The window needs a stable terminal id for this (builder's: where it is kept).
 - A draft belongs to its chart and lists **every writer who typed into it**: when a different "who's here"
-  picks a draft up and types, that person is added (maintainer: naming every writer is enough — "whoever finally
+  at the same terminal picks a draft up and types, that person is added (maintainer: naming every writer is enough — "whoever finally
   signs has to take responsibility for the content anyway"). This refines §3.10's "keyed by `(author,
   patient)`": a draft has a subject and a writer *set*, never a session. It also departs from §3.10's "a
   'switch' hides … the previous user's draft": here drafts are visible to all (next bullet).
@@ -102,8 +106,9 @@ countersignature) — their addendum and signature carry the supervisor's respon
   and anyone else continues *below*. Enforced at the floor: the save door refuses a save that changes or removes
   another writer's part. So Dr Z can never empty Dr X's draft and type "seen" over it.
 - **Drafts are visible to everyone who opens the chart** (maintainer: "it may contain important information for
-  the next writer"), plainly marked *unsigned draft*, with its writers and start time. Another person may read
-  it, continue it (and be named), or start their own note.
+  the next writer"), plainly marked *unsigned draft*, with its writers, start time and terminal. Another person
+  may read it, continue it (at its terminal by typing into it; anywhere else as an addendum draft), or start
+  their own note.
 
 ### 3.3 Walking away: the quarantine clock
 
@@ -347,8 +352,9 @@ an edit.
 
 Decide these before or in the plan:
 
-- **Two terminals on one draft.** Even with per-writer parts, the same writer saving from two terminals is last
-  save wins. One live editor per draft (a lease shown on the other terminal)?
+- **When a continuation is signed before its original commits.** An `addendum-to` ref must name an event that
+  already exists (ADR-0041 decision 8), and a draft is not one yet. Does signing the continuation first commit
+  the original as it stands (asserted, `?`-named — the page taken out of the folder), or wait for it?
 - **A discard leaves no trace even if someone acted on the draft** (a doctor orders levels after reading it).
   Keep an audit row (who discarded which draft on which chart, when) outside the clinical record?
 - **3a ships a note editor with no draft store**, so a crash loses an unsigned note until 3b lands — against
