@@ -1287,7 +1287,7 @@ The doors behind them were run against throwaway databases by the slice's DB-gat
 
 ## 18. Write, autosave and sign a progress note (GUI sign-in slice 3a, ADR-0087)
 
-The slice's gestures: **New note**, typing (saved by itself about a second after the typing pauses), an optional
+The slice's gestures: **New note**, typing (saved by itself at the first keystroke, then at most once a second while typing, R14), an optional
 **When it happened**, and **Sign note** with the signer strip of section 16. Paper counterpart: the progress sheet in
 the bedside folder: pick it up, write (heading the entry with the time it happened, if not now), sign. **Live only**:
 a `--mock` window lists no notes and refuses every note write ("fixture mode…").
@@ -1352,7 +1352,7 @@ seconds, then type the strip's Staff ID and passphrase and press *Sign note*. Fi
 - [ ] The draft is back in the editor, with its stated time, and the status line reads "unsigned draft · started … ·
       last typed …". Count every act before typing can continue (target 0).
 - [ ] Kill it again within a second of a keystroke: record how much of the last typing was lost (the bound is the
-      one-second debounce).
+      one-second save interval, R14).
 - [ ] Stop the node's Postgres while typing: "not saved yet — your text is still here" shows and the text stays.
       *Sign note* says "Could not sign this note: …" and keeps the text. Start Postgres; the next keystroke saves.
 - [ ] **Another terminal's draft.** Quit, move the terminal-id file aside, relaunch: the draft is listed, read-only,
