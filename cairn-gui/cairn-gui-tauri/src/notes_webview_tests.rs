@@ -10,6 +10,7 @@ use crate::source_guard::{js_const, js_fn, position};
 const NOTES_JS: &str = include_str!("../src-ui/notes.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
+const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
 
 /// Review Focus 3: a debounced save that fires after Sign must never be sent. `signNote` cancels
 /// the pending timer BEFORE it sends the sign (the node answers `spent` to a late save anyway;
@@ -136,17 +137,6 @@ fn the_chart_read_reads_the_notes_and_a_chart_change_clears_them() {
         "refresh reads the note pane"
     );
     assert!(js_fn(MAIN_JS, "clearChart").contains("clearNotes();"));
-    // The chart change flushes the last second of typing to its own draft's chart, and that save
-    // is SENT before `closeChart` sends `close_chart` (an idle save goes out at once, not on a
-    // later tick — the walk caught it arriving after the chart had closed, so refused).
-    assert!(
-        js_fn(NOTES_JS, "clearNotes").contains("if (noteSaveTimer !== null) void saveNoteNow();")
-    );
-    let save = js_fn(NOTES_JS, "saveNoteNow");
-    assert!(
-        save.contains("noteSaveQueue = savesInFlight === 1 ? send() : noteSaveQueue.then(send);"),
-        "{save}"
-    );
     let read = js_fn(NOTES_JS, "readNotes");
     assert!(
         read.contains("invoke(\"note_list\", { patientId: patient })"),
@@ -241,4 +231,103 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
             );
         }
     }
+}
+
+/// Fix round 1, I1. Closing a chart waits for every queued save BEFORE it sends `close_chart`.
+/// Being SENT first is not enough: Tauri runs async commands as separate tasks, so a save sent
+/// before `close_chart` may still take the chart lock after it, and be refused. The queue never
+/// rejects (`sendDraft` catches everything), so the close always goes on.
+#[test]
+fn closing_a_chart_waits_for_every_queued_save() {
+    let close = js_fn(FUNNEL_JS, "closeChart");
+    let waited = position(
+        close,
+        "if (typeof notesSaved === \"function\") await notesSaved();",
+    );
+    assert!(position(close, "clearChart();") < waited, "{close}");
+    assert!(
+        waited < position(close, "invoke(\"close_chart\")"),
+        "{close}"
+    );
+    assert!(js_fn(NOTES_JS, "notesSaved").contains("return noteSaveQueue;"));
+    let save = js_fn(NOTES_JS, "saveNoteNow");
+    assert!(
+        save.contains("noteSaveQueue = noteSaveQueue.then(() => sendDraft(sent));"),
+        "{save}"
+    );
+    assert!(
+        !NOTES_JS.contains("savesInFlight"),
+        "the send-at-once special case is gone"
+    );
+}
+
+/// Fix round 1, I2. A partly typed time is never saved as "not stated": the save sends the last
+/// COMPLETE time the draft held — the one it reopened with, or the last complete one typed.
+#[test]
+fn a_partly_typed_time_saves_the_last_complete_one() {
+    let save = js_fn(NOTES_JS, "saveNoteNow");
+    assert!(
+        save.contains(
+            "statedTime: when.validity.badInput ? held.statedTime : (held.statedTime = when.value),"
+        ),
+        "{save}"
+    );
+    assert!(
+        js_fn(NOTES_JS, "openDraft").contains("statedTime: draft.stated_time || \"\""),
+        "a reopened draft holds the time it was saved with"
+    );
+    assert!(js_fn(NOTES_JS, "newNote").contains("statedTime: \"\""));
+}
+
+/// Fix round 1, I3 (ruling R13). While a Sign is in flight the editor is read-only: a keystroke
+/// then would be in neither the signed note nor any draft. It comes back on a refusal and with
+/// every editor shown; closing the editor drops any pending save timer.
+#[test]
+fn the_editor_is_read_only_while_a_sign_is_in_flight() {
+    let signing = js_fn(NOTES_JS, "setSigning");
+    for line in [
+        "el(\"note-sign\").disabled = on;",
+        "el(\"note-text\").readOnly = on;",
+        "el(\"note-when\").readOnly = on;",
+    ] {
+        assert!(signing.contains(line), "{signing}");
+    }
+    let sign = js_fn(NOTES_JS, "signNote");
+    assert!(
+        position(sign, "setSigning(true);") < position(sign, "invoke(\"note_sign\""),
+        "{sign}"
+    );
+    let caught = &sign[position(sign, "catch (failure) {")..];
+    assert!(caught.contains("setSigning(false);"), "{sign}");
+    assert!(js_fn(NOTES_JS, "showEditor").contains("setSigning(false);"));
+    assert!(js_fn(NOTES_JS, "closeEditor").contains("clearTimeout(noteSaveTimer);"));
+}
+
+/// Fix round 1, I4. Text not yet in the node survives a chart change: a keystroke or a failed save
+/// marks the editor unsaved, an answered save clears it, and the close flushes on either. Sign's
+/// partly-typed-time refusal comes BEFORE it cancels the pending save, so the save still goes. An
+/// unknown-outcome Sign keeps the editor unless the save before closing it was answered.
+#[test]
+fn unsaved_text_survives_a_chart_change() {
+    assert!(js_fn(NOTES_JS, "onNoteInput").contains("noteUnsaved = true;"));
+    let send = js_fn(NOTES_JS, "sendDraft");
+    let caught = &send[position(send, "catch (failure) {")..];
+    assert!(caught.contains("noteUnsaved = true;"), "{send}");
+    assert!(
+        send[..position(send, "catch (failure) {")].contains("noteUnsaved = false;"),
+        "{send}"
+    );
+    assert!(js_fn(NOTES_JS, "clearNotes")
+        .contains("if (noteUnsaved || noteSaveTimer !== null) void saveNoteNow();"));
+    let sign = js_fn(NOTES_JS, "signNote");
+    assert!(
+        position(sign, "if (when.validity.badInput) {")
+            < position(sign, "clearTimeout(noteSaveTimer);"),
+        "{sign}"
+    );
+    let unknown = position(
+        sign,
+        "if (report.behind_the_record && !(await saveNoteNow())) {",
+    );
+    assert!(unknown < position(sign, "closeEditor();"), "{sign}");
 }
