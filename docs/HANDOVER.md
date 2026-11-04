@@ -92,8 +92,9 @@
 > full-text copy per save) · **#969** (the re-lock leaves enrol/re-key/reseal passphrases in their forms) · **#970**
 > (a Sign's outcome after a switch) · **#971** (the directory lists repudiated keys) · **#972** (bookmarks from
 > `--patient`/registering; the offer shows an age, with #673) · **#974** (resuming costs a who's-here pick, below) ·
-> **#973** (a signed byline's `?` has no spoken
-> "unverified"); from planning **#963** (slice 5: drafts across
+> **#973** (built in this PR; the PR closes it) · from the final review **#975** (three small window
+> defects) · **#976** (the first keystroke after a fork can close the editor; overlapping forks) · **#945** half
+> built (a draft signed elsewhere keeps the unsaved text); from planning **#963** (slice 5: drafts across
 > terminal-nodes) · **#964** · **#965**. Owed by a human: **RUNBOOK §19** (hot key → named ≤ 3 s over 50 staff, re-lock
 > → back ≤ 10 s, Continue here ≤ 1 s, nothing lost in a mid-typing switch, keyboard + VoiceOver). **Decision owed, #974** (`M > N`?):
 > with nobody named, *Continue here* costs 2 acts (plan: 1), and a relaunch forgets who's here, so getting a draft
