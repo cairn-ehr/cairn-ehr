@@ -139,6 +139,8 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         held_by: None,
         key_hold_secs: 0,
         mock: false,
+        whos_here: crate::whos_here::claim_view(&crate::whos_here::Claim::NotAsked),
+        idle_lock_secs: 900,
     })
     .unwrap();
 

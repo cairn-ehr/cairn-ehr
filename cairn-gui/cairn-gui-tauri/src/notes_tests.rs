@@ -4,9 +4,7 @@
 use super::time::{parse_stated, pick_local, stated_time_in};
 use super::*;
 use crate::funnel::view::Retry;
-use cairn_node::note::draft::DraftPart;
-use cairn_node::note::view::NoteGrade;
-use chrono::{FixedOffset, LocalResult, NaiveDate};
+use chrono::{FixedOffset, LocalResult, TimeZone};
 
 fn on_screen() -> (AppState, String) {
     let chart = Uuid::from_u128(7);
@@ -26,12 +24,25 @@ fn a_draft() -> String {
 #[tokio::test]
 async fn sign_refuses_a_chart_not_on_screen() {
     let (state, _) = on_screen();
-    let err = note_sign_impl(&state, &another_chart(), &a_draft(), "seen", None, None)
+    let err = note_sign_impl(
+        &state,
+        &another_chart(),
+        &a_draft(),
+        "seen",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.text.contains("not the chart"), "{}", err.text);
+    // A save as well: a debounced save for the chart just left must not land on it.
+    let err = note_draft_save_impl(&state, &another_chart(), &a_draft(), "seen", None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
-    // A save as well: a debounced save for the chart just left must not land on it.
-    let err = note_draft_save_impl(&state, &another_chart(), &a_draft(), "seen", None)
+    // And a take: Continue here acts only on the chart on screen.
+    let err = note_draft_take_impl(&state, &another_chart(), &a_draft())
         .await
         .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
@@ -42,12 +53,16 @@ async fn sign_refuses_a_chart_not_on_screen() {
 #[tokio::test]
 async fn sign_in_fixture_mode_refuses() {
     let (state, chart) = on_screen();
-    let err = note_sign_impl(&state, &chart, &a_draft(), "seen", None, None)
+    let err = note_sign_impl(&state, &chart, &a_draft(), "seen", None, None, None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, Retry::Never);
     assert!(err.text.contains("fixture mode"), "{}", err.text);
-    let err = note_draft_save_impl(&state, &chart, &a_draft(), "seen", None)
+    let err = note_draft_save_impl(&state, &chart, &a_draft(), "seen", None, None)
+        .await
+        .unwrap_err();
+    assert!(err.text.contains("fixture mode"), "{}", err.text);
+    let err = note_draft_take_impl(&state, &chart, &a_draft())
         .await
         .unwrap_err();
     assert!(err.text.contains("fixture mode"), "{}", err.text);
@@ -75,9 +90,70 @@ fn save_words_each_outcome() {
         words(SaveOutcome::NoChart),
         "this patient has no chart on this node"
     );
-    // Slice 3b-1 shim (Task 5 words them): a move reads as 3a's sentence.
-    assert_eq!(words(SaveOutcome::Moved), words(SaveOutcome::Elsewhere));
-    assert!(words(SaveOutcome::NoSuchWriter).contains("not enrolled"));
+    assert_eq!(
+        words(SaveOutcome::NoSuchWriter),
+        "the name at this terminal is not an enrolled member — say who's here again"
+    );
+    assert!(!saved.moved && !save_view(SaveOutcome::Elsewhere).moved);
+}
+
+/// The old terminal's next save after a Continue elsewhere: `moved`, so the webview keeps what it
+/// had not saved as a new draft, and says so in this one sentence.
+#[test]
+fn moved_sentence_exact() {
+    let moved = save_view(SaveOutcome::Moved);
+    assert!(moved.moved && !moved.saved);
+    assert_eq!(
+        moved.sentence.as_deref(),
+        Some(
+            "This note is now being continued at another terminal. What you typed since the \
+             last save is kept here as a new draft."
+        )
+    );
+}
+
+#[test]
+fn take_words_each_outcome() {
+    let taken = take_view(TakeOutcome::Taken);
+    assert!(taken.taken && taken.sentence.is_none());
+    let words = |o| take_view(o).sentence.expect("a refusal is worded");
+    assert_eq!(
+        words(TakeOutcome::Spent),
+        "this note has already been signed"
+    );
+    assert_eq!(
+        words(TakeOutcome::Elsewhere),
+        "this draft belongs to another chart or terminal — nothing was saved"
+    );
+    assert_eq!(words(TakeOutcome::Gone), "this draft is no longer open");
+}
+
+/// Global constraint: the writer of a save is the one the editor captured when it opened
+/// (`noteDraft.writer`), never re-read from the current claim — a debounced save landing after a
+/// switch to Dr B still names Nurse A, who typed it. Read from the source, because a fixture window
+/// refuses before the door is reached: both doors are handed the `writer` the webview sent, and
+/// neither impl reads who's here.
+#[test]
+fn save_passes_the_given_writer_not_the_claim() {
+    let src = include_str!("notes.rs");
+    let flat = |f: &str| -> String {
+        crate::source_guard::rust_fn(src, f)
+            .split_whitespace()
+            .collect()
+    };
+    let save = flat("note_draft_save_impl");
+    assert!(
+        save.contains("save_part(&*db,draft,patient,terminal,writer,"),
+        "{save}"
+    );
+    let sign = flat("note_sign_impl");
+    assert!(
+        sign.contains("SignNoteInput{draft,patient,terminal,writer,"),
+        "{sign}"
+    );
+    for body in [save, sign] {
+        assert!(!body.contains("whos_here"), "{body}");
+    }
 }
 
 /// Each refusal a sign can meet is a sentence, and the one a re-read mends (the note is already
@@ -115,13 +191,23 @@ fn sign_words_each_refusal() {
 /// paper never has: an empty note, a malformed draft id, a stated time that cannot be read.
 #[test]
 fn an_empty_note_or_a_bad_time_is_refused_before_the_key() {
-    let empty = sign_checks_before_the_key(&a_draft(), "  \n ", None).unwrap_err();
+    let empty = sign_checks_before_the_key(&a_draft(), "  \n ", false, None).unwrap_err();
     assert_eq!(empty.text, "there is nothing to sign — the note is empty");
-    assert!(sign_checks_before_the_key("not-a-uuid", "seen", None).is_err());
-    assert!(sign_checks_before_the_key(&a_draft(), "seen", Some("noon")).is_err());
-    let (draft, stated) = sign_checks_before_the_key(&a_draft(), "seen", Some("")).unwrap();
+    assert!(sign_checks_before_the_key("not-a-uuid", "seen", false, None).is_err());
+    assert!(sign_checks_before_the_key(&a_draft(), "seen", false, Some("noon")).is_err());
+    let (draft, stated) = sign_checks_before_the_key(&a_draft(), "seen", false, Some("")).unwrap();
     assert_eq!(draft.to_string(), a_draft());
     assert_eq!(stated, None);
+}
+
+/// Carry 2: the node signs a draft whose on-screen part is blank when a part above it holds text
+/// (blank parts are skipped), so the window asks for the key then — and refuses only when the
+/// on-screen text AND every other part are blank.
+#[test]
+fn a_blank_editor_under_a_written_part_still_signs() {
+    assert!(sign_checks_before_the_key(&a_draft(), " ", true, None).is_ok());
+    let empty = sign_checks_before_the_key(&a_draft(), " ", false, None).unwrap_err();
+    assert_eq!(empty.text, "there is nothing to sign — the note is empty");
 }
 
 /// Final review M2: `datetime-local` takes years up to 275760, so a slip like "20266" reads as a
@@ -130,27 +216,31 @@ fn an_empty_note_or_a_bad_time_is_refused_before_the_key() {
 /// The SAVE still keeps such a time: refusing it there would leave the text unsaved.
 #[test]
 fn a_stated_year_the_record_cannot_hold_is_refused_before_the_key() {
-    let far =
-        sign_checks_before_the_key(&a_draft(), "seen", Some("20266-11-03T03:00")).unwrap_err();
+    let far = sign_checks_before_the_key(&a_draft(), "seen", false, Some("20266-11-03T03:00"))
+        .unwrap_err();
     assert_eq!(
         far.text,
         "the time it happened, 20266-11-03T03:00, has a year the record cannot hold \
          (years 1 to 9999) — check the year you typed"
     );
-    assert!(sign_checks_before_the_key(&a_draft(), "seen", Some("0000-06-01T12:00")).is_err());
-    assert!(sign_checks_before_the_key(&a_draft(), "seen", Some("9999-12-31T09:00")).is_ok());
+    assert!(
+        sign_checks_before_the_key(&a_draft(), "seen", false, Some("0000-06-01T12:00")).is_err()
+    );
+    assert!(
+        sign_checks_before_the_key(&a_draft(), "seen", false, Some("9999-12-31T09:00")).is_ok()
+    );
     assert!(
         parse_stated(Some("20266-11-03T03:00")).is_ok(),
         "a save keeps it"
     );
 }
 
-fn utc(s: &str) -> DateTime<Utc> {
+pub(crate) fn utc(s: &str) -> DateTime<Utc> {
     s.parse().unwrap()
 }
 
 /// Brisbane, UTC+10, no daylight saving.
-fn bne() -> FixedOffset {
+pub(crate) fn bne() -> FixedOffset {
     FixedOffset::east_opt(10 * 3600).unwrap()
 }
 
@@ -198,103 +288,6 @@ fn a_clock_change_takes_the_earlier_time_and_refuses_the_gap() {
     assert!(gap.contains("clocks"), "{gap}");
 }
 
-fn draft(terminal: &str) -> NoteDraft {
-    NoteDraft {
-        draft_id: Uuid::from_u128(5),
-        terminal_id: terminal.into(),
-        recording_started: utc("2026-11-02T17:12:00Z"),
-        last_keystroke: utc("2026-11-02T17:40:00Z"),
-        parts: vec![DraftPart {
-            seq: 1,
-            writer: None,
-            writer_name: None,
-            narrative: "BP <90".into(),
-            stated_time: Some(utc("2026-11-02T17:00:00Z")),
-            recording_started: utc("2026-11-02T17:12:00Z"),
-            last_keystroke: utc("2026-11-02T17:40:00Z"),
-        }],
-    }
-}
-
-/// Slice 3b-1 shim (Task 5 replaces it): the editor reopens a draft's LAST part.
-#[test]
-fn a_draft_reopens_its_last_part() {
-    let mut d = draft("pc-1");
-    let mut second = d.parts[0].clone();
-    second.seq = 2;
-    second.narrative = "plan: review".into();
-    second.stated_time = None;
-    d.parts.push(second);
-    let view = draft_view(&d, Some("pc-1"), &bne(), nov(3));
-    assert_eq!(view.narrative, "plan: review");
-    assert_eq!(view.stated_time, None);
-}
-
-fn nov(d: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 11, d).unwrap()
-}
-
-#[test]
-fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
-    let here = draft_view(&draft("pc-1"), Some("pc-1"), &bne(), nov(3));
-    assert!(here.here);
-    assert_eq!(
-        here.words,
-        "unsigned draft · started 03:12 · last typed 03:40"
-    );
-    assert_eq!(here.narrative, "BP <90", "the raw text, to reopen");
-    assert_eq!(here.stated_time.as_deref(), Some("2026-11-03T03:00"));
-    let there = draft_view(&draft("pc-2"), Some("pc-1"), &bne(), nov(4));
-    assert!(!there.here);
-    assert_eq!(
-        there.words,
-        "unsigned draft · started 3 Nov 03:12 · last typed 3 Nov 03:40 \
-         · being written at another terminal"
-    );
-}
-
-#[test]
-fn the_pane_words_each_note_and_any_withheld_ones() {
-    // Last year, so the words carry the date whatever today is.
-    let t = utc("2025-11-02T17:00:00Z");
-    let list = PatientNoteList {
-        notes: vec![NoteRow {
-            event_id: Uuid::from_u128(1),
-            chart: Uuid::from_u128(7),
-            text: "BP <90".into(),
-            t_effective: t,
-            effective_basis: "stated".into(),
-            recording_started: t,
-            grade: NoteGrade::Signed {
-                by: "Dr Ada".into(),
-            },
-            addendum_to: None,
-            drafted_by: Some("Nurse A".into()),
-        }],
-        withheld_on_linked: 2,
-        drafts: vec![draft("pc-1")],
-    };
-    let pane = note_pane(list, Some("pc-1"), &bne(), nov(3));
-    let row = &pane.notes[0];
-    assert_eq!(row.text, "BP <90");
-    assert_eq!(row.byline, "written by ?Nurse A · signed by Dr Ada");
-    assert_eq!(row.when, "3 Nov 2025 03:00 (stated)");
-    assert!(pane.drafts[0].here);
-    let withheld = pane.withheld_sentence.expect("withheld notes are said");
-    assert!(withheld.starts_with("2 note(s)"), "{withheld}");
-    let none = note_pane(
-        PatientNoteList {
-            notes: vec![],
-            withheld_on_linked: 0,
-            drafts: vec![],
-        },
-        Some("pc-1"),
-        &bne(),
-        nov(3),
-    );
-    assert_eq!(none.withheld_sentence, None);
-}
-
 /// The id is filled by `main`'s setup hook, which Tauri runs after it has built the window: a
 /// note command served before that refuses, retryable, rather than writing under a blank name.
 #[test]
@@ -305,30 +298,4 @@ fn a_note_command_before_the_terminal_id_is_read_refuses() {
     let err = terminal_of(&state).unwrap_err();
     assert_eq!(err.retry, Retry::Now);
     assert!(err.text.contains("terminal's id"), "{}", err.text);
-}
-
-/// A reopened draft's stated time comes back as the field holds it, seconds included, so the next
-/// save or Sign sends the same instant — never one silently rounded to the minute.
-#[test]
-fn a_stated_time_with_seconds_survives_reopening() {
-    let mut d = draft("pc-1");
-    d.parts[0].stated_time = Some(utc("2026-11-02T17:00:30Z"));
-    let view = draft_view(&d, Some("pc-1"), &bne(), nov(3));
-    assert_eq!(view.stated_time.as_deref(), Some("2026-11-03T03:00:30"));
-    let back = stated_time_in(view.stated_time.as_deref().unwrap(), &bne());
-    assert_eq!(back, Ok(utc("2026-11-02T17:00:30Z")));
-}
-
-/// Before setup has read this terminal's id, the list still shows every draft — none as this
-/// terminal's, so none opens for editing here — rather than refusing to show the chart's notes.
-#[test]
-fn without_a_terminal_id_no_draft_is_here() {
-    let list = PatientNoteList {
-        notes: vec![],
-        withheld_on_linked: 0,
-        drafts: vec![draft("pc-1")],
-    };
-    let pane = note_pane(list, None, &bne(), nov(3));
-    assert_eq!(pane.drafts.len(), 1);
-    assert!(!pane.drafts[0].here);
 }

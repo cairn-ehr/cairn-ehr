@@ -106,14 +106,27 @@ pub struct LockState {
     pub key_hold_secs: u64,
     /// True in fixture mode, where there is nothing to sign and nothing to write.
     pub mock: bool,
+    /// Who the terminal says is at the keyboard (a claim, never authentication).
+    pub whos_here: crate::whos_here::ClaimView,
+    /// This terminal's idle re-lock (`--idle-lock-minutes`), in seconds, for `idle.js`.
+    pub idle_lock_secs: u64,
 }
 
 /// The lock as it stands, read WITHOUT counting as activity (`AppState::key_status`).
-async fn lock_state_impl(state: &AppState) -> LockState {
+pub(crate) async fn lock_state_impl(state: &AppState) -> LockState {
+    let (whos_here, idle_lock_secs) = {
+        let here = state.whos_here.lock().await;
+        (
+            crate::whos_here::claim_view(&here.claim),
+            here.idle_lock.as_secs(),
+        )
+    };
     LockState {
         held_by: state.key_status(Now::read()).await,
         key_hold_secs: state.key_hold.as_secs(),
         mock: state.is_mock(),
+        whos_here,
+        idle_lock_secs,
     }
 }
 

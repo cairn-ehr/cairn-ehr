@@ -115,7 +115,7 @@ fn a_here_draft_reopens_and_another_terminals_draft_is_read_only() {
     }
     let open = js_fn(NOTES_JS, "openDraft");
     assert!(
-        open.contains("el(\"note-text\").value = draft.narrative;"),
+        open.contains("el(\"note-text\").value = tail.text;"),
         "{open}"
     );
 }
@@ -226,7 +226,8 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
 #[test]
 fn notes_js_reads_no_field_the_backend_does_not_send() {
     use crate::commands::tests::fields_read_in;
-    use crate::notes::{DraftView, NotePane, NoteRowView, NoteSignReport, SaveView};
+    use crate::notes::parts::{DraftView, NotePane, NoteRowView, PartView};
+    use crate::notes::{NoteSignReport, SaveView};
     let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()
     };
@@ -238,10 +239,17 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
     };
     let draft = DraftView {
         draft_id: "d".into(),
-        narrative: "n".into(),
-        stated_time: None,
         here: true,
         words: "w".into(),
+        parts: vec![],
+    };
+    let tail = PartView {
+        writer_shown: "?A".into(),
+        writer_spoken: "unverified A".into(),
+        text: "t".into(),
+        stated_time: None,
+        words: "w".into(),
+        editable: true,
     };
     let pane = NotePane {
         notes: vec![],
@@ -250,6 +258,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
     };
     let view = SaveView {
         saved: true,
+        moved: false,
         sentence: None,
     };
     let report = NoteSignReport {
@@ -260,6 +269,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         ("pane", keys(serde_json::to_value(&pane).unwrap())),
         ("note", keys(serde_json::to_value(&note).unwrap())),
         ("draft", keys(serde_json::to_value(&draft).unwrap())),
+        ("tail", keys(serde_json::to_value(&tail).unwrap())),
         ("view", keys(serde_json::to_value(&view).unwrap())),
         ("report", keys(serde_json::to_value(&report).unwrap())),
     ] {
@@ -324,7 +334,7 @@ fn a_partly_typed_time_saves_the_last_complete_one() {
         "{send}"
     );
     assert!(
-        js_fn(NOTES_JS, "openDraft").contains("statedTime: draft.stated_time || \"\""),
+        js_fn(NOTES_JS, "openDraft").contains("statedTime: tail.stated_time || \"\""),
         "a reopened draft holds the time it was saved with"
     );
     assert!(js_fn(NOTES_JS, "newNote").contains("statedTime: \"\""));

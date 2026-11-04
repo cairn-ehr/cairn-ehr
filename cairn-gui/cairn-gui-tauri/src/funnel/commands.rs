@@ -300,6 +300,8 @@ pub async fn open_chart_impl(
         .get(&patient)
         .cloned()
         .ok_or_else(refusal)?;
+    // The named person's bookmark: offered back to them at their next pick (`crate::whos_here`).
+    state.whos_here.lock().await.remember_chart(&candidate);
     Ok(open(
         state,
         OpenChart {

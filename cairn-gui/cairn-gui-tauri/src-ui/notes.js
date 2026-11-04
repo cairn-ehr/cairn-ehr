@@ -98,15 +98,17 @@ function noteItem(note) {
 /** A draft not in the editor: its words and its text, and nothing to press. */
 function draftItem(draft) {
   const li = document.createElement("li");
-  li.append(cell("p", draft.words), cell("p", draft.narrative, { class: "note-text" }));
+  li.append(cell("p", draft.words), ...draft.parts.map((p) => cell("p", p.text, { class: "note-text" })));
   return li;
 }
 
 /** Put this terminal's draft back in the editor, as it was saved. */
 function openDraft(draft) {
-  noteDraft = { draftId: draft.draft_id, patientId: displayedPatient, statedTime: draft.stated_time || "" };
-  el("note-text").value = draft.narrative;
-  el("note-when").value = draft.stated_time || "";
+  // shortcut (slice 3b-1 Task 5): the editor opens on the TAIL part; Task 6 draws every part.
+  const tail = draft.parts[draft.parts.length - 1];
+  noteDraft = { draftId: draft.draft_id, patientId: displayedPatient, statedTime: tail.stated_time || "" };
+  el("note-text").value = tail.text;
+  el("note-when").value = tail.stated_time || "";
   showEditor(true);
   // "unsigned draft · started … · last typed …", added to — never in place of — what the same
   // gesture said: a Sign that worked reopens the next draft here, and "Signed" must stay seen.

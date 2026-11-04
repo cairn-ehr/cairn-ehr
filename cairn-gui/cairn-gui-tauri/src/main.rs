@@ -55,6 +55,7 @@ mod superuser_panel;
 mod terminal_id;
 #[cfg(test)]
 mod waiting_webview_tests;
+mod whos_here;
 mod worklist;
 mod write_failure;
 
@@ -95,6 +96,12 @@ struct Cli {
     #[arg(long, default_value = "0", value_parser = signer::parse_key_hold)]
     key_hold_seconds: std::time::Duration,
 
+    /// After this many minutes with no keystroke, pointer, input or scroll, the terminal re-locks:
+    /// the chart leaves the screen, any held key is forgotten and so is who's here (design §3.3).
+    /// 1 to 240; 15 by default. A separate setting from the key hold's cap.
+    #[arg(long, default_value = "15", value_parser = whos_here::parse_idle_lock_minutes)]
+    idle_lock_minutes: std::time::Duration,
+
     /// Run against fixtures with no database. Clinical writes (sign-off, stopping a drug) are
     /// refused in this mode; registering a patient succeeds into an in-memory population that
     /// vanishes with the window.
@@ -121,7 +128,9 @@ fn main() -> anyhow::Result<()> {
     let app_state = if cli.mock {
         // Fixture mode carries NO connection and NO node key — not a flag that says so. The
         // one constructor that builds it is `AppState::mock`, so the two cannot drift apart.
-        AppState::mock(cli.patient)
+        let mut state = AppState::mock(cli.patient);
+        state.whos_here.get_mut().idle_lock = cli.idle_lock_minutes;
+        state
     } else {
         runtime.block_on(build_live_state(&cli))?
     };
@@ -150,6 +159,10 @@ fn main() -> anyhow::Result<()> {
             notes::note_list,
             notes::note_draft_save,
             notes::note_sign,
+            notes::note_draft_take,
+            whos_here::whos_here_directory,
+            whos_here::whos_here_pick,
+            whos_here::relock,
             enrol::enrol_member,
             rekey::rekey_member,
             superuser_panel::list_unconfirmed,
@@ -249,5 +262,6 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         session: tokio::sync::Mutex::new(Default::default()),
         // Filled in `main`'s setup hook, which alone can name the config directory.
         terminal_id: std::sync::OnceLock::new(),
+        whos_here: tokio::sync::Mutex::new(whos_here::Here::new(cli.idle_lock_minutes)),
     })
 }
