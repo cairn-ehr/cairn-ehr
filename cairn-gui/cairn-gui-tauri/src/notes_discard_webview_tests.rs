@@ -5,7 +5,7 @@
 //! like `notes_webview_tests.rs`, each guard reads the script's source (`crate::source_guard`) and
 //! pins the ORDER or the CHOICE a property is. The behaviour was walked headlessly (a stub
 //! `invoke` in a browser) when it was written — see the slice's PR.
-use crate::source_guard::{js_fn, position};
+use crate::source_guard::{js_const, js_fn, position};
 
 const DISCARD_JS: &str = include_str!("../src-ui/notes_discard.js");
 /// The note pane's other two scripts as one text: notes.js, and its save queue notes_save.js.
@@ -14,6 +14,8 @@ const NOTES_JS: &str = concat!(
     include_str!("../src-ui/notes_save.js")
 );
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
+const WHOS_HERE_JS: &str = include_str!("../src-ui/whos_here.js");
+const IDLE_JS: &str = include_str!("../src-ui/idle.js");
 
 /// A pending autosave that fired after the press would only say what the press already carries,
 /// so it is cancelled BEFORE the discard is sent; a partly typed time is refused before that, so
@@ -77,7 +79,7 @@ fn the_editor_is_read_only_while_a_discard_is_in_flight() {
     let caught = &discard[position(discard, "catch (failure) {")..];
     assert!(caught.contains("setSigning(false);"), "{discard}");
     assert!(NOTES_JS.contains(
-        "el(\"note-discard\").addEventListener(\"click\", () => {\n  noteSignInFlight = true;\n  noteSigning = discardNote()\n    .catch((failure) => {"
+        "el(\"note-discard\").addEventListener(\"click\", () => {\n  noteSignInFlight = true;\n  noteSigning = discardNote()\n    .then("
     ));
 }
 
@@ -262,4 +264,54 @@ fn notes_discard_js_reads_no_field_the_backend_does_not_send() {
             );
         }
     }
+}
+
+/// The discard writes as the writer captured when the editor opened, never the claim held now
+/// (whos_here_webview_tests.rs pins the same for every save and the Sign): a discard landing
+/// after a switch still names the person who typed it.
+#[test]
+fn a_discard_never_re_reads_the_claim() {
+    let discard = js_fn(DISCARD_JS, "discardNote");
+    assert!(discard.contains("writer: held.writer,"), "{discard}");
+    assert!(!discard.contains("whosHere("), "{discard}");
+}
+
+/// Task 6 review, item 1. A who's-here switch waits for a Discard as for a Sign (they share
+/// `noteSigning`), then says its outcome in the picker — in a discard's OWN words, never a Sign's.
+/// The listener renames a discard's "unknown" (and its own fault) to "discard-unknown", so
+/// `signOutcomeLine` can never word an unknown discard as an unknown signature.
+#[test]
+fn a_switch_during_a_discard_says_what_the_discard_did() {
+    assert!(NOTES_JS.contains(
+        "noteSigning = discardNote()\n    .then((outcome) => (outcome === \"unknown\" ? \"discard-unknown\" : outcome))\n    .catch((failure) => {\n      console.error(failure);\n      return \"discard-unknown\";"
+    ));
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "DISCARDED_LINE"),
+        "Your draft was discarded."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "NOT_DISCARDED_LINE"),
+        "Your draft was NOT discarded \u{2014} open the chart to see where it stands."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "DISCARD_UNKNOWN_LINE"),
+        "Whether your draft was discarded is not known \u{2014} check the chart."
+    );
+    let line = js_fn(WHOS_HERE_JS, "signOutcomeLine");
+    for arm in [
+        "if (outcome === \"discarded\") return DISCARDED_LINE;",
+        "if (outcome === \"not-discarded\") return NOT_DISCARDED_LINE;",
+        "if (outcome === \"discard-unknown\") return DISCARD_UNKNOWN_LINE;",
+    ] {
+        assert!(line.contains(arm), "{line}");
+    }
+    // discardNote's own answers are the ones the lines name (plus "unknown", renamed above).
+    let discard = js_fn(DISCARD_JS, "discardNote");
+    for answer in ["\"discarded\"", "\"not-discarded\"", "\"unknown\""] {
+        assert!(discard.contains(answer), "{answer} in {discard}");
+    }
+    // The idle re-lock only WAITS for the press; it words no outcome, so it has none to get wrong.
+    let relock = js_fn(IDLE_JS, "idleRelock");
+    assert!(relock.contains("await signsSettled();"), "{relock}");
+    assert!(!IDLE_JS.contains("signOutcomeLine"), "{IDLE_JS}");
 }

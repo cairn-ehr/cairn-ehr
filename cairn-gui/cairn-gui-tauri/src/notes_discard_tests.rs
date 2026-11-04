@@ -36,6 +36,56 @@ async fn discard_in_fixture_mode_refuses() {
         .unwrap_err();
     assert_eq!(err.retry, Retry::Never);
     assert!(err.text.contains("fixture mode"), "{}", err.text);
+    // Not a worded refusal: it carries the lead (Task 6 review, item 3).
+    assert!(
+        err.text.starts_with("Not discarded: fixture mode"),
+        "{}",
+        err.text
+    );
+}
+
+/// Task 6 review, item 3: a failure that is not one of the node's worded refusals (an outage, a
+/// node that cannot write, a check before the key) reaches the clinician led by what it means
+/// for the discard — chosen by its retry class — and a text already led is never led twice.
+#[test]
+fn a_failure_is_led_by_what_it_means_for_the_discard() {
+    let view = |text: &str, retry| ErrorView {
+        text: text.into(),
+        retry,
+    };
+    let led = |v: ErrorView| (led_failure(v.clone()).text, led_failure(v).retry);
+    assert_eq!(
+        led(view(
+            "connection reset",
+            Retry::AfterReread(Recorded::Unknown)
+        )),
+        (
+            "Whether this draft was discarded is NOT known: connection reset".to_string(),
+            Retry::AfterReread(Recorded::Unknown)
+        )
+    );
+    for retry in [
+        Retry::Now,
+        Retry::AfterOperator,
+        Retry::Never,
+        Retry::AfterReread(Recorded::No),
+    ] {
+        assert_eq!(
+            led(view("no database connection", retry)),
+            ("Not discarded: no database connection".to_string(), retry)
+        );
+    }
+    for already in [
+        "Not discarded: this draft belongs to another chart",
+        "Whether this draft was discarded is NOT known: connection reset",
+    ] {
+        assert_eq!(led(view(already, Retry::Now)).0, already, "never doubled");
+        assert_eq!(
+            led(view(already, Retry::AfterReread(Recorded::Unknown))).0,
+            already,
+            "never doubled"
+        );
+    }
 }
 
 /// A time that cannot be read is a verdict on the gesture, said before the key is asked for.

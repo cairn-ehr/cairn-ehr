@@ -9,12 +9,10 @@ use crate::source_guard::{js_fn, position};
 
 const WHOS_HERE_JS: &str = include_str!("../src-ui/whos_here.js");
 const IDLE_JS: &str = include_str!("../src-ui/idle.js");
-/// The note pane's scripts as one text: notes.js, its save queue notes_save.js, and its Discard
-/// notes_discard.js.
+/// The note pane's two scripts as one text: notes.js, and its save queue notes_save.js.
 const NOTES_JS: &str = concat!(
     include_str!("../src-ui/notes.js"),
-    include_str!("../src-ui/notes_save.js"),
-    include_str!("../src-ui/notes_discard.js")
+    include_str!("../src-ui/notes_save.js")
 );
 const SIGNER_JS: &str = include_str!("../src-ui/signer.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
@@ -105,15 +103,10 @@ fn the_writer_is_set_once_at_editor_open() {
         js_fn(NOTES_JS, "signNote").contains("writer: held.writer,"),
         "the sign sends the captured writer"
     );
-    assert!(
-        js_fn(NOTES_JS, "discardNote").contains("writer: held.writer,"),
-        "the discard sends the captured writer"
-    );
     for at_save in [
         "saveNoteNow",
         "sendDraft",
         "signNote",
-        "discardNote",
         "keepUnsavedText",
         "openDraft",
     ] {

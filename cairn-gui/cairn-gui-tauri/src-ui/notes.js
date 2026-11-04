@@ -47,11 +47,12 @@ let noteDraft = null;
 /** The newest note read started; an older answer is dropped. */
 let notesRevision = 0;
 /**
- * The last Sign, as a promise of its outcome ("signed", "not-signed", "unknown", or null when
- * nothing was pressed); it never rejects. The idle re-lock and a switch of who's here wait for it.
+ * The last Sign or Discard, as a promise of its outcome — a Sign's "signed", "not-signed" or
+ * "unknown"; a Discard's "discarded", "not-discarded" or "discard-unknown"; or null when nothing
+ * was pressed. It never rejects. The idle re-lock and a switch of who's here wait for it.
  */
 let noteSigning = Promise.resolve(null);
-/** A Sign was pressed and has not settled: a switch then says its outcome in the picker. */
+/** A Sign or Discard was pressed and has not settled: a switch then says its outcome in the picker. */
 let noteSignInFlight = false;
 
 /** Read the note pane for `patient` (main.js's `refresh`, beside the medication list). */
@@ -285,12 +286,15 @@ async function signNote() {
   return report.behind_the_record ? "unknown" : "signed";
 }
 
-/** The last Sign, done, as its outcome (idle.js's re-lock and whos_here.js's switch wait for it). */
+/**
+ * The last Sign or Discard, done, as its outcome (`noteSigning`'s values). idle.js's re-lock and
+ * whos_here.js's switch wait for it.
+ */
 function signsSettled() {
   return noteSigning;
 }
 
-/** Whether a Sign is in flight right now. */
+/** Whether a Sign or Discard is in flight right now. */
 function signInFlight() {
   return noteSignInFlight;
 }
@@ -370,13 +374,16 @@ el("note-sign").addEventListener("click", () => {
     });
 });
 // A Discard shares Sign's in-flight flags: idle.js's re-lock and whos_here.js's switch wait on
-// `signsSettled()` / `signInFlight()`, and must wait for a discard exactly as for a Sign.
+// `signsSettled()` / `signInFlight()`, and must wait for a discard exactly as for a Sign. Its
+// "unknown" is renamed "discard-unknown", so the picker never words it as an unknown SIGNATURE
+// ("discarded" and "not-discarded" are already a discard's own).
 el("note-discard").addEventListener("click", () => {
   noteSignInFlight = true;
   noteSigning = discardNote()
+    .then((outcome) => (outcome === "unknown" ? "discard-unknown" : outcome))
     .catch((failure) => {
       console.error(failure);
-      return "unknown"; // a fault in this window mid-discard: whether it discarded is not known
+      return "discard-unknown"; // a fault in this window mid-discard: whether it discarded is not known
     })
     .finally(() => {
       noteSignInFlight = false;

@@ -12,7 +12,7 @@ use super::time::{parse_stated, year_the_record_holds};
 use super::words::{DISCARDED, GONE, NO_CHART, SPENT};
 use super::{terminal_of, NoteSignReport, FIXTURE};
 use crate::commands::record_timing;
-use crate::funnel::view::{ErrorView, Recorded};
+use crate::funnel::view::{ErrorView, Recorded, Retry};
 use crate::link::judgement_view::{refused, stale};
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
@@ -47,6 +47,8 @@ const COMMITTED: &str = "Not discarded: this note had already gone into the reco
 const NO_SUCH_SIGNER: &str = "Not discarded: this staff ID may not discard a clinical note.";
 /// The prefix every refusal borrowed from the sign's wording carries.
 const NOT_DISCARDED: &str = "Not discarded: ";
+/// The lead of a failure whose commit may have landed: the discard may or may not be recorded.
+const DISCARD_UNKNOWN: &str = "Whether this draft was discarded is NOT known: ";
 
 /// Discard the draft on screen (the webview sends the same object as for Sign).
 #[tauri::command]
@@ -104,8 +106,32 @@ pub(crate) fn discard_checks_before_the_key(
     Ok((draft, stated))
 }
 
+/// A failure that is not one of the node's worded refusals — an outage, a node that cannot write,
+/// a verdict before the key — led by what it means for the discard, chosen by its retry class: a
+/// commit that may have landed says the discard is NOT known; anything else, "Not discarded".
+/// The window shows Rust's sentence as it is (notes_discard.js adds no lead), so without this a
+/// bare "connection reset" would not say whether the draft is gone. A text already led is left
+/// alone, so the lead is never doubled. Pure.
+pub(crate) fn led_failure(failure: ErrorView) -> ErrorView {
+    if failure.text.starts_with(NOT_DISCARDED) || failure.text.starts_with(DISCARD_UNKNOWN) {
+        return failure;
+    }
+    let lead = match failure.retry {
+        Retry::AfterReread(Recorded::Unknown) => DISCARD_UNKNOWN,
+        Retry::Now | Retry::AfterOperator | Retry::Never | Retry::AfterReread(Recorded::No) => {
+            NOT_DISCARDED
+        }
+    };
+    ErrorView {
+        text: format!("{lead}{}", failure.text),
+        retry: failure.retry,
+    }
+}
+
 /// Discard draft `draft_id` of the chart on screen, carrying the text on screen into the audit
-/// copy (as Sign carries it). See the module doc; the steps are `note_sign_impl`'s.
+/// copy (as Sign carries it). See the module doc; the steps are `note_sign_impl`'s. The node's
+/// own refusals are worded whole (`discard_refusal_view`); every other failure is led by what it
+/// means for the discard (`led_failure`).
 pub async fn note_discard_impl(
     state: &AppState,
     patient_id: &str,
@@ -115,6 +141,33 @@ pub async fn note_discard_impl(
     writer: Option<&str>,
     credential: Option<Credential>,
 ) -> Result<NoteSignReport, ErrorView> {
+    let attempt = discard_attempt(
+        state,
+        patient_id,
+        draft_id,
+        narrative,
+        stated_time,
+        writer,
+        credential,
+    );
+    match attempt.await {
+        Ok(Ok(report)) => Ok(report),
+        Ok(Err(refusal)) => Err(discard_refusal_view(refusal)),
+        Err(failure) => Err(led_failure(failure)),
+    }
+}
+
+/// `note_discard_impl`'s steps. The node's refusal comes back apart (`Ok(Err(refusal))`) from
+/// every other failure (`Err`), so the caller words each its own way.
+async fn discard_attempt(
+    state: &AppState,
+    patient_id: &str,
+    draft_id: &str,
+    narrative: &str,
+    stated_time: Option<&str>,
+    writer: Option<&str>,
+    credential: Option<Credential>,
+) -> Result<Result<NoteSignReport, DiscardRefusal>, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     if state.is_mock() {
         return Err(refused(FIXTURE));
@@ -160,7 +213,7 @@ pub async fn note_discard_impl(
     let (text, behind_the_record) = match result {
         Ok(Ok(DiscardOutcome::Recorded(_))) => (RECORDED.to_string(), None),
         Ok(Ok(DiscardOutcome::Empty)) => (EMPTY_DISCARDED.to_string(), None),
-        Ok(Err(refusal)) => return Err(discard_refusal_view(refusal)),
+        Ok(Err(refusal)) => return Ok(Err(refusal)),
         Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
             Some(event) => (
                 format!(
@@ -179,10 +232,10 @@ pub async fn note_discard_impl(
         let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
         record_timing(state, "note-discard", 1, elapsed_ms).await;
     }
-    Ok(NoteSignReport {
+    Ok(Ok(NoteSignReport {
         text,
         behind_the_record,
-    })
+    }))
 }
 
 #[cfg(test)]
