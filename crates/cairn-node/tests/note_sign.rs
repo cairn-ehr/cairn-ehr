@@ -14,7 +14,7 @@ use cairn_event::generate_key;
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
-use cairn_node::note::draft::{open_drafts, save_draft, SaveOutcome};
+use cairn_node::note::draft::{open_drafts, save_part, SaveOutcome};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{sign_note, SignNoteInput, SignRefusal};
 use cairn_node::note::view::NoteGrade;
@@ -50,7 +50,7 @@ async fn note_count(c: &Client, patient: Uuid) -> i64 {
 /// Autosave `text` into a new draft on `chart`, as the window's autosave would.
 async fn autosave(c: &Client, chart: Uuid, text: &str) -> Uuid {
     let draft = Uuid::now_v7();
-    let saved = save_draft(c, draft, chart, TERMINAL, text, None)
+    let saved = save_part(c, draft, chart, TERMINAL, None, text, None)
         .await
         .unwrap();
     assert_eq!(saved, SaveOutcome::Saved);
@@ -187,7 +187,7 @@ async fn a_second_sign_of_the_same_draft_is_refused_spent_and_writes_one_note() 
 
 /// PR #931 review: the spend door names only the draft (db/065), so what keeps another
 /// terminal — or a stale draft id on another chart — from signing a draft is that `sign_note`
-/// SAVES before it spends, and the save answers `elsewhere`. This pins that ordering: either
+/// SAVES before it spends, and the save answers `moved` or `elsewhere`. This pins that ordering: either
 /// sign is refused, the draft and its text are untouched, and no note is written anywhere.
 #[tokio::test]
 async fn a_sign_from_another_terminal_or_chart_is_refused_and_leaves_the_draft() {
@@ -207,20 +207,19 @@ async fn a_sign_from_another_terminal_or_chart_is_refused_and_leaves_the_draft()
 
     let mut other_terminal = input(draft, chart, "overwritten elsewhere");
     other_terminal.terminal = "theatre-pc";
-    for (who, attempt) in [
-        ("another terminal", other_terminal),
+    // Since db/066, another terminal of the SAME chart answers `moved` (#958), not `elsewhere`.
+    for (who, attempt, expected) in [
+        ("another terminal", other_terminal, SignRefusal::Moved),
         (
             "another chart",
             input(draft, other_chart, "on the wrong chart"),
+            SignRefusal::Elsewhere,
         ),
     ] {
         let refused = sign_note(&mut c, &node_sk, &attempt, &author)
             .await
             .unwrap();
-        assert!(
-            matches!(refused, Err(SignRefusal::Elsewhere)),
-            "{who}: {refused:?}"
-        );
+        assert_eq!(refused.err(), Some(expected), "{who}");
     }
 
     let drafts = open_drafts(&c, chart).await.unwrap();
@@ -228,7 +227,7 @@ async fn a_sign_from_another_terminal_or_chart_is_refused_and_leaves_the_draft()
     assert_eq!(drafts[0].draft_id, draft);
     assert_eq!(drafts[0].terminal_id, TERMINAL);
     assert_eq!(
-        drafts[0].narrative, "held at the ward PC",
+        drafts[0].parts[0].narrative, "held at the ward PC",
         "its text is untouched"
     );
     assert_eq!(note_count(&c, chart).await, 0);
@@ -314,7 +313,7 @@ async fn a_failed_submit_leaves_the_draft_in_place() {
     assert_eq!(drafts.len(), 1, "the draft survives");
     assert_eq!(drafts[0].draft_id, draft);
     assert_eq!(
-        drafts[0].narrative, "first text",
+        drafts[0].parts[0].narrative, "first text",
         "the sign's own save rolled back with it"
     );
     assert_eq!(note_count(&c, chart).await, 0);
@@ -354,7 +353,7 @@ async fn no_stated_time_signs_recording_started_as_t_effective() {
     };
     let draft = autosave(&c, chart, "reviewed overnight").await;
     let saved = open_drafts(&c, chart).await.unwrap().remove(0);
-    assert_eq!(saved.stated_time, None);
+    assert_eq!(saved.parts[0].stated_time, None);
 
     sign_note(
         &mut c,
@@ -439,12 +438,13 @@ async fn a_backward_clock_step_does_not_make_a_draft_unsignable() {
         human_kid: &human_kid,
     };
     let draft = autosave(&c, chart, "written before the step").await;
-    c.execute(
+    // The note's times come from the draft's PART since db/066, so the part is what is pushed.
+    c.batch_execute(&format!(
         "UPDATE note_draft SET recording_started = clock_timestamp() + interval '1 hour', \
-                last_keystroke = clock_timestamp() + interval '1 hour' \
-          WHERE draft_id = $1::text::uuid",
-        &[&draft.to_string()],
-    )
+                last_keystroke = clock_timestamp() + interval '1 hour' WHERE draft_id = '{draft}'; \
+         UPDATE note_draft_part SET recording_started = clock_timestamp() + interval '1 hour', \
+                last_keystroke = clock_timestamp() + interval '1 hour' WHERE draft_id = '{draft}';"
+    ))
     .await
     .unwrap();
 

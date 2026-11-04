@@ -416,6 +416,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "065_note_draft",
         include_str!("../../../db/065_note_draft.sql"),
     ),
+    // db/066 (sign-in slice 3b-1): a draft becomes a sequence of writers' parts; the move and
+    // staff-directory doors. Replaces db/065's three draft doors.
+    (
+        "066_note_draft_parts",
+        include_str!("../../../db/066_note_draft_parts.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
@@ -1045,7 +1051,10 @@ pub async fn reset_node_federation_tables(client: &Client) -> anyhow::Result<()>
 /// `node_origin`. Authoring is single-threaded on a node, so a tick->sign->submit per event
 /// is safe. The single home for every in-node authoring path — auto_apply's C2b link and
 /// john_doe's §5.4 registration both call this, rather than each re-writing the round-trip.
-pub async fn next_hlc(client: &Client, node_origin: &str) -> anyhow::Result<cairn_event::Hlc> {
+pub async fn next_hlc(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    node_origin: &str,
+) -> anyhow::Result<cairn_event::Hlc> {
     let row = client
         .query_one("SELECT wall, counter FROM node_hlc_tick()", &[])
         .await

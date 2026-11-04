@@ -141,6 +141,9 @@ const ELSEWHERE: &str = "this draft belongs to another chart or terminal — not
 /// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
 const SIGN_ELSEWHERE: &str =
     "this draft belongs to another chart or terminal — nothing was signed; your text is still here";
+/// … when the writer a save or sign names is not enrolled here (unreachable until the window
+/// names a writer, slice 3b-1 Task 5).
+const NO_SUCH_WRITER: &str = "the writer named is not enrolled on this node — nothing was written";
 /// … when no event names the patient on this node.
 const NO_CHART: &str = "this patient has no chart on this node";
 /// … when nothing but whitespace was typed.
@@ -201,8 +204,9 @@ pub async fn note_draft_save_impl(
         .ok_or_else(|| node_cannot_write("no database connection"))?
         .lock()
         .await?;
+    // shortcut: writer `None` (not known) until slice 3b-1 Task 5 sends the claimed writer.
     let outcome =
-        cairn_node::note::draft::save_draft(&*db, draft, patient, terminal, narrative, stated)
+        cairn_node::note::draft::save_part(&*db, draft, patient, terminal, None, narrative, stated)
             .await
             .map_err(|e| node_failure(&db.explain(e)))?;
     Ok(save_view(outcome))
@@ -332,8 +336,10 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
     let sentence = match outcome {
         SaveOutcome::Saved => None,
         SaveOutcome::Spent => Some(SPENT),
-        SaveOutcome::Elsewhere => Some(ELSEWHERE),
+        // shortcut: a moved draft reads as 3a's "another chart or terminal" until Task 5 words it.
+        SaveOutcome::Elsewhere | SaveOutcome::Moved => Some(ELSEWHERE),
         SaveOutcome::NoChart => Some(NO_CHART),
+        SaveOutcome::NoSuchWriter => Some(NO_SUCH_WRITER),
     };
     SaveView {
         saved: sentence.is_none(),
@@ -348,8 +354,9 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
     match refusal {
         SignRefusal::Empty => refused(EMPTY),
         SignRefusal::Spent => stale(SPENT),
-        SignRefusal::Elsewhere => refused(SIGN_ELSEWHERE),
+        SignRefusal::Elsewhere | SignRefusal::Moved => refused(SIGN_ELSEWHERE),
         SignRefusal::NoChart => refused(NO_CHART),
+        SignRefusal::NoSuchWriter => refused(NO_SUCH_WRITER),
     }
 }
 
@@ -425,10 +432,15 @@ where
     if !here {
         words.push_str(" · being written at another terminal");
     }
+    // shortcut: the editor reopens the LAST part only (every draft this window makes has one part
+    // while it names no writer); slice 3b-1 Task 5 shows every part.
+    let last = draft.parts.last();
     DraftView {
         draft_id: draft.draft_id.to_string(),
-        narrative: draft.narrative.clone(),
-        stated_time: draft.stated_time.map(|t| datetime_local(t, tz)),
+        narrative: last.map(|p| p.narrative.clone()).unwrap_or_default(),
+        stated_time: last
+            .and_then(|p| p.stated_time)
+            .map(|t| datetime_local(t, tz)),
         here,
         words,
     }

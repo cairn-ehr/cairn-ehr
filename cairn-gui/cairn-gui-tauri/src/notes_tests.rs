@@ -4,6 +4,7 @@
 use super::time::{parse_stated, pick_local, stated_time_in};
 use super::*;
 use crate::funnel::view::Retry;
+use cairn_node::note::draft::DraftPart;
 use cairn_node::note::view::NoteGrade;
 use chrono::{FixedOffset, LocalResult, NaiveDate};
 
@@ -74,6 +75,9 @@ fn save_words_each_outcome() {
         words(SaveOutcome::NoChart),
         "this patient has no chart on this node"
     );
+    // Slice 3b-1 shim (Task 5 words them): a move reads as 3a's sentence.
+    assert_eq!(words(SaveOutcome::Moved), words(SaveOutcome::Elsewhere));
+    assert!(words(SaveOutcome::NoSuchWriter).contains("not enrolled"));
 }
 
 /// Each refusal a sign can meet is a sentence, and the one a re-read mends (the note is already
@@ -95,6 +99,13 @@ fn sign_words_each_refusal() {
         sign_refusal_view(SignRefusal::NoChart).text,
         "this patient has no chart on this node"
     );
+    assert_eq!(
+        sign_refusal_view(SignRefusal::Moved).text,
+        sign_refusal_view(SignRefusal::Elsewhere).text
+    );
+    assert!(sign_refusal_view(SignRefusal::NoSuchWriter)
+        .text
+        .contains("not enrolled"));
 }
 
 /// What a sign refuses before it asks for the key — a passphrase that signs nothing is a step
@@ -188,11 +199,32 @@ fn draft(terminal: &str) -> NoteDraft {
     NoteDraft {
         draft_id: Uuid::from_u128(5),
         terminal_id: terminal.into(),
-        narrative: "BP <90".into(),
-        stated_time: Some(utc("2026-11-02T17:00:00Z")),
         recording_started: utc("2026-11-02T17:12:00Z"),
         last_keystroke: utc("2026-11-02T17:40:00Z"),
+        parts: vec![DraftPart {
+            seq: 1,
+            writer: None,
+            writer_name: None,
+            narrative: "BP <90".into(),
+            stated_time: Some(utc("2026-11-02T17:00:00Z")),
+            recording_started: utc("2026-11-02T17:12:00Z"),
+            last_keystroke: utc("2026-11-02T17:40:00Z"),
+        }],
     }
+}
+
+/// Slice 3b-1 shim (Task 5 replaces it): the editor reopens a draft's LAST part.
+#[test]
+fn a_draft_reopens_its_last_part() {
+    let mut d = draft("pc-1");
+    let mut second = d.parts[0].clone();
+    second.seq = 2;
+    second.narrative = "plan: review".into();
+    second.stated_time = None;
+    d.parts.push(second);
+    let view = draft_view(&d, Some("pc-1"), &bne(), nov(3));
+    assert_eq!(view.narrative, "plan: review");
+    assert_eq!(view.stated_time, None);
 }
 
 fn nov(d: u32) -> NaiveDate {
@@ -275,7 +307,7 @@ fn a_note_command_before_the_terminal_id_is_read_refuses() {
 #[test]
 fn a_stated_time_with_seconds_survives_reopening() {
     let mut d = draft("pc-1");
-    d.stated_time = Some(utc("2026-11-02T17:00:30Z"));
+    d.parts[0].stated_time = Some(utc("2026-11-02T17:00:30Z"));
     let view = draft_view(&d, Some("pc-1"), &bne(), nov(3));
     assert_eq!(view.stated_time.as_deref(), Some("2026-11-03T03:00:30"));
     let back = stated_time_in(view.stated_time.as_deref().unwrap(), &bne());

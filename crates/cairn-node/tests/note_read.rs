@@ -13,7 +13,7 @@ use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
-use cairn_node::note::draft::save_draft;
+use cairn_node::note::draft::save_part;
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{note_body, sign_note, SignNoteInput};
 use cairn_node::note::view::{grade_words, NoteGrade};
@@ -31,7 +31,7 @@ async fn sign_on(
     text: &str,
 ) {
     let draft = Uuid::now_v7();
-    save_draft(c, draft, chart, "pc-1", text, None)
+    save_part(c, draft, chart, "pc-1", None, text, None)
         .await
         .unwrap();
     let input = SignNoteInput {

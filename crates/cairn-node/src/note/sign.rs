@@ -17,7 +17,7 @@ use cairn_event::{EventBody, Hlc, SigningKey};
 use chrono::{DateTime, SecondsFormat, Utc};
 use uuid::Uuid;
 
-use super::draft::{save_draft, spend_draft, SaveOutcome, SpentDraft};
+use super::draft::{save_part, spend_parts, SaveOutcome, SpentPart};
 use crate::db_diagnosis::Committed;
 use crate::medication::sealed_submit::{prepare_sealed, Prepared};
 use crate::medication::AuthorParams;
@@ -43,10 +43,14 @@ pub enum SignRefusal {
     Empty,
     /// This draft was already signed.
     Spent,
-    /// The draft belongs to another chart or terminal than the one signing it.
+    /// The draft belongs to another chart than the one signing it.
     Elsewhere,
+    /// The draft is on this chart, but another terminal holds it now.
+    Moved,
     /// The patient has no chart on this node.
     NoChart,
+    /// The writer named is not an enrolled member.
+    NoSuchWriter,
 }
 
 /// RFC 3339 UTC, to the microsecond — the precision Postgres stores and the floor's
@@ -82,9 +86,9 @@ pub fn note_body(
     }
 }
 
-/// Build the note from the SPENT draft row (ruling R1): its text escaped here, its recording
-/// times as the database stamped them, `recording_ended` = the last real keystroke.
-fn body_from_spent(event_id: Uuid, spent: &SpentDraft, node_kid: &str, hlc: Hlc) -> EventBody {
+/// Build the note from a SPENT draft part (ruling R1): its text escaped here, its recording
+/// times as the database stamped them, `recording_ended` = the part's last real keystroke.
+fn body_from_spent(event_id: Uuid, spent: &SpentPart, node_kid: &str, hlc: Hlc) -> EventBody {
     let stated = spent.stated_time.map(rfc3339);
     let started = rfc3339(spent.recording_started);
     let ended = rfc3339(spent.last_keystroke);
@@ -107,7 +111,9 @@ fn refusal_for(outcome: SaveOutcome) -> Option<SignRefusal> {
         SaveOutcome::Saved => None,
         SaveOutcome::Spent => Some(SignRefusal::Spent),
         SaveOutcome::Elsewhere => Some(SignRefusal::Elsewhere),
+        SaveOutcome::Moved => Some(SignRefusal::Moved),
         SaveOutcome::NoChart => Some(SignRefusal::NoChart),
+        SaveOutcome::NoSuchWriter => Some(SignRefusal::NoSuchWriter),
     }
 }
 
@@ -125,18 +131,21 @@ pub async fn sign_note(
         return Ok(Err(SignRefusal::Empty));
     }
     let event_id = Uuid::now_v7();
-    // `next_hlc` takes a `Client`, so the tick runs before the transaction. A refused sign
-    // leaves a gap in the HLC, which is allowed (it is monotonic, not dense).
+    // The tick runs before the transaction (slice 3b-1 Task 4 moves it inside, one per part). A
+    // refused sign leaves a gap in the HLC, which is allowed (it is monotonic, not dense).
     let hlc = crate::db::next_hlc(client, input.node_origin).await?;
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
     // Every early return below drops `tx` uncommitted, which rolls the whole sign back.
     let tx = client.transaction().await?;
-    let saved = save_draft(
+    // Writer `None` (not known) until slice 3b-1 Task 4 lets the window name one: a NULL writer
+    // rewrites its own NULL tail, so every draft this path makes has exactly one part.
+    let saved = save_part(
         &tx,
         input.draft,
         input.patient,
         input.terminal,
+        None,
         input.narrative,
         input.stated,
     )
@@ -144,17 +153,22 @@ pub async fn sign_note(
     if let Some(refusal) = refusal_for(saved) {
         return Ok(Err(refusal));
     }
-    // Saved in this transaction under the door's per-draft lock, so the spend finds it; `None`
+    // Saved in this transaction under the door's per-draft lock, so the spend finds it; no part
     // would mean it vanished in between, which is a spend by someone else.
-    let Some(spent) = spend_draft(&tx, input.draft, event_id).await? else {
-        return Ok(Err(SignRefusal::Spent));
+    let parts = spend_parts(&tx, input.draft, event_id).await?;
+    let spent = match parts.as_slice() {
+        [] => return Ok(Err(SignRefusal::Spent)),
+        [one] => one,
+        // shortcut: one part only (unreachable while this path saves writer `None`); slice 3b-1
+        // Task 4 signs one event per part. Returning Err drops `tx`, so nothing is spent.
+        _ => anyhow::bail!("multi-part signing arrives with slice 3b-1 Task 4"),
     };
     let Prepared {
         signed_bytes, dek, ..
     } = prepare_sealed(
         &tx,
         node_sk,
-        body_from_spent(event_id, &spent, &node_kid, hlc),
+        body_from_spent(event_id, spent, &node_kid, hlc),
         Some(author),
     )
     .await?;
@@ -180,9 +194,11 @@ pub async fn sign_note(
 mod tests {
     use super::*;
 
-    fn spent(stated: Option<&str>) -> SpentDraft {
-        SpentDraft {
+    fn spent(stated: Option<&str>) -> SpentPart {
+        SpentPart {
             patient_id: Uuid::nil(),
+            seq: 1,
+            writer: None,
             narrative: "BP <90 [L] arm (R)".into(),
             stated_time: stated.map(|s| s.parse().unwrap()),
             recording_started: "2026-11-03T01:00:00.123456Z".parse().unwrap(),
@@ -241,6 +257,11 @@ mod tests {
         assert_eq!(
             refusal_for(SaveOutcome::NoChart),
             Some(SignRefusal::NoChart)
+        );
+        assert_eq!(refusal_for(SaveOutcome::Moved), Some(SignRefusal::Moved));
+        assert_eq!(
+            refusal_for(SaveOutcome::NoSuchWriter),
+            Some(SignRefusal::NoSuchWriter)
         );
     }
 }
