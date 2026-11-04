@@ -385,6 +385,36 @@ observed \_\_ · finishing elsewhere with nobody named 1 → 2 → observed \_\_
 | A signed note's byline read "written by unverified Nurse A · signed by Dr B" (#973) | | |
 | No dialog | | |
 
+## A draft left untouched goes in unsigned (GUI sign-in slice 3b-2a, runbook §20)
+
+Quarantine set: \_\_ minutes · `--idle-lock-minutes`: \_\_ · the window holds the node key: \_\_
+
+| What | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| The tick: `due` → the note in `clinical_note`, window on another chart | | | | ≤ 60 s | |
+| A chart open that commits first | | | | single-chart open + 200 ms | |
+| The same chart open with no draft (the baseline) | | | | — | |
+
+Steps: walking away paper *N* = 0 → forced *M* = 0 → observed \_\_ · reading a note that went in unsigned 0 → 0 →
+observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Before due: "goes into the record unsigned at HH:MM if nobody types in it", matching `due` | | |
+| Two writers: two node-signed notes, `drafted` + `recorded`, the second `addendum-to` the first; `by_timer` | | |
+| Read "written by ?Nurse A · went in unsigned"; never "signed by" | | |
+| The open commits first; with no `--key` the chart reads and the draft says overdue | | |
+| Typing into a committed draft: the committed sentence, a new draft; the two other cases' sentences | | |
+| Sign on a committed draft: "had already gone into the record unsigned — nothing was signed" | | |
+| Stuck: kept, nothing in, the stuck sentence; before due it says: \_\_ (#982); stderr once | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| A went-in-unsigned note read "written by unverified Nurse A · went in unsigned" | | |
+| Due, overdue and stuck words read with the draft | | |
+| The committed sentence read once | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

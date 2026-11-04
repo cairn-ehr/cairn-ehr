@@ -1473,8 +1473,8 @@ aside (a new terminal id), relaunch and name `nurse-a`.
       typing: the refusal ("already signed") is followed by the same sentence, and the editor is never left on the
       signed draft.
 
-**Measurement 5 — resuming with nobody named (#974: `M > N` for the maintainer to judge).** Two cases the plan's
-step counts left out. Count the acts and time each one, five runs.
+**Measurement 5 — resuming with nobody named (#974; ruled not an `M > N` defect, ADR-0089 decision 13).** Two
+cases the plan's step counts left out. Count the acts and time each one, five runs: the counts are still recorded.
 
 - [ ] **Continue here with nobody named.** As in Measurement 4, but relaunch and do NOT pick anyone first: the bar
       reads "Nobody has said who is at this terminal". Press *Continue here*: the picker opens. Pick `nurse-a`. Count the
@@ -1506,3 +1506,95 @@ in Chromium only, against a stubbed `invoke` (sign-in slice 3b-1, Task 6; the si
 `whos_here_pick`, `note_draft_take` and `relock`, and real timers over a real minute were not. The doors were run
 against throwaway databases by the slice's DB-gated tests. `TEMPLATE.md` carries a matching block (*Who's here, the
 idle re-lock and a draft's parts*).
+
+## 20. A draft left untouched goes in unsigned (GUI sign-in slice 3b-2a, ADR-0089)
+
+The slice has no new gesture: the point is that **nobody acts**. A draft nobody has typed into for the site's
+quarantine goes into the record by itself, node-signed, and reads "went in unsigned". Paper counterpart: an entry left
+unsigned on the progress sheet. It stays in the folder, readable by anyone, plainly not signed, and nobody acts to put
+it there. **Live only**: a `--mock` window holds no drafts and commits nothing.
+
+**Budgets (the slice plan's §1.2).**
+
+| What | Start | Stop | Budget |
+|---|---|---|---|
+| The tick commits an overdue draft | the draft's due time (`due` below) | its note's row in `clinical_note` | **≤ 60 s** |
+| A chart open that commits first | the press that opens the chart | the header read, the note listed | **≤ the single-chart open + 200 ms** |
+| Reading a note that went in unsigned | — | — | **0 acts** |
+
+Steps: walking away from a draft paper *N* = 0 → forced *M* = 0 → target *K* = 0; reading a note that went in
+unsigned 0 → 0 → 0; setting the quarantine is not a clinical act (the owner, at the console, once). **A delay, not
+an `M > N` case:** paper's unsigned entry is in the folder at once, Cairn's only after the quarantine. **A figure
+outside its budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
+
+**Setup.** Section 19's setup (`nurse-a` and `dr-b` enrolled from the window) and **two** charts, A and B (the
+section 2 chart and one more). Launch as section 3, which passes `--key "$NODE_KEY"`: a window without the node key
+commits nothing. Set the quarantine to two minutes at the console, and put it back at the end:
+
+```bash
+cnode note-set-quarantine --minutes 2     # prints: a draft left untouched for 2 minutes goes into the record unsigned
+cnode note-set-quarantine --default       # at the end: 180 minutes (the default)
+due()    { psql "$CONN" -c "SELECT d.draft_id, q.due, q.overdue, q.stuck, clock_timestamp() AS now FROM note_draft d, cairn_note_drafts_due(d.patient_id) q WHERE q.draft_id = d.draft_id"; }
+went()   { psql "$CONN" -c "SELECT left(n.narrative, 30) AS narrative, e.contributors, e.signer_key_id, s.by_timer FROM clinical_note n JOIN event_log e USING (event_id) LEFT JOIN note_draft_spent s ON s.event_id = n.event_id ORDER BY n.recording_started"; }
+```
+
+`parts`, `revs` and `signed` are section 19's helpers.
+
+**Measurement 1 — the tick (≤ 60 s past due), with the window on another chart.** As `nurse-a` on chart A: *New
+note*, type `obs stable`. Switch to `dr-b`, reopen chart A and type `plan: review 4h` below (a two-writer draft). Open
+chart B and leave the terminal alone (with `--idle-lock-minutes` above 3, so the re-lock does not close chart B
+first). Note the `due` time, then watch the log in a second terminal with `\watch 1` on `went`'s query. Five runs.
+
+- [ ] Before it is due, chart A's draft reads "… · goes into the record unsigned at HH:MM if nobody types in it",
+      HH:MM matching `due`.
+- [ ] Record the seconds from `due` to the rows appearing (budget ≤ 60 s). `went` shows **two** notes:
+      `[{nurse-a's key, drafted}, {node, recorded}]` and `[{dr-b's key, drafted}, {node, recorded}]`, both signed by
+      the node key, the second an `addendum-to` the first (`signed`), and `by_timer` true on the spend. `parts` and
+      `revs` are empty.
+- [ ] Open chart A: two notes, read "written by ?Nurse A · went in unsigned" and "written by ?Dr B · went in
+      unsigned". No "signed by" anywhere on them.
+
+**Measurement 2 — a chart open that commits first (≤ the single-chart open + 200 ms).** Quit the window so no tick
+runs. Leave a draft on chart A until `due` says `overdue` is true. Relaunch on chart B, then open chart A from a list
+before the first tick (it waits a minute after launch). Five runs, and five opens of chart A with no draft for the
+baseline.
+
+- [ ] Chart A shows the note, "went in unsigned", and no draft. Record the open times against the baseline.
+- [ ] Relaunch once **without** `--key` (a window with no node key commits nothing): chart A still reads, and the
+      draft reads "… · overdue — not in the record yet; the window tries again at every check to put it in unsigned".
+
+**Measurement 3 — typing into a just-committed draft.** With the editor open on chart A's draft, stop typing past
+`due` and wait for the tick (`went` shows the note). Then type `; later: BP 90/60`.
+
+- [ ] The status line reads "This note went into the record unsigned after it was left untouched. What you typed
+      since the last save is kept here as a new draft.", and the editor holds only the new text, as a new draft
+      (`parts` shows a new draft id). Repeat with nothing new typed (the "Everything typed here was saved into it
+      first." sentence) and after editing the saved text (the "Everything on this screen is kept here as a new
+      draft" sentence).
+- [ ] Repeat pressing *Sign note* instead of typing (with the passphrase typed): "this note had already gone into the
+      record unsigned — nothing was signed; your text is still here". Nothing is signed (`went`).
+
+**Measurement 4 — a stuck draft (on this throwaway database only).** Leave a draft by `nurse-a`, then remove her
+member row as the owner: `psql "$CONN" -c "DELETE FROM vault_attempt WHERE staff_id = 'nurse-a'; DELETE FROM
+vault_member WHERE staff_id = 'nurse-a'"`. Wait past `due` and two ticks.
+
+- [ ] `due` shows `stuck` true, and the draft is still there (`parts`); nothing went in (`went`).
+- [ ] The draft reads "… · overdue, but cannot go into the record by itself — a writer of it is no longer enrolled
+      on this node; it goes in once they are enrolled again". Record what it says **before** `due` (#982: it still
+      promises a time).
+- [ ] The window's stderr says the draft once, not at every tick.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] A note that went in unsigned is read "written by unverified Nurse A · went in unsigned", never with a bare
+      "question mark", and never "signed".
+- [ ] A draft's due words are read with the draft, and the overdue and stuck sentences in full.
+- [ ] The committed sentence on `#note-status` is read once.
+- [ ] No dialog appears at any point.
+
+**What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. The commit door,
+the race, the stuck case and the grade were run against throwaway databases by the slice's DB-gated tests, and the
+pre-read commit by `cairn-gui-tauri`'s DB-gated tests (CI never runs those, #905). The committed fork was walked
+headlessly in Chromium only, against a stubbed `invoke` (sign-in slice 3b-2a, Task 4); WebKit, a hidden or
+minimised window's tick over a real minute, and Tauri's runtime spawning the tick were not seen. `TEMPLATE.md`
+carries a matching block (*A draft left untouched goes in unsigned*).

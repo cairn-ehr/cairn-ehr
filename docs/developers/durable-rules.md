@@ -10,6 +10,53 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3b-2a — THE QUARANTINE COMMIT AND THE `Asserted` GRADE (ADR-0089, db/067, db/065 + db/066 in
+place) — do not undo** (pins: `db/tests/067_note_draft_commit_test.sql`, `crates/cairn-event/src/contributor.rs`'s
+tests, `crates/cairn-node/tests/{note_commit,authority_lockstep,window_role_grants_notes}.rs`,
+`cairn-gui-tauri/src/{notes_commit,notes,notes_fork_webview}_tests.rs`):
+- **The door decides "overdue" — never the caller, never a terminal clock.** `cairn_note_draft_commit_overdue`
+  re-checks the header's `last_keystroke + quarantine` against `clock_timestamp()` AFTER the draft's advisory lock
+  and the header's `FOR UPDATE`, and consumes the draft in the same call; `cairn_note_drafts_overdue` is only a hint.
+  **Tempting wrong fixes:** commit every draft the listing returned "since we just checked" (a save between the list
+  and the commit restarts the clock, and a draft goes in mid-sentence); pass the window's `now` to the door "for
+  testability" (a terminal clock then decides, and a raw-SQL client commits anyone's draft early); test overdue
+  before taking the lock. Pins: db/tests/067's `not_overdue_commits_nothing`, `a_spent_draft_commits_nothing`;
+  `note_commit.rs::two_commits_race_one_note`, `a_sign_after_the_timer_is_refused_committed`.
+- **The window's due words come from the HEADER, through `cairn_note_drafts_due`** — the commit door's own input,
+  plus its `stuck` rule. **Tempting wrong fix:** compute `due` in Rust from the parts' `last_keystroke` (db/066
+  clamps a part's stamp apart from its header's after a backward clock step, so the shown time disagrees with the
+  timer). Pin: `note_commit.rs::due_follows_the_header_not_the_parts`.
+- **A column a door body reads lives with its table.** `note_draft_spent.by_timer` is created in db/065 (with its
+  paired `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, #207), because db/066's save and take doors read it. **Tempting
+  wrong fix:** move it into db/067 "with the rest of the slice" (PL/pgSQL binds a column when the body runs, so on
+  an upgraded database db/066's doors raise until db/067 has committed). Pins: db/tests/067's
+  `save_after_a_timer_commit_answers_committed`, `take_after_a_timer_commit_answers_committed`.
+- **`committed` forks regardless of `mayBeSigned`.** A timer's commit is never this window's Sign, so what was typed
+  since the last save is kept as a new draft even after a Sign press. **Tempting wrong fix:** treat `committed` as
+  `spent` in `notes_save.js` ("both mean the draft is gone"): the `mayBeSigned` excuse then swallows text the timer's
+  note does not hold. Pins: `notes_fork_webview_tests.rs::a_timer_commit_forks_even_after_a_sign_press`,
+  `notes_tests.rs::committed_sentence_exact`.
+- **A stuck draft is never committed as "not known".** A named writer whose `cairn_vault_member_key` is NULL drops
+  the whole transaction (`CommitOutcome::Stuck`); the draft stays and says it is stuck. **Tempting wrong fixes:**
+  commit the part with no `drafted` contributor "so the text is not lost" (it quietly loses who wrote it,
+  principle 4); skip only that part (half a note goes in and the draft is spent); tell the clinician to "sign it" (a
+  Sign is refused `NoSuchWriter` too). Pins: `commit.rs::a_named_writer_without_a_key_is_stuck`;
+  `note_commit.rs::a_writer_with_no_key_is_stuck_and_kept`, `one_stuck_draft_does_not_stop_the_others`;
+  `notes_commit_tests.rs::a_stuck_draft_reads_stuck`.
+- **`recorded` is never the human contributory role.** `Asserted` needs a contributory entry other than `recorded`
+  (the capture device's own, ADR-0051) whose key the read names; a bearing contributor always wins.
+  **Tempting wrong fixes:** count any contributory entry (a node key that is also a known human then grades its own
+  capture `Asserted`); let the classifier decide "human" from the body itself (a claim read out of a body, the
+  #412 trap; who is human is a registry fact the caller resolves and passes in). Pins: `contributor.rs::recorded_is_never_the_human_role`,
+  `the_old_classifier_never_says_asserted`, `a_bearer_wins_over_asserted`;
+  `authority_lockstep.rs::asserted_in_rust_is_unverified_in_sql`.
+- **The runner is a Rust task, one connection hold per draft, and the tick never reopens a lost connection.**
+  **Tempting wrong fixes:** move the tick into the webview as a `setInterval` (WebKit throttles a hidden window's
+  timers, so a minimised window stops committing); hold the connection for the whole pass (a clinician's press waits
+  behind every overdue draft on the node); reopen from the tick (a dead node is hammered every minute with nobody
+  there to read why). Pins: `notes_commit_tests.rs::the_tick_is_spawned_once_in_setup`,
+  `each_draft_is_its_own_hold_and_the_tick_never_reopens`, `a_failed_commit_never_blocks_the_read`.
+
 **⇒ GUI SIGN-IN SLICE 3b-1 — WHO'S HERE AND A DRAFT'S PARTS (ADR-0088, db/066, db/065 in place) — do not undo**
 (pins: `db/tests/066_note_draft_parts_test.sql`, `crates/cairn-event/src/contributor.rs`'s tests,
 `crates/cairn-node/src/note/sign.rs`'s tests, `crates/cairn-node/tests/{note_draft_parts,note_sign_parts,note_read,window_role_grants_notes}.rs`,

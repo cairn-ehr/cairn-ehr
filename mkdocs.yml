@@ -217,6 +217,7 @@ nav:
       - ADR-0086 · Who may act after a repudiation: spec/decisions/0086-who-may-act-after-a-repudiation.md
       - ADR-0087 · The first note stream and its draft: spec/decisions/0087-the-first-note-stream-and-its-draft.md
       - ADR-0088 · Who's here, and a draft's parts: spec/decisions/0088-whos-here-and-a-drafts-parts.md
+      - ADR-0089 · The quarantine commit and the Asserted grade: spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
