@@ -46,8 +46,8 @@
 >   #958); **Sign = one event per non-blank part**, chained by `addendum-to`, so **⚠️ #948 is LIVE** (part 2 can reach a
 >   peer before part 1). Open: **#963** (slice 5) · **#964** · **#965** · **#967** · **#968** · **#969** · **#970** ·
 >   **#971** · **#972** · **#975** · **#976** · **#977** · **#978**; #973 built. Owed by a human: **RUNBOOK §19**.
-> - **Slice 3b-2a BUILT 2026-11-04 on draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)** (branch
->   `plan/sign-in-slice-3b-2-commit-runner`; final review done and its findings fixed; the full local gate PASSED on `01b464e5` (3194 tests, 0 skipped);
+> - **Slice 3b-2a MERGED 2026-11-04 — PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)** (full local gate
+>   3194 tests, 0 skipped;
 >   [ADR-0089](spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md), spec **v0.91**, `db/067` with
 >   `db/065` + `db/066` edited in place, `SCHEMA_GENERATION` **67**; plan
 >   [`superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md)).
@@ -58,8 +58,7 @@
 >   new `Asserted` grade reads "written by ?Nurse A · went in unsigned"; the window commits on a 60 s Rust tick and
 >   before every chart read; a `committed` save forks even after a Sign press. **#974 RULED by the maintainer: not an
 >   `M > N` defect** (ADR-0089 decision 13; closed). Filed **#979** (the terminal of an unattributed commit, deferred)
->   · **#980** (a co-signed discard, not built) · **#982** (a stuck draft not yet due promised a time; built in the
->   final-review fix, left open for the maintainer) · **#983** (the final review's residual minors, M1/M3/M4/M7/M8 +
+>   · **#980** (a co-signed discard, not built) · #982 (built in the PR, closed 2026-11-04) · **#983** (the final review's residual minors, M1/M3/M4/M7/M8 +
 >   the per-task deferred minors);
 >   commented #968 (revision rows now bounded in life, not size). **Second (PR) review, 2026-11-04, fixed on the
 >   branch:** a draft whose LAST commit failed now says so ("could not go into the record by itself … sign it, or
@@ -118,11 +117,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **The maintainer reviews and merges PR #981 (3b-2a)**, then marks issue #982 done by hand (the PR builds it; nothing
->    closes it automatically). **Then 3b-2b: the audited discard** (a new event
+> 1. **3b-2b: the audited discard — IN PROGRESS** on branch `plan/sign-in-slice-3b-2b-audited-discard` (a new event
 >    type, its own plan; ADR-0089 decision 15's rule: only a draft whose every non-blank part is the discarder's own or
 >    by a writer not known; two or more named writers are refused and go in by the timer, a co-signed discard is
->    #980). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
+>    #980; maintainer 2026-11-04: the chart's notes list shows a one-line marker of each discard, its text behind a click, never as a note). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
 >    `Asserted` — it must answer #948 too). Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979),
 >    4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
