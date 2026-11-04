@@ -8,8 +8,9 @@
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard` taken BEFORE connecting.
 mod common;
 
+use cairn_event::contributor::with_drafting_writer;
 use cairn_event::note::{EscapedNarrative, NoteAssertion, StatedTime};
-use cairn_event::SigningKey;
+use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
@@ -136,6 +137,56 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
     assert_eq!(list.notes.len(), 1);
     assert_eq!(list.notes[0].grade, NoteGrade::WriterNotKnown);
     assert_eq!(grade_words(&list.notes[0].grade), "writer not known");
+}
+
+/// Final review M6: `Asserted` ("went in unsigned") says a PERSON wrote it. A node-signed note
+/// whose `drafted` key is an enrolled AGENT's — one the registry can still name, by its pinned
+/// handle — is not that: it grades "writer not known", whatever name the byline gives the key.
+#[tokio::test]
+async fn a_note_drafted_by_an_agent_key_never_grades_went_in_unsigned() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, _, human_kid, chart) = common::note_setup(&c).await;
+    let (_agent_sk, agent_kid): (SigningKey, String) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('agent', '{\"handle\":\"scribe-bot\"}', $1)",
+        &[&agent_kid],
+    )
+    .await
+    .unwrap();
+    for (writer, text) in [
+        (&agent_kid, "drafted by an agent"),
+        (&human_kid, "drafted by a person"),
+    ] {
+        let a = NoteAssertion {
+            narrative: EscapedNarrative::of_typed(text),
+            stated: StatedTime::NotStated,
+            recording_started: "2026-11-02T22:00:00Z",
+            recording_ended: "2026-11-02T22:04:00Z",
+            addendum_to: None,
+        };
+        let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
+        let body = note_body(Uuid::now_v7(), chart, &node_kid, hlc, &a);
+        let body = with_drafting_writer(body, Some(writer));
+        seal_sign_submit(&mut c, &node_sk, body, None, None)
+            .await
+            .unwrap();
+    }
+
+    let list = list_patient_notes(&c, chart).await.unwrap();
+    let grade_of = |text: &str| {
+        list.notes
+            .iter()
+            .find(|n| n.text == text)
+            .map(|n| n.grade.clone())
+            .unwrap()
+    };
+    assert_eq!(grade_of("drafted by an agent"), NoteGrade::WriterNotKnown);
+    assert_eq!(grade_of("drafted by a person"), NoteGrade::WentInUnsigned);
 }
 
 /// I2: a part signed under "Don't know" is `{signer, attested}` with no writer, and must never

@@ -15,9 +15,10 @@
 -- stated time, t_effective or t_recorded.
 --
 -- WHY THE DOOR, NOT THE CALLER, DECIDES "OVERDUE". cairn_note_drafts_overdue is only a hint (it
--- takes no lock). The commit door re-decides under the draft's advisory lock and consumes the
--- draft in the same call, so two windows ticking at once, or a Sign racing the timer, can never
--- put two sets of notes in the log, and a raw-SQL client cannot commit someone's draft early.
+-- takes no lock). The commit door re-decides under the draft's advisory lock (tried, not waited
+-- for: a held lock means someone is acting on the draft) and consumes the draft in the same
+-- call, so two windows ticking at once, or a Sign racing the timer, can never put two sets of
+-- notes in the log, and a raw-SQL client cannot commit someone's draft early.
 -- Lock order is every draft door's (db/066): advisory lock 'note_draft:' || draft_id, then the
 -- header row, then its parts.
 --
@@ -108,8 +109,9 @@ $$;
 -- Commit overdue draft p_draft into note event p_event (the first non-blank part's event).
 -- Returns the same columns as cairn_note_draft_spend_parts (db/066), so the caller builds the
 -- parts exactly as a Sign does. Zero rows = nothing to build, for one of three reasons:
---   * the draft is absent or already spent (by a Sign or another tick), or not yet overdue —
---     nothing was written;
+--   * the draft is absent or already spent (by a Sign or another tick), not yet overdue, or its
+--     lock is held by another session (this door alone TRIES the lock; every other draft door
+--     waits for it) — nothing was written;
 --   * it is overdue but every part is blank — its header (parts cascade) and revisions were
 --     deleted, and no spend recorded (an empty draft never becomes a note, design §3.5).
 -- Otherwise: the non-blank parts in writing order; the header, parts and revisions deleted; and
@@ -127,7 +129,12 @@ BEGIN
     IF p_draft IS NULL OR p_event IS NULL THEN
         RAISE EXCEPTION 'cairn_note_draft_commit_overdue needs a draft and an event';
     END IF;
-    PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
+    -- TRY, never wait (final review M2): a held lock means a save or a Sign is acting on this
+    -- draft right now, so it is not abandoned. Zero rows, nothing written; the next pass retries.
+    -- Waiting would make a chart read or a tick queue behind a clinician's press.
+    IF NOT pg_try_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0)) THEN
+        RETURN;
+    END IF;
     -- Read AFTER the lock: a save that just finished has moved last_keystroke, and is seen here.
     SELECT d.patient_id, d.last_keystroke INTO v_patient, v_keystroke
       FROM note_draft d WHERE d.draft_id = p_draft FOR UPDATE;
@@ -153,8 +160,23 @@ BEGIN
 END;
 $$;
 
+-- Whether the actor registry enrolled signing key p_key for an actor of kind 'human'. The note
+-- read (cairn_node::note::read) grades a node-signed note "went in unsigned" (Asserted) only when
+-- its `drafted` key passes this: cairn_note_signer_name (db/065) also names device and agent keys,
+-- by their pinned handle, and a note an agent drafted is not one a PERSON left (final review M6).
+-- The registry, not vault_member: a removed member's earlier notes keep their grade, as does a
+-- restored node (no member rows). A rotate-key row carries its actor's kind. A definer door, as
+-- cairn_note_signer_name is: the window reads only actor_event's signing_key_id column.
+CREATE OR REPLACE FUNCTION cairn_note_key_is_human(p_key text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT EXISTS (SELECT 1 FROM actor_event ae
+                    WHERE ae.signing_key_id = p_key AND ae.op IN ('enroll', 'rotate-key')
+                      AND ae.kind = 'human');
+$$;
+
 REVOKE EXECUTE ON FUNCTION cairn_note_set_quarantine(int), cairn_note_quarantine_minutes(),
     cairn_note_drafts_overdue(uuid), cairn_note_drafts_due(uuid),
-    cairn_note_draft_commit_overdue(uuid, uuid) FROM PUBLIC;
+    cairn_note_draft_commit_overdue(uuid, uuid), cairn_note_key_is_human(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_note_quarantine_minutes(), cairn_note_drafts_overdue(uuid),
-    cairn_note_drafts_due(uuid), cairn_note_draft_commit_overdue(uuid, uuid) TO cairn_window;
+    cairn_note_drafts_due(uuid), cairn_note_draft_commit_overdue(uuid, uuid),
+    cairn_note_key_is_human(text) TO cairn_window;

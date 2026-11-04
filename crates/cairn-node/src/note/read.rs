@@ -66,10 +66,12 @@ pub struct PatientNoteList {
 /// contributor is present even when its key cannot be named, and whether the signer only
 /// ATTESTED it — so a part someone else typed never reads like the signer's own note (I2).
 ///
-/// The last column is the `drafted` contributor's key itself (slice 3b-2a). The read tells the
-/// grader that key is a HUMAN only when `cairn_note_signer_name` names it (a vault member is a
-/// person), so a quarantine-committed part grades `Asserted` ("went in unsigned") rather than
-/// `Device`. It is never an attester: the #412 guard below still holds.
+/// The last column is the `drafted` contributor's key itself (slice 3b-2a), and only when db/067's
+/// `cairn_note_key_is_human` says the registry enrolled it for a HUMAN actor. The grader is told
+/// that key is a person, so a quarantine-committed part grades `Asserted` ("went in unsigned")
+/// rather than `Device`. Being NAMED is not enough: `cairn_note_signer_name` also names device and
+/// agent keys by their pinned handle (final review M6). It is never an attester: the #412 guard
+/// below still holds.
 const NOTES_SQL: &str = "\
     SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
@@ -82,8 +84,9 @@ const NOTES_SQL: &str = "\
            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c WHERE c ->> 'role' = 'drafted'), \
            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
                     WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id), \
-           (SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
-             WHERE c ->> 'role' = 'drafted' LIMIT 1) \
+           (SELECT k FROM (SELECT c ->> 'actor_id' AS k FROM jsonb_array_elements(e.contributors) c \
+                            WHERE c ->> 'role' = 'drafted' LIMIT 1) d \
+             WHERE cairn_note_key_is_human(d.k)) \
       FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      WHERE n.patient_id = ANY($1::text[]::uuid[])";
 
@@ -107,13 +110,9 @@ pub async fn list_patient_notes(
         let contributors: serde_json::Value = serde_json::from_str(&r.get::<_, String>(7))?;
         let attester: Option<String> = r.get(8);
         let drafted_by: Option<String> = r.get(11);
-        let drafted_kid: Option<String> = r.get(14);
-        // A drafted key is a human only when the vault can name it (see NOTES_SQL).
-        let humans: Vec<&str> = drafted_kid
-            .as_deref()
-            .filter(|_| drafted_by.is_some())
-            .into_iter()
-            .collect();
+        // The drafted key, present only when the registry knows it as a human's (see NOTES_SQL).
+        let human_drafted_kid: Option<String> = r.get(14);
+        let humans: Vec<&str> = human_drafted_kid.as_deref().into_iter().collect();
         // Both kids come from event_log columns whose existence is a verification: the signer
         // always, the attester only through the vouch door in NOTES_SQL.
         let confidence = classify_authorship_with_humans(

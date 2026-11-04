@@ -40,6 +40,10 @@ const OVERDUE: &str =
 /// a Sign refuses the same draft (`SignRefusal::NoSuchWriter`), so only re-enrolling them helps.
 const STUCK: &str = "overdue, but cannot go into the record by itself — a writer of it is no \
      longer enrolled on this node; it goes in once they are enrolled again";
+/// Said of a stuck draft NOT yet due (review I1): it will not go in at its due time either, so it
+/// never says when it goes in — only what lets it.
+const STUCK_NOT_DUE: &str = "cannot go into the record by itself — a writer of it is no longer \
+     enrolled on this node; it can go in only once they are enrolled again";
 
 /// Commit the overdue drafts on `patient`'s chart (`None` = every chart), and say on stderr each
 /// one whose commit failed. `None` when nothing was asked: fixture mode, no node key, or no
@@ -120,10 +124,11 @@ fn newly_stuck(said: &mut HashSet<Uuid>, stuck: Vec<Uuid>) -> Vec<Uuid> {
     stuck.into_iter().filter(|d| said.insert(*d)).collect()
 }
 
-/// When an open draft goes into the record unsigned, in zone `tz` with `today` its date: at its
-/// `due` time if nobody types in it; or, `overdue` (the node decided, on its own clock), a
-/// sentence that is true after the pre-read commit ran — [`STUCK`] when `stuck`, else
-/// [`OVERDUE`]. Pure.
+/// When an open draft goes into the record unsigned, in zone `tz` with `today` its date. `stuck`
+/// wins whether or not it is due: such a draft never goes in by itself ([`STUCK`] once
+/// `overdue`, else [`STUCK_NOT_DUE`]). Otherwise: at its `due` time if nobody types in it; or,
+/// `overdue` (the node decided, on its own clock), [`OVERDUE`], which is true after the
+/// pre-read commit ran. Pure.
 pub(crate) fn due_words<Tz: TimeZone>(
     due: DateTime<Utc>,
     overdue: bool,
@@ -136,8 +141,9 @@ where
 {
     match (overdue, stuck) {
         (true, true) => STUCK.into(),
+        (false, true) => STUCK_NOT_DUE.into(),
         (true, false) => OVERDUE.into(),
-        (false, _) => format!(
+        (false, false) => format!(
             "goes into the record unsigned at {} if nobody types in it",
             instant(due, tz, today)
         ),

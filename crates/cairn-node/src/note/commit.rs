@@ -13,8 +13,10 @@
 //! WHO DECIDES "OVERDUE". Never this code and never a terminal clock: db/067's commit door
 //! re-decides on the database's clock, under the draft's advisory lock, in the same call that
 //! consumes the draft. [`overdue_drafts`] is only a hint of which drafts to try. So two windows
-//! ticking at once, or a Sign racing the timer, put exactly one set of notes in the log: the
-//! loser's door call answers zero rows ([`CommitOutcome::NotDue`]).
+//! ticking at once, or a Sign racing the timer, put exactly one set of notes in the log. A losing
+//! timer's door call answers zero rows ([`CommitOutcome::NotDue`]) — the draft is gone, or its
+//! lock is held, which the door TRIES and never waits for; a losing Sign's own save answers
+//! `committed`, so the Sign is refused `SignRefusal::Committed`.
 //!
 //! THE ONE-TRANSACTION SHAPE is `sign_note`'s: the door spends the draft, each part is built,
 //! sealed and submitted with NO savepoint (db/065's commit-time trigger checks the note row's
@@ -46,8 +48,9 @@ pub fn draft_due(last_keystroke: DateTime<Utc>, quarantine_minutes: i32) -> Date
 pub enum CommitOutcome {
     /// The draft went in: its parts' events in writing order (`event_id` = the first, the note).
     Committed(Committed<Vec<Uuid>>),
-    /// Nothing to write: the draft is absent, already spent, not yet overdue, or was all blank
-    /// (the door deleted it, and that deletion was committed).
+    /// Nothing to write: the draft is absent, already spent, not yet overdue, locked by another
+    /// session (a save or Sign mid-flight; the next pass retries), or was all blank (the door
+    /// deleted it, and that deletion was committed).
     NotDue,
     /// A named writer has no vault key any more: rolled back, the draft is kept as it was.
     Stuck,

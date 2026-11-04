@@ -797,6 +797,12 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
         "a read-only snapshot for the medication list reads: it writes nothing (#864)",
     ),
     (
+        "cairn-gui/cairn-gui-tauri/src/notes_commit_tests.rs",
+        "a test fixture, not a production commit: `notes_commit.rs`'s `#[cfg(test)]` module \
+         (kept beside it by `#[path]`), whose `an_overdue_draft` enrols the draft's writer on a \
+         scratch database",
+    ),
+    (
         "crates/cairn-sync/src/main.rs",
         "the sync harness's `write`/`gen` load generator and its content-addressed blob store",
     ),

@@ -407,6 +407,57 @@ async fn two_commits_race_one_note() {
     assert_eq!(note_count(&c, chart).await, 2, "the two parts, once");
 }
 
+/// Final review M2: a draft whose lock someone else holds is being acted on (a save or a Sign
+/// mid-flight), so it is not abandoned — the timer's door answers zero rows at once and writes
+/// nothing, rather than making a chart read or a tick wait behind a clinician's press.
+#[tokio::test]
+async fn a_held_draft_lock_makes_the_commit_skip_it() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut other = db::connect(&base).await.unwrap();
+    let (node_sk, _, _, _, chart) = common::note_setup(&c).await;
+    let draft = Uuid::now_v7();
+    save_as(&c, draft, chart, Some("notewriter"), "obs stable", None).await;
+    age(&c, draft, 181).await;
+
+    // The lock every draft door takes (db/066), held by another session's open transaction.
+    let holder = other.transaction().await.unwrap();
+    holder
+        .execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('note_draft:' || $1::text::uuid::text, 0))",
+            &[&draft.to_string()],
+        )
+        .await
+        .unwrap();
+    let skipped = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        commit_overdue(&mut c, &node_sk, draft, ORIGIN),
+    )
+    .await
+    .expect("the timer never waits behind a held draft lock")
+    .unwrap();
+    assert!(matches!(skipped, CommitOutcome::NotDue), "{skipped:?}");
+    assert_eq!(note_count(&c, chart).await, 0, "nothing written");
+    assert_eq!(
+        open_drafts(&c, chart).await.unwrap().len(),
+        1,
+        "the draft is intact"
+    );
+
+    // Released: the next pass commits it.
+    holder.rollback().await.unwrap();
+    committed(
+        commit_overdue(&mut c, &node_sk, draft, ORIGIN)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(note_count(&c, chart).await, 1);
+}
+
 #[tokio::test]
 async fn a_sign_after_the_timer_is_refused_committed() {
     let Some(base) = common::cs() else {

@@ -198,9 +198,11 @@ fn committed_sentence_exact() {
     let sign = sign_refusal_view(SignRefusal::Committed);
     assert_eq!(
         sign.text,
-        "this note had already gone into the record unsigned — nothing was signed; your text is \
-         still here"
+        "this note had already gone into the record unsigned — nothing was signed"
     );
+    // Final review I2: the save that follows this refusal always forks, and may close the editor,
+    // so — as for `spent` — the sign never says "your text is still here".
+    assert!(!sign.text.contains("still here"), "{}", sign.text);
     assert_eq!(sign.retry, Retry::AfterReread(Recorded::No));
 }
 

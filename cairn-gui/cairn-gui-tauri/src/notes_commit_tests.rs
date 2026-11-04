@@ -31,6 +31,13 @@ fn due_words_before_and_after() {
         "overdue, but cannot go into the record by itself — a writer of it is no longer \
          enrolled on this node; it goes in once they are enrolled again"
     );
+    // Final review I1: stuck wins even before it falls due — a stuck draft never goes in at
+    // its due time, so it must never say it will.
+    assert_eq!(
+        due_words(due, false, true, &bne(), today),
+        "cannot go into the record by itself — a writer of it is no longer enrolled on this \
+         node; it can go in only once they are enrolled again"
+    );
 }
 
 /// Review M2: the tick says each stuck draft once per window run, not every minute.

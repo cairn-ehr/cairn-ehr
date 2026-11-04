@@ -1,5 +1,5 @@
 //! The text progress note (`clinical.note.asserted`, ADR-0041, sign-in slice 3a) — the node side
-//! the window calls. Five small parts, each a file:
+//! the window calls. Six small parts, each a file:
 //!
 //! * `draft` — the text being typed, one part per writer (db/066). It lives in the one
 //!   deliberately MUTABLE store (db/065/066), reachable only through definer doors, and is never

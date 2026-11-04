@@ -114,8 +114,10 @@ pub struct NoteDraft {
     /// own input, which a backward clock step can set apart from `last_keystroke` above (the
     /// parts'). For the window's words only.
     pub due: DateTime<Utc>,
-    /// Overdue NOW, on the database's clock, from the same row as `due`: still here
-    /// because the timer has not run yet, or because the draft is stuck.
+    /// Overdue NOW, on the database's clock, from the same row as `due`: still here because the
+    /// timer has not run yet, because its commit failed (a floor refusal, say: tried again every
+    /// pass), because someone held its lock when the timer came (a save or Sign mid-flight), or
+    /// because the draft is stuck.
     pub overdue: bool,
     /// A named writer of a non-blank part has no vault key: the commit rolls it back every time,
     /// so it never goes in by itself (until that writer is enrolled again).
