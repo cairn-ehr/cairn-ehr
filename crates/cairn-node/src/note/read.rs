@@ -56,12 +56,16 @@ pub struct PatientNoteList {
 /// `VerifiedKid::from_event_log_column`). A door, because the window role may not call the
 /// predicate itself (ruling R11). `signer_key_id` needs no such check — no row exists unless
 /// the door verified the signature against it.
+///
+/// The addendum ref is read as `::uuid::text`, Postgres's canonical form: the floor admits any
+/// spelling `::uuid` accepts, some of which Rust's `Uuid` parser refuses, and one such ref must not
+/// make the chart's whole note list fail to read.
 const NOTES_SQL: &str = "\
     SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
            cairn_note_vouched_attester(e.event_id), \
            cairn_note_signer_name(e.signer_key_id), \
-           (SELECT r ->> 'event' FROM jsonb_array_elements(n.refs) r \
+           (SELECT (r ->> 'event')::uuid::text FROM jsonb_array_elements(n.refs) r \
              WHERE r ->> 'rel' = 'addendum-to' LIMIT 1), \
            cairn_note_signer_name((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
                                     WHERE c ->> 'role' = 'drafted' LIMIT 1)) \

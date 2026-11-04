@@ -174,3 +174,52 @@ async fn the_window_role_reads_a_charts_notes() {
         }
     );
 }
+
+/// Task 4 review, Important #1: the floor reads a ref's event as `::uuid`, which admits spellings
+/// Rust's `Uuid` parser does not (hyphens after every four digits). One such addendum, from a peer
+/// or a raw-SQL client, must not make the chart's whole note list unreadable: the read takes the
+/// id in Postgres's canonical form.
+#[tokio::test]
+async fn an_addendum_ref_in_a_non_canonical_spelling_still_reads() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, _, _, chart) = common::note_setup(&c).await;
+    let note = |addendum_to| NoteAssertion {
+        narrative: EscapedNarrative::of_typed("seen"),
+        stated: StatedTime::NotStated,
+        recording_started: "2026-11-02T22:00:00Z",
+        recording_ended: "2026-11-02T22:04:00Z",
+        addendum_to,
+    };
+    let first = Uuid::now_v7();
+    let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
+    let body = note_body(first, chart, &node_kid, hlc, &note(None));
+    seal_sign_submit(&mut c, &node_sk, body, None, None)
+        .await
+        .unwrap();
+    // `a0ee-bc99-…`: Postgres reads it as a uuid, `Uuid::parse_str` refuses it.
+    let simple = first.simple().to_string();
+    let odd: String = simple
+        .as_bytes()
+        .chunks(4)
+        .map(|g| std::str::from_utf8(g).unwrap())
+        .collect::<Vec<_>>()
+        .join("-");
+    assert!(odd.parse::<Uuid>().is_err(), "the spelling Rust refuses");
+    let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
+    let body = note_body(Uuid::now_v7(), chart, &node_kid, hlc, &note(Some(&odd)));
+    seal_sign_submit(&mut c, &node_sk, body, None, None)
+        .await
+        .expect("the floor admits the spelling");
+
+    let list = list_patient_notes(&c, chart)
+        .await
+        .expect("one odd ref must not break the chart's notes");
+    assert_eq!(list.notes.len(), 2);
+    let addenda: Vec<_> = list.notes.iter().filter_map(|n| n.addendum_to).collect();
+    assert_eq!(addenda, [first], "the ref reads as the canonical id");
+}
