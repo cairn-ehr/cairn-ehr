@@ -35,8 +35,8 @@ use crate::db_diagnosis::Committed;
 use crate::medication::sealed_submit::{prepare_sealed_as, Prepared};
 
 /// When a draft last typed into at `last_keystroke` falls due, under a quarantine of
-/// `quarantine_minutes` (`cairn_note_quarantine_minutes()`). Pure; the window words it, the
-/// database alone decides it.
+/// `quarantine_minutes` (`cairn_note_quarantine_minutes()`): db/067's `cairn_note_drafts_due`
+/// arithmetic, in Rust. Pure; the database alone decides it, and answers it to `open_drafts`.
 pub fn draft_due(last_keystroke: DateTime<Utc>, quarantine_minutes: i32) -> DateTime<Utc> {
     last_keystroke + Duration::minutes(i64::from(quarantine_minutes))
 }

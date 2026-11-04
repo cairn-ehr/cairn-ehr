@@ -109,10 +109,12 @@ pub struct NoteDraft {
     pub last_keystroke: DateTime<Utc>,
     /// Its parts in writing order (never empty: a draft is created with its part 1).
     pub parts: Vec<DraftPart>,
-    /// When it goes into the record unsigned if nobody types in it: `last_keystroke` plus the
-    /// site's quarantine (`commit::draft_due`). For the window's words only.
+    /// When it goes into the record unsigned if nobody types in it: the draft HEADER's last
+    /// keystroke plus the site's quarantine (db/067's `cairn_note_drafts_due`) — the commit door's
+    /// own input, which a backward clock step can set apart from `last_keystroke` above (the
+    /// parts'). For the window's words only.
     pub due: DateTime<Utc>,
-    /// Overdue NOW, on the database's clock (db/067's `cairn_note_drafts_overdue`): still here
+    /// Overdue NOW, on the database's clock, from the same row as `due`: still here
     /// because the timer has not run yet, or because the draft is stuck.
     pub overdue: bool,
 }
@@ -166,14 +168,20 @@ pub async fn open_drafts(
     if drafts.is_empty() {
         return Ok(drafts);
     }
-    let minutes: i32 = client
-        .query_one("SELECT cairn_note_quarantine_minutes()", &[])
-        .await?
-        .get(0);
-    let overdue = super::commit::overdue_drafts(client, Some(patient)).await?;
-    for d in &mut drafts {
-        d.due = super::commit::draft_due(d.last_keystroke, minutes);
-        d.overdue = overdue.contains(&d.draft_id);
+    // Both from the draft HEADER's last keystroke (db/067 `cairn_note_drafts_due`), the commit
+    // door's own input: a part's can differ from it after a backward clock step (db/066 clamps).
+    let due = client
+        .query(
+            "SELECT draft_id::text, due, overdue FROM cairn_note_drafts_due($1::text::uuid)",
+            &[&patient.to_string()],
+        )
+        .await?;
+    for r in &due {
+        let id: Uuid = r.get::<_, String>(0).parse()?;
+        if let Some(d) = drafts.iter_mut().find(|d| d.draft_id == id) {
+            d.due = r.get(1);
+            d.overdue = r.get(2);
+        }
     }
     Ok(drafts)
 }

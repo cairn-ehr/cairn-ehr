@@ -489,3 +489,49 @@ async fn an_open_draft_reads_due_and_overdue() {
     assert_eq!(after.due, draft_due(after.last_keystroke, 30));
     assert!(after.overdue);
 }
+
+/// Task 3 review M1: `due` is worked from the draft HEADER's last keystroke — the input the
+/// commit door and `overdue` read — never from its parts'. After a backward database clock step
+/// db/066 can clamp the two apart; here the owner moves them apart by hand, and `due` and
+/// `overdue` must still tell one story.
+#[tokio::test]
+async fn due_follows_the_header_not_the_parts() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_, _, _, _, chart) = common::note_setup(&c).await;
+    c.execute("SELECT cairn_note_set_quarantine(30)", &[])
+        .await
+        .unwrap();
+    let draft = Uuid::now_v7();
+    save_as(&c, draft, chart, Some("notewriter"), "obs stable", None).await;
+    // The header 60 minutes back, its part only 10: overdue by the header, not by the part.
+    c.execute(
+        "WITH h AS (UPDATE note_draft SET last_keystroke = last_keystroke - interval '60 min', \
+                           recording_started = recording_started - interval '60 min' \
+                     WHERE draft_id = $1::text::uuid) \
+         UPDATE note_draft_part SET last_keystroke = last_keystroke - interval '10 min', \
+                recording_started = recording_started - interval '10 min' \
+          WHERE draft_id = $1::text::uuid",
+        &[&draft.to_string()],
+    )
+    .await
+    .unwrap();
+    let header: DateTime<Utc> = c
+        .query_one(
+            "SELECT last_keystroke FROM note_draft WHERE draft_id = $1::text::uuid",
+            &[&draft.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    let read = open_drafts(&c, chart).await.unwrap().remove(0);
+
+    assert_eq!(read.due, draft_due(header, 30));
+    assert!(read.overdue, "the header says overdue");
+    assert!(read.due < Utc::now(), "and so does the due time shown");
+}

@@ -77,6 +77,19 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
      ORDER BY d.last_keystroke, d.draft_id;
 $$;
 
+-- Each open draft on p_patient's chart: when it falls due and whether it is overdue now. Both from
+-- the HEADER's last keystroke, the input cairn_note_drafts_overdue and the commit door read, so the
+-- window's due words can never disagree with the timer (a backward clock step lets db/066 clamp a
+-- part's last keystroke apart from its header's). For the window's words only: no lock, no write.
+CREATE OR REPLACE FUNCTION cairn_note_drafts_due(p_patient uuid)
+RETURNS TABLE(draft_id uuid, due timestamptz, overdue boolean)
+LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT q.draft_id, q.due, q.due <= clock_timestamp()
+      FROM (SELECT d.draft_id,
+                   d.last_keystroke + make_interval(mins => cairn_note_quarantine_minutes()) AS due
+              FROM note_draft d WHERE d.patient_id = p_patient) q;
+$$;
+
 -- Commit overdue draft p_draft into note event p_event (the first non-blank part's event).
 -- Returns the same columns as cairn_note_draft_spend_parts (db/066), so the caller builds the
 -- parts exactly as a Sign does. Zero rows = nothing to build, for one of three reasons:
@@ -126,6 +139,7 @@ END;
 $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_note_set_quarantine(int), cairn_note_quarantine_minutes(),
-    cairn_note_drafts_overdue(uuid), cairn_note_draft_commit_overdue(uuid, uuid) FROM PUBLIC;
+    cairn_note_drafts_overdue(uuid), cairn_note_drafts_due(uuid),
+    cairn_note_draft_commit_overdue(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_note_quarantine_minutes(), cairn_note_drafts_overdue(uuid),
-    cairn_note_draft_commit_overdue(uuid, uuid) TO cairn_window;
+    cairn_note_drafts_due(uuid), cairn_note_draft_commit_overdue(uuid, uuid) TO cairn_window;
