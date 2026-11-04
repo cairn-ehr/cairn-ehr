@@ -139,6 +139,23 @@ pub fn with_attesting_signer(
     body
 }
 
+/// Rewrite a device-shaped body so a named human is its WRITER without anyone signing for it
+/// (sign-in slice 3b-2a, the quarantine commit): prepend a `drafted` contributor for
+/// `writer_kid`. Unlike [`with_attesting_signer`] there is no `attested` entry and
+/// `signer_key_id` stays the node's, so the set grades [`AuthorshipConfidence::Asserted`] (when
+/// the node knows the writer as a human), never `Attested`. `None` (writer unknown) returns the
+/// body unchanged: an unknown writer is left out rather than invented (principle 4). Pure.
+pub fn with_drafting_writer(mut body: EventBody, writer_kid: Option<&str>) -> EventBody {
+    if let Some(w) = writer_kid {
+        let drafted = serde_json::json!({"actor_id": w, "role": "drafted"});
+        match body.contributors.as_array_mut() {
+            Some(arr) => arr.insert(0, drafted),
+            None => body.contributors = serde_json::json!([drafted]),
+        }
+    }
+    body
+}
+
 /// The authorship-confidence grade an event carries (ADR-0008 "a grade, not a gate";
 /// ADR-0053). The single, shared reading every consumer must use so an unverifiable
 /// claim is never displayed as authenticated.
@@ -172,7 +189,9 @@ pub fn with_attesting_signer(
 ///     by anything below. Where the two DO overlap on the shapes
 ///     `crates/cairn-node/tests/authority_lockstep.rs` actually exercises (a single vouched
 ///     human attester; a claimed-but-unattested human author; a device-only contributor set)
-///     they agree: `Attested` <-> `'attested'`, `Unverified`/`Device` both <-> `'unverified'`.
+///     they agree: `Attested` <-> `'attested'`, `Unverified`/`Device` both <-> `'unverified'`;
+///     `Asserted` (a named human writer, no bearer) <-> `'unverified'` too, as it bears no
+///     responsibility.
 ///     That is what the test pins — an obligation on those shapes, not a universal guarantee
 ///     over every event this repo can admit.
 ///
@@ -203,6 +222,11 @@ pub enum AuthorshipConfidence {
     /// token) — a forgery OR an author authenticated by a scheme this node is too old to parse.
     /// Rendered "authorship claimed, not authenticated here", never `Attested`, and upgradable.
     Unverified,
+    /// No responsibility-bearing contributor, but a contributory one (other than the device's
+    /// own `recorded`) whose actor is a known human: a note that went into the record UNSIGNED
+    /// with a named writer. Rendered "went in unsigned", never "signed", and upgradable by a
+    /// later vouch (sign-in slice 3c). Only [`classify_authorship_with_humans`] produces it.
+    Asserted,
     /// No responsibility-bearing contributor — the honest device-additive default (`recorded`).
     Device,
 }
@@ -339,24 +363,48 @@ pub fn classify_authorship_confidence(
     signer: VerifiedKid<'_>,
     verified_attester: Option<VerifiedKid<'_>>,
 ) -> AuthorshipConfidence {
+    // No human list: nothing can be `Asserted`, so this never returns it.
+    classify_authorship_with_humans(contributors, signer, verified_attester, &[])
+}
+
+/// [`classify_authorship_confidence`], told which actor keys the node knows as humans
+/// (`human_kids`). Identical, except that where that answer would be `Device`, a contributory
+/// entry (not `recorded`, the capture device's own role, ADR-0051; not an unknown-partition
+/// role) whose `actor_id` is in `human_kids` makes it [`AuthorshipConfidence::Asserted`]. A
+/// bearing contributor always wins: the human list only refines the no-bearer case. Pure.
+pub fn classify_authorship_with_humans(
+    contributors: &serde_json::Value,
+    signer: VerifiedKid<'_>,
+    verified_attester: Option<VerifiedKid<'_>>,
+    human_kids: &[&str],
+) -> AuthorshipConfidence {
     let signer_key_id = signer.as_str();
     let verified_attester = verified_attester.map(|v| v.as_str());
+    let entries: &[serde_json::Value] = contributors.as_array().map_or(&[], |a| a.as_slice());
+    fn role_of(e: &serde_json::Value) -> &str {
+        e.get("role").and_then(|r| r.as_str()).unwrap_or("")
+    }
     // Every bearing-role entry's actor claim, kept as Option so an anonymous claim
     // stays visible to the grading instead of vanishing from the set.
-    let bearing: Vec<Option<&str>> = contributors
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter(|e| {
-                    classify_role(e.get("role").and_then(|r| r.as_str()).unwrap_or(""))
-                        == RolePartition::Bearing
-                })
-                .map(|e| e.get("actor_id").and_then(|v| v.as_str()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let bearing: Vec<Option<&str>> = entries
+        .iter()
+        .filter(|e| classify_role(role_of(e)) == RolePartition::Bearing)
+        .map(|e| e.get("actor_id").and_then(|v| v.as_str()))
+        .collect();
     if bearing.is_empty() {
-        return AuthorshipConfidence::Device;
+        let human_wrote = entries.iter().any(|e| {
+            let role = role_of(e);
+            classify_role(role) == RolePartition::Contributory
+                && role != "recorded"
+                && e.get("actor_id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|a| human_kids.contains(&a))
+        });
+        return if human_wrote {
+            AuthorshipConfidence::Asserted
+        } else {
+            AuthorshipConfidence::Device
+        };
     }
     let authenticated = |actor: Option<&str>| match actor {
         Some(a) => a == signer_key_id || verified_attester == Some(a),
@@ -557,5 +605,89 @@ mod tests {
             classify_authorship_confidence(&c, kid("N"), None),
             AuthorshipConfidence::Device
         );
+    }
+
+    fn humans<'a>(h: &'a [&'a str]) -> &'a [&'a str] {
+        h
+    }
+
+    #[test]
+    fn a_drafted_human_with_no_bearer_is_asserted() {
+        let c = serde_json::json!([
+            {"actor_id": "H", "role": "drafted"},
+            {"actor_id": "N", "role": "recorded"}]);
+        assert_eq!(
+            classify_authorship_with_humans(&c, kid("N"), None, humans(&["H"])),
+            AuthorshipConfidence::Asserted
+        );
+    }
+
+    #[test]
+    fn a_drafted_non_human_stays_device() {
+        let c = serde_json::json!([
+            {"actor_id": "H", "role": "drafted"},
+            {"actor_id": "N", "role": "recorded"}]);
+        assert_eq!(
+            classify_authorship_with_humans(&c, kid("N"), None, humans(&[])),
+            AuthorshipConfidence::Device
+        );
+    }
+
+    /// `recorded` is the capture device's role: a node key that is also a known human never
+    /// grades its own capture `Asserted`.
+    #[test]
+    fn recorded_is_never_the_human_role() {
+        let c = serde_json::json!([{"actor_id": "N", "role": "recorded"}]);
+        assert_eq!(
+            classify_authorship_with_humans(&c, kid("N"), None, humans(&["N"])),
+            AuthorshipConfidence::Device
+        );
+    }
+
+    #[test]
+    fn an_unknown_partition_role_is_never_the_human_role() {
+        let c = serde_json::json!([{"actor_id": "H", "role": "reviewed"}]);
+        assert_eq!(
+            classify_authorship_with_humans(&c, kid("N"), None, humans(&["H"])),
+            AuthorshipConfidence::Device
+        );
+    }
+
+    #[test]
+    fn a_bearer_wins_over_asserted() {
+        let c = serde_json::json!([
+            {"actor_id": "H", "role": "drafted"},
+            {"actor_id": "S", "role": "attested", "responsibility": {"held_by": "S"}}]);
+        assert_eq!(
+            classify_authorship_with_humans(&c, kid("S"), None, humans(&["H"])),
+            AuthorshipConfidence::Attested
+        );
+    }
+
+    #[test]
+    fn the_old_classifier_never_says_asserted() {
+        let c = serde_json::json!([
+            {"actor_id": "H", "role": "drafted"},
+            {"actor_id": "N", "role": "recorded"}]);
+        assert_eq!(
+            classify_authorship_confidence(&c, kid("N"), None),
+            AuthorshipConfidence::Device
+        );
+    }
+
+    #[test]
+    fn with_drafting_writer_shapes() {
+        let out = with_drafting_writer(device_body(), Some("W"));
+        let before = device_body().contributors.as_array().unwrap().len();
+        let arr = out.contributors.as_array().unwrap();
+        assert_eq!(arr.len(), before + 1);
+        assert_eq!(
+            arr[0],
+            serde_json::json!({"actor_id": "W", "role": "drafted"})
+        );
+        assert_eq!(out.signer_key_id, device_body().signer_key_id);
+        let none = with_drafting_writer(device_body(), None);
+        assert_eq!(none.contributors, device_body().contributors);
+        assert_eq!(none.signer_key_id, device_body().signer_key_id);
     }
 }
