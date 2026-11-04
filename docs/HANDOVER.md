@@ -43,7 +43,7 @@
 > (**`cairn-node vault-repudiate-superuser-key --staff-id <id>`**, then `vault-rekey-superuser`).
 > Owed by a human: **RUNBOOK §17** (enrol ≤ 2 min, re-key ≤ 1 min, change ≤ 30 s, confirm ≤ 10 s; VoiceOver).
 >
-> **Slice 3a BUILT 2026-11-03 — draft PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)** (plan and build
+> **Slice 3a MERGED 2026-11-03 — PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)** (plan and build
 > in one PR; [ADR-0087](spec/decisions/0087-the-first-note-stream-and-its-draft.md), spec **v0.89**, `db/064` + `db/065`,
 > `SCHEMA_GENERATION` **65**; plan `superpowers/plans/2026-11-03-sign-in-slice-3a-note-stream.md`; the rulings R1–R14
 > the code cites are recorded in the ADR). **New note** → type (autosaved at the first keystroke and then once a
@@ -80,6 +80,14 @@
 > save blocked behind a lock is silent, and `recording_started` is stamped when the first save executes, not at the
 > keystroke.
 >
+> **Slice 3b PLANNED 2026-11-04 — split into 3b-1 and 3b-2.** 3b-1's plan:
+> [`superpowers/plans/2026-11-04-sign-in-slice-3b-1-whos-here-and-draft-parts.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-1-whos-here-and-draft-parts.md)
+> (who's here, the idle re-lock, a draft's per-writer parts + revisions, one event per part at Sign, `db/066`).
+> **Decided with the maintainer 2026-11-04** (ADR-0088 owed in the 3b-1 build): "Continue" at another terminal
+> **moves** the draft there (supersedes the design's rule I1; an unreachable draft means a new note); the bookmark is
+> **offered**, pre-focused (not an `M > N` defect: paper includes the walk back to the folder); ADR-0087's "drafts in
+> no backup or export" is **confirmed**; an unknown writer's draft may be discarded by **any** signer (3b-2).
+>
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
 > [ADR-0084](spec/decisions/0084-the-window-never-holds-the-owners-keys.md), spec **v0.86**, `db/062`,
@@ -95,7 +103,7 @@
 > > **NOT YET GUARANTEED — gates on any pilot:** until **#909** (pinned, installer-generated TLS) or slice 5 (every
 > > terminal its own node) lands, a facility has ONE usable terminal: the one on the database's machine. **#912**: no
 > > long-running process re-adjudicates deferred events (the window's launch used to, incidentally). **#910**: a
-> > Cairn-installed Postgres (brainstorm first). From PR #911's second review: **#914** (say "cannot sign" at launch, not at the first signature) · **#915** (the posture check's routes are a hand-kept list) · **#916** (small robustness residuals); #913 was fixed in the PR. **Slice 5's design must answer** (design §4): synced sealed blobs on a
+> > Cairn-installed Postgres (brainstorm first). From PR #911's second review: **#914** (say "cannot sign" at launch, not at the first signature) · **#915** (the posture check's routes are a hand-kept list) · **#916** (small robustness residuals); #913 was fixed in the PR. **Slice 5's design must answer** (design §4; and since 2026-11-04 how a draft reaches the facility's other terminal-nodes, partitioned case included — drafts never sync, **#963**): synced sealed blobs on a
 > > stolen terminal disk can be guessed offline, and the attempt counter is per node. Open from slice 1: **#900**
 > > (a superuser key could sign a clinical event) · **#901** (bound stored Argon2 parameters) · **#902** (handle case) ·
 > > **#903** (another's guesses can hold a member at the 300 s cap — a decision) · **#904** (an unreadable blob counts
@@ -127,11 +135,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **The maintainer reviews PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)** (slice 3a, above) — and
->    confirms or reverses ADR-0087's "drafts are in no backup or export". **Then: plan 3b** (design §5's row: who's
->    here, the idle screensaver, the rest of the draft store — revisions, append-only writers, per-writer parts, one
->    event per part — the last-keystroke clock + commit door + commit runner + console knob, the audited discard,
->    `Asserted` + its display), then 3c. The design's §10 findings are deferred to them (maintainer, 2026-11-03).
+> 1. **Build slice 3b-1** from its plan (above; the maintainer reviews the plan PR and picks the execution mode
+>    first). **Then plan 3b-2** (the last-keystroke clock + commit door + commit runner + console knob, `Asserted` + its
+>    display, the audited discard incl. any-signer discard of an unknown writer's draft, the terminal of an
+>    unattributed commit), then 3c. Design §10's findings 1–2 are decided (above), 3 is 3b-2's, 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930, merged; it also carries the per-note "unconfirmed" marker and #918's display half). The maintainer picks
 >    the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
