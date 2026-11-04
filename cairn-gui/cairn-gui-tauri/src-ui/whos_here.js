@@ -18,6 +18,13 @@
 // funnel.js's `failureText` — all read only at a press, long after every script has loaded.
 "use strict";
 
+/** Said in the picker for a Sign that settled while a switch waited (no patient identifier:
+ * the next person may read it). */
+const SIGNED_LINE = "Your note was signed.";
+const NOT_SIGNED_LINE =
+  "Your note was NOT signed. Open the chart to see why; its drafts hold what was saved.";
+const SIGN_UNKNOWN_LINE = "Whether your note was signed is not known — check the chart.";
+
 /** The claim on screen (Rust's `ClaimView`), or null before the first lock poll answers. */
 let currentClaim = null;
 /** The directory the picker shows (Rust's `StaffEntryView`s), read each time it opens. */
@@ -74,9 +81,19 @@ function takeClaim(claim) {
  */
 async function switchWhosHere() {
   if (!el("whos-here-picker").hidden) return;
-  await signsSettled();
+  // Captured BEFORE closeChart, which clears the note pane where the Sign said how it went.
+  const signing = signInFlight();
+  const signed = await signsSettled();
   await closeChart();
-  openPicker(null);
+  openPicker(null, signing ? signed : null);
+}
+
+/** The picker's line for a Sign's outcome (notes.js's `signNote`); "" for none. Pure. */
+function signOutcomeLine(outcome) {
+  if (outcome === "signed") return SIGNED_LINE;
+  if (outcome === "not-signed") return NOT_SIGNED_LINE;
+  if (outcome === "unknown") return SIGN_UNKNOWN_LINE;
+  return "";
 }
 
 /** Ask who's here, then run `then` once a claim is made (New note, Continue here). */
@@ -85,9 +102,13 @@ function askWhosHere(then) {
   openPicker(then);
 }
 
-/** Show the picker over the page, the rest of it out of Tab's reach, the search focused. */
-async function openPicker(then) {
+/**
+ * Show the picker over the page, the rest of it out of Tab's reach, the search focused. `signed`
+ * is the outcome of a Sign the switch waited for, said above the heading, or null.
+ */
+async function openPicker(then, signed) {
   afterPick = then;
+  setMessage(el("whos-here-signed"), signOutcomeLine(signed));
   // Someone new may be at the keyboard: a passphrase typed and not used never stays beside the
   // next person's ID (it is only ever cleared here, never set).
   el("signer-passphrase").value = "";
@@ -114,6 +135,7 @@ async function openPicker(then) {
  */
 function closePicker() {
   afterPick = null;
+  setMessage(el("whos-here-signed"), "");
   el("whos-here-picker").hidden = true;
   document.querySelector("main").inert = !el("terminal-lock").hidden;
   el(displayedPatient === null ? "browse-name" : "whos-here-switch").focus();

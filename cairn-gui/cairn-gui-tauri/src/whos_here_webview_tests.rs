@@ -181,14 +181,93 @@ fn relock_waits_for_a_sign_in_flight() {
     );
     // The Sign in flight is a promise the re-lock can wait on, and it never rejects.
     assert!(NOTES_JS.contains(
-        "el(\"note-sign\").addEventListener(\"click\", () => {\n  \
-         noteSigning = signNote().catch(console.error);"
+        "el(\"note-sign\").addEventListener(\"click\", () => {\n  noteSignInFlight = true;"
     ));
+    assert!(NOTES_JS.contains("    .finally(() => {\n      noteSignInFlight = false;"));
     assert!(js_fn(NOTES_JS, "signsSettled").contains("return noteSigning;"));
     // The lock shows again: the shared unlock is asked for anew.
     let shown = js_fn(SIGNER_JS, "relockTerminal");
     assert!(shown.contains("terminalUnlocked = false;"), "{shown}");
     assert!(shown.contains("renderSigner(lock);"), "{shown}");
+}
+
+/// Fix round 2 (I4's residual): Sign pressed, then the hot key at once. The switch waits for the
+/// Sign, but `closeChart` then clears the note pane, so its outcome would never be read — a
+/// refused or unknown sign could be taken for signed. The outcome of a Sign that was IN FLIGHT
+/// when the switch was pressed is captured before `closeChart` and said in the picker, as a
+/// status line worded with no patient identifier (the next person may read it). It goes when a
+/// person is picked or the picker closes.
+#[test]
+fn a_sign_settled_during_a_switch_is_said_in_the_picker() {
+    let switch = js_fn(WHOS_HERE_JS, "switchWhosHere");
+    let in_flight = position(switch, "const signing = signInFlight();");
+    let settled = position(switch, "const signed = await signsSettled();");
+    assert!(in_flight < settled, "{switch}");
+    assert!(
+        settled < position(switch, "await closeChart();"),
+        "{switch}"
+    );
+    assert!(
+        switch.contains("openPicker(null, signing ? signed : null);"),
+        "{switch}"
+    );
+    let open = js_fn(WHOS_HERE_JS, "openPicker");
+    assert!(
+        open.contains("setMessage(el(\"whos-here-signed\"), signOutcomeLine(signed));"),
+        "{open}"
+    );
+    assert!(
+        js_fn(WHOS_HERE_JS, "closePicker").contains("setMessage(el(\"whos-here-signed\"), \"\");")
+    );
+    assert!(
+        position(
+            INDEX_HTML,
+            "<p id=\"whos-here-signed\" role=\"status\" hidden></p>"
+        ) < position(INDEX_HTML, "<h2 id=\"whos-here-heading\">"),
+        "the line sits above the picker's heading"
+    );
+    // The words: one per outcome, none naming a patient.
+    use crate::source_guard::js_const;
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "SIGNED_LINE"),
+        "Your note was signed."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "NOT_SIGNED_LINE"),
+        "Your note was NOT signed. Open the chart to see why; its drafts hold what was saved."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "SIGN_UNKNOWN_LINE"),
+        "Whether your note was signed is not known \u{2014} check the chart."
+    );
+    let line = js_fn(WHOS_HERE_JS, "signOutcomeLine");
+    for arm in [
+        "if (outcome === \"signed\") return SIGNED_LINE;",
+        "if (outcome === \"not-signed\") return NOT_SIGNED_LINE;",
+        "if (outcome === \"unknown\") return SIGN_UNKNOWN_LINE;",
+        "return \"\";",
+    ] {
+        assert!(line.contains(arm), "{line}");
+    }
+    // signNote answers its outcome on every path that pressed Sign: refused (or a time only
+    // partly typed) is "not-signed"; an interrupted commit (#814) is "unknown".
+    let sign = js_fn(NOTES_JS, "signNote");
+    let caught = &sign[position(sign, "catch (failure) {")..];
+    assert!(
+        caught.contains(
+            "return behindTheRecord(failure) === \"unknown\" ? \"unknown\" : \"not-signed\";"
+        ),
+        "{sign}"
+    );
+    assert!(
+        sign[..position(sign, "clearTimeout(noteSaveTimer);")].contains("return \"not-signed\";"),
+        "a partly typed time signs nothing: {sign}"
+    );
+    assert!(sign.contains("return report.behind_the_record ? \"unknown\" : \"signed\";"));
+    assert!(NOTES_JS.contains(
+        "noteSignInFlight = true;\n  noteSigning = signNote()\n    .catch((failure) => {"
+    ));
+    assert!(js_fn(NOTES_JS, "signInFlight").contains("return noteSignInFlight;"));
 }
 
 /// Review Focus 2: the old terminal saves after another took the draft. The save answers

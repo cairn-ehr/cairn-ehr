@@ -64,8 +64,13 @@ let noteUnsaved = false;
 let saveSaid = null;
 /** The newest note read started; an older answer is dropped. */
 let notesRevision = 0;
-/** The Sign in flight (it never rejects), or a settled promise: the idle re-lock waits for it. */
-let noteSigning = Promise.resolve();
+/**
+ * The last Sign, as a promise of its outcome ("signed", "not-signed", "unknown", or null when
+ * nothing was pressed); it never rejects. The idle re-lock and a switch of who's here wait for it.
+ */
+let noteSigning = Promise.resolve(null);
+/** A Sign was pressed and has not settled: a switch then says its outcome in the picker. */
+let noteSignInFlight = false;
 
 /** Read the note pane for `patient` (main.js's `refresh`, beside the medication list). */
 async function readNotes(patient) {
@@ -359,13 +364,13 @@ function saySaved(text) {
  */
 async function signNote() {
   const held = noteDraft;
-  if (held === null) return;
+  if (held === null) return null;
   const when = el("note-when");
   if (when.validity.badInput) {
     // Sent as "", it would sign as "not stated": a time the clinician began, silently dropped.
     // Asked BEFORE the pending save is cancelled, so that save still goes.
     noteStatus(PARTLY_TYPED_TIME);
-    return;
+    return "not-signed";
   }
   clearTimeout(noteSaveTimer);
   noteSaveTimer = null;
@@ -391,7 +396,8 @@ async function signNote() {
     // shortcut: a stale refusal (already signed elsewhere) keeps the dead draft in the editor
     // until the chart is reopened; give it a way out (#945).
     await refresh(el("note-status").textContent, behindTheRecord(failure));
-    return;
+    // An interrupted commit MAY have signed (#713); every other refusal recorded nothing.
+    return behindTheRecord(failure) === "unknown" ? "unknown" : "not-signed";
   }
   // Not known whether it was signed (#814): save the text first, so if it was NOT, the draft the
   // re-read reopens holds all of it; if it was, the save answers `spent` and writes nothing. A
@@ -400,16 +406,22 @@ async function signNote() {
     setSigning(false);
     noteStatus(report.text + " · " + NOT_SAVED);
     await refresh(report.text, report.behind_the_record);
-    return;
+    return "unknown";
   }
   closeEditor();
   noteStatus(report.text); // worded in Rust: `notes::note_sign_impl`
   await refresh(report.text, report.behind_the_record);
+  return report.behind_the_record ? "unknown" : "signed";
 }
 
-/** The Sign in flight, done (idle.js's re-lock waits for it before it closes the chart). */
+/** The last Sign, done, as its outcome (idle.js's re-lock and whos_here.js's switch wait for it). */
 function signsSettled() {
   return noteSigning;
+}
+
+/** Whether a Sign is in flight right now. */
+function signInFlight() {
+  return noteSignInFlight;
 }
 
 /** Say how the note pane's last act went. Never a dialog. */
@@ -473,5 +485,13 @@ el("new-note").addEventListener("click", newNote);
 el("note-text").addEventListener("input", onNoteInput);
 el("note-when").addEventListener("input", onNoteInput);
 el("note-sign").addEventListener("click", () => {
-  noteSigning = signNote().catch(console.error);
+  noteSignInFlight = true;
+  noteSigning = signNote()
+    .catch((failure) => {
+      console.error(failure);
+      return "unknown"; // a fault in this window mid-sign: whether it signed is not known
+    })
+    .finally(() => {
+      noteSignInFlight = false;
+    });
 });
