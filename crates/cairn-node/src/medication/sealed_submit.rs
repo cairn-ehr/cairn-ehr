@@ -282,8 +282,20 @@ pub(crate) async fn prepare_sealed(
 ) -> anyhow::Result<Prepared> {
     // ADR-0053: when a human authors, rewrite the device-shaped body so the human is
     // an `authored` contributor AND the signer; the node stays `recorded` + custodian.
-    let (mut body, signing_sk) = apply_author(body, author, node_sk);
+    let (body, signing_sk) = apply_author(body, author, node_sk);
+    prepare_sealed_as(client, body, signing_sk).await
+}
 
+/// [`prepare_sealed`] for a body whose authorship is ALREADY rewritten, signed by `signer`: the
+/// note's attested parts (`with_attesting_signer`, sign-in slice 3b-1), which must not pass
+/// through `apply_author` too — `with_human_author` on top would add a second bearing entry.
+/// Everything after the authorship rewrite (the §5.9 rung, seal-then-sign, the unwrap-key
+/// check) is this one function, so the two entries cannot drift apart.
+pub(crate) async fn prepare_sealed_as(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    mut body: EventBody,
+    signing_sk: &dyn EventSigner,
+) -> anyhow::Result<Prepared> {
     // §5.9 part B (ADR-0063): choose the CLEAR disclosure rung from the grade standing on
     // this chart RIGHT NOW, and attach it to the envelope.
     //

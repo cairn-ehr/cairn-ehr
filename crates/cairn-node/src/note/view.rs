@@ -42,6 +42,16 @@ pub fn grade_words(grade: &NoteGrade) -> String {
     }
 }
 
+/// The note's byline: [`grade_words`], headed `"written by ?Nurse A · "` when the note names a
+/// `drafted` writer (`drafted_by`, their display name). The `?` is text, never a glyph alone: the
+/// writer did not sign, so the name is a claim this node cannot verify (design §3.7).
+pub fn byline_words(grade: &NoteGrade, drafted_by: Option<&str>) -> String {
+    match drafted_by {
+        Some(name) => format!("written by ?{name} · {}", grade_words(grade)),
+        None => grade_words(grade),
+    }
+}
+
 /// When the note applies, in words, in time zone `tz` (the window passes `chrono::Local`):
 /// `"03:00 (stated)"` when the writer stated a time, else `"no stated time · writing began
 /// 03:12"` (design §4.3) — never a stated-looking time the writer did not give (principle 4).
@@ -127,6 +137,18 @@ mod tests {
         let device = note_grade(AuthorshipConfidence::Device, Some("the node".into()));
         assert_eq!(device, NoteGrade::WriterNotKnown);
         assert_eq!(grade_words(&device), "writer not known");
+    }
+
+    #[test]
+    fn a_drafted_name_heads_the_byline_unverified() {
+        let signed = NoteGrade::Signed { by: "Dr B".into() };
+        assert_eq!(
+            byline_words(&signed, Some("Nurse A")),
+            "written by ?Nurse A · signed by Dr B"
+        );
+        for grade in [signed, NoteGrade::Claimed, NoteGrade::WriterNotKnown] {
+            assert_eq!(byline_words(&grade, None), grade_words(&grade), "{grade:?}");
+        }
     }
 
     #[test]

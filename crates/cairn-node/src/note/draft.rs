@@ -200,16 +200,7 @@ pub async fn take_draft(
 /// One non-empty part as the spend door handed it back: what a note event is built from.
 pub(crate) struct SpentPart {
     pub patient_id: Uuid,
-    // `expect`, not `allow`: once slice 3b-1 Task 4's multi-part sign reads them, this warns.
-    #[expect(
-        dead_code,
-        reason = "read by slice 3b-1 Task 4's one-event-per-part sign"
-    )]
-    pub seq: i32,
-    #[expect(
-        dead_code,
-        reason = "read by slice 3b-1 Task 4's one-event-per-part sign"
-    )]
+    /// The writer's staff id; `None` = not known. Decides the part's contributor set.
     pub writer: Option<String>,
     pub narrative: String,
     pub stated_time: Option<DateTime<Utc>>,
@@ -229,7 +220,7 @@ pub(crate) async fn spend_parts(
 ) -> anyhow::Result<Vec<SpentPart>> {
     let rows = client
         .query(
-            "SELECT patient_id::text, seq, writer, narrative, stated_time, recording_started, \
+            "SELECT patient_id::text, writer, narrative, stated_time, recording_started, \
                     last_keystroke \
                FROM cairn_note_draft_spend_parts($1::text::uuid, $2::text::uuid)",
             &[&draft.to_string(), &event.to_string()],
@@ -239,12 +230,11 @@ pub(crate) async fn spend_parts(
         .map(|r| {
             Ok(SpentPart {
                 patient_id: r.get::<_, String>(0).parse()?,
-                seq: r.get(1),
-                writer: r.get(2),
-                narrative: r.get(3),
-                stated_time: r.get(4),
-                recording_started: r.get(5),
-                last_keystroke: r.get(6),
+                writer: r.get(1),
+                narrative: r.get(2),
+                stated_time: r.get(3),
+                recording_started: r.get(4),
+                last_keystroke: r.get(5),
             })
         })
         .collect()

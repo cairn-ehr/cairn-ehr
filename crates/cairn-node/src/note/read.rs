@@ -30,6 +30,11 @@ pub struct NoteRow {
     pub effective_basis: String,
     pub recording_started: DateTime<Utc>,
     pub grade: NoteGrade,
+    /// The note this one continues (its `addendum-to` ref): a later writer's part of one draft.
+    pub addendum_to: Option<Uuid>,
+    /// The display name of the note's `drafted` contributor — who typed a part the signer
+    /// attested — when this node can name that key (`cairn_note_signer_name`); `None` otherwise.
+    pub drafted_by: Option<String>,
 }
 
 /// What the note pane shows for one opened chart.
@@ -55,7 +60,11 @@ const NOTES_SQL: &str = "\
     SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
            cairn_note_vouched_attester(e.event_id), \
-           cairn_note_signer_name(e.signer_key_id) \
+           cairn_note_signer_name(e.signer_key_id), \
+           (SELECT r ->> 'event' FROM jsonb_array_elements(n.refs) r \
+             WHERE r ->> 'rel' = 'addendum-to' LIMIT 1), \
+           cairn_note_signer_name((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
+                                    WHERE c ->> 'role' = 'drafted' LIMIT 1)) \
       FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      WHERE n.patient_id = ANY($1::text[]::uuid[])";
 
@@ -93,6 +102,11 @@ pub async fn list_patient_notes(
             effective_basis: r.get(4),
             recording_started: r.get(5),
             grade: note_grade(confidence, r.get(9)),
+            addendum_to: r
+                .get::<_, Option<String>>(10)
+                .map(|s| s.parse())
+                .transpose()?,
+            drafted_by: r.get(11),
         });
     }
     // Ordered here rather than by SQL ORDER BY (ADR-0045); the id breaks a tie stably.

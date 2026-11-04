@@ -23,7 +23,7 @@ use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, nod
 use cairn_node::note::draft::{NoteDraft, SaveOutcome};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::sign::SignRefusal;
-use cairn_node::note::view::{grade_words, instant, time_words};
+use cairn_node::note::view::{byline_words, instant, time_words};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use std::time::Instant;
 use time::{datetime_local, parse_stated, year_the_record_holds};
@@ -39,7 +39,8 @@ pub struct NoteRowView {
     pub event_id: String,
     /// The text exactly as its writer typed it. The webview sets it as `textContent`.
     pub text: String,
-    /// Who signed it, graded (`view::grade_words`): "signed by …", a claim, or writer not known.
+    /// Who signed it, graded (`view::byline_words`): "signed by …", a claim, or writer not known,
+    /// headed "written by ?…" when another writer drafted it.
     pub byline: String,
     /// When it applies (`view::time_words`): a stated time, or when writing began.
     pub when: String,
@@ -141,9 +142,13 @@ const ELSEWHERE: &str = "this draft belongs to another chart or terminal — not
 /// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
 const SIGN_ELSEWHERE: &str =
     "this draft belongs to another chart or terminal — nothing was signed; your text is still here";
-/// … when the writer a save or sign names is not enrolled here (unreachable until the window
-/// names a writer, slice 3b-1 Task 5).
+/// … when the writer a save names is not enrolled here (unreachable until the window names a
+/// writer, slice 3b-1 Task 5).
 const NO_SUCH_WRITER: &str = "the writer named is not enrolled on this node — nothing was written";
+/// … the same, for a SIGN: the on-screen writer, or the writer of a part above, is no longer
+/// enrolled. Nothing was signed, and the editor still holds the text.
+const SIGN_NO_SUCH_WRITER: &str = "a writer of this note is not enrolled on this node — nothing \
+     was signed; your text is still here";
 /// … when no event names the patient on this node.
 const NO_CHART: &str = "this patient has no chart on this node";
 /// … when nothing but whitespace was typed.
@@ -251,6 +256,8 @@ pub async fn note_sign_impl(
             draft,
             patient,
             terminal,
+            // shortcut: the writer is not known until the window names one (slice 3b-1 Task 5).
+            writer: None,
             narrative,
             stated,
             node_origin: &state.node_origin,
@@ -356,7 +363,7 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
         SignRefusal::Spent => stale(SPENT),
         SignRefusal::Elsewhere | SignRefusal::Moved => refused(SIGN_ELSEWHERE),
         SignRefusal::NoChart => refused(NO_CHART),
-        SignRefusal::NoSuchWriter => refused(NO_SUCH_WRITER),
+        SignRefusal::NoSuchWriter => refused(SIGN_NO_SUCH_WRITER),
     }
 }
 
@@ -401,7 +408,7 @@ where
     NoteRowView {
         event_id: note.event_id.to_string(),
         text: note.text.clone(),
-        byline: grade_words(&note.grade),
+        byline: byline_words(&note.grade, note.drafted_by.as_deref()),
         when: time_words(
             &note.effective_basis,
             note.t_effective,

@@ -38,6 +38,7 @@ async fn sign_on(
         draft,
         patient: chart,
         terminal: "pc-1",
+        writer: None,
         narrative: text,
         stated: None,
         node_origin: ORIGIN,

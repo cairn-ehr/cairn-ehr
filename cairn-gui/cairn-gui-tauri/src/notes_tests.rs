@@ -103,9 +103,12 @@ fn sign_words_each_refusal() {
         sign_refusal_view(SignRefusal::Moved).text,
         sign_refusal_view(SignRefusal::Elsewhere).text
     );
-    assert!(sign_refusal_view(SignRefusal::NoSuchWriter)
-        .text
-        .contains("not enrolled"));
+    let gone = sign_refusal_view(SignRefusal::NoSuchWriter).text;
+    assert!(gone.contains("not enrolled"), "{gone}");
+    assert!(
+        gone.contains("nothing was signed; your text is still here"),
+        "a sign's refusal says nothing was SIGNED: {gone}"
+    );
 }
 
 /// What a sign refuses before it asks for the key — a passphrase that signs nothing is a step
@@ -265,6 +268,8 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             grade: NoteGrade::Signed {
                 by: "Dr Ada".into(),
             },
+            addendum_to: None,
+            drafted_by: Some("Nurse A".into()),
         }],
         withheld_on_linked: 2,
         drafts: vec![draft("pc-1")],
@@ -272,7 +277,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
     let pane = note_pane(list, Some("pc-1"), &bne(), nov(3));
     let row = &pane.notes[0];
     assert_eq!(row.text, "BP <90");
-    assert_eq!(row.byline, "signed by Dr Ada");
+    assert_eq!(row.byline, "written by ?Nurse A · signed by Dr Ada");
     assert_eq!(row.when, "3 Nov 2025 03:00 (stated)");
     assert!(pane.drafts[0].here);
     let withheld = pane.withheld_sentence.expect("withheld notes are said");

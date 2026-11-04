@@ -50,7 +50,17 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     submit_registration(&owner, &sk, &kid, x, 1).await;
     for (chart, text) in [(a, "BP <90 [L] arm (R)"), (x, "note on X")] {
         let draft = Uuid::now_v7();
-        let r = save_part(&window, draft, chart, "pc-window", None, text, None).await;
+        // A NAMED writer, so the sign's key lookup (`cairn_vault_member_key`) runs as the window.
+        let r = save_part(
+            &window,
+            draft,
+            chart,
+            "pc-window",
+            Some("notewriter"),
+            text,
+            None,
+        )
+        .await;
         assert_eq!(
             expect_as_window("note::draft::save_part", r),
             SaveOutcome::Saved
@@ -61,6 +71,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
             draft,
             patient: chart,
             terminal: "pc-window",
+            writer: Some("notewriter"),
             narrative: text,
             stated: None,
             node_origin: ORIGIN,
