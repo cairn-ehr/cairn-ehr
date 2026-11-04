@@ -516,3 +516,8 @@ incremental writing lives pre-commit in the durable draft store
 > removed. A newer profile is carried at the remote door but never projected. `note.added` is **not** retired yet
 > ([#364](https://github.com/cairn-ehr/cairn-ehr/issues/364)), contrary to the first paragraph above. The draft
 > store as built is in [§3.10](#310-session-identity-event-authorship-and-draft-durability)'s note.
+> **Since sign-in slice 3b-2b** ([ADR-0090](decisions/0090-the-audited-discard.md), `db/068` + `db/069`), a draft
+> thrown away leaves its own signed event beside `clinical.note.asserted`: `clinical.note-discard.asserted`
+> (`clinical.note-discard/1`), whose payload carries the draft's non-blank parts and whose twin begins "Draft
+> discarded; it was never entered in the record." It is never a note: it never enters `clinical_note`, and the chart
+> shows it as a one-line marker with its text behind a click.

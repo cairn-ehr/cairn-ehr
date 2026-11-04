@@ -415,6 +415,33 @@ observed \_\_.
 | The committed sentence read once | | |
 | No dialog | | |
 
+## Throw away your own draft (GUI sign-in slice 3b-2b, runbook §21)
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| Discard a draft: Staff ID keystroke → "Discarded. …" | | | | ≤ 3 s | |
+| `ui_gesture_timing` `note-discard` (the write half) | | | | — | |
+
+Steps: discarding your own draft paper *N* = 1 → forced *M* = 1 → observed \_\_ · a colleague's draft: refused, no
+gesture · seeing a discard 0 → 0 → observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Own draft: no dialog; the draft gone; one event signed by the discarder, `authored` + `recorded`; `spent_at` = `t_effective` | | |
+| Empty editor: "The draft was empty, so nothing was kept."; no event, no spend, no marker | | |
+| A colleague's draft: the "someone else wrote part of this draft" sentence; draft kept; text saved again | | |
+| A stuck draft: the same sentence; kept; its line reads the stuck words, no time | | |
+| During the debounce: the audit copy ends with the last characters typed | | |
+| A switch during a discard: the picker says the discard's outcome, never "signed" | | |
+| WebKit (the real window) against the headless walk: any difference noted | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| *Discard draft* by keyboard; both buttons down while it runs | | |
+| The marker read as a collapsed disclosure; opened by Space/Enter; parts read as typed | | |
+| The outcome read once; a refusal's sentence in full | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

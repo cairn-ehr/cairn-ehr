@@ -10,6 +10,62 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3b-2b — THE AUDITED DISCARD (ADR-0090, db/068 + db/069, db/037 + db/044 + db/065 + db/066 in
+place) — do not undo** (pins: `db/tests/068_clinical_note_discard_test.sql`, `db/tests/069_note_draft_discard_test.sql`,
+`crates/cairn-event/src/note_discard.rs`'s tests, `crates/cairn-node/tests/{note_discard,note_discard_floor,note_read,window_role_grants_notes}.rs`,
+`cairn-gui-tauri/src/{notes_discard,notes_discard_webview,notes_parts,notes}_tests.rs`):
+- **"Your own writing" is decided by KEY, never by staff id.** The door compares each non-blank part's
+  `cairn_vault_member_key(writer)` with the discarder's key; a named writer with no key is `not-yours`; blank parts
+  (`cairn_twin_is_present`) never count; the discarder must be a clinical member. **Tempting wrong fixes:** compare
+  staff-id text "because it is simpler" (the key is what the signature proves, ADR-0088 decision 15, and what
+  db/065's trigger checks; a rule in another currency is one the floor cannot back); read a keyless writer as "not known" so the draft can go (it quietly loses
+  who wrote it, principle 4); test blank with `btrim(…) <> ''` (it disagrees with the floor under another collation).
+  Pins: db/tests/069's `a_colleagues_part_is_not_yours`, `a_named_writer_without_a_key_is_not_yours`,
+  `a_blank_colleague_part_does_not_count`, `an_admin_key_is_no_such_signer`;
+  `note_discard.rs::a_colleagues_draft_is_refused_not_yours_and_kept`.
+- **The trigger's discard arm checks the SIGNER and the INSTANT, not only type + chart + `xmin`.** The door trusts the
+  key its caller names, and a key id is public; only a row signed by `discarded_by` proves the discarder's hand, and
+  only `t_effective = spent_at` (minted by the door under the draft's lock) proves it is THIS discard. **Tempting
+  wrong fix:** "simplify" the arm to type + chart + `xmin`, like the note arm (a raw-SQL client naming a colleague's
+  key then discards her draft with any event it can sign, and a captured genuine discard of hers can be replayed
+  against another draft). Also: read the instant before the lock (a discard queued behind a save is stamped before
+  that save's keystroke). Pins: db/tests/069's `the_commit_refuses_a_spend_without_its_signed_event`,
+  `the_commit_refuses_an_event_signed_by_another_key`, `the_commit_refuses_a_discard_event_of_another_instant`;
+  `note_discard.rs::a_raw_door_call_without_its_event_is_refused_at_commit`,
+  `discarded_at_follows_a_save_that_held_the_lock`.
+- **`discarded` is not `spent`.** The save, take and discard doors answer `discarded` for a spend with `discarded_by`
+  set, and `note_draft_spent.discarded_by` lives in db/065 with its paired `ALTER` (3b-2a's "a column a door body
+  reads lives with its table"). **Tempting wrong fix:** answer `spent` "because the draft is gone either way" (the
+  window words `spent` as "already signed", which is false: no note exists). Pins: db/tests/069's
+  `save_after_discard_answers_discarded`, `take_after_discard_answers_discarded`;
+  `note_discard.rs::sign_after_discard_is_refused_discarded`;
+  `notes_tests.rs::discarded_fork_words_never_say_signed`.
+- **The marker is never a note, and a part is read by its five named keys only.** `clinical_note_discard` is read
+  only by `read.rs`'s `DISCARDS_SQL`, which takes `writer`, `narrative`, `stated_time`, `recording_started` and
+  `recording_ended` and nothing else; `NOTES_SQL` does not know the table exists; the window draws a closed
+  `<details>` in `#note-discards`, its words set as text. **Tempting wrong fixes:** render a part generically (every
+  key it carries) "so a future field just shows" (db/068 stores `parts` as received, so a key a raw-SQL client added
+  reaches the screen unchecked); join the discards into the notes list or count them as notes (ADR-0087 R8); show
+  the text open "to save a click" (the notes crowd out). Pins: `note_read.rs::the_marker_lists_the_discard_not_as_a_note`,
+  `a_doubted_set_withholds_a_linked_charts_marker`; `notes_discard_webview_tests.rs::a_marker_is_a_details_not_a_note`,
+  `markers_are_text_never_html`; `notes_parts_tests.rs::the_marker_summary_and_headings_are_exact`.
+- **A discard press marks the text as carried (`mayBeSigned`), and a refusal saves it again.** The node saves the text
+  on screen and discards it in ONE transaction, so a refusal rolls back that save. **Tempting wrong fixes:** leave
+  `mayBeSigned` unset "because nothing was signed" (a late save answering `discarded` after this window's own press
+  then forks the discarded text back as a new draft); skip the re-save after a refusal (the "your text is still here"
+  promise is true only until the window closes); discard the last autosave instead of the text on screen (the audit
+  copy misses the last second of typing). Pins: `notes_discard_webview_tests.rs::a_discard_marks_the_press_as_carrying_the_text`,
+  `a_discarded_save_is_handled_as_spent`, `a_refused_discard_saves_the_text_on_screen_again`,
+  `discard_cancels_the_pending_save_before_it_discards`; `note_discard.rs::discard_carries_the_text_on_screen`.
+- **A discard's words never borrow Sign's.** Each refusal and outcome has its own sentence ("Not discarded: …",
+  "Whether this draft was discarded is NOT known: …"); the who's-here picker words a discard's outcome as a discard's
+  (`noteSigning` renames a discard's `unknown` to `discard-unknown`). **Tempting wrong fix:** reuse the sign sentence
+  with a prefix "to keep one set of words" — that copy is false here three ways this slice found ("nothing was
+  signed", "says when it goes in by itself" for a stuck draft, the picker's "Whether your note was signed"). Sign's own
+  matching flaw is #986. Pins: `notes_discard_tests.rs::discard_words_each_refusal`, `discard_words_each_outcome`,
+  `a_failure_is_led_by_what_it_means_for_the_discard`;
+  `notes_discard_webview_tests.rs::a_switch_during_a_discard_says_what_the_discard_did`.
+
 **⇒ GUI SIGN-IN SLICE 3b-2a — THE QUARANTINE COMMIT AND THE `Asserted` GRADE (ADR-0089, db/067, db/065 + db/066 in
 place) — do not undo** (pins: `db/tests/067_note_draft_commit_test.sql`, `crates/cairn-event/src/contributor.rs`'s
 tests, `crates/cairn-node/tests/{note_commit,note_read,authority_lockstep,window_role_grants_notes}.rs`,
