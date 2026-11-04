@@ -202,7 +202,7 @@ const SU_STAFF: &str = "boss";
 /// `cairn-gui/cairn-gui-live/tests/common/mod.rs`): this is a src unit-test module with no
 /// `tests/common` to import, three test trees cannot share a test module, and a library fn that
 /// mints passwordless logins is not something to ship. Keep the copies identical.
-async fn window_login(owner: &tokio_postgres::Client, cs: &str) -> String {
+pub(crate) async fn window_login(owner: &tokio_postgres::Client, cs: &str) -> String {
     owner
         .batch_execute(
             "DO $$ BEGIN \

@@ -8,6 +8,7 @@
 //! writer is the current claim — a named person by staff id, or "Don't know" on an unknown tail
 //! (ruling M3: two unknown writers share it, since the floor cannot tell them apart; the editor
 //! must show its text, or an empty editor would REPLACE it on the next save). Pure functions.
+use super::commit::due_words;
 use super::time::datetime_local;
 use crate::whos_here::{claim_view, claimed_name, Claim, ClaimView};
 use cairn_node::note::draft::{DraftPart, NoteDraft};
@@ -124,7 +125,8 @@ pub struct DraftView {
     pub draft_id: String,
     /// Whether the draft is held by THIS terminal — the only place it may be edited.
     pub here: bool,
-    /// "unsigned draft · started 03:12 · last typed 03:40", plus where it is being written.
+    /// "unsigned draft · started 03:12 · last typed 03:40", plus where it is being written, and
+    /// when it goes into the record unsigned (`commit::due_words`).
     pub words: String,
     /// Its parts in writing order.
     pub parts: Vec<PartView>,
@@ -161,6 +163,8 @@ where
     if !here {
         words.push_str(" · being written at another terminal");
     }
+    words.push_str(" · ");
+    words.push_str(&due_words(draft.due, draft.overdue, tz, today));
     let tail = draft.parts.len().saturating_sub(1);
     let parts = draft
         .parts

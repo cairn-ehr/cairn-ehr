@@ -394,4 +394,4 @@ pub async fn enrol_member_impl(
 
 #[cfg(test)]
 #[path = "enrol_tests.rs"]
-mod tests;
+pub(crate) mod tests;

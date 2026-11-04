@@ -149,6 +149,8 @@ fn main() -> anyhow::Result<()> {
             let id = terminal_id_or_ephemeral(app.path().app_config_dir());
             // `set` fails only if already set, and nothing else sets it.
             let _ = app.state::<AppState>().terminal_id.set(id);
+            // The quarantine commit's tick (slice 3b-2a): a Rust task, so a hidden window ticks.
+            tauri::async_runtime::spawn(notes::commit::run_ticks(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

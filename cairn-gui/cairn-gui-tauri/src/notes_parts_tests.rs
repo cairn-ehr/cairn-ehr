@@ -115,7 +115,8 @@ fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
     assert!(here.here);
     assert_eq!(
         here.words,
-        "unsigned draft · started 03:12 · last typed 03:40"
+        "unsigned draft · started 03:12 · last typed 03:40 \
+         · goes into the record unsigned at 06:40 if nobody types in it"
     );
     assert_eq!(here.parts[0].text, "BP <90", "the raw text, to reopen");
     let there = draft_view(
@@ -129,7 +130,8 @@ fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
     assert_eq!(
         there.words,
         "unsigned draft · started 3 Nov 03:12 · last typed 3 Nov 03:40 \
-         · being written at another terminal"
+         · being written at another terminal · goes into the record unsigned at 3 Nov 06:40 if \
+         nobody types in it"
     );
 }
 

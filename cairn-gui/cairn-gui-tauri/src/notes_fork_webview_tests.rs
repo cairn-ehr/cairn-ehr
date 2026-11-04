@@ -11,6 +11,10 @@ const NOTES_JS: &str = concat!(
     include_str!("../src-ui/notes_save.js")
 );
 
+/// The one line that decides a save's answer forks: moved; committed by the quarantine timer;
+/// or signed, unless this window's own Sign may have signed it.
+const FORKS: &str = "if (view.moved || view.committed || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);";
+
 /// Review Focus 2: the old terminal saves after another took the draft. The save answers
 /// `moved`, and what the node lacks is kept as a NEW draft (a fresh id, the same writer), saved
 /// in queue order. Fix round 1, I3: only what was typed AFTER the last answered save is new — the
@@ -20,7 +24,7 @@ const NOTES_JS: &str = concat!(
 #[test]
 fn moved_forks_a_new_draft() {
     let send = js_fn(NOTES_JS, "sendDraft");
-    let forks = "if (view.moved || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);";
+    let forks = FORKS;
     assert!(
         position(send, forks) < position(send, "noteUnsaved = !kept;"),
         "{send}"
@@ -130,4 +134,23 @@ fn later_answers_refill_the_one_fork_never_a_second() {
             < position(keep, "return sendDraft({ held: fork,"),
         "{keep}"
     );
+}
+
+/// Slice 3b-2a, Review Focus 1: a save answering `committed` (the quarantine timer put the draft
+/// into the record unsigned) keeps the unsaved text as a new draft EVEN while this window's Sign
+/// has marked the draft `mayBeSigned`: a timer's commit is never this window's Sign, so that text
+/// went with no note. Only `spent` is excused by the mark. The sentence it says is the save's
+/// `fork` words (Rust's, `notes_words.rs`), on the status line the editor shows (`noteStatus`);
+/// its visibility was walked headlessly in a browser with a stub `invoke` (see the slice's PR).
+#[test]
+fn a_timer_commit_forks_even_after_a_sign_press() {
+    let send = js_fn(NOTES_JS, "sendDraft");
+    let line = &send[position(send, FORKS)..][..FORKS.len()];
+    let excused = position(line, "(view.spent && !sent.held.mayBeSigned)");
+    assert!(
+        position(line, "view.committed ||") < excused,
+        "committed is never excused by mayBeSigned: {line}"
+    );
+    let keep = js_fn(NOTES_JS, "keepUnsavedText");
+    assert!(keep.contains("noteStatus(said);"), "{keep}");
 }

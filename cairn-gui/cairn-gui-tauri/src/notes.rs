@@ -40,6 +40,10 @@ mod time;
 #[path = "notes_parts.rs"]
 pub(crate) mod parts;
 
+/// The quarantine commit's runner: the tick, the pre-read commit, the due words (`notes_commit.rs`).
+#[path = "notes_commit.rs"]
+pub(crate) mod commit;
+
 /// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
 #[path = "notes_words.rs"]
 pub(crate) mod words;
@@ -136,6 +140,9 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             claim: crate::whos_here::claim_view(&claim),
         });
     };
+    // Overdue drafts go in FIRST, so the pane never shows one the next tick takes away. Its
+    // answer is ignored: a commit that cannot run never blocks the read (Review Focus 5).
+    let _ = commit::commit_overdue_impl(state, Some(patient)).await;
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
     let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;
