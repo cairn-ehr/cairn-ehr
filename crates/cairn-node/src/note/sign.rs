@@ -96,6 +96,7 @@ fn body_from_spent(event_id: Uuid, spent: &SpentDraft, node_kid: &str, hlc: Hlc)
         },
         recording_started: &started,
         recording_ended: &ended,
+        addendum_to: None,
     };
     note_body(event_id, spent.patient_id, node_kid, hlc, &a)
 }

@@ -105,6 +105,30 @@ pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
     body
 }
 
+/// Rewrite a device-shaped body so a human SIGNS (attests) a part somebody else may
+/// have written (sign-in slice 3b-1): the signer gets an `attested` contributor, the
+/// writer (when known) a `drafted` one in front of it, and the device `recorded` entry
+/// stays after both. Unlike [`with_human_author`] the signer is not claiming to have
+/// authored the text, only to answer for it; a writer of unknown identity is simply
+/// left out rather than invented (principle 4). The signer also becomes the event's
+/// `signer_key_id`, so the set grades `Attested`. Pure; the caller signs the sealed bytes.
+pub fn with_attesting_signer(
+    mut body: EventBody,
+    signer_kid: &str,
+    writer_kid: Option<&str>,
+) -> EventBody {
+    let mut front = Vec::with_capacity(2);
+    if let Some(w) = writer_kid {
+        front.push(serde_json::json!({"actor_id": w, "role": "drafted"}));
+    }
+    front.push(serde_json::json!({"actor_id": signer_kid, "role": "attested"}));
+    let rest = body.contributors.as_array().cloned().unwrap_or_default();
+    front.extend(rest);
+    body.contributors = serde_json::Value::Array(front);
+    body.signer_key_id = signer_kid.to_string();
+    body
+}
+
 /// The authorship-confidence grade an event carries (ADR-0008 "a grade, not a gate";
 /// ADR-0053). The single, shared reading every consumer must use so an unverifiable
 /// claim is never displayed as authenticated.
@@ -415,6 +439,64 @@ mod tests {
         // The device recorded contributor is preserved after the human author.
         assert_eq!(out.contributors[1]["actor_id"], "NODEKID");
         assert_eq!(out.contributors[1]["role"], "recorded");
+    }
+
+    /// A device-shaped body (node "N" recorded, node signs) for the attesting-signer tests.
+    fn device_body() -> crate::EventBody {
+        crate::EventBody {
+            event_id: "e".into(),
+            patient_id: "p".into(),
+            event_type: "clinical.note.asserted".into(),
+            schema_version: "clinical.note/1".into(),
+            hlc: crate::Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "n".into(),
+            },
+            t_effective: None,
+            signer_key_id: "N".into(),
+            contributors: serde_json::json!([{"actor_id": "N", "role": "recorded"}]),
+            payload: serde_json::json!({}),
+            attachments: vec![],
+            plaintext_twin: Some("twin".into()),
+            clock_grade: crate::ClockGrade::SelfAsserted,
+            safety: None,
+        }
+    }
+
+    #[test]
+    fn attesting_signer_shape() {
+        let out = with_attesting_signer(device_body(), "S", Some("W"));
+        assert_eq!(
+            out.contributors,
+            serde_json::json!([
+                {"actor_id": "W", "role": "drafted"},
+                {"actor_id": "S", "role": "attested"},
+                {"actor_id": "N", "role": "recorded"}])
+        );
+        assert_eq!(out.signer_key_id, "S");
+    }
+
+    #[test]
+    fn attesting_signer_unknown_writer() {
+        let out = with_attesting_signer(device_body(), "S", None);
+        assert_eq!(
+            out.contributors,
+            serde_json::json!([
+                {"actor_id": "S", "role": "attested"},
+                {"actor_id": "N", "role": "recorded"}])
+        );
+    }
+
+    #[test]
+    fn attested_part_grades_attested() {
+        let out = with_attesting_signer(device_body(), "S", Some("W"));
+        // Test fixture, not a DB-provenance assertion.
+        let signer = VerifiedKid::from_event_log_column("S");
+        assert_eq!(
+            classify_authorship_confidence(&out.contributors, signer, None),
+            AuthorshipConfidence::Attested
+        );
     }
 
     #[test]

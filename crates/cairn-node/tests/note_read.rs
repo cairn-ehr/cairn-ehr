@@ -118,6 +118,7 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
         stated: StatedTime::NotStated,
         recording_started: "2026-11-02T22:00:00Z",
         recording_ended: "2026-11-02T22:04:00Z",
+        addendum_to: None,
     };
     let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
     seal_sign_submit(

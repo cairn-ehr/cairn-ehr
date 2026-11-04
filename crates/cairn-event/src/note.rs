@@ -52,6 +52,9 @@ pub struct NoteAssertion<'a> {
     pub recording_started: &'a str,
     /// RFC 3339 UTC: the last save that changed the text, never before `recording_started`.
     pub recording_ended: &'a str,
+    /// Set when this note is an addendum to an earlier note event: the id it continues.
+    /// Written as the `addendum-to` ref (db/064 checks `rel` and `event`).
+    pub addendum_to: Option<&'a str>,
 }
 
 /// Build the `clinical.note/1` payload. Keys are frozen; `media`, `refs` and
@@ -62,10 +65,14 @@ pub fn note_payload(a: &NoteAssertion) -> Value {
         StatedTime::Stated(_) => "stated",
         StatedTime::NotStated => "recording-started",
     };
+    let refs = match a.addendum_to {
+        Some(id) => json!([{"rel": "addendum-to", "event": id}]),
+        None => json!([]),
+    };
     json!({
         "narrative": a.narrative.as_str(),
         "media": [],
-        "refs": [],
+        "refs": refs,
         "encounter": null,
         "recording_started": a.recording_started,
         "recording_ended": a.recording_ended,
@@ -151,6 +158,7 @@ mod tests {
             stated,
             recording_started: "2026-11-03T01:00:00Z",
             recording_ended: "2026-11-03T01:05:00Z",
+            addendum_to: None,
         }
     }
 
@@ -178,6 +186,24 @@ mod tests {
         assert_eq!(v["media"], json!([]));
         assert_eq!(v["refs"], json!([]));
         assert!(v["encounter"].is_null());
+    }
+
+    #[test]
+    fn addendum_ref_written() {
+        let mut a = note(StatedTime::NotStated);
+        a.addendum_to = Some("EID");
+        assert_eq!(
+            note_payload(&a)["refs"],
+            json!([{"rel": "addendum-to", "event": "EID"}])
+        );
+    }
+
+    #[test]
+    fn no_addendum_keeps_empty_refs() {
+        assert_eq!(
+            note_payload(&note(StatedTime::NotStated))["refs"],
+            json!([])
+        );
     }
 
     #[test]
