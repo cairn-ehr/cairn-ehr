@@ -47,7 +47,7 @@
 >   peer before part 1). Open: **#963** (slice 5) · **#964** · **#965** · **#967** · **#968** · **#969** · **#970** ·
 >   **#971** · **#972** · **#975** · **#976** · **#977** · **#978**; #973 built. Owed by a human: **RUNBOOK §19**.
 > - **Slice 3b-2a BUILT 2026-11-04 on draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)** (branch
->   `plan/sign-in-slice-3b-2-commit-runner`; final review done and its findings fixed; awaiting the full gate;
+>   `plan/sign-in-slice-3b-2-commit-runner`; final review done and its findings fixed; the full local gate PASSED on `01b464e5` (3194 tests, 0 skipped);
 >   [ADR-0089](spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md), spec **v0.91**, `db/067` with
 >   `db/065` + `db/066` edited in place, `SCHEMA_GENERATION` **67**; plan
 >   [`superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md)).
@@ -112,8 +112,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Finish 3b-2a: PR #981's full gate** (final review done, findings fixed; `scripts/run-db-gated-tests.sh`,
->    detached, ~2 h, plus `cairn-gui-tauri`'s DB-gated tests, #905), then mark it ready. **Then 3b-2b: the audited discard** (a new event
+> 1. **The maintainer reviews and merges PR #981 (3b-2a)**, then marks issue #982 done by hand (the PR builds it; nothing
+>    closes it automatically). **Then 3b-2b: the audited discard** (a new event
 >    type, its own plan; ADR-0089 decision 15's rule: only a draft whose every non-blank part is the discarder's own or
 >    by a writer not known; two or more named writers are refused and go in by the timer, a co-signed discard is
 >    #980). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
@@ -298,6 +298,12 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 
 Each task reviewed and re-reviewed (ledger: `.superpowers/sdd/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted/`,
 gitignored); the rules that bind later slices are ADR-0089 and the 3b-2a durable-rules block.
+- **⇒ A new file under `cairn-gui/*/src` — even a test fixture — is read by the ROOT tree's source guards.** One new
+  GUI test file tripped four (`db_errors_stay_legible`, `enrolment_is_never_a_write_side_effect`,
+  `unwrap_secret_is_not_derived`, `secret32_conversions_are_named`): CI caught one, the full gate the next, a sweep the
+  last two; every task review had passed it, because the GUI task ran GUI gates only. A task touching `cairn-gui/*/src`
+  runs every root guard that sweeps sources (`grep -ln production_rust_files crates/*/tests/*.rs`), DB-free. Test
+  binaries bake `CARGO_MANIFEST_DIR`: a target dir shared with a gate worktree makes those guards read the wrong tree.
 - **⇒ A displayed time is a claim: compute it from the input the door decides on.** The first cut showed a draft's
   due time from its parts' keystrokes while the door decides on the header's; after a backward clock step they part.
   The fix was db/067's fifth door, `cairn_note_drafts_due`. A RELEASED door's return shape is final; this one was
