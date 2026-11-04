@@ -121,16 +121,21 @@ async fn an_overdue_draft(
         )
         .await
         .unwrap();
-    // The node: a device actor whose key seals, with its unwrap key registered (the fixture
-    // derives it from the signing key, as cairn-node's `medication_setup` does: it stands in for
-    // provisioning, which a DB-only test cannot run). Keys are minted at runtime (house rule 6).
+    // The node: a device actor whose key seals, with a fresh CSPRNG unwrap key registered (it
+    // stands in for provisioning, which a DB-only test cannot run; never derived from the
+    // signing seed, ADR-0066). Keys are minted at runtime (house rule 6).
+    // Enrolled through SQL, as the other window fixtures do: the provisioning ceremony is the
+    // CLI's alone (#654), so no window source may run it.
     let (node_sk, node_kid): (SigningKey, String) = cairn_event::generate_key().unwrap();
-    cairn_node::actor_enrolment::enroll_device_actor(&owner, &node_kid)
+    owner
+        .execute(
+            "SELECT enroll_actor('device', \
+             '{\"role\":\"registration-desk\",\"node_key\":\"notes-commit-test\"}', $1)",
+            &[&node_kid],
+        )
         .await
         .unwrap();
-    let unwrap = cairn_event::seal::derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(
-        node_sk.to_bytes(),
-    ));
+    let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
     owner
         .execute(
             "SELECT cairn_register_unwrap_key($1)",
