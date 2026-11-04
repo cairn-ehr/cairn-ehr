@@ -483,3 +483,69 @@ async fn a_raw_door_call_without_its_event_is_refused_at_commit() {
         "the draft is still there"
     );
 }
+
+/// PR #984 review: `discarded_at_follows_a_save_that_held_the_lock` cannot tell WHERE db/069 reads
+/// its clock, because `discard_draft` saves first and that save takes the same lock. A raw door
+/// call takes nothing before the door does, so here only the door's own lock can make it wait: the
+/// instant it mints (signed into the event's `t_effective`) must come after the holder lets go —
+/// a clock read before `pg_advisory_xact_lock` would be stamped ~300 ms earlier.
+#[tokio::test]
+async fn a_raw_door_call_reads_its_clock_after_the_drafts_lock() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut other = db::connect(&base).await.unwrap();
+    let (_, _, _, human_kid, chart) = common::note_setup(&c).await;
+    let draft = Uuid::now_v7();
+    save_as(&c, draft, chart, Some("notewriter"), "seen").await;
+
+    // A holds the draft's lock (the key every draft door takes, db/066) until it commits.
+    let holder = other.transaction().await.unwrap();
+    holder
+        .execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('note_draft:' || $1, 0))",
+            &[&draft.to_string()],
+        )
+        .await
+        .unwrap();
+
+    let tx = c.transaction().await.unwrap();
+    let (minted, released) = tokio::join!(
+        async {
+            let row = tx
+                .query_one(
+                    "SELECT max(discarded_at) FROM cairn_note_draft_discard($1::text::uuid, \
+                            $2::text::uuid, $3, $4::text::uuid, $5)",
+                    &[
+                        &draft.to_string(),
+                        &chart.to_string(),
+                        &TERMINAL,
+                        &Uuid::now_v7().to_string(),
+                        &human_kid,
+                    ],
+                )
+                .await
+                .unwrap();
+            row.get::<_, DateTime<Utc>>(0)
+        },
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let at: DateTime<Utc> = holder
+                .query_one("SELECT clock_timestamp()", &[])
+                .await
+                .unwrap()
+                .get(0);
+            holder.commit().await.unwrap();
+            at
+        }
+    );
+    assert!(
+        minted > released,
+        "the discard instant {minted} must follow the lock's release {released}"
+    );
+    // No event was signed: the COMMIT would refuse it. Nothing is kept.
+    tx.rollback().await.unwrap();
+}

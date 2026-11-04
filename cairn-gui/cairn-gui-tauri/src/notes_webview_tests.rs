@@ -286,6 +286,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         discarded: false,
         sentence: None,
         fork: None,
+        pressed_fork: None,
     };
     let fork_words = ForkWords {
         kept: "k".into(),

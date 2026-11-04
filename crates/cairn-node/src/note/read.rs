@@ -14,6 +14,7 @@
 //! joined into the notes, never counted as one, and `NOTES_SQL` does not know they exist.
 use cairn_event::contributor::{classify_authorship_with_humans, VerifiedKid};
 use cairn_event::note::unescape_note_markup;
+use cairn_event::note_discard::DiscardedWriter;
 use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -130,11 +131,11 @@ const NOTES_SQL: &str = "\
 
 /// One row per PART of each discard on the given charts, with its 1-based position (`ord`).
 ///
-/// Only the five named part keys are read (controller ruling): db/068 stores `parts` as received,
-/// so a key a raw-SQL client added beside them must never reach the screen. The times go through
-/// `cairn_t_effective`, the very validator the floor admitted them with, so every row the floor
-/// let in reads here: as `NOTES_SQL` reads a ref as `::uuid::text`, one odd spelling cannot make
-/// the chart's whole list fail. `stated_time` JSON null reads as SQL NULL (not stated).
+/// Only the five named part keys are read: db/068 stores `parts` as received (its floor does not
+/// refuse an extra key), so a key a raw-SQL client added beside them must never reach the screen.
+/// The times go through `cairn_t_effective`, the very validator the floor admitted them with, so
+/// every row the floor let in reads here: as `NOTES_SQL` reads a ref as `::uuid::text`, one odd
+/// spelling cannot make the chart's whole list fail. `stated_time` JSON null reads as SQL NULL (not stated).
 const DISCARDS_SQL: &str = "\
     SELECT d.event_id::text, d.patient_id::text, d.t_effective, \
            cairn_note_signer_name(e.signer_key_id), x.ord, \
@@ -144,6 +145,23 @@ const DISCARDS_SQL: &str = "\
       FROM clinical_note_discard d JOIN event_log e ON e.event_id = d.event_id \
      CROSS JOIN LATERAL jsonb_array_elements(d.parts) WITH ORDINALITY AS x(p, ord) \
      WHERE d.patient_id = ANY($1::text[]::uuid[])";
+
+/// Whether a stored discard part's `writer` word names the discarder. The floor admits only the
+/// two words this build knows, so an unknown word (or none) is an ERROR, never "not known": a
+/// later value must not be shown as either (PR #984 review). The match is exhaustive, so a new
+/// `DiscardedWriter` value cannot compile without deciding how the marker heads it. Unlike an odd
+/// time spelling (above), such a word fails the chart's list: the floor admitted no such row, so
+/// only a defect can put one there, and saying so beats heading someone's text with the wrong
+/// writer.
+fn by_discarder(word: Option<&str>) -> anyhow::Result<bool> {
+    match word.and_then(DiscardedWriter::from_wire) {
+        Some(DiscardedWriter::Discarder) => Ok(true),
+        Some(DiscardedWriter::NotKnown) => Ok(false),
+        None => {
+            anyhow::bail!("a discarded part's writer is {word:?}, which this build does not know")
+        }
+    }
+}
 
 /// The discard markers of `members`, minus those a doubted set withholds (on a chart other than
 /// `patient`), which are only counted. Returns `(markers newest first, withheld count)`.
@@ -164,7 +182,7 @@ async fn discard_markers(
                 discarded_at: r.get(2),
                 discarder: r.get(3),
                 parts: vec![DiscardedText {
-                    by_discarder: r.get::<_, Option<String>>(5).as_deref() == Some("discarder"),
+                    by_discarder: by_discarder(r.get::<_, Option<String>>(5).as_deref())?,
                     text: unescape_note_markup(&r.get::<_, String>(6)),
                     stated: r.get(7),
                     recording_started: r.get(8),
@@ -250,7 +268,17 @@ pub async fn list_patient_notes(
 
 #[cfg(test)]
 mod tests {
-    use super::NOTES_SQL;
+    use super::{by_discarder, NOTES_SQL};
+
+    /// PR #984 review: the marker reads the writer word back, never defaults it.
+    #[test]
+    fn a_writer_word_this_build_does_not_know_is_an_error() {
+        assert!(by_discarder(Some("discarder")).unwrap());
+        assert!(!by_discarder(Some("not-known")).unwrap());
+        for unknown in [None, Some(""), Some("colleague")] {
+            assert!(by_discarder(unknown).is_err(), "{unknown:?}");
+        }
+    }
 
     /// #412 guard (PR #931 review): the note list reads the attester ONLY through the vouch
     /// door. Reading `event_log.attester_key` directly would mint a `VerifiedKid` from a peer's

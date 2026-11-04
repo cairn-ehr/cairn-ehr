@@ -429,6 +429,7 @@ gesture · seeing a discard 0 → 0 → observed \_\_.
 |---|---|---|
 | Own draft: no dialog; the draft gone; one event signed by the discarder, `authored` + `recorded`; `spent_at` = `t_effective` | | |
 | Empty editor: "The draft was empty, so nothing was kept."; no event, no spend, no marker | | |
+| No key held: "Not discarded: Enter your staff ID and passphrase to discard this draft." — never "sign" | | |
 | A colleague's draft: the "someone else wrote part of this draft" sentence; draft kept; text saved again | | |
 | A stuck draft: the same sentence; kept; its line reads the stuck words, no time | | |
 | During the debounce: the audit copy ends with the last characters typed | | |

@@ -20,15 +20,19 @@
 -- discarded_by set must name a discard event of this chart, inserted in this same transaction
 -- and SIGNED BY discarded_by, whose t_effective is the instant this door minted under the lock
 -- (stored as the spend's spent_at). Only the private key can make that row (the strict door
--- verifies every signature), and no event signed before this call can carry an instant minted
--- inside it, so a raw-SQL client naming a colleague's key, even holding a colleague's captured
--- discard event, gets the draft consumed and the whole transaction refused at COMMIT. Hence NO savepoint around the submit: a row inserted in a
--- subtransaction carries a subxid, and the trigger compares xmin to this transaction's id.
+-- verifies every signature), and an event signed before this call carries an earlier instant
+-- unless its signer's clock ran ahead of this node's; even then it must hit this instant to the
+-- microsecond, and its body's key is not here for a discard not yet synced (ADR-0090 decision 8).
+-- So a raw-SQL client naming a colleague's key, even holding a colleague's captured discard
+-- event, gets the draft consumed and the whole transaction refused at COMMIT. Hence NO savepoint
+-- around the submit: a row inserted in a subtransaction carries a subxid, and the trigger compares
+-- xmin to this transaction's id.
 --
 -- LOCK ORDER is every draft door's (db/066): the advisory lock 'note_draft:' || draft_id
 -- (WAITED for, as save, take and spend do; only the timer's door tries it), then the header row
--- FOR UPDATE, then its parts. So a discard racing the timer or a Sign elsewhere has exactly one
--- winner, and the loser answers 'committed' or 'spent' (or, after a discard, 'discarded').
+-- FOR UPDATE; the parts are read, not locked, and go with the header's cascade. So a discard
+-- racing the timer or a Sign elsewhere has exactly one winner, and the loser answers 'committed'
+-- or 'spent' (or, after a discard, 'discarded').
 --
 -- Replay-safe: this file re-runs on every schema replay. Its return shape is final.
 

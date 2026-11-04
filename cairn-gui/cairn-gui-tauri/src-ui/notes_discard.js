@@ -1,12 +1,14 @@
 // Discard draft (sign-in slice 3b-2b): throw away the draft in the editor, leaving a signed record
-// that it existed — the paper counterpart is crossing out a page you wrote and initialling it.
+// that it existed — the paper counterpart is tearing up a page you wrote (ADR-0090), except that
+// the record keeps a signed copy of what it said.
 //
-// What the node does, not this file (cairn-gui-tauri's `notes_discard.rs`, tested there): every
-// sentence; who may discard (only the writer of every part with text, by KEY); saving the text on
-// screen and discarding it in ONE transaction, so the audit copy holds the last second of typing;
-// and every time. What IS decided here, each pinned in notes_discard_webview_tests.rs: the press
-// cancels a pending save and carries the text on screen, the editor is read-only while it is in
-// flight, a refusal saves the text again, and the markers are text in their own list.
+// What is decided elsewhere, not in this file: every sentence (cairn-gui-tauri's `notes_discard.rs`,
+// tested there); who may discard (db/069: every part with text is the discarder's own by KEY, or
+// by a writer not known); saving the text on screen and discarding it in ONE transaction, so the
+// audit copy holds the last second of typing, and every time (`cairn_node::note::discard`). What IS
+// decided here, each pinned in notes_discard_webview_tests.rs: the press cancels a pending save,
+// waits for every save already queued, and carries the text on screen; the editor is read-only
+// while it is in flight; a refusal saves the text again; and the markers are text in their own list.
 //
 // No confirmation dialog, on purpose (principle 3): a dialog is a step paper never charges, and it
 // is not a safety mechanism. The safety is the record itself — the discarded text is kept, signed.
@@ -36,11 +38,23 @@ async function discardNote() {
   }
   clearTimeout(noteSaveTimer);
   noteSaveTimer = null;
+  setSigning(true);
+  // Every save already queued lands first (PR #984 review): an all-blank draft is deleted with no
+  // spend row, so a save arriving after the discard would make the draft again. One that found
+  // the draft gone on without this window has already said so and kept the text: stop here.
+  await notesSaved();
+  if (noteDraft !== held) {
+    setSigning(false);
+    return "not-discarded";
+  }
   // From this press on, a save of this draft answering `discarded` may be this press's own: its
   // text went with the discard, so it must never be kept again as a new draft (notes_save.js).
+  // What the press carries is remembered, so text typed after it (an unknown outcome leaves the
+  // editor live) is still kept (`sendDraft`).
   const wasMaybeSigned = Boolean(held.mayBeSigned);
+  const wasPressedText = held.pressedText;
   held.mayBeSigned = true;
-  setSigning(true);
+  held.pressedText = el("note-text").value;
   let report;
   try {
     report = await invoke("note_discard", {
@@ -56,7 +70,10 @@ async function discardNote() {
     clearSigner();
     setSigning(false);
     // Every refusal but an interrupted commit recorded nothing: this press discarded nothing.
-    if (behindTheRecord(failure) !== "unknown") held.mayBeSigned = wasMaybeSigned;
+    if (behindTheRecord(failure) !== "unknown") {
+      held.mayBeSigned = wasMaybeSigned;
+      held.pressedText = wasPressedText;
+    }
     // Worded in Rust, already "Not discarded: …": a prefix here would say it twice (found in the walk).
     noteStatus(failureText(failure));
     // The refused transaction rolled back its own save of the text on screen: save it again, so

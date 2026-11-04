@@ -408,3 +408,84 @@ async fn a_doubted_set_withholds_a_linked_charts_marker() {
     assert_eq!(list.discards_withheld_on_linked, 1, "and counted");
     assert_eq!(list.withheld_on_linked, 0, "no note was withheld");
 }
+
+/// Save a part by a writer not known, then discard with the fixture clinician's own part on top:
+/// a two-part discard on `chart`.
+async fn discard_two_parts_on(
+    c: &mut Client,
+    node_sk: &SigningKey,
+    author: &AuthorParams<'_>,
+    chart: Uuid,
+    found: &str,
+    mine: &str,
+) {
+    let draft = Uuid::now_v7();
+    save_part(c, draft, chart, "pc-1", None, found, None)
+        .await
+        .unwrap();
+    let input = SignNoteInput {
+        draft,
+        patient: chart,
+        terminal: "pc-1",
+        writer: Some("notewriter"),
+        narrative: mine,
+        stated: None,
+        node_origin: ORIGIN,
+    };
+    let out = discard_draft(c, node_sk, &input, author).await.unwrap();
+    assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
+}
+
+/// PR #984 review: the marker groups ITS OWN event's parts, in writing order, and reads each part's
+/// writer word. With two two-part discards on two linked charts, a grouping that merged rows by
+/// anything but the event (or ordered them by position alone) would put X's text inside A's
+/// marker — which then survives the doubted-set withholding, since that looks at the marker's
+/// chart. Every read test before this one had one part, by the discarder.
+#[tokio::test]
+async fn each_marker_holds_only_its_own_parts_in_writing_order() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, human_sk, human_kid, a) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let x = Uuid::now_v7();
+    common::submit_registration(&c, &node_sk, &node_kid, x, 0).await;
+    discard_two_parts_on(&mut c, &node_sk, &author, a, "A found", "A mine").await;
+    discard_two_parts_on(&mut c, &node_sk, &author, x, "X found", "X mine").await;
+    common::submit_link_event(&c, &node_sk, &node_kid, a, x, 10, true).await;
+
+    let parts = |m: &cairn_node::note::read::DiscardMarker| -> Vec<(String, bool)> {
+        m.parts
+            .iter()
+            .map(|p| (p.text.clone(), p.by_discarder))
+            .collect()
+    };
+    let list = list_patient_notes(&c, a).await.unwrap();
+    assert_eq!(list.discards.len(), 2, "one marker per discard");
+    for (m, chart, name) in [(&list.discards[0], x, "X"), (&list.discards[1], a, "A")] {
+        assert_eq!(m.chart, chart, "newest first");
+        assert_eq!(
+            parts(m),
+            [
+                (format!("{name} found"), false),
+                (format!("{name} mine"), true)
+            ],
+            "{name}'s marker holds its own two parts, in writing order"
+        );
+    }
+
+    flag_link(&c, a, x).await;
+    let doubted = list_patient_notes(&c, a).await.unwrap();
+    assert_eq!(doubted.discards.len(), 1, "X's marker is withheld whole");
+    assert_eq!(
+        parts(&doubted.discards[0]),
+        [("A found".to_string(), false), ("A mine".to_string(), true)]
+    );
+    assert_eq!(doubted.discards_withheld_on_linked, 1);
+}

@@ -3,7 +3,7 @@
 - **Status:** Accepted (builds [ADR-0089](0089-the-quarantine-commit-and-the-asserted-grade.md) decision 15's
   rule as recorded there, with [ADR-0088](0088-whos-here-and-a-drafts-parts.md) maintainer decision 6; supersedes no
   ADR decision. It narrows the slice 3 design's §3.5, which put a discard "only in the chart's audit view": decision
-  9, maintainer 2026-11-04)
+  13, maintainer 2026-11-04)
 - **Date:** 2026-11-05
 - **Spec version at acceptance:** 0.92
 - **Issues:** draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984) (GUI sign-in slice 3b-2b). Design:
@@ -46,7 +46,8 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
    `note_discard_floor.rs::a_sealed_discard_submits_and_projects_its_parts_not_a_note`.
 
 2. **The wire shape, frozen from the first signed discard.** `schema_version` is `clinical.note-discard/1`. The
-   payload has one key, `parts`: a non-empty array, in writing order, of objects with exactly these keys:
+   payload has one key, `parts`: a non-empty array, in writing order, of objects. The node writes exactly these keys;
+   the floor does not refuse another beside them, so the read takes only these (decision 12):
    - `writer`: `"discarder"` or `"not-known"`. It names no key, because under the rule every named writer IS the
      discarder (decision 6), so a key here would be a second, unchecked claim. #980 can add a key-bearing value
      additively.
@@ -67,7 +68,7 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
 3. **The twin is mechanical and names no time.** Its first line is exactly `Draft discarded; it was never entered in
    the record.` Then, for each part, a blank line, a heading `Part N, written by the discarder:` or `Part N, writer
    not known:`, and the part's text unescaped. A time in the twin would be a second, unchecked copy of the
-   envelope's. The twin row requires a non-empty twin (#173). Pins: `the_twin_is_the_typed_text_under_part_headings`,
+   envelope's. Its `cairn_event_twin_check` row requires a non-empty twin (#173). Pins: `the_twin_is_the_typed_text_under_part_headings`,
    `the_twin_names_no_time`.
 
 4. **The floor follows db/064 rule for rule** (`cairn_check_note_discard`, revoked from PUBLIC). It refuses a
@@ -76,8 +77,8 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
    a narrative failing `cairn_check_note_markup`, or `cairn_check_note_anchors(text, '[]'::jsonb)` (a discard carries
    no media, so every anchor dangles); recording times that are not strings or not instants with an explicit offset
    (the `cairn_t_effective` validator); `recording_started` after `recording_ended`; a missing `stated_time` key, or
-   one that is neither `null` nor an instant; an unset `t_effective`. At the remote door a newer profile is carried
-   unchecked and never projected (ruling R8, as db/064), because refusing it would wedge sync on every older node.
+   one that is neither `null` nor an instant; an unset `t_effective`. At the remote door a profile other than `/1`
+   (newer, older or missing) is carried unchecked and never projected (ruling R8, as db/064), because refusing it would wedge sync on every older node.
    Pins: db/tests/068 (each refusal by its own message); `note_discard_floor.rs::the_strict_door_refuses_a_hostile_discard_with_the_floors_own_sentence`.
 
 5. **One projection row per discard, read only for the marker.** `clinical_note_discard` holds the event id, the
@@ -118,17 +119,21 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
    The door is granted to `cairn_window` alone, and its return shape is final. Pins: db/tests/069's
    `discard_after_timer_answers_committed`, `discard_after_sign_answers_spent`, `moved_and_elsewhere_and_gone`, the
    NULL case; `note_discard.rs::discard_racing_sign_one_wins` (two connections),
-   `discarded_at_follows_a_save_that_held_the_lock` (a smoke test: it cannot catch a clock read before the door's lock,
-   since the node's save takes that lock first).
+   `discarded_at_follows_a_save_that_held_the_lock` (through the node, whose save takes the lock first), and
+   `a_raw_door_call_reads_its_clock_after_the_drafts_lock` (a raw door call behind another connection's lock: the
+   one that fails if the clock is read before the door's lock).
 
 8. **The door's yes is only a claim until db/065's trigger ties it to a signature and an instant.** The door trusts
    the key its caller names, and a key id is public. So `note_draft_spent_names_its_note`, the deferred commit-time
    trigger, gains a discard arm: a spend with `discarded_by` set must name an event that is a
    `clinical.note-discard.asserted`, of the same chart, inserted in the same transaction (`xmin`), **signed by
    `discarded_by`**, and whose **`t_effective` equals the spend's `spent_at`**. Only the private key can make such a
-   row, because the strict door writes only a row whose signature verifies. And no event signed before the door's
-   call can carry an instant the door minted inside it, so a raw-SQL client holding a colleague's genuine discard
-   (captured from another node, not yet synced here) cannot replay it against a draft. A client that names a
+   row, because the strict door writes only a row whose signature verifies. An event signed before the door's call
+   carries an earlier instant than the one the door mints, unless its signer's clock ran ahead of this node's; even
+   then it must match that instant to the microsecond, and submitting it at the strict door needs its body's key,
+   which this node does not hold for a discard not yet synced here. So a raw-SQL client holding a colleague's genuine
+   discard (captured from another node) has no practical way to replay it against a draft; requiring the event's
+   `node_origin` to be this node would close even the clock-ahead case, and is not built. A client that names a
    colleague's key gets the draft consumed, then the whole transaction refused at COMMIT. Hence no savepoint around
    the submit: a subtransaction's row carries a subxid. The note arm (`discarded_by` NULL) is unchanged, and a
    discard event never backs a Sign's spend. Pins: db/tests/069's `the_commit_refuses_a_spend_without_its_signed_event`,
@@ -171,7 +176,10 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
     never reach the screen. Its times go through `cairn_t_effective`, the validator the floor admitted them with. The
     discarder's name is `cairn_note_signer_name` of the signing key. `NOTES_SQL` is unchanged, so ADR-0087 R8 still
     holds: a chart's notes are read only from `clinical_note`. Pins: `note_read.rs::the_marker_lists_the_discard_not_as_a_note`,
-    `a_doubted_set_withholds_a_linked_charts_marker`. The withheld line counts both: "2 note(s) on this patient's
+    `a_doubted_set_withholds_a_linked_charts_marker`, `each_marker_holds_only_its_own_parts_in_writing_order` (two
+    two-part discards on two linked charts). A stored `writer` word this build does not know is an error, never
+    "not known" (`DiscardedWriter::from_wire`, matched exhaustively; `read.rs`'s
+    `a_writer_word_this_build_does_not_know_is_an_error`). The withheld line counts both: "2 note(s) on this patient's
     linked charts are not shown: … 3 discarded draft(s) on those charts are held back for the same reason." With no
     note withheld it leads with the discards ("3 discarded draft(s) on this patient's linked charts are not shown:
     …"), never "0 note(s)". Pin: `notes_parts_tests.rs::the_withheld_sentence_counts_discards`.
@@ -197,13 +205,22 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
     press cancels a pending save and carries the text on screen, so a discard pressed during the debounce keeps the
     last second of typing. It marks the draft `mayBeSigned`, so a late save answering `discarded` after this window's
     own press forks nothing; a save answering `discarded` otherwise keeps what it had not saved as a new draft, in a
-    discard's own words. A refusal gives the mark back (unless the outcome is not known) and saves the text on screen
-    again, because the refused transaction rolled back its own save. The gesture is timed as `note-discard` (db/044,
+    discard's own words. The mark is not a licence to drop text typed AFTER the press: the press remembers the text
+    it carried (`pressedText`, given back with the mark), and a save read after it that answers `spent` or
+    `discarded` with different text keeps what differs as a new draft, worded for the press ("What you typed after
+    pressing Discard draft is kept here as a new draft."; Sign has the same, PR #984 review). Before it is sent, the
+    press waits for every save already queued (`notesSaved`), because an all-blank draft is deleted with no spend
+    row and a late save would make it again; if one of them found the draft gone on, the press stops there. A
+    refusal gives the mark back (unless the outcome is not known) and saves the text on screen again, because the
+    refused transaction rolled back its own save. The gesture is timed as `note-discard` (db/044,
     in place, in both the `CREATE TABLE` line and the drop/re-add). Pins:
     `notes_discard_webview_tests.rs::discard_cancels_the_pending_save_before_it_discards`,
     `discard_sends_the_credential_and_the_text_on_screen`, `the_discard_button_never_asks_to_confirm`,
     `the_editor_is_read_only_while_a_discard_is_in_flight`, `a_discard_marks_the_press_as_carrying_the_text`,
-    `a_discarded_save_is_handled_as_spent`, `a_refused_discard_saves_the_text_on_screen_again`; db/tests/069's
+    `a_discarded_save_is_handled_as_spent`, `a_refused_discard_saves_the_text_on_screen_again`,
+    `discard_waits_for_every_queued_save_before_it_discards`;
+    `notes_fork_webview_tests.rs::text_typed_after_an_unknown_press_is_kept_never_lost`;
+    `notes_tests.rs::a_press_of_this_window_forks_with_its_own_words`; db/tests/069's
     `note_discard_is_a_timing_kind`; `notes_discard_tests.rs::note_discard_impl_discards_under_the_window_login`;
     `window_role_grants_notes.rs::the_windows_discard_runs_under_its_own_login`.
 
@@ -217,13 +234,16 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
     [#988](https://github.com/cairn-ehr/cairn-ehr/issues/988). A save that finds its draft discarded in another window
     says "This draft was discarded in another window …", never "signed". A failure that is not a worded refusal is
     led by its retry class: "Whether this draft was discarded is NOT known:" when the commit may have landed, else
-    "Not discarded:". A Recorded COMMIT whose answer was lost reads "Whether this draft was discarded is NOT known — no
+    "Not discarded:". A refusal of the key is worded for a discard too ("Not discarded: Enter your staff ID and
+    passphrase to discard this draft."), never "to sign" or "Nothing was signed" (`discard_key_refused`, every
+    `KeyRefusal` spelled out). A Recorded COMMIT whose answer was lost reads "Whether this draft was discarded is NOT known — no
     ordinary answer came back …" and is not a timing sample; the Empty path's eventless commit is not marked, so a
     lost answer there reads "Not discarded:" ([#989](https://github.com/cairn-ehr/cairn-ehr/issues/989)). The who's-here picker words a discard's outcome as a
     discard's ("Your draft was discarded.", "Your draft was NOT discarded — open the chart to see where it stands.",
     "Whether your draft was discarded is not known — check the chart."), never as a signature. Sign's matching flaw
     is #986. Pins: `notes_discard_tests.rs::discard_words_each_refusal`, `discard_words_each_outcome`,
-    `a_failure_is_led_by_what_it_means_for_the_discard`, `a_discarded_save_reads_like_spent_and_says_discarded`,
+    `a_failure_is_led_by_what_it_means_for_the_discard`, `a_key_refusal_under_discard_never_says_sign`,
+    `a_discarded_save_reads_like_spent_and_says_discarded`,
     `take_words_discarded`; `notes_tests.rs::discarded_fork_words_never_say_signed`;
     `notes_discard_webview_tests.rs::a_switch_during_a_discard_says_what_the_discard_did`.
 
@@ -249,7 +269,8 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
   last part and then Discard with their own key. Blank parts do not count (db/069), so the door answers `empty` and
   deletes the draft and its revisions without an event. This is not a new erasure: the blanking already hid the text,
   and 3b-2a's timer deletes an all-blank draft after the quarantine anyway. The discard only removes the owner-only
-  revision trace sooner. See [#985](https://github.com/cairn-ehr/cairn-ehr/issues/985).
+  revision trace sooner. (The sign path's own raw-SQL erasure of a colleague's draft is a separate, open defect,
+  [#985](https://github.com/cairn-ehr/cairn-ehr/issues/985).)
 - **The marker reaches a peer only with the event.** Drafts never sync (design §3.3), so a peer never saw the draft;
   it sees the marker once the discard event arrives and its custody lets it project the body.
 

@@ -243,8 +243,12 @@ async function signNote() {
   noteSaveTimer = null;
   // From this press on, a `spent` save of this draft may be this Sign's own: its text went with
   // the Sign, so it is never kept again as a new draft (final review I1).
+  // What the press carries is remembered, so text typed after it (an unknown outcome leaves the
+  // editor live) is still kept as a new draft (notes_save.js `sendDraft`, PR #984 review).
   const wasMaybeSigned = Boolean(held.mayBeSigned);
+  const wasPressedText = held.pressedText;
   held.mayBeSigned = true;
+  held.pressedText = el("note-text").value;
   setSigning(true);
   let report;
   try {
@@ -261,7 +265,10 @@ async function signNote() {
     clearSigner();
     setSigning(false);
     // Every refusal but an interrupted commit recorded nothing: this press signed nothing.
-    if (behindTheRecord(failure) !== "unknown") held.mayBeSigned = wasMaybeSigned;
+    if (behindTheRecord(failure) !== "unknown") {
+      held.mayBeSigned = wasMaybeSigned;
+      held.pressedText = wasPressedText;
+    }
     noteStatus("Could not sign this note: " + failureText(failure));
     // The cancelled save's text is still only on screen: save it now. A draft signed in another
     // window answers `spent`, and what it lacks is kept as a new draft (#945); one this window may

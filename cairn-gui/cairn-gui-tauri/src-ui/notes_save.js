@@ -68,6 +68,9 @@ function saveNoteNow() {
     // sends the last time the node took instead, read by `sendDraft` in queue order, after every
     // earlier save has answered.
     statedTime: when.validity.badInput ? null : when.value,
+    // Read after a press (Sign note or Discard draft) of this draft: the text that press carried.
+    // A `spent` or `discarded` answer keeps only what differs from it (`sendDraft`).
+    pressCarried: held.mayBeSigned ? held.pressedText : null,
   };
   noteSaveQueue = noteSaveQueue.then(() => sendDraft(sent));
   return noteSaveQueue;
@@ -82,10 +85,10 @@ function notesSaved() {
  * One save, as `saveNoteNow` read it. Says how it went, and marks the editor saved or not, only
  * while its draft is still the one on screen. Resolves whether nothing is left to send: saved; a
  * moved, timer-committed or signed-elsewhere draft whose unsaved text was kept as a new draft
- * (`keepUnsavedText`); or a spend this window's own Sign may have made (that text went with the
- * Sign). A refusal that wrote nothing — elsewhere, no chart, no such writer — resolves false and
- * leaves the editor UNSAVED: the text exists only on screen, and nothing may treat it as kept
- * (PR #966 review).
+ * (`keepUnsavedText`); or a spend or discard this window's own press may have made (the text that
+ * press carried went with it; text typed after the press is kept as a new draft). A refusal that
+ * wrote nothing — elsewhere, no chart, no such writer — resolves false and leaves the editor
+ * UNSAVED: the text exists only on screen, and nothing may treat it as kept (PR #966 review).
  */
 async function sendDraft(sent) {
   const mine = () => noteDraft === sent.held;
@@ -106,6 +109,15 @@ async function sendDraft(sent) {
     // text went with the press (`mayBeSigned`). A timer's commit is never this window's press, so
     // `committed` forks even after one.
     if (view.moved || view.committed || ((view.spent || view.discarded) && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);
+    // PR #984 review: this window's own press may have spent or discarded the draft — but it took
+    // only the text it carried. An unknown outcome leaves the editor live, so a save read after the
+    // press may carry text typed since: that is in no draft, and is kept as a new draft, said with
+    // the press's own words. The press saved its text in its own transaction, so that is the line.
+    const pressTook = (view.spent || view.discarded) && sent.held.mayBeSigned;
+    if (pressTook && typeof sent.pressCarried === "string" && sent.narrative !== sent.pressCarried) {
+      sent.held.savedText = sent.pressCarried;
+      return keepUnsavedText(sent, view.pressed_fork);
+    }
     const kept = view.saved || view.spent || view.discarded; // this window's own press took the text
     if (kept) sent.held.statedTime = asked;
     if (view.saved) sent.held.savedText = sent.narrative;

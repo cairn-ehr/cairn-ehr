@@ -14,7 +14,7 @@ use super::{terminal_of, NoteSignReport, FIXTURE};
 use crate::commands::record_timing;
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use crate::link::judgement_view::{refused, stale};
-use crate::signer::Credential;
+use crate::signer::{Credential, KeyRefusal};
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write, node_failure};
 use cairn_node::note::discard::{DiscardOutcome, DiscardRefusal};
@@ -34,17 +34,18 @@ const NOT_YOURS: &str = "Not discarded: someone else wrote part of this draft, a
 const ELSEWHERE: &str = "Not discarded: this draft belongs to another chart — nothing was thrown \
      away; your text is still here.";
 /// … when another terminal holds the draft now.
-const MOVED: &str = "Not discarded: this note is now being continued at another terminal — \
+const MOVED: &str = "Not discarded: this draft is now being continued at another terminal — \
      nothing was thrown away; your text is still here.";
-/// … when the on-screen writer, or the writer of a part above, is not an enrolled member.
+/// … when the on-screen writer is not an enrolled member (the save of the text on screen refused
+/// it). A part above whose writer has no key is `NOT_YOURS`: db/069 compares by key.
 const NO_SUCH_WRITER: &str =
     "Not discarded: the name at this terminal is not an enrolled member — \
      say who's here again; your text is still here.";
 /// … when the quarantine timer already put the draft into the record unsigned.
 const COMMITTED: &str = "Not discarded: this note had already gone into the record unsigned.";
 /// … when this staff ID's role may not act clinically.
-const NO_SUCH_SIGNER: &str = "Not discarded: this staff ID may not discard a clinical note.";
-/// The prefix every refusal borrowed from the sign's wording carries.
+const NO_SUCH_SIGNER: &str = "Not discarded: this staff ID may not discard a clinical draft.";
+/// The lead of a refusal, or of any failure that wrote nothing (`led_failure`).
 const NOT_DISCARDED: &str = "Not discarded: ";
 /// The lead of a failure whose commit may have landed: the discard may or may not be recorded.
 const DISCARD_UNKNOWN: &str = "Whether this draft was discarded is NOT known: ";
@@ -88,6 +89,43 @@ pub(crate) fn discard_refusal_view(refusal: DiscardRefusal) -> ErrorView {
         DiscardRefusal::Gone => not_discarded(GONE),
         DiscardRefusal::NotYours => refused(NOT_YOURS),
         DiscardRefusal::NoSuchSigner => refused(NO_SUCH_SIGNER),
+    }
+}
+
+/// A key refusal worded for a discard (PR #984 review): `KeyRefusal::sentence` is Sign's ("…to
+/// sign", "Nothing was signed"), and a clinician throwing a draft away must not read that the
+/// press signs it. Only the sentences that name signing are reworded; "Nothing was …" is dropped,
+/// because `led_failure` already leads with "Not discarded". Every variant is spelled out (#412),
+/// so a new one must be worded here too. The retry is the key's own (`key_locked`).
+pub(crate) fn discard_key_refused(refusal: &KeyRefusal) -> ErrorView {
+    let text = match refusal {
+        KeyRefusal::NeedCredential => {
+            "Enter your staff ID and passphrase to discard this draft.".to_string()
+        }
+        KeyRefusal::NotForClinicalActs => {
+            "A superuser cannot discard a clinical draft. Enter your own staff ID.".to_string()
+        }
+        KeyRefusal::NotCurrent => "Your key is no longer enrolled here. Ask a superuser or an \
+             enroller to re-key you."
+            .to_string(),
+        KeyRefusal::Expired => "No superuser has confirmed your key, and this site stops \
+             unconfirmed keys after a set time. Ask a superuser to confirm your key."
+            .to_string(),
+        KeyRefusal::OverPowered => "This workstation is connected to the node with more access \
+             than a window may have, so it cannot discard. Ask your IT support to run cairn-node \
+             provision-window-role and start this window with its login."
+            .to_string(),
+        KeyRefusal::Fault => "Your passphrase could not be checked. Try again, and if it fails \
+             again, ask your IT support."
+            .to_string(),
+        KeyRefusal::Wrong { .. }
+        | KeyRefusal::Replaced { .. }
+        | KeyRefusal::Waiting { .. }
+        | KeyRefusal::Unknown => refusal.sentence(),
+    };
+    ErrorView {
+        text,
+        retry: key_locked(refusal).retry,
     }
 }
 
@@ -176,7 +214,7 @@ async fn discard_attempt(
     let (human_sk, human_kid) = state
         .signer_for_act(credential, Now::read())
         .await
-        .map_err(|r| key_locked(&r))?;
+        .map_err(|r| discard_key_refused(&r))?;
     let node_sk = state
         .node_sk
         .as_ref()

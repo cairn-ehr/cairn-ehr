@@ -29,6 +29,14 @@ impl DiscardedWriter {
             DiscardedWriter::NotKnown => "not-known",
         }
     }
+
+    /// Read a stored wire word back. `None` for a word this build does not know (a later value):
+    /// the caller must refuse it, never read it as one of these two.
+    pub fn from_wire(word: &str) -> Option<Self> {
+        [DiscardedWriter::Discarder, DiscardedWriter::NotKnown]
+            .into_iter()
+            .find(|w| w.wire() == word)
+    }
 }
 
 /// One part of the discarded draft, in writing order.
@@ -132,6 +140,18 @@ mod tests {
         assert!(ps[0]["stated_time"].is_null());
         assert_eq!(ps[1]["writer"], "not-known");
         assert_eq!(ps[1]["stated_time"], "2026-11-04T08:00:00+10:00");
+    }
+
+    /// A reader of a stored discard must read the word back, never default it: a word this build
+    /// does not know is `None`, so the caller refuses it (PR #984 review).
+    #[test]
+    fn the_writer_word_reads_back_and_an_unknown_word_is_none() {
+        for w in [DiscardedWriter::Discarder, DiscardedWriter::NotKnown] {
+            assert_eq!(DiscardedWriter::from_wire(w.wire()), Some(w));
+        }
+        for unknown in ["", "Discarder", "colleague"] {
+            assert_eq!(DiscardedWriter::from_wire(unknown), None, "{unknown:?}");
+        }
     }
 
     #[test]

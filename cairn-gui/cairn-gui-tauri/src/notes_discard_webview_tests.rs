@@ -35,6 +35,28 @@ fn discard_cancels_the_pending_save_before_it_discards() {
     );
 }
 
+/// PR #984 review: an all-blank draft is deleted with no spend row, so a save still queued behind
+/// the press would make the discarded draft again. The press waits for every save already queued
+/// (the editor already read-only), and goes no further if one found the draft gone on — that
+/// save already said what happened and kept the text.
+#[test]
+fn discard_waits_for_every_queued_save_before_it_discards() {
+    let discard = js_fn(DISCARD_JS, "discardNote");
+    let waited = position(discard, "await notesSaved();");
+    assert!(position(discard, "setSigning(true);") < waited, "{discard}");
+    let gone_on = position(discard, "if (noteDraft !== held) {");
+    assert!(waited < gone_on, "{discard}");
+    assert!(
+        gone_on < position(discard, "held.mayBeSigned = true;"),
+        "{discard}"
+    );
+    assert!(
+        position(discard, "held.mayBeSigned = true;")
+            < position(discard, "invoke(\"note_discard\""),
+        "{discard}"
+    );
+}
+
 /// Review Focus 4: the audit copy holds the text ON SCREEN, not the last autosave, so the press
 /// sends the field's value, the stated time, the captured writer and the strip's credential.
 #[test]
@@ -101,7 +123,7 @@ fn a_discard_marks_the_press_as_carrying_the_text() {
     let caught = &discard[position(discard, "catch (failure) {")..];
     assert!(
         caught.contains(
-            "if (behindTheRecord(failure) !== \"unknown\") held.mayBeSigned = wasMaybeSigned;"
+            "if (behindTheRecord(failure) !== \"unknown\") {\n      held.mayBeSigned = wasMaybeSigned;"
         ),
         "{discard}"
     );

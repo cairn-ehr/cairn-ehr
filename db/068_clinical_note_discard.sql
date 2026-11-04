@@ -10,7 +10,8 @@
 -- WIRE SHAPE (`clinical.note-discard/1`, built by cairn_event::note_discard):
 --   parts   a non-empty array, in writing order, of objects:
 --             writer             'discarder' | 'not-known'
---             narrative          the part's text, ESCAPED once by the window (as a note's is)
+--             narrative          the part's text, ESCAPED once by the node
+--                                (`cairn_node::note::discard`), as a note's is
 --             stated_time        RFC 3339 instant, or null (the writer named no time)
 --             recording_started  RFC 3339 instant, the database clock at the part's first save
 --             recording_ended    RFC 3339 instant, the part's last keystroke
@@ -18,8 +19,9 @@
 --
 -- THE FLOOR (below) follows db/064 rule for rule, and reuses its two narrative checks rather than
 -- copying their regexes: a discard's narrative is rendered back to a clinician later, so it must
--- be as inert as a note's. Both doors run every rule for a /1 body; a NEWER profile arriving at
--- the remote door is carried unchecked and never projected (ruling R8, exactly as db/064).
+-- be as inert as a note's. Both doors run every rule for a /1 body; any OTHER profile (newer,
+-- older or missing) arriving at the remote door is carried unchecked and never projected (ruling
+-- R8, exactly as db/064).
 --
 -- Replay: the loader re-runs every db/*.sql on each connect, so each statement converges.
 BEGIN;

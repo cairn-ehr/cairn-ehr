@@ -61,7 +61,7 @@
 >   **Discard draft** beside Sign, same strip, no dialog: a signed, sealed `clinical.note-discard.asserted` keeps what
 >   the draft said; only a draft whose every non-blank part is the discarder's own **by key** (or by a writer not
 >   known) may go; db/065's trigger holds the spend to an event signed by the discarder **at the instant the door
->   minted under the lock**, so neither a colleague's key id nor a captured discard can be replayed; save/take answer
+>   minted under the lock**, so a colleague's key id cannot be used, nor, in practice, a captured discard; save/take answer
 >   `discarded`, never `spent`; an all-blank draft is deleted with no event. The chart lists a one-line `<details>`
 >   marker, never a note (maintainer, 2026-11-04). Open: **#987** (a discarder's own raw-SQL client can sign different
 >   text; filed by the ADR) · **#985** (a raw-SQL Sign spends a colleague's draft) · **#986** (Sign's unknown-outcome
@@ -115,7 +115,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **3b-2b built and gated locally (the full `run-db-gated-tests.sh` passed at 4a83ea23: 3214 tests, 0 failed, 0 skipped; only docs after it); a CI run at the PR head is still owed. Then the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
+> 1. **3b-2b built and gated locally (the full `run-db-gated-tests.sh` passed at 4a83ea23: 3214 tests, 0 failed, 0 skipped); CI passed at 927efa40. The PR review round (2026-11-05) then fixed one critical and four important findings in the window, node and docs, re-gated by the GUI tree's gates and the touched DB suites, not by a second full run; CI at the new head is owed. Then the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
 >    `Asserted` — it must answer #948 too). Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979),
 >    4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
@@ -305,6 +305,12 @@ gitignored); the binding rules are ADR-0090 and the 3b-2b durable-rules block.
 - **⇒ A signature proves "this key signed A discard", not "this one".** The Task 3 review found a colleague's captured,
   genuinely signed discard could be replayed by a raw-SQL client; the fix binds the event to an instant the door mints
   under the lock (`t_effective = spent_at`). What the floor cannot see (deleted rows) is a named residual, #987.
+- **⇒ "This press may have taken the text" is not "everything after it went too".** The PR review found the `mayBeSigned`
+  mark, copied from Sign, dropped text typed in the editor an unknown-outcome press leaves live: a later save answering
+  `spent`/`discarded` counted as kept. Each press now remembers what it carried (`pressedText`) and the rest forks, in
+  the press's own words — Sign included. And a press that consumes a draft with NO spend row (the all-blank discard)
+  must wait for the save queue (`notesSaved`), or a late save makes the draft again. Both walked under Node against
+  the real `notes_save.js`/`notes_discard.js` with stubbed globals; the old code fails both walks.
 
 ### 2026-11-01 → 11-04 — sign-in slices 2 (PRs #917 + #920), 3a (PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)), 3b-1 (PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)), 3b-2a (PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981))
 

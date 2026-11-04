@@ -1642,6 +1642,8 @@ seconds, then type the strip's Staff ID and passphrase and press *Discard draft*
       its spend with `discarded_by` = nurse-a's key and `spent_at` = the event's `t_effective`.
 - [ ] Repeat with an empty editor (*New note*, type a letter, delete it, *Discard draft*): "Discarded. The draft was
       empty, so nothing was kept." No event, no spend, no marker.
+- [ ] With the strip empty and no key held, press *Discard draft*: "Not discarded: Enter your staff ID and passphrase
+      to discard this draft." A key refusal under Discard never says "sign" (PR #984 review).
 
 **Measurement 2 — a colleague's draft.** As `nurse-a` type `obs stable`; switch to `dr-b` and reopen the chart (Nurse
 A's part is drawn read-only above dr-b's editor, as in section 19, Measurement 2), then press *Discard draft* with

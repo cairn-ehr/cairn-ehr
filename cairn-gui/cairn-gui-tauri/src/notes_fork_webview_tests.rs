@@ -88,7 +88,7 @@ fn a_draft_signed_in_another_window_forks_a_new_draft() {
     assert!(
         position(
             caught,
-            "if (behindTheRecord(failure) !== \"unknown\") held.mayBeSigned = wasMaybeSigned;"
+            "if (behindTheRecord(failure) !== \"unknown\") {\n      held.mayBeSigned = wasMaybeSigned;"
         ) < position(caught, "void saveNoteNow();"),
         "{sign}"
     );
@@ -156,4 +156,67 @@ fn a_timer_commit_forks_even_after_a_sign_press() {
     );
     let keep = js_fn(NOTES_JS, "keepUnsavedText");
     assert!(keep.contains("noteStatus(said);"), "{keep}");
+}
+
+/// PR #984 review (critical): after a press (Sign note or Discard draft) whose outcome was not
+/// known, the editor stays live; text typed then is not in what the press carried. A later save of
+/// it answering `spent` or `discarded` must keep that text as a new draft, never treat it as gone
+/// with the press. So each press remembers the text it carries (`pressedText`, given back with the
+/// mark on a refusal that recorded nothing), each save read after a press carries that text
+/// (`pressCarried`), and a save whose text differs from it forks with the press's own words.
+#[test]
+fn text_typed_after_an_unknown_press_is_kept_never_lost() {
+    for (script, name, verb) in [
+        (NOTES_JS, "signNote", "note_sign"),
+        (
+            include_str!("../src-ui/notes_discard.js"),
+            "discardNote",
+            "note_discard",
+        ),
+    ] {
+        let press = js_fn(script, name);
+        let carried = position(press, "held.pressedText = el(\"note-text\").value;");
+        assert!(
+            position(press, "held.mayBeSigned = true;") < carried,
+            "{press}"
+        );
+        assert!(
+            carried < position(press, &format!("invoke(\"{verb}\"")),
+            "{press}"
+        );
+        assert!(
+            position(press, "const wasPressedText = held.pressedText;")
+                < position(press, "held.mayBeSigned = true;"),
+            "{press}"
+        );
+        let caught = &press[position(press, "catch (failure) {")..];
+        assert!(
+            caught.contains("held.pressedText = wasPressedText;"),
+            "{press}"
+        );
+    }
+    let save = js_fn(NOTES_JS, "saveNoteNow");
+    assert!(
+        save.contains("pressCarried: held.mayBeSigned ? held.pressedText : null,"),
+        "{save}"
+    );
+    let send = js_fn(NOTES_JS, "sendDraft");
+    let after = position(
+        send,
+        "if (pressTook && typeof sent.pressCarried === \"string\" && sent.narrative !== sent.pressCarried) {",
+    );
+    assert!(
+        send.contains("const pressTook = (view.spent || view.discarded) && sent.held.mayBeSigned;"),
+        "{send}"
+    );
+    // After the forks of a draft gone on without this window, before anything counts as kept.
+    assert!(position(send, FORKS) < after, "{send}");
+    assert!(after < position(send, "const kept ="), "{send}");
+    let branch = &send[after..position(send, "const kept =")];
+    for line in [
+        "sent.held.savedText = sent.pressCarried;",
+        "return keepUnsavedText(sent, view.pressed_fork);",
+    ] {
+        assert!(branch.contains(line), "{send}");
+    }
 }

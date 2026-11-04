@@ -28,6 +28,10 @@ pub struct SaveView {
     pub sentence: Option<String>,
     /// `moved`, `spent`, `committed` or `discarded`: the words for keeping what the draft lacks as a new draft.
     pub fork: Option<ForkWords>,
+    /// `spent` or `discarded` only: the words for keeping what was typed AFTER this window's own
+    /// press (Sign note or Discard draft) whose outcome was not known. The press took only the
+    /// text it carried; the webview keeps the rest as a new draft (PR #984 review).
+    pub pressed_fork: Option<ForkWords>,
 }
 
 /// What the webview says when it keeps the text a moved, signed-elsewhere, timer-committed or
@@ -67,6 +71,24 @@ pub(crate) const DISCARDED_ELSEWHERE_NOTHING_NEW: &str =
 pub(crate) const DISCARDED_ELSEWHERE_EVERYTHING: &str =
     "This draft was discarded in another window. \
      Everything on this screen is kept here as a new draft.";
+/// … when a save read after this window's own Sign note, whose outcome was not known, finds the
+/// draft signed: what was typed after the press is in no note, so it is kept. True whichever
+/// window signed it, so it never says which.
+const SIGNED_AFTER_PRESS: &str =
+    "This note was signed. What you typed after pressing Sign note is kept here as a new draft.";
+/// … the same, when nothing but blank space was typed after the press: nothing is kept.
+const SIGNED_AFTER_PRESS_NOTHING_NEW: &str = "This note was signed; it is no longer open.";
+/// … the same, when the text the press carried was edited after it: all of it is kept.
+const SIGNED_AFTER_PRESS_EVERYTHING: &str = "This note was signed. The text here was changed \
+     after you pressed Sign note, so all of it is kept here as a new draft.";
+/// … the same three, for a Discard draft whose outcome was not known.
+const DISCARDED_AFTER_PRESS: &str = "This draft was discarded. What you typed after pressing \
+     Discard draft is kept here as a new draft.";
+/// … nothing but blank space typed after the press.
+const DISCARDED_AFTER_PRESS_NOTHING_NEW: &str = DISCARDED;
+/// … the text the press carried edited after it.
+const DISCARDED_AFTER_PRESS_EVERYTHING: &str = "This draft was discarded. The text here was \
+     changed after you pressed Discard draft, so all of it is kept here as a new draft.";
 /// The sentence a save or sign answers when the draft was already signed.
 pub(crate) const SPENT: &str = "this note has already been signed";
 /// … when a SAVE's draft is another chart's (another terminal's is `MOVED`, #958).
@@ -165,6 +187,30 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         | SaveOutcome::NoChart
         | SaveOutcome::NoSuchWriter => None,
     };
+    // Only a spend or a discard can be this window's own press (Sign note, Discard draft).
+    let pressed_fork = match outcome {
+        SaveOutcome::Spent => Some([
+            SIGNED_AFTER_PRESS,
+            SIGNED_AFTER_PRESS_NOTHING_NEW,
+            SIGNED_AFTER_PRESS_EVERYTHING,
+        ]),
+        SaveOutcome::Discarded => Some([
+            DISCARDED_AFTER_PRESS,
+            DISCARDED_AFTER_PRESS_NOTHING_NEW,
+            DISCARDED_AFTER_PRESS_EVERYTHING,
+        ]),
+        SaveOutcome::Saved
+        | SaveOutcome::Moved
+        | SaveOutcome::Elsewhere
+        | SaveOutcome::NoChart
+        | SaveOutcome::NoSuchWriter
+        | SaveOutcome::Committed => None,
+    };
+    let words = |[kept, nothing_new, everything]: [&str; 3]| ForkWords {
+        kept: kept.into(),
+        nothing_new: nothing_new.into(),
+        everything: everything.into(),
+    };
     SaveView {
         saved: sentence.is_none(),
         moved: outcome == SaveOutcome::Moved,
@@ -172,11 +218,8 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         committed: outcome == SaveOutcome::Committed,
         discarded: outcome == SaveOutcome::Discarded,
         sentence: sentence.map(str::to_string),
-        fork: fork.map(|[kept, nothing_new, everything]| ForkWords {
-            kept: kept.into(),
-            nothing_new: nothing_new.into(),
-            everything: everything.into(),
-        }),
+        fork: fork.map(words),
+        pressed_fork: pressed_fork.map(words),
     }
 }
 

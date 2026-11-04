@@ -120,7 +120,7 @@ fn discard_words_each_refusal() {
         (
             Moved,
             false,
-            "Not discarded: this note is now being continued at another terminal — nothing was \
+            "Not discarded: this draft is now being continued at another terminal — nothing was \
              thrown away; your text is still here.",
         ),
         (NoChart, false, "Not discarded: this patient has no chart on this node"),
@@ -139,7 +139,7 @@ fn discard_words_each_refusal() {
         (
             NoSuchSigner,
             false,
-            "Not discarded: this staff ID may not discard a clinical note.",
+            "Not discarded: this staff ID may not discard a clinical draft.",
         ),
         (Gone, false, "Not discarded: this draft is no longer open"),
     ];
@@ -152,6 +152,54 @@ fn discard_words_each_refusal() {
             "{refusal:?}"
         );
     }
+}
+
+/// PR #984 review: a key refusal under Discard is never worded as Sign's ("…to sign", "Nothing was
+/// signed"): a clinician throwing a draft away must not read that the press will sign it. Every
+/// variant, so a new one must be worded for a discard too; the retry is the key's own.
+#[test]
+fn a_key_refusal_under_discard_never_says_sign() {
+    use crate::signer::KeyRefusal;
+    use std::time::Duration;
+    let every = [
+        KeyRefusal::NeedCredential,
+        KeyRefusal::Wrong { retry_after: None },
+        KeyRefusal::Wrong {
+            retry_after: Some(Duration::from_secs(2)),
+        },
+        KeyRefusal::Replaced {
+            at: "3 Nov 03:40".into(),
+            approver: "Nurse A".into(),
+            retry_after: None,
+        },
+        KeyRefusal::Waiting {
+            retry_after: Duration::from_secs(12),
+        },
+        KeyRefusal::Unknown,
+        KeyRefusal::NotForClinicalActs,
+        KeyRefusal::NotCurrent,
+        KeyRefusal::Expired,
+        KeyRefusal::OverPowered,
+        KeyRefusal::Fault,
+    ];
+    for refusal in &every {
+        let view = led_failure(discard_key_refused(refusal));
+        assert!(
+            view.text.starts_with("Not discarded: "),
+            "{refusal:?}: {}",
+            view.text
+        );
+        assert!(
+            !view.text.to_lowercase().contains("sign"),
+            "{refusal:?}: {}",
+            view.text
+        );
+        assert_eq!(view.retry, key_locked(refusal).retry, "{refusal:?}");
+    }
+    assert_eq!(
+        led_failure(discard_key_refused(&KeyRefusal::NeedCredential)).text,
+        "Not discarded: Enter your staff ID and passphrase to discard this draft."
+    );
 }
 
 #[test]
