@@ -298,7 +298,8 @@ Each task reviewed and re-reviewed (ledger: `.superpowers/sdd/2026-11-04-sign-in
 gitignored); the rules that bind later slices are ADR-0089 and the 3b-2a durable-rules block.
 - **⇒ A displayed time is a claim: compute it from the input the door decides on.** The first cut showed a draft's
   due time from its parts' keystrokes while the door decides on the header's; after a backward clock step they part.
-  A door's return shape is final, so the fix was a fifth door (`cairn_note_drafts_due`), not a widened one.
+  The fix was db/067's fifth door, `cairn_note_drafts_due`. A RELEASED door's return shape is final; this one was
+  unreleased (same branch), so widening it with `stuck` was allowed, behind a guarded `DROP` of the old shape.
 - **⇒ A remedy the window offers must be walked through the refusal it meets.** The reviewer's suggested words for a
   stuck draft, "sign it", were false: a Sign of that draft is refused `NoSuchWriter` too.
 - **⇒ A helper the plan prescribes can be the defect.** `commit_overdue_drafts` held one connection for a whole pass,

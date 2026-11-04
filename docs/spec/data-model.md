@@ -301,7 +301,8 @@ Two infrastructure invariants — and their realization — underpin point-of-ca
 > `db/067`) a draft nobody has typed into for the site's quarantine (default 3 hours) goes into the record by itself,
 > **unsigned**: one node-signed event per non-blank part, its named writer a `drafted` contributor and nobody
 > `attested`, read "went in unsigned" (the `Asserted` grade, the "provisional authorship-confidence grade" above).
-> Any running window commits it, on a one-minute tick and before every chart read.
+> A window that holds the node key commits it, on a one-minute tick while its connection is open and before every
+> chart read (which may reopen a lost connection); with no such window it waits, shown overdue.
 
 ## 3.11 Notifications as projections, responsibility-routing, and acknowledgment
 > Resolves former open question §11.10 — see [ADR-0009](decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md), canonical design [identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor). Minimal data-model commitments; the clinical model and the *why* live there and in the ADR.

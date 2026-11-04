@@ -14,7 +14,7 @@
   [#980](https://github.com/cairn-ehr/cairn-ehr/issues/980) (a co-signed discard, not built). Filed by the build:
   [#982](https://github.com/cairn-ehr/cairn-ehr/issues/982) (a stuck draft not yet due promises a time). Bounds the
   life of [#968](https://github.com/cairn-ehr/cairn-ehr/issues/968)'s revision rows (commented; it stays open). Rules
-  on [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974) (the maintainer closed it).
+  on [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974) (closed on the maintainer's ruling).
 - **Builds on:** [ADR-0088](0088-whos-here-and-a-drafts-parts.md) (a draft's parts, one event per part) ·
   [ADR-0087](0087-the-first-note-stream-and-its-draft.md) (the note and its draft) ·
   [ADR-0083](0083-the-human-key-vault.md) (the vault) · [ADR-0053](0053-per-write-human-authorship.md) (the human
@@ -161,8 +161,8 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
     `a_failed_commit_never_blocks_the_read`, `opening_a_chart_commits_its_overdue_draft_first`,
     `a_stuck_draft_is_said_once`.
 
-12. **An open draft says when it goes in, from the same row the door reads.** A fifth window door,
-    `cairn_note_drafts_due(patient)` (db/067), answers each open draft's `due` and `overdue` from the HEADER's
+12. **An open draft says when it goes in, from the same row the door reads.** A fifth door in db/067,
+    `cairn_note_drafts_due(patient)` (granted to `cairn_window`), answers each open draft's `due` and `overdue` from the HEADER's
     `last_keystroke` plus the policy, the commit door's own input, and `stuck` by the commit's own rule (a non-blank
     part whose writer has no vault key). Reading the parts' times instead could disagree with the door after a
     backward clock step, and a displayed time is a claim. The draft's words end with one of three sentences:
@@ -181,8 +181,8 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
 13. **#974 is not an `M > N` defect** (maintainer decision 4). *Continue here* with nobody named costs 2 acts (the
     press and the who's-here pick) where the plan counted 1, and getting a draft back after a window restart costs
     about 2 where slice 3a's target was 0. Neither is worse than paper, whose counterpart is walking back to where
-    the sheet was left, or having it fetched: the same ruling as ADR-0088 decision 5's bookmark. The maintainer
-    has since marked #974 done on GitHub.
+    the sheet was left, or having it fetched: the same ruling as ADR-0088 decision 5's bookmark. The issue was
+    closed on that ruling.
 
 14. **The terminal of an unattributed commit is not recorded** (maintainer decision 3; design §10 finding 3,
     ADR-0088 decision 18). `clinical.note/1` has no slot for it, and a `/2` profile would hide the note from older
@@ -196,9 +196,12 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
 
 ## What is not guaranteed
 
-- **With no window running, nothing commits.** A draft waits, safe, and is shown overdue to the next reader, whose
-  chart open commits it first. Until it commits it is only on this node: drafts never sync, so no peer sees the note
-  (design §3.3, last bullet).
+- **Only a window that holds the node key and an open connection commits on its tick.** With no window running, or
+  only windows launched without `--key` (they commit nothing), or windows whose connection was lost (the tick never
+  reopens one: after an overnight Postgres restart nothing goes in until someone's press reopens it), a draft waits,
+  safe, and is shown overdue to the next reader. That reader's chart read commits it first, reopening a lost
+  connection if it must, when their window holds the node key. Until it commits it is only on this node: drafts
+  never sync, so no peer sees the note (design §3.3, last bullet).
 - **A pane already open on a chart keeps showing a draft the tick has committed** until that chart is read again;
   nothing pushes to the screen. Typing into it is safe: the next save answers `committed` and forks what was typed
   since the last save into a new draft, with the committed sentence (decision 12).
@@ -213,9 +216,9 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
   key ids it is given.
 - **No vouch upgrades `Asserted` yet.** Finishing or vouching for a note that went in unsigned is 3c's addendum.
 - **Revision rows now live at most the quarantine plus one tick** after a draft's last real change, while a window
-  runs ([#968](https://github.com/cairn-ehr/cairn-ehr/issues/968), commented, still open): each real save still
-  writes a full-text copy, a draft typed into for hours keeps every one, and a stuck draft or a node with no window
-  keeps them indefinitely.
+  holding the node key has an open connection ([#968](https://github.com/cairn-ehr/cairn-ehr/issues/968), commented,
+  still open): each real save still writes a full-text copy, a draft typed into for hours keeps every one, and a stuck
+  draft, or a node where no such window ticks and no chart is read, keeps them indefinitely.
 - **Which terminal an unattributed draft came from is not recorded** (decision 14, #979).
 - **The tick's own cost and its stderr lines are not measured or surfaced in the window.** A stuck draft is said on
   stderr once per window run, and a failed commit on every pass, where only an operator reading the log sees it.
@@ -229,7 +232,8 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
   once); finishing one later is 3c's addendum (design §6, 3 → 3 → 3). #974's two cases are 1 → 2 and 0 → about 2,
   ruled not defects (decision 13). **A delay worth naming, not an `M > N` case:** paper's unsigned entry is in the
   folder at once, Cairn's only after the quarantine, and a peer sees it only then. Time budgets, owed by a human in
-  RUNBOOK §20: an overdue draft goes in within one tick (≤ 60 s past due) while any window runs, and a chart open that
+  RUNBOOK §20: an overdue draft goes in within one tick (≤ 60 s past due) while a window holding the node key has an open
+  connection, and a chart open that
   first commits an overdue draft stays within the single-chart open budget + 200 ms.
 - **Harder.** Every future draft door must keep the lock order (advisory lock, header, parts) and must treat
   `by_timer` as a second kind of spend. A new window that reads drafts must take its due time from

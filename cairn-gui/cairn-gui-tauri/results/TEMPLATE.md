@@ -404,7 +404,7 @@ observed \_\_.
 | Two writers: two node-signed notes, `drafted` + `recorded`, the second `addendum-to` the first; `by_timer` | | |
 | Read "written by ?Nurse A · went in unsigned"; never "signed by" | | |
 | The open commits first; with no `--key` the chart reads and the draft says overdue | | |
-| Typing into a committed draft: the committed sentence, a new draft; the two other cases' sentences | | |
+| Typing into a committed draft: the committed sentence, a new draft; after editing the saved text, all kept | | |
 | Sign on a committed draft: "had already gone into the record unsigned — nothing was signed" | | |
 | Stuck: kept, nothing in, the stuck sentence; before due it says: \_\_ (#982); stderr once | | |
 
