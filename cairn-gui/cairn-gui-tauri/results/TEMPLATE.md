@@ -356,10 +356,12 @@ Staff on the node: \_\_ (50 for Measurement 1) · `--idle-lock-minutes`: \_\_ ·
 | Re-lock: first passphrase keystroke → back at the chart | | | | ≤ 10 s | |
 | Continue here: press → caret in *Progress note* | | | | ≤ 1 s | |
 | A switch within a second of a keystroke: characters lost | | | | 0 | |
+| Continue here with nobody named: acts / time to the caret (#974) | | | | paper 1 | |
+| Reopen a draft after a hard kill: acts / time before typing (#974) | | | | 3a: 0 | |
 
 Steps: writing and signing paper *N* = 3 → forced *M* = 3 → observed *K* = \_\_ · adding below a colleague 1 → 1 →
 observed \_\_ · finishing at another terminal 1 → 1 → observed \_\_ · resuming after the re-lock 2 (+ walk) → 3 →
-observed \_\_ · after a crash (3a's target 0) observed \_\_.
+observed \_\_ · finishing elsewhere with nobody named 1 → 2 → observed \_\_ · after a crash (3a's target 0) observed \_\_.
 
 | Behaviour | Verdict | Notes |
 |---|---|---|

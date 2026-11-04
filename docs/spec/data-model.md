@@ -293,8 +293,9 @@ Two infrastructure invariants — and their realization — underpin point-of-ca
 > a header plus **per-writer parts**: each part names its writer (an enrolled clinical member, or unknown) as a
 > who's-here claim, a save rewrites only the saver's own tail part or appends one, and every real change leaves a
 > revision row for the draft's life. A draft is still held by one terminal at a time, but "Continue here" moves it.
-> It signs as one event per part, the signer `authored` on their own and `attested` (with the writer `drafted`) on
-> anyone else's. The draft is still keyed by terminal, not by `(author, patient)`.
+> It signs as one event per non-blank part (the first the note, each later one an `addendum-to` the one before), the
+> signer `authored` on their own part, `attested` with the writer `drafted` on anyone else's, and `attested` alone on a
+> part whose writer is not known. The draft is still keyed by terminal, not by `(author, patient)`.
 
 ## 3.11 Notifications as projections, responsibility-routing, and acknowledgment
 > Resolves former open question §11.10 — see [ADR-0009](decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md), canonical design [identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor). Minimal data-model commitments; the clinical model and the *why* live there and in the ADR.

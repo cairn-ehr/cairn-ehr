@@ -1,7 +1,8 @@
 # ADR-0087 — The first note stream and its draft
 
 - **Status:** Accepted (partly supersedes [ADR-0041](0041-progress-note-narrative-format.md) decisions 1 and 2, and
-  [ADR-0026](0026-node-durability-and-disaster-recovery.md) decisions 1 and 3 for note drafts)
+  [ADR-0026](0026-node-durability-and-disaster-recovery.md) decisions 1 and 3 for note drafts); decisions 1, 10, 11
+  and 12 partly superseded by [ADR-0088](0088-whos-here-and-a-drafts-parts.md)
 - **Date:** 2026-11-03
 - **Spec version at acceptance:** 0.89
 - **Issues:** draft PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931) (GUI sign-in slice 3a). Design:

@@ -39,10 +39,12 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   signature or return type (db/065's replay then fails on every existing database); delete db/066's `DROP` lines as
   dead code (an upgraded database keeps the old doors, granted to `cairn_window`). Pins: db/tests/066's
   `the_3a_doors_are_gone`; `window_role_grants_notes.rs`.
-- **One event per non-blank part, in ONE transaction, HLC ticks inside it, no savepoint; the spend records part 1.**
-  Part *k* > 1 carries `addendum-to` the previous signed part. **Tempting wrong fixes:** commit each part in its own
+- **One event per non-blank part, in ONE transaction, HLC ticks inside it, no savepoint; the spend records the first
+  non-blank part's event id.** The first non-blank part is the note (a blank part 1 is skipped); each later non-blank
+  part carries `addendum-to` the one before it. **Tempting wrong fixes:** commit each part in its own
   transaction "so one bad part does not block the rest" (half a note signs and the draft is spent); tick the HLCs
-  before `BEGIN`; spend with the last part's id; wrap a submit in a savepoint (db/065's trigger then refuses every
+  before `BEGIN`; spend with the last part's id, or give the spend's id to `seq` 1 rather than to the first non-blank part (a
+  blank part 1 would leave the spend naming no note); wrap a submit in a savepoint (db/065's trigger then refuses every
   sign, the 3a rule). Pins: `note_sign_parts.rs::a_refused_second_part_rolls_back_the_first`,
   `a_two_writer_draft_signs_as_two_events_chained_by_addendum_to`,
   `empty_parts_are_skipped_and_an_all_empty_draft_is_refused_empty`; db/tests/066's

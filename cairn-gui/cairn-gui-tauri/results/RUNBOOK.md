@@ -1352,7 +1352,7 @@ seconds, then type the strip's Staff ID and passphrase and press *Sign note*. Fi
 - [ ] The draft is back in the editor, with its stated time, and the status line reads "unsigned draft · started … ·
       last typed …". Count every act before typing can continue (target 0). **Since 3b-1** a relaunch forgets who's here, and a
       draft reopens into the editor only once somebody has said who is writing: record the acts as they now are
-      (expected: *Continue here* or *New note* asks, one pick, then the editor) — section 19's Measurement 4.
+      (expected: *Continue here* asks, one pick, then the editor) — section 19's Measurement 5 (#974).
 - [ ] Kill it again within a second of a keystroke: record how much of the last typing was lost (the bound is the
       one-second save interval, R14).
 - [ ] Stop the node's Postgres while typing: "not saved yet — your text is still here" shows and the text stays.
@@ -1399,8 +1399,9 @@ note write.
 
 Steps: reading a chart 0 → 0 → 0 (no name asked) · writing and signing 3 → 3 (say who's here once per stint, type,
 sign with only the passphrase, the staff ID prefilled) → 3 · adding to a colleague's draft 1 → 1 → 1 · finishing at
-another terminal 1 (plus the walk) → 1 → 1 · resuming after the re-lock 2 (plus the walk to the folder) → 3 (unlock,
-pick yourself, *Return to …*) → 3, which the maintainer ruled is not an architecture defect (ADR-0088 decision 5).
+another terminal 1 (plus the walk) → 1 with the writer already named here, 2 (*Continue here* + the pick) with nobody
+named (#974) · after a window restart 3a's 0 → about 2 (#974) · resuming after the re-lock 2 (plus the walk to the folder) → 3 (unlock,
+pick yourself, *Return to …*) → 3, which the maintainer ruled is not an architecture defect (maintainer decision 3, recorded in ADR-0088 decision 5).
 **A figure outside its budget, or another `M > N`, is the finding — file an issue; never adjust the budget.**
 
 **Setup.** Section 18's setup, with **two** enrolled clinical members besides `boss`: `nurse-a` and `dr-b`, each
@@ -1465,8 +1466,17 @@ aside (a new terminal id), relaunch and name `nurse-a`.
       new word as a new draft of its own (`parts` shows two drafts). Repeat with no new typing (the editor closes, the
       sentence says everything was saved into it) and after editing the saved text (the whole editor is kept, and
       said so).
-- [ ] After a crash (`pkill -9 -f cairn-gui-tauri`) and a relaunch, count the acts before typing can continue (section
-      18's Measurement 3; 3a's target was 0, and since 3b-1 who's here must be answered first).
+
+**Measurement 5 — resuming with nobody named (#974: `M > N` for the maintainer to judge).** Two cases the plan's
+step counts left out. Count the acts and time each one, five runs.
+
+- [ ] **Continue here with nobody named.** As in Measurement 4, but relaunch and do NOT pick anyone first: the bar
+      reads "Nobody has said who is at this terminal". Press *Continue here*: the picker opens. Pick `nurse-a`. Count the
+      acts from the press to the caret in *Progress note* (paper 1; expected 2), and time them.
+- [ ] **Reopening a draft after a window restart.** Type a draft as `nurse-a`, wait two seconds, kill the window hard
+      (`pkill -9 -f cairn-gui-tauri`) and relaunch on the same chart. The draft is listed, not in the editor. Count every
+      act before typing can continue (3a's target 0; expected about 2: *Continue here* + the pick), and time them. Also
+      record whether the terminal lock asked for its passphrase first (it is a separate gatekeeping act).
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 

@@ -1,20 +1,23 @@
 # ADR-0088 — Who's here, and a draft's parts
 
 - **Status:** Accepted (partly supersedes [ADR-0087](0087-the-first-note-stream-and-its-draft.md) decisions 1, 10, 11
-  and 12; supersedes rule I1 of the slice 3 design, §3.2)
+  and 12; narrows [ADR-0041](0041-progress-note-narrative-format.md) decision 1's atomic arrival for a multi-writer
+  note, see Consequences; supersedes rule I1 of the slice 3 design, §3.2)
 - **Date:** 2026-11-04
 - **Spec version at acceptance:** 0.90
-- **Issues:** draft PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966) (GUI sign-in slice 3b-1), which builds
-  [#958](https://github.com/cairn-ehr/cairn-ehr/issues/958) (`moved` split from `elsewhere`). Design:
+- **Issues:** PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966) (GUI sign-in slice 3b-1), which builds
+  [#958](https://github.com/cairn-ehr/cairn-ehr/issues/958) (`moved` split from `elsewhere`; the PR closes it). Design:
   `docs/superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`; plan:
   `docs/superpowers/plans/2026-11-04-sign-in-slice-3b-1-whos-here-and-draft-parts.md` (its "Decisions taken with the
-  maintainer on 2026-11-04" are Decisions 1–6 below). Filed at planning: [#963](https://github.com/cairn-ehr/cairn-ehr/issues/963)
+  maintainer on 2026-11-04" are cited below as *maintainer decision 1* to *6*, never to be confused with this ADR's
+  own numbered decisions). Filed at planning: [#963](https://github.com/cairn-ehr/cairn-ehr/issues/963)
   (drafts across terminal-nodes, slice 5), [#964](https://github.com/cairn-ehr/cairn-ehr/issues/964) ("unknown is
   allowed" as a deployment policy), [#965](https://github.com/cairn-ehr/cairn-ehr/issues/965) (draft visibility once
   sealed episodes reach notes). Filed by the build: [#967](https://github.com/cairn-ehr/cairn-ehr/issues/967) ·
   [#968](https://github.com/cairn-ehr/cairn-ehr/issues/968) · [#969](https://github.com/cairn-ehr/cairn-ehr/issues/969) ·
   [#970](https://github.com/cairn-ehr/cairn-ehr/issues/970) · [#971](https://github.com/cairn-ehr/cairn-ehr/issues/971) ·
-  [#972](https://github.com/cairn-ehr/cairn-ehr/issues/972) · [#973](https://github.com/cairn-ehr/cairn-ehr/issues/973).
+  [#972](https://github.com/cairn-ehr/cairn-ehr/issues/972) · [#973](https://github.com/cairn-ehr/cairn-ehr/issues/973); by the
+  review: [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974) (the who's-here pick on resuming, `M > N` to judge).
 - **Builds on:** [ADR-0087](0087-the-first-note-stream-and-its-draft.md) (the note and its draft) ·
   [ADR-0083](0083-the-human-key-vault.md) (the vault, the held key, the terminal lock) ·
   [ADR-0053](0053-per-write-human-authorship.md) (the human signs, the node seals) ·
@@ -27,7 +30,7 @@
 On a ward several people write into one note before one of them signs it: the nurse's observations, then the
 doctor's plan below them. On paper each hand is plainly its own, nobody can rub out a colleague's ink, and the sheet
 travels with whoever carries it. Slice 3a (ADR-0087) built a note and its draft for one unknown writer at one
-terminal. Its next part, 3b, was split in two on 2026-11-04 (Decision 1): **3b-1**, recorded here, adds who is at the terminal,
+terminal. Its next part, 3b, was split in two on 2026-11-04 (maintainer decision 1): **3b-1**, recorded here, adds who is at the terminal,
 the idle re-lock, a draft made of per-writer parts with their revisions, moving a draft to another terminal, and
 signing one event per part. **3b-2** adds the commit runner after the quarantine timer, the `Asserted` grade and the
 audited discard. 3c adds addenda to signed notes and "sign off this note".
@@ -43,7 +46,8 @@ number.
    and reading a chart never asks for a name. A name is asked only when writing begins (**New note**, **Continue
    here**) or when someone presses **Who's here?** or Ctrl+Shift+H (Cmd+Shift+H on macOS). "Don't know / just
    reading" is an allowed answer (`Claim::Unknown`); until somebody answers, the claim is `NotAsked` and owns no draft
-   part. Every signature is still a staff ID and passphrase.
+   part. Every signature still needs the signer's own key, released by their staff ID and passphrase (or still held
+   from that release on a key-hold terminal).
 
 2. **The directory is the vault's clinical members.** `cairn_whos_here_directory()` lists every `vault_member`
    whose role passes `cairn_vault_purpose_allowed(role, false, 'clinical')` (db/061), so never a superuser or an
@@ -73,7 +77,7 @@ number.
    is typed (design §3.6); "Don't know" leaves it empty. Pins: `whos_here_tests.rs::claimed_name_words`,
    `the_bar_says_who_is_writing`; `whos_here_webview_tests.rs::the_bar_is_aria_live`, `parts_drawn_through_cell`.
 
-5. **The bookmark is offered, pre-focused, never auto-opened** (Decision 3; design §10 finding 1). When a named
+5. **The bookmark is offered, pre-focused, never auto-opened** (maintainer decision 3; design §10 finding 1). When a named
    person opens a chart from a list on screen (`open_chart_impl`), it becomes their bookmark at this terminal. Their
    next pick shows one pre-focused button, "Return to …", and puts the chart into `AppState::shown`, so opening it
    passes `open_chart`'s rule that only a chart some list on screen showed can be opened. Esc or a search dismisses
@@ -139,7 +143,7 @@ number.
     owner can, over SQL. They exist so that text a later save replaced stays findable while the draft is open (ADR-0087
     "what is not guaranteed", first bullet). Pin: db/tests/066's `every_real_change_is_a_revision`.
 
-12. **"Continue here" at another terminal MOVES the draft there** (Decision 2; supersedes the design's rule I1, which
+12. **"Continue here" at another terminal MOVES the draft there** (maintainer decision 2; supersedes the design's rule I1, which
     started an addendum draft, and partly supersedes ADR-0087 decision 11, "one draft, one chart, one terminal").
     `cairn_note_draft_take` is one statement on the node holding the draft, under the draft's advisory lock: it
     changes `note_draft.terminal_id` and nothing else, and answers `taken`, `spent`, `elsewhere` (another chart's) or
@@ -149,7 +153,8 @@ number.
     when the editor still starts with that saved text; nothing, and the editor closes, when nothing new was typed; the
     whole editor when the saved text was itself edited. Each case says its own sentence. The new draft is a separate
     note, not a part of the moved one. When the draft's node cannot be reached, the clinician can only start a new
-    note; once terminals are nodes (slice 5), how a draft reaches the facility's other terminal-nodes, partitioned
+    note. With nobody named at this terminal, *Continue here* asks who's here first, so it is two acts, not one
+    ([#974](https://github.com/cairn-ehr/cairn-ehr/issues/974)). Once terminals are nodes (slice 5), how a draft reaches the facility's other terminal-nodes, partitioned
     case included, is #963. Pins: db/tests/066's `moved_vs_elsewhere`, `take_moves_and_the_old_terminal_is_moved`,
     `take_of_spent_is_spent`, `take_of_unknown_is_gone`, `take_naming_another_chart_is_elsewhere`;
     `note_draft_parts.rs::a_take_then_the_old_terminal_saves_moved`; `notes_tests.rs::moved_sentence_exact`;
@@ -172,9 +177,10 @@ number.
 14. **One event per non-blank part, in one transaction** (design §4.3; partly supersedes ADR-0087 decision 12's one
     note per draft). Sign saves the on-screen text as the captured writer's part, then
     `cairn_note_draft_spend_parts` returns the non-blank parts in writing order and spends the draft, and each part
-    becomes one sealed, signed `clinical.note.asserted`. Part 1 is the note; each later signed part carries
-    `refs: [{"rel": "addendum-to", "event": <the previous signed part's event id>}]`, so a blank part is skipped in
-    the chain. The spend records **part 1's** event id, so db/065's commit-time trigger is unchanged. Each part takes
+    becomes one sealed, signed `clinical.note.asserted`. The first non-blank part is the note; each later non-blank
+    part carries `refs: [{"rel": "addendum-to", "event": <the previous non-blank part's event id>}]`, so a blank part
+    (part 1 included) is skipped in the chain. The spend records the **first non-blank part's** event id (the id
+    `sign_note` mints before the spend and hands to that part), so db/065's commit-time trigger is unchanged. Each part takes
     its own HLC tick **inside** the transaction, and the submits run with no savepoint (ADR-0087 ruling R9). A refused
     part rolls back every part and leaves the draft as it was. A draft whose every part is blank is refused `Empty`
     and is not spent. A draft taken to another terminal is refused `Moved`. Pins: `note_sign_parts.rs::
@@ -196,27 +202,27 @@ number.
     refuses the whole sign (`NoSuchWriter`) rather than signing as "not known". **No wire change:**
     `clinical.note/1`'s `refs` slot already existed, the floor already checks `addendum-to` against an event this
     node holds (db/064 rule 6), and the earlier part is held because it was inserted earlier in the same
-    transaction. ADR-0087 decision 1's `refs` is `[]` only for part 1 now. Pins: `contributor.rs::attesting_signer_shape`,
+    transaction. ADR-0087 decision 1's `refs` is `[]` only for the first non-blank part now. Pins: `contributor.rs::attesting_signer_shape`,
     `attesting_signer_unknown_writer`, `attested_part_grades_attested`; `sign.rs::a_parts_author_is_decided_by_key`;
     `note_sign_parts.rs::a_one_writer_draft_signs_as_one_attested_note`, `an_unknown_writers_part_is_attested_by_the_signer`,
     `a_part_whose_writer_left_is_refused_no_such_writer`.
 
-16. **A signed part reads with its writer.** A chart's note list carries `addendum_to` (the first `addendum-to` ref,
-    read back as `::uuid::text`, Postgres's canonical form, so a peer's other spelling cannot make the whole list
+16. **A signed part reads with its writer.** A chart's note list carries `addendum_to` (an `addendum-to` ref, the
+    window writes one, read back as `::uuid::text`, Postgres's canonical form, so a peer's other spelling cannot make the whole list
     fail to read) and `drafted_by` (the display name of the `drafted` key, through `cairn_note_signer_name`). The
     byline is "written by ?Nurse A · signed by Dr B" (`view::byline_words`). Each part is listed as its own note; the
     compound note with its "N parts" is 3c's. Pins: `view.rs::a_drafted_name_heads_the_byline_unverified`;
     `note_sign_parts.rs::a_two_writer_draft_signs_as_two_events_chained_by_addendum_to`.
 
-17. **ADR-0087 decision 9 is confirmed** (Decision 4): drafts are in no backup and no export. Moving a draft between
+17. **ADR-0087 decision 9 is confirmed** (maintainer decision 4): drafts are in no backup and no export. Moving a draft between
     terminals changes one column on one node and never touches a backup.
 
 ### What 3b-1 leaves out
 
-18. **Not built here, by the design's own table** (Decision 5): the picker's pending-sign-off counts and the person
+18. **Not built here, by the design's own table** (maintainer decision 5): the picker's pending-sign-off counts and the person
     menu (§3.6, 3c); the `Asserted` grade, with its only producer, the commit runner after the quarantine timer
     (3b-2); the audited discard (3b-2), where a draft whose writer is unknown may be discarded by **any** signer
-    (Decision 6, recorded here so it is not lost); the terminal of an unattributed commit (design §10 finding 3,
+    (maintainer decision 6, recorded here so it is not lost); the terminal of an unattributed commit (design §10 finding 3,
     3b-2). This ADR builds part of [#243](https://github.com/cairn-ehr/cairn-ehr/issues/243)'s durable drafts: a draft
     has a subject and a writer per part, never a session, but it is still held by a terminal, not by `(author,
     patient)`.
@@ -228,7 +234,7 @@ number.
   "written by ?Nurse A". That is what the terminal asserted, marked as a claim, and no stronger. The revision rows
   record the terminal and time of each save, but only while the draft is open and only for the node's owner over SQL;
   the spend deletes them. Guards: the loud bar, the re-lock clearing the claim, and Sign needing the signer's own
-  passphrase.
+  key, released by their staff ID and passphrase (or still held from that release on a key-hold terminal).
 - **Two "Don't know" writers at one terminal share one tail part.** The floor cannot tell two unknown people apart
   (NULL is NULL), so the second one's save rewrites the first one's tail. The window shows that tail's text for
   editing, so the second writer normally adds to it; an empty editor would replace it. The revision rows keep the
@@ -236,7 +242,9 @@ number.
 - **A writer's own earlier part is read-only** once a colleague has written below it ([#967](https://github.com/cairn-ehr/cairn-ehr/issues/967)).
 - **The revision rows cost one full-text copy of the part per real save**, about one a second while typing, for the
   life of the draft, which is unbounded until 3b-2's runner ([#968](https://github.com/cairn-ehr/cairn-ehr/issues/968)).
-- **A window restart forgets the claim, the recent people and the bookmarks** (decision 6).
+- **A window restart forgets the claim, the recent people and the bookmarks** (decision 6). So a draft held here is
+  not reopened into the editor until somebody says who is writing: getting it back after a crash or relaunch takes
+  about two acts (*Continue here* and the pick), where slice 3a needed none ([#974](https://github.com/cairn-ehr/cairn-ehr/issues/974)).
 - **The re-lock is a window posture, not a node one.** It is a timer in the webview. The node does not know the
   terminal re-locked, and the window's own commands are not refused while the lock shows: a raw-SQL `cairn_window`
   client, or a webview that stops running its timers, is not re-locked. It leaves the enrol, re-key and reseal forms'
@@ -248,7 +256,8 @@ number.
 - **An `addendum-to` target that arrives after its part at the remote door is refused** (ADR-0087's
   [#948](https://github.com/cairn-ehr/cairn-ehr/issues/948)). ADR-0087 expected this to become live with 3c's addenda;
   it is live now, because a two-writer draft signs part 2 as an addendum to part 1. Part 2's HLC follows part 1's,
-  but set-union sync does not promise delivery in order.
+  but set-union sync does not promise delivery in order. The refusal happens when the receiver holds the body's key;
+  a sealed arrival without custody is admitted unchecked, since its floor cannot read the ciphertext (db/020's step 8).
 - **The directory lists members whose key is repudiated or retired** ([#971](https://github.com/cairn-ehr/cairn-ehr/issues/971)).
   Naming them signs nothing, and a repudiated or retired key cannot sign here.
 - **Only a chart opened from a list on screen is bookmarked**: one opened at launch by `--patient` or by registering
@@ -268,12 +277,23 @@ number.
 
 ## Consequences
 
-- **Easier.** Several people write one note at paper's step counts, each person's words stay theirs, and the signed
-  record says exactly who typed each part and who answers for it, at event granularity, with nothing new on the
-  wire. ADR-0041 decision 1's bet, that sub-note span provenance is not needed, holds: provenance is exact per event.
-  Moving to another terminal costs one press. Steps (the plan's §1.2): writing and signing 3 → 3 → 3; adding to a
-  colleague's draft 1 → 1 → 1; finishing at another terminal 1 → 1 → 1; resuming after the re-lock paper 2 plus the
-  walk → 3 → 3 (Decision 3's ruling); reading 0 → 0 → 0.
+- **Easier.** Several people write one note, each person's words stay theirs, and the signed record says exactly
+  who typed each part and who answers for it, at event granularity, with nothing new on the wire. ADR-0020's bet,
+  which ADR-0041 decision 1 shares, that sub-note span-level provenance is not needed, holds: provenance is exact
+  per event. Steps (paper *N* → built *M* → target *K*): reading 0 → 0 → 0; writing and signing 3 → 3 → 3 (the
+  who's-here pick once per stint replaces typing the staff ID at signing, design §6); adding to a colleague's draft
+  1 → 1 → 1; finishing at another terminal 1 (plus the walk) → **1** when that terminal already names the writer,
+  **2** (*Continue here* and the pick) when nobody is named; resuming after the re-lock 2 (plus the walk) → 3 → 3
+  (maintainer decision 3's ruling); getting a draft back after a window restart, which paper never needs, 3a's 0 →
+  about **2**. Whether the two `M > N` cases are defects is the maintainer's to judge
+  ([#974](https://github.com/cairn-ehr/cairn-ehr/issues/974)).
+- **Narrower: a multi-writer note can arrive in parts.** ADR-0041 decision 1 made a note one signed event, so that
+  "arrival is atomic (a note can never half-arrive)", and rejected a chained shape for that sync reason. 3b-1 keeps
+  every event a whole note on its own, but a note several people wrote is now several events chained by
+  `addendum-to`, and that compound CAN arrive in parts: a peer may hold Nurse A's part without Dr B's, or (where it
+  can check) refuse Dr B's for want of Nurse A's (#948). This narrows decision 1's atomicity for a multi-writer
+  note; a one-writer note is still one event and arrives whole. The trade was made for exact per-writer provenance
+  and no wire change (design §4.3).
 - **Harder.** A reader of a multi-writer note must follow `addendum-to` to see it whole until 3c's compound view. Any
   future door on the draft tables must keep the tail-only rule and the lock order (advisory lock, header, parts),
   and must take a new name rather than reshape an old one.

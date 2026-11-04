@@ -73,7 +73,7 @@
 > save blocked behind a lock is silent, and `recording_started` is stamped when the first save executes, not at the
 > keystroke.
 >
-> **Slice 3b-1 BUILT 2026-11-04 — draft PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)**
+> **Slice 3b-1 BUILT 2026-11-04 — PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)**
 > ([ADR-0088](spec/decisions/0088-whos-here-and-a-drafts-parts.md), spec **v0.90**, `db/066`, `SCHEMA_GENERATION`
 > **66**; plan [`superpowers/plans/2026-11-04-sign-in-slice-3b-1-whos-here-and-draft-parts.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-1-whos-here-and-draft-parts.md),
 > its six maintainer decisions recorded in the ADR). **Who's here** (a claim, never a sign-in: the bar, the picker,
@@ -81,20 +81,24 @@
 > the held key; claimed names read `?Nurse A`, spoken "unverified"; the bookmark is OFFERED, pre-focused, in window
 > memory only). **A draft is per-writer parts** (a save rewrites the saver's own tail or appends; no door addresses a
 > part; a revision row per real change; the writer captured when the editor opens). **"Continue here" MOVES a
-> draft** (`moved` split from `elsewhere` — the PR body closes **#958**); the old terminal keeps its unsaved remainder
-> as a new draft. **Sign = one event per non-blank part in one transaction**, later parts `addendum-to` the one before,
+> draft** (`moved` split from `elsewhere` — the PR closes **#958**); the old terminal keeps its unsaved remainder
+> as a new draft. **Sign = one event per non-blank part in one transaction**, the first non-blank part the note and each later one
+> `addendum-to` the one before (so a multi-writer note can now arrive in parts — ADR-0088 narrows ADR-0041 decision
+> 1's atomic arrival),
 > the signer `authored` on their own part (decided by KEY) and `drafted` + `attested` on anyone else's; no wire
 > change. 3a's three draft doors are REMOVED, not reshaped (new names). **⚠️ #948 is now LIVE** (a two-writer note's
 > part 2 can reach a peer before part 1 and be refused at the remote door) — ADR-0087 expected it only with 3c.
 > Follow-ups filed: **#967** (a writer's own earlier part is read-only — the shortcut) · **#968** (revision rows: a
 > full-text copy per save) · **#969** (the re-lock leaves enrol/re-key/reseal passphrases in their forms) · **#970**
 > (a Sign's outcome after a switch) · **#971** (the directory lists repudiated keys) · **#972** (bookmarks from
-> `--patient`/registering; the offer shows an age, with #673) · **#973** (a signed byline's `?` has no spoken
+> `--patient`/registering; the offer shows an age, with #673) · **#974** (resuming costs a who's-here pick, below) ·
+> **#973** (a signed byline's `?` has no spoken
 > "unverified"); from planning **#963** (slice 5: drafts across
 > terminal-nodes) · **#964** · **#965**. Owed by a human: **RUNBOOK §19** (hot key → named ≤ 3 s over 50 staff, re-lock
-> → back ≤ 10 s, Continue here ≤ 1 s, nothing lost in a mid-typing switch, keyboard + VoiceOver). **Check in §19:**
-> after a crash a relaunch forgets who's here, so a draft reopens only after a pick — §18's "0 acts" target is now
-> about 2 (*Continue here* + the pick); record it and decide whether it is a finding.
+> → back ≤ 10 s, Continue here ≤ 1 s, nothing lost in a mid-typing switch, keyboard + VoiceOver). **Decision owed, #974** (`M > N`?):
+> with nobody named, *Continue here* costs 2 acts (plan: 1), and a relaunch forgets who's here, so getting a draft
+> back after a crash costs about 2 where 3a's target was 0; the design's accounting is that the pick replaces typing
+> the staff ID at signing. §19 Measurement 5 measures both.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -322,7 +326,7 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
-### 2026-11-04 — sign-in slice 3b-1 (draft PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)): plan → SDD, 7 tasks
+### 2026-11-04 — sign-in slice 3b-1 (PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)): plan → SDD, 7 tasks
 
 Each task reviewed and re-reviewed (ledger: `.superpowers/sdd/2026-11-04-sign-in-slice-3b-1-whos-here-and-draft-parts/`,
 gitignored); the rulings that bind later slices are in ADR-0088 and the 3b-1 durable-rules block.
