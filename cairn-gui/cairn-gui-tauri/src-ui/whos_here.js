@@ -21,8 +21,9 @@
 /** Said in the picker for a Sign that settled while a switch waited (no patient identifier:
  * the next person may read it). */
 const SIGNED_LINE = "Your note was signed.";
-const NOT_SIGNED_LINE =
-  "Your note was NOT signed. Open the chart to see why; its drafts hold what was saved.";
+// The refusal's reason was said in the note pane the switch cleared, so this line promises
+// only what reopening the chart gives: the chance to sign again.
+const NOT_SIGNED_LINE = "Your note was NOT signed. Open the chart and sign it again.";
 const SIGN_UNKNOWN_LINE = "Whether your note was signed is not known — check the chart.";
 
 /** The claim on screen (Rust's `ClaimView`), or null before the first lock poll answers. */

@@ -234,8 +234,11 @@ fn a_sign_settled_during_a_switch_is_said_in_the_picker() {
     );
     assert_eq!(
         js_const(WHOS_HERE_JS, "NOT_SIGNED_LINE"),
-        "Your note was NOT signed. Open the chart to see why; its drafts hold what was saved."
+        "Your note was NOT signed. Open the chart and sign it again."
     );
+    // Fix round 3: the refusal's reason lived only in the note pane the switch cleared, so no
+    // line may send the clinician to the chart to read why.
+    assert!(!WHOS_HERE_JS.contains("to see why"));
     assert_eq!(
         js_const(WHOS_HERE_JS, "SIGN_UNKNOWN_LINE"),
         "Whether your note was signed is not known \u{2014} check the chart."
