@@ -1466,6 +1466,12 @@ aside (a new terminal id), relaunch and name `nurse-a`.
       new word as a new draft of its own (`parts` shows two drafts). Repeat with no new typing (the editor closes, the
       sentence says everything was saved into it) and after editing the saved text (the whole editor is kept, and
       said so).
+- [ ] **Signed in another window** (final review I1, #945). With the editor open on a draft here, press *Continue
+      here* on it at a second terminal, add a line there and sign it. Type one more word here: the status line says
+      "This note was signed in another window. What you typed since the last save is kept here as a new draft.", and
+      the editor keeps only the new word, as a new draft of its own. Repeat pressing *Sign note* here instead of
+      typing: the refusal ("already signed") is followed by the same sentence, and the editor is never left on the
+      signed draft.
 
 **Measurement 5 — resuming with nobody named (#974: `M > N` for the maintainer to judge).** Two cases the plan's
 step counts left out. Count the acts and time each one, five runs.
@@ -1484,12 +1490,19 @@ step counts left out. Count the acts and time each one, five runs.
       alone; after the picker closes focus is on *Who's here?* (a chart open) or the search (no chart), never lost.
 - [ ] The bar is read once when the name changes, and not at each lock-state poll.
 - [ ] A colleague's part is read as "unverified Nurse A", then its text; a part with no writer as "writer not known".
-- [ ] **Record how a signed note's "written by ?Nurse A" byline is read** (no spoken form yet, #973).
+- [ ] A signed note Nurse A typed and Dr B signed is read "written by unverified Nurse A · signed by Dr B" (#973),
+      never with a bare "question mark"; one signed under "Don't know" reads "writer not known · signed by Dr B".
 - [ ] No dialog appears at any point.
+
+**Not a fault: a part 2 refused at a peer** ([#948](https://github.com/cairn-ehr/cairn-ehr/issues/948), until it is
+decided). A two-writer note signs part 2 as an `addendum-to` part 1, and set-union sync does not promise order. A peer
+that holds the body's key and receives part 2 before part 1 refuses it, and the pull reports it as failed. Do not
+chase it: the refused part is penned and re-offered, and the failure heals once part 1 has landed.
 
 **What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. The picker, the
 bar, the hot key, the switch order, the parts, *Continue here*, the moved fork and the re-lock were walked headlessly
-in Chromium only, against a stubbed `invoke` (sign-in slice 3b-1, Task 6); WebKit, Tauri's argument casing for
+in Chromium only, against a stubbed `invoke` (sign-in slice 3b-1, Task 6; the signed-in-another-window fork, the
+`mayBeSigned` mark and the spoken byline in the final fix wave); WebKit, Tauri's argument casing for
 `whos_here_pick`, `note_draft_take` and `relock`, and real timers over a real minute were not. The doors were run
 against throwaway databases by the slice's DB-gated tests. `TEMPLATE.md` carries a matching block (*Who's here, the
 idle re-lock and a draft's parts*).

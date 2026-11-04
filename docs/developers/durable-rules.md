@@ -13,7 +13,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 **⇒ GUI SIGN-IN SLICE 3b-1 — WHO'S HERE AND A DRAFT'S PARTS (ADR-0088, db/066, db/065 in place) — do not undo**
 (pins: `db/tests/066_note_draft_parts_test.sql`, `crates/cairn-event/src/contributor.rs`'s tests,
 `crates/cairn-node/src/note/sign.rs`'s tests, `crates/cairn-node/tests/{note_draft_parts,note_sign_parts,note_read,window_role_grants_notes}.rs`,
-`cairn-gui-tauri/src/{whos_here,whos_here_webview,notes,notes_parts}_tests.rs`):
+`cairn-gui-tauri/src/{whos_here,whos_here_webview,notes,notes_parts}_tests.rs`, `crates/cairn-node/src/note/view.rs`'s tests):
 - **A save writes only the TAIL part, and only the saver's own.** Any other save appends a part; no draft door takes
   a part number, so nothing can address, change or remove another writer's text. A writer's own earlier part is
   read-only too once someone wrote below it: a deliberate shortcut, #967. **Tempting wrong fixes:** add a `p_seq`
@@ -57,10 +57,28 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   both `cairn_note_draft_part_save` and `cairn_whos_here_directory`. **Tempting wrong fix:** filter only the
   directory (a raw-SQL client then records a superuser or an admin as a writer). Pins: db/tests/066's superuser and
   admin `no-such-writer` cases and `directory_lists_clinical_roles_only`.
-- **`moved` is not `elsewhere`, and a `moved` save keeps the unsaved remainder as a new draft** (#958). **Tempting
-  wrong fixes:** fold `moved` back into `elsewhere`; drop the fork "because the text is at the other terminal" (what
-  was typed since the last save is not). Pins: db/tests/066's `moved_vs_elsewhere`;
-  `whos_here_webview_tests.rs::moved_forks_a_new_draft`; `notes_tests.rs::moved_sentence_exact`.
+- **`moved` is not `elsewhere`, and a `moved` save keeps the unsaved remainder as a new draft** (#958); **so does a
+  `spent` save, unless this window's own Sign may have signed the draft** (`mayBeSigned`, set BEFORE the Sign is
+  sent, taken back only by a refusal that recorded nothing; final review I1, #945). **Tempting wrong fixes:** fold
+  `moved` back into `elsewhere`; drop the fork "because the text is at the other terminal" (what was typed since the
+  last save is not); treat `spent` as "nothing to do" (Nurse A's line typed after Dr B signed at terminal B is then in
+  no draft, and lost on close); set `mayBeSigned` only after the Sign answers, or never clear it (an unknown-outcome
+  Sign's follow-up save then forks text it just signed, or the save after an "already signed" refusal keeps the
+  editor on a dead draft). Pins: db/tests/066's `moved_vs_elsewhere`;
+  `whos_here_webview_tests.rs::moved_forks_a_new_draft`, `a_draft_signed_in_another_window_forks_a_new_draft`;
+  `notes_tests.rs::moved_sentence_exact`, `spent_sentence_exact`.
+- **A reopened draft writes as the claim its list was read for** (`NotePane.claim`, final review item 7), and a list
+  read for another claim than the one held now opens nothing. **Tempting wrong fix:** take `openDraft`'s writer from
+  `whosHere()` "because it is the same thing" — a list read before a pick then opens an "unknown" tail for editing
+  under Nurse A's name, and her first save APPENDS a copy of that tail as her part. Pins:
+  `whos_here_webview_tests.rs::the_writer_is_set_once_at_editor_open`;
+  `notes_parts_tests.rs::the_pane_names_the_claim_it_chose_the_editable_part_for`.
+- **A part the signer only attested never reads like their own note.** The byline comes from the event's contributor
+  set (`view::PartWriter`: a `drafted` contributor, named or not, and whether the signer's role is `attested`), never
+  from `drafted_by` alone. **Tempting wrong fix:** infer "own" from a NULL drafter name (a part signed under "Don't
+  know", or by a drafter this node cannot name, then reads "signed by Dr B" as if Dr B wrote it). Pins:
+  `view.rs::an_attested_part_never_reads_as_the_signers_own`,
+  `note_read.rs::an_unknown_writers_part_reads_writer_not_known_signed_by`.
 - **A pick and the re-lock forget the held key FIRST; only a person's input resets the idle clock.**
   **Tempting wrong fixes:** forget the key only after a pick succeeds (a refused pick leaves Dr A's key for Dr B);
   count a poll or an IPC answer as activity (main.js's lock-poll lesson: the terminal never re-locks). Pins:

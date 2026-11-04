@@ -382,7 +382,7 @@ observed \_\_ · finishing elsewhere with nobody named 1 → 2 → observed \_\_
 | Hot key, picker and offer complete by keyboard alone; focus never left on a hidden element | | |
 | The bar read once per change, never per poll | | |
 | A colleague's part read "unverified Nurse A"; an unknown writer "writer not known" | | |
-| A signed note's "written by ?Nurse A" byline: how it is read (#973) | | |
+| A signed note's byline read "written by unverified Nurse A · signed by Dr B" (#973) | | |
 | No dialog | | |
 
 ## Verdict

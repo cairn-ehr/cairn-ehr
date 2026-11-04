@@ -16,8 +16,11 @@
   sealed episodes reach notes). Filed by the build: [#967](https://github.com/cairn-ehr/cairn-ehr/issues/967) ·
   [#968](https://github.com/cairn-ehr/cairn-ehr/issues/968) · [#969](https://github.com/cairn-ehr/cairn-ehr/issues/969) ·
   [#970](https://github.com/cairn-ehr/cairn-ehr/issues/970) · [#971](https://github.com/cairn-ehr/cairn-ehr/issues/971) ·
-  [#972](https://github.com/cairn-ehr/cairn-ehr/issues/972) · [#973](https://github.com/cairn-ehr/cairn-ehr/issues/973); by the
-  review: [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974) (the who's-here pick on resuming, `M > N` to judge).
+  [#972](https://github.com/cairn-ehr/cairn-ehr/issues/972) · [#973](https://github.com/cairn-ehr/cairn-ehr/issues/973) (built by
+  the final fix wave, decision 16); by the review: [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974) (the who's-here
+  pick on resuming, `M > N` to judge), [#975](https://github.com/cairn-ehr/cairn-ehr/issues/975) (three small window defects)
+  and [#976](https://github.com/cairn-ehr/cairn-ehr/issues/976) (a whitespace-only first keystroke closes a moved draft's
+  editor). It builds the first half of [#945](https://github.com/cairn-ehr/cairn-ehr/issues/945) (decision 12).
 - **Builds on:** [ADR-0087](0087-the-first-note-stream-and-its-draft.md) (the note and its draft) ·
   [ADR-0083](0083-the-human-key-vault.md) (the vault, the held key, the terminal lock) ·
   [ADR-0053](0053-per-write-human-authorship.md) (the human signs, the node seals) ·
@@ -73,7 +76,7 @@ number.
    live region, rewritten only when its words change. On this screen the claim is the user's own statement, so the
    bar has no `?`. Where others read a claimed writer the name is `?Nurse A`, text, never a glyph or a colour alone:
    in a draft's parts with the accessible name "unverified Nurse A" (`whos_here::claimed_name`), and in a signed
-   part's byline as plain text (decision 16; its spoken form is #973). After every pick the signer strip's staff ID is the claim's, so only the passphrase
+   part's byline, heard "written by unverified Nurse A" (`byline_spoken`, decision 16). After every pick the signer strip's staff ID is the claim's, so only the passphrase
    is typed (design §3.6); "Don't know" leaves it empty. Pins: `whos_here_tests.rs::claimed_name_words`,
    `the_bar_says_who_is_writing`; `whos_here_webview_tests.rs::the_bar_is_aria_live`, `parts_drawn_through_cell`.
 
@@ -123,7 +126,9 @@ number.
    (`noteDraft.writer` in `notes.js`), and sends it verbatim with every save and with Sign; it is never re-read from
    the current claim at save time, so a debounced save landing after a switch still names the person who typed it.
    The window decides only which part the editor opens on (`notes_parts.rs`: the tail, when the draft is held here
-   and the tail is the current claim's), and the node's rule is the one that holds. Pins: db/tests/066's
+   and the tail is the current claim's), and the node's rule is the one that holds. The note list names the claim it
+   chose that part for (`NotePane.claim`), and a reopened draft's editor writes as THAT claim, so the part it opens on
+   and the writer it saves as cannot diverge; a list read for another claim than the one held now opens nothing. Pins: db/tests/066's
    `an_unknown_staff_id_answers_no_such_writer`, `a_staff_id_in_other_case_is_normalised` and its superuser and admin
    cases; `whos_here_webview_tests.rs::the_writer_is_set_once_at_editor_open`;
    `notes_tests.rs::save_passes_the_given_writer_not_the_claim` (a source-text guard: the window crate has no chart
@@ -152,13 +157,21 @@ number.
     (a fresh id, the same writer and chart), so nothing typed is lost: the text typed since its last successful save
     when the editor still starts with that saved text; nothing, and the editor closes, when nothing new was typed; the
     whole editor when the saved text was itself edited. Each case says its own sentence. The new draft is a separate
-    note, not a part of the moved one. When the draft's node cannot be reached, the clinician can only start a new
+    note, not a part of the moved one. **A save that answers `spent` is kept the same way** (final review I1,
+    [#945](https://github.com/cairn-ehr/cairn-ehr/issues/945)): the draft was continued and signed in another window, so
+    what was typed here since the last save is in no note; the window keeps it as a new draft by the same rule, with
+    its own three sentences ("This note was signed in another window. …"). The save the window sends after a Sign
+    refused "already signed" does the same, so the editor is never left on a signed draft. A Sign marks its draft
+    (`mayBeSigned`) before it is sent, and only a refusal that recorded nothing takes the mark back: so a `spent`
+    answer for a draft this window's own Sign may have signed forks nothing, and the text that Sign carried is never
+    written twice. Once the editor's text has been kept, a save of the old draft still queued keeps nothing again. When the draft's node cannot be reached, the clinician can only start a new
     note. With nobody named at this terminal, *Continue here* asks who's here first, so it is two acts, not one
     ([#974](https://github.com/cairn-ehr/cairn-ehr/issues/974)). Once terminals are nodes (slice 5), how a draft reaches the facility's other terminal-nodes, partitioned
     case included, is #963. Pins: db/tests/066's `moved_vs_elsewhere`, `take_moves_and_the_old_terminal_is_moved`,
     `take_of_spent_is_spent`, `take_of_unknown_is_gone`, `take_naming_another_chart_is_elsewhere`;
-    `note_draft_parts.rs::a_take_then_the_old_terminal_saves_moved`; `notes_tests.rs::moved_sentence_exact`;
-    `whos_here_webview_tests.rs::moved_forks_a_new_draft`.
+    `note_draft_parts.rs::a_take_then_the_old_terminal_saves_moved`; `notes_tests.rs::moved_sentence_exact`,
+    `spent_sentence_exact`; `whos_here_webview_tests.rs::moved_forks_a_new_draft`,
+    `a_draft_signed_in_another_window_forks_a_new_draft`.
 
 13. **3a's three draft doors are removed, never reshaped** (partly supersedes ADR-0087 decision 10's door list). A
     door's return shape is final, and a `CREATE OR REPLACE` of a same-named function with a new shape would make
@@ -207,12 +220,23 @@ number.
     `note_sign_parts.rs::a_one_writer_draft_signs_as_the_signers_own_authored_note`, `an_unknown_writers_part_is_attested_by_the_signer`,
     `a_part_whose_writer_left_is_refused_no_such_writer`.
 
-16. **A signed part reads with its writer.** A chart's note list carries `addendum_to` (an `addendum-to` ref, the
-    window writes one, read back as `::uuid::text`, Postgres's canonical form, so a peer's other spelling cannot make the whole list
-    fail to read) and `drafted_by` (the display name of the `drafted` key, through `cairn_note_signer_name`). The
-    byline is "written by ?Nurse A · signed by Dr B" (`view::byline_words`). Each part is listed as its own note; the
-    compound note with its "N parts" is 3c's. Pins: `view.rs::a_drafted_name_heads_the_byline_unverified`;
-    `note_sign_parts.rs::a_two_writer_draft_signs_as_two_events_chained_by_addendum_to`.
+16. **A signed part reads with its writer, and never like the signer's own when it is not.** A chart's note list
+    carries `addendum_to` (an `addendum-to` ref, the window writes one, read back as `::uuid::text`, Postgres's
+    canonical form, so a peer's other spelling cannot make the whole list fail to read) and `writer`
+    (`view::PartWriter`), read from the event: whether it carries a `drafted` contributor, that key's display name
+    through `cairn_note_signer_name` when this node can name it, and whether the signer's own role is `attested`
+    rather than `authored`. The byline (`view::byline_words`) is "written by ?Nurse A · signed by Dr B" for a named
+    drafter, "written by someone not named here · signed by Dr B" when the drafter's key cannot be named, "writer not
+    known · signed by Dr B" for a part the signer attested with no writer recorded, and plain "signed by Dr B" for the
+    signer's own. Beside the device grade a drafted writer reads "… · no person signed for it", never "writer not
+    known". Each byline has a spoken form (`byline_spoken`, "written by unverified Nurse A · …"), which a screen
+    reader hears in place of the shown one ([#973](https://github.com/cairn-ehr/cairn-ehr/issues/973)). Each part is
+    listed as its own note; the compound note with its "N parts" is 3c's. Pins:
+    `view.rs::a_drafted_name_heads_the_byline_unverified`, `an_attested_part_never_reads_as_the_signers_own`,
+    `every_grade_and_writer_reads_true`; `note_read.rs::an_unknown_writers_part_reads_writer_not_known_signed_by`;
+    `note_sign_parts.rs::a_two_writer_draft_signs_as_two_events_chained_by_addendum_to`;
+    `notes_parts_tests.rs::the_pane_words_each_note_and_any_withheld_ones`;
+    `whos_here_webview_tests.rs::parts_drawn_through_cell`.
 
 17. **ADR-0087 decision 9 is confirmed** (maintainer decision 4): drafts are in no backup and no export. Moving a draft between
     terminals changes one column on one node and never touches a backup.
@@ -267,8 +291,18 @@ number.
   hot-key press during the chart's close clears the first press's outcome line, and the idle re-lock never says a
   Sign's outcome, by ruling: the next person at the terminal must not read what the last one did
   ([#970](https://github.com/cairn-ehr/cairn-ehr/issues/970)).
-- **A signed part's byline "written by ?Nurse A" has no spoken "unverified" form**: a screen reader meets the bare
-  `?` there, unlike in a draft's parts ([#973](https://github.com/cairn-ehr/cairn-ehr/issues/973)).
+- **The bookmark offer shows a colleague's last patient to anyone who picks that colleague's name.** A pick is a
+  claim and needs no proof, so whoever says "Nurse A" at this terminal is offered "Return to …" with the name of the
+  chart Nurse A last opened here. That discloses no more than the terminal already does: it is unlocked, and every
+  chart on it is readable without a name.
+- **Text typed after an unknown-outcome Sign can be lost** ([#945](https://github.com/cairn-ehr/cairn-ehr/issues/945)'s
+  second half). When the save after that Sign gets no answer the editor stays live; if the Sign did sign, every later
+  save answers `spent`, nothing is kept (decision 12's `mayBeSigned`), and the editor stays on the signed draft until
+  the chart is reopened. It needs an interrupted commit and an unanswered save in a row.
+- **A whitespace-only first keystroke after a move or a signing elsewhere closes the editor**
+  ([#976](https://github.com/cairn-ehr/cairn-ehr/issues/976)). The first keystroke of a burst is saved at once; when
+  it is Enter or a space, the remainder is blank, so the editor closes (decision 12's nothing-new case) and the
+  letters typed next go to no field.
 - **A note naming two `addendum-to` refs** (none from this window, which writes one) reads with an arbitrary one of
   them as `addendum_to`: the read takes the first row with no order.
 - **"Unknown is allowed" is not a site setting yet** ([#964](https://github.com/cairn-ehr/cairn-ehr/issues/964)),
