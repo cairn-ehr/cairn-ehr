@@ -434,6 +434,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "068_clinical_note_discard",
         include_str!("../../../db/068_clinical_note_discard.sql"),
     ),
+    // db/069 (sign-in slice 3b-2b): the discard door, which applies "only your own writing" and
+    // consumes the draft (db/065's trigger then ties the spend to an event signed by the
+    // discarder's key; db/066's save and take answer 'discarded'; db/044 gains 'note-discard').
+    (
+        "069_note_draft_discard",
+        include_str!("../../../db/069_note_draft_discard.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

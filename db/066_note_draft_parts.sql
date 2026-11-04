@@ -89,6 +89,7 @@ DROP FUNCTION IF EXISTS cairn_note_draft_spend(uuid, uuid);
 
 -- Save writer p_writer's text into draft p_draft of p_patient, held by p_terminal. Answers
 -- 'saved' | 'spent' (signed) | 'committed' (the quarantine timer put it in unsigned, db/067) |
+-- 'discarded' (thrown away with an audit record, db/069) |
 -- 'moved' (this chart, another terminal holds it) | 'elsewhere' (another chart's) | 'no-chart'
 -- (no event names the patient) | 'no-such-writer'. Every answer but 'saved' wrote nothing.
 --
@@ -127,7 +128,8 @@ BEGIN
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
     -- A timer's commit is never this window's Sign, so it gets its own word (db/067).
-    v_spent := (SELECT CASE WHEN s.by_timer THEN 'committed' ELSE 'spent' END
+    v_spent := (SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'  -- db/069
+                            WHEN s.by_timer THEN 'committed' ELSE 'spent' END
                   FROM note_draft_spent s WHERE s.draft_id = p_draft);
     IF v_spent IS NOT NULL THEN
         RETURN v_spent;
@@ -200,7 +202,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 
 -- Move draft p_draft of p_patient to terminal p_terminal ("Continue" at another terminal).
--- Answers 'taken' | 'spent' (signed) | 'committed' (the quarantine timer's, db/067) | 'elsewhere'
+-- Answers 'taken' | 'spent' (signed) | 'committed' (the quarantine timer's, db/067) |
+-- 'discarded' (db/069) | 'elsewhere'
 -- (another chart's) | 'gone' (no such draft). Only note_draft.terminal_id changes: no text, no
 -- time, no part. Taking a draft already held here answers 'taken'.
 CREATE OR REPLACE FUNCTION cairn_note_draft_take(p_draft uuid, p_patient uuid, p_terminal text)
@@ -214,7 +217,8 @@ BEGIN
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
     -- A timer's commit is never this window's Sign, so it gets its own word (db/067).
-    v_spent := (SELECT CASE WHEN s.by_timer THEN 'committed' ELSE 'spent' END
+    v_spent := (SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'  -- db/069
+                            WHEN s.by_timer THEN 'committed' ELSE 'spent' END
                   FROM note_draft_spent s WHERE s.draft_id = p_draft);
     IF v_spent IS NOT NULL THEN
         RETURN v_spent;
