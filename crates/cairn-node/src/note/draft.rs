@@ -32,6 +32,8 @@ pub enum SaveOutcome {
     /// The quarantine timer already put the draft into the record unsigned (slice 3b-2a): never
     /// this window's own Sign, so what was typed since the last save is in no note.
     Committed,
+    /// The draft was discarded (slice 3b-2b): a late debounced save must not resurrect it.
+    Discarded,
 }
 
 /// Map the save door's answer word to an outcome. An unknown word is an ERROR, never a default:
@@ -45,6 +47,7 @@ fn outcome_from_word(word: &str) -> anyhow::Result<SaveOutcome> {
         "no-chart" => Ok(SaveOutcome::NoChart),
         "no-such-writer" => Ok(SaveOutcome::NoSuchWriter),
         "committed" => Ok(SaveOutcome::Committed),
+        "discarded" => Ok(SaveOutcome::Discarded),
         other => {
             anyhow::bail!("the note draft save answered {other:?}, which this build does not know")
         }
@@ -205,10 +208,12 @@ pub enum TakeOutcome {
     Spent,
     /// The draft belongs to another chart.
     Elsewhere,
-    /// No such draft (never saved, or discarded).
+    /// No such draft (never saved, or deleted as all blank by a discard).
     Gone,
     /// The quarantine timer already put the draft into the record unsigned.
     Committed,
+    /// The draft was discarded (slice 3b-2b).
+    Discarded,
 }
 
 /// Map the take door's answer word; an unknown word is an error, as for a save.
@@ -219,6 +224,7 @@ fn take_from_word(word: &str) -> anyhow::Result<TakeOutcome> {
         "elsewhere" => Ok(TakeOutcome::Elsewhere),
         "gone" => Ok(TakeOutcome::Gone),
         "committed" => Ok(TakeOutcome::Committed),
+        "discarded" => Ok(TakeOutcome::Discarded),
         other => {
             anyhow::bail!("the note draft take answered {other:?}, which this build does not know")
         }
@@ -322,6 +328,7 @@ mod tests {
             ("no-chart", SaveOutcome::NoChart),
             ("no-such-writer", SaveOutcome::NoSuchWriter),
             ("committed", SaveOutcome::Committed),
+            ("discarded", SaveOutcome::Discarded),
         ] {
             assert_eq!(outcome_from_word(word).unwrap(), outcome, "{word}");
         }
@@ -332,6 +339,7 @@ mod tests {
             ("elsewhere", TakeOutcome::Elsewhere),
             ("gone", TakeOutcome::Gone),
             ("committed", TakeOutcome::Committed),
+            ("discarded", TakeOutcome::Discarded),
         ] {
             assert_eq!(take_from_word(word).unwrap(), outcome, "{word}");
         }

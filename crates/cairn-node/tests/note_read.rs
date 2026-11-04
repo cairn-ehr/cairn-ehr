@@ -14,6 +14,7 @@ use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
+use cairn_node::note::discard::{discard_draft, DiscardOutcome};
 use cairn_node::note::draft::save_part;
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{note_body, sign_note, SignNoteInput};
@@ -298,4 +299,112 @@ async fn an_addendum_ref_in_a_non_canonical_spelling_still_reads() {
     assert_eq!(list.notes.len(), 2);
     let addenda: Vec<_> = list.notes.iter().filter_map(|n| n.addendum_to).collect();
     assert_eq!(addenda, [first], "the ref reads as the canonical id");
+}
+
+/// Save `text` as the fixture clinician's draft on `chart` and discard it (slice 3b-2b).
+async fn discard_on(
+    c: &mut Client,
+    node_sk: &SigningKey,
+    author: &AuthorParams<'_>,
+    chart: Uuid,
+    text: &str,
+) {
+    let draft = Uuid::now_v7();
+    save_part(c, draft, chart, "pc-1", Some("notewriter"), text, None)
+        .await
+        .unwrap();
+    let input = SignNoteInput {
+        draft,
+        patient: chart,
+        terminal: "pc-1",
+        writer: Some("notewriter"),
+        narrative: text,
+        stated: None,
+        node_origin: ORIGIN,
+    };
+    let out = discard_draft(c, node_sk, &input, author).await.unwrap();
+    assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
+}
+
+/// Slice 3b-2b: a discard is listed as a MARKER beside the notes, never as a note (ADR-0087 R8:
+/// notes are read only from `clinical_note`), naming who discarded it and what it said, unescaped.
+#[tokio::test]
+async fn the_marker_lists_the_discard_not_as_a_note() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, _, human_sk, human_kid, chart) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    sign_on(&mut c, &node_sk, &author, chart, "a real note").await;
+    discard_on(&mut c, &node_sk, &author, chart, "BP <90 [L] arm (R)").await;
+
+    let list = list_patient_notes(&c, chart).await.unwrap();
+    assert_eq!(texts(&list), vec!["a real note"], "the notes are unchanged");
+    assert_eq!(list.discards.len(), 1);
+    let m = &list.discards[0];
+    assert_eq!(m.chart, chart);
+    assert_eq!(m.discarder.as_deref(), Some(common::NOTE_AUTHOR));
+    assert_eq!(m.parts.len(), 1);
+    assert_eq!(m.parts[0].text, "BP <90 [L] arm (R)", "unescaped");
+    assert!(m.parts[0].by_discarder);
+    assert_eq!(m.parts[0].stated, None);
+    assert!(m.parts[0].recording_started <= m.parts[0].recording_ended);
+    let t: chrono::DateTime<chrono::Utc> = c
+        .query_one(
+            "SELECT t_effective FROM event_log WHERE event_id = $1::text::uuid",
+            &[&m.event_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(m.discarded_at, t);
+}
+
+/// Review Focus 5: a discard marker on another chart of a set holding a doubted link is withheld
+/// and counted, as a note is.
+#[tokio::test]
+async fn a_doubted_set_withholds_a_linked_charts_marker() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, human_sk, human_kid, a) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let x = Uuid::now_v7();
+    common::submit_registration(&c, &node_sk, &node_kid, x, 0).await;
+    discard_on(&mut c, &node_sk, &author, a, "on A").await;
+    discard_on(&mut c, &node_sk, &author, x, "on X").await;
+    common::submit_link_event(&c, &node_sk, &node_kid, a, x, 10, true).await;
+
+    let before = list_patient_notes(&c, a).await.unwrap();
+    assert_eq!(
+        before.discards.len(),
+        2,
+        "an undoubted link reads as one record"
+    );
+    assert_eq!(before.discards_withheld_on_linked, 0);
+    let order: Vec<&str> = before
+        .discards
+        .iter()
+        .map(|m| m.parts[0].text.as_str())
+        .collect();
+    assert_eq!(order, ["on X", "on A"], "newest discard first");
+
+    flag_link(&c, a, x).await;
+    let list = list_patient_notes(&c, a).await.unwrap();
+    assert_eq!(list.discards.len(), 1, "X's marker is withheld");
+    assert_eq!(list.discards[0].parts[0].text, "on A");
+    assert_eq!(list.discards_withheld_on_linked, 1, "and counted");
+    assert_eq!(list.withheld_on_linked, 0, "no note was withheld");
 }

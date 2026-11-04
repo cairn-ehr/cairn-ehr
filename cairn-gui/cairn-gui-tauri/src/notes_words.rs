@@ -20,6 +20,9 @@ pub struct SaveView {
     /// The quarantine timer put the draft into the record unsigned (slice 3b-2a). Never this
     /// window's own Sign, so the webview always keeps what it had not saved as a new draft.
     pub committed: bool,
+    /// The draft was discarded (slice 3b-2b). Forks with `spent`'s words: the webview keeps what
+    /// it had not saved as a new draft.
+    pub discarded: bool,
     /// Why nothing was written. For `moved` and `committed`, the same words as `fork.kept`.
     pub sentence: Option<String>,
     /// `moved`, `spent` or `committed`: the words for keeping what the draft lacks as a new draft.
@@ -47,6 +50,8 @@ pub struct TakeView {
     pub sentence: Option<String>,
 }
 
+/// The sentence a save, take or sign answers when the draft was discarded (slice 3b-2b).
+const DISCARDED: &str = "This draft was discarded; it is no longer open.";
 /// The sentence a save or sign answers when the draft was already signed.
 const SPENT: &str = "this note has already been signed";
 /// … when a SAVE's draft is another chart's (another terminal's is `MOVED`, #958).
@@ -122,10 +127,11 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         SaveOutcome::NoChart => Some(NO_CHART),
         SaveOutcome::NoSuchWriter => Some(NO_SUCH_WRITER),
         SaveOutcome::Committed => Some(COMMITTED),
+        SaveOutcome::Discarded => Some(DISCARDED),
     };
     let fork = match outcome {
         SaveOutcome::Moved => Some([MOVED, MOVED_NOTHING_NEW, MOVED_EVERYTHING]),
-        SaveOutcome::Spent => Some([
+        SaveOutcome::Spent | SaveOutcome::Discarded => Some([
             SIGNED_ELSEWHERE,
             SIGNED_ELSEWHERE_NOTHING_NEW,
             SIGNED_ELSEWHERE_EVERYTHING,
@@ -142,6 +148,7 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         moved: outcome == SaveOutcome::Moved,
         spent: outcome == SaveOutcome::Spent,
         committed: outcome == SaveOutcome::Committed,
+        discarded: outcome == SaveOutcome::Discarded,
         sentence: sentence.map(str::to_string),
         fork: fork.map(|[kept, nothing_new, everything]| ForkWords {
             kept: kept.into(),
@@ -159,6 +166,7 @@ pub(crate) fn take_view(outcome: TakeOutcome) -> TakeView {
         TakeOutcome::Elsewhere => Some(TAKE_ELSEWHERE),
         TakeOutcome::Gone => Some(GONE),
         TakeOutcome::Committed => Some(TAKE_COMMITTED),
+        TakeOutcome::Discarded => Some(DISCARDED),
     };
     TakeView {
         taken: sentence.is_none(),
@@ -178,5 +186,6 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
         SignRefusal::NoChart => refused(NO_CHART),
         SignRefusal::NoSuchWriter => refused(SIGN_NO_SUCH_WRITER),
         SignRefusal::Committed => stale(SIGN_COMMITTED),
+        SignRefusal::Discarded => stale(DISCARDED),
     }
 }

@@ -158,6 +158,8 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
         }],
         withheld_on_linked: 2,
         drafts: vec![draft("pc-1")],
+        discards: vec![],
+        discards_withheld_on_linked: 0,
     };
     let pane = note_pane(
         list,
@@ -184,6 +186,8 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             notes: vec![],
             withheld_on_linked: 0,
             drafts: vec![],
+            discards: vec![],
+            discards_withheld_on_linked: 0,
         },
         Some("pc-1"),
         &Claim::NotAsked,
@@ -238,6 +242,8 @@ fn without_a_terminal_id_no_draft_is_here() {
         notes: vec![],
         withheld_on_linked: 0,
         drafts: vec![draft("pc-1")],
+        discards: vec![],
+        discards_withheld_on_linked: 0,
     };
     let pane = note_pane(
         list,
@@ -260,6 +266,8 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
         notes: vec![],
         withheld_on_linked: 0,
         drafts: vec![two_writers()],
+        discards: vec![],
+        discards_withheld_on_linked: 0,
     };
     let dr_b = Claim::Named {
         staff_id: "dr-b".into(),

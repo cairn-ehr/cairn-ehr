@@ -68,11 +68,13 @@ pub enum SignRefusal {
     NoSuchWriter,
     /// The quarantine timer already put the draft into the record unsigned (slice 3b-2a).
     Committed,
+    /// The draft was discarded (slice 3b-2b): it is no longer open.
+    Discarded,
 }
 
 /// RFC 3339 UTC, to the microsecond — the precision Postgres stores and the floor's
-/// `cairn_t_effective` accepts (at most six fractional digits).
-fn rfc3339(t: DateTime<Utc>) -> String {
+/// `cairn_t_effective` accepts (at most six fractional digits). Shared with `discard.rs`.
+pub(super) fn rfc3339(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
@@ -141,6 +143,7 @@ fn refusal_for(outcome: SaveOutcome) -> Option<SignRefusal> {
         SaveOutcome::NoChart => Some(SignRefusal::NoChart),
         SaveOutcome::NoSuchWriter => Some(SignRefusal::NoSuchWriter),
         SaveOutcome::Committed => Some(SignRefusal::Committed),
+        SaveOutcome::Discarded => Some(SignRefusal::Discarded),
     }
 }
 
@@ -387,6 +390,10 @@ mod tests {
         assert_eq!(
             refusal_for(SaveOutcome::Committed),
             Some(SignRefusal::Committed)
+        );
+        assert_eq!(
+            refusal_for(SaveOutcome::Discarded),
+            Some(SignRefusal::Discarded)
         );
     }
 }
