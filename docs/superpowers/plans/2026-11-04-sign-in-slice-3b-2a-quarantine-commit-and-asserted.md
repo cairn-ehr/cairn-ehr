@@ -34,6 +34,9 @@ discard) gets its own plan.
    writers** is refused and goes in by the timer. A co-signed discard is **#980**, not built.
 3. **The terminal of an unattributed commit is NOT recorded** (design §10 finding 3). `clinical.note/1` has no slot,
    and a `/2` profile would hide the note from older nodes (ADR-0087 ruling R8). Deferred: **#979**.
+4. **#974 is ruled: not an `M > N` defect.** *Continue here* with nobody named (2 acts) and getting a draft back
+   after a relaunch (about 2) are not worse than paper, whose counterpart is walking back to where the sheet was
+   left or having it fetched (the same ruling as ADR-0088 decision 5's). ADR-0089 records it; #974 is closed.
 
 ## Global Constraints
 
