@@ -20,8 +20,11 @@ tests, `crates/cairn-node/tests/{note_commit,authority_lockstep,window_role_gran
   **Tempting wrong fixes:** commit every draft the listing returned "since we just checked" (a save between the list
   and the commit restarts the clock, and a draft goes in mid-sentence); pass the window's `now` to the door "for
   testability" (a terminal clock then decides, and a raw-SQL client commits anyone's draft early); test overdue
-  before taking the lock. Pins: db/tests/067's `not_overdue_commits_nothing`, `a_spent_draft_commits_nothing`;
-  `note_commit.rs::two_commits_race_one_note`, `a_sign_after_the_timer_is_refused_committed`.
+  before taking the lock; make this door WAIT for the lock "as every other draft door does" (it alone tries it: a
+  held lock means a save or Sign is acting on the draft, and a waiting timer stalls a chart read behind that press).
+  Pins: db/tests/067's `not_overdue_commits_nothing`, `a_spent_draft_commits_nothing`;
+  `note_commit.rs::two_commits_race_one_note`, `a_held_draft_lock_makes_the_commit_skip_it`,
+  `a_sign_after_the_timer_is_refused_committed`.
 - **The window's due words come from the HEADER, through `cairn_note_drafts_due`** — the commit door's own input,
   plus its `stuck` rule. **Tempting wrong fix:** compute `due` in Rust from the parts' `last_keystroke` (db/066
   clamps a part's stamp apart from its header's after a backward clock step, so the shown time disagrees with the
@@ -44,12 +47,16 @@ tests, `crates/cairn-node/tests/{note_commit,authority_lockstep,window_role_gran
   `note_commit.rs::a_writer_with_no_key_is_stuck_and_kept`, `one_stuck_draft_does_not_stop_the_others`;
   `notes_commit_tests.rs::a_stuck_draft_reads_stuck`.
 - **`recorded` is never the human contributory role.** `Asserted` needs a contributory entry other than `recorded`
-  (the capture device's own, ADR-0051) whose key the read names; a bearing contributor always wins.
+  (the capture device's own, ADR-0051) whose key the registry enrolled for a `human` actor (db/067's
+  `cairn_note_key_is_human`); a bearing contributor always wins.
   **Tempting wrong fixes:** count any contributory entry (a node key that is also a known human then grades its own
   capture `Asserted`); let the classifier decide "human" from the body itself (a claim read out of a body, the
-  #412 trap; who is human is a registry fact the caller resolves and passes in). Pins: `contributor.rs::recorded_is_never_the_human_role`,
+  #412 trap; who is human is a registry fact the caller resolves and passes in); take "the read can name the key"
+  as "human" (`cairn_note_signer_name` names device and agent keys by their pinned handle too). Pins:
+  `contributor.rs::recorded_is_never_the_human_role`,
   `the_old_classifier_never_says_asserted`, `a_bearer_wins_over_asserted`;
-  `authority_lockstep.rs::asserted_in_rust_is_unverified_in_sql`.
+  `authority_lockstep.rs::asserted_in_rust_is_unverified_in_sql`;
+  `note_read.rs::a_note_drafted_by_an_agent_key_never_grades_went_in_unsigned`.
 - **The runner is a Rust task, one connection hold per draft, and the tick never reopens a lost connection.**
   **Tempting wrong fixes:** move the tick into the webview as a `setInterval` (WebKit throttles a hidden window's
   timers, so a minimised window stops committing); hold the connection for the whole pass (a clinician's press waits

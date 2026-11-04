@@ -12,9 +12,11 @@
   confused with this ADR's own numbered decisions). Filed at planning:
   [#979](https://github.com/cairn-ehr/cairn-ehr/issues/979) (the terminal of an unattributed commit, deferred) and
   [#980](https://github.com/cairn-ehr/cairn-ehr/issues/980) (a co-signed discard, not built). Filed by the build:
-  [#982](https://github.com/cairn-ehr/cairn-ehr/issues/982) (a stuck draft not yet due promises a time). Bounds the
-  life of [#968](https://github.com/cairn-ehr/cairn-ehr/issues/968)'s revision rows (commented; it stays open). Rules
-  on [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974) (closed on the maintainer's ruling).
+  [#982](https://github.com/cairn-ehr/cairn-ehr/issues/982) (a stuck draft not yet due promised a time; built before
+  merge, decision 12). Filed by the final review: [#983](https://github.com/cairn-ehr/cairn-ehr/issues/983) (its
+  residual minors). Bounds the life of [#968](https://github.com/cairn-ehr/cairn-ehr/issues/968)'s revision rows
+  (commented; it stays open). Rules on [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974) (closed on the
+  maintainer's ruling).
 - **Builds on:** [ADR-0088](0088-whos-here-and-a-drafts-parts.md) (a draft's parts, one event per part) ·
   [ADR-0087](0087-the-first-note-stream-and-its-draft.md) (the note and its draft) ·
   [ADR-0083](0083-the-human-key-vault.md) (the vault) · [ADR-0053](0053-per-write-human-authorship.md) (the human
@@ -65,14 +67,18 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
 3. **"Overdue" is decided in one door, under the draft's lock, in the same call that consumes it.**
    `cairn_note_draft_commit_overdue(draft, event)` takes the draft's advisory lock (`'note_draft:' || draft_id`),
    then the header row `FOR UPDATE`, which is every draft door's lock order (ADR-0088's "Harder"), and only then
-   compares the header's `last_keystroke` against the policy. An absent, already spent or not yet overdue draft
-   returns no rows and writes nothing. Otherwise it returns the non-blank parts in writing order, with the same
-   columns as db/066's `cairn_note_draft_spend_parts`, and deletes the draft's revisions and its header (the parts
-   cascade). `cairn_note_drafts_overdue` lists candidates oldest first and takes no lock: it is a hint, never the
+   compares the header's `last_keystroke` against the policy. It alone TRIES the lock (`pg_try_advisory_xact_lock`)
+   where every other draft door waits for it: a held lock means a save or a Sign is acting on the draft, so it is not
+   abandoned, and the timer must never make a chart read or a tick wait behind a clinician's press. An absent,
+   already spent, not yet overdue or locked draft returns no rows and writes nothing; the next pass tries again.
+   Otherwise it returns the non-blank parts in writing order, with the same columns as db/066's
+   `cairn_note_draft_spend_parts`, and deletes the draft's revisions and its header (the parts cascade).
+   `cairn_note_drafts_overdue` lists candidates oldest first and takes no lock: it is a hint, never the
    decision. So two windows ticking at once, or a Sign racing the timer, put exactly one set of notes in the log, and
    a raw-SQL `cairn_window` client cannot commit a draft early. A NULL argument raises. Pins: db/tests/067's
    `a_spent_draft_commits_nothing`, `overdue_list_filters_by_chart`, the NULL case;
-   `note_commit.rs::two_commits_race_one_note` (two connections), `a_sign_after_the_timer_is_refused_committed`.
+   `note_commit.rs::two_commits_race_one_note` (two connections), `a_held_draft_lock_makes_the_commit_skip_it`,
+   `a_sign_after_the_timer_is_refused_committed`.
 
 4. **A timer's spend is marked, and a later save or take says `committed`.** `note_draft_spent` gains
    `by_timer boolean NOT NULL DEFAULT false`, created in **db/065**, the file that creates the table, with the paired
@@ -134,15 +140,19 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
    `a_bearer_wins_over_asserted`, `the_old_classifier_never_says_asserted`;
    `authority_lockstep.rs::asserted_in_rust_is_unverified_in_sql`.
 
-10. **The note read takes "human" to mean "a key this node can name"; the byline says "went in unsigned".** The
-    note list reads the `drafted` contributor's key and passes it as human only when `cairn_note_signer_name` names
-    it (db/065, through db/061's `cairn_vault_key_holder`: a key the actor registry enrolled or rotated to, named by
-    its vault member's display name or staff id, else by the handle the registry pinned). `Asserted`
+10. **The note read takes "human" to mean "a key the actor registry enrolled for a human"; the byline says "went in
+    unsigned".** The note list reads the `drafted` contributor's key and passes it as human only when db/067's
+    `cairn_note_key_is_human` finds an `enroll` or `rotate-key` row for that key whose actor kind is `human` (a
+    definer door: the window reads only `actor_event`'s `signing_key_id`). Being nameable is not enough:
+    `cairn_note_signer_name` (db/065, through db/061's `cairn_vault_key_holder`) also names a device's or an agent's
+    key by the handle the registry pinned, and a note an agent drafted is not one a person left. The registry, not
+    the vault, so a removed member's earlier notes keep their grade, as a restored node's do. `Asserted`
     reads `NoteGrade::WentInUnsigned`, "went in unsigned", never "signed": the byline is
     **"written by ?Nurse A · went in unsigned"**, spoken "written by unverified Nurse A · went in unsigned"
     (ADR-0088 decision 16's marks). A part with no writer reads "writer not known", as any node-recorded note does.
     Pins: `view.rs::every_authorship_grade_has_its_words`, `every_grade_and_writer_reads_true`,
-    `a_went_in_unsigned_byline_marks_the_name_in_speech`; `note_commit.rs::the_read_grades_a_committed_part_asserted`.
+    `a_went_in_unsigned_byline_marks_the_name_in_speech`; `note_commit.rs::the_read_grades_a_committed_part_asserted`;
+    `note_read.rs::a_note_drafted_by_an_agent_key_never_grades_went_in_unsigned`.
 
 ### The runner (`cairn-gui-tauri/src/notes_commit.rs`, `notes.rs`, `src-ui/notes_save.js`)
 
@@ -162,19 +172,26 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
     `a_stuck_draft_is_said_once`.
 
 12. **An open draft says when it goes in, from the same row the door reads.** A fifth door in db/067,
-    `cairn_note_drafts_due(patient)` (granted to `cairn_window`), answers each open draft's `due` and `overdue` from the HEADER's
-    `last_keystroke` plus the policy, the commit door's own input, and `stuck` by the commit's own rule (a non-blank
-    part whose writer has no vault key). Reading the parts' times instead could disagree with the door after a
-    backward clock step, and a displayed time is a claim. The draft's words end with one of three sentences:
-    "goes into the record unsigned at HH:MM if nobody types in it"; once overdue, "overdue — not in the record yet;
-    the window tries again at every check to put it in unsigned"; and for a stuck draft, "overdue, but cannot go into
-    the record by itself — a writer of it is no longer enrolled on this node; it goes in once they are enrolled
-    again". A save that answers `committed` keeps what was typed since the last save as a **new draft**, with its own
-    three sentences ("This note went into the record unsigned after it was left untouched. …"), **even when this
-    window's Sign set `mayBeSigned`**: a timer's commit is never this window's Sign (ADR-0088 decision 12's fork,
-    with one more answer). Pins: `notes_commit_tests.rs::due_words_before_and_after`, `a_stuck_draft_reads_stuck`;
+    `cairn_note_drafts_due(patient)` (granted to `cairn_window`), answers each open draft's `due` and `overdue` from
+    the HEADER's `last_keystroke` plus the policy, the commit door's own input, and `stuck` by the commit's own rule
+    (a non-blank part whose writer has no vault key), whether or not the draft is due yet. Reading the parts' times
+    instead could disagree with the door after a backward clock step, and a displayed time is a claim. The draft's
+    words end with one of four sentences, and `stuck` wins whether or not the draft is due, because a stuck draft
+    never goes in at its due time: for a stuck draft not yet due, "cannot go into the record by itself — a writer of
+    it is no longer enrolled on this node; it can go in only once they are enrolled again"; for one overdue,
+    "overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes
+    in once they are enrolled again"; otherwise "goes into the record unsigned at HH:MM if nobody types in it", and
+    once overdue, "overdue — not in the record yet; the window tries again at every check to put it in unsigned".
+    A save that answers `committed` keeps what was typed since the last save as a **new draft**, with its own three
+    sentences ("This note went into the record unsigned after it was left untouched. …"), **even when this window's
+    Sign set `mayBeSigned`**: a timer's commit is never this window's Sign (ADR-0088 decision 12's fork, with one
+    more answer). A Sign refused `Committed` says "this note had already gone into the record unsigned — nothing was
+    signed", and, as for `spent`, not "your text is still here": the save that follows that refusal always forks,
+    and closes the editor when nothing on screen was unsaved. Pins:
+    `notes_commit_tests.rs::due_words_before_and_after`, `a_stuck_draft_reads_stuck`;
     `note_commit.rs::an_open_draft_reads_due_and_overdue`, `due_follows_the_header_not_the_parts`;
-    `notes_tests.rs::committed_sentence_exact`; `notes_fork_webview_tests.rs::a_timer_commit_forks_even_after_a_sign_press`.
+    `notes_tests.rs::committed_sentence_exact`;
+    `notes_fork_webview_tests.rs::a_timer_commit_forks_even_after_a_sign_press`.
 
 ### Decisions taken with the maintainer
 
@@ -197,23 +214,25 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
 ## What is not guaranteed
 
 - **Only a window that holds the node key and an open connection commits on its tick.** With no window running, or
-  only windows launched without `--key` (they commit nothing), or windows whose connection was lost (the tick never
-  reopens one: after an overnight Postgres restart nothing goes in until someone's press reopens it), a draft waits,
-  safe, and is shown overdue to the next reader. That reader's chart read commits it first, reopening a lost
-  connection if it must, when their window holds the node key. Until it commits it is only on this node: drafts
-  never sync, so no peer sees the note (design §3.3, last bullet).
+  only windows in fixture mode (`--mock`: no database and no node key, so they commit nothing; a live window cannot
+  run without the node key, because `--key` defaults to `node.key` and a key that cannot be loaded fails the
+  launch), or windows whose connection was lost (the tick never reopens one: after an overnight Postgres restart
+  nothing goes in until someone's press reopens it), a draft waits, safe, and is shown overdue to the next reader.
+  That reader's chart read commits it first, reopening a lost connection if it must, when their window holds the
+  node key. Until it commits it is only on this node: drafts never sync, so no peer sees the note (design §3.3, last
+  bullet).
 - **A pane already open on a chart keeps showing a draft the tick has committed** until that chart is read again;
   nothing pushes to the screen. Typing into it is safe: the next save answers `committed` and forks what was typed
   since the last save into a new draft, with the committed sentence (decision 12).
 - **The commit door cannot prove that the notes a `cairn_window` client submits carry the draft's text.** db/065's
   trigger checks that the spend names a note of this chart inserted in this transaction, not what it says. This
   grants nothing new: a raw-SQL client holding the node key could already submit any node-signed note.
-- **A stuck draft not yet due still says "goes into the record unsigned at HH:MM"**, which is false for it; the stuck
-  sentence appears only once it is overdue ([#982](https://github.com/cairn-ehr/cairn-ehr/issues/982)).
-- **A note that went in unsigned reads `Asserted` only where its writer's key can be named.** A node whose vault and
-  registry cannot name the `drafted` key reads "written by someone not named here · no person signed for it" (the
-  `Device` grade): true, and weaker. Being nameable is the read's whole test of "human": the classifier trusts the
-  key ids it is given.
+- **A note that went in unsigned reads `Asserted` only where this node's registry knows its writer's key as a
+  human's.** A node whose registry has no human enrolment for the `drafted` key reads "… · no person signed for it"
+  (the `Device` grade): true, and weaker. The registry's actor kind is the read's whole test of "human": the
+  classifier trusts the key ids it is given.
+- **A draft a save or a Sign is acting on when the timer comes is skipped, not waited for** (decision 3). It is still
+  listed overdue, and the next pass commits it, unless that save moved its clock or that Sign spent it.
 - **No vouch upgrades `Asserted` yet.** Finishing or vouching for a note that went in unsigned is 3c's addendum.
 - **Revision rows now live at most the quarantine plus one tick** after a draft's last real change, while a window
   holding the node key has an open connection ([#968](https://github.com/cairn-ehr/cairn-ehr/issues/968), commented,
@@ -232,9 +251,9 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
   once); finishing one later is 3c's addendum (design §6, 3 → 3 → 3). #974's two cases are 1 → 2 and 0 → about 2,
   ruled not defects (decision 13). **A delay worth naming, not an `M > N` case:** paper's unsigned entry is in the
   folder at once, Cairn's only after the quarantine, and a peer sees it only then. Time budgets, owed by a human in
-  RUNBOOK §20: an overdue draft goes in within one tick (≤ 60 s past due) while a window holding the node key has an open
-  connection, and a chart open that
-  first commits an overdue draft stays within the single-chart open budget + 200 ms.
+  RUNBOOK §20: an overdue draft goes in within one tick (≤ 60 s past due) while a window holding the node key has an
+  open connection, and a chart open that first commits an overdue draft stays within the single-chart open budget +
+  200 ms.
 - **Harder.** Every future draft door must keep the lock order (advisory lock, header, parts) and must treat
   `by_timer` as a second kind of spend. A new window that reads drafts must take its due time from
   `cairn_note_drafts_due`, never from the parts. A new consumer of `AuthorshipConfidence` must decide how `Asserted`
@@ -244,6 +263,6 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
   vouched for, or if sites set the quarantine so short that drafts go in mid-thought.
 - **Pinned by** `db/tests/067_note_draft_commit_test.sql`, `crates/cairn-event/src/contributor.rs`'s tests,
   `crates/cairn-node/src/note/{commit,view}.rs`'s tests,
-  `crates/cairn-node/tests/{note_commit,authority_lockstep,cli_note_quarantine,window_role_grants_notes}.rs` and
-  `cairn-gui-tauri/src/{notes_commit,notes,notes_fork_webview}_tests.rs`. RUNBOOK §20 carries the human
+  `crates/cairn-node/tests/{note_commit,note_read,authority_lockstep,cli_note_quarantine,window_role_grants_notes}.rs`
+  and `cairn-gui-tauri/src/{notes_commit,notes,notes_fork_webview}_tests.rs`. RUNBOOK §20 carries the human
   measurements.

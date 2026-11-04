@@ -47,7 +47,7 @@
 >   peer before part 1). Open: **#963** (slice 5) · **#964** · **#965** · **#967** · **#968** · **#969** · **#970** ·
 >   **#971** · **#972** · **#975** · **#976** · **#977** · **#978**; #973 built. Owed by a human: **RUNBOOK §19**.
 > - **Slice 3b-2a BUILT 2026-11-04 on draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)** (branch
->   `plan/sign-in-slice-3b-2-commit-runner`; awaiting its final review and the full gate;
+>   `plan/sign-in-slice-3b-2-commit-runner`; final review done and its findings fixed; awaiting the full gate;
 >   [ADR-0089](spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md), spec **v0.91**, `db/067` with
 >   `db/065` + `db/066` edited in place, `SCHEMA_GENERATION` **67**; plan
 >   [`superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md)).
@@ -58,7 +58,9 @@
 >   new `Asserted` grade reads "written by ?Nurse A · went in unsigned"; the window commits on a 60 s Rust tick and
 >   before every chart read; a `committed` save forks even after a Sign press. **#974 RULED by the maintainer: not an
 >   `M > N` defect** (ADR-0089 decision 13; closed). Filed **#979** (the terminal of an unattributed commit, deferred)
->   · **#980** (a co-signed discard, not built) · **#982** (a stuck draft not yet due still promises a time);
+>   · **#980** (a co-signed discard, not built) · **#982** (a stuck draft not yet due promised a time; built in the
+>   final-review fix, left open for the maintainer) · **#983** (the final review's residual minors, M1/M3/M4/M7/M8 +
+>   the per-task deferred minors);
 >   commented #968 (revision rows now bounded in life, not size). Owed by a human: **RUNBOOK §20** (the tick ≤ 60 s past
 >   due with the window on another chart; a chart open that commits first ≤ the single-chart open + 200 ms; typing
 >   into a just-committed draft; VoiceOver "written by unverified Nurse A · went in unsigned").
@@ -110,8 +112,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Finish 3b-2a: PR #981's final review and the full gate** (`scripts/run-db-gated-tests.sh`, detached, ~2 h, plus
->    `cairn-gui-tauri`'s DB-gated tests, #905), then mark it ready. **Then 3b-2b: the audited discard** (a new event
+> 1. **Finish 3b-2a: PR #981's full gate** (final review done, findings fixed; `scripts/run-db-gated-tests.sh`,
+>    detached, ~2 h, plus `cairn-gui-tauri`'s DB-gated tests, #905), then mark it ready. **Then 3b-2b: the audited discard** (a new event
 >    type, its own plan; ADR-0089 decision 15's rule: only a draft whose every non-blank part is the discarder's own or
 >    by a writer not known; two or more named writers are refused and go in by the timer, a co-signed discard is
 >    #980). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
@@ -306,7 +308,9 @@ gitignored); the rules that bind later slices are ADR-0089 and the 3b-2a durable
   so a node-wide backlog would hold a clinician's press past the 15 s cut-off; the window now takes one hold per
   draft and the tick never reopens a lost connection.
 - **⇒ The fact-check found what "human" really means:** the read names a `drafted` key through the actor registry,
-  so `Asserted` holds only where that key can be named (ADR-0089, "What is not guaranteed").
+  which names device and agent keys too, so the final review's fix tests the registry's actor KIND instead
+  (db/067's `cairn_note_key_is_human`, ADR-0089 decision 10). The commit door also TRIES the draft's lock rather than
+  waiting for it, so the timer never queues behind a clinician's press (decision 3).
 
 ### 2026-11-01 → 11-04 — sign-in slices 2 (PRs #917 + #920), 3a (PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)), 3b-1 (PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966))
 
