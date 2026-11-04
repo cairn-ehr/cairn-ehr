@@ -46,29 +46,27 @@
 >   #958); **Sign = one event per non-blank part**, chained by `addendum-to`, so **⚠️ #948 is LIVE** (part 2 can reach a
 >   peer before part 1). Open: **#963** (slice 5) · **#964** · **#965** · **#967** · **#968** · **#969** · **#970** ·
 >   **#971** · **#972** · **#975** · **#976** · **#977** · **#978**; #973 built. Owed by a human: **RUNBOOK §19**.
-> - **Slice 3b-2a MERGED 2026-11-04 — PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)** (full local gate
->   3194 tests, 0 skipped;
->   [ADR-0089](spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md), spec **v0.91**, `db/067` with
->   `db/065` + `db/066` edited in place, `SCHEMA_GENERATION` **67**; plan
->   [`superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md)).
->   A draft untouched for the site's quarantine (`cairn-node note-set-quarantine --minutes N | --default`, default
->   180, console only, in no backup) goes into the record **unsigned**: one door decides overdue on the database's
->   clock under the draft's lock and consumes it; one node-signed event per non-blank part, `{writer, drafted}` +
->   `{node, recorded}`, never attested; a named writer with no vault key leaves it **stuck**, never "not known"; the
->   new `Asserted` grade reads "written by ?Nurse A · went in unsigned"; the window commits on a 60 s Rust tick and
->   before every chart read; a `committed` save forks even after a Sign press. **#974 RULED by the maintainer: not an
->   `M > N` defect** (ADR-0089 decision 13; closed). Filed **#979** (the terminal of an unattributed commit, deferred)
->   · **#980** (a co-signed discard, not built) · #982 (built in the PR, closed 2026-11-04) · **#983** (the final review's residual minors, M1/M3/M4/M7/M8 +
->   the per-task deferred minors);
->   commented #968 (revision rows now bounded in life, not size). **Second (PR) review, 2026-11-04, fixed on the
->   branch:** a draft whose LAST commit failed now says so ("could not go into the record by itself … sign it, or
->   tell the site's operator", `AppState::commit_failed`), never "tries again"; the tick says once when it pauses
->   and resumes; `a_failed_commit_never_blocks_the_read` now really fails a commit (#983 M4); `draft_due` moved into
->   the test (#983 M3, half); `NotDue` → `NothingWritten`; new pins for blank parts between text parts, a stuck draft
->   going in once its writer is a member again, a take not restarting the clock, a rotated human key; RUNBOOK §20's
->   three false expectations corrected. Its residuals are a comment on #983. Owed by a human: **RUNBOOK §20** (the tick ≤ 60 s past
->   due with the window on another chart; a chart open that commits first ≤ the single-chart open + 200 ms; typing
->   into a just-committed draft; VoiceOver "written by unverified Nurse A · went in unsigned").
+> - **Slice 3b-2a MERGED 2026-11-04 — PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)**
+>   ([ADR-0089](spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md), v0.91, `db/067`, db/065 + db/066
+>   in place): a draft untouched for the site's quarantine (`cairn-node note-set-quarantine`, default 180 min, console
+>   only) goes in **unsigned**, one node-signed event per non-blank part, `{writer, drafted}` + `{node, recorded}`; a
+>   keyless named writer leaves it **stuck**; `Asserted` reads "written by ?Nurse A · went in unsigned"; a 60 s Rust
+>   tick plus a commit before every chart read; a draft whose last commit failed says so. **#974 ruled not `M > N`**
+>   (closed). Filed **#979** (deferred) · **#980** · #982 (built, closed) · **#983** (residual minors); commented #968.
+>   Owed by a human: **RUNBOOK §20**.
+> - **Slice 3b-2b BUILT 2026-11-05 — draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (branch
+>   `plan/sign-in-slice-3b-2b-audited-discard`; [ADR-0090](spec/decisions/0090-the-audited-discard.md), spec **v0.92**,
+>   `db/068` + `db/069` with `db/037`, `db/044`, `db/065`, `db/066` edited in place, `SCHEMA_GENERATION` **69**; plan
+>   [`superpowers/plans/2026-11-04-sign-in-slice-3b-2b-audited-discard.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-2b-audited-discard.md)).
+>   **Discard draft** beside Sign, same strip, no dialog: a signed, sealed `clinical.note-discard.asserted` keeps what
+>   the draft said; only a draft whose every non-blank part is the discarder's own **by key** (or by a writer not
+>   known) may go; db/065's trigger holds the spend to an event signed by the discarder **at the instant the door
+>   minted under the lock**, so neither a colleague's key id nor a captured discard can be replayed; save/take answer
+>   `discarded`, never `spent`; an all-blank draft is deleted with no event. The chart lists a one-line `<details>`
+>   marker, never a note (maintainer, 2026-11-04). Open: **#987** (a discarder's own raw-SQL client can sign different
+>   text; filed by the ADR) · **#985** (a raw-SQL Sign spends a colleague's draft) · **#986** (Sign's unknown-outcome
+>   lead) · #980 still. Owed by a human: **RUNBOOK §21** (discard ≤ 3 s; the colleague's-draft and stuck refusals; the
+>   marker by keyboard + VoiceOver; WebKit).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -117,17 +115,14 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **3b-2b: the audited discard — IN PROGRESS** on branch `plan/sign-in-slice-3b-2b-audited-discard` (a new event
->    type, its own plan; ADR-0089 decision 15's rule: only a draft whose every non-blank part is the discarder's own or
->    by a writer not known; two or more named writers are refused and go in by the timer, a co-signed discard is
->    #980; maintainer 2026-11-04: the chart's notes list shows a one-line marker of each discard, its text behind a click, never as a note). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
+> 1. **3b-2b BUILT — the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
 >    `Asserted` — it must answer #948 too). Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979),
 >    4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930, merged; it also carries the per-note "unconfirmed" marker and #918's display half). The maintainer picks
 >    the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
->    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**; #838's
+>    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**; #838's
 >    **§15** (incl. #861's current-line check); **§14** (c) (the cause on screen; a refused reopen offers no retry; the
 >    front door's top line clears) and (d) (no waiting bar on an ordinary press; a locked `medication_statement` →
 >    "Waiting…", cut off by 15 s, and since #893 the outcome says the window cut it off). **#894** needs the satellite
@@ -162,7 +157,7 @@
 >    `cairn_test`'s fixtures).
 >
 > **⇒ DURABLE RULES — READ BEFORE TOUCHING THE CODE THEY NAME:**
-> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (sign-in 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
+> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (sign-in 3b-2b, 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
 > R5a, #725, R4, R3, R1b, R2a, R2b-1, R2b-2, R1, the funnel) and the **eighteen traps**, each with its pin and its
 > tempting wrong fix. A slice that adds rules adds its block there, not here.
 >
@@ -263,23 +258,23 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-11-04 (3b-2a plan → SDD, Tasks 1–5, draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)) · 2026-11-04 (3b-1 plan → SDD, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (RUNBOOK §18 half run in the real window, #954 + #955) · 2026-11-03 (slice 3a built by SDD, Tasks 1–7, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)) · 2026-11-03 (slice 3a plan, same PR) · 2026-11-03 (slice 3 brainstorm → design + review, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-02 (#926 + #924 + #919 decided, ADR-0086, PR [#928](https://github.com/cairn-ehr/cairn-ehr/pull/928)) · 2026-11-01 (slice 2: brainstorm → design → plan → SDD, PRs [#917](https://github.com/cairn-ehr/cairn-ehr/pull/917) + [#920](https://github.com/cairn-ehr/cairn-ehr/pull/920)) · 2026-11-01 (#898 + #899, PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)) · 2026-10-31/11-01 (GUI milestone: sign-in design, plan, slice 1 built, PR [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)) · 2026-10-31 (#893, PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895)) · 2026-10-30 (#875 option 2, PR [#892](https://github.com/cairn-ehr/cairn-ehr/pull/892)) · 2026-10-30 (#810, PR [#890](https://github.com/cairn-ehr/cairn-ehr/pull/890)) · 2026-10-30 (#882 + #885, PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887)) · 2026-10-29 (#878, PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886)) · 2026-10-29 (#880 + #881, PR [#883](https://github.com/cairn-ehr/cairn-ehr/pull/883)) · 2026-10-29 (#876, PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)) · 2026-10-28 (#875 option 1, PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)) · 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-11-04/05 (3b-2b plan → SDD, Tasks 1–7, draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)) · 2026-11-04 (3b-2a plan → SDD, Tasks 1–5, draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)) · 2026-11-04 (3b-1 plan → SDD, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (RUNBOOK §18 half run in the real window, #954 + #955) · 2026-11-03 (slice 3a built by SDD, Tasks 1–7, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)) · 2026-11-03 (slice 3a plan, same PR) · 2026-11-03 (slice 3 brainstorm → design + review, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-02 (#926 + #924 + #919 decided, ADR-0086, PR [#928](https://github.com/cairn-ehr/cairn-ehr/pull/928)) · 2026-11-01 (slice 2: brainstorm → design → plan → SDD, PRs [#917](https://github.com/cairn-ehr/cairn-ehr/pull/917) + [#920](https://github.com/cairn-ehr/cairn-ehr/pull/920)) · 2026-11-01 (#898 + #899, PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)) · 2026-10-31/11-01 (GUI milestone: sign-in design, plan, slice 1 built, PR [#897](https://github.com/cairn-ehr/cairn-ehr/pull/897)) · 2026-10-31 (#893, PR [#895](https://github.com/cairn-ehr/cairn-ehr/pull/895)) · 2026-10-30 (#875 option 2, PR [#892](https://github.com/cairn-ehr/cairn-ehr/pull/892)) · 2026-10-30 (#810, PR [#890](https://github.com/cairn-ehr/cairn-ehr/pull/890)) · 2026-10-30 (#882 + #885, PR [#887](https://github.com/cairn-ehr/cairn-ehr/pull/887)) · 2026-10-29 (#878, PR [#886](https://github.com/cairn-ehr/cairn-ehr/pull/886)) · 2026-10-29 (#880 + #881, PR [#883](https://github.com/cairn-ehr/cairn-ehr/pull/883)) · 2026-10-29 (#876, PR [#879](https://github.com/cairn-ehr/cairn-ehr/pull/879)) · 2026-10-28 (#875 option 1, PR [#877](https://github.com/cairn-ehr/cairn-ehr/pull/877)) · 2026-10-28 (#807, PR [#874](https://github.com/cairn-ehr/cairn-ehr/pull/874)) · 2026-10-28 (#855 + #837 item 1, PR [#873](https://github.com/cairn-ehr/cairn-ehr/pull/873)) · 2026-10-27 (#869, PR [#872](https://github.com/cairn-ehr/cairn-ehr/pull/872)) · 2026-10-26 (#861, PR [#868](https://github.com/cairn-ehr/cairn-ehr/pull/868)) · 2026-10-24 (#863 + #864, PR [#865](https://github.com/cairn-ehr/cairn-ehr/pull/865)) · 2026-10-23/24 (#857 + #859, PR [#860](https://github.com/cairn-ehr/cairn-ehr/pull/860)) · 2026-10-23 (#835 + #854, PR [#856](https://github.com/cairn-ehr/cairn-ehr/pull/856)) · 2026-10-23 (#843 + #849, PR [#853](https://github.com/cairn-ehr/cairn-ehr/pull/853)) · 2026-10-23 (#848, PR [#851](https://github.com/cairn-ehr/cairn-ehr/pull/851)) · 2026-10-22 (#846, PR [#847](https://github.com/cairn-ehr/cairn-ehr/pull/847)) · 2026-10-22 (#844 + #836, PR [#845](https://github.com/cairn-ehr/cairn-ehr/pull/845)) · 2026-10-22 (#839 + #840 + #841, PR [#842](https://github.com/cairn-ehr/cairn-ehr/pull/842)) · 2026-10-21 (#832, PR [#838](https://github.com/cairn-ehr/cairn-ehr/pull/838)) · 10-21 (#803 slice A, PR [#831](https://github.com/cairn-ehr/cairn-ehr/pull/831)) · 10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
-ROADMAP. · **Spec:** **v0.91** (newest ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
+ROADMAP. · **Spec:** **v0.92** (newest ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
-wording only) · **`SCHEMA_GENERATION`:** **67** (`db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
+wording only) · **`SCHEMA_GENERATION`:** **69** (`db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a
 doubted link can be confirmed from the window; clinicians sign in per act and write, autosave and sign a progress note,
-several writers to a draft, and an untouched draft goes in unsigned by itself.
+several writers to a draft, an untouched draft goes in unsigned by itself, and a clinician can discard their own draft, leaving a signed record of it.
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waited on a clinical-note surface, which 3a now gives it) · §5.4 John-Doe (§5.12
 push-alert open) · §5.3/§5.8 funnel (ADR-0061; precedence #345 at db/005 step 8b; ranking ADR-0075; one row per
 PERSON since R3, PR #721) · `clinical.medication` 1–6b under born-sealed bodies (ADR-0052) + per-write human authorship
-(ADR-0053 — grading half-live until #245) · §5.9 stream through its read surface · the text progress note `clinical.note.asserted` + its draft store (ADR-0087, slice 3a), per-writer parts (ADR-0088) and the quarantine commit + `Asserted` (ADR-0089) · med-list node tier (read + whole-list
+(ADR-0053 — grading half-live until #245) · §5.9 stream through its read surface · the text progress note `clinical.note.asserted` + its draft store (ADR-0087, slice 3a), per-writer parts (ADR-0088) the quarantine commit + `Asserted` (ADR-0089) and the audited discard (ADR-0090) · med-list node tier (read + whole-list
 sign-off over a linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the
 compare-and-link panel (R2b-1, PR #707) + unlink from a record (R2b-2, PR #711) + a doubted set withholds every line
 not on the opened chart (R1b, PR #717) · the commit-time duplicate check (`db/056`, `cairn-matcher watch`, `cairn-node
@@ -298,39 +293,23 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
-### 2026-11-04 — sign-in slice 3b-2a (draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)): plan → SDD, 5 tasks
+### 2026-11-04 → 11-05 — sign-in slice 3b-2b (draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)): plan → SDD, 7 tasks
 
-- **⇒ A failure the user can act on must reach the user, not only stderr.** The second review found the pre-read
-  commit's report dropped (`let _ =`) so a commit failing on every pass read "the window tries again" forever; an
-  abandoned draft has no other way in. "Never block the read" and "say what failed" are both owed; the first does not
-  excuse dropping the second.
+Each task reviewed and re-reviewed (ledger: `.superpowers/sdd/2026-11-04-sign-in-slice-3b-2b-audited-discard/`,
+gitignored); the binding rules are ADR-0090 and the 3b-2b durable-rules block.
+- **⇒ A plan's COPY borrowed from a sibling gesture is a claim about THIS gesture, and was false three times.** The
+  plan reused Sign's words for the discard: the save's fork words ("signed in another window"), the refusals
+  ("nothing was signed", and "says when it goes in by itself", false for a stuck draft), and the who's-here picker's
+  "Whether your note was signed". Each review caught one. Walk every borrowed sentence through every state of the
+  NEW gesture before reusing it; Sign's own leftover is #986.
+- **⇒ A signature proves "this key signed A discard", not "this one".** The Task 3 review found a colleague's captured,
+  genuinely signed discard could be replayed by a raw-SQL client; the fix binds the event to an instant the door mints
+  under the lock (`t_effective = spent_at`). What the floor cannot see (deleted rows) is a named residual, #987.
 
-Each task reviewed and re-reviewed (ledger: `.superpowers/sdd/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted/`,
-gitignored); the rules that bind later slices are ADR-0089 and the 3b-2a durable-rules block.
-- **⇒ A new file under `cairn-gui/*/src` — even a test fixture — is read by the ROOT tree's source guards.** One new
-  GUI test file tripped four (`db_errors_stay_legible`, `enrolment_is_never_a_write_side_effect`,
-  `unwrap_secret_is_not_derived`, `secret32_conversions_are_named`): CI caught one, the full gate the next, a sweep the
-  last two; every task review had passed it, because the GUI task ran GUI gates only. A task touching `cairn-gui/*/src`
-  runs every root guard that sweeps sources (`grep -ln production_rust_files crates/*/tests/*.rs`), DB-free. Test
-  binaries bake `CARGO_MANIFEST_DIR`: a target dir shared with a gate worktree makes those guards read the wrong tree.
-- **⇒ A displayed time is a claim: compute it from the input the door decides on.** The first cut showed a draft's
-  due time from its parts' keystrokes while the door decides on the header's; after a backward clock step they part.
-  The fix was db/067's fifth door, `cairn_note_drafts_due`. A RELEASED door's return shape is final; this one was
-  unreleased (same branch), so widening it with `stuck` was allowed, behind a guarded `DROP` of the old shape.
-- **⇒ A remedy the window offers must be walked through the refusal it meets.** The reviewer's suggested words for a
-  stuck draft, "sign it", were false: a Sign of that draft is refused `NoSuchWriter` too.
-- **⇒ A helper the plan prescribes can be the defect.** `commit_overdue_drafts` held one connection for a whole pass,
-  so a node-wide backlog would hold a clinician's press past the 15 s cut-off; the window now takes one hold per
-  draft and the tick never reopens a lost connection.
-- **⇒ The fact-check found what "human" really means:** the read names a `drafted` key through the actor registry,
-  which names device and agent keys too, so the final review's fix tests the registry's actor KIND instead
-  (db/067's `cairn_note_key_is_human`, ADR-0089 decision 10). The commit door also TRIES the draft's lock rather than
-  waiting for it, so the timer never queues behind a clinician's press (decision 3).
-
-### 2026-11-01 → 11-04 — sign-in slices 2 (PRs #917 + #920), 3a (PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)), 3b-1 (PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966))
+### 2026-11-01 → 11-04 — sign-in slices 2 (PRs #917 + #920), 3a (PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931)), 3b-1 (PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)), 3b-2a (PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981))
 
 Condensed 2026-11-04; each was plan → SDD with every task reviewed and re-reviewed, its rulings recorded in its ADR
-(0085, 0087, 0088) and its durable-rules block. Slice 2's two real cases (a junior's password sent to an inbox that
+(0085, 0087, 0088, 0089) and its durable-rules block. Slice 2's two real cases (a junior's password sent to an inbox that
 needs it; a locum's Friday-night start) turned "re-key by token" into in-person enrolment.
 - **⇒ A plan's own wording can be the defect** ("empty = `btrim(…) <> ''`": the floor's blank test is
   `cairn_twin_is_present`, the only one that agrees under every collation). **"Own part" by key, not by text.**
@@ -347,6 +326,12 @@ needs it; a locum's Friday-night start) turned "re-key by token" into in-person 
 - **⇒ Walk every path that LEAVES the editor**, and every sentence the window says through every branch (the "moved"
   sentence was untrue for an edited saved text; the picker's "sign it again" is impossible after "already signed",
   #970). WebKit is still owed (RUNBOOK §18–§20).
+- **3b-2a (PR #981, 2026-11-04):** a failure the user can act on must reach the user, not only stderr (a dropped
+  `let _ =` made a failing commit read "tries again" forever); a new file under `cairn-gui/*/src`, test fixtures
+  included, is read by the ROOT tree's source guards (four tripped: run every `production_rust_files` guard DB-free,
+  with its own target dir); a displayed time is a claim, computed from the door's own input (`cairn_note_drafts_due`);
+  walk an offered remedy through the refusal it meets ("sign it" a stuck draft is refused too); a prescribed helper
+  can be the defect (one connection hold per draft); "human" is the registry's actor KIND, not "nameable".
 - **Mechanics:** a harness background job can be SIGTERMed (exit 143) — run the 2 h gate detached (`nohup … & disown`)
   in a worktree pinned to the PR head, with a done-marker; a second scratch DB set (`cairn_sdd/2/3` on :5532,
   `cairn_pgx` + the scratch marker) lets DB work proceed beside the gate without the `cairn_test` DDL deadlock.
@@ -409,35 +394,30 @@ Condensed 2026-10-31; ROADMAP has each slice. #797: brainstorm → plan → SDD;
 #781 · #789 · #732 · #793 · #712 item 3 · #737 · #796 (PRs #794, #795); R6 = #716 + #723; R7 = #742 + #743 part 2.
 Filed then: #781 · #782 · #783 · #784 · #785 · #786 · #787 · #789 · #790 · #791 · #755 · #756 · #757 · #778; commented #718 · #738; decisions left: #649 · #613 · #628 · #780
 (`casefold()`), Turkish dotless `ı` (the ADR-0014 profile's job); #427 is lower than it reads (#424); #220 gained a test; #626's `do_pull` non-P0001 arm open.
-- **⇒ Route a cause by TYPE end to end** (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`). **A
-  baseline that must survive overlapping reads is window STATE.** **Rule on the evidence, not on who proposed it**
-  (a reviewer's counter-case beat my `applyOwnAct` formula). Pin "after apply, before commit" on BOTH sides.
-- **⇒ Walk the old code with the same script** (a walk passing only on the fix proves the rig). Webview JS is pinned
-  without a JS runner (`source_guard::js_fn` / `js_const`); pin the exact expression (`a && b`, not either half).
-  Draw unless something newer is DRAWN; say a failure only if newest STARTED.
+- **⇒ Route a cause by TYPE end to end** (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); a baseline
+  that must survive overlapping reads is window STATE; rule on the evidence, not on who proposed it; pin "after apply,
+  before commit" on BOTH sides; walk the OLD code with the same script (a walk passing only on the fix proves the rig);
+  webview JS is pinned without a JS runner (`source_guard::js_fn` / `js_const`), on the exact expression.
 - **⇒ A remedy that names a command is a claim: run it, name the LIGHTEST** (#787); keep one in-memory truth (#786);
-  prove a pure move by the sorted test LIST; punctuation is not speech (VoiceOver reads "—" as a pause).
-- **⇒ #726: a connect replays the schema only when it changed** (ADR-0080) — never "simplify" the gate to the
-  generation number; tests repairing the schema call `db::force_schema_replay`. A case-mapping change on one side of
-  a subset invariant breaks it (#775); COMMITTED IS NOT VOUCHED (#556); a judgement carries what was compared (#708);
-  an unknown outcome is its own ROOT marker (#713); a per-row lock cannot guard a whole-log scan (#773); an issue's
-  fix can be wrong about MVCC (#560) or predate a guard (#608 vs #633); a count is not a set (#553); a lenient arm can
-  be worse than silent (#768, #606).
-- **⇒ A title is a claim too** (ADR-0078); "the front door never waits" in every UI state; a test whose two
-  orientations coincide pins neither; count steps against the as-built window (#754); widening "who may be proposed"
-  checks every CLOSED status; read the design's filter against its issue (#700); diagnose before choosing a candidate
-  fix (#725, `EXPLAIN ANALYZE`); a CI job with a different dependency set cannot be gated locally.
+  prove a pure move by the sorted test LIST; VoiceOver reads "—" as a pause. A title is a claim too (ADR-0078); count
+  steps against the as-built window (#754); read the design's filter against its issue (#700); diagnose before
+  choosing a fix (#725, `EXPLAIN ANALYZE`).
+- **⇒ #726: a connect replays the schema only when it changed** (ADR-0080; tests call `db::force_schema_replay`). Also:
+  a case-mapping change on one side of a subset invariant breaks it (#775); COMMITTED IS NOT VOUCHED (#556); a
+  judgement carries what was compared (#708); an unknown outcome is its own ROOT marker (#713); a per-row lock cannot
+  guard a whole-log scan (#773); an issue's fix can be wrong about MVCC (#560) or predate a guard (#608 vs #633); a
+  count is not a set (#553); a lenient arm can be worse than silent (#768, #606).
 - **⇒ ROLLBACK HAZARD:** with `SCHEMA_GENERATION` unchanged, an OLDER binary on a database this branch loaded fails
   "cannot change return type" on db/056 — `DROP FUNCTION cairn_duplicate_check_status();` before switching back.
 - **Cloud rig** (runs the FULL DB gate): micromamba + conda-forge `postgresql=18`, `cargo install cargo-pgrx --version
   =0.18.1 --locked`, `cargo pgrx init --pg18 <conda pg_config>` with an `xlocale.h` shim in `CFLAGS` and
   `BINDGEN_EXTRA_CLANG_ARGS`, `initdb` as `postgres`, `CREATE ROLE root SUPERUSER`; never pre-create `cairn_pgx` in
-  `template1`; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`; `target/` ~23 GB. A new db/tests
-  mirror needs `\ir _scratch_database_guard.sql`.
-- **Mechanics:** `cargo doc -D warnings` reads `<date>` as an unclosed HTML tag; a struct literal gaining a field
-  breaks every test that builds it; a callee's `rollback()` undoes a test's `SET ROLE`; editing an `include_str!`'d
-  `db/*.sql` relinks every cairn-node test binary; stub payloads are dumped from Rust, never hand-written; a test
-  assert must never echo identity-built text (CodeQL failed #795 after merge).
+  `template1`; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`; `target/` ~23 GB; a new db/tests
+  mirror needs `\ir _scratch_database_guard.sql`. `cargo doc -D warnings` reads `<date>` as an unclosed HTML tag; a
+  test assert must never echo identity-built text (CodeQL failed #795 after merge).
+- **Smaller:** draw unless something newer is DRAWN, say a failure only if the newest read STARTED; a test whose two
+  orientations coincide pins neither; a callee's `rollback()` undoes a test's `SET ROLE`; stub payloads are dumped
+  from Rust, never hand-written; a CI job with a different dependency set cannot be gated locally.
 
 ### 2026-08-20 → 10-03 — restore, node plane, doors, search, funnel UI 2a–2c, #671, repair path R1–R3
 
