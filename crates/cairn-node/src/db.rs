@@ -428,6 +428,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "067_note_draft_commit",
         include_str!("../../../db/067_note_draft_commit.sql"),
     ),
+    // db/068 (sign-in slice 3b-2b, ADR-0089 decision 15): the audited discard of a draft note —
+    // its type, floor, projection (read only for the marker) and shred hook (db/037, in place).
+    (
+        "068_clinical_note_discard",
+        include_str!("../../../db/068_clinical_note_discard.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

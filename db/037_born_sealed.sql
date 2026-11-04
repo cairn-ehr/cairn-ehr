@@ -347,6 +347,12 @@ BEGIN
         IF to_regclass('public.clinical_note') IS NOT NULL THEN
             DELETE FROM clinical_note WHERE content_address = v_ca;
         END IF;
+        -- The audited discard of a draft note (db/068, ADR-0089 decision 15): its `parts` ARE the
+        -- discarded draft's clinical plaintext, one row per discard event, keyed by this CA.
+        -- Guarded like its siblings: the table is created by a later file.
+        IF to_regclass('public.clinical_note_discard') IS NOT NULL THEN
+            DELETE FROM clinical_note_discard WHERE content_address = v_ca;
+        END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;
