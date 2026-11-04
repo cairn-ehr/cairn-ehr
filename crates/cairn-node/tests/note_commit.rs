@@ -337,6 +337,10 @@ async fn a_writer_with_no_key_is_stuck_and_kept() {
         "the draft is intact"
     );
     assert!(drafts[0].overdue, "and still shown overdue");
+    assert!(
+        drafts[0].stuck,
+        "and read stuck: it will not go in by itself"
+    );
 }
 
 #[tokio::test]
@@ -488,6 +492,7 @@ async fn an_open_draft_reads_due_and_overdue() {
     let after = open_drafts(&c, chart).await.unwrap().remove(0);
     assert_eq!(after.due, draft_due(after.last_keystroke, 30));
     assert!(after.overdue);
+    assert!(!after.stuck, "its writer is enrolled");
 }
 
 /// Task 3 review M1: `due` is worked from the draft HEADER's last keystroke — the input the

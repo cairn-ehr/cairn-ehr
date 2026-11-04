@@ -142,7 +142,7 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     };
     // Overdue drafts go in FIRST, so the pane never shows one the next tick takes away. Its
     // answer is ignored: a commit that cannot run never blocks the read (Review Focus 5).
-    let _ = commit::commit_overdue_impl(state, Some(patient)).await;
+    let _ = commit::commit_overdue_impl(state, Some(patient), true).await;
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
     let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;

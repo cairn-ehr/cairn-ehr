@@ -10,30 +10,74 @@ use cairn_event::SigningKey;
 
 const ORIGIN: &str = "notes-commit-test-node";
 
+/// Each sentence is true in every state it is shown in (review I1). The read runs AFTER the
+/// pre-read commit, so a draft still listed overdue is stuck (it will never go in by itself) or
+/// one whose commit failed (it is tried again, which may fail again): never "the next check".
 #[test]
 fn due_words_before_and_after() {
     let today = NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
     // 20:40 UTC is 06:40 the next morning in Brisbane.
     let due = utc("2026-11-02T20:40:00Z");
     assert_eq!(
-        due_words(due, false, &bne(), today),
+        due_words(due, false, false, &bne(), today),
         "goes into the record unsigned at 06:40 if nobody types in it"
     );
     assert_eq!(
-        due_words(due, true, &bne(), today),
-        "overdue — goes into the record unsigned at the next check"
+        due_words(due, true, false, &bne(), today),
+        "overdue — not in the record yet; the window tries again at every check to put it in unsigned"
+    );
+    assert_eq!(
+        due_words(due, true, true, &bne(), today),
+        "overdue, but cannot go into the record by itself — a writer of it is no longer \
+         enrolled on this node; it goes in once they are enrolled again"
+    );
+}
+
+/// Review M2: the tick says each stuck draft once per window run, not every minute.
+#[test]
+fn a_stuck_draft_is_said_once() {
+    let (a, b) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+    let mut said = std::collections::HashSet::new();
+    assert_eq!(newly_stuck(&mut said, vec![a]), vec![a]);
+    assert_eq!(newly_stuck(&mut said, vec![a, b]), vec![b]);
+    assert!(newly_stuck(&mut said, vec![a, b]).is_empty());
+}
+
+/// Review I2 and M1, pinned in the source (no behavioural test sees a hold's extent): the pass
+/// lists under one short hold and takes ONE HOLD PER DRAFT, inside the loop — never one hold
+/// for the whole pass, which would keep a clinician's press waiting behind every draft — and the
+/// tick never reopens a lost connection (the next press does).
+#[test]
+fn each_draft_is_its_own_hold_and_the_tick_never_reopens() {
+    let src = include_str!("notes_commit.rs");
+    let pass = crate::source_guard::rust_fn(src, "commit_overdue_impl");
+    assert!(!pass.contains("commit_overdue_drafts("), "{pass}");
+    let each = crate::source_guard::position(pass, "for draft in drafts {");
+    let held = &pass[each..];
+    assert!(
+        crate::source_guard::position(held, "hold(db, may_reopen)")
+            < crate::source_guard::position(held, "commit_overdue(&mut"),
+        "{pass}"
+    );
+    let hold = crate::source_guard::rust_fn(src, "hold");
+    assert!(hold.contains("lock_if_open()"), "{hold}");
+    let tick = crate::source_guard::rust_fn(src, "run_ticks");
+    assert!(
+        tick.contains("commit_overdue_impl(&app.state::<AppState>(), None, false)"),
+        "{tick}"
     );
 }
 
 #[tokio::test]
 async fn fixture_mode_commits_nothing() {
     let id = uuid::Uuid::now_v7();
-    assert!(commit_overdue_impl(&AppState::mock(Some(id)), None)
-        .await
-        .is_none());
-    assert!(commit_overdue_impl(&AppState::mock(Some(id)), Some(id))
-        .await
-        .is_none());
+    for may_reopen in [false, true] {
+        let mock = AppState::mock(Some(id));
+        assert!(commit_overdue_impl(&mock, None, may_reopen).await.is_none());
+        assert!(commit_overdue_impl(&mock, Some(id), may_reopen)
+            .await
+            .is_none());
+    }
 }
 
 /// The tick is a Rust task, spawned ONCE in setup: never a webview timer (WebKit throttles a
@@ -176,7 +220,7 @@ async fn a_failed_commit_never_blocks_the_read() {
     assert!(
         pane.drafts[0]
             .words
-            .ends_with(" · overdue — goes into the record unsigned at the next check"),
+            .ends_with(" · overdue — not in the record yet; the window tries again at every check to put it in unsigned"),
         "{}",
         pane.drafts[0].words
     );
@@ -206,5 +250,31 @@ async fn opening_a_chart_commits_its_overdue_draft_first() {
         pane.notes[0].byline.contains("went in unsigned"),
         "{}",
         pane.notes[0].byline
+    );
+}
+
+/// Review I1: a draft whose named writer has left the vault is STUCK — the pre-read commit rolls
+/// it back every time — and the pane says so, with what makes it go in, never "it goes in".
+#[tokio::test]
+async fn a_stuck_draft_reads_stuck() {
+    let Some((_guard, owner, state, chart)) = an_overdue_draft(true).await else {
+        return;
+    };
+    owner
+        .batch_execute(
+            "DELETE FROM vault_attempt WHERE staff_id = 'notewriter'; \
+             DELETE FROM vault_member WHERE staff_id = 'notewriter';",
+        )
+        .await
+        .unwrap();
+    let pane = note_list_impl(&state, &chart.to_string())
+        .await
+        .expect("the chart reads");
+    assert!(pane.notes.is_empty(), "nothing went in");
+    assert_eq!(pane.drafts.len(), 1, "the draft is kept");
+    assert!(
+        pane.drafts[0].words.ends_with(" · overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes in once they are enrolled again"),
+        "{}",
+        pane.drafts[0].words
     );
 }

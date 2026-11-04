@@ -151,6 +151,19 @@ pub struct CommitReport {
     pub failed: Vec<(Uuid, String)>,
 }
 
+impl CommitReport {
+    /// Count what one draft's commit did, a failure in words. For a caller that runs
+    /// [`commit_overdue`] itself (the window takes one connection hold per draft).
+    pub fn record(&mut self, draft: Uuid, outcome: anyhow::Result<CommitOutcome>) {
+        match outcome {
+            Ok(CommitOutcome::Committed(_)) => self.committed += 1,
+            Ok(CommitOutcome::NotDue) => {}
+            Ok(CommitOutcome::Stuck) => self.stuck.push(draft),
+            Err(e) => self.failed.push((draft, format!("{e:#}"))),
+        }
+    }
+}
+
 /// Commit every overdue draft on `patient`'s chart (`None` = every chart), each in its own
 /// transaction. One draft's failure is recorded and the pass goes on, so one bad draft never
 /// holds the others back (Review Focus 4). Only the listing's own failure is `Err`.
@@ -162,12 +175,8 @@ pub async fn commit_overdue_drafts(
 ) -> anyhow::Result<CommitReport> {
     let mut report = CommitReport::default();
     for draft in overdue_drafts(client, patient).await? {
-        match commit_overdue(client, node_sk, draft, node_origin).await {
-            Ok(CommitOutcome::Committed(_)) => report.committed += 1,
-            Ok(CommitOutcome::NotDue) => {}
-            Ok(CommitOutcome::Stuck) => report.stuck.push(draft),
-            Err(e) => report.failed.push((draft, format!("{e:#}"))),
-        }
+        let outcome = commit_overdue(client, node_sk, draft, node_origin).await;
+        report.record(draft, outcome);
     }
     Ok(report)
 }

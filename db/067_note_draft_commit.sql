@@ -77,14 +77,29 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
      ORDER BY d.last_keystroke, d.draft_id;
 $$;
 
--- Each open draft on p_patient's chart: when it falls due and whether it is overdue now. Both from
--- the HEADER's last keystroke, the input cairn_note_drafts_overdue and the commit door read, so the
--- window's due words can never disagree with the timer (a backward clock step lets db/066 clamp a
--- part's last keystroke apart from its header's). For the window's words only: no lock, no write.
+-- Each open draft on p_patient's chart: when it falls due, whether it is overdue now, and whether
+-- it is STUCK. Due and overdue come from the HEADER's last keystroke, the input
+-- cairn_note_drafts_overdue and the commit door read, so the window's due words can never disagree
+-- with the timer (a backward clock step lets db/066 clamp a part's last keystroke apart from its
+-- header's). Stuck = a non-blank part names a writer with no vault key: the commit rolls such a
+-- draft back every time (the Rust side's CommitOutcome::Stuck), so it never goes in by itself and
+-- the window must not say it will. For the window's words only: no lock, no write.
+-- An unreleased three-column version of this door may sit in a dev database; CREATE OR REPLACE
+-- cannot change a return shape, so that one (and only that one) is dropped first.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cairn_note_drafts_due'
+                AND NOT ('stuck' = ANY (proargnames))) THEN
+        DROP FUNCTION cairn_note_drafts_due(uuid);
+    END IF;
+END $$;
 CREATE OR REPLACE FUNCTION cairn_note_drafts_due(p_patient uuid)
-RETURNS TABLE(draft_id uuid, due timestamptz, overdue boolean)
+RETURNS TABLE(draft_id uuid, due timestamptz, overdue boolean, stuck boolean)
 LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT q.draft_id, q.due, q.due <= clock_timestamp()
+    SELECT q.draft_id, q.due, q.due <= clock_timestamp(),
+           EXISTS (SELECT 1 FROM note_draft_part p
+                    WHERE p.draft_id = q.draft_id AND p.writer IS NOT NULL
+                      AND cairn_twin_is_present(p.narrative)  -- the commit door's blank test
+                      AND cairn_vault_member_key(p.writer) IS NULL)
       FROM (SELECT d.draft_id,
                    d.last_keystroke + make_interval(mins => cairn_note_quarantine_minutes()) AS due
               FROM note_draft d WHERE d.patient_id = p_patient) q;

@@ -16,6 +16,8 @@ use std::path::Path;
 const EXEMPT: &[&str] = &[
     // Records what a gesture cost; its error goes to stderr only, never to the screen.
     "record_timing",
+    // notes_commit.rs: only hands the guard back; its caller, `commit_overdue_impl`, explains.
+    "hold",
 ];
 
 /// Any of these in a function's body is its errors passed through the cut check: the guard's own

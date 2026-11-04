@@ -117,6 +117,9 @@ pub struct NoteDraft {
     /// Overdue NOW, on the database's clock, from the same row as `due`: still here
     /// because the timer has not run yet, or because the draft is stuck.
     pub overdue: bool,
+    /// A named writer of a non-blank part has no vault key: the commit rolls it back every time,
+    /// so it never goes in by itself (until that writer is enrolled again).
+    pub stuck: bool,
 }
 
 /// The open (unsigned) drafts on `patient`'s chart, oldest first, each with its parts. The door
@@ -161,6 +164,7 @@ pub async fn open_drafts(
                 // Filled in below, once every part is in.
                 due: part.last_keystroke,
                 overdue: false,
+                stuck: false,
                 parts: vec![part],
             }),
         }
@@ -172,7 +176,7 @@ pub async fn open_drafts(
     // door's own input: a part's can differ from it after a backward clock step (db/066 clamps).
     let due = client
         .query(
-            "SELECT draft_id::text, due, overdue FROM cairn_note_drafts_due($1::text::uuid)",
+            "SELECT draft_id::text, due, overdue, stuck FROM cairn_note_drafts_due($1::text::uuid)",
             &[&patient.to_string()],
         )
         .await?;
@@ -181,6 +185,7 @@ pub async fn open_drafts(
         if let Some(d) = drafts.iter_mut().find(|d| d.draft_id == id) {
             d.due = r.get(1);
             d.overdue = r.get(2);
+            d.stuck = r.get(3);
         }
     }
     Ok(drafts)

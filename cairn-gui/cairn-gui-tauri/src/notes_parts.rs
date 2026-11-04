@@ -164,7 +164,7 @@ where
         words.push_str(" · being written at another terminal");
     }
     words.push_str(" · ");
-    words.push_str(&due_words(draft.due, draft.overdue, tz, today));
+    words.push_str(&due_words(draft.due, draft.overdue, draft.stuck, tz, today));
     let tail = draft.parts.len().saturating_sub(1);
     let parts = draft
         .parts
