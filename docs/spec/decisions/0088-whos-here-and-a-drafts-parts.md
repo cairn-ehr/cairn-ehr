@@ -170,7 +170,7 @@ number.
     case included, is #963. Pins: db/tests/066's `moved_vs_elsewhere`, `take_moves_and_the_old_terminal_is_moved`,
     `take_of_spent_is_spent`, `take_of_unknown_is_gone`, `take_naming_another_chart_is_elsewhere`;
     `note_draft_parts.rs::a_take_then_the_old_terminal_saves_moved`; `notes_tests.rs::moved_sentence_exact`,
-    `spent_sentence_exact`; `whos_here_webview_tests.rs::moved_forks_a_new_draft`,
+    `spent_sentence_exact`; `notes_fork_webview_tests.rs::moved_forks_a_new_draft`,
     `a_draft_signed_in_another_window_forks_a_new_draft`.
 
 13. **3a's three draft doors are removed, never reshaped** (partly supersedes ADR-0087 decision 10's door list). A
@@ -337,5 +337,5 @@ number.
 - **Pinned by** `db/tests/066_note_draft_parts_test.sql`, `db/tests/065_note_draft_test.sql`,
   `crates/cairn-event/src/{contributor,note}.rs`'s tests, `crates/cairn-node/src/note/{sign,view}.rs`'s tests,
   `crates/cairn-node/tests/{note_draft_parts,note_sign_parts,note_sign,note_read,window_role_grants_notes}.rs` and
-  `cairn-gui-tauri/src/{whos_here,whos_here_webview,notes,notes_parts,notes_webview}_tests.rs`. RUNBOOK §19 carries
+  `cairn-gui-tauri/src/{whos_here,whos_here_webview,notes,notes_parts,notes_webview,notes_fork_webview}_tests.rs`. RUNBOOK §19 carries
   the human measurements.

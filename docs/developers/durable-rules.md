@@ -13,7 +13,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 **⇒ GUI SIGN-IN SLICE 3b-1 — WHO'S HERE AND A DRAFT'S PARTS (ADR-0088, db/066, db/065 in place) — do not undo**
 (pins: `db/tests/066_note_draft_parts_test.sql`, `crates/cairn-event/src/contributor.rs`'s tests,
 `crates/cairn-node/src/note/sign.rs`'s tests, `crates/cairn-node/tests/{note_draft_parts,note_sign_parts,note_read,window_role_grants_notes}.rs`,
-`cairn-gui-tauri/src/{whos_here,whos_here_webview,notes,notes_parts}_tests.rs`, `crates/cairn-node/src/note/view.rs`'s tests):
+`cairn-gui-tauri/src/{whos_here,whos_here_webview,notes,notes_parts,notes_fork_webview}_tests.rs`, `crates/cairn-node/src/note/view.rs`'s tests):
 - **A save writes only the TAIL part, and only the saver's own.** Any other save appends a part; no draft door takes
   a part number, so nothing can address, change or remove another writer's text. A writer's own earlier part is
   read-only too once someone wrote below it: a deliberate shortcut, #967. **Tempting wrong fixes:** add a `p_seq`
@@ -65,7 +65,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   no draft, and lost on close); set `mayBeSigned` only after the Sign answers, or never clear it (an unknown-outcome
   Sign's follow-up save then forks text it just signed, or the save after an "already signed" refusal keeps the
   editor on a dead draft). Pins: db/tests/066's `moved_vs_elsewhere`;
-  `whos_here_webview_tests.rs::moved_forks_a_new_draft`, `a_draft_signed_in_another_window_forks_a_new_draft`;
+  `notes_fork_webview_tests.rs::moved_forks_a_new_draft`, `a_draft_signed_in_another_window_forks_a_new_draft`;
   `notes_tests.rs::moved_sentence_exact`, `spent_sentence_exact`.
 - **A reopened draft writes as the claim its list was read for** (`NotePane.claim`, final review item 7), and a list
   read for another claim than the one held now opens nothing. **Tempting wrong fix:** take `openDraft`'s writer from
