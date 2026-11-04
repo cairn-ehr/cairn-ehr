@@ -45,6 +45,9 @@ function clearSigner(signed) {
   el("signer-passphrase").value = "";
   if (keyHoldSecs === 0) {
     el("staff-id").value = "";
+    // The act's ID goes; who's here's ID comes back (design §3.6: prefilled for every act, not
+    // only the first after a pick — empty when nobody is named). The passphrase never is.
+    el("staff-id").value = claimedStaffId();
     setMessage(el("signer-hint"), "");
     // The expiry warning belongs to the ID just cleared: never the next person's.
     setMessage(el("signer-notice"), "");

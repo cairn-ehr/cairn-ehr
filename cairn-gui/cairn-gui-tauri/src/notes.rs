@@ -48,7 +48,14 @@ pub struct SaveView {
     /// The draft was taken to another terminal: the webview keeps what it had not saved as a NEW
     /// draft of its own, so nothing typed is lost.
     pub moved: bool,
+    /// Why nothing was written. For `moved`, the sentence for keeping the text typed after the
+    /// last answered save — the webview's usual branch.
     pub sentence: Option<String>,
+    /// `moved` only: the sentence for when nothing on screen was unsaved (the editor closes).
+    pub moved_nothing_new: Option<String>,
+    /// `moved` only: the sentence for when the text above the last save was edited, so all of it
+    /// is kept (and the saved part is in the moved note too).
+    pub moved_everything: Option<String>,
 }
 
 /// What a "Continue here" did. `taken: false` always carries the sentence why nothing moved.
@@ -147,6 +154,13 @@ const NO_SUCH_WRITER: &str =
 /// … when a save finds its draft taken to another terminal.
 const MOVED: &str = "This note is now being continued at another terminal. What you typed since \
      the last save is kept here as a new draft.";
+/// … the same, when nothing on screen was unsaved: nothing is kept here.
+const MOVED_NOTHING_NEW: &str = "This note is now being continued at another terminal. \
+     Everything typed here was saved into it before it moved.";
+/// … the same, when the text that was saved has since been edited: everything is kept.
+const MOVED_EVERYTHING: &str = "This note is now being continued at another terminal. \
+     Everything on this screen is kept here as a new draft; what was saved before the move is \
+     also in that note.";
 /// … when a take finds no such draft (never saved, or discarded).
 const GONE: &str = "this draft is no longer open";
 /// … the same, for a SIGN: the on-screen writer, or the writer of a part above, is no longer
@@ -414,10 +428,14 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         SaveOutcome::NoChart => Some(NO_CHART),
         SaveOutcome::NoSuchWriter => Some(NO_SUCH_WRITER),
     };
+    let moved = outcome == SaveOutcome::Moved;
+    let if_moved = |s: &str| moved.then(|| s.to_string());
     SaveView {
         saved: sentence.is_none(),
-        moved: outcome == SaveOutcome::Moved,
+        moved,
         sentence: sentence.map(str::to_string),
+        moved_nothing_new: if_moved(MOVED_NOTHING_NEW),
+        moved_everything: if_moved(MOVED_EVERYTHING),
     }
 }
 

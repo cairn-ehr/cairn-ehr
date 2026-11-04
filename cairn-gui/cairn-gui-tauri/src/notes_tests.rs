@@ -98,7 +98,10 @@ fn save_words_each_outcome() {
 }
 
 /// The old terminal's next save after a Continue elsewhere: `moved`, so the webview keeps what it
-/// had not saved as a new draft, and says so in this one sentence.
+/// had not saved as a new draft. Only the webview knows which of three things happened to the
+/// text on screen, so all three sentences travel, each true for its own branch (fix round 1,
+/// I3): the text after what was last saved is kept (`sentence`); nothing was unsaved
+/// (`moved_nothing_new`); the text above was edited, so all of it is kept (`moved_everything`).
 #[test]
 fn moved_sentence_exact() {
     let moved = save_view(SaveOutcome::Moved);
@@ -110,6 +113,28 @@ fn moved_sentence_exact() {
              last save is kept here as a new draft."
         )
     );
+    assert_eq!(
+        moved.moved_nothing_new.as_deref(),
+        Some(
+            "This note is now being continued at another terminal. Everything typed here was \
+             saved into it before it moved."
+        )
+    );
+    assert_eq!(
+        moved.moved_everything.as_deref(),
+        Some(
+            "This note is now being continued at another terminal. Everything on this screen \
+             is kept here as a new draft; what was saved before the move is also in that note."
+        )
+    );
+    for other in [
+        SaveOutcome::Saved,
+        SaveOutcome::Spent,
+        SaveOutcome::Elsewhere,
+    ] {
+        let view = save_view(other);
+        assert!(view.moved_nothing_new.is_none() && view.moved_everything.is_none());
+    }
 }
 
 #[test]

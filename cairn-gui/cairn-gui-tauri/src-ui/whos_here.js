@@ -50,6 +50,11 @@ function seedWhosHere(claim) {
   if (currentClaim === null) showClaim(claim);
 }
 
+/** The claim's staff id for the signer strip, or "" when nobody is named (signer.js). */
+function claimedStaffId() {
+  return (currentClaim && currentClaim.staff_id) || "";
+}
+
 /**
  * Take a claim the node now holds (a pick, a refused pick, the re-lock). The signer strip's
  * staff ID becomes the claim's — the directory's own id, verbatim — or empty when nobody is
@@ -62,11 +67,14 @@ function takeClaim(claim) {
 }
 
 /**
- * "Who's here?" and the hot key: the chart leaves the screen first, its queued saves awaited
- * (`closeChart`), so nothing typed is saved under the next person; then the picker opens.
+ * "Who's here?" and the hot key. A Sign in flight settles first, so its outcome is said on the
+ * chart it signed (the pick also forgets the held key). Then the chart leaves the screen, its
+ * queued saves awaited (`closeChart`), so nothing typed is saved under the next person; then
+ * the picker opens.
  */
 async function switchWhosHere() {
   if (!el("whos-here-picker").hidden) return;
+  await signsSettled();
   await closeChart();
   openPicker(null);
 }
@@ -80,6 +88,9 @@ function askWhosHere(then) {
 /** Show the picker over the page, the rest of it out of Tab's reach, the search focused. */
 async function openPicker(then) {
   afterPick = then;
+  // Someone new may be at the keyboard: a passphrase typed and not used never stays beside the
+  // next person's ID (it is only ever cleared here, never set).
+  el("signer-passphrase").value = "";
   dismissOffer();
   el("whos-here-search").value = "";
   setMessage(el("whos-here-status"), "");
@@ -96,11 +107,16 @@ async function openPicker(then) {
   drawPicker();
 }
 
-/** Close the picker without a pick (Esc): the claim stays as it was. */
+/**
+ * Close the picker (Esc or Back: the claim stays as it was; or after a pick). Focus goes back to
+ * the page — "Who's here?" over a chart, the search at the front door — never left on a hidden
+ * element. A pick's next step (the offer, New note) may move it on.
+ */
 function closePicker() {
   afterPick = null;
   el("whos-here-picker").hidden = true;
   document.querySelector("main").inert = !el("terminal-lock").hidden;
+  el(displayedPatient === null ? "browse-name" : "whos-here-switch").focus();
 }
 
 /** The people matching the search, by name or staff ID, recent people first (the node's order). */
@@ -190,6 +206,8 @@ el("whos-here-search").addEventListener("input", drawPicker);
 // Enter in the search picks the first match, so a typed name or ID is one keystroke away.
 el("whos-here-form").addEventListener("submit", (event) => {
   event.preventDefault();
+  // A blank search names nobody: the list's head is the person who just left.
+  if (el("whos-here-search").value.trim() === "") return;
   const first = matchingEntries()[0];
   if (first) void pick(first.staff_id);
 });

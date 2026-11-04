@@ -34,8 +34,6 @@ const NOTE_SAVE_EVERY_MS = 1000;
 const NOT_SAVED = "not saved yet — your text is still here";
 /** Said (with the reason) when the text saved but a new stated time was refused. */
 const TIME_NOT_KEPT = "your text is saved, but not the time it happened: ";
-/** Said when a save finds its draft moved to another terminal and nothing here was unsaved. */
-const MOVED_NOTHING_KEPT = "This note is now being continued at another terminal.";
 /** Said instead of signing a time the clinician only began to type (a date, no hour). */
 const PARTLY_TYPED_TIME =
   "the time it happened is only partly typed — finish it, or clear it if the note is about now";
@@ -273,7 +271,7 @@ async function sendDraft(sent) {
       statedTime: asked,
       writer: sent.held.writer,
     });
-    if (view.moved) return keepMovedText(sent, view.sentence);
+    if (view.moved) return keepMovedText(sent, view);
     sent.held.statedTime = asked;
     if (view.saved) sent.held.savedText = sent.narrative;
     if (mine()) {
@@ -303,18 +301,34 @@ async function sendDraft(sent) {
 }
 
 /**
- * Review Focus 2: a save found its draft taken to another terminal. What the node lacks is kept
- * as a NEW draft of its own (a fresh id, the same writer), sent at once in queue order, so a
- * chart closing behind it still waits for it: nothing typed is lost. The editor's text when it
- * still holds the draft, else what the save carried; nothing new, and the editor just closes.
+ * What of `text` a moved draft lacks, and the sentence (Rust's, from the save's `view`) that is
+ * true for it. `savedText` is what this window last saved for the part and the node took — it
+ * went on with the moved note. Typed after it: only the rest is new. Nothing after it: nothing
+ * is kept (`kept: null`). The saved text itself edited: all of the text is kept, and said so.
+ * Pure.
  */
-async function keepMovedText(sent, sentence) {
+function movedRemainder(text, savedText, view) {
+  if (!text.startsWith(savedText)) return { kept: text, said: view.moved_everything };
+  const rest = text.slice(savedText.length);
+  if (rest.trim() === "") return { kept: null, said: view.moved_nothing_new };
+  return { kept: rest, said: view.sentence };
+}
+
+/**
+ * Review Focus 2: a save found its draft taken to another terminal. What the node lacks
+ * (`movedRemainder`) is kept as a NEW draft of its own (a fresh id, the same writer), sent at
+ * once in queue order, so a chart closing behind it still waits for it: nothing typed is lost,
+ * and nothing saved is written twice. The editor's text when it still holds the draft (the
+ * editor then shows only what the new draft holds), else what the save carried.
+ */
+async function keepMovedText(sent, view) {
   const onScreen = noteDraft === sent.held;
   const text = onScreen ? el("note-text").value : sent.narrative;
-  if (text === sent.held.savedText) {
+  const { kept, said } = movedRemainder(text, sent.held.savedText, view);
+  if (kept === null) {
     if (onScreen) {
       closeEditor();
-      noteStatus(MOVED_NOTHING_KEPT);
+      noteStatus(said);
       void readNotes(sent.held.patientId); // the note is listed where it went on
     }
     return true;
@@ -323,10 +337,11 @@ async function keepMovedText(sent, sentence) {
   if (onScreen) {
     noteDraft = fork;
     el("note-parts").replaceChildren(); // the parts above went on with the moved draft
-    noteStatus(sentence);
+    el("note-text").value = kept;
+    noteStatus(said);
     saveSaid = null; // a later save that works must not take the sentence down
   }
-  return sendDraft({ held: fork, narrative: text, statedTime: sent.statedTime });
+  return sendDraft({ held: fork, narrative: kept, statedTime: sent.statedTime });
 }
 
 /** A save's word on the status line: a sentence is said; a save that worked clears only its own. */

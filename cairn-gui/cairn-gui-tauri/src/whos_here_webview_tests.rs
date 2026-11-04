@@ -26,9 +26,40 @@ fn switch_awaits_the_save_queue_before_picking() {
         position(switch, "await closeChart();") < position(switch, "openPicker("),
         "{switch}"
     );
+    // Fix round 1, I4: a Sign in flight settles first, so its outcome is said on the chart it
+    // signed, and the pick's key-forgetting never lands mid-sign.
+    assert!(
+        position(switch, "await signsSettled();") < position(switch, "await closeChart();"),
+        "{switch}"
+    );
     let close = js_fn(FUNNEL_JS, "closeChart");
     assert!(
         position(close, "await notesSaved();") < position(close, "invoke(\"close_chart\")"),
+        "{close}"
+    );
+    // Fix round 1, I2: Enter on a BLANK search names nobody — the list's head is the person who
+    // just left, and a reflexive Enter would claim their name.
+    let enter = &WHOS_HERE_JS[position(
+        WHOS_HERE_JS,
+        "el(\"whos-here-form\").addEventListener(\"submit\"",
+    )..];
+    assert!(
+        position(
+            enter,
+            "if (el(\"whos-here-search\").value.trim() === \"\") return;"
+        ) < position(enter, "matchingEntries()[0]"),
+        "{enter}"
+    );
+    // A1: leaving the picker puts focus back on the page, never on a hidden element.
+    let close = js_fn(WHOS_HERE_JS, "closePicker");
+    assert!(
+        position(close, "document.querySelector(\"main\").inert =") < position(close, ".focus();"),
+        "{close}"
+    );
+    assert!(
+        close.contains(
+            "el(displayedPatient === null ? \"browse-name\" : \"whos-here-switch\").focus();"
+        ),
         "{close}"
     );
     // The only pick is a press in the picker, which opens only after the awaited close.
@@ -161,33 +192,50 @@ fn relock_waits_for_a_sign_in_flight() {
 }
 
 /// Review Focus 2: the old terminal saves after another took the draft. The save answers
-/// `moved`; text the node lacks is kept as a NEW draft (a fresh id, the same writer), saved in
-/// queue order — or, with nothing unsaved, the editor closes. The moved sentence is said.
+/// `moved`, and what the node lacks is kept as a NEW draft (a fresh id, the same writer), saved
+/// in queue order. Fix round 1, I3: only what was typed AFTER the last answered save is new — the
+/// rest went on with the moved note — so three branches, each saying its own true sentence:
+/// the remainder is kept; nothing is new (the editor closes); the text above was edited (all of
+/// it is kept, and the sentence says the saved part is also in the moved note).
 #[test]
 fn moved_forks_a_new_draft() {
     let send = js_fn(NOTES_JS, "sendDraft");
     assert!(
-        position(
-            send,
-            "if (view.moved) return keepMovedText(sent, view.sentence);"
-        ) < position(send, "noteUnsaved = false;"),
+        position(send, "if (view.moved) return keepMovedText(sent, view);")
+            < position(send, "noteUnsaved = false;"),
         "{send}"
     );
     // Only an answered save says what the node holds.
     assert!(send[..position(send, "catch (failure) {")]
-        .contains("sent.held.savedText = sent.narrative;"));
+        .contains("if (view.saved) sent.held.savedText = sent.narrative;"));
+    let split = js_fn(NOTES_JS, "movedRemainder");
+    for line in [
+        "if (!text.startsWith(savedText)) return { kept: text, said: view.moved_everything };",
+        "const rest = text.slice(savedText.length);",
+        "if (rest.trim() === \"\") return { kept: null, said: view.moved_nothing_new };",
+        "return { kept: rest, said: view.sentence };",
+    ] {
+        assert!(split.contains(line), "{split}");
+    }
     let keep = js_fn(NOTES_JS, "keepMovedText");
-    let nothing_new = position(keep, "if (text === sent.held.savedText) {");
+    assert!(keep.contains("const text = onScreen ? el(\"note-text\").value : sent.narrative;"));
+    assert!(
+        keep.contains("const { kept, said } = movedRemainder(text, sent.held.savedText, view);")
+    );
+    let nothing_new = position(keep, "if (kept === null) {");
     assert!(nothing_new < position(keep, "closeEditor();"), "{keep}");
     for line in [
         "const fork = { ...sent.held, draftId: crypto.randomUUID(), savedText: \"\" };",
-        "return sendDraft({ held: fork, narrative: text, statedTime: sent.statedTime });",
-        "noteStatus(sentence);",
+        "el(\"note-text\").value = kept;",
+        "return sendDraft({ held: fork, narrative: kept, statedTime: sent.statedTime });",
+        "noteStatus(said);",
     ] {
         assert!(keep.contains(line), "{keep}");
     }
-    // The text on screen, if the editor still holds the draft; what the save carried otherwise.
-    assert!(keep.contains("const text = onScreen ? el(\"note-text\").value : sent.narrative;"));
+    assert!(
+        !NOTES_JS.contains("MOVED_NOTHING_KEPT"),
+        "every moved sentence is Rust's"
+    );
 }
 
 /// A draft's parts are drawn as read-only blocks through `cell` (3a's rule: never `innerHTML` a
@@ -242,10 +290,27 @@ fn parts_drawn_through_cell() {
 }
 
 /// On every pick the signer strip's staff ID becomes the claim's (empty for "Don't know" and on
-/// the re-lock); the passphrase field is never written by who's here — a claim is never a
-/// credential.
+/// the re-lock), and after an act empties it on a shared terminal it is filled again from the
+/// claim (G2, design §3.6). The passphrase is never SET by who's here, and is always CLEARED when
+/// the picker opens and on the re-lock (fix round 1, I1): Nurse A's typed-but-unused secret must
+/// not sit beside Dr B's ID.
 #[test]
 fn staff_id_prefilled_passphrase_never() {
+    let open = js_fn(WHOS_HERE_JS, "openPicker");
+    assert!(
+        position(open, "el(\"signer-passphrase\").value = \"\";")
+            < position(open, "el(\"whos-here-picker\").hidden = false;"),
+        "{open}"
+    );
+    assert!(js_fn(SIGNER_JS, "relockTerminal").contains("el(\"signer-passphrase\").value = \"\";"));
+    let cleared = js_fn(SIGNER_JS, "clearSigner");
+    assert!(
+        position(cleared, "el(\"staff-id\").value = \"\";")
+            < position(cleared, "el(\"staff-id\").value = claimedStaffId();"),
+        "{cleared}"
+    );
+    assert!(js_fn(WHOS_HERE_JS, "claimedStaffId")
+        .contains("return (currentClaim && currentClaim.staff_id) || \"\";"));
     let take = js_fn(WHOS_HERE_JS, "takeClaim");
     assert!(
         take.contains("el(\"staff-id\").value = claim.staff_id || \"\";"),
@@ -253,10 +318,11 @@ fn staff_id_prefilled_passphrase_never() {
     );
     assert!(js_fn(WHOS_HERE_JS, "pick").contains("takeClaim(picked.claim);"));
     assert!(js_fn(SIGNER_JS, "relockTerminal").contains("el(\"staff-id\").value = \"\";"));
-    for (file, js) in [("whos_here.js", WHOS_HERE_JS), ("idle.js", IDLE_JS)] {
-        assert!(
-            !js.contains("signer-passphrase"),
-            "{file} touches the passphrase"
+    for (file, js, clears) in [("whos_here.js", WHOS_HERE_JS, 1), ("idle.js", IDLE_JS, 0)] {
+        assert_eq!(
+            js.matches("signer-passphrase").count(),
+            clears,
+            "{file} touches the passphrase other than to clear it"
         );
         assert!(!js.contains("credential"), "{file} handles a credential");
     }

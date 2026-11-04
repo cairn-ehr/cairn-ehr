@@ -266,6 +266,8 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         saved: true,
         moved: false,
         sentence: None,
+        moved_nothing_new: None,
+        moved_everything: None,
     };
     let report = NoteSignReport {
         text: "t".into(),
