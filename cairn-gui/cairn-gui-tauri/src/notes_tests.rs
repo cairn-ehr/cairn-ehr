@@ -85,7 +85,7 @@ fn save_words_each_outcome() {
     );
     assert_eq!(
         words(SaveOutcome::Elsewhere),
-        "this draft belongs to another chart or terminal — nothing was saved"
+        "this draft belongs to another chart — nothing was saved"
     );
     assert_eq!(
         words(SaveOutcome::NoChart),
@@ -223,7 +223,7 @@ fn sign_words_each_refusal() {
     assert_eq!(spent.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(
         sign_refusal_view(SignRefusal::Elsewhere).text,
-        "this draft belongs to another chart or terminal — nothing was signed; your text is \
+        "this draft belongs to another chart — nothing was signed; your text is \
          still here"
     );
     assert_eq!(

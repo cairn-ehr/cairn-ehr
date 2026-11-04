@@ -23,7 +23,7 @@ fn pick_named_then_forget_keeps_bookmarks() {
     h.pick(named("nurse-a", "Nurse A"));
     h.remember_chart(&sample_candidate());
     h.forget_claim();
-    assert_eq!(h.claim, Claim::NotAsked);
+    assert_eq!(h.claim(), &Claim::NotAsked);
     assert_eq!(h.offer(), None, "nobody is named, so nothing is offered");
     assert_eq!(h.recent(), [("nurse-a".into(), "Nurse A".into())]);
     h.pick(named("nurse-a", "Nurse A"));
@@ -153,7 +153,7 @@ async fn a_pick_of_someone_not_enrolled_names_nobody() {
         .await
         .unwrap_err();
     assert!(err.text.contains("not an enrolled member"), "{}", err.text);
-    assert_eq!(state.whos_here.lock().await.claim, Claim::NotAsked);
+    assert_eq!(state.whos_here.lock().await.claim(), &Claim::NotAsked);
     assert!(!key_is_held(&state).await);
 }
 

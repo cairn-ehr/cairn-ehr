@@ -117,7 +117,7 @@ pub(crate) async fn lock_state_impl(state: &AppState) -> LockState {
     let (whos_here, idle_lock_secs) = {
         let here = state.whos_here.lock().await;
         (
-            crate::whos_here::claim_view(&here.claim),
+            crate::whos_here::claim_view(here.claim()),
             here.idle_lock.as_secs(),
         )
     };

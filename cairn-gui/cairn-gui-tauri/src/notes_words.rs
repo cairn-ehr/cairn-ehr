@@ -45,11 +45,11 @@ pub struct TakeView {
 
 /// The sentence a save or sign answers when the draft was already signed.
 const SPENT: &str = "this note has already been signed";
-/// … when a SAVE's draft is another chart's or another terminal's.
-const ELSEWHERE: &str = "this draft belongs to another chart or terminal — nothing was saved";
+/// … when a SAVE's draft is another chart's (another terminal's is `MOVED`, #958).
+const ELSEWHERE: &str = "this draft belongs to another chart — nothing was saved";
 /// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
 const SIGN_ELSEWHERE: &str =
-    "this draft belongs to another chart or terminal — nothing was signed; your text is still here";
+    "this draft belongs to another chart — nothing was signed; your text is still here";
 /// … when a SIGN finds its draft taken to another terminal (Task 5 review M1): not "another
 /// chart" — the clinician is told where the note went.
 const SIGN_MOVED: &str = "This note is now being continued at another terminal — nothing was \

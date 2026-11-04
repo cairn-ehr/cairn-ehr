@@ -48,7 +48,9 @@ pub enum Claim {
 /// [`RECENT_CAP`]), each person's bookmark, and this terminal's idle re-lock interval (a launch
 /// setting kept here so `AppState` gains one field, not two).
 pub struct Here {
-    pub claim: Claim,
+    /// Private: a claim changes only through [`Here::pick`] / [`Here::forget_claim`], so no crate
+    /// code can name someone without `whos_here_pick_impl` first forgetting the held key.
+    claim: Claim,
     recent: Vec<(String, String)>,
     bookmarks: HashMap<String, Candidate>,
     pub idle_lock: Duration,
@@ -65,7 +67,14 @@ impl Here {
         }
     }
 
-    /// Take `claim`. A named person moves to the front of the recent list (once, capped).
+    /// Who the terminal says is here.
+    pub fn claim(&self) -> &Claim {
+        &self.claim
+    }
+
+    /// Take `claim` — called only by `whos_here_pick_impl`, which forgets any held key first, so
+    /// one person's key can never sign under the next person's claim. A named person moves to the
+    /// front of the recent list (once, capped).
     pub fn pick(&mut self, claim: Claim) {
         if let Claim::Named {
             staff_id,
@@ -283,7 +292,7 @@ pub async fn whos_here_pick_impl(
     let (claim, offer) = {
         let mut here = state.whos_here.lock().await;
         here.pick(claim);
-        (claim_view(&here.claim), here.offer().cloned())
+        (claim_view(here.claim()), here.offer().cloned())
     };
     if let Some(c) = &offer {
         state.shown.lock().await.insert(c.patient_id, c.clone());

@@ -103,7 +103,7 @@ function setTerminalLocked(locked) {
 }
 
 /**
- * The idle re-lock (idle.js), after the node forgot the key and the claim: the strip is
+ * The idle re-lock (idle.js), after the window's Rust side forgot the key and the claim: the strip is
  * emptied, and the shared terminal passphrase is asked for again. `lock` is the node's answer,
  * or null when the re-lock could not reach it — the lock still shows, and says so.
  */

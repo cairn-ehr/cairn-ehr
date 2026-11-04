@@ -208,7 +208,7 @@ pub(crate) struct SpentPart {
     pub last_keystroke: DateTime<Utc>,
 }
 
-/// Spend draft `draft` into note event `event` (part 1's): the door returns the draft's
+/// Spend draft `draft` into note event `event` (the first NON-blank part's, not `seq` 1's): the door returns the draft's
 /// NON-empty parts in writing order, deletes the draft and records the spend, and a deferred
 /// trigger refuses the COMMIT unless `event` is a note of the same chart submitted in the same
 /// transaction. Empty means NOTHING was spent: the draft is absent, already spent, or has no

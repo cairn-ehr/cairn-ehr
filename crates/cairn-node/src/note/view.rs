@@ -49,7 +49,9 @@ pub enum PartWriter {
     /// No `drafted` contributor, and the signer did not merely attest: nothing says anyone but
     /// the grade's own author typed it (3a's notes, a signer's own part).
     TheSigner,
-    /// A `drafted` contributor this node can name: their display name.
+    /// A `drafted` contributor this node can name: their display name. A CLAIM, never verified
+    /// (`drafted` is a contributory role the floor does not authenticate): render it through
+    /// [`byline_words`], which marks it `?Name` and "unverified", never as a bare name.
     Drafted(String),
     /// A `drafted` contributor whose key this node cannot name (`cairn_note_signer_name` NULL).
     DraftedUnnamed,

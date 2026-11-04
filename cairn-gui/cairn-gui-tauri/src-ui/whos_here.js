@@ -4,15 +4,16 @@
 // A claim, never authentication: naming someone signs nothing and releases no key, and reading a
 // chart never needs a name. It is asked only when writing begins (New note, "Continue here"), or
 // when someone presses "Who's here?" / Ctrl+Shift+H (Cmd+Shift+H on macOS). "Don't know / just
-// reading" is an allowed answer. The node (`whos_here.rs`) holds the claim and words every
-// sentence; this file only draws it, and decides two orders, each pinned in
+// reading" is an allowed answer. The window's own Rust side (`whos_here.rs`, in `AppState` — not
+// cairn-node, which never learns who is here) holds the claim and words its sentences, all but
+// the picker's few lines below; this file draws it, and decides two orders, each pinned in
 // whos_here_webview_tests.rs:
 //  - a switch takes the chart off screen and AWAITS its saves before a name can be picked
 //    (Review Focus 1), so Nurse A's last words are saved under Nurse A;
 //  - the claim drawn here changes only at a pick or the re-lock: the 10-second lock poll seeds
 //    it at launch and never again, so an older poll answer cannot undo a newer pick.
 //
-// Recent people and bookmarks live in the node's window memory only, never browser storage.
+// Recent people and bookmarks live in the window's Rust memory only, never browser storage.
 // Classic script, loaded after notes.js, sharing main.js's globals (`el`, `cell`, `setMessage`,
 // `invoke`, `pollLock`), signer.js's `onStaffIdChange`, funnel.js's `closeChart`/`openChart` and
 // funnel.js's `failureText` — all read only at a press, long after every script has loaded.
@@ -25,6 +26,8 @@ const SIGNED_LINE = "Your note was signed.";
 // only what reopening the chart gives: the chance to sign again.
 const NOT_SIGNED_LINE = "Your note was NOT signed. Open the chart and sign it again.";
 const SIGN_UNKNOWN_LINE = "Whether your note was signed is not known — check the chart.";
+/** The bar's words when a refused pick's claim could not be read back: nobody is named. */
+const CLAIM_UNREAD = "Nobody is named at this terminal — say who's here";
 
 /** The claim on screen (Rust's `ClaimView`), or null before the first lock poll answers. */
 let currentClaim = null;
@@ -64,7 +67,7 @@ function claimedStaffId() {
 }
 
 /**
- * Take a claim the node now holds (a pick, a refused pick, the re-lock). The signer strip's
+ * Take a claim the window's Rust side now holds (a pick, a refused pick, the re-lock). The signer strip's
  * staff ID becomes the claim's — the directory's own id, verbatim — or empty when nobody is
  * named. The passphrase is never touched: a claim never signs anything.
  */
@@ -169,8 +172,8 @@ function drawPicker() {
 }
 
 /**
- * Say who is here: `staffId` from the directory, verbatim, or null for "Don't know". The node
- * forgets any held key and the old claim FIRST, so a refused pick leaves nobody named: the
+ * Say who is here: `staffId` from the directory, verbatim, or null for "Don't know". The window's
+ * Rust side forgets any held key and the old claim FIRST, so a refused pick leaves nobody named: the
  * claim is then read back, never assumed. A switch offers the person's bookmark; a pick asked
  * for by New note or Continue here goes on with that instead.
  */
@@ -183,7 +186,10 @@ async function pick(staffId) {
     try {
       takeClaim((await invoke("lock_state")).whos_here);
     } catch (e) {
+      // The window's Rust side forgot the old claim before refusing; never go on showing it,
+      // or the next New note would capture the last person as its writer (PR #966 review).
       console.error("the claim could not be read back", e);
+      takeClaim({ kind: "not-asked", staff_id: null, display_name: null, words: CLAIM_UNREAD });
     }
     return;
   }

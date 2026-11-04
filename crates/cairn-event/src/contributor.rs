@@ -112,11 +112,21 @@ pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
 /// authored the text, only to answer for it; a writer of unknown identity is simply
 /// left out rather than invented (principle 4). The signer also becomes the event's
 /// `signer_key_id`, so the set grades `Attested`. Pure; the caller signs the sealed bytes.
+///
+/// The writer is never the signer: the signer's OWN part is [`with_human_author`]'s
+/// `{signer, authored}` (cairn-node's `note::sign::part_author` decides which, by key). A
+/// `{S, drafted} + {S, attested}` set would read as somebody else's part the signer only
+/// vouched for, so a caller that builds one is a bug, caught in debug builds.
 pub fn with_attesting_signer(
     mut body: EventBody,
     signer_kid: &str,
     writer_kid: Option<&str>,
 ) -> EventBody {
+    debug_assert_ne!(
+        writer_kid,
+        Some(signer_kid),
+        "the signer's own part is authored (with_human_author), never drafted + attested"
+    );
     let mut front = Vec::with_capacity(2);
     if let Some(w) = writer_kid {
         front.push(serde_json::json!({"actor_id": w, "role": "drafted"}));
@@ -486,6 +496,13 @@ mod tests {
                 {"actor_id": "S", "role": "attested"},
                 {"actor_id": "N", "role": "recorded"}])
         );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "the signer's own part is authored")]
+    fn attesting_signer_refuses_the_signer_as_its_own_writer() {
+        let _ = with_attesting_signer(device_body(), "S", Some("S"));
     }
 
     #[test]

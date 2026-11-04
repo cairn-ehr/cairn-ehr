@@ -79,8 +79,11 @@ function notesSaved() {
 
 /**
  * One save, as `saveNoteNow` read it. Says how it went, and marks the editor saved or not, only
- * while its draft is still the one on screen. Resolves whether the node ANSWERED: saved, or a
- * sentence no retry can change (spent, elsewhere, no chart) — either way nothing is left to send.
+ * while its draft is still the one on screen. Resolves whether nothing is left to send: saved; a
+ * moved or signed-elsewhere draft whose unsaved text was kept as a new draft (`keepUnsavedText`);
+ * or a spend this window's own Sign may have made (that text went with the Sign). A refusal that
+ * wrote nothing — elsewhere, no chart, no such writer — resolves false and leaves the editor
+ * UNSAVED: the text exists only on screen, and nothing may treat it as kept (PR #966 review).
  */
 async function sendDraft(sent) {
   const mine = () => noteDraft === sent.held;
@@ -98,13 +101,14 @@ async function sendDraft(sent) {
     // window (final review I1) — so what it lacks is kept as a new draft. A spend this window's
     // own Sign may have made forks nothing: that text went with the Sign (`mayBeSigned`).
     if (view.moved || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);
-    sent.held.statedTime = asked;
+    const kept = view.saved || view.spent; // `spent` here: this window's own Sign took the text
+    if (kept) sent.held.statedTime = asked;
     if (view.saved) sent.held.savedText = sent.narrative;
     if (mine()) {
-      noteUnsaved = false;
+      noteUnsaved = !kept;
       saySaved(view.saved ? "" : view.sentence);
     }
-    return true;
+    return kept;
   } catch (failure) {
     // A new time the node refused (one this clock never showed) must not hold the TEXT back: the
     // door writes both, so send the text again with the last time the node took, and say why.
@@ -147,7 +151,10 @@ function unsavedRemainder(text, savedText, forkWords) {
  * waits for it: nothing typed is lost, and nothing saved is written twice. The editor's text when
  * it still holds the draft (the editor then shows only what the new draft holds), else what the
  * save carried. Once the editor's text has been kept, a save of the old draft still queued
- * carries older text than that, so it keeps nothing again (a second copy).
+ * carries older text than that, so it keeps nothing again (a second copy). With the editor gone
+ * (the chart closed behind two queued saves), each later answer carries NEWER text than the one
+ * before: it refills the one new draft the first answer made (`forkedTo`), never a second one
+ * holding the same words again (PR #966 review).
  */
 async function keepUnsavedText(sent, forkWords) {
   if (sent.held.keptOnScreen) return true;
@@ -163,7 +170,9 @@ async function keepUnsavedText(sent, forkWords) {
     }
     return true;
   }
-  const fork = { ...sent.held, draftId: crypto.randomUUID(), savedText: "", mayBeSigned: false, keptOnScreen: false };
+  const fork = sent.held.forkedTo ||
+    { ...sent.held, draftId: crypto.randomUUID(), savedText: "", mayBeSigned: false, keptOnScreen: false, forkedTo: null };
+  sent.held.forkedTo = fork;
   if (onScreen) {
     noteDraft = fork;
     el("note-parts").replaceChildren(); // the parts above went on with the other draft

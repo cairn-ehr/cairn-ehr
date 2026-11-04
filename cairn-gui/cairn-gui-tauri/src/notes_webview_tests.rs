@@ -413,7 +413,8 @@ fn the_editor_is_read_only_while_a_sign_is_in_flight() {
 }
 
 /// Fix round 1, I4. Text not yet in the node survives a chart change: a keystroke or a failed save
-/// marks the editor unsaved, an answered save clears it, and the close flushes on either. Sign's
+/// marks the editor unsaved, a save the node took clears it (a refusal that wrote nothing does not,
+/// PR #966 review), and the close flushes on either. Sign's
 /// partly-typed-time refusal comes BEFORE it cancels the pending save, so the save still goes. An
 /// unknown-outcome Sign keeps the editor unless the save before closing it was answered.
 #[test]
@@ -423,7 +424,7 @@ fn unsaved_text_survives_a_chart_change() {
     let caught = &send[position(send, "catch (failure) {")..];
     assert!(caught.contains("noteUnsaved = true;"), "{send}");
     assert!(
-        send[..position(send, "catch (failure) {")].contains("noteUnsaved = false;"),
+        send[..position(send, "catch (failure) {")].contains("noteUnsaved = !kept;"),
         "{send}"
     );
     assert!(js_fn(NOTES_JS, "clearNotes")

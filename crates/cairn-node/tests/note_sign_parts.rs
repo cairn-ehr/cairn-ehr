@@ -385,6 +385,105 @@ async fn empty_parts_are_skipped_and_an_all_empty_draft_is_refused_empty() {
     assert_eq!(open, [blank], "the blank draft is not spent");
 }
 
+/// PR #966 review: a blank FIRST part (Nurse A clicked in, typed, deleted) makes the next typed
+/// part the note — the spend's event, with no ref of its own — and every later part is an addendum
+/// to the part signed just before it, never to the note itself. Three events, so chaining every
+/// addendum to the first (`ids.first()`) fails here where a two-event test cannot tell.
+#[tokio::test]
+async fn a_blank_first_part_makes_the_next_the_note_and_each_part_continues_the_one_before() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, _, human_sk, human_kid, chart) = common::note_setup(&c).await;
+    enrol_nurse_a(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    // Part 1 Nurse A's (blank), 2 Dr Ada's, 3 Nurse A's, 4 Dr Ada's (written by Sign's own save).
+    let draft = Uuid::now_v7();
+    save_as(&c, draft, chart, Some("nurse-a"), " ").await;
+    save_as(&c, draft, chart, Some("notewriter"), "plan: fluids").await;
+    save_as(&c, draft, chart, Some("nurse-a"), "obs at 04:00 stable").await;
+    let mut sent = input(draft, chart, "review at 08:00");
+    sent.writer = Some("notewriter");
+
+    let signed = sign_note(&mut c, &node_sk, &sent, &author)
+        .await
+        .unwrap()
+        .expect("signs");
+
+    let [second, third, fourth] = signed.value[..] else {
+        panic!("three typed parts, three events: {:?}", signed.value);
+    };
+    assert_eq!(
+        signed.event_id, second,
+        "the spend names the first NON-blank part's event"
+    );
+    let addendum = |to: Uuid| serde_json::json!([{"rel": "addendum-to", "event": to.to_string()}]);
+    assert_eq!(
+        stored(&c, second).await.1,
+        serde_json::json!([]),
+        "the note"
+    );
+    assert_eq!(stored(&c, third).await.1, addendum(second));
+    assert_eq!(
+        stored(&c, fourth).await.1,
+        addendum(third),
+        "part 4 continues part 3, not the note"
+    );
+}
+
+/// PR #966 review: the text on screen at Sign belongs to the writer the editor captured, not to
+/// the signer — Nurse A typed it (the editor opened under her claim), Dr Ada signs it. Sign's own
+/// save carries `writer: nurse-a`, so the part signs `{nurse, drafted} + {signer, attested}`, never
+/// the false `{signer, authored}`.
+#[tokio::test]
+async fn the_signs_own_save_of_a_colleagues_part_signs_as_drafted_and_attested() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, human_sk, human_kid, chart) = common::note_setup(&c).await;
+    let nurse_kid = enrol_nurse_a(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let draft = Uuid::now_v7();
+    save_as(&c, draft, chart, Some("nurse-a"), "obs stable").await;
+    // Typed since the last autosave, still Nurse A's part; Dr Ada's key signs.
+    let mut sent = input(draft, chart, "obs stable, sats 97% on air");
+    sent.writer = Some("nurse-a");
+
+    let signed = sign_note(&mut c, &node_sk, &sent, &author)
+        .await
+        .unwrap()
+        .expect("signs");
+
+    assert_eq!(signed.value, vec![signed.event_id], "one part, one event");
+    let (contributors, _) = stored(&c, signed.event_id).await;
+    assert_eq!(
+        contributors,
+        serde_json::json!([
+            contributor(&nurse_kid, "drafted"),
+            contributor(&human_kid, "attested"),
+            contributor(&node_kid, "recorded")
+        ])
+    );
+    let note = &list_patient_notes(&c, chart).await.unwrap().notes[0];
+    assert_eq!(
+        note.text, "obs stable, sats 97% on air",
+        "Sign's own save landed"
+    );
+    assert_eq!(note.writer, PartWriter::Drafted("Nurse A".into()));
+}
+
 #[tokio::test]
 async fn a_moved_draft_is_refused_moved_and_writes_nothing() {
     let Some(base) = common::cs() else {

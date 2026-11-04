@@ -32,8 +32,8 @@ function noteActivity() {
 /**
  * The timer fired. A Sign in flight is waited for first (Review Focus 4): cutting it would leave
  * its outcome unsaid. Someone who touched the terminal meanwhile is there, so nothing locks.
- * Then the chart closes (its queued saves awaited), the node forgets the key and the claim, and
- * the terminal lock shows again.
+ * Then the chart closes (its queued saves awaited), the window's Rust side forgets the key and
+ * the claim, and the terminal lock shows again.
  */
 async function idleRelock() {
   idleTimer = null;

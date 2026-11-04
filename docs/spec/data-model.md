@@ -409,6 +409,12 @@ Federation requires **globally-unique, offline-mintable** identity (UUIDv7 and c
 ## 3.19 The progress-note narrative format: one signed event, markdown narrative, and manifest-keyed media anchors
 > See [ADR-0041](decisions/0041-progress-note-narrative-format.md). The first narrative clinical surface: [principle 11](index.md#founding-principles-the-lens-for-every-decision) (the raw body is human-readable) and [principle 12](index.md#founding-principles-the-lens-for-every-decision) (rendering belongs to the edges) applied to rich clinical text. Rides the [§3.14](#314-attachments-content-addressed-blobs-and-the-rendition-set) attachment shape, the [§3.15](#315-the-active-write-model-thin-encounters-co-produced-legibility-and-the-delete-vs-erase-distinction) encounter fold, and the [§3.10](#310-session-identity-event-authorship-and-draft-durability) draft store. No new envelope field; no new founding principle.
 
+> [!NOTE]
+> **Narrowed by [ADR-0088](decisions/0088-whos-here-and-a-drafts-parts.md) (sign-in slice 3b-1).** One *writer's*
+> entry is still one signed event, but a draft several people wrote signs as **one event per writer's part**, each
+> later part an `addendum-to` the one before ([§3.10](#310-session-identity-event-authorship-and-draft-durability)).
+> So a multi-writer note's arrival is no longer atomic: a peer may hold part 2 before part 1 (#948).
+
 A progress note is **one signed event** (`clinical.note.asserted`, `schema_version =
 clinical.note/1` — three-segment like every production type, opening the `clinical.*` namespace
 that separates clinical content from administrative/infrastructure streams; the walking-skeleton

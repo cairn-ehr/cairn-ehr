@@ -7,7 +7,7 @@
 //! `AppState::mock` with no Tauri runtime (`notes_tests.rs`). Every sentence the clinician reads is
 //! made by a pure function here, so its wording is pinned without a database or a webview.
 //!
-//! Three things the window deliberately does NOT do, because the node does them:
+//! Four things the window deliberately does NOT do (the first three because the node does them):
 //! * escape markup — `sign_note` escapes the raw text once, at signing (ADR-0041); drafts and
 //!   this file carry the text exactly as typed;
 //! * send a time for recording — the save door stamps `recording_started` and `last_keystroke`
@@ -128,7 +128,7 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     // under the next one's header.
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let Some(db) = state.db.as_ref() else {
-        let claim = state.whos_here.lock().await.claim.clone();
+        let claim = state.whos_here.lock().await.claim().clone();
         return Ok(NotePane {
             notes: vec![],
             withheld_sentence: None,
@@ -149,7 +149,7 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     // The window supplies the zone (ruling R10): the node never knows the terminal's.
     let today = Utc::now().with_timezone(&chrono::Local).date_naive();
     // The claim decides only which part the editor may open on; a save never reads it.
-    let claim = state.whos_here.lock().await.claim.clone();
+    let claim = state.whos_here.lock().await.claim().clone();
     Ok(note_pane(list, terminal, &claim, &chrono::Local, today))
 }
 
@@ -214,7 +214,7 @@ pub async fn note_draft_take_impl(
     Ok(take_view(outcome))
 }
 
-/// Sign the note: the steps of `commands::cease_impl`, for one event. The chart on screen first,
+/// Sign the note: the steps of `commands::cease_impl`, for one event per writer's part. The chart on screen first,
 /// then fixture mode, then every refusal that is a verdict on the gesture (empty text, a stated
 /// time that cannot be read), and only then the key — a passphrase that signs nothing is a step
 /// paper never has. The raw text goes to `sign_note`, which escapes it, with `writer` — the

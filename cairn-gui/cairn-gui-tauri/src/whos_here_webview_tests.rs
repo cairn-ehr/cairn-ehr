@@ -381,7 +381,15 @@ fn staff_id_prefilled_passphrase_never() {
         take.contains("el(\"staff-id\").value = claim.staff_id || \"\";"),
         "{take}"
     );
-    assert!(js_fn(WHOS_HERE_JS, "pick").contains("takeClaim(picked.claim);"));
+    let pick = js_fn(WHOS_HERE_JS, "pick");
+    assert!(pick.contains("takeClaim(picked.claim);"));
+    // PR #966 review: a refused pick whose claim cannot be read back shows NOBODY, never the
+    // last person — the next New note would otherwise capture them as its writer.
+    let unread = &pick[position(pick, "console.error(\"the claim could not be read back\"")..];
+    assert!(
+        unread.contains("takeClaim({ kind: \"not-asked\", staff_id: null, display_name: null, words: CLAIM_UNREAD });"),
+        "{pick}"
+    );
     assert!(js_fn(SIGNER_JS, "relockTerminal").contains("el(\"staff-id\").value = \"\";"));
     for (file, js, clears) in [("whos_here.js", WHOS_HERE_JS, 1), ("idle.js", IDLE_JS, 0)] {
         assert_eq!(

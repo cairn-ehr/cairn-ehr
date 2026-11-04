@@ -57,9 +57,9 @@ pub struct NoteAssertion<'a> {
     pub addendum_to: Option<&'a str>,
 }
 
-/// Build the `clinical.note/1` payload. Keys are frozen; `media`, `refs` and
-/// `encounter` are reserved slots written empty so adding content later is
-/// additive, never a shape change.
+/// Build the `clinical.note/1` payload. Keys are frozen; `media` and `encounter`
+/// are reserved slots written empty so adding content later is additive, never a
+/// shape change; `refs` is empty too, except a later part's one `addendum-to`.
 pub fn note_payload(a: &NoteAssertion) -> Value {
     let basis = match a.stated {
         StatedTime::Stated(_) => "stated",

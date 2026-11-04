@@ -93,7 +93,10 @@
 > (a Sign's outcome after a switch) · **#971** (the directory lists repudiated keys) · **#972** (bookmarks from
 > `--patient`/registering; the offer shows an age, with #673) · **#974** (resuming costs a who's-here pick, below) ·
 > **#973** (built in this PR; the PR closes it) · from the final review **#975** (three small window
-> defects) · **#976** (the first keystroke after a fork can close the editor; overlapping forks) · **#945** half
+> defects) · **#976** (a whitespace-only first keystroke after a move or a signing elsewhere closes the editor) · from
+> the post-PR review **#977** (no two-connection test of db/066's advisory lock) · **#978** (the save queue's JS has only
+> source pins; that review's two text-loss fixes — an off-screen double fork, a refusal marked saved — were proved
+> with a throwaway node harness) · **#945** half
 > built (a draft signed elsewhere keeps the unsaved text); from planning **#963** (slice 5: drafts across
 > terminal-nodes) · **#964** · **#965**. Owed by a human: **RUNBOOK §19** (hot key → named ≤ 3 s over 50 staff, re-lock
 > → back ≤ 10 s, Continue here ≤ 1 s, nothing lost in a mid-typing switch, keyboard + VoiceOver). **Decision owed, #974** (`M > N`?):
