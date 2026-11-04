@@ -332,6 +332,9 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
             );
         }
     }
+    // A save answering `discarded` (slice 3b-2b) is read off `view`, checked above; the markers'
+    // own fields are checked in notes_discard_webview_tests.rs.
+    assert!(NOTES_JS.contains("view.discarded"));
 }
 
 /// Fix round 1, I1. Closing a chart waits for every queued save BEFORE it sends `close_chart`.

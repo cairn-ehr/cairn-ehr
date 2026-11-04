@@ -86,6 +86,7 @@ function renderNotes(pane) {
   }
   const listed = pane.drafts.filter((draft) => !(noteDraft && noteDraft.draftId === draft.draft_id));
   el("note-drafts").replaceChildren(...listed.map(draftItem));
+  renderDiscards(pane); // notes_discard.js: their own list, never among the notes
 }
 
 /**
@@ -307,11 +308,13 @@ function showEditor(open) {
 }
 
 /**
- * While a Sign is in flight (`on`), Sign is down and the editor read-only (ruling R13): a key
- * pressed then would be in neither the signed note nor any draft.
+ * While a Sign or a Discard is in flight (`on`), both buttons are down and the editor read-only
+ * (ruling R13): a key pressed then would be in neither the signed note (or the discard's audit
+ * copy) nor any draft.
  */
 function setSigning(on) {
   el("note-sign").disabled = on; // one press, one note
+  el("note-discard").disabled = on;
   el("note-text").readOnly = on;
   el("note-when").readOnly = on;
 }
@@ -346,6 +349,7 @@ function clearNotes() {
   closeEditor();
   el("note-list").replaceChildren();
   el("note-drafts").replaceChildren();
+  el("note-discards").replaceChildren();
   setMessage(el("notes-withheld"), "");
   setMessage(el("notes-error"), "");
   noteStatus("");
@@ -360,6 +364,19 @@ el("note-sign").addEventListener("click", () => {
     .catch((failure) => {
       console.error(failure);
       return "unknown"; // a fault in this window mid-sign: whether it signed is not known
+    })
+    .finally(() => {
+      noteSignInFlight = false;
+    });
+});
+// A Discard shares Sign's in-flight flags: idle.js's re-lock and whos_here.js's switch wait on
+// `signsSettled()` / `signInFlight()`, and must wait for a discard exactly as for a Sign.
+el("note-discard").addEventListener("click", () => {
+  noteSignInFlight = true;
+  noteSigning = discardNote()
+    .catch((failure) => {
+      console.error(failure);
+      return "unknown"; // a fault in this window mid-discard: whether it discarded is not known
     })
     .finally(() => {
       noteSignInFlight = false;

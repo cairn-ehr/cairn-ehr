@@ -372,6 +372,10 @@ fn every_command_the_webview_calls_is_registered() {
         ("signer.js", include_str!("../src-ui/signer.js")),
         ("notes_save.js", include_str!("../src-ui/notes_save.js")),
         ("notes.js", include_str!("../src-ui/notes.js")),
+        (
+            "notes_discard.js",
+            include_str!("../src-ui/notes_discard.js"),
+        ),
         ("whos_here.js", include_str!("../src-ui/whos_here.js")),
         ("idle.js", include_str!("../src-ui/idle.js")),
         ("enrol.js", include_str!("../src-ui/enrol.js")),

@@ -12,8 +12,8 @@ const NOTES_JS: &str = concat!(
 );
 
 /// The one line that decides a save's answer forks: moved; committed by the quarantine timer;
-/// or signed, unless this window's own Sign may have signed it.
-const FORKS: &str = "if (view.moved || view.committed || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);";
+/// or signed or discarded, unless this window's own press (Sign or Discard) may have made it.
+const FORKS: &str = "if (view.moved || view.committed || ((view.spent || view.discarded) && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);";
 
 /// Review Focus 2: the old terminal saves after another took the draft. The save answers
 /// `moved`, and what the node lacks is kept as a NEW draft (a fresh id, the same writer), saved
@@ -108,7 +108,7 @@ fn a_refusal_that_wrote_nothing_leaves_the_editor_unsaved() {
     let send = js_fn(NOTES_JS, "sendDraft");
     let answered = &send[..position(send, "catch (failure) {")];
     for line in [
-        "const kept = view.saved || view.spent;",
+        "const kept = view.saved || view.spent || view.discarded;",
         "if (kept) sent.held.statedTime = asked;",
         "noteUnsaved = !kept;",
         "return kept;",
@@ -146,7 +146,10 @@ fn later_answers_refill_the_one_fork_never_a_second() {
 fn a_timer_commit_forks_even_after_a_sign_press() {
     let send = js_fn(NOTES_JS, "sendDraft");
     let line = &send[position(send, FORKS)..][..FORKS.len()];
-    let excused = position(line, "(view.spent && !sent.held.mayBeSigned)");
+    let excused = position(
+        line,
+        "((view.spent || view.discarded) && !sent.held.mayBeSigned)",
+    );
     assert!(
         position(line, "view.committed ||") < excused,
         "committed is never excused by mayBeSigned: {line}"

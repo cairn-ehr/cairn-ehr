@@ -116,9 +116,11 @@ h2 {
   margin-bottom: 1rem;
 }
 
-/* A draft's other parts, read-only above the editor; each is headed by its claimed writer. */
+/* A draft's other parts, read-only above the editor; each is headed by its claimed writer. A
+   discarded draft's parts are headed the same way. */
 #note-parts h3,
-#note-drafts h3 {
+#note-drafts h3,
+#note-discards h3 {
   font-size: 1rem;
   margin: 0.4rem 0 0;
 }

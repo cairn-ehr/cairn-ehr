@@ -101,11 +101,12 @@ async function sendDraft(sent) {
     });
     // The draft went on without this window — moved to another terminal, put into the record
     // unsigned by the quarantine timer (slice 3b-2a), or signed in another window (final review
-    // I1) — so what it lacks is kept as a new draft. A spend this window's own Sign may have made
-    // forks nothing: that text went with the Sign (`mayBeSigned`). A timer's commit is never this
-    // window's Sign, so `committed` forks even after a Sign press.
-    if (view.moved || view.committed || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);
-    const kept = view.saved || view.spent; // `spent` here: this window's own Sign took the text
+    // I1) or discarded in another window (slice 3b-2b) — so what it lacks is kept as a new draft. A
+    // spend or discard this window's own press (Sign or Discard) may have made forks nothing: that
+    // text went with the press (`mayBeSigned`). A timer's commit is never this window's press, so
+    // `committed` forks even after one.
+    if (view.moved || view.committed || ((view.spent || view.discarded) && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);
+    const kept = view.saved || view.spent || view.discarded; // this window's own press took the text
     if (kept) sent.held.statedTime = asked;
     if (view.saved) sent.held.savedText = sent.narrative;
     if (mine()) {
