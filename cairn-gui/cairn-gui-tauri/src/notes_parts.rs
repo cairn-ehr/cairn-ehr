@@ -8,12 +8,15 @@
 //! writer is the current claim — a named person by staff id, or "Don't know" on an unknown tail
 //! (ruling M3: two unknown writers share it, since the floor cannot tell them apart; the editor
 //! must show its text, or an empty editor would REPLACE it on the next save). Pure functions.
+use super::commit::due_words;
 use super::time::datetime_local;
 use crate::whos_here::{claim_view, claimed_name, Claim, ClaimView};
 use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::view::{byline_words, instant, time_words};
 use chrono::{NaiveDate, TimeZone};
+use std::collections::HashSet;
+use uuid::Uuid;
 
 /// One signed note, as the pane shows it.
 #[derive(Debug, serde::Serialize)]
@@ -44,11 +47,13 @@ pub struct NotePane {
 }
 
 /// The read as the pane shows it, in zone `tz` with `today` its date, the editable part chosen for
-/// `claim`. Pure.
+/// `claim`; `failed`: the drafts whose last commit in this window failed (`commit::due_words`).
+/// Pure.
 pub(crate) fn note_pane<Tz: TimeZone>(
     list: PatientNoteList,
     terminal: Option<&str>,
     claim: &Claim,
+    failed: &HashSet<Uuid>,
     tz: &Tz,
     today: NaiveDate,
 ) -> NotePane
@@ -73,7 +78,7 @@ where
         drafts: list
             .drafts
             .iter()
-            .map(|d| draft_view(d, terminal, claim, tz, today))
+            .map(|d| draft_view(d, terminal, claim, failed.contains(&d.draft_id), tz, today))
             .collect(),
         claim: claim_view(claim),
     }
@@ -124,7 +129,8 @@ pub struct DraftView {
     pub draft_id: String,
     /// Whether the draft is held by THIS terminal — the only place it may be edited.
     pub here: bool,
-    /// "unsigned draft · started 03:12 · last typed 03:40", plus where it is being written.
+    /// "unsigned draft · started 03:12 · last typed 03:40", plus where it is being written, and
+    /// when it goes into the record unsigned (`commit::due_words`).
     pub words: String,
     /// Its parts in writing order.
     pub parts: Vec<PartView>,
@@ -140,11 +146,13 @@ fn is_claims(part: &DraftPart, claim: &Claim) -> bool {
     }
 }
 
-/// One draft's words, its parts, and which part the current claim may edit.
+/// One draft's words, its parts, and which part the current claim may edit. `failed`: this
+/// window's last commit of it failed.
 pub(crate) fn draft_view<Tz: TimeZone>(
     draft: &NoteDraft,
     terminal: Option<&str>,
     claim: &Claim,
+    failed: bool,
     tz: &Tz,
     today: NaiveDate,
 ) -> DraftView
@@ -161,6 +169,15 @@ where
     if !here {
         words.push_str(" · being written at another terminal");
     }
+    words.push_str(" · ");
+    words.push_str(&due_words(
+        draft.due,
+        draft.overdue,
+        draft.stuck,
+        failed,
+        tz,
+        today,
+    ));
     let tail = draft.parts.len().saturating_sub(1);
     let parts = draft
         .parts

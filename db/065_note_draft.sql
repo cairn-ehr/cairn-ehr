@@ -11,7 +11,8 @@
 --   * One draft belongs to one chart on one terminal ('elsewhere'/'moved' otherwise), so two screens
 --     cannot silently overwrite each other's text.
 --   * A spent draft can never come back: spending moves the row into note_draft_spent, and a
---     later save of that id answers 'spent'. A deferred constraint trigger refuses, at COMMIT,
+--     later save of that id answers 'spent' (or 'committed', when the quarantine timer spent it,
+--     db/067). A deferred constraint trigger refuses, at COMMIT,
 --     a spend that names no clinical.note.asserted event of that chart INSERTED IN THE SAME
 --     TRANSACTION (ruling R9) — so a draft cannot be "spent" without the note it became.
 --   * Drafts hold the RAW text as typed (the window escapes markup only when it signs, ADR-0041);
@@ -48,8 +49,15 @@ CREATE TABLE IF NOT EXISTS note_draft_spent (
     -- UNIQUE: one note event backs exactly one spend, so an existing note can never be reused
     -- to wipe other drafts on the chart.
     event_id   uuid NOT NULL UNIQUE,
-    spent_at   timestamptz NOT NULL DEFAULT clock_timestamp()
+    spent_at   timestamptz NOT NULL DEFAULT clock_timestamp(),
+    -- true = the quarantine timer committed it unsigned (db/067), false = a clinician signed it.
+    -- Lives HERE, not in db/067, because db/066's save and take doors read it: a column a door
+    -- reads is created by its table's own file, so an upgrade replay never runs a body ahead of it.
+    by_timer   boolean NOT NULL DEFAULT false
 );
+
+-- Paired ALTER for a database created before by_timer existed (#207's rule).
+ALTER TABLE note_draft_spent ADD COLUMN IF NOT EXISTS by_timer boolean NOT NULL DEFAULT false;
 
 -- Paired ALTER for a database created before UNIQUE existed (#207's rule). Constraint name is
 -- the one Postgres gives an inline UNIQUE.
@@ -64,7 +72,8 @@ REVOKE ALL ON note_draft, note_draft_spent FROM PUBLIC;
 
 -- At COMMIT, a spent draft must be backed by its note event: right type, this patient's chart,
 -- and INSERTED IN THIS SAME TRANSACTION (xmin = our xid) -- a spend is only ever the sign path's
--- own submit, so an older note (already committed) must not be able to justify wiping a draft.
+-- (or the quarantine commit's, db/067) own submit, so an older note (already committed) must not
+-- be able to justify wiping a draft.
 -- Caveat: a row inserted inside a subtransaction carries the subxid, so the sign path must submit
 -- the note without a savepoint around it.
 -- SECURITY DEFINER with a pinned search_path and a qualified table: a caller must not be able to

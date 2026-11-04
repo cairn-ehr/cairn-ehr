@@ -1,8 +1,9 @@
 // The note editor's save queue (split from notes.js, sign-in slice 3b-1): the one-second
 // autosave rhythm (ruling R14), saves sent one after another, what a save that failed says, and
 // what is kept when a save finds its draft gone on without this window — moved to another
-// terminal, or signed in another window. notes.js owns the editor (`noteDraft`, the fields, Sign);
-// this file owns getting its text into the node, and never losing what the node does not have.
+// terminal, put into the record unsigned by the quarantine timer, or signed in another window.
+// notes.js owns the editor (`noteDraft`, the fields, Sign); this file owns getting its text into
+// the node, and never losing what the node does not have.
 //
 // Classic script, loaded right BEFORE notes.js (whose input listeners name `onNoteInput` as it
 // loads), sharing main.js's global scope (`el`, `invoke`) and notes.js's `noteDraft`,
@@ -80,10 +81,11 @@ function notesSaved() {
 /**
  * One save, as `saveNoteNow` read it. Says how it went, and marks the editor saved or not, only
  * while its draft is still the one on screen. Resolves whether nothing is left to send: saved; a
- * moved or signed-elsewhere draft whose unsaved text was kept as a new draft (`keepUnsavedText`);
- * or a spend this window's own Sign may have made (that text went with the Sign). A refusal that
- * wrote nothing — elsewhere, no chart, no such writer — resolves false and leaves the editor
- * UNSAVED: the text exists only on screen, and nothing may treat it as kept (PR #966 review).
+ * moved, timer-committed or signed-elsewhere draft whose unsaved text was kept as a new draft
+ * (`keepUnsavedText`); or a spend this window's own Sign may have made (that text went with the
+ * Sign). A refusal that wrote nothing — elsewhere, no chart, no such writer — resolves false and
+ * leaves the editor UNSAVED: the text exists only on screen, and nothing may treat it as kept
+ * (PR #966 review).
  */
 async function sendDraft(sent) {
   const mine = () => noteDraft === sent.held;
@@ -97,10 +99,12 @@ async function sendDraft(sent) {
       statedTime: asked,
       writer: sent.held.writer,
     });
-    // The draft went on without this window — moved to another terminal, or signed in another
-    // window (final review I1) — so what it lacks is kept as a new draft. A spend this window's
-    // own Sign may have made forks nothing: that text went with the Sign (`mayBeSigned`).
-    if (view.moved || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);
+    // The draft went on without this window — moved to another terminal, put into the record
+    // unsigned by the quarantine timer (slice 3b-2a), or signed in another window (final review
+    // I1) — so what it lacks is kept as a new draft. A spend this window's own Sign may have made
+    // forks nothing: that text went with the Sign (`mayBeSigned`). A timer's commit is never this
+    // window's Sign, so `committed` forks even after a Sign press.
+    if (view.moved || view.committed || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);
     const kept = view.saved || view.spent; // `spent` here: this window's own Sign took the text
     if (kept) sent.held.statedTime = asked;
     if (view.saved) sent.held.savedText = sent.narrative;
@@ -145,10 +149,11 @@ function unsavedRemainder(text, savedText, forkWords) {
 }
 
 /**
- * Review Focus 2 and final review I1: a save found its draft moved to another terminal, or signed
- * in another window. What the node lacks (`unsavedRemainder`) is kept as a NEW draft of its own (a
- * fresh id, the same writer), sent at once in queue order, so a chart closing behind it still
- * waits for it: nothing typed is lost, and nothing saved is written twice. The editor's text when
+ * Review Focus 2 and final review I1: a save found its draft moved to another terminal, put into
+ * the record unsigned by the quarantine timer, or signed in another window. What the node lacks
+ * (`unsavedRemainder`) is kept as a NEW draft of its own (a fresh id, the same writer), sent at
+ * once in queue order, so a chart closing behind it still waits for it: nothing typed is lost,
+ * and nothing saved is written twice. The editor's text when
  * it still holds the draft (the editor then shows only what the new draft holds), else what the
  * save carried. Once the editor's text has been kept, a save of the old draft still queued
  * carries older text than that, so it keeps nothing again (a second copy). With the editor gone

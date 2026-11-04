@@ -2055,6 +2055,22 @@ enum Cmd {
         none: bool,
     },
 
+    /// Console-only: how long a note draft nobody types into waits before it goes into the record
+    /// unsigned (`--minutes N`), or back to the default of 180 minutes (`--default`). Exactly one.
+    NoteSetQuarantine {
+        /// Whole minutes without typing, 1 to 43200 (30 days).
+        #[arg(
+            long,
+            required_unless_present = "default",
+            conflicts_with = "default",
+            value_parser = clap::value_parser!(i32).range(1..=43200)
+        )]
+        minutes: Option<i32>,
+        /// Back to the default, 180 minutes.
+        #[arg(long)]
+        default: bool,
+    },
+
     /// Record clinician-observed identity evidence on an existing chart (§5.4): an
     /// estimated age (-> a year-range dob) and/or an observed sex (-> administrative-sex),
     /// both provenance `clinician-observed`. Supply at least one of --age / --sex.
@@ -4929,6 +4945,30 @@ async fn run() -> anyhow::Result<()> {
                 Some(n) => println!("unconfirmed keys stop signing {n} days after approval"),
                 None => println!("unconfirmed keys never expire"),
             }
+        }
+        Cmd::NoteSetQuarantine {
+            minutes,
+            default: _,
+        } => {
+            // A site's policy is set at its own console, like the vault's (#899).
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            // NULL = the default (db/067).
+            db.execute("SELECT cairn_note_set_quarantine($1)", &[&minutes])
+                .await?;
+            // Read back what is now in force, so the line never states a default it assumed.
+            let n: i32 = db
+                .query_one("SELECT cairn_note_quarantine_minutes()", &[])
+                .await?
+                .get(0);
+            let default = if minutes.is_none() {
+                " (the default)"
+            } else {
+                ""
+            };
+            println!(
+                "a draft left untouched for {n} minutes{default} goes into the record unsigned"
+            );
         }
         Cmd::AssertObservedEvidence {
             patient,

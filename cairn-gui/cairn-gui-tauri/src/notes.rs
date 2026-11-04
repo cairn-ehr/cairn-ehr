@@ -40,6 +40,10 @@ mod time;
 #[path = "notes_parts.rs"]
 pub(crate) mod parts;
 
+/// The quarantine commit's runner: the tick, the pre-read commit, the due words (`notes_commit.rs`).
+#[path = "notes_commit.rs"]
+pub(crate) mod commit;
+
 /// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
 #[path = "notes_words.rs"]
 pub(crate) mod words;
@@ -136,6 +140,11 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             claim: crate::whos_here::claim_view(&claim),
         });
     };
+    // Overdue drafts go in FIRST, so the pane never shows one the next tick takes away. Its
+    // answer is ignored: a commit that cannot run never blocks the read (Review Focus 5). What it
+    // failed to commit is in `commit_failed`, which the pane's words read.
+    let _ = commit::commit_overdue_impl(state, Some(patient), true).await;
+    let failed = state.commit_failed.lock().await.clone();
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
     let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;
@@ -150,7 +159,14 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     let today = Utc::now().with_timezone(&chrono::Local).date_naive();
     // The claim decides only which part the editor may open on; a save never reads it.
     let claim = state.whos_here.lock().await.claim().clone();
-    Ok(note_pane(list, terminal, &claim, &chrono::Local, today))
+    Ok(note_pane(
+        list,
+        terminal,
+        &claim,
+        &failed,
+        &chrono::Local,
+        today,
+    ))
 }
 
 /// Save the text on screen as `writer`'s part of draft `draft_id` of the chart on screen, held by

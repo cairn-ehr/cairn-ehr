@@ -165,6 +165,47 @@ fn spent_sentence_exact() {
     );
 }
 
+/// Slice 3b-2a: a save answering `committed` means the quarantine timer put the draft into the
+/// record unsigned. That is never this window's own Sign, so the webview always keeps what it had
+/// not saved as a new draft (Review Focus 1), with these words; the take and the sign say the
+/// same thing in their own shape, and the sign asks for a re-read, as for `spent`.
+#[test]
+fn committed_sentence_exact() {
+    let committed = save_view(SaveOutcome::Committed);
+    assert!(committed.committed && !committed.spent && !committed.moved && !committed.saved);
+    let kept = "This note went into the record unsigned after it was left untouched. What you \
+                typed since the last save is kept here as a new draft.";
+    assert_eq!(committed.sentence.as_deref(), Some(kept));
+    let fork = committed.fork.expect("a timer's commit forks");
+    assert_eq!(fork.kept, kept);
+    assert_eq!(
+        fork.nothing_new,
+        "This note went into the record unsigned after it was left untouched. Everything typed \
+         here was saved into it first."
+    );
+    assert_eq!(
+        fork.everything,
+        "This note went into the record unsigned after it was left untouched. Everything on this \
+         screen is kept here as a new draft; what was saved before is also in that note."
+    );
+    for other in [SaveOutcome::Saved, SaveOutcome::Spent, SaveOutcome::Moved] {
+        assert!(!save_view(other).committed, "{other:?}");
+    }
+    assert_eq!(
+        take_view(TakeOutcome::Committed).sentence.as_deref(),
+        Some("this note has already gone into the record unsigned")
+    );
+    let sign = sign_refusal_view(SignRefusal::Committed);
+    assert_eq!(
+        sign.text,
+        "this note had already gone into the record unsigned — nothing was signed"
+    );
+    // Final review I2: the save that follows this refusal always forks, and may close the editor,
+    // so — as for `spent` — the sign never says "your text is still here".
+    assert!(!sign.text.contains("still here"), "{}", sign.text);
+    assert_eq!(sign.retry, Retry::AfterReread(Recorded::No));
+}
+
 #[test]
 fn take_words_each_outcome() {
     let taken = take_view(TakeOutcome::Taken);

@@ -17,14 +17,18 @@ pub struct SaveView {
     /// The draft was signed. Unless this window's own Sign may have signed it, the webview keeps
     /// what it had not saved as a new draft, as for `moved` (final review I1).
     pub spent: bool,
-    /// Why nothing was written. For `moved`, the same words as `fork.kept`.
+    /// The quarantine timer put the draft into the record unsigned (slice 3b-2a). Never this
+    /// window's own Sign, so the webview always keeps what it had not saved as a new draft.
+    pub committed: bool,
+    /// Why nothing was written. For `moved` and `committed`, the same words as `fork.kept`.
     pub sentence: Option<String>,
-    /// `moved` or `spent`: the words for keeping what the draft lacks as a new draft.
+    /// `moved`, `spent` or `committed`: the words for keeping what the draft lacks as a new draft.
     pub fork: Option<ForkWords>,
 }
 
-/// What the webview says when it keeps the text a moved or signed-elsewhere draft lacks. Only the
-/// webview knows which of the three happened to the text on screen, so all three travel.
+/// What the webview says when it keeps the text a moved, signed-elsewhere or timer-committed draft
+/// lacks. Only the webview knows which of the three happened to the text on screen, so all three
+/// travel.
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ForkWords {
     /// The text typed after the last answered save is kept: the usual branch.
@@ -77,6 +81,23 @@ const SIGNED_ELSEWHERE_NOTHING_NEW: &str = "This note was signed in another wind
 /// … the same, when the text that was saved has since been edited: everything is kept.
 const SIGNED_ELSEWHERE_EVERYTHING: &str = "This note was signed in another window. Everything on \
      this screen is kept here as a new draft; what was saved before is also in that note.";
+/// … when a save finds its draft put into the record unsigned by the quarantine timer (slice
+/// 3b-2a): the text typed since the last save is in no note, so it is kept.
+const COMMITTED: &str = "This note went into the record unsigned after it was left untouched. \
+     What you typed since the last save is kept here as a new draft.";
+/// … the same, when nothing on screen was unsaved: nothing is kept here.
+const COMMITTED_NOTHING_NEW: &str = "This note went into the record unsigned after it was left \
+     untouched. Everything typed here was saved into it first.";
+/// … the same, when the text that was saved has since been edited: everything is kept.
+const COMMITTED_EVERYTHING: &str = "This note went into the record unsigned after it was left \
+     untouched. Everything on this screen is kept here as a new draft; what was saved before is \
+     also in that note.";
+/// … when a TAKE finds the draft already put in by the timer.
+const TAKE_COMMITTED: &str = "this note has already gone into the record unsigned";
+/// … when a SIGN finds it: nothing was signed. Not "your text is still here", as for `SPENT`: the
+/// save that follows always forks, and closes the editor when nothing was unsaved (review I2).
+const SIGN_COMMITTED: &str =
+    "this note had already gone into the record unsigned — nothing was signed";
 /// … when a TAKE's draft is another chart's (final review item 6): a take saves nothing, and a
 /// draft at another terminal is what a take moves, so ELSEWHERE's words are not true of it.
 const TAKE_ELSEWHERE: &str = "this draft belongs to another chart — nothing was moved";
@@ -100,6 +121,7 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         SaveOutcome::Elsewhere => Some(ELSEWHERE),
         SaveOutcome::NoChart => Some(NO_CHART),
         SaveOutcome::NoSuchWriter => Some(NO_SUCH_WRITER),
+        SaveOutcome::Committed => Some(COMMITTED),
     };
     let fork = match outcome {
         SaveOutcome::Moved => Some([MOVED, MOVED_NOTHING_NEW, MOVED_EVERYTHING]),
@@ -108,12 +130,18 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
             SIGNED_ELSEWHERE_NOTHING_NEW,
             SIGNED_ELSEWHERE_EVERYTHING,
         ]),
-        _ => None,
+        SaveOutcome::Committed => Some([COMMITTED, COMMITTED_NOTHING_NEW, COMMITTED_EVERYTHING]),
+        // Spelled out, no `_` (#412): a new outcome must decide whether its text forks.
+        SaveOutcome::Saved
+        | SaveOutcome::Elsewhere
+        | SaveOutcome::NoChart
+        | SaveOutcome::NoSuchWriter => None,
     };
     SaveView {
         saved: sentence.is_none(),
         moved: outcome == SaveOutcome::Moved,
         spent: outcome == SaveOutcome::Spent,
+        committed: outcome == SaveOutcome::Committed,
         sentence: sentence.map(str::to_string),
         fork: fork.map(|[kept, nothing_new, everything]| ForkWords {
             kept: kept.into(),
@@ -130,6 +158,7 @@ pub(crate) fn take_view(outcome: TakeOutcome) -> TakeView {
         TakeOutcome::Spent => Some(SPENT),
         TakeOutcome::Elsewhere => Some(TAKE_ELSEWHERE),
         TakeOutcome::Gone => Some(GONE),
+        TakeOutcome::Committed => Some(TAKE_COMMITTED),
     };
     TakeView {
         taken: sentence.is_none(),
@@ -137,9 +166,9 @@ pub(crate) fn take_view(outcome: TakeOutcome) -> TakeView {
     }
 }
 
-/// A sign's refusal as the webview reads it. Pure. Only "already signed" asks for a re-read: the
-/// pane on screen is behind the record, and the re-read shows the signed note. The others are
-/// verdicts a re-read cannot mend.
+/// A sign's refusal as the webview reads it. Pure. Only "already signed" and "already gone in
+/// unsigned" ask for a re-read: the pane on screen is behind the record, and the re-read shows
+/// the note. The others are verdicts a re-read cannot mend.
 pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
     match refusal {
         SignRefusal::Empty => refused(EMPTY),
@@ -148,5 +177,6 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
         SignRefusal::Moved => refused(SIGN_MOVED),
         SignRefusal::NoChart => refused(NO_CHART),
         SignRefusal::NoSuchWriter => refused(SIGN_NO_SUCH_WRITER),
+        SignRefusal::Committed => stale(SIGN_COMMITTED),
     }
 }

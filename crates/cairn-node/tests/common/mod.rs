@@ -1265,9 +1265,9 @@ pub async fn owner_and_window(base: &str) -> (Client, Client) {
 /// read back as ("signed by …").
 pub const NOTE_AUTHOR: &str = "Dr Ada Notewriter";
 
-/// The note suites' fixture (sign-in slice 3a): empty note, draft, link and vault tables; the
-/// medication keys ([`medication_setup`]); the human author named [`NOTE_AUTHOR`] the way the
-/// vault names a member; and one registered chart (#345: a chart's first event is its
+/// The note suites' fixture (sign-in slice 3a): empty note, draft, quarantine-policy, link and
+/// vault tables; the medication keys ([`medication_setup`]); the human author named
+/// [`NOTE_AUTHOR`] the way the vault names a member; and one registered chart (#345: a chart's first event is its
 /// registration). Returns `(node sk, node kid, human sk, human kid, chart)`.
 ///
 /// The vault row is written directly rather than through `vault::enrol_member`: the note read
@@ -1276,8 +1276,8 @@ pub const NOTE_AUTHOR: &str = "Dr Ada Notewriter";
 /// is a placeholder no test ever releases.
 pub async fn note_setup(c: &Client) -> (SigningKey, String, SigningKey, String, Uuid) {
     c.batch_execute(
-        "TRUNCATE clinical_note, note_draft, note_draft_spent, vault_member, patient_link, \
-         person_member, link_veto_flag CASCADE",
+        "TRUNCATE clinical_note, note_draft, note_draft_spent, note_policy, vault_member, \
+         patient_link, person_member, link_veto_flag CASCADE",
     )
     .await
     .unwrap();

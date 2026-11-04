@@ -29,6 +29,9 @@ pub enum SaveOutcome {
     NoChart,
     /// The writer named is not an enrolled member (and is not "unknown", `None`).
     NoSuchWriter,
+    /// The quarantine timer already put the draft into the record unsigned (slice 3b-2a): never
+    /// this window's own Sign, so what was typed since the last save is in no note.
+    Committed,
 }
 
 /// Map the save door's answer word to an outcome. An unknown word is an ERROR, never a default:
@@ -41,6 +44,7 @@ fn outcome_from_word(word: &str) -> anyhow::Result<SaveOutcome> {
         "elsewhere" => Ok(SaveOutcome::Elsewhere),
         "no-chart" => Ok(SaveOutcome::NoChart),
         "no-such-writer" => Ok(SaveOutcome::NoSuchWriter),
+        "committed" => Ok(SaveOutcome::Committed),
         other => {
             anyhow::bail!("the note draft save answered {other:?}, which this build does not know")
         }
@@ -105,11 +109,25 @@ pub struct NoteDraft {
     pub last_keystroke: DateTime<Utc>,
     /// Its parts in writing order (never empty: a draft is created with its part 1).
     pub parts: Vec<DraftPart>,
+    /// When it goes into the record unsigned if nobody types in it: the draft HEADER's last
+    /// keystroke plus the site's quarantine (db/067's `cairn_note_drafts_due`) — the commit door's
+    /// own input, which a backward clock step can set apart from `last_keystroke` above (the
+    /// parts'). For the window's words only.
+    pub due: DateTime<Utc>,
+    /// Overdue NOW, on the database's clock, from the same row as `due`: still here because the
+    /// timer has not run yet, because its commit failed (a floor refusal, say: tried again every
+    /// pass), because someone held its lock when the timer came (a save or Sign mid-flight), or
+    /// because the draft is stuck.
+    pub overdue: bool,
+    /// A named writer of a non-blank part has no vault key: the commit rolls it back every time,
+    /// so it never goes in by itself (until that writer is enrolled again).
+    pub stuck: bool,
 }
 
 /// The open (unsigned) drafts on `patient`'s chart, oldest first, each with its parts. The door
 /// answers one row per part, already ordered by draft and then part, so consecutive rows with
-/// the same draft id are one draft.
+/// the same draft id are one draft. When each falls due, and whether it is overdue, come from the
+/// database (its quarantine and its clock), never from this machine's clock.
 pub async fn open_drafts(
     client: &(impl GenericClient + Sync),
     patient: Uuid,
@@ -145,8 +163,33 @@ pub async fn open_drafts(
                 terminal_id: r.get(1),
                 recording_started: part.recording_started,
                 last_keystroke: part.last_keystroke,
+                // Filled in below, once every part is in. A draft spent between the two queries
+                // keeps these placeholders (a past `due`, not overdue): callers that show them read
+                // inside one snapshot (`read::list_patient_notes` under `in_snapshot`), #983 T4-b.
+                due: part.last_keystroke,
+                overdue: false,
+                stuck: false,
                 parts: vec![part],
             }),
+        }
+    }
+    if drafts.is_empty() {
+        return Ok(drafts);
+    }
+    // Both from the draft HEADER's last keystroke (db/067 `cairn_note_drafts_due`), the commit
+    // door's own input: a part's can differ from it after a backward clock step (db/066 clamps).
+    let due = client
+        .query(
+            "SELECT draft_id::text, due, overdue, stuck FROM cairn_note_drafts_due($1::text::uuid)",
+            &[&patient.to_string()],
+        )
+        .await?;
+    for r in &due {
+        let id: Uuid = r.get::<_, String>(0).parse()?;
+        if let Some(d) = drafts.iter_mut().find(|d| d.draft_id == id) {
+            d.due = r.get(1);
+            d.overdue = r.get(2);
+            d.stuck = r.get(3);
         }
     }
     Ok(drafts)
@@ -164,6 +207,8 @@ pub enum TakeOutcome {
     Elsewhere,
     /// No such draft (never saved, or discarded).
     Gone,
+    /// The quarantine timer already put the draft into the record unsigned.
+    Committed,
 }
 
 /// Map the take door's answer word; an unknown word is an error, as for a save.
@@ -173,6 +218,7 @@ fn take_from_word(word: &str) -> anyhow::Result<TakeOutcome> {
         "spent" => Ok(TakeOutcome::Spent),
         "elsewhere" => Ok(TakeOutcome::Elsewhere),
         "gone" => Ok(TakeOutcome::Gone),
+        "committed" => Ok(TakeOutcome::Committed),
         other => {
             anyhow::bail!("the note draft take answered {other:?}, which this build does not know")
         }
@@ -226,18 +272,40 @@ pub(crate) async fn spend_parts(
             &[&draft.to_string(), &event.to_string()],
         )
         .await?;
-    rows.iter()
-        .map(|r| {
-            Ok(SpentPart {
-                patient_id: r.get::<_, String>(0).parse()?,
-                writer: r.get(1),
-                narrative: r.get(2),
-                stated_time: r.get(3),
-                recording_started: r.get(4),
-                last_keystroke: r.get(5),
-            })
-        })
-        .collect()
+    rows.iter().map(spent_part).collect()
+}
+
+/// Commit OVERDUE draft `draft` into note event `event` (db/067, the quarantine timer): the
+/// same rows as [`spend_parts`], but the door spends the draft only if it is overdue on the
+/// database's clock, under the draft's lock, and records the spend as the timer's. Empty means
+/// nothing to write: absent, spent, not yet due, or every part blank (that draft the door has
+/// deleted, so the caller must COMMIT for the deletion to stick).
+pub(crate) async fn commit_overdue_parts(
+    client: &(impl GenericClient + Sync),
+    draft: Uuid,
+    event: Uuid,
+) -> anyhow::Result<Vec<SpentPart>> {
+    let rows = client
+        .query(
+            "SELECT patient_id::text, writer, narrative, stated_time, recording_started, \
+                    last_keystroke \
+               FROM cairn_note_draft_commit_overdue($1::text::uuid, $2::text::uuid)",
+            &[&draft.to_string(), &event.to_string()],
+        )
+        .await?;
+    rows.iter().map(spent_part).collect()
+}
+
+/// One spend door row (both doors answer the same columns, in this order) as a [`SpentPart`].
+fn spent_part(r: &tokio_postgres::Row) -> anyhow::Result<SpentPart> {
+    Ok(SpentPart {
+        patient_id: r.get::<_, String>(0).parse()?,
+        writer: r.get(1),
+        narrative: r.get(2),
+        stated_time: r.get(3),
+        recording_started: r.get(4),
+        last_keystroke: r.get(5),
+    })
 }
 
 #[cfg(test)]
@@ -253,6 +321,7 @@ mod tests {
             ("elsewhere", SaveOutcome::Elsewhere),
             ("no-chart", SaveOutcome::NoChart),
             ("no-such-writer", SaveOutcome::NoSuchWriter),
+            ("committed", SaveOutcome::Committed),
         ] {
             assert_eq!(outcome_from_word(word).unwrap(), outcome, "{word}");
         }
@@ -262,6 +331,7 @@ mod tests {
             ("spent", TakeOutcome::Spent),
             ("elsewhere", TakeOutcome::Elsewhere),
             ("gone", TakeOutcome::Gone),
+            ("committed", TakeOutcome::Committed),
         ] {
             assert_eq!(take_from_word(word).unwrap(), outcome, "{word}");
         }

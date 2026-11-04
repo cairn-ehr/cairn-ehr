@@ -13,6 +13,9 @@ pub enum NoteGrade {
     Signed { by: String },
     /// Someone claims authorship, but this node cannot verify the claim.
     Claimed,
+    /// Went into the record unsigned, with a named human writer (the quarantine commit): no one
+    /// answers for it yet; a later vouch can upgrade it.
+    WentInUnsigned,
     /// No one took authorship: the node recorded it alone.
     WriterNotKnown,
 }
@@ -20,15 +23,16 @@ pub enum NoteGrade {
 /// Turn the shared authorship grade into the note's. `signer_name` is who the signing key
 /// stands for (`cairn_note_signer_name`), `None` when the node does not know the key.
 ///
-/// The match is EXHAUSTIVE, with no `_` arm, on purpose: a fourth `AuthorshipConfidence` must
+/// The match is EXHAUSTIVE, with no `_` arm, on purpose: a new `AuthorshipConfidence` must
 /// break this build so someone decides how it reads, rather than a wildcard silently showing it
-/// as one of these three (#412; `AuthorshipConfidence`'s docs give the full argument).
+/// as one of these four (#412; `AuthorshipConfidence`'s docs give the full argument).
 pub fn note_grade(confidence: AuthorshipConfidence, signer_name: Option<String>) -> NoteGrade {
     match confidence {
         AuthorshipConfidence::Attested => NoteGrade::Signed {
             by: signer_name.unwrap_or_else(|| UNKNOWN_SIGNER.into()),
         },
         AuthorshipConfidence::Unverified => NoteGrade::Claimed,
+        AuthorshipConfidence::Asserted => NoteGrade::WentInUnsigned,
         AuthorshipConfidence::Device => NoteGrade::WriterNotKnown,
     }
 }
@@ -38,6 +42,7 @@ pub fn grade_words(grade: &NoteGrade) -> String {
     match grade {
         NoteGrade::Signed { by } => format!("signed by {by}"),
         NoteGrade::Claimed => "authorship claimed, not verified here".into(),
+        NoteGrade::WentInUnsigned => "went in unsigned".into(),
         NoteGrade::WriterNotKnown => "writer not known".into(),
     }
 }
@@ -194,6 +199,9 @@ mod tests {
         let device = note_grade(AuthorshipConfidence::Device, Some("the node".into()));
         assert_eq!(device, NoteGrade::WriterNotKnown);
         assert_eq!(grade_words(&device), "writer not known");
+        let asserted = note_grade(AuthorshipConfidence::Asserted, Some("the node".into()));
+        assert_eq!(asserted, NoteGrade::WentInUnsigned);
+        assert_eq!(grade_words(&asserted), "went in unsigned");
     }
 
     #[test]
@@ -202,7 +210,12 @@ mod tests {
         let b = byline_words(&signed, &PartWriter::Drafted("Nurse A".into()));
         assert_eq!(b.shown, "written by ?Nurse A · signed by Dr B");
         assert_eq!(b.spoken, "written by unverified Nurse A · signed by Dr B");
-        for grade in [signed, NoteGrade::Claimed, NoteGrade::WriterNotKnown] {
+        for grade in [
+            signed,
+            NoteGrade::Claimed,
+            NoteGrade::WriterNotKnown,
+            NoteGrade::WentInUnsigned,
+        ] {
             let own = byline_words(&grade, &PartWriter::TheSigner);
             assert_eq!(own.shown, grade_words(&grade), "{grade:?}");
             assert_eq!(own.spoken, own.shown, "{grade:?}");
@@ -250,6 +263,26 @@ mod tests {
                 "writer not known · authorship claimed, not verified here",
             ),
             (
+                NoteGrade::WentInUnsigned,
+                a(),
+                "written by ?Nurse A · went in unsigned",
+            ),
+            (
+                NoteGrade::WentInUnsigned,
+                PartWriter::DraftedUnnamed,
+                "written by someone not named here · went in unsigned",
+            ),
+            (
+                NoteGrade::WentInUnsigned,
+                PartWriter::TheSigner,
+                "went in unsigned",
+            ),
+            (
+                NoteGrade::WentInUnsigned,
+                PartWriter::NotKnown,
+                "writer not known · went in unsigned",
+            ),
+            (
                 NoteGrade::WriterNotKnown,
                 a(),
                 "written by ?Nurse A · no person signed for it",
@@ -272,6 +305,16 @@ mod tests {
                 "{grade:?} {writer:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_went_in_unsigned_byline_marks_the_name_in_speech() {
+        let b = byline_words(
+            &NoteGrade::WentInUnsigned,
+            &PartWriter::Drafted("Nurse A".into()),
+        );
+        assert_eq!(b.shown, "written by ?Nurse A · went in unsigned");
+        assert_eq!(b.spoken, "written by unverified Nurse A · went in unsigned");
     }
 
     #[test]

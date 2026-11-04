@@ -12,15 +12,18 @@
 //! `Device` here and `'attested'` in SQL — filed as an issue for #245's display half to
 //! resolve, not something this test papers over.
 //!
-//! What this test pins is narrower: on the THREE SHAPES below — a single vouched human
-//! attester, a claimed-but-unattested human author, a device-only contributor set (none of
-//! them a dual-mapped key or a no-responsibility suppressing event) — the two verdicts
-//! agree: `Attested` <-> `'attested'`, `Unverified`/`Device` <-> `'unverified'`. That is the
-//! obligation a future display grade and today's enforcement grade owe each other on THESE
-//! shapes; it is not a claim that every event this repo can admit agrees.
+//! What this test pins is narrower: on the FOUR SHAPES below — a single vouched human
+//! attester, a claimed-but-unattested human author, a device-only contributor set, and a
+//! quarantine-committed note (a named human `drafted` writer beside the node's `recorded`,
+//! signed by the node; slice 3b-2a) — none of them a dual-mapped key or a no-responsibility
+//! suppressing event — the two verdicts agree: `Attested` <-> `'attested'`,
+//! `Unverified`/`Asserted`/`Device` <-> `'unverified'`. That is the obligation a future display
+//! grade and today's enforcement grade owe each other on THESE shapes; it is not a claim that
+//! every event this repo can admit agrees.
 //!
-//! THREE FIXTURES, ONE PER RUST VARIANT, each DOOR-ADMITTED (`apply_remote_event` or
-//! `submit_event`, via the SAME `tests/common/mod.rs` helpers the other DB-gated suites use)
+//! FOUR FIXTURES, ONE PER RUST VARIANT (the fourth in its own test, on the note fixture), each
+//! DOOR-ADMITTED (`apply_remote_event` or `submit_event`, via the SAME `tests/common/mod.rs`
+//! helpers the other DB-gated suites use, or the real quarantine commit)
 //! and then READ BACK from `event_log` — the same two columns `cairn_claim_authority`'s R1
 //! branch reads — so the comparison is over what Postgres actually stored, not the in-memory
 //! struct the test happened to build. (Fixture 2 overrides `contributors` with a literal
@@ -303,5 +306,71 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
         sql_verdict, "unverified",
         "cairn_claim_authority has no Device state — a device-only event grades \
          'unverified' there, the deliberate half of the mapping that is NOT 1:1"
+    );
+}
+
+/// Fixture 4 — Asserted / 'unverified' (sign-in slice 3b-2a): a note the quarantine timer
+/// committed, `[{H, "drafted"}, {N, "recorded"}]` signed by the node N. Made through the real
+/// commit path (`note::commit::commit_overdue`, which submits through `submit_event`) and read
+/// back from `event_log`. Rust grades it `Asserted` when told H is a human (the read passes the
+/// drafted key only when the actor registry enrolled it for a human, `cairn_note_key_is_human`); SQL has no such state, and a set with no bearing
+/// contributor and no attester is not authoritative there.
+#[tokio::test]
+async fn asserted_in_rust_is_unverified_in_sql() {
+    use cairn_event::contributor::classify_authorship_with_humans;
+    use cairn_node::note::commit::{commit_overdue, CommitOutcome};
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (node_sk, node_kid, _, kid_h, chart) = common::note_setup(&c).await;
+    let draft = Uuid::now_v7();
+    cairn_node::note::draft::save_part(
+        &c,
+        draft,
+        chart,
+        "lockstep-pc",
+        Some("notewriter"),
+        "obs stable",
+        None,
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "UPDATE note_draft SET last_keystroke = last_keystroke - interval '181 minutes' \
+          WHERE draft_id = $1::text::uuid",
+        &[&draft.to_string()],
+    )
+    .await
+    .unwrap();
+    let CommitOutcome::Committed(done) = commit_overdue(&mut c, &node_sk, draft, "lockstep")
+        .await
+        .unwrap()
+    else {
+        panic!("the overdue draft commits");
+    };
+
+    let stored = stored_claim(&c, done.event_id).await;
+    assert_eq!(
+        stored.contributors,
+        serde_json::json!([
+            {"actor_id": kid_h, "role": "drafted"},
+            {"actor_id": node_kid, "role": "recorded"},
+        ])
+    );
+    assert_eq!(stored.signer, node_kid, "the node signed it");
+    assert_eq!(stored.attester, None, "nobody attested it");
+    let rust_verdict = classify_authorship_with_humans(
+        &stored.contributors,
+        VerifiedKid::from_event_log_column(&stored.signer),
+        None,
+        &[kid_h.as_str()],
+    );
+    let sql_verdict = authority_null_target(&c, done.event_id).await;
+    assert_eq!(rust_verdict, AuthorshipConfidence::Asserted);
+    assert_eq!(
+        sql_verdict, "unverified",
+        "no bearing contributor and no attester: not authoritative in SQL either"
     );
 }

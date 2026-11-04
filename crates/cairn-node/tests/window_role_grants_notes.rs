@@ -17,6 +17,7 @@ use cairn_node::medication::AuthorParams;
 use cairn_node::note::draft::{open_drafts, save_part, take_draft, SaveOutcome, TakeOutcome};
 use cairn_node::note::read::{list_patient_notes, PatientNoteList};
 use cairn_node::note::sign::{sign_note, SignNoteInput};
+use cairn_node::note::view::{NoteGrade, PartWriter};
 use common::{
     cs, expect_as_window, note_setup, owner_and_window, submit_link_event, submit_registration,
 };
@@ -167,4 +168,73 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     );
     assert_eq!(doubted.notes.len(), 1, "X's note is withheld");
     assert_eq!(doubted.withheld_on_linked, 1, "and counted");
+}
+
+/// The quarantine commit (slice 3b-2a) under the window's login: the policy read and the
+/// overdue hint (through `open_drafts`' due words and `overdue_drafts`), and the commit door
+/// driven to its deep path — an overdue draft actually committed. The console's setter is
+/// refused here (42501): a site's quarantine is set at its own console only.
+#[tokio::test]
+async fn the_windows_quarantine_commit_runs_under_its_own_login() {
+    use cairn_node::note::commit::{commit_overdue_drafts, overdue_drafts};
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, mut window) = owner_and_window(&base).await;
+    let (sk, _, _, _, a) = note_setup(&owner).await;
+    let draft = Uuid::now_v7();
+    let r = save_part(
+        &window,
+        draft,
+        a,
+        "pc-window",
+        Some("notewriter"),
+        "left",
+        None,
+    )
+    .await;
+    assert_eq!(expect_as_window("save_part", r), SaveOutcome::Saved);
+    owner
+        .execute(
+            "UPDATE note_draft SET last_keystroke = last_keystroke - interval '181 minutes' \
+              WHERE draft_id = $1::text::uuid",
+            &[&draft.to_string()],
+        )
+        .await
+        .unwrap();
+
+    let r = open_drafts(&window, a).await;
+    let drafts = expect_as_window("open_drafts (due, overdue)", r);
+    assert!(
+        drafts[0].overdue,
+        "cairn_note_quarantine_minutes + the hint ran"
+    );
+    let r = overdue_drafts(&window, Some(a)).await;
+    assert_eq!(expect_as_window("overdue_drafts", r), vec![draft]);
+    let r = commit_overdue_drafts(&mut window, &sk, Some(a), ORIGIN).await;
+    let report = expect_as_window("commit_overdue_drafts", r);
+    assert_eq!(report.committed, 1, "{report:?}");
+    assert!(report.failed.is_empty(), "{report:?}");
+    // The read of that note runs `cairn_note_key_is_human` under the window's own login: the
+    // named writer's part grades "went in unsigned", never "writer not known".
+    let r = note_pane_read(&mut window, a).await;
+    let list = expect_as_window("note pane read (the human-key door)", r);
+    let note = list
+        .notes
+        .iter()
+        .find(|n| n.text == "left")
+        .expect("the committed part");
+    assert_eq!(note.grade, NoteGrade::WentInUnsigned);
+    assert_eq!(note.writer, PartWriter::Drafted(common::NOTE_AUTHOR.into()));
+
+    let refused = window
+        .execute("SELECT cairn_note_set_quarantine(60)", &[])
+        .await
+        .expect_err("the window may not set the quarantine");
+    assert_eq!(
+        refused.code(),
+        Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
+    );
 }
