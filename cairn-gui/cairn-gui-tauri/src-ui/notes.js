@@ -3,18 +3,19 @@
 // writing and signing are the same pen.
 //
 // What the node does, not this file (cairn-gui-tauri's `notes.rs`, tested there): every sentence
-// but the two below; escaping markup (the RAW text is sent and `sign_note` escapes it once, at
+// but the one below and notes_save.js's two; escaping markup (the RAW text is sent and `sign_note` escapes it once, at
 // signing — never escape here); every time of recording (the save door stamps them from the
 // database's clock — the only time sent is the writer's STATED one); and whether a draft is this
 // terminal's to edit (`draft.here`). What IS decided here, each pinned in notes_webview_tests.rs:
-// the save rhythm (ruling R14), that Sign cancels a pending save, that a failed save keeps the text and says so,
-// and that a draft started elsewhere is shown read-only.
+// that Sign cancels a pending save, and that a draft started elsewhere is shown read-only. The save
+// queue — the rhythm (ruling R14), a failed save keeping the text, a moved or signed-elsewhere
+// draft's unsaved text kept as a new draft — is notes_save.js's, loaded just before this file.
 //
 // No browser storage, on purpose: a draft lives in the node, behind definer doors. A copy in
 // the browser's storage would put draft prose on this machine's disk in the clear. The draft
 // being edited is a JS variable only (`noteDraft`).
 //
-// Classic script, loaded right after signer.js, sharing main.js's global scope (`el`, `cell`,
+// Classic script, loaded right after signer.js and notes_save.js, sharing main.js's global scope (`el`, `cell`,
 // `setMessage`, `invoke`, `refresh`, `displayedPatient`), signer.js's `signerCredential` and
 // `clearSigner`, whos_here.js's `whosHere`/`claimAsked`/`askWhosHere`, funnel.js's `failureText`
 // and chart_stale.js's `behindTheRecord` — all read only when a chart is read or a key is
@@ -28,12 +29,6 @@
 // still names the person who typed it.
 "use strict";
 
-/** At most one save a second while the clinician types: often enough to lose little, rarely enough to be cheap. */
-const NOTE_SAVE_EVERY_MS = 1000;
-/** Said (with the reason) when a save failed. The next keystroke tries again. */
-const NOT_SAVED = "not saved yet — your text is still here";
-/** Said (with the reason) when the text saved but a new stated time was refused. */
-const TIME_NOT_KEPT = "your text is saved, but not the time it happened: ";
 /** Said instead of signing a time the clinician only began to type (a date, no hour). */
 const PARTLY_TYPED_TIME =
   "the time it happened is only partly typed — finish it, or clear it if the note is about now";
@@ -42,26 +37,13 @@ const PARTLY_TYPED_TIME =
  * The draft in the editor, `{ draftId, patientId, statedTime, savedText, writer }` — its own
  * chart, never "whatever is open"; the last stated time and text the node TOOK for its part (a
  * partly typed time is never saved); and the staff id of whoever was here when it opened (null
- * for "Don't know"), sent verbatim with every save and the sign.
+ * for "Don't know"), sent verbatim with every save and the sign. Two marks are added later:
+ * `mayBeSigned`, once a Sign of it might have signed (a `spent` save then forks nothing), and
+ * `keptOnScreen`, once its unsaved text has been kept as a new draft (notes_save.js).
  * Read into a local named `held`, never `draft`: `draft` is a Rust `DraftView` here, and the
  * field-drift guard (notes_webview_tests.rs) reads every `draft.<field>` against it.
  */
 let noteDraft = null;
-let noteSaveTimer = null;
-/** When the last save was sent (`performance.now()`); -Infinity for a draft not yet saved. */
-let noteLastSave = -Infinity;
-/**
- * Saves go out one after another, so an older text can never land after a newer one. It never
- * rejects (`sendDraft` catches everything): closing a chart awaits it (`notesSaved`).
- */
-let noteSaveQueue = Promise.resolve();
-/** The editor holds text the node may not have: typed since a save, or a save that failed. */
-let noteUnsaved = false;
-/**
- * What a save last said on the status line (or a reopened draft's words): a later save that
- * works takes only THAT down — never a Sign's refusal, which a save sent after it must not hide.
- */
-let saveSaid = null;
 /** The newest note read started; an older answer is dropped. */
 let notesRevision = 0;
 /**
@@ -97,17 +79,38 @@ function renderNotes(pane) {
   setMessage(el("notes-error"), "");
   el("note-list").replaceChildren(...pane.notes.map(noteItem));
   setMessage(el("notes-withheld"), pane.withheld_sentence);
+  // The claim Rust chose `editable` for: the editor writes as THAT claim (final review item 7).
+  const claim = pane.claim;
   for (const draft of pane.drafts) {
-    if (draft.here && noteDraft === null && claimAsked()) openDraft(draft);
+    if (draft.here && noteDraft === null && readForThisClaim(claim)) openDraft(draft, claim.staff_id);
   }
   const listed = pane.drafts.filter((draft) => !(noteDraft && noteDraft.draftId === draft.draft_id));
   el("note-drafts").replaceChildren(...listed.map(draftItem));
 }
 
-/** One signed note: its text exactly as typed, then who signed it and when it applies. */
+/**
+ * Whether a pane was read for the claim this window holds now: only then do its `editable` flags
+ * say which part this person may edit. A read that answers after a pick waits for the next one.
+ */
+function readForThisClaim(claim) {
+  return claimAsked() && whosHere().kind === claim.kind && whosHere().staff_id === claim.staff_id;
+}
+
+/**
+ * One signed note: its text exactly as typed, then who wrote and signed it and when it applies.
+ * The byline is heard in its spoken form ("written by unverified Nurse A", #973): a screen reader
+ * skips a bare `?`, and a paragraph's aria-label is not read, so the shown words are hidden from
+ * it and the spoken ones are visually hidden.
+ */
 function noteItem(note) {
   const li = document.createElement("li");
-  li.append(cell("p", note.text, { class: "note-text" }), cell("p", note.byline + " · " + note.when));
+  const byline = document.createElement("p");
+  byline.append(
+    cell("span", note.byline, { "aria-hidden": "true" }),
+    cell("span", note.byline_spoken, { class: "visually-hidden" }),
+    " · " + note.when,
+  );
+  li.append(cell("p", note.text, { class: "note-text" }), byline);
   return li;
 }
 
@@ -143,12 +146,13 @@ function partBlock(part) {
 }
 
 /**
- * Put this terminal's draft back in the editor. Only the tail the claim may edit (Rust's
+ * Put this terminal's draft back in the editor, writing as `writer` — the staff id of the claim
+ * the pane chose `editable` for (null for "Don't know"). Only the tail the claim may edit (Rust's
  * `editable`) goes in the textarea; every other part is drawn above it, and with no editable
  * tail the editor is empty: what is typed becomes a new part (M3: an unknown claim over an
  * unknown tail EDITS that tail, which Rust marks editable — never an empty editor over it).
  */
-function openDraft(draft) {
+function openDraft(draft, writer) {
   const tail = draft.parts[draft.parts.length - 1];
   const editing = Boolean(tail && tail.editable);
   const above = editing ? draft.parts.slice(0, -1) : draft.parts;
@@ -157,7 +161,7 @@ function openDraft(draft) {
     patientId: displayedPatient,
     statedTime: editing ? tail.stated_time || "" : "",
     savedText: editing ? tail.text : "",
-    writer: whosHere().staff_id,
+    writer: writer,
   };
   el("note-parts").replaceChildren(...above.map(partBlock));
   el("note-text").value = editing ? tail.text : "";
@@ -217,145 +221,6 @@ async function continueHere(draft) {
 }
 
 /**
- * A keystroke in the note or its time (ruling R14): the first of a burst saves at once, so the
- * node stamps `recording_started` when writing began; later ones wait until a second has passed
- * since the last save. The timer is never pushed back by the next keystroke, so continuous typing
- * still saves every second (a power cut loses at most that), and it reads the fields when it
- * fires, so it is also the save after the last keystroke.
- */
-function onNoteInput() {
-  noteUnsaved = true;
-  if (noteSaveTimer !== null) return; // a save is already due, and will carry this keystroke
-  const wait = noteLastSave + NOTE_SAVE_EVERY_MS - performance.now();
-  if (wait <= 0) void saveNoteNow();
-  else noteSaveTimer = setTimeout(saveNoteNow, wait);
-}
-
-/**
- * Save the editor's text now, into its own draft and chart. The fields are read HERE, so a save
- * flushed as the chart closes (`clearNotes`) still carries what was typed. Returns the queue.
- */
-function saveNoteNow() {
-  clearTimeout(noteSaveTimer);
-  noteSaveTimer = null;
-  const held = noteDraft;
-  if (held === null) return noteSaveQueue;
-  noteLastSave = performance.now();
-  const when = el("note-when");
-  const sent = {
-    held: held,
-    narrative: el("note-text").value,
-    // A partly typed time reads as "" — saved, it would erase the time the draft holds. `null`
-    // sends the last time the node took instead, read by `sendDraft` in queue order, after every
-    // earlier save has answered.
-    statedTime: when.validity.badInput ? null : when.value,
-  };
-  noteSaveQueue = noteSaveQueue.then(() => sendDraft(sent));
-  return noteSaveQueue;
-}
-
-/** Every save queued so far, done (funnel.js's `closeChart` waits for it before `close_chart`). */
-function notesSaved() {
-  return noteSaveQueue;
-}
-
-/**
- * One save, as `saveNoteNow` read it. Says how it went, and marks the editor saved or not, only
- * while its draft is still the one on screen. Resolves whether the node ANSWERED: saved, or a
- * sentence no retry can change (spent, elsewhere, no chart) — either way nothing is left to send.
- */
-async function sendDraft(sent) {
-  const mine = () => noteDraft === sent.held;
-  const taken = sent.held.statedTime;
-  const asked = sent.statedTime === null ? taken : sent.statedTime;
-  try {
-    const view = await invoke("note_draft_save", {
-      patientId: sent.held.patientId,
-      draftId: sent.held.draftId,
-      narrative: sent.narrative,
-      statedTime: asked,
-      writer: sent.held.writer,
-    });
-    if (view.moved) return keepMovedText(sent, view);
-    sent.held.statedTime = asked;
-    if (view.saved) sent.held.savedText = sent.narrative;
-    if (mine()) {
-      noteUnsaved = false;
-      saySaved(view.saved ? "" : view.sentence);
-    }
-    return true;
-  } catch (failure) {
-    // A new time the node refused (one this clock never showed) must not hold the TEXT back: the
-    // door writes both, so send the text again with the last time the node took, and say why.
-    // The editor stays UNSAVED (its time is not in the node), so the next save — or the flush
-    // as the chart closes — sends the time again: a passing failure that was not the time heals.
-    if (asked !== taken && (await sendDraft({ ...sent, statedTime: taken }))) {
-      if (mine()) {
-        noteUnsaved = true;
-        saySaved(TIME_NOT_KEPT + failureText(failure));
-      }
-      return true;
-    }
-    // Nothing here touches the field: the text stays as typed (Review Focus 2).
-    if (mine()) {
-      noteUnsaved = true;
-      saySaved(NOT_SAVED + " (" + failureText(failure) + ")");
-    }
-    return false;
-  }
-}
-
-/**
- * What of `text` a moved draft lacks, and the sentence (Rust's, from the save's `view`) that is
- * true for it. `savedText` is what this window last saved for the part and the node took — it
- * went on with the moved note. Typed after it: only the rest is new. Nothing after it: nothing
- * is kept (`kept: null`). The saved text itself edited: all of the text is kept, and said so.
- * Pure.
- */
-function movedRemainder(text, savedText, view) {
-  if (!text.startsWith(savedText)) return { kept: text, said: view.moved_everything };
-  const rest = text.slice(savedText.length);
-  if (rest.trim() === "") return { kept: null, said: view.moved_nothing_new };
-  return { kept: rest, said: view.sentence };
-}
-
-/**
- * Review Focus 2: a save found its draft taken to another terminal. What the node lacks
- * (`movedRemainder`) is kept as a NEW draft of its own (a fresh id, the same writer), sent at
- * once in queue order, so a chart closing behind it still waits for it: nothing typed is lost,
- * and nothing saved is written twice. The editor's text when it still holds the draft (the
- * editor then shows only what the new draft holds), else what the save carried.
- */
-async function keepMovedText(sent, view) {
-  const onScreen = noteDraft === sent.held;
-  const text = onScreen ? el("note-text").value : sent.narrative;
-  const { kept, said } = movedRemainder(text, sent.held.savedText, view);
-  if (kept === null) {
-    if (onScreen) {
-      closeEditor();
-      noteStatus(said);
-      void readNotes(sent.held.patientId); // the note is listed where it went on
-    }
-    return true;
-  }
-  const fork = { ...sent.held, draftId: crypto.randomUUID(), savedText: "" };
-  if (onScreen) {
-    noteDraft = fork;
-    el("note-parts").replaceChildren(); // the parts above went on with the moved draft
-    el("note-text").value = kept;
-    noteStatus(said);
-    saveSaid = null; // a later save that works must not take the sentence down
-  }
-  return sendDraft({ held: fork, narrative: kept, statedTime: sent.statedTime });
-}
-
-/** A save's word on the status line: a sentence is said; a save that worked clears only its own. */
-function saySaved(text) {
-  if (text || el("note-status").textContent === saveSaid) noteStatus(text);
-  saveSaid = text || null;
-}
-
-/**
  * Sign the note: the text ON SCREEN goes with the press (Review Focus 4), so a pending save is
  * cancelled first — it could only say what Sign already carries (Review Focus 3). `cease`'s shape
  * otherwise: the strip's credential, the strip cleared both ways, the outcome said, then the chart
@@ -374,6 +239,10 @@ async function signNote() {
   }
   clearTimeout(noteSaveTimer);
   noteSaveTimer = null;
+  // From this press on, a `spent` save of this draft may be this Sign's own: its text went with
+  // the Sign, so it is never kept again as a new draft (final review I1).
+  const wasMaybeSigned = Boolean(held.mayBeSigned);
+  held.mayBeSigned = true;
   setSigning(true);
   let report;
   try {
@@ -389,12 +258,13 @@ async function signNote() {
   } catch (failure) {
     clearSigner();
     setSigning(false);
+    // Every refusal but an interrupted commit recorded nothing: this press signed nothing.
+    if (behindTheRecord(failure) !== "unknown") held.mayBeSigned = wasMaybeSigned;
     noteStatus("Could not sign this note: " + failureText(failure));
-    // The cancelled save's text is still only on screen: save it now (a signed draft answers
-    // `spent` and nothing is written).
+    // The cancelled save's text is still only on screen: save it now. A draft signed in another
+    // window answers `spent`, and what it lacks is kept as a new draft (#945); one this window may
+    // have signed writes nothing.
     void saveNoteNow();
-    // shortcut: a stale refusal (already signed elsewhere) keeps the dead draft in the editor
-    // until the chart is reopened; give it a way out (#945).
     await refresh(el("note-status").textContent, behindTheRecord(failure));
     // An interrupted commit MAY have signed (#713); every other refusal recorded nothing.
     return behindTheRecord(failure) === "unknown" ? "unknown" : "not-signed";

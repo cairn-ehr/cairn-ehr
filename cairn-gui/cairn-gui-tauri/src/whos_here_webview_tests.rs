@@ -9,7 +9,11 @@ use crate::source_guard::{js_fn, position};
 
 const WHOS_HERE_JS: &str = include_str!("../src-ui/whos_here.js");
 const IDLE_JS: &str = include_str!("../src-ui/idle.js");
-const NOTES_JS: &str = include_str!("../src-ui/notes.js");
+/// The note pane's two scripts as one text: notes.js, and its save queue notes_save.js.
+const NOTES_JS: &str = concat!(
+    include_str!("../src-ui/notes.js"),
+    include_str!("../src-ui/notes_save.js")
+);
 const SIGNER_JS: &str = include_str!("../src-ui/signer.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
@@ -82,13 +86,13 @@ fn switch_awaits_the_save_queue_before_picking() {
 /// note would record its signer as `attested` instead of `authored`, in an immutable record.
 #[test]
 fn the_writer_is_set_once_at_editor_open() {
-    for opener in ["newNote", "openDraft"] {
-        let body = js_fn(NOTES_JS, opener);
-        assert!(body.contains("writer: whosHere().staff_id,"), "{body}");
-    }
+    assert!(js_fn(NOTES_JS, "newNote").contains("writer: whosHere().staff_id,"));
+    // A reopened draft writes as the claim the pane chose `editable` for (final review item 7):
+    // the part it opens on and the writer it saves as can never diverge.
+    assert!(js_fn(NOTES_JS, "openDraft").contains("writer: writer,"));
     assert_eq!(
         NOTES_JS.matches("writer: whosHere().staff_id,").count(),
-        2,
+        1,
         "the writer is captured only where an editor opens"
     );
     assert!(
@@ -99,7 +103,13 @@ fn the_writer_is_set_once_at_editor_open() {
         js_fn(NOTES_JS, "signNote").contains("writer: held.writer,"),
         "the sign sends the captured writer"
     );
-    for at_save in ["saveNoteNow", "sendDraft", "signNote", "keepMovedText"] {
+    for at_save in [
+        "saveNoteNow",
+        "sendDraft",
+        "signNote",
+        "keepUnsavedText",
+        "openDraft",
+    ] {
         let body = js_fn(NOTES_JS, at_save);
         assert!(
             !body.contains("whosHere("),
@@ -112,9 +122,19 @@ fn the_writer_is_set_once_at_editor_open() {
         position(new_note, "askWhosHere(newNote);") < position(new_note, "crypto.randomUUID()"),
         "{new_note}"
     );
-    // ...and a here-draft is reopened for writing only once somebody has said who is writing.
-    assert!(js_fn(NOTES_JS, "renderNotes")
-        .contains("if (draft.here && noteDraft === null && claimAsked()) openDraft(draft);"));
+    // ...and a here-draft is reopened for writing only once somebody has said who is writing,
+    // and only by a pane read for the claim held now, as that claim's writer.
+    let render = js_fn(NOTES_JS, "renderNotes");
+    assert!(render.contains("const claim = pane.claim;"), "{render}");
+    assert!(
+        render.contains(
+            "if (draft.here && noteDraft === null && readForThisClaim(claim)) openDraft(draft, claim.staff_id);"
+        ),
+        "{render}"
+    );
+    assert!(js_fn(NOTES_JS, "readForThisClaim").contains(
+        "return claimAsked() && whosHere().kind === claim.kind && whosHere().staff_id === claim.staff_id;"
+    ));
 }
 
 /// Review Focus 4 / main.js's poll lesson: the idle clock is reset by a person at the keyboard
@@ -131,7 +151,7 @@ fn idle_resets_only_on_user_input() {
         ("idle.js", IDLE_JS),
         ("main.js", MAIN_JS),
         ("signer.js", SIGNER_JS),
-        ("notes.js", NOTES_JS),
+        ("notes.js + notes_save.js", NOTES_JS),
         ("whos_here.js", WHOS_HERE_JS),
     ] {
         let expected = if file == "idle.js" { 2 } else { 0 };
@@ -282,41 +302,77 @@ fn a_sign_settled_during_a_switch_is_said_in_the_picker() {
 #[test]
 fn moved_forks_a_new_draft() {
     let send = js_fn(NOTES_JS, "sendDraft");
+    let forks = "if (view.moved || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);";
     assert!(
-        position(send, "if (view.moved) return keepMovedText(sent, view);")
-            < position(send, "noteUnsaved = false;"),
+        position(send, forks) < position(send, "noteUnsaved = false;"),
         "{send}"
     );
     // Only an answered save says what the node holds.
     assert!(send[..position(send, "catch (failure) {")]
         .contains("if (view.saved) sent.held.savedText = sent.narrative;"));
-    let split = js_fn(NOTES_JS, "movedRemainder");
+    let split = js_fn(NOTES_JS, "unsavedRemainder");
     for line in [
-        "if (!text.startsWith(savedText)) return { kept: text, said: view.moved_everything };",
+        "if (!text.startsWith(savedText)) return { kept: text, said: forkWords.everything };",
         "const rest = text.slice(savedText.length);",
-        "if (rest.trim() === \"\") return { kept: null, said: view.moved_nothing_new };",
-        "return { kept: rest, said: view.sentence };",
+        "if (rest.trim() === \"\") return { kept: null, said: forkWords.nothing_new };",
+        "return { kept: rest, said: forkWords.kept };",
     ] {
         assert!(split.contains(line), "{split}");
     }
-    let keep = js_fn(NOTES_JS, "keepMovedText");
+    let keep = js_fn(NOTES_JS, "keepUnsavedText");
     assert!(keep.contains("const text = onScreen ? el(\"note-text\").value : sent.narrative;"));
-    assert!(
-        keep.contains("const { kept, said } = movedRemainder(text, sent.held.savedText, view);")
-    );
+    assert!(keep.contains(
+        "const { kept, said } = unsavedRemainder(text, sent.held.savedText, forkWords);"
+    ));
     let nothing_new = position(keep, "if (kept === null) {");
     assert!(nothing_new < position(keep, "closeEditor();"), "{keep}");
     for line in [
-        "const fork = { ...sent.held, draftId: crypto.randomUUID(), savedText: \"\" };",
+        "const fork = { ...sent.held, draftId: crypto.randomUUID(), savedText: \"\", mayBeSigned: false, keptOnScreen: false };",
         "el(\"note-text\").value = kept;",
         "return sendDraft({ held: fork, narrative: kept, statedTime: sent.statedTime });",
         "noteStatus(said);",
     ] {
         assert!(keep.contains(line), "{keep}");
     }
+    // An older save of the same draft, still queued once the editor's newer text was kept,
+    // keeps nothing again: no second copy.
+    assert!(
+        position(keep, "if (sent.held.keptOnScreen) return true;")
+            < position(keep, "unsavedRemainder("),
+        "{keep}"
+    );
     assert!(
         !NOTES_JS.contains("MOVED_NOTHING_KEPT"),
         "every moved sentence is Rust's"
+    );
+}
+
+/// Final review I1 (#945): a save answering `spent` while this window's own Sign cannot have
+/// signed it — the draft was continued and signed in another window — keeps the text typed here
+/// since the last save as a new draft, exactly as a move does. A Sign marks its draft
+/// `mayBeSigned` BEFORE it is sent, so the save an unknown-outcome Sign sends next never forks
+/// text that Sign carried; a Sign refused outright (it recorded nothing) takes the mark back, so
+/// the save its refusal sends forks what another window's spend lacks.
+#[test]
+fn a_draft_signed_in_another_window_forks_a_new_draft() {
+    let sign = js_fn(NOTES_JS, "signNote");
+    let marked = position(sign, "held.mayBeSigned = true;");
+    assert!(
+        position(sign, "const wasMaybeSigned = Boolean(held.mayBeSigned);") < marked,
+        "{sign}"
+    );
+    assert!(marked < position(sign, "invoke(\"note_sign\""), "{sign}");
+    let caught = &sign[position(sign, "catch (failure) {")..];
+    assert!(
+        position(
+            caught,
+            "if (behindTheRecord(failure) !== \"unknown\") held.mayBeSigned = wasMaybeSigned;"
+        ) < position(caught, "void saveNoteNow();"),
+        "{sign}"
+    );
+    assert!(
+        !NOTES_JS.contains("give it a way out (#945)"),
+        "the stale-refusal shortcut is gone: the save it sends now forks"
     );
 }
 
@@ -344,9 +400,19 @@ fn parts_drawn_through_cell() {
         assert!(open.contains(line), "{open}");
     }
     assert!(js_fn(NOTES_JS, "draftItem").contains("draft.parts.map(partBlock)"));
+    // A signed part's byline is HEARD in its spoken form, "unverified Nurse A" (#973): the shown
+    // words, with their bare `?`, are hidden from a screen reader, the spoken ones from the eye
+    // (a paragraph's aria-label is not read out). Both are drawn through `cell`.
+    let item = js_fn(NOTES_JS, "noteItem");
+    for line in [
+        "cell(\"span\", note.byline, { \"aria-hidden\": \"true\" }),",
+        "cell(\"span\", note.byline_spoken, { class: \"visually-hidden\" }),",
+    ] {
+        assert!(item.contains(line), "{item}");
+    }
     assert!(js_fn(NOTES_JS, "closeEditor").contains("el(\"note-parts\").replaceChildren();"));
     for (file, js) in [
-        ("notes.js", NOTES_JS),
+        ("notes.js + notes_save.js", NOTES_JS),
         ("whos_here.js", WHOS_HERE_JS),
         ("idle.js", IDLE_JS),
     ] {

@@ -4,7 +4,7 @@
 use super::*;
 use crate::notes::tests::{bne, utc};
 use crate::notes::time::stated_time_in;
-use cairn_node::note::view::NoteGrade;
+use cairn_node::note::view::{NoteGrade, PartWriter};
 use uuid::Uuid;
 
 fn draft(terminal: &str) -> NoteDraft {
@@ -147,7 +147,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
                 by: "Dr Ada".into(),
             },
             addendum_to: None,
-            drafted_by: Some("Nurse A".into()),
+            writer: PartWriter::Drafted("Nurse A".into()),
         }],
         withheld_on_linked: 2,
         drafts: vec![draft("pc-1")],
@@ -156,6 +156,11 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
     let row = &pane.notes[0];
     assert_eq!(row.text, "BP <90");
     assert_eq!(row.byline, "written by ?Nurse A · signed by Dr Ada");
+    // I3 (#973): the `?` is heard as "unverified", as in a draft's parts.
+    assert_eq!(
+        row.byline_spoken,
+        "written by unverified Nurse A · signed by Dr Ada"
+    );
     assert_eq!(row.when, "3 Nov 2025 03:00 (stated)");
     assert!(pane.drafts[0].here);
     let withheld = pane.withheld_sentence.expect("withheld notes are said");
@@ -223,4 +228,26 @@ fn without_a_terminal_id_no_draft_is_here() {
     assert_eq!(pane.drafts.len(), 1);
     assert!(!pane.drafts[0].here);
     assert!(!pane.drafts[0].parts[0].editable);
+}
+
+/// Hardening (final review item 7): the pane names the claim it chose the editable part for, so
+/// the window's editor captures THAT writer — the editable flag and the writer cannot diverge.
+#[test]
+fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
+    let list = || PatientNoteList {
+        notes: vec![],
+        withheld_on_linked: 0,
+        drafts: vec![two_writers()],
+    };
+    let dr_b = Claim::Named {
+        staff_id: "dr-b".into(),
+        display_name: "Dr B".into(),
+    };
+    let pane = note_pane(list(), Some("pc-1"), &dr_b, &bne(), nov(3));
+    assert_eq!(pane.claim.kind, "named");
+    assert_eq!(pane.claim.staff_id.as_deref(), Some("dr-b"));
+    assert!(pane.drafts[0].parts[1].editable, "Dr B's own tail");
+    let nobody = note_pane(list(), Some("pc-1"), &Claim::NotAsked, &bne(), nov(3));
+    assert_eq!(nobody.claim.kind, "not-asked");
+    assert_eq!(nobody.claim.staff_id, None);
 }

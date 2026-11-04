@@ -289,7 +289,7 @@ discard) gets its own plan against what this one builds.
   `cairn_vault_staff_id(signer_staff_id)`; normalise both in Rust with the same rule, or ask the door.
 
 - [ ] **Step 1: Failing tests** in `note_sign.rs`:
-  - `a_one_writer_draft_signs_as_one_attested_note` (3a's case, unchanged in outcome);
+  - `a_one_writer_draft_signs_as_the_signers_own_authored_note` (3a's case, unchanged in outcome);
   - `a_two_writer_draft_signs_as_two_events_chained_by_addendum_to`: part 2's `refs[0].event` is part 1's id; part 1
     carries `{A, drafted}` and `{B, attested}` when B signs, and part 2 carries `{B, authored}`. Both grade
     `Attested`;

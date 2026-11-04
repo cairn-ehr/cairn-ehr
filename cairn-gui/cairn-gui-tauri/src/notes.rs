@@ -21,11 +21,10 @@
 //!   which part the editor may open on (`notes_parts.rs`).
 use crate::commands::record_timing;
 use crate::funnel::view::{ErrorView, Recorded, Retry};
-use crate::link::judgement_view::{refused, stale};
+use crate::link::judgement_view::refused;
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
-use cairn_node::note::draft::{SaveOutcome, TakeOutcome};
 use cairn_node::note::sign::SignRefusal;
 use chrono::{DateTime, Utc};
 use parts::{note_pane, others_have_text, NotePane};
@@ -41,29 +40,11 @@ mod time;
 #[path = "notes_parts.rs"]
 pub(crate) mod parts;
 
-/// What a draft save did. `saved: false` always carries the sentence why nothing was written.
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
-pub struct SaveView {
-    pub saved: bool,
-    /// The draft was taken to another terminal: the webview keeps what it had not saved as a NEW
-    /// draft of its own, so nothing typed is lost.
-    pub moved: bool,
-    /// Why nothing was written. For `moved`, the sentence for keeping the text typed after the
-    /// last answered save — the webview's usual branch.
-    pub sentence: Option<String>,
-    /// `moved` only: the sentence for when nothing on screen was unsaved (the editor closes).
-    pub moved_nothing_new: Option<String>,
-    /// `moved` only: the sentence for when the text above the last save was edited, so all of it
-    /// is kept (and the saved part is in the moved note too).
-    pub moved_everything: Option<String>,
-}
-
-/// What a "Continue here" did. `taken: false` always carries the sentence why nothing moved.
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
-pub struct TakeView {
-    pub taken: bool,
-    pub sentence: Option<String>,
-}
+/// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
+#[path = "notes_words.rs"]
+pub(crate) mod words;
+pub(crate) use words::{save_view, sign_refusal_view, take_view};
+pub use words::{SaveView, TakeView};
 
 /// What one Sign did: signed, or — its commit got no ordinary answer (#814) — NOT known.
 #[derive(Debug, serde::Serialize)]
@@ -137,40 +118,6 @@ pub async fn note_sign(
     .await
 }
 
-/// The sentence a save or sign answers when the draft was already signed.
-const SPENT: &str = "this note has already been signed";
-/// … when a SAVE's draft is another chart's or another terminal's.
-const ELSEWHERE: &str = "this draft belongs to another chart or terminal — nothing was saved";
-/// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
-const SIGN_ELSEWHERE: &str =
-    "this draft belongs to another chart or terminal — nothing was signed; your text is still here";
-/// … when a SIGN finds its draft taken to another terminal (Task 5 review M1): not "another
-/// chart" — the clinician is told where the note went.
-const SIGN_MOVED: &str = "This note is now being continued at another terminal — nothing was \
-     signed; your text is still here.";
-/// … when the writer a save names is not an enrolled member (any more).
-const NO_SUCH_WRITER: &str =
-    "the name at this terminal is not an enrolled member — say who's here again";
-/// … when a save finds its draft taken to another terminal.
-const MOVED: &str = "This note is now being continued at another terminal. What you typed since \
-     the last save is kept here as a new draft.";
-/// … the same, when nothing on screen was unsaved: nothing is kept here.
-const MOVED_NOTHING_NEW: &str = "This note is now being continued at another terminal. \
-     Everything typed here was saved into it before it moved.";
-/// … the same, when the text that was saved has since been edited: everything is kept.
-const MOVED_EVERYTHING: &str = "This note is now being continued at another terminal. \
-     Everything on this screen is kept here as a new draft; what was saved before the move is \
-     also in that note.";
-/// … when a take finds no such draft (never saved, or discarded).
-const GONE: &str = "this draft is no longer open";
-/// … the same, for a SIGN: the on-screen writer, or the writer of a part above, is no longer
-/// enrolled. Nothing was signed, and the editor still holds the text.
-const SIGN_NO_SUCH_WRITER: &str = "a writer of this note is not enrolled on this node — nothing \
-     was signed; your text is still here";
-/// … when no event names the patient on this node.
-const NO_CHART: &str = "this patient has no chart on this node";
-/// … when nothing but whitespace was typed.
-const EMPTY: &str = "there is nothing to sign — the note is empty";
 /// Fixture mode's refusal, worded as every other write's (`commands::cease_impl`).
 const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
 
@@ -181,10 +128,12 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     // under the next one's header.
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let Some(db) = state.db.as_ref() else {
+        let claim = state.whos_here.lock().await.claim.clone();
         return Ok(NotePane {
             notes: vec![],
             withheld_sentence: None,
             drafts: vec![],
+            claim: crate::whos_here::claim_view(&claim),
         });
     };
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
@@ -416,55 +365,6 @@ pub(crate) fn sign_checks_before_the_key(
         year_the_record_holds(s, t).map_err(refused)?;
     }
     Ok((draft, stated))
-}
-
-/// A save's answer as the webview reads it. Pure.
-pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
-    let sentence = match outcome {
-        SaveOutcome::Saved => None,
-        SaveOutcome::Spent => Some(SPENT),
-        SaveOutcome::Moved => Some(MOVED),
-        SaveOutcome::Elsewhere => Some(ELSEWHERE),
-        SaveOutcome::NoChart => Some(NO_CHART),
-        SaveOutcome::NoSuchWriter => Some(NO_SUCH_WRITER),
-    };
-    let moved = outcome == SaveOutcome::Moved;
-    let if_moved = |s: &str| moved.then(|| s.to_string());
-    SaveView {
-        saved: sentence.is_none(),
-        moved,
-        sentence: sentence.map(str::to_string),
-        moved_nothing_new: if_moved(MOVED_NOTHING_NEW),
-        moved_everything: if_moved(MOVED_EVERYTHING),
-    }
-}
-
-/// A take's answer as the webview reads it. Pure.
-pub(crate) fn take_view(outcome: TakeOutcome) -> TakeView {
-    let sentence = match outcome {
-        TakeOutcome::Taken => None,
-        TakeOutcome::Spent => Some(SPENT),
-        TakeOutcome::Elsewhere => Some(ELSEWHERE),
-        TakeOutcome::Gone => Some(GONE),
-    };
-    TakeView {
-        taken: sentence.is_none(),
-        sentence: sentence.map(str::to_string),
-    }
-}
-
-/// A sign's refusal as the webview reads it. Pure. Only "already signed" asks for a re-read: the
-/// pane on screen is behind the record, and the re-read shows the signed note. The others are
-/// verdicts a re-read cannot mend.
-pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
-    match refusal {
-        SignRefusal::Empty => refused(EMPTY),
-        SignRefusal::Spent => stale(SPENT),
-        SignRefusal::Elsewhere => refused(SIGN_ELSEWHERE),
-        SignRefusal::Moved => refused(SIGN_MOVED),
-        SignRefusal::NoChart => refused(NO_CHART),
-        SignRefusal::NoSuchWriter => refused(SIGN_NO_SUCH_WRITER),
-    }
 }
 
 #[cfg(test)]

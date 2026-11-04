@@ -4,6 +4,7 @@
 use super::time::{parse_stated, pick_local, stated_time_in};
 use super::*;
 use crate::funnel::view::Retry;
+use cairn_node::note::draft::{SaveOutcome, TakeOutcome};
 use chrono::{FixedOffset, LocalResult, TimeZone};
 
 fn on_screen() -> (AppState, String) {
@@ -100,41 +101,68 @@ fn save_words_each_outcome() {
 /// The old terminal's next save after a Continue elsewhere: `moved`, so the webview keeps what it
 /// had not saved as a new draft. Only the webview knows which of three things happened to the
 /// text on screen, so all three sentences travel, each true for its own branch (fix round 1,
-/// I3): the text after what was last saved is kept (`sentence`); nothing was unsaved
-/// (`moved_nothing_new`); the text above was edited, so all of it is kept (`moved_everything`).
+/// I3): the text after what was last saved is kept (`fork.kept`, also the save's `sentence`);
+/// nothing was unsaved (`fork.nothing_new`); the text above was edited, so all of it is kept
+/// (`fork.everything`).
 #[test]
 fn moved_sentence_exact() {
     let moved = save_view(SaveOutcome::Moved);
-    assert!(moved.moved && !moved.saved);
+    assert!(moved.moved && !moved.spent && !moved.saved);
+    let kept = "This note is now being continued at another terminal. What you typed since the \
+                last save is kept here as a new draft.";
+    assert_eq!(moved.sentence.as_deref(), Some(kept));
+    let fork = moved.fork.expect("a moved draft forks");
+    assert_eq!(fork.kept, kept);
     assert_eq!(
-        moved.sentence.as_deref(),
-        Some(
-            "This note is now being continued at another terminal. What you typed since the \
-             last save is kept here as a new draft."
-        )
+        fork.nothing_new,
+        "This note is now being continued at another terminal. Everything typed here was \
+         saved into it before it moved."
     );
     assert_eq!(
-        moved.moved_nothing_new.as_deref(),
-        Some(
-            "This note is now being continued at another terminal. Everything typed here was \
-             saved into it before it moved."
-        )
-    );
-    assert_eq!(
-        moved.moved_everything.as_deref(),
-        Some(
-            "This note is now being continued at another terminal. Everything on this screen \
-             is kept here as a new draft; what was saved before the move is also in that note."
-        )
+        fork.everything,
+        "This note is now being continued at another terminal. Everything on this screen \
+         is kept here as a new draft; what was saved before the move is also in that note."
     );
     for other in [
         SaveOutcome::Saved,
-        SaveOutcome::Spent,
         SaveOutcome::Elsewhere,
+        SaveOutcome::NoChart,
+        SaveOutcome::NoSuchWriter,
     ] {
         let view = save_view(other);
-        assert!(view.moved_nothing_new.is_none() && view.moved_everything.is_none());
+        assert!(view.fork.is_none() && !view.spent, "{view:?}");
     }
+}
+
+/// Final review I1: a save answering `spent` means the draft was signed. Unless THIS window's
+/// own Sign may have done it, it was signed in another window — after a Continue there — and
+/// what was typed here since the last save is in no note: the webview keeps it as a new draft,
+/// by the moved rule, with these sentences. `sentence` stays the plain "already signed", for a
+/// spend this window's own Sign may have made (the webview then forks nothing).
+#[test]
+fn spent_sentence_exact() {
+    let spent = save_view(SaveOutcome::Spent);
+    assert!(spent.spent && !spent.moved && !spent.saved);
+    assert_eq!(
+        spent.sentence.as_deref(),
+        Some("this note has already been signed")
+    );
+    let fork = spent.fork.expect("a draft signed elsewhere forks");
+    assert_eq!(
+        fork.kept,
+        "This note was signed in another window. What you typed since the last save is kept \
+         here as a new draft."
+    );
+    assert_eq!(
+        fork.nothing_new,
+        "This note was signed in another window. Everything typed here was saved into it \
+         first."
+    );
+    assert_eq!(
+        fork.everything,
+        "This note was signed in another window. Everything on this screen is kept here as a \
+         new draft; what was saved before is also in that note."
+    );
 }
 
 #[test]
@@ -146,9 +174,11 @@ fn take_words_each_outcome() {
         words(TakeOutcome::Spent),
         "this note has already been signed"
     );
+    // Final review item 6: a take's own words — it saves nothing, and a terminal never makes a
+    // take answer `elsewhere` (a draft at another terminal is what a take moves).
     assert_eq!(
         words(TakeOutcome::Elsewhere),
-        "this draft belongs to another chart or terminal — nothing was saved"
+        "this draft belongs to another chart — nothing was moved"
     );
     assert_eq!(words(TakeOutcome::Gone), "this draft is no longer open");
 }

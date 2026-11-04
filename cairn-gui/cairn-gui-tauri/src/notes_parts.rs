@@ -9,7 +9,7 @@
 //! (ruling M3: two unknown writers share it, since the floor cannot tell them apart; the editor
 //! must show its text, or an empty editor would REPLACE it on the next save). Pure functions.
 use super::time::datetime_local;
-use crate::whos_here::{claimed_name, Claim};
+use crate::whos_here::{claim_view, claimed_name, Claim, ClaimView};
 use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::view::{byline_words, instant, time_words};
@@ -22,8 +22,11 @@ pub struct NoteRowView {
     /// The text exactly as its writer typed it. The webview sets it as `textContent`.
     pub text: String,
     /// Who signed it, graded (`view::byline_words`): "signed by …", a claim, or writer not known,
-    /// headed "written by ?…" when another writer drafted it.
+    /// headed by who typed it when that is not the signer ("written by ?Nurse A", "writer not
+    /// known", …).
     pub byline: String,
+    /// The byline as a screen reader should say it: "written by unverified Nurse A · …" (#973).
+    pub byline_spoken: String,
     /// When it applies (`view::time_words`): a stated time, or when writing began.
     pub when: String,
 }
@@ -35,6 +38,9 @@ pub struct NotePane {
     /// Said when notes on a linked chart are held back because a link is in doubt.
     pub withheld_sentence: Option<String>,
     pub drafts: Vec<DraftView>,
+    /// The claim the `editable` flags were chosen for: the window's editor captures ITS staff id
+    /// as the writer, so the part it opens on and the writer it saves as cannot diverge.
+    pub claim: ClaimView,
 }
 
 /// The read as the pane shows it, in zone `tz` with `today` its date, the editable part chosen for
@@ -69,6 +75,7 @@ where
             .iter()
             .map(|d| draft_view(d, terminal, claim, tz, today))
             .collect(),
+        claim: claim_view(claim),
     }
 }
 
@@ -77,10 +84,12 @@ fn note_row_view<Tz: TimeZone>(note: &NoteRow, tz: &Tz, today: NaiveDate) -> Not
 where
     Tz::Offset: std::fmt::Display,
 {
+    let byline = byline_words(&note.grade, &note.writer);
     NoteRowView {
         event_id: note.event_id.to_string(),
         text: note.text.clone(),
-        byline: byline_words(&note.grade, note.drafted_by.as_deref()),
+        byline: byline.shown,
+        byline_spoken: byline.spoken,
         when: time_words(
             &note.effective_basis,
             note.t_effective,

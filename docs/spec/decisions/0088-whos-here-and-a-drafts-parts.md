@@ -204,7 +204,7 @@ number.
     node holds (db/064 rule 6), and the earlier part is held because it was inserted earlier in the same
     transaction. ADR-0087 decision 1's `refs` is `[]` only for the first non-blank part now. Pins: `contributor.rs::attesting_signer_shape`,
     `attesting_signer_unknown_writer`, `attested_part_grades_attested`; `sign.rs::a_parts_author_is_decided_by_key`;
-    `note_sign_parts.rs::a_one_writer_draft_signs_as_one_attested_note`, `an_unknown_writers_part_is_attested_by_the_signer`,
+    `note_sign_parts.rs::a_one_writer_draft_signs_as_the_signers_own_authored_note`, `an_unknown_writers_part_is_attested_by_the_signer`,
     `a_part_whose_writer_left_is_refused_no_such_writer`.
 
 16. **A signed part reads with its writer.** A chart's note list carries `addendum_to` (an `addendum-to` ref, the

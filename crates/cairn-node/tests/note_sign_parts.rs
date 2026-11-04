@@ -20,7 +20,7 @@ use cairn_node::medication::AuthorParams;
 use cairn_node::note::draft::{open_drafts, save_part, take_draft, SaveOutcome, TakeOutcome};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{sign_note, SignNoteInput, SignRefusal};
-use cairn_node::note::view::NoteGrade;
+use cairn_node::note::view::{NoteGrade, PartWriter};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -108,7 +108,7 @@ fn contributor(kid: &str, role: &str) -> serde_json::Value {
 /// The signer's OWN part signs as 3a's did, `{signer, authored}`, never as a part they merely
 /// attest (`{signer, drafted} + {signer, attested}`): "own" is decided by the writer's key.
 #[tokio::test]
-async fn a_one_writer_draft_signs_as_one_attested_note() {
+async fn a_one_writer_draft_signs_as_the_signers_own_authored_note() {
     let Some(base) = common::cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -149,7 +149,7 @@ async fn a_one_writer_draft_signs_as_one_attested_note() {
             by: common::NOTE_AUTHOR.into()
         }
     );
-    assert_eq!(list.notes[0].drafted_by, None);
+    assert_eq!(list.notes[0].writer, PartWriter::TheSigner);
     assert_eq!(list.notes[0].addendum_to, None);
 }
 
@@ -213,13 +213,13 @@ async fn a_two_writer_draft_signs_as_two_events_chained_by_addendum_to() {
     };
     let (n1, n2) = (by_id(first), by_id(second));
     assert_eq!((n1.text.as_str(), &n1.grade), ("obs stable", &signed_by));
-    assert_eq!(n1.drafted_by.as_deref(), Some("Nurse A"));
+    assert_eq!(n1.writer, PartWriter::Drafted("Nurse A".into()));
     assert_eq!(n1.addendum_to, None);
     assert_eq!(
         (n2.text.as_str(), &n2.grade),
         ("plan: review in the morning", &signed_by)
     );
-    assert_eq!(n2.drafted_by, None);
+    assert_eq!(n2.writer, PartWriter::TheSigner);
     assert_eq!(n2.addendum_to, Some(first));
     assert!(open_drafts(&c, chart).await.unwrap().is_empty());
 }
@@ -266,7 +266,11 @@ async fn an_unknown_writers_part_is_attested_by_the_signer() {
             by: common::NOTE_AUTHOR.into()
         }
     );
-    assert_eq!(note.drafted_by, None);
+    assert_eq!(
+        note.writer,
+        PartWriter::NotKnown,
+        "never read as the signer's own"
+    );
 }
 
 /// Review Focus 5: the parts sign in ONE transaction. Part 2's stored times are made dishonest

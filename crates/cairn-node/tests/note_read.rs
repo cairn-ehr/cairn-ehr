@@ -16,7 +16,7 @@ use cairn_node::medication::AuthorParams;
 use cairn_node::note::draft::save_part;
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{note_body, sign_note, SignNoteInput};
-use cairn_node::note::view::{grade_words, NoteGrade};
+use cairn_node::note::view::{byline_words, grade_words, NoteGrade, PartWriter};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -136,6 +136,31 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
     assert_eq!(list.notes.len(), 1);
     assert_eq!(list.notes[0].grade, NoteGrade::WriterNotKnown);
     assert_eq!(grade_words(&list.notes[0].grade), "writer not known");
+}
+
+/// I2: a part signed under "Don't know" is `{signer, attested}` with no writer, and must never
+/// read like the signer's own authored note: its byline says the writer is not known.
+#[tokio::test]
+async fn an_unknown_writers_part_reads_writer_not_known_signed_by() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, _, human_sk, human_kid, chart) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    sign_on(&mut c, &node_sk, &author, chart, "found on the floor").await;
+
+    let note = &list_patient_notes(&c, chart).await.unwrap().notes[0];
+    assert_eq!(note.writer, PartWriter::NotKnown);
+    assert_eq!(
+        byline_words(&note.grade, &note.writer).shown,
+        format!("writer not known · signed by {}", common::NOTE_AUTHOR)
+    );
 }
 
 /// The window reads notes as `cairn_window`, not as the schema owner (ruling R11). The vouch

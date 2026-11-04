@@ -7,7 +7,11 @@
 //! this file.
 use crate::source_guard::{js_const, js_fn, position};
 
-const NOTES_JS: &str = include_str!("../src-ui/notes.js");
+/// The note pane's two scripts as one text: notes.js, and its save queue notes_save.js.
+const NOTES_JS: &str = concat!(
+    include_str!("../src-ui/notes.js"),
+    include_str!("../src-ui/notes_save.js")
+);
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
@@ -104,7 +108,9 @@ fn notes_js_never_touches_browser_storage() {
 fn a_here_draft_reopens_and_another_terminals_draft_is_read_only() {
     let render = js_fn(NOTES_JS, "renderNotes");
     assert!(
-        render.contains("if (draft.here && noteDraft === null && claimAsked()) openDraft(draft);"),
+        render.contains(
+            "if (draft.here && noteDraft === null && readForThisClaim(claim)) openDraft(draft, claim.staff_id);"
+        ),
         "{render}"
     );
     let item = js_fn(NOTES_JS, "draftItem");
@@ -213,6 +219,11 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
     }
     assert!(
         position(INDEX_HTML, "<script src=\"signer.js\"></script>")
+            < position(INDEX_HTML, "<script src=\"notes_save.js\"></script>")
+    );
+    // notes.js names `onNoteInput` (notes_save.js's) as it loads, for its input listeners.
+    assert!(
+        position(INDEX_HTML, "<script src=\"notes_save.js\"></script>")
             < position(INDEX_HTML, "<script src=\"notes.js\"></script>")
     );
     assert!(
@@ -233,7 +244,9 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
 fn notes_js_reads_no_field_the_backend_does_not_send() {
     use crate::commands::tests::fields_read_in;
     use crate::notes::parts::{DraftView, NotePane, NoteRowView, PartView};
+    use crate::notes::words::ForkWords;
     use crate::notes::{NoteSignReport, SaveView, TakeView};
+    use crate::whos_here::{claim_view, Claim};
     let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()
     };
@@ -241,6 +254,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         event_id: "e".into(),
         text: "t".into(),
         byline: "b".into(),
+        byline_spoken: "b".into(),
         when: "w".into(),
     };
     let draft = DraftView {
@@ -261,13 +275,19 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         notes: vec![],
         withheld_sentence: None,
         drafts: vec![],
+        claim: claim_view(&Claim::Unknown),
     };
     let view = SaveView {
         saved: true,
         moved: false,
+        spent: false,
         sentence: None,
-        moved_nothing_new: None,
-        moved_everything: None,
+        fork: None,
+    };
+    let fork_words = ForkWords {
+        kept: "k".into(),
+        nothing_new: "n".into(),
+        everything: "e".into(),
     };
     let report = NoteSignReport {
         text: "t".into(),
@@ -280,6 +300,14 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         ("tail", keys(serde_json::to_value(&tail).unwrap())),
         ("part", keys(serde_json::to_value(&tail).unwrap())),
         ("view", keys(serde_json::to_value(&view).unwrap())),
+        (
+            "forkWords",
+            keys(serde_json::to_value(&fork_words).unwrap()),
+        ),
+        (
+            "claim",
+            keys(serde_json::to_value(claim_view(&Claim::Unknown)).unwrap()),
+        ),
         (
             "took",
             keys(

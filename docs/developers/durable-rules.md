@@ -31,7 +31,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   text in Rust, and a named writer with no member row refuses the sign (`NoSuchWriter`), never signs as "not known".
   **Tempting wrong fix:** normalise staff ids in Rust and compare them — a second normalisation rule that can drift
   from `cairn_vault_staff_id`. Pins: `sign.rs::a_parts_author_is_decided_by_key`,
-  `note_sign_parts.rs::a_one_writer_draft_signs_as_one_attested_note` (a `" NoteWriter "` writer is still the
+  `note_sign_parts.rs::a_one_writer_draft_signs_as_the_signers_own_authored_note` (a `" NoteWriter "` writer is still the
   signer's own), `a_part_whose_writer_left_is_refused_no_such_writer`.
 - **A door's return shape is final: new shape, new name.** 3a's `cairn_note_draft_save`, `cairn_note_drafts` and
   `cairn_note_draft_spend` were deleted from db/065 in place AND are dropped by db/066's `DROP FUNCTION IF EXISTS`

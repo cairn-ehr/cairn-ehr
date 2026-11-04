@@ -10,8 +10,8 @@
 //! and a draft can never be both spent and unsigned (db/065's commit-time trigger refuses a spend
 //! with no note of the same chart behind it).
 //!
-//! WHO EACH PART SAYS WROTE IT (design §3.4). Part 1 is the note; part k > 1 is an addendum to
-//! the part signed just before it (`refs: addendum-to`). The signer's OWN part — decided by key,
+//! WHO EACH PART SAYS WROTE IT (design §3.4). The first non-blank part is the note; each later
+//! non-blank part is an addendum to the part signed just before it (`refs: addendum-to`). The signer's OWN part — decided by key,
 //! the writer's current vault key equal to the signer's (ruling R-B) — signs as 3a's did,
 //! `{signer, authored}`. Anyone else's part is `{writer, drafted} + {signer, attested}`: the
 //! signer answers for words they did not write. A part by a writer not known names no writer at
@@ -103,7 +103,8 @@ pub fn note_body(
 
 /// Build the note from a SPENT draft part (ruling R1): its text escaped here, its recording
 /// times as the database stamped them, `recording_ended` = the part's last real keystroke.
-/// `addendum_to` is the event of the part signed just before this one (`None` for part 1).
+/// `addendum_to` is the event of the part signed just before this one (`None` for the first
+/// non-blank part).
 fn body_from_spent(
     event_id: Uuid,
     spent: &SpentPart,
@@ -202,7 +203,8 @@ async fn seal_part(
 }
 
 /// Sign the draft in `input` as `author`, one event per non-empty part, spending the draft.
-/// `Ok(Ok(_))` names the parts' events in writing order (`event_id` = part 1's, the note);
+/// `Ok(Ok(_))` names the parts' events in writing order (`event_id` = the first non-blank
+/// part's, the note);
 /// `Ok(Err(_))` is a refusal that wrote nothing; `Err` is a database failure or a floor
 /// refusal, which also wrote nothing — unless the commit's answer was lost, which
 /// `commit_failure` marks.

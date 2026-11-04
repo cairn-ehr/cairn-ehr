@@ -108,8 +108,8 @@ BEGIN
     END IF;
 
     -- b_cannot_reach_part_1: every argument combination a caller has leaves part 1 byte-equal to
-    -- A's last save — B rewriting their own tail, B from another terminal or chart, a NULL
-    -- writer, B in other case, an unknown writer.
+    -- A's last save — B rewriting their own tail, B from another terminal or chart, B in other
+    -- case, an unknown staff id.
     PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'doctor-b', 'obs stable, afebrile', NULL);
     PERFORM cairn_note_draft_part_save(d, p, 'term-2', 'doctor-b', 'clobber', NULL);
     PERFORM cairn_note_draft_part_save(d, q, 'term-1', 'doctor-b', 'clobber', NULL);

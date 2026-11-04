@@ -14,7 +14,8 @@
 -- The writer is the staff id of a vault member whose role may act clinically (db/061; never a
 -- superuser or an admin, §5.1), normalised with cairn_vault_staff_id, or NULL for an unknown
 -- writer ("Don't know" is an allowed answer to who's here, design §3.1). Anything else answers
--- 'no-such-writer'. "Empty" text is the floor's own blank test, cairn_twin_is_present (db/005). "Who's here" is a claim, never authentication: nothing here signs.
+-- 'no-such-writer'. "Empty" text is the floor's own blank test, cairn_twin_is_present (db/005).
+-- "Who's here" is a claim, never authentication: nothing here signs.
 --
 -- MOVING A DRAFT. "Continue" at another terminal moves the draft there (cairn_note_draft_take,
 -- one statement). The old terminal's next save then answers 'moved' — the draft is still on this
@@ -34,7 +35,8 @@
 
 CREATE TABLE IF NOT EXISTS note_draft_part (
     draft_id          uuid NOT NULL REFERENCES note_draft ON DELETE CASCADE,
-    -- 1, 2, 3 … in writing order. Part 1 becomes the note; part k > 1 an addendum to part k−1.
+    -- 1, 2, 3 … in writing order. The first non-blank part becomes the note; each later non-blank
+    -- part an addendum to the non-blank part before it (a blank part is never signed).
     seq               int  NOT NULL CHECK (seq >= 1),
     -- The vault staff id (normalised), or NULL = the writer is not known.
     writer            text,
@@ -221,10 +223,10 @@ BEGIN
 END;
 $$;
 
--- Spend draft p_draft into note event p_event (part 1's event, when the note has several): return
--- its NON-empty parts in writing order, then delete the header (its parts cascade) and its
--- revisions, and record the spend. Zero rows means NOTHING was spent: the draft is absent, already
--- spent, or every part is empty (there is nothing to sign). db/065's commit-time trigger then
+-- Spend draft p_draft into note event p_event (the first non-blank part's event, when the note
+-- has several): return its NON-empty parts in writing order, then delete the header (its parts
+-- cascade) and its revisions, and record the spend. Zero rows means NOTHING was spent: the draft
+-- is absent, already spent, or every part is empty (there is nothing to sign). db/065's commit-time trigger then
 -- insists p_event is a note of this chart inserted in this same transaction.
 CREATE OR REPLACE FUNCTION cairn_note_draft_spend_parts(p_draft uuid, p_event uuid)
 RETURNS TABLE(patient_id uuid, seq int, writer text, narrative text, stated_time timestamptz,
