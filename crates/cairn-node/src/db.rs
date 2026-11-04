@@ -422,6 +422,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "066_note_draft_parts",
         include_str!("../../../db/066_note_draft_parts.sql"),
     ),
+    // db/067 (sign-in slice 3b-2a): the site's quarantine policy and the door that commits an
+    // overdue draft unsigned (db/065 gains note_draft_spent.by_timer in place).
+    (
+        "067_note_draft_commit",
+        include_str!("../../../db/067_note_draft_commit.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

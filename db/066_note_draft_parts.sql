@@ -88,15 +88,15 @@ DROP FUNCTION IF EXISTS cairn_note_drafts(uuid);
 DROP FUNCTION IF EXISTS cairn_note_draft_spend(uuid, uuid);
 
 -- Save writer p_writer's text into draft p_draft of p_patient, held by p_terminal. Answers
--- 'saved' | 'spent' | 'moved' (this chart, another terminal holds it) | 'elsewhere' (another
--- chart's) | 'no-chart' (no event names the patient) | 'no-such-writer'. Every answer but
--- 'saved' wrote nothing.
+-- 'saved' | 'spent' (signed) | 'committed' (the quarantine timer put it in unsigned, db/067) |
+-- 'moved' (this chart, another terminal holds it) | 'elsewhere' (another chart's) | 'no-chart'
+-- (no event names the patient) | 'no-such-writer'. Every answer but 'saved' wrote nothing.
 --
 -- HOW, in order: refuse NULLs; normalise the writer and check they are an enrolled clinical
 -- member (a plain read of vault_member, taking no lock, so it cannot deadlock with the lock order
 -- below); take the
--- draft's advisory lock; a spent draft answers 'spent'; an existing draft must be this chart's
--- and this terminal's. Then the TAIL part (highest seq) decides: the saver's own tail is rewritten
+-- draft's advisory lock; a spent draft answers 'spent' or 'committed'; an existing draft must be
+-- this chart's and this terminal's. Then the TAIL part (highest seq) decides: the saver's own tail is rewritten
 -- if the text or stated time changed; otherwise a non-empty text appends part tail+1 (an empty one
 -- makes no part — a colleague clicking in and out writes nothing). A new draft always gets part 1.
 -- Every write stamps the part's and the header's last_keystroke and leaves a revision row.
@@ -110,6 +110,7 @@ DECLARE
     v_tail   note_draft_part%ROWTYPE;
     v_seq    int;
     v_now    timestamptz;
+    v_spent  text;
 BEGIN
     -- A NULL is a caller bug, not an outcome: `<> NULL` is NULL, so it would slip past the
     -- 'moved'/'elsewhere' guards below and write into another chart's or terminal's draft.
@@ -125,8 +126,11 @@ BEGIN
         RETURN 'no-such-writer';
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
-    IF EXISTS (SELECT 1 FROM note_draft_spent WHERE draft_id = p_draft) THEN
-        RETURN 'spent';
+    -- A timer's commit is never this window's Sign, so it gets its own word (db/067).
+    v_spent := (SELECT CASE WHEN s.by_timer THEN 'committed' ELSE 'spent' END
+                  FROM note_draft_spent s WHERE s.draft_id = p_draft);
+    IF v_spent IS NOT NULL THEN
+        RETURN v_spent;
     END IF;
     -- ONE clock reading per call, so a new draft's header and part 1 start at the same instant.
     v_now := clock_timestamp();
@@ -196,20 +200,24 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 
 -- Move draft p_draft of p_patient to terminal p_terminal ("Continue" at another terminal).
--- Answers 'taken' | 'spent' | 'elsewhere' (another chart's) | 'gone' (no such draft). Only
--- note_draft.terminal_id changes: no text, no time, no part. Taking a draft already held here
--- answers 'taken'.
+-- Answers 'taken' | 'spent' (signed) | 'committed' (the quarantine timer's, db/067) | 'elsewhere'
+-- (another chart's) | 'gone' (no such draft). Only note_draft.terminal_id changes: no text, no
+-- time, no part. Taking a draft already held here answers 'taken'.
 CREATE OR REPLACE FUNCTION cairn_note_draft_take(p_draft uuid, p_patient uuid, p_terminal text)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_patient uuid;
+    v_spent   text;
 BEGIN
     IF p_draft IS NULL OR p_patient IS NULL OR p_terminal IS NULL THEN
         RAISE EXCEPTION 'cairn_note_draft_take needs a draft, a patient and a terminal';
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
-    IF EXISTS (SELECT 1 FROM note_draft_spent WHERE draft_id = p_draft) THEN
-        RETURN 'spent';
+    -- A timer's commit is never this window's Sign, so it gets its own word (db/067).
+    v_spent := (SELECT CASE WHEN s.by_timer THEN 'committed' ELSE 'spent' END
+                  FROM note_draft_spent s WHERE s.draft_id = p_draft);
+    IF v_spent IS NOT NULL THEN
+        RETURN v_spent;
     END IF;
     SELECT d.patient_id INTO v_patient FROM note_draft d WHERE d.draft_id = p_draft FOR UPDATE;
     IF NOT FOUND THEN
