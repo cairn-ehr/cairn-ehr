@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 /// Reading the stated time (`notes_time.rs`).
 #[path = "notes_time.rs"]
-mod time;
+pub(crate) mod time;
 
 /// The pane's views: its notes, and each draft's parts (`notes_parts.rs`).
 #[path = "notes_parts.rs"]
@@ -43,6 +43,10 @@ pub(crate) mod parts;
 /// The quarantine commit's runner: the tick, the pre-read commit, the due words (`notes_commit.rs`).
 #[path = "notes_commit.rs"]
 pub(crate) mod commit;
+
+/// The discard command (`notes_discard.rs`).
+#[path = "notes_discard.rs"]
+pub(crate) mod discard;
 
 /// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
 #[path = "notes_words.rs"]
@@ -123,7 +127,7 @@ pub async fn note_sign(
 }
 
 /// Fixture mode's refusal, worded as every other write's (`commands::cease_impl`).
-const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
+pub(crate) const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
 
 /// Read the chart's notes (over its linked charts, ADR-0076) and open drafts, worded in this
 /// machine's zone. Fixture mode has no notes: it reads as an empty pane, never a failure.
@@ -137,6 +141,7 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             notes: vec![],
             withheld_sentence: None,
             drafts: vec![],
+            discards: vec![],
             claim: crate::whos_here::claim_view(&claim),
         });
     };

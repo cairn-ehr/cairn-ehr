@@ -4,6 +4,7 @@
 use super::*;
 use crate::notes::tests::{bne, utc};
 use crate::notes::time::stated_time_in;
+use cairn_node::note::read::{DiscardMarker, DiscardedText};
 use cairn_node::note::view::{NoteGrade, PartWriter};
 use uuid::Uuid;
 
@@ -294,4 +295,99 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
     );
     assert_eq!(nobody.claim.kind, "not-asked");
     assert_eq!(nobody.claim.staff_id, None);
+}
+
+fn marker(discarder: Option<&str>) -> DiscardMarker {
+    DiscardMarker {
+        event_id: Uuid::from_u128(77),
+        chart: Uuid::from_u128(7),
+        discarded_at: utc("2026-11-02T17:40:00Z"),
+        discarder: discarder.map(str::to_string),
+        parts: vec![
+            DiscardedText {
+                by_discarder: true,
+                text: "BP <90 <b>".into(),
+                stated: None,
+                recording_started: utc("2026-11-02T17:12:00Z"),
+                recording_ended: utc("2026-11-02T17:30:00Z"),
+            },
+            DiscardedText {
+                by_discarder: false,
+                text: "pale".into(),
+                stated: None,
+                recording_started: utc("2026-11-02T17:31:00Z"),
+                recording_ended: utc("2026-11-02T17:35:00Z"),
+            },
+        ],
+    }
+}
+
+/// The marker's one-line summary and each part's heading, word for word. The text is carried
+/// exactly as typed (the webview sets it as `textContent`).
+#[test]
+fn the_marker_summary_and_headings_are_exact() {
+    let v = discard_view(&marker(Some("Nurse A")), &bne(), nov(3));
+    assert_eq!(v.event_id, Uuid::from_u128(77).to_string());
+    assert_eq!(v.summary, "Draft discarded by Nurse A · 03:40");
+    assert_eq!(
+        v.parts[0].heading,
+        "Part 1, written by Nurse A · started 03:12"
+    );
+    assert_eq!(v.parts[0].text, "BP <90 <b>");
+    assert_eq!(
+        v.parts[1].heading,
+        "Part 2, writer not known · started 03:31"
+    );
+    let nameless = discard_view(&marker(None), &bne(), nov(3));
+    assert_eq!(
+        nameless.summary,
+        "Draft discarded by someone this node cannot name · 03:40"
+    );
+    assert_eq!(
+        nameless.parts[0].heading,
+        "Part 1, written by someone this node cannot name · started 03:12"
+    );
+}
+
+/// All four combinations of held-back notes and held-back discards.
+#[test]
+fn the_withheld_sentence_counts_discards() {
+    assert_eq!(withheld_words(0, 0), None);
+    let notes = withheld_words(2, 0).unwrap();
+    assert!(notes.starts_with("2 note(s) on this patient's linked charts are not shown"));
+    assert!(!notes.contains("discarded"), "{notes}");
+    let both = withheld_words(2, 3).unwrap();
+    assert!(both.starts_with(&notes), "the notes sentence is unchanged");
+    assert!(
+        both.ends_with(" 3 discarded draft(s) on those charts are held back for the same reason."),
+        "{both}"
+    );
+    let only = withheld_words(0, 3).unwrap();
+    assert!(
+        only.starts_with("3 discarded draft(s) on this patient's linked charts are not shown"),
+        "{only}"
+    );
+    assert!(!only.contains("held back"), "{only}");
+}
+
+/// The pane carries the markers, newest first, and says what it withheld.
+#[test]
+fn the_pane_lists_discard_markers() {
+    let list = PatientNoteList {
+        notes: vec![],
+        withheld_on_linked: 0,
+        drafts: vec![],
+        discards: vec![marker(Some("Nurse A"))],
+        discards_withheld_on_linked: 1,
+    };
+    let pane = note_pane(
+        list,
+        None,
+        &Claim::NotAsked,
+        &Default::default(),
+        &bne(),
+        nov(3),
+    );
+    assert_eq!(pane.discards.len(), 1);
+    assert!(pane.withheld_sentence.is_some());
 }

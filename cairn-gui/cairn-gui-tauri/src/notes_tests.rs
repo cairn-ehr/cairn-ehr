@@ -397,3 +397,26 @@ fn a_note_command_before_the_terminal_id_is_read_refuses() {
     assert_eq!(err.retry, Retry::Now);
     assert!(err.text.contains("terminal's id"), "{}", err.text);
 }
+
+/// A discarded draft's fork never says "signed": no note exists (controller ruling 1). Each of
+/// the three sentences is pinned exactly.
+#[test]
+fn discarded_fork_words_never_say_signed() {
+    use super::words::{
+        DISCARDED_ELSEWHERE, DISCARDED_ELSEWHERE_EVERYTHING, DISCARDED_ELSEWHERE_NOTHING_NEW,
+    };
+    let fork = save_view(SaveOutcome::Discarded).fork.expect("it forks");
+    for (got, want) in [
+        (&fork.kept, DISCARDED_ELSEWHERE),
+        (&fork.nothing_new, DISCARDED_ELSEWHERE_NOTHING_NEW),
+        (&fork.everything, DISCARDED_ELSEWHERE_EVERYTHING),
+    ] {
+        assert_eq!(got, want);
+        assert!(!got.contains("signed"), "{got}");
+    }
+    assert_eq!(
+        fork.nothing_new,
+        "This draft was discarded in another window. Everything typed here was saved into it \
+         first, and the record keeps it only as a discarded draft, never as a note."
+    );
+}

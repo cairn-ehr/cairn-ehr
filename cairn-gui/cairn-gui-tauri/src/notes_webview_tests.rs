@@ -275,6 +275,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         notes: vec![],
         withheld_sentence: None,
         drafts: vec![],
+        discards: vec![],
         claim: claim_view(&Claim::Unknown),
     };
     let view = SaveView {

@@ -20,18 +20,19 @@ pub struct SaveView {
     /// The quarantine timer put the draft into the record unsigned (slice 3b-2a). Never this
     /// window's own Sign, so the webview always keeps what it had not saved as a new draft.
     pub committed: bool,
-    /// The draft was discarded (slice 3b-2b). Forks with `spent`'s words: the webview keeps what
-    /// it had not saved as a new draft.
+    /// The draft was discarded (slice 3b-2b). Forks with its own words (`DISCARDED_ELSEWHERE`):
+    /// no note exists, so they never say "signed". The webview keeps what it had not saved as a
+    /// new draft.
     pub discarded: bool,
     /// Why nothing was written. For `moved` and `committed`, the same words as `fork.kept`.
     pub sentence: Option<String>,
-    /// `moved`, `spent` or `committed`: the words for keeping what the draft lacks as a new draft.
+    /// `moved`, `spent`, `committed` or `discarded`: the words for keeping what the draft lacks as a new draft.
     pub fork: Option<ForkWords>,
 }
 
-/// What the webview says when it keeps the text a moved, signed-elsewhere or timer-committed draft
-/// lacks. Only the webview knows which of the three happened to the text on screen, so all three
-/// travel.
+/// What the webview says when it keeps the text a moved, signed-elsewhere, timer-committed or
+/// discarded draft lacks. Only the webview knows which of the three happened to the text on
+/// screen, so all three travel.
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ForkWords {
     /// The text typed after the last answered save is kept: the usual branch.
@@ -51,17 +52,32 @@ pub struct TakeView {
 }
 
 /// The sentence a save, take or sign answers when the draft was discarded (slice 3b-2b).
-const DISCARDED: &str = "This draft was discarded; it is no longer open.";
+pub(crate) const DISCARDED: &str = "This draft was discarded; it is no longer open.";
+/// … when a save finds its draft discarded in another window: the text typed since the last save
+/// is in no draft, so it is kept. Never "signed": a discard leaves no note.
+pub(crate) const DISCARDED_ELSEWHERE: &str =
+    "This draft was discarded in another window. What you typed \
+     since the last save is kept here as a new draft.";
+/// … the same, when nothing on screen was unsaved: nothing is kept here.
+pub(crate) const DISCARDED_ELSEWHERE_NOTHING_NEW: &str =
+    "This draft was discarded in another window. \
+     Everything typed here was saved into it first, and the record keeps it only as a discarded \
+     draft, never as a note.";
+/// … the same, when the text that was saved has since been edited: everything is kept.
+pub(crate) const DISCARDED_ELSEWHERE_EVERYTHING: &str =
+    "This draft was discarded in another window. \
+     Everything on this screen is kept here as a new draft.";
 /// The sentence a save or sign answers when the draft was already signed.
-const SPENT: &str = "this note has already been signed";
+pub(crate) const SPENT: &str = "this note has already been signed";
 /// … when a SAVE's draft is another chart's (another terminal's is `MOVED`, #958).
 const ELSEWHERE: &str = "this draft belongs to another chart — nothing was saved";
 /// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
-const SIGN_ELSEWHERE: &str =
+pub(crate) const SIGN_ELSEWHERE: &str =
     "this draft belongs to another chart — nothing was signed; your text is still here";
 /// … when a SIGN finds its draft taken to another terminal (Task 5 review M1): not "another
 /// chart" — the clinician is told where the note went.
-const SIGN_MOVED: &str = "This note is now being continued at another terminal — nothing was \
+pub(crate) const SIGN_MOVED: &str =
+    "This note is now being continued at another terminal — nothing was \
      signed; your text is still here.";
 /// … when the writer a save names is not an enrolled member (any more).
 const NO_SUCH_WRITER: &str =
@@ -101,19 +117,20 @@ const COMMITTED_EVERYTHING: &str = "This note went into the record unsigned afte
 const TAKE_COMMITTED: &str = "this note has already gone into the record unsigned";
 /// … when a SIGN finds it: nothing was signed. Not "your text is still here", as for `SPENT`: the
 /// save that follows always forks, and closes the editor when nothing was unsaved (review I2).
-const SIGN_COMMITTED: &str =
+pub(crate) const SIGN_COMMITTED: &str =
     "this note had already gone into the record unsigned — nothing was signed";
 /// … when a TAKE's draft is another chart's (final review item 6): a take saves nothing, and a
 /// draft at another terminal is what a take moves, so ELSEWHERE's words are not true of it.
 const TAKE_ELSEWHERE: &str = "this draft belongs to another chart — nothing was moved";
 /// … when a take finds no such draft (never saved, or discarded).
-const GONE: &str = "this draft is no longer open";
+pub(crate) const GONE: &str = "this draft is no longer open";
 /// … the same, for a SIGN: the on-screen writer, or the writer of a part above, is no longer
 /// enrolled. Nothing was signed, and the editor still holds the text.
-const SIGN_NO_SUCH_WRITER: &str = "a writer of this note is not enrolled on this node — nothing \
+pub(crate) const SIGN_NO_SUCH_WRITER: &str =
+    "a writer of this note is not enrolled on this node — nothing \
      was signed; your text is still here";
 /// … when no event names the patient on this node.
-const NO_CHART: &str = "this patient has no chart on this node";
+pub(crate) const NO_CHART: &str = "this patient has no chart on this node";
 /// … when nothing but whitespace was typed.
 const EMPTY: &str = "there is nothing to sign — the note is empty";
 
@@ -131,10 +148,15 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
     };
     let fork = match outcome {
         SaveOutcome::Moved => Some([MOVED, MOVED_NOTHING_NEW, MOVED_EVERYTHING]),
-        SaveOutcome::Spent | SaveOutcome::Discarded => Some([
+        SaveOutcome::Spent => Some([
             SIGNED_ELSEWHERE,
             SIGNED_ELSEWHERE_NOTHING_NEW,
             SIGNED_ELSEWHERE_EVERYTHING,
+        ]),
+        SaveOutcome::Discarded => Some([
+            DISCARDED_ELSEWHERE,
+            DISCARDED_ELSEWHERE_NOTHING_NEW,
+            DISCARDED_ELSEWHERE_EVERYTHING,
         ]),
         SaveOutcome::Committed => Some([COMMITTED, COMMITTED_NOTHING_NEW, COMMITTED_EVERYTHING]),
         // Spelled out, no `_` (#412): a new outcome must decide whether its text forks.

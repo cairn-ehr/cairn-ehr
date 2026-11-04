@@ -12,7 +12,7 @@ use super::commit::due_words;
 use super::time::datetime_local;
 use crate::whos_here::{claim_view, claimed_name, Claim, ClaimView};
 use cairn_node::note::draft::{DraftPart, NoteDraft};
-use cairn_node::note::read::{NoteRow, PatientNoteList};
+use cairn_node::note::read::{DiscardMarker, NoteRow, PatientNoteList};
 use cairn_node::note::view::{byline_words, instant, time_words};
 use chrono::{NaiveDate, TimeZone};
 use std::collections::HashSet;
@@ -41,6 +41,8 @@ pub struct NotePane {
     /// Said when notes on a linked chart are held back because a link is in doubt.
     pub withheld_sentence: Option<String>,
     pub drafts: Vec<DraftView>,
+    /// Discarded drafts, newest first: a marker BESIDE the notes, never among them (slice 3b-2b).
+    pub discards: Vec<DiscardView>,
     /// The claim the `editable` flags were chosen for: the window's editor captures ITS staff id
     /// as the writer, so the part it opens on and the writer it saves as cannot diverge.
     pub claim: ClaimView,
@@ -60,14 +62,8 @@ pub(crate) fn note_pane<Tz: TimeZone>(
 where
     Tz::Offset: std::fmt::Display,
 {
-    let withheld_sentence = (list.withheld_on_linked > 0).then(|| {
-        format!(
-            "{} note(s) on this patient's linked charts are not shown: a link in this record is in \
-             doubt, so the node cannot yet vouch that they are this patient's. They are shown \
-             once a clinician has judged the record's links (\"How these charts are linked\").",
-            list.withheld_on_linked
-        )
-    });
+    let withheld_sentence =
+        withheld_words(list.withheld_on_linked, list.discards_withheld_on_linked);
     NotePane {
         notes: list
             .notes
@@ -80,7 +76,100 @@ where
             .iter()
             .map(|d| draft_view(d, terminal, claim, failed.contains(&d.draft_id), tz, today))
             .collect(),
+        discards: list
+            .discards
+            .iter()
+            .map(|m| discard_view(m, tz, today))
+            .collect(),
         claim: claim_view(claim),
+    }
+}
+
+/// What the pane says when charts of the set are held back because a link is in doubt: `notes`
+/// held-back notes and `discards` held-back discard markers. `None` when nothing is held back.
+/// The notes sentence is unchanged when no marker is held back; markers alone get the same
+/// sentence led by their own count. Pure.
+fn withheld_words(notes: usize, discards: usize) -> Option<String> {
+    if notes == 0 && discards == 0 {
+        return None;
+    }
+    let lead = if notes > 0 {
+        format!("{notes} note(s)")
+    } else {
+        format!("{discards} discarded draft(s)")
+    };
+    let mut words = format!(
+        "{lead} on this patient's linked charts are not shown: a link in this record is in \
+         doubt, so the node cannot yet vouch that they are this patient's. They are shown \
+         once a clinician has judged the record's links (\"How these charts are linked\")."
+    );
+    if notes > 0 && discards > 0 {
+        words.push_str(&format!(
+            " {discards} discarded draft(s) on those charts are held back for the same reason."
+        ));
+    }
+    Some(words)
+}
+
+/// One discarded draft, as the pane lists it: a one-line summary and the text it held.
+#[derive(Debug, serde::Serialize)]
+pub struct DiscardView {
+    pub event_id: String,
+    /// "Draft discarded by Nurse A · 3 Nov 03:40".
+    pub summary: String,
+    pub parts: Vec<DiscardPartView>,
+}
+
+/// One part of a discarded draft.
+#[derive(Debug, serde::Serialize)]
+pub struct DiscardPartView {
+    /// "Part 1, written by Nurse A · started 3 Nov 03:12", or "Part 2, writer not known · …".
+    pub heading: String,
+    /// The text exactly as typed; the webview sets it as `textContent`.
+    pub text: String,
+}
+
+/// The name a marker uses for a discarder the node cannot name.
+const UNNAMED: &str = "someone this node cannot name";
+
+/// One marker's words, dated against `today` in zone `tz`. A part the discarder wrote is
+/// headed with the discarder's name (the rule lets only the discarder's own parts be discarded,
+/// so "written by" is the discarder); any other part says its writer is not known. Pure.
+pub(crate) fn discard_view<Tz: TimeZone>(
+    m: &DiscardMarker,
+    tz: &Tz,
+    today: NaiveDate,
+) -> DiscardView
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let name = m.discarder.as_deref().unwrap_or(UNNAMED);
+    DiscardView {
+        event_id: m.event_id.to_string(),
+        summary: format!(
+            "Draft discarded by {name} · {}",
+            instant(m.discarded_at, tz, today)
+        ),
+        parts: m
+            .parts
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let writer = if p.by_discarder {
+                    format!("written by {name}")
+                } else {
+                    "writer not known".to_string()
+                };
+                DiscardPartView {
+                    heading: format!(
+                        "Part {}, {writer} · started {}",
+                        i + 1,
+                        instant(p.recording_started, tz, today)
+                    ),
+                    text: p.text.clone(),
+                }
+            })
+            .collect(),
     }
 }
 

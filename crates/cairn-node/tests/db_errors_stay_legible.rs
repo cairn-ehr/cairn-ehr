@@ -810,6 +810,12 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
          scratch database",
     ),
     (
+        "cairn-gui/cairn-gui-tauri/src/notes_discard_tests.rs",
+        "a test fixture, not a production commit: `notes_discard.rs`'s `#[cfg(test)]` module \
+         (kept beside it by `#[path]`), whose DB-gated test enrols the discarder on a scratch \
+         database",
+    ),
+    (
         "crates/cairn-sync/src/main.rs",
         "the sync harness's `write`/`gen` load generator and its content-addressed blob store",
     ),
