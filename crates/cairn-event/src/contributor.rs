@@ -188,10 +188,10 @@ pub fn with_drafting_writer(mut body: EventBody, writer_kid: Option<&str>) -> Ev
 ///     `'attested'` in SQL — filed as an issue for #245's display half to resolve, not fixed
 ///     by anything below. Where the two DO overlap on the shapes
 ///     `crates/cairn-node/tests/authority_lockstep.rs` actually exercises (a single vouched
-///     human attester; a claimed-but-unattested human author; a device-only contributor set)
-///     they agree: `Attested` <-> `'attested'`, `Unverified`/`Device` both <-> `'unverified'`;
-///     `Asserted` (a named human writer, no bearer) <-> `'unverified'` too, as it bears no
-///     responsibility.
+///     human attester; a claimed-but-unattested human author; a device-only contributor set;
+///     a quarantine-committed note, a human `drafted` beside the node's `recorded`, node-signed)
+///     they agree: `Attested` <-> `'attested'`; `Unverified`, `Asserted` and `Device` all <->
+///     `'unverified'` (`Asserted` bears no responsibility, so SQL has no authority to grant).
 ///     That is what the test pins — an obligation on those shapes, not a universal guarantee
 ///     over every event this repo can admit.
 ///

@@ -8,7 +8,7 @@
 //! Notes are read ONLY from the `clinical_note` projection, never from the event log's clear
 //! view (ruling R8): the projection is what keeps a newer, unchecked note profile carried by a
 //! peer off the screen. `event_log` is joined only for what grades authorship.
-use cairn_event::contributor::{classify_authorship_confidence, VerifiedKid};
+use cairn_event::contributor::{classify_authorship_with_humans, VerifiedKid};
 use cairn_event::note::unescape_note_markup;
 use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
@@ -62,9 +62,14 @@ pub struct PatientNoteList {
 /// spelling `::uuid` accepts, some of which Rust's `Uuid` parser refuses, and one such ref must not
 /// make the chart's whole note list fail to read.
 ///
-/// The last two columns say who typed the part (`view::part_writer`): whether a `drafted`
+/// The two columns before the last say who typed the part (`view::part_writer`): whether a `drafted`
 /// contributor is present even when its key cannot be named, and whether the signer only
 /// ATTESTED it — so a part someone else typed never reads like the signer's own note (I2).
+///
+/// The last column is the `drafted` contributor's key itself (slice 3b-2a). The read tells the
+/// grader that key is a HUMAN only when `cairn_note_signer_name` names it (a vault member is a
+/// person), so a quarantine-committed part grades `Asserted` ("went in unsigned") rather than
+/// `Device`. It is never an attester: the #412 guard below still holds.
 const NOTES_SQL: &str = "\
     SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
@@ -76,7 +81,9 @@ const NOTES_SQL: &str = "\
                                     WHERE c ->> 'role' = 'drafted' LIMIT 1)), \
            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c WHERE c ->> 'role' = 'drafted'), \
            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
-                    WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id) \
+                    WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id), \
+           (SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
+             WHERE c ->> 'role' = 'drafted' LIMIT 1) \
       FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      WHERE n.patient_id = ANY($1::text[]::uuid[])";
 
@@ -99,12 +106,21 @@ pub async fn list_patient_notes(
         let signer: String = r.get(6);
         let contributors: serde_json::Value = serde_json::from_str(&r.get::<_, String>(7))?;
         let attester: Option<String> = r.get(8);
+        let drafted_by: Option<String> = r.get(11);
+        let drafted_kid: Option<String> = r.get(14);
+        // A drafted key is a human only when the vault can name it (see NOTES_SQL).
+        let humans: Vec<&str> = drafted_kid
+            .as_deref()
+            .filter(|_| drafted_by.is_some())
+            .into_iter()
+            .collect();
         // Both kids come from event_log columns whose existence is a verification: the signer
         // always, the attester only through the vouch door in NOTES_SQL.
-        let confidence = classify_authorship_confidence(
+        let confidence = classify_authorship_with_humans(
             &contributors,
             VerifiedKid::from_event_log_column(&signer),
             attester.as_deref().map(VerifiedKid::from_event_log_column),
+            &humans,
         );
         notes.push(NoteRow {
             event_id: r.get::<_, String>(0).parse()?,
@@ -118,7 +134,7 @@ pub async fn list_patient_notes(
                 .get::<_, Option<String>>(10)
                 .map(|s| s.parse())
                 .transpose()?,
-            writer: part_writer(r.get(12), r.get(11), r.get(13)),
+            writer: part_writer(r.get(12), drafted_by, r.get(13)),
         });
     }
     // Ordered here rather than by SQL ORDER BY (ADR-0045); the id breaks a tie stably.

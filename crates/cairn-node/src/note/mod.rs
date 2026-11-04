@@ -8,11 +8,14 @@
 //! * `sign` — turns a draft into signed, sealed note events — one per writer's non-blank part,
 //!   each later part an addendum to the one before — in ONE transaction that spends the draft,
 //!   so a draft can never be both a note and still open.
+//! * `commit` — the quarantine timer: a draft left untouched for the site's quarantine goes into
+//!   the record UNSIGNED, as node-signed note events, one per non-blank part (slice 3b-2a).
 //! * `read` — a chart's notes (over every linked chart, as the medication list reads, ADR-0076)
 //!   with each one's authorship grade, plus the chart's open drafts.
 //! * `view` — the pure words the window shows: who wrote and who signed, and when the note applies.
 //!
 //! The pure wire builders (payload, twin, markup escaping) are `cairn_event::note`'s.
+pub mod commit;
 pub mod draft;
 pub mod read;
 pub mod sign;

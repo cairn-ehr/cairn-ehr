@@ -22,6 +22,8 @@ fn draft(terminal: &str) -> NoteDraft {
             recording_started: utc("2026-11-02T17:12:00Z"),
             last_keystroke: utc("2026-11-02T17:40:00Z"),
         }],
+        due: utc("2026-11-02T20:40:00Z"),
+        overdue: false,
     }
 }
 

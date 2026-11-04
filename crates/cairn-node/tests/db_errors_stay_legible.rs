@@ -734,19 +734,29 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/shred.rs",
     "crates/cairn-node/src/identity_evidence.rs",
     "crates/cairn-node/src/note/sign.rs",
+    "crates/cairn-node/src/note/commit.rs",
 ];
 
 /// Commits inside a MARKED file that write no event, so there is nothing to double: how many,
 /// and why. Each is subtracted from that file's count of commits that need `commit_failure(`.
 /// Kept apart from [`UNMARKED_COMMITS`] because the same file also commits an event, which IS
 /// marked; a new commit in it is still red unless it is marked or listed here on purpose.
-const EVENTLESS_COMMITS: &[(&str, usize, &str)] = &[(
-    "crates/cairn-node/src/auto_apply.rs",
-    2,
-    "sending a disputed or vetoed pair to human review only sets `match_proposal.status`; \
-     a re-run after a lost commit finds the row `review` (skips it) or `pending` (sends it \
-     again), both harmless",
-)];
+const EVENTLESS_COMMITS: &[(&str, usize, &str)] = &[
+    (
+        "crates/cairn-node/src/auto_apply.rs",
+        2,
+        "sending a disputed or vetoed pair to human review only sets `match_proposal.status`; \
+         a re-run after a lost commit finds the row `review` (skips it) or `pending` (sends it \
+         again), both harmless",
+    ),
+    (
+        "crates/cairn-node/src/note/commit.rs",
+        1,
+        "a commit door call that returned no part wrote no event: it either did nothing or \
+         deleted an all-blank overdue draft, and a re-run after a lost commit finds the draft \
+         gone or deletes it again",
+    ),
+];
 
 /// Every other file that commits a database transaction or writes an event in autocommit,
 /// with why it is not marked. A file that is in neither list is red, so a new write is

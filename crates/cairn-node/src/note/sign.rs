@@ -66,6 +66,8 @@ pub enum SignRefusal {
     NoChart,
     /// A writer named (on screen, or by one of the draft's parts) is not an enrolled member.
     NoSuchWriter,
+    /// The quarantine timer already put the draft into the record unsigned (slice 3b-2a).
+    Committed,
 }
 
 /// RFC 3339 UTC, to the microsecond — the precision Postgres stores and the floor's
@@ -104,8 +106,8 @@ pub fn note_body(
 /// Build the note from a SPENT draft part (ruling R1): its text escaped here, its recording
 /// times as the database stamped them, `recording_ended` = the part's last real keystroke.
 /// `addendum_to` is the event of the part signed just before this one (`None` for the first
-/// non-blank part).
-fn body_from_spent(
+/// non-blank part). Shared with the quarantine commit (`commit.rs`), which builds the same body.
+pub(super) fn body_from_spent(
     event_id: Uuid,
     spent: &SpentPart,
     node_kid: &str,
@@ -138,6 +140,7 @@ fn refusal_for(outcome: SaveOutcome) -> Option<SignRefusal> {
         SaveOutcome::Moved => Some(SignRefusal::Moved),
         SaveOutcome::NoChart => Some(SignRefusal::NoChart),
         SaveOutcome::NoSuchWriter => Some(SignRefusal::NoSuchWriter),
+        SaveOutcome::Committed => Some(SignRefusal::Committed),
     }
 }
 
@@ -171,8 +174,8 @@ fn part_author(
 }
 
 /// The current signing key of vault member `writer` (`None` for no such member), when a part
-/// names one; `None` without a query for a writer not known.
-async fn writer_key(
+/// names one; `None` without a query for a writer not known. Shared with `commit.rs`.
+pub(super) async fn writer_key(
     client: &(impl GenericClient + Sync),
     writer: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
@@ -380,6 +383,10 @@ mod tests {
         assert_eq!(
             refusal_for(SaveOutcome::NoSuchWriter),
             Some(SignRefusal::NoSuchWriter)
+        );
+        assert_eq!(
+            refusal_for(SaveOutcome::Committed),
+            Some(SignRefusal::Committed)
         );
     }
 }

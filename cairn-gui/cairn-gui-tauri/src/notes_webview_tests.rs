@@ -281,6 +281,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         saved: true,
         moved: false,
         spent: false,
+        committed: false,
         sentence: None,
         fork: None,
     };
