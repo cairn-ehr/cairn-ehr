@@ -288,6 +288,13 @@ Two infrastructure invariants — and their realization — underpin point-of-ca
 > same transaction; and it is in no backup or export (partly superseding ADR-0026 decisions 1 and 3). Author-owned,
 > session-decoupled drafts and `sign-as` salvage remain deferred (slice 3b,
 > [#243](https://github.com/cairn-ehr/cairn-ehr/issues/243)).
+>
+> **Since sign-in slice 3b-1** ([ADR-0088](decisions/0088-whos-here-and-a-drafts-parts.md), `db/066`) a note draft is
+> a header plus **per-writer parts**: each part names its writer (an enrolled clinical member, or unknown) as a
+> who's-here claim, a save rewrites only the saver's own tail part or appends one, and every real change leaves a
+> revision row for the draft's life. A draft is still held by one terminal at a time, but "Continue here" moves it.
+> It signs as one event per part, the signer `authored` on their own and `attested` (with the writer `drafted`) on
+> anyone else's. The draft is still keyed by terminal, not by `(author, patient)`.
 
 ## 3.11 Notifications as projections, responsibility-routing, and acknowledgment
 > Resolves former open question §11.10 — see [ADR-0009](decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md), canonical design [identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor). Minimal data-model commitments; the clinical model and the *why* live there and in the ADR.

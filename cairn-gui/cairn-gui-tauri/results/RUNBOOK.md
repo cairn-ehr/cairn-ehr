@@ -1314,7 +1314,7 @@ Read what the node holds with the owner connection:
 
 ```bash
 notes()  { psql "$CONN" -c "SELECT left(narrative, 40) AS narrative, effective_basis, t_effective, recording_started, recording_ended FROM clinical_note ORDER BY t_effective"; }
-drafts() { psql "$CONN" -c "SELECT left(narrative, 40) AS narrative, terminal_id, stated_time, last_keystroke FROM note_draft"; }
+drafts() { psql "$CONN" -c "SELECT left(p.narrative, 40) AS narrative, d.terminal_id, p.stated_time, p.last_keystroke FROM note_draft d JOIN note_draft_part p USING (draft_id) ORDER BY d.recording_started, p.seq"; }   # since 3b-1 (db/066) the text is in note_draft_part
 ```
 
 - [ ] **The setup hook filled the terminal id.** After the first launch the file holds one UUID, and it is the same
@@ -1343,21 +1343,23 @@ seconds, then type the strip's Staff ID and passphrase and press *Sign note*. Fi
       ACCESS EXCLUSIVE MODE;`. Press *Sign note*, then type in the editor and the time field: nothing appears and Sign
       is disabled. `ROLLBACK;` within 15 s: the sign completes with the text as it was at the press.
 - [ ] **Stated seconds survive a reopen.** On this throwaway database only, give an open draft a time with seconds
-      (`UPDATE note_draft SET stated_time = '2026-11-03T03:00:15+00' WHERE …`), reopen the chart, and sign without
+      (`UPDATE note_draft_part SET stated_time = '2026-11-03T03:00:15+00' WHERE …`; `note_draft` before 3b-1), reopen the chart, and sign without
       touching the field: `notes` shows `t_effective` at `:15`.
 
 **Measurement 3 — a crash loses nothing.** Type a note, wait two seconds, then kill the window hard
 (`pkill -9 -f cairn-gui-tauri`, so no close-time save can run). Relaunch on the same chart.
 
 - [ ] The draft is back in the editor, with its stated time, and the status line reads "unsigned draft · started … ·
-      last typed …". Count every act before typing can continue (target 0).
+      last typed …". Count every act before typing can continue (target 0). **Since 3b-1** a relaunch forgets who's here, and a
+      draft reopens into the editor only once somebody has said who is writing: record the acts as they now are
+      (expected: *Continue here* or *New note* asks, one pick, then the editor) — section 19's Measurement 4.
 - [ ] Kill it again within a second of a keystroke: record how much of the last typing was lost (the bound is the
       one-second save interval, R14).
 - [ ] Stop the node's Postgres while typing: "not saved yet — your text is still here" shows and the text stays.
       *Sign note* says "Could not sign this note: …" and keeps the text. Start Postgres; the next keystroke saves.
 - [ ] **Another terminal's draft.** Quit, move the terminal-id file aside, relaunch: the draft is listed, read-only,
-      "… · being written at another terminal", with nothing to press. Put the file back and relaunch: it reopens in
-      the editor.
+      "… · being written at another terminal" (since 3b-1 with **Continue here**: do not press it here, section 19 times it). Put the file back and relaunch: it reopens in
+      the editor (since 3b-1, after a who's-here pick).
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
@@ -1375,3 +1377,109 @@ editor was walked headlessly in Chromium only (sign-in slice 3a, Task 6): WebKit
 partial input and seconds, Tauri's argument casing for `note_draft_save` / `note_sign`, and the setup hook that fills
 the terminal id were never seen in the real window. The doors were run against throwaway databases by the slice's
 DB-gated tests on 2026-11-03. `TEMPLATE.md` carries a matching block (*Write, autosave and sign a progress note*).
+
+## 19. Who's here, the idle re-lock and a draft's parts (GUI sign-in slice 3b-1, ADR-0088)
+
+The slice's gestures: **Who's here?** (the button in the bar, or Ctrl+Shift+H, Cmd+Shift+H on macOS) and its picker,
+the **Return to …** offer, the **idle re-lock**, writing **below a colleague's part**, and **Continue here** on a draft
+held at another terminal. Paper counterpart: the progress sheet in the bedside folder. Whoever picks up the pen writes
+below what is there, nobody rubs out a colleague's ink, an open folder is put away when its reader walks off, and the
+sheet is carried to wherever you sit down to finish it. **Live, except one check:** `--mock` lists two fixture staff
+(Dr B, Nurse A), so the picker, the bar and the hot key can be walked there, but it holds no drafts and refuses every
+note write.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Hot key to named, 50 staff on the node | the press of Ctrl/Cmd+Shift+H, a chart open | the bar reads "Writing as …" | **≤ 3 s** |
+| Back at the chart after the re-lock | the first keystroke in the terminal passphrase | the chart on screen, header read | **≤ 10 s** |
+| Continue here | the press of *Continue here* | the caret in *Progress note*, the draft's parts above | **≤ 1 s** |
+| A switch mid-typing | the hot key pressed within a second of a keystroke | the switched-out writer's part, read back | **nothing lost** |
+
+Steps: reading a chart 0 → 0 → 0 (no name asked) · writing and signing 3 → 3 (say who's here once per stint, type,
+sign with only the passphrase, the staff ID prefilled) → 3 · adding to a colleague's draft 1 → 1 → 1 · finishing at
+another terminal 1 (plus the walk) → 1 → 1 · resuming after the re-lock 2 (plus the walk to the folder) → 3 (unlock,
+pick yourself, *Return to …*) → 3, which the maintainer ruled is not an architecture defect (ADR-0088 decision 5).
+**A figure outside its budget, or another `M > N`, is the finding — file an issue; never adjust the budget.**
+
+**Setup.** Section 18's setup, with **two** enrolled clinical members besides `boss`: `nurse-a` and `dr-b`, each
+enrolled from the window (section 17) so each has a passphrase. Launch as section 3 (with `--key-hold-seconds 900`,
+so a held key exists to be forgotten) plus `--idle-lock-minutes 1` for Measurement 3 only. For Measurement 1, add 48
+placeholder members **on this throwaway database only** (they cannot sign: their sealed seed is a placeholder nobody
+can release), so the directory holds 50 clinical staff:
+
+```bash
+psql "$CONN" -c "INSERT INTO vault_member (staff_id, display_name, role, actor_id, signing_key_id, sealed, contact_email, enrolled_by)
+  SELECT 'staff-' || i, 'Staff ' || chr(64 + (i % 26) + 1) || i, CASE WHEN i % 3 = 0 THEN 'clinician' ELSE 'nurse' END,
+         decode(md5('actor' || i), 'hex'), md5('k' || i) || md5('l' || i), '\x00', 's' || i || '@x', 'console'
+    FROM generate_series(1, 48) i"
+parts() { psql "$CONN" -c "SELECT d.draft_id, d.patient_id, d.terminal_id, p.seq, p.writer, left(p.narrative, 40) AS narrative, p.last_keystroke FROM note_draft d JOIN note_draft_part p USING (draft_id) ORDER BY d.recording_started, p.seq"; }
+revs()  { psql "$CONN" -c "SELECT seq, writer, terminal_id, left(narrative, 30) AS narrative, saved_at FROM note_draft_revision ORDER BY rev"; }
+signed() { psql "$CONN" -c "SELECT left(n.narrative, 30) AS narrative, n.refs, e.contributors FROM clinical_note n JOIN event_log e USING (event_id) ORDER BY n.recording_started"; }
+```
+
+**Measurement 1 — hot key to named (≤ 3 s).** A chart open, nobody typing. Press the hot key, type the first letters
+of `dr-b`'s display name, and pick them (Enter picks the first match). Five runs with the person among this terminal's
+recent people (listed first) and five with someone never picked here.
+
+- [ ] The chart leaves the screen before the picker shows; the picker has no passphrase field; the search has focus.
+- [ ] The bar reads "Writing as …" and the signer strip's Staff ID holds that person's staff ID; the passphrase field
+      is empty. With `--key-hold-seconds 900` and a key held before the press, the strip no longer shows it held.
+- [ ] The offer "Return to …" shows, focused, for a person who opened a chart from a list here before; it is never
+      opened by itself. Esc dismisses it; Enter opens that chart. **Record what it shows after the name** (an age today,
+      #972).
+- [ ] *Don't know / just reading* names nobody ("Writer not known"); *Back* keeps the name as it was; Enter on an empty
+      search picks nobody.
+
+**Measurement 2 — a switch mid-typing loses nothing; a colleague writes below.** As `nurse-a`: *New note*, type
+`obs stable, BP 120/80`, and press the hot key within a second of the last keystroke. Pick `dr-b`, reopen the chart.
+
+- [ ] `parts` shows part 1 by `nurse-a` holding **every** character typed. Nothing `dr-b` types lands in it.
+- [ ] As `dr-b`: Nurse A's part is drawn read-only above an empty editor, headed "?Nurse A". Type `plan: review 4h`:
+      `parts` shows part 2 by `dr-b`. Switch back to `nurse-a` and type: part 3 by `nurse-a`, part 1 unchanged.
+- [ ] `revs` shows one row per real change, each with its writer and terminal; an idle second adds none.
+- [ ] Switch to `dr-b` and sign with the editor empty (only the passphrase typed). Three notes are listed, the `nurse-a` ones reading "written by
+      ?Nurse A · signed by …". `signed` shows part 1 with `drafted` + `attested` contributors, part 2 with `authored`,
+      and parts 2 and 3 each with an `addendum-to` ref to the part before. `parts` is empty, `revs` too.
+
+**Measurement 3 — the idle re-lock (≤ 10 s back at the chart).** Relaunch with `--idle-lock-minutes 1`. Name
+`nurse-a`, open a chart from a list, type a few words, then leave the terminal alone for a minute.
+
+- [ ] The chart leaves the screen, the terminal lock shows with its passphrase field focused, the bar reads "Nobody has
+      said who is at this terminal" and the strip's Staff ID is empty. `parts` holds the typed words.
+- [ ] Time unlock → pick `nurse-a` → *Return to …* → the chart on screen; count the acts (budget 3).
+- [ ] Typing steadily in any field, the terminal passphrase field included, never re-locks; leaving the window open
+      with no touch while the lock-state poll runs does re-lock (a poll is not activity).
+- [ ] Press *Sign note* and hold the sign (section 18's `LOCK TABLE note_draft` trick) past the minute: the re-lock
+      waits until the sign settles. Record what the clinician is told (by ruling nothing on the lock screen, #970).
+
+**Measurement 4 — Continue here (≤ 1 s), and the move.** Type a draft as `nurse-a`, quit, move the terminal-id file
+aside (a new terminal id), relaunch and name `nurse-a`.
+
+- [ ] The draft is listed "… · being written at another terminal", with *Continue here*. Time its press to the caret.
+      The draft is now this terminal's (`parts`' `terminal_id`).
+- [ ] With the editor open on it, move it away from the owner connection:
+      `psql "$CONN" -c "SELECT cairn_note_draft_take('<draft id>', '<patient id>', 'elsewhere-test')"`. Type one more
+      word: the status line says the note is now being continued at another terminal, and the editor keeps only the
+      new word as a new draft of its own (`parts` shows two drafts). Repeat with no new typing (the editor closes, the
+      sentence says everything was saved into it) and after editing the saved text (the whole editor is kept, and
+      said so).
+- [ ] After a crash (`pkill -9 -f cairn-gui-tauri`) and a relaunch, count the acts before typing can continue (section
+      18's Measurement 3; 3a's target was 0, and since 3b-1 who's here must be answered first).
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The hot key, the picker (type, Enter, Tab to a name, *Don't know*, *Back*, Esc) and the offer work by keyboard
+      alone; after the picker closes focus is on *Who's here?* (a chart open) or the search (no chart), never lost.
+- [ ] The bar is read once when the name changes, and not at each lock-state poll.
+- [ ] A colleague's part is read as "unverified Nurse A", then its text; a part with no writer as "writer not known".
+- [ ] **Record how a signed note's "written by ?Nurse A" byline is read** (no spoken form yet, #973).
+- [ ] No dialog appears at any point.
+
+**What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. The picker, the
+bar, the hot key, the switch order, the parts, *Continue here*, the moved fork and the re-lock were walked headlessly
+in Chromium only, against a stubbed `invoke` (sign-in slice 3b-1, Task 6); WebKit, Tauri's argument casing for
+`whos_here_pick`, `note_draft_take` and `relock`, and real timers over a real minute were not. The doors were run
+against throwaway databases by the slice's DB-gated tests. `TEMPLATE.md` carries a matching block (*Who's here, the
+idle re-lock and a draft's parts*).
