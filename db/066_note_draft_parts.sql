@@ -11,9 +11,10 @@
 --     read-only too, once a colleague has written below it. Upgrade if clinicians ask.)
 -- Every real change also leaves a revision row (who, where, what, when) for the draft's life.
 --
--- The writer is a vault staff id (db/061), normalised with cairn_vault_staff_id, or NULL for an
--- unknown writer ("Don't know" is an allowed answer to who's here, design §3.1). Anything else
--- answers 'no-such-writer'. "Who's here" is a claim, never authentication: nothing here signs.
+-- The writer is the staff id of a vault member whose role may act clinically (db/061; never a
+-- superuser or an admin, §5.1), normalised with cairn_vault_staff_id, or NULL for an unknown
+-- writer ("Don't know" is an allowed answer to who's here, design §3.1). Anything else answers
+-- 'no-such-writer'. "Empty" text is the floor's own blank test, cairn_twin_is_present (db/005). "Who's here" is a claim, never authentication: nothing here signs.
 --
 -- MOVING A DRAFT. "Continue" at another terminal moves the draft there (cairn_note_draft_take,
 -- one statement). The old terminal's next save then answers 'moved' — the draft is still on this
@@ -89,8 +90,9 @@ DROP FUNCTION IF EXISTS cairn_note_draft_spend(uuid, uuid);
 -- chart's) | 'no-chart' (no event names the patient) | 'no-such-writer'. Every answer but
 -- 'saved' wrote nothing.
 --
--- HOW, in order: refuse NULLs; normalise the writer and check they are enrolled (a plain read of
--- vault_member, taking no lock, so it cannot deadlock with the lock order below); take the
+-- HOW, in order: refuse NULLs; normalise the writer and check they are an enrolled clinical
+-- member (a plain read of vault_member, taking no lock, so it cannot deadlock with the lock order
+-- below); take the
 -- draft's advisory lock; a spent draft answers 'spent'; an existing draft must be this chart's
 -- and this terminal's. Then the TAIL part (highest seq) decides: the saver's own tail is rewritten
 -- if the text or stated time changed; otherwise a non-empty text appends part tail+1 (an empty one
@@ -112,7 +114,12 @@ BEGIN
     IF p_draft IS NULL OR p_patient IS NULL OR p_terminal IS NULL THEN
         RAISE EXCEPTION 'cairn_note_draft_part_save needs a draft, a patient and a terminal';
     END IF;
-    IF v_writer IS NOT NULL AND NOT EXISTS (SELECT 1 FROM vault_member m WHERE m.staff_id = v_writer) THEN
+    -- A writer must be a member whose role may act clinically (db/061): a superuser or an admin
+    -- confers no clinical authorship (§5.1), so is never a part's writer — the same rule the
+    -- directory below lists by, held here too so a raw-SQL client cannot record one.
+    IF v_writer IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM vault_member m
+         WHERE m.staff_id = v_writer AND cairn_vault_purpose_allowed(m.role, false, 'clinical')) THEN
         RETURN 'no-such-writer';
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
@@ -150,8 +157,10 @@ BEGIN
                    last_keystroke = GREATEST(v_now, v_tail.recording_started)
              WHERE draft_id = p_draft AND seq = v_seq;
         ELSE
-            -- "Empty" = no non-space character (btrim alone keeps a newline-only text).
-            IF p_narrative !~ '[^[:space:]]' THEN
+            -- "Empty" is the floor's ONE blank test (db/005; rule 2 of db/064 refuses a blank
+            -- note with it): locale-free, so every node and Rust's trim() agree. A regex class
+            -- would read a lone NBSP as text under COLLATE "C" and make the draft unsignable.
+            IF NOT cairn_twin_is_present(p_narrative) THEN
                 RETURN 'saved';  -- nothing typed by a new writer: no part
             END IF;
             v_seq := COALESCE(v_tail.seq, 0) + 1;
@@ -233,7 +242,7 @@ BEGIN
     RETURN QUERY
         SELECT v_patient, p.seq, p.writer, p.narrative, p.stated_time, p.recording_started, p.last_keystroke
           FROM note_draft_part p
-         WHERE p.draft_id = p_draft AND p.narrative ~ '[^[:space:]]'
+         WHERE p.draft_id = p_draft AND cairn_twin_is_present(p.narrative)  -- the floor's blank test
          ORDER BY p.seq;
     IF NOT FOUND THEN
         RETURN;

@@ -131,6 +131,10 @@ BEGIN
     -- an_empty_save_by_a_new_writer_makes_no_part (whitespace is empty too)
     PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'doctor-b', E'  \n ', NULL);
     PERFORM cairn_note_draft_part_save(d, p, 'term-1', NULL, '', NULL);
+    -- "Empty" is the floor's own blank test (cairn_twin_is_present, db/005), not a locale-
+    -- dependent class: a lone NO-BREAK SPACE or IDEOGRAPHIC SPACE is blank on every node.
+    PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'doctor-b', U&'\00A0', NULL);
+    PERFORM cairn_note_draft_part_save(d, p, 'term-1', NULL, U&'\3000 \00A0', NULL);
     IF pg_temp.writers(d) <> 'nurse-a,doctor-b,nurse-a' THEN
         RAISE EXCEPTION 'an_empty_save_by_a_new_writer_makes_no_part: %', pg_temp.writers(d);
     END IF;
@@ -140,6 +144,13 @@ BEGIN
     IF w <> 'no-such-writer' THEN RAISE EXCEPTION 'an_unknown_staff_id_answers_no_such_writer: %', w; END IF;
     w := cairn_note_draft_part_save(gen_random_uuid(), p, 'term-1', '', 'x', NULL);
     IF w <> 'no-such-writer' THEN RAISE EXCEPTION 'an empty staff id is no writer: %', w; END IF;
+    -- A superuser or an admin confers no clinical authorship (§5.1): never a draft's writer,
+    -- even from a raw-SQL client the directory would never offer them to.
+    w := cairn_note_draft_part_save(d, p, 'term-1', 'super-s', 'x', NULL);
+    IF w <> 'no-such-writer' THEN RAISE EXCEPTION 'a superuser is no writer: %', w; END IF;
+    w := cairn_note_draft_part_save(d, p, 'term-1', ' Admin-X ', 'x', NULL);
+    IF w <> 'no-such-writer' THEN RAISE EXCEPTION 'an admin is no writer: %', w; END IF;
+    IF pg_temp.writers(d) <> 'nurse-a,doctor-b,nurse-a' THEN RAISE EXCEPTION 'a refused writer wrote'; END IF;
 
     -- a_staff_id_in_other_case_is_normalised: ' Nurse-A ' is nurse-a, so it rewrites her tail.
     PERFORM cairn_note_draft_part_save(d, p, 'term-1', ' Nurse-A ', 'BP rechecked 120/80', NULL);
@@ -225,7 +236,8 @@ BEGIN
 END $$;
 
 -- spend_returns_nonempty_parts_in_order_and_clears_revisions. Draft 3: A writes, B writes, A's
--- tail is emptied again by a later A save (an empty part is kept while typing, never signed).
+-- tail is blanked again by a later A save — NBSP and IDEOGRAPHIC SPACE only, which the floor's
+-- rule 2 calls blank (an empty part is kept while typing, never signed).
 DO $$
 DECLARE
     d  uuid := 'dddddddd-0066-7000-8000-000000000003';
@@ -235,7 +247,7 @@ BEGIN
     PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'nurse-a', 'obs', NULL);
     PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'doctor-b', 'plan', NULL);
     PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'nurse-a', 'more', NULL);
-    PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'nurse-a', '  ', NULL);
+    PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'nurse-a', U&'\00A0\3000 ', NULL);
     SELECT string_agg(s.seq || ':' || s.writer || ':' || s.narrative, ',' ORDER BY s.seq) INTO w
       FROM cairn_note_draft_spend_parts(d, 'aaaaaaaa-0066-7000-8000-0000000000a1') s
      WHERE s.patient_id = p;
@@ -271,7 +283,7 @@ SET CONSTRAINTS note_draft_spent_names_its_note IMMEDIATE;
 DO $$
 DECLARE d uuid := 'dddddddd-0066-7000-8000-000000000004';
 BEGIN
-    PERFORM cairn_note_draft_part_save(d, 'bbbbbbbb-0066-7000-8000-000000000001', 'term-1', 'nurse-a', ' ', NULL);
+    PERFORM cairn_note_draft_part_save(d, 'bbbbbbbb-0066-7000-8000-000000000001', 'term-1', 'nurse-a', U&'\00A0', NULL);
     IF EXISTS (SELECT 1 FROM cairn_note_draft_spend_parts(d, gen_random_uuid())) THEN
         RAISE EXCEPTION 'an all-empty draft returned parts';
     END IF;
@@ -367,6 +379,22 @@ BEGIN
                     AND display_name = 'Nurse A' AND role = 'nurse') THEN
         RAISE EXCEPTION 'the directory carries the name and the role';
     END IF;
+END $$;
+
+-- One definition of blank: both doors ask the floor's own cairn_twin_is_present (db/005), never a
+-- regex class, whose answer for NBSP/U+3000 depends on the database's collation (under "C" a lone
+-- NBSP reads non-empty, so a part the floor's rule 2 refuses would reach the sign and make the
+-- draft unsignable). This rig's collation cannot show that behaviourally, so the source is pinned.
+DO $$
+DECLARE f text;
+BEGIN
+    FOREACH f IN ARRAY ARRAY['cairn_note_draft_part_save(uuid, uuid, text, text, text, timestamptz)',
+                             'cairn_note_draft_spend_parts(uuid, uuid)'] LOOP
+        IF pg_get_functiondef(f::regprocedure) NOT LIKE '%cairn_twin_is_present(%'
+           OR pg_get_functiondef(f::regprocedure) LIKE '%[:space:]%' THEN
+            RAISE EXCEPTION '% must test blankness with cairn_twin_is_present only', f;
+        END IF;
+    END LOOP;
 END $$;
 
 -- the_3a_doors_are_gone (a door's return shape is final, so 3a's three were removed, not reshaped).
