@@ -72,6 +72,57 @@ h2 {
   border: 0;
 }
 
+/* Who's here: full-width at the top, the name large. The words carry it; no colour does. */
+#whos-here-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: -1.5rem -1.5rem 1rem;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 2px solid var(--line);
+}
+
+#whos-here-name {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+}
+
+/* The picker covers the page like the terminal lock (a region, not a dialog box); <main> is
+   inert behind it (whos_here.js). Below the lock, which may cover it at the re-lock. */
+#whos-here-picker {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  overflow: auto;
+  padding: 2rem 1.5rem;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+#whos-here-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 32rem;
+}
+
+#whos-here-offer button {
+  font-size: 1.2rem;
+  margin-bottom: 1rem;
+}
+
+/* A draft's other parts, read-only above the editor; each is headed by its claimed writer. */
+#note-parts h3,
+#note-drafts h3 {
+  font-size: 1rem;
+  margin: 0.4rem 0 0;
+}
+
 #session {
   margin-bottom: 1rem;
   color: var(--muted);

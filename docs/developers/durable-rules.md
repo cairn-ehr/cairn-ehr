@@ -10,6 +10,89 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3b-1 — WHO'S HERE AND A DRAFT'S PARTS (ADR-0088, db/066, db/065 in place) — do not undo**
+(pins: `db/tests/066_note_draft_parts_test.sql`, `crates/cairn-event/src/contributor.rs`'s tests,
+`crates/cairn-node/src/note/sign.rs`'s tests, `crates/cairn-node/tests/{note_draft_parts,note_sign_parts,note_read,window_role_grants_notes}.rs`,
+`cairn-gui-tauri/src/{whos_here,whos_here_webview,notes,notes_parts,notes_fork_webview}_tests.rs`, `crates/cairn-node/src/note/view.rs`'s tests):
+- **A save writes only the TAIL part, and only the saver's own.** Any other save appends a part; no draft door takes
+  a part number, so nothing can address, change or remove another writer's text. A writer's own earlier part is
+  read-only too once someone wrote below it: a deliberate shortcut, #967. **Tempting wrong fixes:** add a `p_seq`
+  to the save door "so Nurse A can fix her typo in part 1" (then the door must prove the part is hers, which is where
+  Dr Z rubs out Dr X's ink); or let a save replace the draft's whole text "for simplicity". Pins: db/tests/066's
+  `b_cannot_reach_part_1`, `another_writer_appends`, `a_b_a_is_three_parts`.
+- **The writer travels with the save; it is never re-read from who's here.** The editor captures it once, when it
+  opens (`noteDraft.writer`), and sends it with every save and with Sign; `notes.rs` passes it through. A switch
+  waits for a Sign in flight, then closes the chart awaiting its saves, before the picker opens. **Tempting wrong
+  fix:** read the current claim in `note_draft_save_impl` "to drop a parameter" — a debounced save landing after a
+  switch then files Nurse A's words under Dr B. Pins: `the_writer_is_set_once_at_editor_open`,
+  `save_passes_the_given_writer_not_the_claim` (source text: keep its token match strict),
+  `switch_awaits_the_save_queue_before_picking`.
+- **"Own part" is decided by KEY** (`cairn_vault_member_key(writer)` = the signing key), never by comparing staff-id
+  text in Rust, and a named writer with no member row refuses the sign (`NoSuchWriter`), never signs as "not known".
+  **Tempting wrong fix:** normalise staff ids in Rust and compare them — a second normalisation rule that can drift
+  from `cairn_vault_staff_id`. Pins: `sign.rs::a_parts_author_is_decided_by_key`,
+  `note_sign_parts.rs::a_one_writer_draft_signs_as_the_signers_own_authored_note` (a `" NoteWriter "` writer is still the
+  signer's own), `a_part_whose_writer_left_is_refused_no_such_writer`.
+- **A door's return shape is final: new shape, new name.** 3a's `cairn_note_draft_save`, `cairn_note_drafts` and
+  `cairn_note_draft_spend` were deleted from db/065 in place AND are dropped by db/066's `DROP FUNCTION IF EXISTS`
+  lines; the part-aware doors are new names. **Tempting wrong fixes:** `CREATE OR REPLACE` an old name with a new
+  signature or return type (db/065's replay then fails on every existing database); delete db/066's `DROP` lines as
+  dead code (an upgraded database keeps the old doors, granted to `cairn_window`). Pins: db/tests/066's
+  `the_3a_doors_are_gone`; `window_role_grants_notes.rs`.
+- **One event per non-blank part, in ONE transaction, HLC ticks inside it, no savepoint; the spend records the first
+  non-blank part's event id.** The first non-blank part is the note (a blank part 1 is skipped); each later non-blank
+  part carries `addendum-to` the one before it. **Tempting wrong fixes:** commit each part in its own
+  transaction "so one bad part does not block the rest" (half a note signs and the draft is spent); tick the HLCs
+  before `BEGIN`; spend with the last part's id, or give the spend's id to `seq` 1 rather than to the first non-blank part (a
+  blank part 1 would leave the spend naming no note); wrap a submit in a savepoint (db/065's trigger then refuses every
+  sign, the 3a rule). Pins: `note_sign_parts.rs::a_refused_second_part_rolls_back_the_first`,
+  `a_two_writer_draft_signs_as_two_events_chained_by_addendum_to`,
+  `empty_parts_are_skipped_and_an_all_empty_draft_is_refused_empty`; db/tests/066's
+  `spend_still_needs_its_note_in_this_transaction`.
+- **"Blank" is `cairn_twin_is_present`, the floor's own test, in both draft doors.** **Tempting wrong fix:**
+  `btrim(narrative) <> ''` or a `[[:space:]]` regex (the plan's own first wording): its answer for a no-break space
+  depends on the database's collation, so a part the floor refuses as blank would reach Sign and make the draft
+  unsignable. Pin: db/tests/066's source check on both doors.
+- **The writer rule and the directory rule are one rule**: `cairn_vault_purpose_allowed(role, false, 'clinical')` in
+  both `cairn_note_draft_part_save` and `cairn_whos_here_directory`. **Tempting wrong fix:** filter only the
+  directory (a raw-SQL client then records a superuser or an admin as a writer). Pins: db/tests/066's superuser and
+  admin `no-such-writer` cases and `directory_lists_clinical_roles_only`.
+- **`moved` is not `elsewhere`, and a `moved` save keeps the unsaved remainder as a new draft** (#958); **so does a
+  `spent` save, unless this window's own Sign may have signed the draft** (`mayBeSigned`, set BEFORE the Sign is
+  sent, taken back only by a refusal that recorded nothing; final review I1, #945). **Tempting wrong fixes:** fold
+  `moved` back into `elsewhere`; drop the fork "because the text is at the other terminal" (what was typed since the
+  last save is not); treat `spent` as "nothing to do" (Nurse A's line typed after Dr B signed at terminal B is then in
+  no draft, and lost on close); set `mayBeSigned` only after the Sign answers, or never clear it (an unknown-outcome
+  Sign's follow-up save then forks text it just signed, or the save after an "already signed" refusal keeps the
+  editor on a dead draft). Pins: db/tests/066's `moved_vs_elsewhere`;
+  `notes_fork_webview_tests.rs::moved_forks_a_new_draft`, `a_draft_signed_in_another_window_forks_a_new_draft`;
+  `notes_tests.rs::moved_sentence_exact`, `spent_sentence_exact`.
+- **A reopened draft writes as the claim its list was read for** (`NotePane.claim`, final review item 7), and a list
+  read for another claim than the one held now opens nothing. **Tempting wrong fix:** take `openDraft`'s writer from
+  `whosHere()` "because it is the same thing" — a list read before a pick then opens an "unknown" tail for editing
+  under Nurse A's name, and her first save APPENDS a copy of that tail as her part. Pins:
+  `whos_here_webview_tests.rs::the_writer_is_set_once_at_editor_open`;
+  `notes_parts_tests.rs::the_pane_names_the_claim_it_chose_the_editable_part_for`.
+- **A part the signer only attested never reads like their own note.** The byline comes from the event's contributor
+  set (`view::PartWriter`: a `drafted` contributor, named or not, and whether the signer's role is `attested`), never
+  from `drafted_by` alone. **Tempting wrong fix:** infer "own" from a NULL drafter name (a part signed under "Don't
+  know", or by a drafter this node cannot name, then reads "signed by Dr B" as if Dr B wrote it). Pins:
+  `view.rs::an_attested_part_never_reads_as_the_signers_own`,
+  `note_read.rs::an_unknown_writers_part_reads_writer_not_known_signed_by`.
+- **A pick and the re-lock forget the held key FIRST; only a person's input resets the idle clock.**
+  **Tempting wrong fixes:** forget the key only after a pick succeeds (a refused pick leaves Dr A's key for Dr B);
+  count a poll or an IPC answer as activity (main.js's lock-poll lesson: the terminal never re-locks). Pins:
+  `whos_here_tests.rs::pick_forgets_the_held_key`, `a_pick_of_someone_not_enrolled_names_nobody`,
+  `relock_forgets_claim_and_key`; `whos_here_webview_tests.rs::idle_resets_only_on_user_input`,
+  `relock_waits_for_a_sign_in_flight`.
+- **The claim, the recent people and the bookmarks live in window memory only.** A bookmark holds a patient's name.
+  **Tempting wrong fix:** persist them "so a restart remembers" (a patient's name on disk in the clear). Pin: the
+  storage check in `whos_here_webview_tests.rs::parts_drawn_through_cell` covers the webview; nothing pins the Rust
+  side (`whos_here::Here` simply does no I/O), so a reviewer must.
+- **The addendum ref is read as `::uuid::text`** (`note/read.rs`). **Tempting wrong fix:** parse the ref's raw text
+  in Rust — one peer note with a spelling Postgres accepts and Rust's parser does not then fails the chart's whole
+  note list. Pin: `note_read.rs::an_addendum_ref_in_a_non_canonical_spelling_still_reads`.
+
 **⇒ GUI SIGN-IN SLICE 3a — THE NOTE STREAM AND ITS DRAFT (ADR-0087, db/064, db/065, db/044 + db/037 in place) — do
 not undo** (pins: `crates/cairn-event/src/note.rs`'s tests, `db/tests/{064_clinical_note,065_note_draft}_test.sql`,
 `crates/cairn-node/tests/{note_floor,note_sign,note_read,window_role_grants_notes}.rs`,
@@ -25,9 +108,10 @@ not undo** (pins: `crates/cairn-event/src/note.rs`'s tests, `db/tests/{064_clini
   `UNIQUE`. So `sign_note` submits with **no savepoint**: a nested `transaction()` around `submit_event` gives the
   row a subtransaction id and every sign is refused at COMMIT. **Tempting wrong fixes:** wrap the submit "for error
   handling"; relax the check to "any note of this chart" (an old note then wipes every draft on the chart). Pins:
-  db/tests/065's committed-earlier case; `note_sign.rs`'s `a_signed_note_is_attested_and_spends_its_draft`,
+  db/tests/065's committed-earlier case (and 066's, against the part-aware spend); `note_sign.rs`'s `a_signed_note_is_attested_and_spends_its_draft`,
   `a_failed_submit_leaves_the_draft_in_place`, `a_second_sign_of_the_same_draft_is_refused_spent_and_writes_one_note`.
-- **Drafts have no table grant.** `note_draft` and `note_draft_spent` are `REVOKE ALL … FROM PUBLIC` and granted to
+- **Drafts have no table grant.** `note_draft` and `note_draft_spent` (and since 3b-1 `note_draft_part` and
+  `note_draft_revision`) are `REVOKE ALL … FROM PUBLIC` and granted to
   nobody; the doors are definers granted to `cairn_window` only. Never `GRANT SELECT` to `cairn_agent` "for a simpler
   read", and never keep a copy in browser storage (draft prose on disk in the clear). Drafts are in no backup or
   export (ADR-0087 decision 9). Pins: db/tests/065's grant block and its `cairn_window` probe;

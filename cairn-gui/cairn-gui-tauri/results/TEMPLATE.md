@@ -345,6 +345,46 @@ Steps: writing and signing paper *N* = 3 → forced *M* = 3 → observed *K* = \
 | Sign sentence read once, or twice (`#note-status` + `#outcome`) — record which | | |
 | No dialog; nothing takes focus on its own | | |
 
+## Who's here, the idle re-lock and a draft's parts (GUI sign-in slice 3b-1, runbook §19)
+
+Staff on the node: \_\_ (50 for Measurement 1) · `--idle-lock-minutes`: \_\_ · `--key-hold-seconds`: \_\_
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| Hot key → "Writing as …", a recent person | | | | ≤ 3 s | |
+| Hot key → "Writing as …", someone never picked here | | | | ≤ 3 s | |
+| Re-lock: first passphrase keystroke → back at the chart | | | | ≤ 10 s | |
+| Continue here: press → caret in *Progress note* | | | | ≤ 1 s | |
+| A switch within a second of a keystroke: characters lost | | | | 0 | |
+| Continue here with nobody named: acts / time to the caret (#974) | | | | paper 1 | |
+| Reopen a draft after a hard kill: acts / time before typing (#974) | | | | 3a: 0 | |
+
+Steps: writing and signing paper *N* = 3 → forced *M* = 3 → observed *K* = \_\_ · adding below a colleague 1 → 1 →
+observed \_\_ · finishing at another terminal 1 → 1 → observed \_\_ · resuming after the re-lock 2 (+ walk) → 3 →
+observed \_\_ · finishing elsewhere with nobody named 1 → 2 → observed \_\_ · after a crash (3a's target 0) observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| The chart leaves the screen before the picker; no passphrase field; a held key is forgotten | | |
+| Staff ID prefilled from the pick; passphrase empty; *Don't know* and the re-lock leave Staff ID empty | | |
+| *Return to …* offered and focused, never auto-opened; what it shows after the name: \_\_ | | |
+| Enter on an empty search names nobody; *Back* keeps the name | | |
+| Nurse A's part holds every character after a mid-typing switch; Dr B's text never lands in it | | |
+| A, B, A gives three parts; part 1 unchanged; one revision row per real change | | |
+| Signed: part 1 `drafted` + `attested`, own part `authored`, later parts `addendum-to` the one before | | |
+| Re-lock: chart gone, lock focused, bar "Nobody has said…", Staff ID empty | | |
+| Typing in any field never re-locks; an untouched window with the poll running does | | |
+| A Sign in flight is waited for by the re-lock; what the clinician is told: \_\_ | | |
+| Moved: one new word kept as a new draft; nothing new closes the editor; an edited saved text keeps all | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Hot key, picker and offer complete by keyboard alone; focus never left on a hidden element | | |
+| The bar read once per change, never per poll | | |
+| A colleague's part read "unverified Nurse A"; an unknown writer "writer not known" | | |
+| A signed note's byline read "written by unverified Nurse A · signed by Dr B" (#973) | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

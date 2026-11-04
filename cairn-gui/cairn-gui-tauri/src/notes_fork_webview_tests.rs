@@ -1,0 +1,133 @@
+//! Sign-in slice 3b-1: what the note editor keeps when a save finds its draft gone on without
+//! this window — moved to another terminal (#958), or signed in another window (final review I1,
+//! #945) — pinned against the source of `notes_save.js` and `notes.js`, as
+//! `whos_here_webview_tests.rs` does (no npm or bundler: main.js's header, issue #332). The
+//! behaviour was walked headlessly (a stub `invoke` in a browser) in the final fix wave.
+use crate::source_guard::{js_fn, position};
+
+/// The note pane's two scripts as one text: notes.js, and its save queue notes_save.js.
+const NOTES_JS: &str = concat!(
+    include_str!("../src-ui/notes.js"),
+    include_str!("../src-ui/notes_save.js")
+);
+
+/// Review Focus 2: the old terminal saves after another took the draft. The save answers
+/// `moved`, and what the node lacks is kept as a NEW draft (a fresh id, the same writer), saved
+/// in queue order. Fix round 1, I3: only what was typed AFTER the last answered save is new — the
+/// rest went on with the moved note — so three branches, each saying its own true sentence:
+/// the remainder is kept; nothing is new (the editor closes); the text above was edited (all of
+/// it is kept, and the sentence says the saved part is also in the moved note).
+#[test]
+fn moved_forks_a_new_draft() {
+    let send = js_fn(NOTES_JS, "sendDraft");
+    let forks = "if (view.moved || (view.spent && !sent.held.mayBeSigned)) return keepUnsavedText(sent, view.fork);";
+    assert!(
+        position(send, forks) < position(send, "noteUnsaved = !kept;"),
+        "{send}"
+    );
+    // Only an answered save says what the node holds.
+    assert!(send[..position(send, "catch (failure) {")]
+        .contains("if (view.saved) sent.held.savedText = sent.narrative;"));
+    let split = js_fn(NOTES_JS, "unsavedRemainder");
+    for line in [
+        "if (!text.startsWith(savedText)) return { kept: text, said: forkWords.everything };",
+        "const rest = text.slice(savedText.length);",
+        "if (rest.trim() === \"\") return { kept: null, said: forkWords.nothing_new };",
+        "return { kept: rest, said: forkWords.kept };",
+    ] {
+        assert!(split.contains(line), "{split}");
+    }
+    let keep = js_fn(NOTES_JS, "keepUnsavedText");
+    assert!(keep.contains("const text = onScreen ? el(\"note-text\").value : sent.narrative;"));
+    assert!(keep.contains(
+        "const { kept, said } = unsavedRemainder(text, sent.held.savedText, forkWords);"
+    ));
+    let nothing_new = position(keep, "if (kept === null) {");
+    assert!(nothing_new < position(keep, "closeEditor();"), "{keep}");
+    for line in [
+        "{ ...sent.held, draftId: crypto.randomUUID(), savedText: \"\", mayBeSigned: false, keptOnScreen: false, forkedTo: null };",
+        "el(\"note-text\").value = kept;",
+        "return sendDraft({ held: fork, narrative: kept, statedTime: sent.statedTime });",
+        "noteStatus(said);",
+    ] {
+        assert!(keep.contains(line), "{keep}");
+    }
+    // An older save of the same draft, still queued once the editor's newer text was kept,
+    // keeps nothing again: no second copy.
+    assert!(
+        position(keep, "if (sent.held.keptOnScreen) return true;")
+            < position(keep, "unsavedRemainder("),
+        "{keep}"
+    );
+    assert!(
+        !NOTES_JS.contains("MOVED_NOTHING_KEPT"),
+        "every moved sentence is Rust's"
+    );
+}
+
+/// Final review I1 (#945): a save answering `spent` while this window's own Sign cannot have
+/// signed it — the draft was continued and signed in another window — keeps the text typed here
+/// since the last save as a new draft, exactly as a move does. A Sign marks its draft
+/// `mayBeSigned` BEFORE it is sent, so the save an unknown-outcome Sign sends next never forks
+/// text that Sign carried; a Sign refused outright (it recorded nothing) takes the mark back, so
+/// the save its refusal sends forks what another window's spend lacks.
+#[test]
+fn a_draft_signed_in_another_window_forks_a_new_draft() {
+    let sign = js_fn(NOTES_JS, "signNote");
+    let marked = position(sign, "held.mayBeSigned = true;");
+    assert!(
+        position(sign, "const wasMaybeSigned = Boolean(held.mayBeSigned);") < marked,
+        "{sign}"
+    );
+    assert!(marked < position(sign, "invoke(\"note_sign\""), "{sign}");
+    let caught = &sign[position(sign, "catch (failure) {")..];
+    assert!(
+        position(
+            caught,
+            "if (behindTheRecord(failure) !== \"unknown\") held.mayBeSigned = wasMaybeSigned;"
+        ) < position(caught, "void saveNoteNow();"),
+        "{sign}"
+    );
+    assert!(
+        !NOTES_JS.contains("give it a way out (#945)"),
+        "the stale-refusal shortcut is gone: the save it sends now forks"
+    );
+}
+
+/// PR #966 review: a refusal that wrote nothing (elsewhere, no chart, no such writer) is NOT
+/// "saved". Only a save the node took — or a spend this window's own Sign may have made, whose
+/// text went with that Sign — clears the editor's unsaved mark and resolves true; anything else
+/// leaves the text marked as only on screen, so nothing downstream (a Sign's unknown-outcome
+/// branch, the close's flush) treats it as kept.
+#[test]
+fn a_refusal_that_wrote_nothing_leaves_the_editor_unsaved() {
+    let send = js_fn(NOTES_JS, "sendDraft");
+    let answered = &send[..position(send, "catch (failure) {")];
+    for line in [
+        "const kept = view.saved || view.spent;",
+        "if (kept) sent.held.statedTime = asked;",
+        "noteUnsaved = !kept;",
+        "return kept;",
+    ] {
+        assert!(answered.contains(line), "{send}");
+    }
+    assert!(
+        !answered.contains("noteUnsaved = false;"),
+        "an answer is not a save: {send}"
+    );
+}
+
+/// PR #966 review: two queued saves of a moved (or signed-elsewhere) draft both answering after
+/// the editor closed must not make two new drafts holding the same words. The first answer's new
+/// draft is remembered on the old one (`forkedTo`); a later, newer answer refills it.
+#[test]
+fn later_answers_refill_the_one_fork_never_a_second() {
+    let keep = js_fn(NOTES_JS, "keepUnsavedText");
+    let reuse = position(keep, "const fork = sent.held.forkedTo ||");
+    assert!(reuse < position(keep, "crypto.randomUUID()"), "{keep}");
+    assert!(
+        position(keep, "sent.held.forkedTo = fork;")
+            < position(keep, "return sendDraft({ held: fork,"),
+        "{keep}"
+    );
+}

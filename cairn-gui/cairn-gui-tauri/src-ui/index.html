@@ -33,6 +33,15 @@
         <div id="node-wait-track" aria-hidden="true"><div id="node-wait-fill"></div></div>
       </div>
 
+      <!-- Who's here (slice 3b-1): the terminal's CLAIM of who is at the keyboard — never a
+           sign-in, and never needed to read a chart. Full width, the name large; a change is
+           announced politely. "Who's here?" and Ctrl+Shift+H (Cmd+Shift+H) switch it: the chart
+           closes, its typing saved, before a name is picked (whos_here.js). -->
+      <section id="whos-here-bar" aria-label="Who's here">
+        <p id="whos-here-name" role="status" aria-live="polite">Checking who's here…</p>
+        <button id="whos-here-switch" type="button" aria-keyshortcuts="Control+Shift+H Meta+Shift+H">Who's here?</button>
+      </section>
+
       <!-- Who is signed in, and whether a key is held. ALWAYS visible (outside both surfaces). Ambient, never modal: the clinician
            should see the lock, not discover it when a signature is refused. -->
       <section id="session" aria-labelledby="session-heading">
@@ -160,6 +169,12 @@
 
       <section id="front-door" aria-labelledby="find-heading" hidden>
         <h1 id="find-heading">Find a patient</h1>
+
+        <!-- After a pick: the chart this person last opened here, OFFERED as one pre-focused
+             button, never auto-opened. Esc or a search dismisses it (whos_here.js). -->
+        <section id="whos-here-offer" aria-label="Your last chart at this terminal" hidden>
+          <button id="whos-here-return" type="button"></button>
+        </section>
 
         <form id="browse-form" autocomplete="off">
           <label for="browse-name">Part of a name</label>
@@ -369,6 +384,9 @@
           <ul id="note-drafts"></ul>
           <button id="new-note" type="button">New note</button>
           <div id="note-editor" hidden>
+            <!-- A draft's parts by other writers (or the claim's own earlier ones), read-only
+                 above the editor, each headed by its claimed writer (notes.js). -->
+            <ol id="note-parts" aria-label="Written so far on this note"></ol>
             <label for="note-text">Progress note</label>
             <textarea id="note-text" rows="8"></textarea>
             <label for="note-when">When it happened — leave empty if it is now</label>
@@ -379,6 +397,23 @@
         </section>
       </section>
     </main>
+    <!-- The who's-here picker (slice 3b-1): a full-screen region over the page, never a dialog
+         box. A type-ahead over the staff directory by name or staff ID, recent people first, and
+         "Don't know / just reading". No passphrase: a claim is not a sign-in (whos_here.js). -->
+    <section id="whos-here-picker" aria-labelledby="whos-here-heading" hidden>
+      <!-- How a Sign pressed just before the switch went: the switch closed the chart that said it. -->
+      <p id="whos-here-signed" role="status" hidden></p>
+      <h2 id="whos-here-heading">Who's here?</h2>
+      <p>Choose your name, so what you write is shown as yours. This is not a sign-in: signing still asks for your passphrase.</p>
+      <form id="whos-here-form" autocomplete="off">
+        <label for="whos-here-search">Name or staff ID</label>
+        <input id="whos-here-search" type="text" />
+      </form>
+      <p id="whos-here-status" role="status" aria-live="polite" hidden></p>
+      <ul id="whos-here-list" aria-label="Staff on this node, recent first"></ul>
+      <button id="whos-here-unknown" type="button">Don't know / just reading</button>
+      <button id="whos-here-cancel" type="button">Back — keep the name as it was</button>
+    </section>
     <!-- The terminal lock screen: shown at launch (live mode) until the shared terminal
          passphrase is entered. An overlay on the page, never a modal; signer.js makes
          <main> inert behind it. -->
@@ -394,7 +429,10 @@
     <script src="waiting.js"></script>
     <script src="main.js"></script>
     <script src="signer.js"></script>
+    <script src="notes_save.js"></script>
     <script src="notes.js"></script>
+    <script src="whos_here.js"></script>
+    <script src="idle.js"></script>
     <script src="enrol.js"></script>
     <script src="rekey.js"></script>
     <script src="superuser.js"></script>

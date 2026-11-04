@@ -4,8 +4,8 @@
 //  - WHO signs the next act: the strip's staff ID + personal passphrase, sent with each write
 //    (`credential: signerCredential()`). The node's vault checks it; this file never does.
 //  - MAY ANYONE USE THIS TERMINAL: the shared terminal passphrase on the lock screen
-//    (#terminal-lock), shown once at launch in live mode (it does not re-lock when idle). Not
-//    a confirmation dialog: it is an overlay on the page, never a modal.
+//    (#terminal-lock), shown at launch in live mode and again at the idle re-lock (idle.js,
+//    `relockTerminal`). Not a confirmation dialog: it is an overlay on the page, never a modal.
 // Classic script, loaded after main.js (uses its `el`, `setMessage`, `invoke`).
 
 const RECENT_SIGNERS_MAX = 10;
@@ -16,6 +16,8 @@ let heldBy = null;
 // This terminal's key hold in seconds (lock_state.key_hold_secs): 0 on a shared terminal.
 let keyHoldSecs = 0;
 let terminalUnlocked = false;
+// Fixture mode (lock_state.mock): the lock never shows, since nothing could unlock it.
+let fixtureMode = false;
 
 const NOT_SET_SENTENCE =
   "No terminal passphrase is set. Run cairn-node vault-set-terminal-passphrase on the node.";
@@ -43,6 +45,9 @@ function clearSigner(signed) {
   el("signer-passphrase").value = "";
   if (keyHoldSecs === 0) {
     el("staff-id").value = "";
+    // The act's ID goes; who's here's ID comes back (design §3.6: prefilled for every act, not
+    // only the first after a pick — empty when nobody is named). The passphrase never is.
+    el("staff-id").value = claimedStaffId();
     setMessage(el("signer-hint"), "");
     // The expiry warning belongs to the ID just cleared: never the next person's.
     setMessage(el("signer-notice"), "");
@@ -73,6 +78,7 @@ function renderSigner(lock) {
   heldBy = lock.held_by || null;
   keyHoldSecs = lock.key_hold_secs || 0;
   el("forget-key").hidden = !heldBy;
+  fixtureMode = lock.mock;
   if (lock.mock) {
     // terminal_unlock always answers "wrong" in fixture mode: a lock here would trap the window.
     setTerminalLocked(false);
@@ -84,11 +90,35 @@ function renderSigner(lock) {
   el("lock-state").textContent = heldBy ? "Signed in for the next act: " + heldBy + "." : "";
 }
 
-/** Show or hide the lock screen; while it shows, the page behind it cannot be reached by Tab. */
+/**
+ * Show or hide the lock screen; while it shows, the page behind it cannot be reached by Tab. An
+ * open who's-here picker keeps the page inert either way (the poll calls this every 10 s).
+ */
 function setTerminalLocked(locked) {
   el("terminal-lock").hidden = !locked;
-  document.querySelector("main").inert = locked;
+  const picking = !el("whos-here-picker").hidden;
+  document.querySelector("main").inert = locked || picking;
+  el("whos-here-picker").inert = locked;
   if (locked) el("terminal-passphrase").focus();
+}
+
+/**
+ * The idle re-lock (idle.js), after the window's Rust side forgot the key and the claim: the strip is
+ * emptied, and the shared terminal passphrase is asked for again. `lock` is the node's answer,
+ * or null when the re-lock could not reach it — the lock still shows, and says so.
+ */
+function relockTerminal(lock) {
+  terminalUnlocked = false;
+  el("signer-passphrase").value = "";
+  el("staff-id").value = "";
+  setMessage(el("signer-hint"), "");
+  setMessage(el("signer-notice"), "");
+  if (lock) {
+    renderSigner(lock);
+    return;
+  }
+  setTerminalLocked(!fixtureMode);
+  el("lock-state").textContent = "The node did not answer the re-lock: press Lock once unlocked.";
 }
 
 async function tryTerminalUnlock(event) {

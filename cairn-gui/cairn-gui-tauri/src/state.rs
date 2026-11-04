@@ -261,6 +261,9 @@ pub struct AppState {
     /// `main`'s setup hook can name the config directory it lives in, and the state is managed
     /// before that hook runs; commands read it through `notes::terminal_of`.
     pub terminal_id: std::sync::OnceLock<String>,
+    /// Who the terminal says is at the keyboard, their recent people and bookmarks, and the idle
+    /// re-lock interval — in memory only (`crate::whos_here`).
+    pub whos_here: tokio::sync::Mutex<crate::whos_here::Here>,
 }
 
 impl AppState {

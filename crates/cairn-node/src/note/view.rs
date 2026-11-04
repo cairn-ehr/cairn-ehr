@@ -42,6 +42,73 @@ pub fn grade_words(grade: &NoteGrade) -> String {
     }
 }
 
+/// Who typed a signed part, as its contributor set says (sign-in slice 3b-1, ADR-0088 decision
+/// 15). A part the signer only ATTESTED must never read like their own authored note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartWriter {
+    /// No `drafted` contributor, and the signer did not merely attest: nothing says anyone but
+    /// the grade's own author typed it (3a's notes, a signer's own part).
+    TheSigner,
+    /// A `drafted` contributor this node can name: their display name. A CLAIM, never verified
+    /// (`drafted` is a contributory role the floor does not authenticate): render it through
+    /// [`byline_words`], which marks it `?Name` and "unverified", never as a bare name.
+    Drafted(String),
+    /// A `drafted` contributor whose key this node cannot name (`cairn_note_signer_name` NULL).
+    DraftedUnnamed,
+    /// The signer ATTESTED and no writer is recorded: who typed it is not known (principle 4).
+    NotKnown,
+}
+
+/// The part's writer, read from its event: `drafted` — it carries a `drafted` contributor;
+/// `drafted_by` — that key's display name when this node can name it; `signer_attested` — the
+/// signer's own contributor role is `attested`, not `authored`. Pure.
+pub fn part_writer(drafted: bool, drafted_by: Option<String>, signer_attested: bool) -> PartWriter {
+    match drafted_by {
+        _ if !drafted && signer_attested => PartWriter::NotKnown,
+        _ if !drafted => PartWriter::TheSigner,
+        Some(name) => PartWriter::Drafted(name),
+        None => PartWriter::DraftedUnnamed,
+    }
+}
+
+/// A note's byline as shown, and as a screen reader should say it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Byline {
+    /// "written by ?Nurse A · signed by Dr B": the `?` is text, never a glyph alone (design §3.7).
+    pub shown: String,
+    /// "written by unverified Nurse A · signed by Dr B": VoiceOver skips a bare `?` (#973).
+    pub spoken: String,
+}
+
+/// The note's byline: [`grade_words`], headed by who typed it when that is not simply the
+/// signer — "written by ?Nurse A", "written by someone not named here" or "writer not known".
+/// The drafted name is a claim this node cannot verify (the writer did not sign), so it carries
+/// the `?` (spoken "unverified"). Pure.
+pub fn byline_words(grade: &NoteGrade, writer: &PartWriter) -> Byline {
+    Byline {
+        shown: byline_marked(grade, writer, "?"),
+        spoken: byline_marked(grade, writer, "unverified "),
+    }
+}
+
+/// [`byline_words`] with `unverified` as the mark before a drafted name.
+fn byline_marked(grade: &NoteGrade, writer: &PartWriter, unverified: &str) -> String {
+    let who = match writer {
+        PartWriter::TheSigner => return grade_words(grade),
+        PartWriter::Drafted(name) => format!("written by {unverified}{name}"),
+        PartWriter::DraftedUnnamed => "written by someone not named here".to_string(),
+        PartWriter::NotKnown => "writer not known".to_string(),
+    };
+    let graded = match grade {
+        // The device grade's own words, "writer not known", would contradict a drafted writer
+        // (and repeat themselves beside an unknown one): no person answers for the note.
+        NoteGrade::WriterNotKnown if *writer == PartWriter::NotKnown => return who,
+        NoteGrade::WriterNotKnown => "no person signed for it".to_string(),
+        _ => grade_words(grade),
+    };
+    format!("{who} · {graded}")
+}
+
 /// When the note applies, in words, in time zone `tz` (the window passes `chrono::Local`):
 /// `"03:00 (stated)"` when the writer stated a time, else `"no stated time · writing began
 /// 03:12"` (design §4.3) — never a stated-looking time the writer did not give (principle 4).
@@ -127,6 +194,95 @@ mod tests {
         let device = note_grade(AuthorshipConfidence::Device, Some("the node".into()));
         assert_eq!(device, NoteGrade::WriterNotKnown);
         assert_eq!(grade_words(&device), "writer not known");
+    }
+
+    #[test]
+    fn a_drafted_name_heads_the_byline_unverified() {
+        let signed = NoteGrade::Signed { by: "Dr B".into() };
+        let b = byline_words(&signed, &PartWriter::Drafted("Nurse A".into()));
+        assert_eq!(b.shown, "written by ?Nurse A · signed by Dr B");
+        assert_eq!(b.spoken, "written by unverified Nurse A · signed by Dr B");
+        for grade in [signed, NoteGrade::Claimed, NoteGrade::WriterNotKnown] {
+            let own = byline_words(&grade, &PartWriter::TheSigner);
+            assert_eq!(own.shown, grade_words(&grade), "{grade:?}");
+            assert_eq!(own.spoken, own.shown, "{grade:?}");
+        }
+    }
+
+    /// I2: a part the signer only ATTESTED never reads like their own authored note — whether
+    /// nobody is recorded as its writer, or this node cannot name the writer's key.
+    #[test]
+    fn an_attested_part_never_reads_as_the_signers_own() {
+        let signed = NoteGrade::Signed { by: "Dr B".into() };
+        let cases = [
+            (PartWriter::NotKnown, "writer not known · signed by Dr B"),
+            (
+                PartWriter::DraftedUnnamed,
+                "written by someone not named here · signed by Dr B",
+            ),
+        ];
+        for (writer, words) in cases {
+            let b = byline_words(&signed, &writer);
+            assert_eq!(b.shown, words, "{writer:?}");
+            assert_eq!(b.spoken, words, "nothing to mark unverified: {writer:?}");
+        }
+    }
+
+    /// Every grade beside every writer reads true: the device grade's "writer not known" never
+    /// sits beside a drafted writer, and is never said twice.
+    #[test]
+    fn every_grade_and_writer_reads_true() {
+        let a = || PartWriter::Drafted("Nurse A".into());
+        let cases = [
+            (
+                NoteGrade::Claimed,
+                a(),
+                "written by ?Nurse A · authorship claimed, not verified here",
+            ),
+            (
+                NoteGrade::Claimed,
+                PartWriter::DraftedUnnamed,
+                "written by someone not named here · authorship claimed, not verified here",
+            ),
+            (
+                NoteGrade::Claimed,
+                PartWriter::NotKnown,
+                "writer not known · authorship claimed, not verified here",
+            ),
+            (
+                NoteGrade::WriterNotKnown,
+                a(),
+                "written by ?Nurse A · no person signed for it",
+            ),
+            (
+                NoteGrade::WriterNotKnown,
+                PartWriter::DraftedUnnamed,
+                "written by someone not named here · no person signed for it",
+            ),
+            (
+                NoteGrade::WriterNotKnown,
+                PartWriter::NotKnown,
+                "writer not known",
+            ),
+        ];
+        for (grade, writer, words) in cases {
+            assert_eq!(
+                byline_words(&grade, &writer).shown,
+                words,
+                "{grade:?} {writer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_writer_is_read_from_the_contributor_set() {
+        assert_eq!(part_writer(false, None, false), PartWriter::TheSigner);
+        assert_eq!(part_writer(false, None, true), PartWriter::NotKnown);
+        assert_eq!(
+            part_writer(true, Some("Nurse A".into()), true),
+            PartWriter::Drafted("Nurse A".into())
+        );
+        assert_eq!(part_writer(true, None, true), PartWriter::DraftedUnnamed);
     }
 
     #[test]

@@ -13,7 +13,11 @@ const HOLDS_JS: &str = include_str!("../src-ui/holds.js");
 const LINK_JS: &str = include_str!("../src-ui/link.js");
 const UNLINK_JS: &str = include_str!("../src-ui/unlink.js");
 const SIGNER_JS: &str = include_str!("../src-ui/signer.js");
-const NOTES_JS: &str = include_str!("../src-ui/notes.js");
+/// The note pane's two scripts as one text: notes.js, and its save queue notes_save.js.
+const NOTES_JS: &str = concat!(
+    include_str!("../src-ui/notes.js"),
+    include_str!("../src-ui/notes_save.js")
+);
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 

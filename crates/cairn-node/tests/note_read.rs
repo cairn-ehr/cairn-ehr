@@ -13,10 +13,10 @@ use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
-use cairn_node::note::draft::save_draft;
+use cairn_node::note::draft::save_part;
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{note_body, sign_note, SignNoteInput};
-use cairn_node::note::view::{grade_words, NoteGrade};
+use cairn_node::note::view::{byline_words, grade_words, NoteGrade, PartWriter};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -31,13 +31,14 @@ async fn sign_on(
     text: &str,
 ) {
     let draft = Uuid::now_v7();
-    save_draft(c, draft, chart, "pc-1", text, None)
+    save_part(c, draft, chart, "pc-1", None, text, None)
         .await
         .unwrap();
     let input = SignNoteInput {
         draft,
         patient: chart,
         terminal: "pc-1",
+        writer: None,
         narrative: text,
         stated: None,
         node_origin: ORIGIN,
@@ -118,6 +119,7 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
         stated: StatedTime::NotStated,
         recording_started: "2026-11-02T22:00:00Z",
         recording_ended: "2026-11-02T22:04:00Z",
+        addendum_to: None,
     };
     let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
     seal_sign_submit(
@@ -134,6 +136,31 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
     assert_eq!(list.notes.len(), 1);
     assert_eq!(list.notes[0].grade, NoteGrade::WriterNotKnown);
     assert_eq!(grade_words(&list.notes[0].grade), "writer not known");
+}
+
+/// I2: a part signed under "Don't know" is `{signer, attested}` with no writer, and must never
+/// read like the signer's own authored note: its byline says the writer is not known.
+#[tokio::test]
+async fn an_unknown_writers_part_reads_writer_not_known_signed_by() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, _, human_sk, human_kid, chart) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    sign_on(&mut c, &node_sk, &author, chart, "found on the floor").await;
+
+    let note = &list_patient_notes(&c, chart).await.unwrap().notes[0];
+    assert_eq!(note.writer, PartWriter::NotKnown);
+    assert_eq!(
+        byline_words(&note.grade, &note.writer).shown,
+        format!("writer not known · signed by {}", common::NOTE_AUTHOR)
+    );
 }
 
 /// The window reads notes as `cairn_window`, not as the schema owner (ruling R11). The vouch
@@ -171,4 +198,53 @@ async fn the_window_role_reads_a_charts_notes() {
             by: common::NOTE_AUTHOR.into()
         }
     );
+}
+
+/// Task 4 review, Important #1: the floor reads a ref's event as `::uuid`, which admits spellings
+/// Rust's `Uuid` parser does not (hyphens after every four digits). One such addendum, from a peer
+/// or a raw-SQL client, must not make the chart's whole note list unreadable: the read takes the
+/// id in Postgres's canonical form.
+#[tokio::test]
+async fn an_addendum_ref_in_a_non_canonical_spelling_still_reads() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, _, _, chart) = common::note_setup(&c).await;
+    let note = |addendum_to| NoteAssertion {
+        narrative: EscapedNarrative::of_typed("seen"),
+        stated: StatedTime::NotStated,
+        recording_started: "2026-11-02T22:00:00Z",
+        recording_ended: "2026-11-02T22:04:00Z",
+        addendum_to,
+    };
+    let first = Uuid::now_v7();
+    let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
+    let body = note_body(first, chart, &node_kid, hlc, &note(None));
+    seal_sign_submit(&mut c, &node_sk, body, None, None)
+        .await
+        .unwrap();
+    // `a0ee-bc99-…`: Postgres reads it as a uuid, `Uuid::parse_str` refuses it.
+    let simple = first.simple().to_string();
+    let odd: String = simple
+        .as_bytes()
+        .chunks(4)
+        .map(|g| std::str::from_utf8(g).unwrap())
+        .collect::<Vec<_>>()
+        .join("-");
+    assert!(odd.parse::<Uuid>().is_err(), "the spelling Rust refuses");
+    let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
+    let body = note_body(Uuid::now_v7(), chart, &node_kid, hlc, &note(Some(&odd)));
+    seal_sign_submit(&mut c, &node_sk, body, None, None)
+        .await
+        .expect("the floor admits the spelling");
+
+    let list = list_patient_notes(&c, chart)
+        .await
+        .expect("one odd ref must not break the chart's notes");
+    assert_eq!(list.notes.len(), 2);
+    let addenda: Vec<_> = list.notes.iter().filter_map(|n| n.addendum_to).collect();
+    assert_eq!(addenda, [first], "the ref reads as the canonical id");
 }

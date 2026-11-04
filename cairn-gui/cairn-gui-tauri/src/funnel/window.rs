@@ -46,6 +46,9 @@ impl AppState {
             session: tokio::sync::Mutex::new(Default::default()),
             // A fixed name: fixture mode writes no draft, so nothing is held under it.
             terminal_id: "fixture-terminal".to_string().into(),
+            whos_here: tokio::sync::Mutex::new(crate::whos_here::Here::new(
+                crate::whos_here::DEFAULT_IDLE_LOCK,
+            )),
         }
     }
 

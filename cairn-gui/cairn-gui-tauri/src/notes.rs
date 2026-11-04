@@ -7,74 +7,44 @@
 //! `AppState::mock` with no Tauri runtime (`notes_tests.rs`). Every sentence the clinician reads is
 //! made by a pure function here, so its wording is pinned without a database or a webview.
 //!
-//! Three things the window deliberately does NOT do, because the node does them:
+//! Four things the window deliberately does NOT do (the first three because the node does them):
 //! * escape markup — `sign_note` escapes the raw text once, at signing (ADR-0041); drafts and
 //!   this file carry the text exactly as typed;
 //! * send a time for recording — the save door stamps `recording_started` and `last_keystroke`
 //!   from the database's clock; the only time sent is the writer's own STATED time;
 //! * decide whether a draft is this terminal's to edit — the door compares the terminal id each
-//!   save names (`AppState::terminal_id`, read through `terminal_of`) and answers `elsewhere`.
+//!   save names (`AppState::terminal_id`, read through `terminal_of`) and answers `moved` or
+//!   `elsewhere`;
+//! * read who's here when it saves or signs — the writer is the one the editor captured when it
+//!   opened (`noteDraft.writer`) and sends with every save, so a debounced save landing after a
+//!   switch still names the person who typed it. Only the LIST reads the current claim, to say
+//!   which part the editor may open on (`notes_parts.rs`).
 use crate::commands::record_timing;
 use crate::funnel::view::{ErrorView, Recorded, Retry};
-use crate::link::judgement_view::{refused, stale};
+use crate::link::judgement_view::refused;
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
-use cairn_node::note::draft::{NoteDraft, SaveOutcome};
-use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::sign::SignRefusal;
-use cairn_node::note::view::{grade_words, instant, time_words};
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Utc};
+use parts::{note_pane, others_have_text, NotePane};
 use std::time::Instant;
-use time::{datetime_local, parse_stated, year_the_record_holds};
+use time::{parse_stated, year_the_record_holds};
 use uuid::Uuid;
 
 /// Reading the stated time (`notes_time.rs`).
 #[path = "notes_time.rs"]
 mod time;
 
-/// One signed note, as the pane shows it.
-#[derive(Debug, serde::Serialize)]
-pub struct NoteRowView {
-    pub event_id: String,
-    /// The text exactly as its writer typed it. The webview sets it as `textContent`.
-    pub text: String,
-    /// Who signed it, graded (`view::grade_words`): "signed by …", a claim, or writer not known.
-    pub byline: String,
-    /// When it applies (`view::time_words`): a stated time, or when writing began.
-    pub when: String,
-}
+/// The pane's views: its notes, and each draft's parts (`notes_parts.rs`).
+#[path = "notes_parts.rs"]
+pub(crate) mod parts;
 
-/// One open draft on the chart.
-#[derive(Debug, serde::Serialize)]
-pub struct DraftView {
-    pub draft_id: String,
-    /// The RAW text, so a draft of this terminal reopens into the editor as it was typed.
-    pub narrative: String,
-    /// The writer's stated time as the `datetime-local` field holds it (`2026-11-03T03:00`, this
-    /// machine's zone; with seconds when it has them), `None` when none was stated.
-    pub stated_time: Option<String>,
-    /// Whether the draft was started at THIS terminal — the only place it may be edited.
-    pub here: bool,
-    /// "unsigned draft · started 03:12 · last typed 03:40", plus where it is being written.
-    pub words: String,
-}
-
-/// What the note pane shows for the chart on screen.
-#[derive(Debug, serde::Serialize)]
-pub struct NotePane {
-    pub notes: Vec<NoteRowView>,
-    /// Said when notes on a linked chart are held back because a link is in doubt.
-    pub withheld_sentence: Option<String>,
-    pub drafts: Vec<DraftView>,
-}
-
-/// What a draft save did. `saved: false` always carries the sentence why nothing was written.
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
-pub struct SaveView {
-    pub saved: bool,
-    pub sentence: Option<String>,
-}
+/// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
+#[path = "notes_words.rs"]
+pub(crate) mod words;
+pub(crate) use words::{save_view, sign_refusal_view, take_view};
+pub use words::{SaveView, TakeView};
 
 /// What one Sign did: signed, or — its commit got no ordinary answer (#814) — NOT known.
 #[derive(Debug, serde::Serialize)]
@@ -93,8 +63,8 @@ pub async fn note_list(
     note_list_impl(&state, &patient_id).await
 }
 
-/// Save the text on screen into its draft (the webview calls this, debounced, as the clinician
-/// types).
+/// Save the text on screen into its draft as `writer`'s part (the webview calls this, debounced,
+/// as the clinician types). `writer` is the editor's captured staff id; null = "Don't know".
 #[tauri::command]
 pub async fn note_draft_save(
     state: tauri::State<'_, AppState>,
@@ -102,6 +72,7 @@ pub async fn note_draft_save(
     draft_id: String,
     narrative: String,
     stated_time: Option<String>,
+    writer: Option<String>,
 ) -> Result<SaveView, ErrorView> {
     note_draft_save_impl(
         &state,
@@ -109,8 +80,19 @@ pub async fn note_draft_save(
         &draft_id,
         &narrative,
         stated_time.as_deref(),
+        writer.as_deref(),
     )
     .await
+}
+
+/// "Continue here": move a draft held by another terminal to this one.
+#[tauri::command]
+pub async fn note_draft_take(
+    state: tauri::State<'_, AppState>,
+    patient_id: String,
+    draft_id: String,
+) -> Result<TakeView, ErrorView> {
+    note_draft_take_impl(&state, &patient_id, &draft_id).await
 }
 
 /// Sign the note on screen — the text sent WITH Sign, never an older autosave (Review Focus 4).
@@ -121,6 +103,7 @@ pub async fn note_sign(
     draft_id: String,
     narrative: String,
     stated_time: Option<String>,
+    writer: Option<String>,
     credential: Option<Credential>,
 ) -> Result<NoteSignReport, ErrorView> {
     note_sign_impl(
@@ -129,22 +112,12 @@ pub async fn note_sign(
         &draft_id,
         &narrative,
         stated_time.as_deref(),
+        writer.as_deref(),
         credential,
     )
     .await
 }
 
-/// The sentence a save or sign answers when the draft was already signed.
-const SPENT: &str = "this note has already been signed";
-/// … when a SAVE's draft is another chart's or another terminal's.
-const ELSEWHERE: &str = "this draft belongs to another chart or terminal — nothing was saved";
-/// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
-const SIGN_ELSEWHERE: &str =
-    "this draft belongs to another chart or terminal — nothing was signed; your text is still here";
-/// … when no event names the patient on this node.
-const NO_CHART: &str = "this patient has no chart on this node";
-/// … when nothing but whitespace was typed.
-const EMPTY: &str = "there is nothing to sign — the note is empty";
 /// Fixture mode's refusal, worded as every other write's (`commands::cease_impl`).
 const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
 
@@ -155,10 +128,12 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     // under the next one's header.
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let Some(db) = state.db.as_ref() else {
+        let claim = state.whos_here.lock().await.claim().clone();
         return Ok(NotePane {
             notes: vec![],
             withheld_sentence: None,
             drafts: vec![],
+            claim: crate::whos_here::claim_view(&claim),
         });
     };
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
@@ -173,18 +148,22 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     .map_err(|e| chart_read_failed(db.explain(e)))?;
     // The window supplies the zone (ruling R10): the node never knows the terminal's.
     let today = Utc::now().with_timezone(&chrono::Local).date_naive();
-    Ok(note_pane(list, terminal, &chrono::Local, today))
+    // The claim decides only which part the editor may open on; a save never reads it.
+    let claim = state.whos_here.lock().await.claim().clone();
+    Ok(note_pane(list, terminal, &claim, &chrono::Local, today))
 }
 
-/// Save the text on screen into draft `draft_id` of the chart on screen, held by this terminal.
-/// A save that wrote nothing (`spent`, `elsewhere`, `no-chart`) is an `Ok` with its sentence, not
-/// an error: the connection worked, and the webview keeps the text either way.
+/// Save the text on screen as `writer`'s part of draft `draft_id` of the chart on screen, held by
+/// this terminal. A save that wrote nothing (`spent`, `moved`, `elsewhere`, `no-chart`,
+/// `no-such-writer`) is an `Ok` with its sentence, not an error: the connection worked, and the
+/// webview keeps the text either way.
 pub async fn note_draft_save_impl(
     state: &AppState,
     patient_id: &str,
     draft_id: &str,
     narrative: &str,
     stated_time: Option<&str>,
+    writer: Option<&str>,
 ) -> Result<SaveView, ErrorView> {
     // The save names the chart the webview is showing, so a debounced save that fires after the
     // clinician switched charts is refused here, never written to the chart now open.
@@ -201,30 +180,62 @@ pub async fn note_draft_save_impl(
         .ok_or_else(|| node_cannot_write("no database connection"))?
         .lock()
         .await?;
-    let outcome =
-        cairn_node::note::draft::save_draft(&*db, draft, patient, terminal, narrative, stated)
-            .await
-            .map_err(|e| node_failure(&db.explain(e)))?;
+    let outcome = cairn_node::note::draft::save_part(
+        &*db, draft, patient, terminal, writer, narrative, stated,
+    )
+    .await
+    .map_err(|e| node_failure(&db.explain(e)))?;
     Ok(save_view(outcome))
 }
 
-/// Sign the note: the steps of `commands::cease_impl`, for one event. The chart on screen first,
+/// "Continue here": move draft `draft_id` of the chart on screen to this terminal — one statement
+/// on the node. Its old terminal's next save then answers `moved`. Refusals are `Ok` with their
+/// sentence, as a save's are.
+pub async fn note_draft_take_impl(
+    state: &AppState,
+    patient_id: &str,
+    draft_id: &str,
+) -> Result<TakeView, ErrorView> {
+    let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
+    if state.is_mock() {
+        return Err(refused(FIXTURE));
+    }
+    let draft: Uuid = draft_id.parse().map_err(|_| refused("not a draft id"))?;
+    let terminal = terminal_of(state)?;
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| node_cannot_write("no database connection"))?
+        .lock()
+        .await?;
+    let outcome = cairn_node::note::draft::take_draft(&*db, draft, patient, terminal)
+        .await
+        .map_err(|e| node_failure(&db.explain(e)))?;
+    Ok(take_view(outcome))
+}
+
+/// Sign the note: the steps of `commands::cease_impl`, for one event per writer's part. The chart on screen first,
 /// then fixture mode, then every refusal that is a verdict on the gesture (empty text, a stated
 /// time that cannot be read), and only then the key — a passphrase that signs nothing is a step
-/// paper never has. The raw text goes to `sign_note`, which escapes it.
+/// paper never has. The raw text goes to `sign_note`, which escapes it, with `writer` — the
+/// editor's captured writer, so the signer's own part signs `authored`, not `attested`.
 pub async fn note_sign_impl(
     state: &AppState,
     patient_id: &str,
     draft_id: &str,
     narrative: &str,
     stated_time: Option<&str>,
+    writer: Option<&str>,
     credential: Option<Credential>,
 ) -> Result<NoteSignReport, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     if state.is_mock() {
         return Err(refused(FIXTURE));
     }
-    let (draft, stated) = sign_checks_before_the_key(draft_id, narrative, stated_time)?;
+    // Asked only of a blank editor: whether a part above holds text the node would sign.
+    let others = narrative.trim().is_empty()
+        && other_parts_have_text(state, patient, draft_id, writer).await?;
+    let (draft, stated) = sign_checks_before_the_key(draft_id, narrative, others, stated_time)?;
     let terminal = terminal_of(state)?;
     let (human_sk, human_kid) = state
         .signer_for_act(credential, Now::read())
@@ -247,6 +258,7 @@ pub async fn note_sign_impl(
             draft,
             patient,
             terminal,
+            writer,
             narrative,
             stated,
             node_origin: &state.node_origin,
@@ -308,15 +320,43 @@ pub(crate) fn terminal_of(state: &AppState) -> Result<&str, ErrorView> {
         })
 }
 
+/// Whether draft `draft_id`'s stored parts hold text the on-screen text does not replace
+/// (`parts::others_have_text`). A draft not yet saved, or an unreadable id, has none.
+async fn other_parts_have_text(
+    state: &AppState,
+    patient: Uuid,
+    draft_id: &str,
+    writer: Option<&str>,
+) -> Result<bool, ErrorView> {
+    let Ok(draft) = draft_id.parse::<Uuid>() else {
+        return Ok(false);
+    };
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| node_cannot_write("no database connection"))?
+        .lock()
+        .await?;
+    let drafts = cairn_node::note::draft::open_drafts(&*db, patient)
+        .await
+        .map_err(|e| chart_read_failed(db.explain(e)))?;
+    Ok(drafts
+        .iter()
+        .find(|d| d.draft_id == draft)
+        .is_some_and(|d| others_have_text(&d.parts, writer)))
+}
+
 /// The refusals a sign says before it asks for the key, and the draft id and stated time read
-/// from what the webview sent. Pure.
+/// from what the webview sent. `others_have_text`: a part the on-screen text does not replace
+/// holds text, so a blank editor still signs. Pure.
 pub(crate) fn sign_checks_before_the_key(
     draft_id: &str,
     narrative: &str,
+    others_have_text: bool,
     stated_time: Option<&str>,
 ) -> Result<(Uuid, Option<DateTime<Utc>>), ErrorView> {
-    // `sign_note` refuses this too; asked here as well so it is said before the passphrase.
-    if narrative.trim().is_empty() {
+    // `sign_note` refuses an all-blank draft too; asked here so it is said before the passphrase.
+    if narrative.trim().is_empty() && !others_have_text {
         return Err(sign_refusal_view(SignRefusal::Empty));
     }
     let draft = draft_id.parse().map_err(|_| refused("not a draft id"))?;
@@ -325,113 +365,6 @@ pub(crate) fn sign_checks_before_the_key(
         year_the_record_holds(s, t).map_err(refused)?;
     }
     Ok((draft, stated))
-}
-
-/// A save's answer as the webview reads it. Pure.
-pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
-    let sentence = match outcome {
-        SaveOutcome::Saved => None,
-        SaveOutcome::Spent => Some(SPENT),
-        SaveOutcome::Elsewhere => Some(ELSEWHERE),
-        SaveOutcome::NoChart => Some(NO_CHART),
-    };
-    SaveView {
-        saved: sentence.is_none(),
-        sentence: sentence.map(str::to_string),
-    }
-}
-
-/// A sign's refusal as the webview reads it. Pure. Only "already signed" asks for a re-read: the
-/// pane on screen is behind the record, and the re-read shows the signed note. The others are
-/// verdicts a re-read cannot mend.
-pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
-    match refusal {
-        SignRefusal::Empty => refused(EMPTY),
-        SignRefusal::Spent => stale(SPENT),
-        SignRefusal::Elsewhere => refused(SIGN_ELSEWHERE),
-        SignRefusal::NoChart => refused(NO_CHART),
-    }
-}
-
-/// The read as the pane shows it, in zone `tz` with `today` its date. Pure.
-pub(crate) fn note_pane<Tz: TimeZone>(
-    list: PatientNoteList,
-    terminal: Option<&str>,
-    tz: &Tz,
-    today: NaiveDate,
-) -> NotePane
-where
-    Tz::Offset: std::fmt::Display,
-{
-    let withheld_sentence = (list.withheld_on_linked > 0).then(|| {
-        format!(
-            "{} note(s) on this patient's linked charts are not shown: a link in this record is in \
-             doubt, so the node cannot yet vouch that they are this patient's. They are shown \
-             once a clinician has judged the record's links (\"How these charts are linked\").",
-            list.withheld_on_linked
-        )
-    });
-    NotePane {
-        notes: list
-            .notes
-            .iter()
-            .map(|n| note_row_view(n, tz, today))
-            .collect(),
-        withheld_sentence,
-        drafts: list
-            .drafts
-            .iter()
-            .map(|d| draft_view(d, terminal, tz, today))
-            .collect(),
-    }
-}
-
-/// One note's words, dated against `today`. Pure.
-fn note_row_view<Tz: TimeZone>(note: &NoteRow, tz: &Tz, today: NaiveDate) -> NoteRowView
-where
-    Tz::Offset: std::fmt::Display,
-{
-    NoteRowView {
-        event_id: note.event_id.to_string(),
-        text: note.text.clone(),
-        byline: grade_words(&note.grade),
-        when: time_words(
-            &note.effective_basis,
-            note.t_effective,
-            note.recording_started,
-            tz,
-            today,
-        ),
-    }
-}
-
-/// One draft's words, and whether it is this terminal's to edit. Pure.
-pub(crate) fn draft_view<Tz: TimeZone>(
-    draft: &NoteDraft,
-    terminal: Option<&str>,
-    tz: &Tz,
-    today: NaiveDate,
-) -> DraftView
-where
-    Tz::Offset: std::fmt::Display,
-{
-    // `None`: this terminal's id is not read yet, so no draft can be known to be this one's.
-    let here = terminal == Some(draft.terminal_id.as_str());
-    let mut words = format!(
-        "unsigned draft · started {} · last typed {}",
-        instant(draft.recording_started, tz, today),
-        instant(draft.last_keystroke, tz, today)
-    );
-    if !here {
-        words.push_str(" · being written at another terminal");
-    }
-    DraftView {
-        draft_id: draft.draft_id.to_string(),
-        narrative: draft.narrative.clone(),
-        stated_time: draft.stated_time.map(|t| datetime_local(t, tz)),
-        here,
-        words,
-    }
 }
 
 #[cfg(test)]

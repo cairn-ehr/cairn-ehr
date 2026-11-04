@@ -1,4 +1,4 @@
-//! Sign-in slice 3a — the note pane's calls, run under the window's OWN login (`cairn_window`).
+//! Sign-in slices 3a/3b-1 — the note pane's calls, run under the window's OWN login (`cairn_window`).
 //!
 //! Split out of `window_role_grants.rs` (which walks the rest of the window's day) to keep each
 //! file under 500 lines; read that file's module doc for why these walks exist and what they
@@ -14,7 +14,7 @@ use cairn_node::chart_link::canonical_pair;
 use cairn_node::db;
 use cairn_node::medication::snapshot::in_snapshot;
 use cairn_node::medication::AuthorParams;
-use cairn_node::note::draft::{open_drafts, save_draft, SaveOutcome};
+use cairn_node::note::draft::{open_drafts, save_part, take_draft, SaveOutcome, TakeOutcome};
 use cairn_node::note::read::{list_patient_notes, PatientNoteList};
 use cairn_node::note::sign::{sign_note, SignNoteInput};
 use common::{
@@ -30,7 +30,8 @@ async fn note_pane_read(c: &mut Client, chart: Uuid) -> anyhow::Result<PatientNo
     in_snapshot(c, async |tx| list_patient_notes(tx, chart).await).await
 }
 
-/// The note pane (slice 3a): save, list drafts, sign, and read back — notes and an open draft —
+/// The note pane (slices 3a, 3b-1): save a part, list drafts, move one, read the who's-here
+/// directory, sign (which spends the draft's parts), and read back — notes and an open draft —
 /// over one chart, then over a linked set, undoubted and doubted, so withholding runs too.
 #[tokio::test]
 async fn the_windows_note_calls_run_under_its_own_login() {
@@ -49,9 +50,19 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     submit_registration(&owner, &sk, &kid, x, 1).await;
     for (chart, text) in [(a, "BP <90 [L] arm (R)"), (x, "note on X")] {
         let draft = Uuid::now_v7();
-        let r = save_draft(&window, draft, chart, "pc-window", text, None).await;
+        // A NAMED writer, so the sign's key lookup (`cairn_vault_member_key`) runs as the window.
+        let r = save_part(
+            &window,
+            draft,
+            chart,
+            "pc-window",
+            Some("notewriter"),
+            text,
+            None,
+        )
+        .await;
         assert_eq!(
-            expect_as_window("note::draft::save_draft", r),
+            expect_as_window("note::draft::save_part", r),
             SaveOutcome::Saved
         );
         let r = open_drafts(&window, chart).await;
@@ -60,6 +71,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
             draft,
             patient: chart,
             terminal: "pc-window",
+            writer: Some("notewriter"),
             narrative: text,
             stated: None,
             node_origin: ORIGIN,
@@ -70,19 +82,29 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     // One draft left UNSIGNED on A, with a stated time, so the snapshot read below decodes a
     // draft row (every column, the stated time included) under the window's login.
     let stated = "2026-11-02T17:00:30Z".parse().unwrap();
-    let r = save_draft(
+    let open = Uuid::now_v7();
+    let r = save_part(
         &window,
-        Uuid::now_v7(),
+        open,
         a,
         "pc-window",
+        Some("notewriter"),
         "still typing",
         Some(stated),
     )
     .await;
     assert_eq!(
-        expect_as_window("note::draft::save_draft (left open)", r),
+        expect_as_window("note::draft::save_part (left open)", r),
         SaveOutcome::Saved
     );
+    // The move door (db/066), then back, so the read below still sees it as this terminal's.
+    for terminal in ["pc-elsewhere", "pc-window"] {
+        let r = take_draft(&window, open, a, terminal).await;
+        assert_eq!(
+            expect_as_window("note::draft::take_draft", r),
+            TakeOutcome::Taken
+        );
+    }
     let one = expect_as_window(
         "note::read::list_patient_notes (one chart)",
         note_pane_read(&mut window, a).await,
@@ -90,8 +112,37 @@ async fn the_windows_note_calls_run_under_its_own_login() {
     assert_eq!(one.notes.len(), 1, "A alone holds its own note");
     assert_eq!(one.notes[0].text, "BP <90 [L] arm (R)", "shown as typed");
     assert_eq!(one.drafts.len(), 1, "the open draft is read");
-    assert_eq!(one.drafts[0].narrative, "still typing");
-    assert_eq!(one.drafts[0].stated_time, Some(stated));
+    let part = &one.drafts[0].parts[0];
+    assert_eq!(part.narrative, "still typing");
+    assert_eq!(part.stated_time, Some(stated));
+    assert_eq!(
+        part.writer_name.as_deref(),
+        Some(common::NOTE_AUTHOR),
+        "the writer's name is read through the parts door"
+    );
+
+    // The who's-here directory (db/066): the note fixture's clinician is offered.
+    let staff = expect_as_window(
+        "note::whos_here::directory",
+        cairn_node::note::whos_here::directory(&window).await,
+    );
+    assert!(
+        staff.iter().any(|s| s.staff_id == "notewriter"),
+        "{staff:?}"
+    );
+    // 3a's three draft doors are gone (a door's shape is final; db/066 replaced them).
+    for gone in [
+        "cairn_note_draft_save(uuid,uuid,text,text,timestamptz)",
+        "cairn_note_drafts(uuid)",
+        "cairn_note_draft_spend(uuid,uuid)",
+    ] {
+        let still: bool = owner
+            .query_one("SELECT to_regprocedure($1) IS NOT NULL", &[&gone])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!still, "{gone} must be gone");
+    }
 
     // Linked: X's note joins the read; flagged in doubt, it is counted and withheld instead.
     submit_link_event(&owner, &sk, &kid, a, x, 10, true).await;

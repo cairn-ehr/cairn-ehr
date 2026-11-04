@@ -67,6 +67,7 @@ async fn chart_with_one_note(c: &mut Client, typed: &str) -> (Node, Uuid, String
         stated: StatedTime::NotStated,
         recording_started: "2026-01-02T03:04:05Z",
         recording_ended: "2026-01-02T03:09:05Z",
+        addendum_to: None,
     };
     let hlc = db::next_hlc(c, &node_kid).await.unwrap();
     let event_id = Uuid::now_v7();

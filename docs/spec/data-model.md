@@ -288,6 +288,14 @@ Two infrastructure invariants — and their realization — underpin point-of-ca
 > same transaction; and it is in no backup or export (partly superseding ADR-0026 decisions 1 and 3). Author-owned,
 > session-decoupled drafts and `sign-as` salvage remain deferred (slice 3b,
 > [#243](https://github.com/cairn-ehr/cairn-ehr/issues/243)).
+>
+> **Since sign-in slice 3b-1** ([ADR-0088](decisions/0088-whos-here-and-a-drafts-parts.md), `db/066`) a note draft is
+> a header plus **per-writer parts**: each part names its writer (an enrolled clinical member, or unknown) as a
+> who's-here claim, a save rewrites only the saver's own tail part or appends one, and every real change leaves a
+> revision row for the draft's life. A draft is still held by one terminal at a time, but "Continue here" moves it.
+> It signs as one event per non-blank part (the first the note, each later one an `addendum-to` the one before), the
+> signer `authored` on their own part, `attested` with the writer `drafted` on anyone else's, and `attested` alone on a
+> part whose writer is not known. The draft is still keyed by terminal, not by `(author, patient)`.
 
 ## 3.11 Notifications as projections, responsibility-routing, and acknowledgment
 > Resolves former open question §11.10 — see [ADR-0009](decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md), canonical design [identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor). Minimal data-model commitments; the clinical model and the *why* live there and in the ADR.
@@ -400,6 +408,12 @@ Federation requires **globally-unique, offline-mintable** identity (UUIDv7 and c
 
 ## 3.19 The progress-note narrative format: one signed event, markdown narrative, and manifest-keyed media anchors
 > See [ADR-0041](decisions/0041-progress-note-narrative-format.md). The first narrative clinical surface: [principle 11](index.md#founding-principles-the-lens-for-every-decision) (the raw body is human-readable) and [principle 12](index.md#founding-principles-the-lens-for-every-decision) (rendering belongs to the edges) applied to rich clinical text. Rides the [§3.14](#314-attachments-content-addressed-blobs-and-the-rendition-set) attachment shape, the [§3.15](#315-the-active-write-model-thin-encounters-co-produced-legibility-and-the-delete-vs-erase-distinction) encounter fold, and the [§3.10](#310-session-identity-event-authorship-and-draft-durability) draft store. No new envelope field; no new founding principle.
+
+> [!NOTE]
+> **Narrowed by [ADR-0088](decisions/0088-whos-here-and-a-drafts-parts.md) (sign-in slice 3b-1).** One *writer's*
+> entry is still one signed event, but a draft several people wrote signs as **one event per writer's part**, each
+> later part an `addendum-to` the one before ([§3.10](#310-session-identity-event-authorship-and-draft-durability)).
+> So a multi-writer note's arrival is no longer atomic: a peer may hold part 2 before part 1 (#948).
 
 A progress note is **one signed event** (`clinical.note.asserted`, `schema_version =
 clinical.note/1` — three-segment like every production type, opening the `clinical.*` namespace

@@ -15,7 +15,7 @@ use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 use super::draft::{open_drafts, NoteDraft};
-use super::view::{note_grade, NoteGrade};
+use super::view::{note_grade, part_writer, NoteGrade, PartWriter};
 
 /// One signed note, ready for the window to word (`view::time_words`, `view::grade_words`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +30,12 @@ pub struct NoteRow {
     pub effective_basis: String,
     pub recording_started: DateTime<Utc>,
     pub grade: NoteGrade,
+    /// The note this one continues (its `addendum-to` ref): a later writer's part of one draft.
+    pub addendum_to: Option<Uuid>,
+    /// Who typed it (`view::part_writer`): the signer, a `drafted` contributor (named when this
+    /// node can name that key, through `cairn_note_signer_name`), or nobody recorded when the
+    /// signer only attested it.
+    pub writer: PartWriter,
 }
 
 /// What the note pane shows for one opened chart.
@@ -51,11 +57,26 @@ pub struct PatientNoteList {
 /// `VerifiedKid::from_event_log_column`). A door, because the window role may not call the
 /// predicate itself (ruling R11). `signer_key_id` needs no such check — no row exists unless
 /// the door verified the signature against it.
+///
+/// The addendum ref is read as `::uuid::text`, Postgres's canonical form: the floor admits any
+/// spelling `::uuid` accepts, some of which Rust's `Uuid` parser refuses, and one such ref must not
+/// make the chart's whole note list fail to read.
+///
+/// The last two columns say who typed the part (`view::part_writer`): whether a `drafted`
+/// contributor is present even when its key cannot be named, and whether the signer only
+/// ATTESTED it — so a part someone else typed never reads like the signer's own note (I2).
 const NOTES_SQL: &str = "\
     SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
            cairn_note_vouched_attester(e.event_id), \
-           cairn_note_signer_name(e.signer_key_id) \
+           cairn_note_signer_name(e.signer_key_id), \
+           (SELECT (r ->> 'event')::uuid::text FROM jsonb_array_elements(n.refs) r \
+             WHERE r ->> 'rel' = 'addendum-to' LIMIT 1), \
+           cairn_note_signer_name((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
+                                    WHERE c ->> 'role' = 'drafted' LIMIT 1)), \
+           EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c WHERE c ->> 'role' = 'drafted'), \
+           EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
+                    WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id) \
       FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      WHERE n.patient_id = ANY($1::text[]::uuid[])";
 
@@ -93,6 +114,11 @@ pub async fn list_patient_notes(
             effective_basis: r.get(4),
             recording_started: r.get(5),
             grade: note_grade(confidence, r.get(9)),
+            addendum_to: r
+                .get::<_, Option<String>>(10)
+                .map(|s| s.parse())
+                .transpose()?,
+            writer: part_writer(r.get(12), r.get(11), r.get(13)),
         });
     }
     // Ordered here rather than by SQL ORDER BY (ADR-0045); the id breaks a tie stably.

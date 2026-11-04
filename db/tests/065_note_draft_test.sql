@@ -2,6 +2,10 @@
 \ir _scratch_database_guard.sql
 -- db/065 — the progress-note draft store and its doors (sign-in slice 3a, Task 3).
 --
+-- Since slice 3b-1 the draft doors are db/066's part-aware ones (3a's were removed); the cases
+-- below drive them with an unknown (NULL) writer, which is exactly a 3a draft, and db/tests/066
+-- pins what parts add.
+--
 -- WHY: a draft is the one MUTABLE thing next to an append-only record, so the guarantees that
 -- keep it honest are asserted here: one draft = one chart + one terminal, a spent draft can
 -- never be resurrected, a spend must be backed by a real note event at COMMIT, and the window
@@ -40,32 +44,32 @@ DECLARE
     t2 timestamptz;
 BEGIN
     -- Save, and the R1 rule: only a real change moves last_keystroke.
-    ASSERT cairn_note_draft_save(d, p, 'term-1', 'first', NULL) = 'saved', 'first save';
+    ASSERT cairn_note_draft_part_save(d, p, 'term-1', NULL, 'first', NULL) = 'saved', 'first save';
     SELECT recording_started, last_keystroke INTO r FROM note_draft WHERE draft_id = d;
     ASSERT r.recording_started = r.last_keystroke, 'insert stamps both times';
     t1 := r.last_keystroke;
     PERFORM pg_sleep(0.02);
-    ASSERT cairn_note_draft_save(d, p, 'term-1', 'first', NULL) = 'saved', 'identical re-save answers saved';
+    ASSERT cairn_note_draft_part_save(d, p, 'term-1', NULL, 'first', NULL) = 'saved', 'identical re-save answers saved';
     ASSERT (SELECT last_keystroke FROM note_draft WHERE draft_id = d) = t1,
         'an identical re-save is not a keystroke';
-    ASSERT cairn_note_draft_save(d, p, 'term-1', 'first, more', NULL) = 'saved', 'changed save';
+    ASSERT cairn_note_draft_part_save(d, p, 'term-1', NULL, 'first, more', NULL) = 'saved', 'changed save';
     SELECT recording_started, last_keystroke INTO r FROM note_draft WHERE draft_id = d;
     ASSERT r.last_keystroke > t1, 'a changed narrative moves last_keystroke';
     ASSERT r.recording_started = t1, 'recording_started never moves';
     t2 := r.last_keystroke;
     PERFORM pg_sleep(0.02);
-    ASSERT cairn_note_draft_save(d, p, 'term-1', 'first, more', '2026-01-01 10:00+00') = 'saved', 'stated time save';
+    ASSERT cairn_note_draft_part_save(d, p, 'term-1', NULL, 'first, more', '2026-01-01 10:00+00') = 'saved', 'stated time save';
     ASSERT (SELECT last_keystroke FROM note_draft WHERE draft_id = d) > t2, 'a changed stated_time moves it too';
 
     -- Raw text round-trips exactly.
-    PERFORM cairn_note_draft_save(d, p, 'term-1', E'*raw* [x]\n  y ', NULL);
-    ASSERT (SELECT narrative FROM cairn_note_drafts(p) WHERE draft_id = d) = E'*raw* [x]\n  y ', 'stored as typed';
+    PERFORM cairn_note_draft_part_save(d, p, 'term-1', NULL, E'*raw* [x]\n  y ', NULL);
+    ASSERT (SELECT narrative FROM cairn_note_draft_parts(p) WHERE draft_id = d) = E'*raw* [x]\n  y ', 'stored as typed';
 
     -- Elsewhere / no-chart.
-    ASSERT cairn_note_draft_save(d, p, 'term-2', 'x', NULL) = 'elsewhere', 'another terminal';
-    ASSERT cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000002', 'term-1', 'x', NULL) = 'elsewhere',
+    ASSERT cairn_note_draft_part_save(d, p, 'term-2', NULL, 'x', NULL) = 'moved', 'another terminal (db/066: moved)';
+    ASSERT cairn_note_draft_part_save(d, 'bbbbbbbb-0000-7000-8000-000000000002', 'term-1', NULL, 'x', NULL) = 'elsewhere',
         'another patient';
-    ASSERT cairn_note_draft_save(gen_random_uuid(), 'bbbbbbbb-0000-7000-8000-000000000002', 'term-1', 'x', NULL)
+    ASSERT cairn_note_draft_part_save(gen_random_uuid(), 'bbbbbbbb-0000-7000-8000-000000000002', 'term-1', NULL, 'x', NULL)
         = 'no-chart', 'a patient with no event has no chart';
     ASSERT NOT EXISTS (SELECT 1 FROM note_draft WHERE patient_id = 'bbbbbbbb-0000-7000-8000-000000000002'),
         'no-chart writes nothing';
@@ -75,14 +79,14 @@ BEGIN
     ASSERT cairn_note_signer_name('no-such-key') IS NULL, 'unknown key -> NULL';
 
     -- Spend: returns the row, removes the draft, and the id can never be saved again.
-    SELECT * INTO r FROM cairn_note_draft_spend(d, 'aaaaaaaa-0000-7000-8000-000000000002');
+    SELECT * INTO r FROM cairn_note_draft_spend_parts(d, 'aaaaaaaa-0000-7000-8000-000000000002');
     ASSERT r.patient_id = p AND r.narrative = E'*raw* [x]\n  y ', 'spend returns the draft';
     ASSERT NOT EXISTS (SELECT 1 FROM note_draft WHERE draft_id = d), 'spent draft is gone';
-    ASSERT cairn_note_draft_save(d, p, 'term-1', 'again', NULL) = 'spent', 'save after spend';
+    ASSERT cairn_note_draft_part_save(d, p, 'term-1', NULL, 'again', NULL) = 'spent', 'save after spend';
     ASSERT NOT EXISTS (SELECT 1 FROM note_draft WHERE draft_id = d), 'spent save writes nothing';
-    ASSERT NOT EXISTS (SELECT 1 FROM cairn_note_draft_spend(d, 'aaaaaaaa-0000-7000-8000-000000000002')),
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_note_draft_spend_parts(d, 'aaaaaaaa-0000-7000-8000-000000000002')),
         'a second spend returns zero rows';
-    ASSERT NOT EXISTS (SELECT 1 FROM cairn_note_draft_spend(gen_random_uuid(), gen_random_uuid())),
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_note_draft_spend_parts(gen_random_uuid(), gen_random_uuid())),
         'spending an absent draft returns zero rows';
 END $$;
 
@@ -92,8 +96,8 @@ DO $$
 DECLARE d uuid := 'dddddddd-0000-7000-8000-000000000003'; refused boolean := false;
 BEGIN
     BEGIN
-        PERFORM cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'x', NULL);
-        PERFORM cairn_note_draft_spend(d, 'aaaaaaaa-0000-7000-8000-000000000001');
+        PERFORM cairn_note_draft_part_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', NULL, 'x', NULL);
+        PERFORM cairn_note_draft_spend_parts(d, 'aaaaaaaa-0000-7000-8000-000000000001');
         SET CONSTRAINTS note_draft_spent_names_its_note IMMEDIATE;
     EXCEPTION WHEN raise_exception THEN refused := true;
     END;
@@ -133,8 +137,8 @@ BEGIN
     FOREACH ev IN ARRAY ARRAY['aaaaaaaa-0000-7000-8000-000000000003', 'aaaaaaaa-0000-7000-8000-000000000004',
                               'aaaaaaaa-0000-7000-8000-0000000000ff', 'aaaaaaaa-0000-7000-8000-000000000002']::uuid[] LOOP
         BEGIN
-            PERFORM cairn_note_draft_save('dddddddd-0000-7000-8000-0000000000a1', p, 'term-1', 'x', NULL);
-            PERFORM cairn_note_draft_spend('dddddddd-0000-7000-8000-0000000000a1', ev);
+            PERFORM cairn_note_draft_part_save('dddddddd-0000-7000-8000-0000000000a1', p, 'term-1', NULL, 'x', NULL);
+            PERFORM cairn_note_draft_spend_parts('dddddddd-0000-7000-8000-0000000000a1', ev);
             SET CONSTRAINTS note_draft_spent_names_its_note IMMEDIATE;
             RAISE EXCEPTION 'spend backed by % was not refused', ev USING ERRCODE = 'P0002';
         EXCEPTION WHEN raise_exception OR unique_violation THEN n := n + 1;
@@ -162,8 +166,8 @@ BEGIN
     BEGIN
         CREATE TEMP TABLE event_log (event_id uuid, event_type text, patient_id uuid);
         INSERT INTO event_log VALUES ('aaaaaaaa-0000-7000-8000-0000000000ee', 'clinical.note.asserted', 'bbbbbbbb-0000-7000-8000-000000000001');
-        PERFORM cairn_note_draft_save('dddddddd-0000-7000-8000-0000000000a2', 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'x', NULL);
-        PERFORM cairn_note_draft_spend('dddddddd-0000-7000-8000-0000000000a2', 'aaaaaaaa-0000-7000-8000-0000000000ee');
+        PERFORM cairn_note_draft_part_save('dddddddd-0000-7000-8000-0000000000a2', 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', NULL, 'x', NULL);
+        PERFORM cairn_note_draft_spend_parts('dddddddd-0000-7000-8000-0000000000a2', 'aaaaaaaa-0000-7000-8000-0000000000ee');
         SET CONSTRAINTS note_draft_spent_names_its_note IMMEDIATE;
     EXCEPTION WHEN raise_exception THEN refused := true;
     END;
@@ -175,20 +179,20 @@ RESET ROLE;
 DO $$
 DECLARE d uuid := 'dddddddd-0000-7000-8000-0000000000a3'; r text;
 BEGIN
-    ASSERT cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'mine', NULL) = 'saved';
+    ASSERT cairn_note_draft_part_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', NULL, 'mine', NULL) = 'saved';
     BEGIN
-        PERFORM cairn_note_draft_save(d, NULL, 'term-1', 'clobber', NULL);
+        PERFORM cairn_note_draft_part_save(d, NULL, 'term-1', NULL, 'clobber', NULL);
         RAISE EXCEPTION 'NULL patient accepted' USING ERRCODE = 'P0002';
     EXCEPTION WHEN raise_exception THEN NULL; END;
     BEGIN
-        PERFORM cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', NULL, 'clobber', NULL);
+        PERFORM cairn_note_draft_part_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', NULL, NULL, 'clobber', NULL);
         RAISE EXCEPTION 'NULL terminal accepted' USING ERRCODE = 'P0002';
     EXCEPTION WHEN raise_exception THEN NULL; END;
     BEGIN
-        PERFORM cairn_note_draft_save(NULL, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'x', NULL);
+        PERFORM cairn_note_draft_part_save(NULL, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', NULL, 'x', NULL);
         RAISE EXCEPTION 'NULL draft accepted' USING ERRCODE = 'P0002';
     EXCEPTION WHEN raise_exception THEN NULL; END;
-    ASSERT (SELECT narrative FROM note_draft WHERE draft_id = d) = 'mine', 'the draft survived the NULL calls';
+    ASSERT (SELECT narrative FROM note_draft_part WHERE draft_id = d) = 'mine', 'the draft survived the NULL calls';
 END $$;
 
 -- Final review I1: a backward clock step must not stamp last_keystroke before recording_started
@@ -197,11 +201,11 @@ END $$;
 DO $$
 DECLARE d uuid := 'dddddddd-0000-7000-8000-0000000000a4'; r record;
 BEGIN
-    ASSERT cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'before', NULL) = 'saved';
+    ASSERT cairn_note_draft_part_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', NULL, 'before', NULL) = 'saved';
     UPDATE note_draft SET recording_started = clock_timestamp() + interval '1 hour',
                           last_keystroke = clock_timestamp() + interval '1 hour'
      WHERE draft_id = d;
-    ASSERT cairn_note_draft_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', 'after', NULL) = 'saved';
+    ASSERT cairn_note_draft_part_save(d, 'bbbbbbbb-0000-7000-8000-000000000001', 'term-1', NULL, 'after', NULL) = 'saved';
     SELECT recording_started, last_keystroke INTO r FROM note_draft WHERE draft_id = d;
     ASSERT r.last_keystroke >= r.recording_started,
         'last_keystroke must never fall before recording_started, got ' || r.last_keystroke || ' < ' || r.recording_started;
@@ -241,20 +245,17 @@ BEGIN
         'the predicate itself stays closed to the window';
 END $$;
 
--- Privileges: tables closed to the window, doors closed to PUBLIC and open to the window.
+-- Privileges: tables closed to the window, doors closed to PUBLIC and open to the window (the
+-- draft doors' own grants are pinned in db/tests/066).
 DO $$
 DECLARE f text;
 BEGIN
     FOREACH f IN ARRAY ARRAY[
-        'cairn_note_draft_save(uuid, uuid, text, text, timestamptz)',
-        'cairn_note_drafts(uuid)', 'cairn_note_draft_spend(uuid, uuid)',
         'cairn_note_signer_name(text)', 'cairn_note_vouched_attester(uuid)',
         'note_draft_spent_names_its_note()'] LOOP
         ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), f || ' must not be PUBLIC';
     END LOOP;
     FOREACH f IN ARRAY ARRAY[
-        'cairn_note_draft_save(uuid, uuid, text, text, timestamptz)',
-        'cairn_note_drafts(uuid)', 'cairn_note_draft_spend(uuid, uuid)',
         'cairn_note_signer_name(text)', 'cairn_note_vouched_attester(uuid)'] LOOP
         ASSERT has_function_privilege('cairn_window', f, 'EXECUTE'), f || ' is the window''s';
     END LOOP;

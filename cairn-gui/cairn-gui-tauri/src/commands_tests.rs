@@ -139,6 +139,8 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         held_by: None,
         key_hold_secs: 0,
         mock: false,
+        whos_here: crate::whos_here::claim_view(&crate::whos_here::Claim::NotAsked),
+        idle_lock_secs: 900,
     })
     .unwrap();
 
@@ -368,7 +370,10 @@ fn every_command_the_webview_calls_is_registered() {
         ("waiting.js", include_str!("../src-ui/waiting.js")),
         ("main.js", include_str!("../src-ui/main.js")),
         ("signer.js", include_str!("../src-ui/signer.js")),
+        ("notes_save.js", include_str!("../src-ui/notes_save.js")),
         ("notes.js", include_str!("../src-ui/notes.js")),
+        ("whos_here.js", include_str!("../src-ui/whos_here.js")),
+        ("idle.js", include_str!("../src-ui/idle.js")),
         ("enrol.js", include_str!("../src-ui/enrol.js")),
         ("rekey.js", include_str!("../src-ui/rekey.js")),
         ("superuser.js", include_str!("../src-ui/superuser.js")),

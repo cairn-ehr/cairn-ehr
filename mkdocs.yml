@@ -216,6 +216,7 @@ nav:
       - ADR-0085 · In-person enrolment and re-key: spec/decisions/0085-in-person-enrolment-and-re-key.md
       - ADR-0086 · Who may act after a repudiation: spec/decisions/0086-who-may-act-after-a-repudiation.md
       - ADR-0087 · The first note stream and its draft: spec/decisions/0087-the-first-note-stream-and-its-draft.md
+      - ADR-0088 · Who's here, and a draft's parts: spec/decisions/0088-whos-here-and-a-drafts-parts.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

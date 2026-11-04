@@ -7,7 +7,11 @@
 //! this file.
 use crate::source_guard::{js_const, js_fn, position};
 
-const NOTES_JS: &str = include_str!("../src-ui/notes.js");
+/// The note pane's two scripts as one text: notes.js, and its save queue notes_save.js.
+const NOTES_JS: &str = concat!(
+    include_str!("../src-ui/notes.js"),
+    include_str!("../src-ui/notes_save.js")
+);
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
@@ -97,25 +101,33 @@ fn notes_js_never_touches_browser_storage() {
 }
 
 /// A draft started at THIS terminal reopens into the editor when the pane is drawn (if the
-/// editor is free); one started elsewhere is listed as its words and text only — no editor, no
-/// Sign.
+/// editor is free and somebody has said who is writing); any other draft is listed as its words
+/// and parts only — no editor, no Sign; its one control is "Continue here" (slice 3b-1), offered
+/// only while the editor is free.
 #[test]
 fn a_here_draft_reopens_and_another_terminals_draft_is_read_only() {
     let render = js_fn(NOTES_JS, "renderNotes");
     assert!(
-        render.contains("if (draft.here && noteDraft === null) openDraft(draft);"),
+        render.contains(
+            "if (draft.here && noteDraft === null && readForThisClaim(claim)) openDraft(draft, claim.staff_id);"
+        ),
         "{render}"
     );
     let item = js_fn(NOTES_JS, "draftItem");
-    for control in ["\"button\"", "\"textarea\"", "\"input\"", "note-sign"] {
+    for control in ["\"textarea\"", "\"input\"", "note-sign"] {
         assert!(
             !item.contains(control),
             "a listed draft has no {control}: {item}"
         );
     }
+    assert_eq!(item.matches("cell(\"button\"").count(), 1, "{item}");
+    assert!(
+        position(item, "if (noteDraft === null) {") < position(item, "\"Continue here\""),
+        "{item}"
+    );
     let open = js_fn(NOTES_JS, "openDraft");
     assert!(
-        open.contains("el(\"note-text\").value = draft.narrative;"),
+        open.contains("el(\"note-text\").value = editing ? tail.text : \"\";"),
         "{open}"
     );
 }
@@ -207,6 +219,11 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
     }
     assert!(
         position(INDEX_HTML, "<script src=\"signer.js\"></script>")
+            < position(INDEX_HTML, "<script src=\"notes_save.js\"></script>")
+    );
+    // notes.js names `onNoteInput` (notes_save.js's) as it loads, for its input listeners.
+    assert!(
+        position(INDEX_HTML, "<script src=\"notes_save.js\"></script>")
             < position(INDEX_HTML, "<script src=\"notes.js\"></script>")
     );
     assert!(
@@ -226,7 +243,10 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
 #[test]
 fn notes_js_reads_no_field_the_backend_does_not_send() {
     use crate::commands::tests::fields_read_in;
-    use crate::notes::{DraftView, NotePane, NoteRowView, NoteSignReport, SaveView};
+    use crate::notes::parts::{DraftView, NotePane, NoteRowView, PartView};
+    use crate::notes::words::ForkWords;
+    use crate::notes::{NoteSignReport, SaveView, TakeView};
+    use crate::whos_here::{claim_view, Claim};
     let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()
     };
@@ -234,23 +254,40 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         event_id: "e".into(),
         text: "t".into(),
         byline: "b".into(),
+        byline_spoken: "b".into(),
         when: "w".into(),
     };
     let draft = DraftView {
         draft_id: "d".into(),
-        narrative: "n".into(),
-        stated_time: None,
         here: true,
         words: "w".into(),
+        parts: vec![],
+    };
+    let tail = PartView {
+        writer_shown: "?A".into(),
+        writer_spoken: "unverified A".into(),
+        text: "t".into(),
+        stated_time: None,
+        words: "w".into(),
+        editable: true,
     };
     let pane = NotePane {
         notes: vec![],
         withheld_sentence: None,
         drafts: vec![],
+        claim: claim_view(&Claim::Unknown),
     };
     let view = SaveView {
         saved: true,
+        moved: false,
+        spent: false,
         sentence: None,
+        fork: None,
+    };
+    let fork_words = ForkWords {
+        kept: "k".into(),
+        nothing_new: "n".into(),
+        everything: "e".into(),
     };
     let report = NoteSignReport {
         text: "t".into(),
@@ -260,7 +297,27 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         ("pane", keys(serde_json::to_value(&pane).unwrap())),
         ("note", keys(serde_json::to_value(&note).unwrap())),
         ("draft", keys(serde_json::to_value(&draft).unwrap())),
+        ("tail", keys(serde_json::to_value(&tail).unwrap())),
+        ("part", keys(serde_json::to_value(&tail).unwrap())),
         ("view", keys(serde_json::to_value(&view).unwrap())),
+        (
+            "forkWords",
+            keys(serde_json::to_value(&fork_words).unwrap()),
+        ),
+        (
+            "claim",
+            keys(serde_json::to_value(claim_view(&Claim::Unknown)).unwrap()),
+        ),
+        (
+            "took",
+            keys(
+                serde_json::to_value(TakeView {
+                    taken: true,
+                    sentence: None,
+                })
+                .unwrap(),
+            ),
+        ),
         ("report", keys(serde_json::to_value(&report).unwrap())),
     ] {
         let read = fields_read_in(NOTES_JS, binding);
@@ -324,7 +381,8 @@ fn a_partly_typed_time_saves_the_last_complete_one() {
         "{send}"
     );
     assert!(
-        js_fn(NOTES_JS, "openDraft").contains("statedTime: draft.stated_time || \"\""),
+        js_fn(NOTES_JS, "openDraft")
+            .contains("statedTime: editing ? tail.stated_time || \"\" : \"\","),
         "a reopened draft holds the time it was saved with"
     );
     assert!(js_fn(NOTES_JS, "newNote").contains("statedTime: \"\""));
@@ -355,7 +413,8 @@ fn the_editor_is_read_only_while_a_sign_is_in_flight() {
 }
 
 /// Fix round 1, I4. Text not yet in the node survives a chart change: a keystroke or a failed save
-/// marks the editor unsaved, an answered save clears it, and the close flushes on either. Sign's
+/// marks the editor unsaved, a save the node took clears it (a refusal that wrote nothing does not,
+/// PR #966 review), and the close flushes on either. Sign's
 /// partly-typed-time refusal comes BEFORE it cancels the pending save, so the save still goes. An
 /// unknown-outcome Sign keeps the editor unless the save before closing it was answered.
 #[test]
@@ -365,7 +424,7 @@ fn unsaved_text_survives_a_chart_change() {
     let caught = &send[position(send, "catch (failure) {")..];
     assert!(caught.contains("noteUnsaved = true;"), "{send}");
     assert!(
-        send[..position(send, "catch (failure) {")].contains("noteUnsaved = false;"),
+        send[..position(send, "catch (failure) {")].contains("noteUnsaved = !kept;"),
         "{send}"
     );
     assert!(js_fn(NOTES_JS, "clearNotes")
