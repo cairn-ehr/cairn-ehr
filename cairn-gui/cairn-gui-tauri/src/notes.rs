@@ -137,6 +137,10 @@ const ELSEWHERE: &str = "this draft belongs to another chart or terminal — not
 /// … the same, for a SIGN: nothing was signed, and the editor still holds the text.
 const SIGN_ELSEWHERE: &str =
     "this draft belongs to another chart or terminal — nothing was signed; your text is still here";
+/// … when a SIGN finds its draft taken to another terminal (Task 5 review M1): not "another
+/// chart" — the clinician is told where the note went.
+const SIGN_MOVED: &str = "This note is now being continued at another terminal — nothing was \
+     signed; your text is still here.";
 /// … when the writer a save names is not an enrolled member (any more).
 const NO_SUCH_WRITER: &str =
     "the name at this terminal is not an enrolled member — say who's here again";
@@ -438,7 +442,8 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
     match refusal {
         SignRefusal::Empty => refused(EMPTY),
         SignRefusal::Spent => stale(SPENT),
-        SignRefusal::Elsewhere | SignRefusal::Moved => refused(SIGN_ELSEWHERE),
+        SignRefusal::Elsewhere => refused(SIGN_ELSEWHERE),
+        SignRefusal::Moved => refused(SIGN_MOVED),
         SignRefusal::NoChart => refused(NO_CHART),
         SignRefusal::NoSuchWriter => refused(SIGN_NO_SUCH_WRITER),
     }

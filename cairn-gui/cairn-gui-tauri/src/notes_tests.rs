@@ -175,9 +175,11 @@ fn sign_words_each_refusal() {
         sign_refusal_view(SignRefusal::NoChart).text,
         "this patient has no chart on this node"
     );
+    // Task 5 review M1: a move is not "another chart" — the sign says where the note went.
     assert_eq!(
         sign_refusal_view(SignRefusal::Moved).text,
-        sign_refusal_view(SignRefusal::Elsewhere).text
+        "This note is now being continued at another terminal — nothing was signed; your text \
+         is still here."
     );
     let gone = sign_refusal_view(SignRefusal::NoSuchWriter).text;
     assert!(gone.contains("not enrolled"), "{gone}");

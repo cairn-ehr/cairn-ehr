@@ -97,25 +97,31 @@ fn notes_js_never_touches_browser_storage() {
 }
 
 /// A draft started at THIS terminal reopens into the editor when the pane is drawn (if the
-/// editor is free); one started elsewhere is listed as its words and text only — no editor, no
-/// Sign.
+/// editor is free and somebody has said who is writing); any other draft is listed as its words
+/// and parts only — no editor, no Sign; its one control is "Continue here" (slice 3b-1), offered
+/// only while the editor is free.
 #[test]
 fn a_here_draft_reopens_and_another_terminals_draft_is_read_only() {
     let render = js_fn(NOTES_JS, "renderNotes");
     assert!(
-        render.contains("if (draft.here && noteDraft === null) openDraft(draft);"),
+        render.contains("if (draft.here && noteDraft === null && claimAsked()) openDraft(draft);"),
         "{render}"
     );
     let item = js_fn(NOTES_JS, "draftItem");
-    for control in ["\"button\"", "\"textarea\"", "\"input\"", "note-sign"] {
+    for control in ["\"textarea\"", "\"input\"", "note-sign"] {
         assert!(
             !item.contains(control),
             "a listed draft has no {control}: {item}"
         );
     }
+    assert_eq!(item.matches("cell(\"button\"").count(), 1, "{item}");
+    assert!(
+        position(item, "if (noteDraft === null) {") < position(item, "\"Continue here\""),
+        "{item}"
+    );
     let open = js_fn(NOTES_JS, "openDraft");
     assert!(
-        open.contains("el(\"note-text\").value = tail.text;"),
+        open.contains("el(\"note-text\").value = editing ? tail.text : \"\";"),
         "{open}"
     );
 }
@@ -227,7 +233,7 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
 fn notes_js_reads_no_field_the_backend_does_not_send() {
     use crate::commands::tests::fields_read_in;
     use crate::notes::parts::{DraftView, NotePane, NoteRowView, PartView};
-    use crate::notes::{NoteSignReport, SaveView};
+    use crate::notes::{NoteSignReport, SaveView, TakeView};
     let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()
     };
@@ -270,7 +276,18 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         ("note", keys(serde_json::to_value(&note).unwrap())),
         ("draft", keys(serde_json::to_value(&draft).unwrap())),
         ("tail", keys(serde_json::to_value(&tail).unwrap())),
+        ("part", keys(serde_json::to_value(&tail).unwrap())),
         ("view", keys(serde_json::to_value(&view).unwrap())),
+        (
+            "took",
+            keys(
+                serde_json::to_value(TakeView {
+                    taken: true,
+                    sentence: None,
+                })
+                .unwrap(),
+            ),
+        ),
         ("report", keys(serde_json::to_value(&report).unwrap())),
     ] {
         let read = fields_read_in(NOTES_JS, binding);
@@ -334,7 +351,8 @@ fn a_partly_typed_time_saves_the_last_complete_one() {
         "{send}"
     );
     assert!(
-        js_fn(NOTES_JS, "openDraft").contains("statedTime: tail.stated_time || \"\""),
+        js_fn(NOTES_JS, "openDraft")
+            .contains("statedTime: editing ? tail.stated_time || \"\" : \"\","),
         "a reopened draft holds the time it was saved with"
     );
     assert!(js_fn(NOTES_JS, "newNote").contains("statedTime: \"\""));

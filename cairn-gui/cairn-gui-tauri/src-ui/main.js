@@ -431,6 +431,10 @@ async function cease(groupId, reason) {
 function renderLockState(lock) {
   // The strip, the "signed in for the next act" line and the terminal lock are signer.js's.
   renderSigner(lock);
+  // Who's here is seeded from the FIRST answer only (whos_here.js); the re-lock's interval is
+  // handed over and never arms the timer — a poll is not a person (idle.js).
+  seedWhosHere(lock.whos_here);
+  setIdleLock(lock.idle_lock_secs);
 }
 
 async function pollLock() {

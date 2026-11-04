@@ -56,6 +56,8 @@ mod terminal_id;
 #[cfg(test)]
 mod waiting_webview_tests;
 mod whos_here;
+#[cfg(test)]
+mod whos_here_webview_tests;
 mod worklist;
 mod write_failure;
 
