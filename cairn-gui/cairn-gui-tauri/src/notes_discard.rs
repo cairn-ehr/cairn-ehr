@@ -29,8 +29,7 @@ pub(crate) const RECORDED: &str =
 pub(crate) const EMPTY_DISCARDED: &str = "Discarded. The draft was empty, so nothing was kept.";
 /// … when a colleague wrote part of the draft: only its writer may throw their part away.
 const NOT_YOURS: &str = "Not discarded: someone else wrote part of this draft, and only its \
-     writer may throw their part away. The draft's own line says whether, and when, it goes into the \
-     record by itself.";
+     writer may throw their part away — nothing was thrown away; your text is still here.";
 /// … when the draft is another chart's.
 const ELSEWHERE: &str = "Not discarded: this draft belongs to another chart — nothing was thrown \
      away; your text is still here.";

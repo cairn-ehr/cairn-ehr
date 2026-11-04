@@ -1648,18 +1648,18 @@ A's part is drawn read-only above dr-b's editor, as in section 19, Measurement 2
 dr-b's credential.
 
 - [ ] The status line reads "Not discarded: someone else wrote part of this draft, and only its writer may throw
-      their part away. The draft's own line says whether, and when, it goes into the record by itself." The draft is
+      their part away — nothing was thrown away; your text is still here." The draft is
       still there with nurse-a's part (`parts`), the editor still holds any text dr-b typed (it is saved again), and
       `discards` and `spends` are unchanged.
-- [ ] The draft's own line says when it goes into the record unsigned (section 20's words), and the window offers no
-      other step.
+- [ ] Reopen the chart: the draft row's words say when it goes into the record unsigned (section 20's words), and the
+      window offers no other step. (The editor itself shows no such line: #988.)
 
 **Measurement 3 — a stuck draft (on this throwaway database only).** Leave a draft by `nurse-a`, then remove her
 member row as the owner (section 20, Measurement 4's two `DELETE`s). As `dr-b`, reopen the chart and press *Discard
 draft*.
 
-- [ ] The same "Not discarded: someone else wrote part of this draft …" sentence; the draft is kept; its own line
-      reads section 20's stuck sentence, never a time.
+- [ ] The same "Not discarded: someone else wrote part of this draft …" sentence; the draft is kept. Reopen the
+      chart: the draft row's words say "stuck" (section 20's stuck sentence), never a time.
 
 **Measurement 4 — a discard during the debounce.** As `nurse-a`, type `obs stable` and, within half a second of the
 last keystroke, type `; recheck 1h` and press *Discard draft* at once (the strip filled beforehand).

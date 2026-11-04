@@ -45,6 +45,7 @@ pub struct NoteRow {
 /// One discarded draft, as the chart lists it beside (never among) its notes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscardMarker {
+    /// The discard event this marker was projected from.
     pub event_id: Uuid,
     /// The chart the draft was on (a linked chart's, when the read combines them).
     pub chart: Uuid,
@@ -63,8 +64,11 @@ pub struct DiscardedText {
     pub by_discarder: bool,
     /// The text as typed (unescaped).
     pub text: String,
+    /// The writer's claimed time for this part; `None` means not stated (principle 4).
     pub stated: Option<DateTime<Utc>>,
+    /// When the part began being recorded.
     pub recording_started: DateTime<Utc>,
+    /// The part's last real keystroke.
     pub recording_ended: DateTime<Utc>,
 }
 

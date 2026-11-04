@@ -157,8 +157,9 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
     autosave; a refused save writes nothing. It then calls the door with the discarder's key, builds ONE event from
     the door's rows with `t_effective` exactly the door's `discarded_at` (RFC 3339 to the microsecond, which is
     `timestamptz`'s precision), takes its HLC tick inside the transaction, seals it through `prepare_sealed`, submits
-    it with no savepoint, and commits. A door word this build does not know is an error, never a default. A COMMIT
-    whose answer was lost is marked by `db_diagnosis::commit_failure`. Pins: `discard.rs`'s
+    it with no savepoint, and commits. A door word this build does not know is an error, never a default. A Recorded
+    COMMIT whose answer was lost is marked by `db_diagnosis::commit_failure`; the Empty path's eventless commit is
+    not, so a lost answer there reads "Not discarded:" ([#989](https://github.com/cairn-ehr/cairn-ehr/issues/989)). Pins: `discard.rs`'s
     `refusal_words_map_every_door_word`, `an_unknown_word_is_an_error`;
     `note_discard.rs::discard_carries_the_text_on_screen`.
 
@@ -209,13 +210,16 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
 15. **A discard's words never borrow Sign's.** Every refusal but `discarded` ("This draft was discarded; it is no
     longer open.") is led "Not discarded:" and says what is true of a discard: "nothing was thrown away; your text
     is still here" where it is. A colleague's draft reads "Not
-    discarded: someone else wrote part of this draft, and only its writer may throw their part away. The draft's own
-    line says whether, and when, it goes into the record by itself.", pointing at `cairn_note_drafts_due`'s words
-    rather than promising a time a stuck draft never meets. A save that finds its draft discarded in another window
+    discarded: someone else wrote part of this draft, and only its writer may throw their part away — nothing was
+    thrown away; your text is still here.". It promises no time, because a stuck draft never meets one, and it does
+    not point at the draft's own line, because a draft held in the editor has none on screen; the chart's draft row
+    carries `cairn_note_drafts_due`'s words, and showing them in the editor is
+    [#988](https://github.com/cairn-ehr/cairn-ehr/issues/988). A save that finds its draft discarded in another window
     says "This draft was discarded in another window …", never "signed". A failure that is not a worded refusal is
     led by its retry class: "Whether this draft was discarded is NOT known:" when the commit may have landed, else
-    "Not discarded:". A COMMIT whose answer was lost reads "Whether this draft was discarded is NOT known — no
-    ordinary answer came back …" and is not a timing sample. The who's-here picker words a discard's outcome as a
+    "Not discarded:". A Recorded COMMIT whose answer was lost reads "Whether this draft was discarded is NOT known — no
+    ordinary answer came back …" and is not a timing sample; the Empty path's eventless commit is not marked, so a
+    lost answer there reads "Not discarded:" ([#989](https://github.com/cairn-ehr/cairn-ehr/issues/989)). The who's-here picker words a discard's outcome as a
     discard's ("Your draft was discarded.", "Your draft was NOT discarded — open the chart to see where it stands.",
     "Whether your draft was discarded is not known — check the chart."), never as a signature. Sign's matching flaw
     is #986. Pins: `notes_discard_tests.rs::discard_words_each_refusal`, `discard_words_each_outcome`,
@@ -241,6 +245,11 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
   says it was never entered in the record.
 - **(e) The marker is the only display.** `cairn_window` runs no audit view; a reader who does not open the
   `<details>` sees only who discarded a draft and when.
+- **A writer is a claim** (ADR-0088 decision 9). Someone who claims to be colleague C at who's-here can blank C's
+  last part and then Discard with their own key. Blank parts do not count (db/069), so the door answers `empty` and
+  deletes the draft and its revisions without an event. This is not a new erasure: the blanking already hid the text,
+  and 3b-2a's timer deletes an all-blank draft after the quarantine anyway. The discard only removes the owner-only
+  revision trace sooner. See [#985](https://github.com/cairn-ehr/cairn-ehr/issues/985).
 - **The marker reaches a peer only with the event.** Drafts never sync (design §3.3), so a peer never saw the draft;
   it sees the marker once the discard event arrives and its custody lets it project the body.
 

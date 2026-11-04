@@ -134,7 +134,7 @@ fn discard_words_each_refusal() {
             NotYours,
             false,
             "Not discarded: someone else wrote part of this draft, and only its writer may throw \
-             their part away. The draft's own line says whether, and when, it goes into the record by itself.",
+             their part away — nothing was thrown away; your text is still here.",
         ),
         (
             NoSuchSigner,

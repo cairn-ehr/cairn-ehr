@@ -65,7 +65,7 @@
 >   `discarded`, never `spent`; an all-blank draft is deleted with no event. The chart lists a one-line `<details>`
 >   marker, never a note (maintainer, 2026-11-04). Open: **#987** (a discarder's own raw-SQL client can sign different
 >   text; filed by the ADR) · **#985** (a raw-SQL Sign spends a colleague's draft) · **#986** (Sign's unknown-outcome
->   lead) · #980 still. Owed by a human: **RUNBOOK §21** (discard ≤ 3 s; the colleague's-draft and stuck refusals; the
+>   lead) · **#988** (the editor should show its due words) · **#989** (a lost answer on an empty-discard commit) · **#990** (the discard's markup messages are labelled "note") · **#991** (split `reread_webview_tests.rs`) · #980 still. Owed by a human: **RUNBOOK §21** (discard ≤ 3 s; the colleague's-draft and stuck refusals; the
 >   marker by keyboard + VoiceOver; WebKit).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
@@ -115,7 +115,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **3b-2b BUILT, not yet gated — the full local gate (`run-db-gated-tests.sh`) must pass at the PR head, then the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
+> 1. **3b-2b built and gated locally (the full `run-db-gated-tests.sh` passed at 4a83ea23: 3214 tests, 0 failed, 0 skipped; only docs after it); a CI run at the PR head is still owed. Then the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
 >    `Asserted` — it must answer #948 too). Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979),
 >    4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
