@@ -59,32 +59,32 @@ fn discard_words_each_refusal() {
         (
             Committed,
             true,
-            "Not discarded: this note had already gone into the record unsigned — nothing was signed",
+            "Not discarded: this note had already gone into the record unsigned.",
         ),
         (Discarded, true, "This draft was discarded; it is no longer open."),
         (
             Elsewhere,
             false,
-            "Not discarded: this draft belongs to another chart — nothing was signed; your text is still here",
+            "Not discarded: this draft belongs to another chart — nothing was thrown away; your text is still here.",
         ),
         (
             Moved,
             false,
-            "Not discarded: This note is now being continued at another terminal — nothing was \
-             signed; your text is still here.",
+            "Not discarded: this note is now being continued at another terminal — nothing was \
+             thrown away; your text is still here.",
         ),
         (NoChart, false, "Not discarded: this patient has no chart on this node"),
         (
             NoSuchWriter,
             false,
-            "Not discarded: a writer of this note is not enrolled on this node — nothing was \
-             signed; your text is still here",
+            "Not discarded: the name at this terminal is not an enrolled member — say who's \
+             here again; your text is still here.",
         ),
         (
             NotYours,
             false,
             "Not discarded: someone else wrote part of this draft, and only its writer may throw \
-             their part away. The draft's own line says when it goes into the record by itself.",
+             their part away. The draft's own line says whether, and when, it goes into the record by itself.",
         ),
         (
             NoSuchSigner,

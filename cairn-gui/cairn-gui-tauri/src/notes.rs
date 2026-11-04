@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 /// Reading the stated time (`notes_time.rs`).
 #[path = "notes_time.rs"]
-pub(crate) mod time;
+mod time;
 
 /// The pane's views: its notes, and each draft's parts (`notes_parts.rs`).
 #[path = "notes_parts.rs"]
@@ -127,7 +127,7 @@ pub async fn note_sign(
 }
 
 /// Fixture mode's refusal, worded as every other write's (`commands::cease_impl`).
-pub(crate) const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
+const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
 
 /// Read the chart's notes (over its linked charts, ADR-0076) and open drafts, worded in this
 /// machine's zone. Fixture mode has no notes: it reads as an empty pane, never a failure.

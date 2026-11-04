@@ -9,10 +9,7 @@
 //! `Empty`), and the words say "discarded", never "signed". Every sentence is a constant or a
 //! pure function so the wording is pinned without a database (`notes_discard_tests.rs`).
 use super::time::{parse_stated, year_the_record_holds};
-use super::words::{
-    DISCARDED, GONE, NO_CHART, SIGN_COMMITTED, SIGN_ELSEWHERE, SIGN_MOVED, SIGN_NO_SUCH_WRITER,
-    SPENT,
-};
+use super::words::{DISCARDED, GONE, NO_CHART, SPENT};
 use super::{terminal_of, NoteSignReport, FIXTURE};
 use crate::commands::record_timing;
 use crate::funnel::view::{ErrorView, Recorded};
@@ -32,8 +29,20 @@ pub(crate) const RECORDED: &str =
 pub(crate) const EMPTY_DISCARDED: &str = "Discarded. The draft was empty, so nothing was kept.";
 /// … when a colleague wrote part of the draft: only its writer may throw their part away.
 const NOT_YOURS: &str = "Not discarded: someone else wrote part of this draft, and only its \
-     writer may throw their part away. The draft's own line says when it goes into the record \
-     by itself.";
+     writer may throw their part away. The draft's own line says whether, and when, it goes into the \
+     record by itself.";
+/// … when the draft is another chart's.
+const ELSEWHERE: &str = "Not discarded: this draft belongs to another chart — nothing was thrown \
+     away; your text is still here.";
+/// … when another terminal holds the draft now.
+const MOVED: &str = "Not discarded: this note is now being continued at another terminal — \
+     nothing was thrown away; your text is still here.";
+/// … when the on-screen writer, or the writer of a part above, is not an enrolled member.
+const NO_SUCH_WRITER: &str =
+    "Not discarded: the name at this terminal is not an enrolled member — \
+     say who's here again; your text is still here.";
+/// … when the quarantine timer already put the draft into the record unsigned.
+const COMMITTED: &str = "Not discarded: this note had already gone into the record unsigned.";
 /// … when this staff ID's role may not act clinically.
 const NO_SUCH_SIGNER: &str = "Not discarded: this staff ID may not discard a clinical note.";
 /// The prefix every refusal borrowed from the sign's wording carries.
@@ -69,12 +78,12 @@ pub(crate) fn discard_refusal_view(refusal: DiscardRefusal) -> ErrorView {
     let not_discarded = |why: &str| refused(format!("{NOT_DISCARDED}{why}"));
     match refusal {
         DiscardRefusal::Spent => stale(format!("{NOT_DISCARDED}{SPENT}")),
-        DiscardRefusal::Committed => stale(format!("{NOT_DISCARDED}{SIGN_COMMITTED}")),
+        DiscardRefusal::Committed => stale(COMMITTED),
         DiscardRefusal::Discarded => stale(DISCARDED),
-        DiscardRefusal::Elsewhere => not_discarded(SIGN_ELSEWHERE),
-        DiscardRefusal::Moved => not_discarded(SIGN_MOVED),
+        DiscardRefusal::Elsewhere => refused(ELSEWHERE),
+        DiscardRefusal::Moved => refused(MOVED),
         DiscardRefusal::NoChart => not_discarded(NO_CHART),
-        DiscardRefusal::NoSuchWriter => not_discarded(SIGN_NO_SUCH_WRITER),
+        DiscardRefusal::NoSuchWriter => refused(NO_SUCH_WRITER),
         DiscardRefusal::Gone => not_discarded(GONE),
         DiscardRefusal::NotYours => refused(NOT_YOURS),
         DiscardRefusal::NoSuchSigner => refused(NO_SUCH_SIGNER),

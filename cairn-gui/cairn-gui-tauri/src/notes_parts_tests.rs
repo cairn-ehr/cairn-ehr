@@ -349,25 +349,24 @@ fn the_marker_summary_and_headings_are_exact() {
     );
 }
 
-/// All four combinations of held-back notes and held-back discards.
+/// All four combinations of held-back notes and held-back discards, word for word.
 #[test]
 fn the_withheld_sentence_counts_discards() {
+    let rest = " on this patient's linked charts are not shown: a link in this record is in \
+         doubt, so the node cannot yet vouch that they are this patient's. They are shown \
+         once a clinician has judged the record's links (\"How these charts are linked\").";
     assert_eq!(withheld_words(0, 0), None);
-    let notes = withheld_words(2, 0).unwrap();
-    assert!(notes.starts_with("2 note(s) on this patient's linked charts are not shown"));
-    assert!(!notes.contains("discarded"), "{notes}");
-    let both = withheld_words(2, 3).unwrap();
-    assert!(both.starts_with(&notes), "the notes sentence is unchanged");
-    assert!(
-        both.ends_with(" 3 discarded draft(s) on those charts are held back for the same reason."),
-        "{both}"
+    assert_eq!(withheld_words(2, 0), Some(format!("2 note(s){rest}")));
+    assert_eq!(
+        withheld_words(2, 3),
+        Some(format!(
+            "2 note(s){rest} 3 discarded draft(s) on those charts are held back for the same reason."
+        ))
     );
-    let only = withheld_words(0, 3).unwrap();
-    assert!(
-        only.starts_with("3 discarded draft(s) on this patient's linked charts are not shown"),
-        "{only}"
+    assert_eq!(
+        withheld_words(0, 3),
+        Some(format!("3 discarded draft(s){rest}"))
     );
-    assert!(!only.contains("held back"), "{only}");
 }
 
 /// The pane carries the markers, newest first, and says what it withheld.
