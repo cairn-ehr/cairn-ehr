@@ -282,7 +282,8 @@ BEGIN
         RAISE EXCEPTION 'the_console_door_has_no_window_grant: a runtime role can reach note_policy';
     END IF;
     FOREACH f IN ARRAY ARRAY['cairn_note_quarantine_minutes()', 'cairn_note_drafts_overdue(uuid)',
-                             'cairn_note_draft_commit_overdue(uuid, uuid)', 'cairn_note_set_quarantine(int)'] LOOP
+                             'cairn_note_draft_commit_overdue(uuid, uuid)', 'cairn_note_set_quarantine(int)',
+                             'cairn_note_key_is_human(text)', 'cairn_note_drafts_due(uuid)'] LOOP
         IF has_function_privilege('public', f, 'EXECUTE') THEN RAISE EXCEPTION '% must not be PUBLIC', f; END IF;
         IF f <> 'cairn_note_set_quarantine(int)' AND NOT has_function_privilege('cairn_window', f, 'EXECUTE') THEN
             RAISE EXCEPTION '% is the window''s', f;

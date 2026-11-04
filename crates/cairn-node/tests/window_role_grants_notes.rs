@@ -17,6 +17,7 @@ use cairn_node::medication::AuthorParams;
 use cairn_node::note::draft::{open_drafts, save_part, take_draft, SaveOutcome, TakeOutcome};
 use cairn_node::note::read::{list_patient_notes, PatientNoteList};
 use cairn_node::note::sign::{sign_note, SignNoteInput};
+use cairn_node::note::view::{NoteGrade, PartWriter};
 use common::{
     cs, expect_as_window, note_setup, owner_and_window, submit_link_event, submit_registration,
 };
@@ -216,6 +217,17 @@ async fn the_windows_quarantine_commit_runs_under_its_own_login() {
     let report = expect_as_window("commit_overdue_drafts", r);
     assert_eq!(report.committed, 1, "{report:?}");
     assert!(report.failed.is_empty(), "{report:?}");
+    // The read of that note runs `cairn_note_key_is_human` under the window's own login: the
+    // named writer's part grades "went in unsigned", never "writer not known".
+    let r = note_pane_read(&mut window, a).await;
+    let list = expect_as_window("note pane read (the human-key door)", r);
+    let note = list
+        .notes
+        .iter()
+        .find(|n| n.text == "left")
+        .expect("the committed part");
+    assert_eq!(note.grade, NoteGrade::WentInUnsigned);
+    assert_eq!(note.writer, PartWriter::Drafted(common::NOTE_AUTHOR.into()));
 
     let refused = window
         .execute("SELECT cairn_note_set_quarantine(60)", &[])
