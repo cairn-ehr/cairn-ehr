@@ -18,9 +18,11 @@
 -- WHY THE DOOR'S YES IS NOT YET A DISCARD. The door trusts the key its caller names, and a key
 -- id is public. What makes "only your own" true is db/065's commit-time trigger: a spend with
 -- discarded_by set must name a discard event of this chart, inserted in this same transaction
--- and SIGNED BY discarded_by. Only the private key can make that row (the strict door verifies
--- every signature), so a raw-SQL client naming a colleague's key gets the draft consumed and the
--- whole transaction refused at COMMIT. Hence NO savepoint around the submit: a row inserted in a
+-- and SIGNED BY discarded_by, whose t_effective is the instant this door minted under the lock
+-- (stored as the spend's spent_at). Only the private key can make that row (the strict door
+-- verifies every signature), and no event signed before this call can carry an instant minted
+-- inside it, so a raw-SQL client naming a colleague's key, even holding a colleague's captured
+-- discard event, gets the draft consumed and the whole transaction refused at COMMIT. Hence NO savepoint around the submit: a row inserted in a
 -- subtransaction carries a subxid, and the trigger compares xmin to this transaction's id.
 --
 -- LOCK ORDER is every draft door's (db/066): the advisory lock 'note_draft:' || draft_id
@@ -49,8 +51,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_head  note_draft%ROWTYPE;
     v_spent text;
-    -- ONE clock reading per call, shared by every returned row.
-    v_now   timestamptz := clock_timestamp();
+    v_now   timestamptz;
 BEGIN
     -- A NULL is a caller bug, not an outcome: `<> NULL` is NULL and would slip past the guards.
     IF p_draft IS NULL OR p_patient IS NULL OR p_terminal IS NULL OR p_event IS NULL
@@ -67,6 +68,11 @@ BEGIN
         RETURN;
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
+    -- The discard instant: ONE clock reading per call, shared by every returned row and stored as
+    -- the spend's spent_at. Read AFTER the lock (as db/066's save door does): a discard queued
+    -- behind a save must not be stamped before that save's last keystroke, since this instant is
+    -- signed into the event's t_effective.
+    v_now := clock_timestamp();
     -- Already gone into the record or thrown away: each says which (db/066's doors say the same).
     v_spent := (SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'
                             WHEN s.by_timer THEN 'committed' ELSE 'spent' END
@@ -107,9 +113,10 @@ BEGIN
     END IF;
     DELETE FROM note_draft_revision r WHERE r.draft_id = p_draft;
     DELETE FROM note_draft d WHERE d.draft_id = p_draft;  -- its parts cascade
-    -- db/065's trigger holds this, at COMMIT, to an event signed by p_discarder_key.
-    INSERT INTO note_draft_spent (draft_id, patient_id, event_id, by_timer, discarded_by)
-    VALUES (p_draft, p_patient, p_event, false, p_discarder_key);
+    -- db/065's trigger holds this, at COMMIT, to an event signed by p_discarder_key whose
+    -- t_effective is exactly v_now (spent_at): the event of THIS call, never an earlier one.
+    INSERT INTO note_draft_spent (draft_id, patient_id, event_id, spent_at, by_timer, discarded_by)
+    VALUES (p_draft, p_patient, p_event, v_now, false, p_discarder_key);
 END;
 $$;
 

@@ -95,6 +95,11 @@ REVOKE ALL ON note_draft, note_draft_spent FROM PUBLIC;
 -- writes a row whose signature verifies under signer_key_id, which takes the private key. So
 -- the door's answer is only a claim until this arm ties it to a signature, and a forged
 -- discard consumes the draft only to be refused here, at COMMIT, with every write rolled back.
+-- WHY THE INSTANT TOO. A signature alone proves "this key signed A discard", not "this one": a
+-- client holding a colleague's genuine discard event (captured from another node, not yet
+-- synced here) could replay it. So the event's t_effective must equal NEW.spent_at, the
+-- instant db/069 minted inside the door, under the draft's lock, and returned for the caller to
+-- sign. An event signed before that call can never carry it. (Both are microsecond timestamptz.)
 -- The note arm (discarded_by IS NULL) is unchanged.
 CREATE OR REPLACE FUNCTION note_draft_spent_names_its_note() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -105,8 +110,9 @@ BEGIN
                           AND e.event_type = 'clinical.note-discard.asserted'
                           AND e.patient_id = NEW.patient_id
                           AND e.xmin = pg_current_xact_id()::xid
-                          AND e.signer_key_id = NEW.discarded_by) THEN
-            RAISE EXCEPTION 'a note draft can only be discarded by a clinical.note-discard.asserted event of the same chart, signed by the discarder''s key, submitted in the same transaction';
+                          AND e.signer_key_id = NEW.discarded_by
+                          AND e.t_effective = NEW.spent_at) THEN
+            RAISE EXCEPTION 'a note draft can only be discarded by a clinical.note-discard.asserted event of the same chart, signed by the discarder''s key, effective at the discard instant, submitted in the same transaction';
         END IF;
         RETURN NULL;
     END IF;

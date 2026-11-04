@@ -96,7 +96,7 @@ DROP FUNCTION IF EXISTS cairn_note_draft_spend(uuid, uuid);
 -- HOW, in order: refuse NULLs; normalise the writer and check they are an enrolled clinical
 -- member (a plain read of vault_member, taking no lock, so it cannot deadlock with the lock order
 -- below); take the
--- draft's advisory lock; a spent draft answers 'spent' or 'committed'; an existing draft must be
+-- draft's advisory lock; a spent draft answers 'spent', 'committed' or 'discarded'; an existing draft must be
 -- this chart's and this terminal's. Then the TAIL part (highest seq) decides: the saver's own tail is rewritten
 -- if the text or stated time changed; otherwise a non-empty text appends part tail+1 (an empty one
 -- makes no part — a colleague clicking in and out writes nothing). A new draft always gets part 1.
