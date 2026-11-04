@@ -1619,7 +1619,7 @@ refuses every note write ("fixture mode…").
 
 Steps: discarding your own draft paper *N* = 1 (tear it up) → forced *M* = 1 (*Discard draft* + the strip, counted as
 Sign is) → target *K* = 1; a draft of unknown writing 1 → 1 → 1; a draft holding a colleague's part: paper permits no
-tear-up → refused, it goes in by the timer (section 20) → no gesture. The write half is also timed by the node
+tear-up → refused; it goes in by the timer, or stays stuck (section 20) → no gesture. The write half is also timed by the node
 (`gesture_kind = 'note-discard'`, section 5). **A figure outside its budget, or an `M > N`, is the finding — file an
 issue; never adjust the budget.**
 

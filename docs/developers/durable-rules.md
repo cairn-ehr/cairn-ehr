@@ -32,7 +32,8 @@ place) — do not undo** (pins: `db/tests/068_clinical_note_discard_test.sql`, `
   that save's keystroke). Pins: db/tests/069's `the_commit_refuses_a_spend_without_its_signed_event`,
   `the_commit_refuses_an_event_signed_by_another_key`, `the_commit_refuses_a_discard_event_of_another_instant`;
   `note_discard.rs::a_raw_door_call_without_its_event_is_refused_at_commit`,
-  `discarded_at_follows_a_save_that_held_the_lock`.
+  `discarded_at_follows_a_save_that_held_the_lock` (a smoke test only: the node's own `save_part` takes the lock
+  first, so no test yet catches a door that reads the clock before its lock; reviewer-held).
 - **`discarded` is not `spent`.** The save, take and discard doors answer `discarded` for a spend with `discarded_by`
   set, and `note_draft_spent.discarded_by` lives in db/065 with its paired `ALTER` (3b-2a's "a column a door body
   reads lives with its table"). **Tempting wrong fix:** answer `spent` "because the draft is gone either way" (the

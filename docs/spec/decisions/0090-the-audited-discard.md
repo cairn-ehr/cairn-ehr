@@ -100,7 +100,7 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
    "not known", which would quietly lose who wrote it (principle 4). The discarder must be a vault member found by
    `signing_key_id` whose role may act clinically (`cairn_vault_purpose_allowed(role, false, 'clinical')`); otherwise
    the answer is `no-such-signer`, so a superuser or an admin may not discard. So a draft that holds a colleague's
-   writing is refused and goes in by the timer (ADR-0089); a co-signed discard is #980. Pins: db/tests/069's
+   writing is refused and goes in by the timer (ADR-0089), or stays stuck while a writer of it has no key; a co-signed discard is #980. Pins: db/tests/069's
    `own_draft_is_discarded_and_spent_with_the_key`, `unknown_writer_draft_any_clinical_signer_may_discard`,
    `a_colleagues_part_is_not_yours`, `a_named_writer_without_a_key_is_not_yours`,
    `a_blank_colleague_part_does_not_count`, `an_admin_key_is_no_such_signer` (an admin's, a superuser's and an unknown
@@ -118,7 +118,8 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
    The door is granted to `cairn_window` alone, and its return shape is final. Pins: db/tests/069's
    `discard_after_timer_answers_committed`, `discard_after_sign_answers_spent`, `moved_and_elsewhere_and_gone`, the
    NULL case; `note_discard.rs::discard_racing_sign_one_wins` (two connections),
-   `discarded_at_follows_a_save_that_held_the_lock`.
+   `discarded_at_follows_a_save_that_held_the_lock` (a smoke test: it cannot catch a clock read before the door's lock,
+   since the node's save takes that lock first).
 
 8. **The door's yes is only a claim until db/065's trigger ties it to a signature and an instant.** The door trusts
    the key its caller names, and a key id is public. So `note_draft_spent_names_its_note`, the deferred commit-time
@@ -169,7 +170,10 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
     never reach the screen. Its times go through `cairn_t_effective`, the validator the floor admitted them with. The
     discarder's name is `cairn_note_signer_name` of the signing key. `NOTES_SQL` is unchanged, so ADR-0087 R8 still
     holds: a chart's notes are read only from `clinical_note`. Pins: `note_read.rs::the_marker_lists_the_discard_not_as_a_note`,
-    `a_doubted_set_withholds_a_linked_charts_marker`.
+    `a_doubted_set_withholds_a_linked_charts_marker`. The withheld line counts both: "2 note(s) on this patient's
+    linked charts are not shown: … 3 discarded draft(s) on those charts are held back for the same reason." With no
+    note withheld it leads with the discards ("3 discarded draft(s) on this patient's linked charts are not shown:
+    …"), never "0 note(s)". Pin: `notes_parts_tests.rs::the_withheld_sentence_counts_discards`.
 
 ### The window (`cairn-gui-tauri/src/notes_discard.rs`, `src-ui/notes_discard.js`, `whos_here.js`)
 
@@ -186,7 +190,8 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
 14. **Discard draft sits beside Sign note, with the same strip and no confirmation dialog** (principle 3: a dialog is
     a step paper never charges, and the record itself is the safety). `note_discard_impl` follows `note_sign_impl`:
     the chart on screen, fixture mode, the verdicts before the key, the terminal, the key, the one-transaction call.
-    An empty editor is allowed (the node answers `Empty`). A Discard shares Sign's in-flight flags, so both buttons
+    An empty editor is allowed (the window checks no text; the node answers `Empty` only when every
+    part is blank). A Discard shares Sign's in-flight flags, so both buttons
     are down and the editor read-only while it runs, and the idle re-lock and a who's-here switch wait for it. The
     press cancels a pending save and carries the text on screen, so a discard pressed during the debounce keeps the
     last second of typing. It marks the draft `mayBeSigned`, so a late save answering `discarded` after this window's
@@ -228,7 +233,8 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
 - **(b) A raw-SQL Sign can spend a colleague's draft with an unrelated note**
   ([#985](https://github.com/cairn-ehr/cairn-ehr/issues/985)). Pre-existing (db/066's `cairn_note_draft_spend_parts`
   and the note arm of db/065's trigger), found by this slice's review, unchanged here.
-- **(c) A draft with two or more named writers cannot be discarded**; it goes in by the timer. A co-signed discard is
+- **(c) A draft holding a non-blank part by any named writer other than the discarder cannot be discarded**; it goes
+  in by the timer, or stays stuck while a writer of it has no key (ADR-0089 decision 8). A co-signed discard is
   [#980](https://github.com/cairn-ehr/cairn-ehr/issues/980).
 - **(d) The discarded text stays searchable.** It is in the event's plaintext twin, the full-text/RAG substrate
   (§3.13), for any reader holding the body's custody, as long as the event is not shredded. The twin's first line
@@ -245,7 +251,8 @@ discard in `cairn_node::note::discard`, and the window's button and marker.
   the strip, counted as Sign is) → 1; discarding a draft of unknown writing 1 → 1 → 1; a draft holding a colleague's
   part: paper permits no tear-up → refused → no gesture; seeing that a draft was discarded: paper leaves no trace →
   0 (the marker is in the list) → 0, and reading the text is one press. No `M > N`. Time budget, owed by a human in
-  RUNBOOK §21: a discard ≤ 3 s, credential included, the same as Sign's (RUNBOOK §16), timed through `note-discard`.
+  RUNBOOK §21: a discard ≤ 3 s, credential included, the same as Sign's (RUNBOOK §16), by stopwatch; the node's `note-discard` sample
+  times the write half.
 - **Harder.** Every future draft door must treat `discarded_by` as a third kind of spend, beside a Sign's and
   `by_timer`, and answer `discarded`. Every future reader of `clinical_note_discard.parts` must read the named keys
   only. A future change to the trigger's discard arm must keep both the signer and the instant.

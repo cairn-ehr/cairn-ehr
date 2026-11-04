@@ -115,7 +115,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **3b-2b BUILT — the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
+> 1. **3b-2b BUILT, not yet gated — the full local gate (`run-db-gated-tests.sh`) must pass at the PR head, then the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
 >    `Asserted` — it must answer #948 too). Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979),
 >    4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
