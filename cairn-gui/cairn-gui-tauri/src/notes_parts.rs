@@ -15,6 +15,8 @@ use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::view::{byline_words, instant, time_words};
 use chrono::{NaiveDate, TimeZone};
+use std::collections::HashSet;
+use uuid::Uuid;
 
 /// One signed note, as the pane shows it.
 #[derive(Debug, serde::Serialize)]
@@ -45,11 +47,13 @@ pub struct NotePane {
 }
 
 /// The read as the pane shows it, in zone `tz` with `today` its date, the editable part chosen for
-/// `claim`. Pure.
+/// `claim`; `failed`: the drafts whose last commit in this window failed (`commit::due_words`).
+/// Pure.
 pub(crate) fn note_pane<Tz: TimeZone>(
     list: PatientNoteList,
     terminal: Option<&str>,
     claim: &Claim,
+    failed: &HashSet<Uuid>,
     tz: &Tz,
     today: NaiveDate,
 ) -> NotePane
@@ -74,7 +78,7 @@ where
         drafts: list
             .drafts
             .iter()
-            .map(|d| draft_view(d, terminal, claim, tz, today))
+            .map(|d| draft_view(d, terminal, claim, failed.contains(&d.draft_id), tz, today))
             .collect(),
         claim: claim_view(claim),
     }
@@ -142,11 +146,13 @@ fn is_claims(part: &DraftPart, claim: &Claim) -> bool {
     }
 }
 
-/// One draft's words, its parts, and which part the current claim may edit.
+/// One draft's words, its parts, and which part the current claim may edit. `failed`: this
+/// window's last commit of it failed.
 pub(crate) fn draft_view<Tz: TimeZone>(
     draft: &NoteDraft,
     terminal: Option<&str>,
     claim: &Claim,
+    failed: bool,
     tz: &Tz,
     today: NaiveDate,
 ) -> DraftView
@@ -164,7 +170,14 @@ where
         words.push_str(" · being written at another terminal");
     }
     words.push_str(" · ");
-    words.push_str(&due_words(draft.due, draft.overdue, draft.stuck, tz, today));
+    words.push_str(&due_words(
+        draft.due,
+        draft.overdue,
+        draft.stuck,
+        failed,
+        tz,
+        today,
+    ));
     let tail = draft.parts.len().saturating_sub(1);
     let parts = draft
         .parts

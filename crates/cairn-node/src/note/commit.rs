@@ -14,8 +14,8 @@
 //! re-decides on the database's clock, under the draft's advisory lock, in the same call that
 //! consumes the draft. [`overdue_drafts`] is only a hint of which drafts to try. So two windows
 //! ticking at once, or a Sign racing the timer, put exactly one set of notes in the log. A losing
-//! timer's door call answers zero rows ([`CommitOutcome::NotDue`]) — the draft is gone, or its
-//! lock is held, which the door TRIES and never waits for; a losing Sign's own save answers
+//! timer's door call answers zero rows ([`CommitOutcome::NothingWritten`]) — the draft is gone, or
+//! its lock is held, which the door TRIES and never waits for; a losing Sign's own save answers
 //! `committed`, so the Sign is refused `SignRefusal::Committed`.
 //!
 //! THE ONE-TRANSACTION SHAPE is `sign_note`'s: the door spends the draft, each part is built,
@@ -27,7 +27,6 @@
 //! not known": that would quietly lose who wrote it (principle 4, as `SignRefusal::NoSuchWriter`).
 use cairn_event::contributor::with_drafting_writer;
 use cairn_event::SigningKey;
-use chrono::{DateTime, Duration, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
@@ -36,22 +35,15 @@ use super::sign::{body_from_spent, writer_key};
 use crate::db_diagnosis::Committed;
 use crate::medication::sealed_submit::{prepare_sealed_as, Prepared};
 
-/// When a draft last typed into at `last_keystroke` falls due, under a quarantine of
-/// `quarantine_minutes` (`cairn_note_quarantine_minutes()`): db/067's `cairn_note_drafts_due`
-/// arithmetic, in Rust. Pure; the database alone decides it, and answers it to `open_drafts`.
-pub fn draft_due(last_keystroke: DateTime<Utc>, quarantine_minutes: i32) -> DateTime<Utc> {
-    last_keystroke + Duration::minutes(i64::from(quarantine_minutes))
-}
-
 /// What one draft's commit did.
 #[derive(Debug)]
 pub enum CommitOutcome {
     /// The draft went in: its parts' events in writing order (`event_id` = the first, the note).
     Committed(Committed<Vec<Uuid>>),
-    /// Nothing to write: the draft is absent, already spent, not yet overdue, locked by another
-    /// session (a save or Sign mid-flight; the next pass retries), or was all blank (the door
-    /// deleted it, and that deletion was committed).
-    NotDue,
+    /// No note was written — NOT only "not yet due": the draft is absent, already spent, not yet
+    /// overdue, locked by another session (a save or Sign mid-flight; the next pass retries), or
+    /// was all blank (the door deleted it, and that deletion was committed).
+    NothingWritten,
     /// A named writer has no vault key any more: rolled back, the draft is kept as it was.
     Stuck,
 }
@@ -107,7 +99,7 @@ pub async fn commit_overdue(
         // Commit even so: an overdue all-blank draft was deleted by the door, and that must
         // stick. Nothing else was written, and no event names this commit.
         tx.commit().await?;
-        return Ok(CommitOutcome::NotDue);
+        return Ok(CommitOutcome::NothingWritten);
     }
     let mut ids: Vec<Uuid> = Vec::with_capacity(parts.len());
     for part in &parts {
@@ -160,7 +152,7 @@ impl CommitReport {
     pub fn record(&mut self, draft: Uuid, outcome: anyhow::Result<CommitOutcome>) {
         match outcome {
             Ok(CommitOutcome::Committed(_)) => self.committed += 1,
-            Ok(CommitOutcome::NotDue) => {}
+            Ok(CommitOutcome::NothingWritten) => {}
             Ok(CommitOutcome::Stuck) => self.stuck.push(draft),
             Err(e) => self.failed.push((draft, format!("{e:#}"))),
         }
@@ -187,23 +179,6 @@ pub async fn commit_overdue_drafts(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn draft_due_adds_the_minutes() {
-        let at: DateTime<Utc> = "2026-11-04T01:00:00.123456Z".parse().unwrap();
-        assert_eq!(
-            draft_due(at, 180),
-            "2026-11-04T04:00:00.123456Z"
-                .parse::<DateTime<Utc>>()
-                .unwrap()
-        );
-        assert_eq!(
-            draft_due(at, 43200),
-            "2026-12-04T01:00:00.123456Z"
-                .parse::<DateTime<Utc>>()
-                .unwrap()
-        );
-    }
 
     /// A named writer with no key is stuck, never "not known"; a writer not known is the node's
     /// part alone, whatever key is passed.

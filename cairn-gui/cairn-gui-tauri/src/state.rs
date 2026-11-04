@@ -264,6 +264,11 @@ pub struct AppState {
     /// Who the terminal says is at the keyboard, their recent people and bookmarks, and the idle
     /// re-lock interval — in memory only (`crate::whos_here`).
     pub whos_here: tokio::sync::Mutex<crate::whos_here::Here>,
+    /// The drafts whose LAST quarantine commit in this window failed (`notes::commit`), so the
+    /// pane says the commit failed rather than promising another try. Cleared by a try that did
+    /// not fail. shortcut: a failed draft later signed or discarded stays listed until the window
+    /// closes; harmless (nothing reads an id no draft has), bounded by the drafts seen.
+    pub commit_failed: tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>,
 }
 
 impl AppState {

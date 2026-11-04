@@ -313,7 +313,7 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
 /// committed, `[{H, "drafted"}, {N, "recorded"}]` signed by the node N. Made through the real
 /// commit path (`note::commit::commit_overdue`, which submits through `submit_event`) and read
 /// back from `event_log`. Rust grades it `Asserted` when told H is a human (the read passes the
-/// drafted key only when the vault names it); SQL has no such state, and a set with no bearing
+/// drafted key only when the actor registry enrolled it for a human, `cairn_note_key_is_human`); SQL has no such state, and a set with no bearing
 /// contributor and no attester is not authoritative there.
 #[tokio::test]
 async fn asserted_in_rust_is_unverified_in_sql() {

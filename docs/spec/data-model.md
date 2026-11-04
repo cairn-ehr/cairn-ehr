@@ -300,7 +300,8 @@ Two infrastructure invariants — and their realization — underpin point-of-ca
 > **Since sign-in slice 3b-2a** ([ADR-0089](decisions/0089-the-quarantine-commit-and-the-asserted-grade.md),
 > `db/067`) a draft nobody has typed into for the site's quarantine (default 3 hours) goes into the record by itself,
 > **unsigned**: one node-signed event per non-blank part, its named writer a `drafted` contributor and nobody
-> `attested`, read "went in unsigned" (the `Asserted` grade, the "provisional authorship-confidence grade" above).
+> `attested`, read "went in unsigned" (the `Asserted` grade: how the "provisional authorship-confidence grade"
+> above resolves when nobody signs).
 > A window that holds the node key commits it, on a one-minute tick while its connection is open and before every
 > chart read (which may reopen a lost connection); with no such window it waits, shown overdue.
 

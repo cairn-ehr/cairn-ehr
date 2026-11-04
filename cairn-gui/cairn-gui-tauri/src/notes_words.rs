@@ -131,7 +131,11 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
             SIGNED_ELSEWHERE_EVERYTHING,
         ]),
         SaveOutcome::Committed => Some([COMMITTED, COMMITTED_NOTHING_NEW, COMMITTED_EVERYTHING]),
-        _ => None,
+        // Spelled out, no `_` (#412): a new outcome must decide whether its text forks.
+        SaveOutcome::Saved
+        | SaveOutcome::Elsewhere
+        | SaveOutcome::NoChart
+        | SaveOutcome::NoSuchWriter => None,
     };
     SaveView {
         saved: sentence.is_none(),

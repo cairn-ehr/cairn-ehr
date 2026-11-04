@@ -163,7 +163,9 @@ pub async fn open_drafts(
                 terminal_id: r.get(1),
                 recording_started: part.recording_started,
                 last_keystroke: part.last_keystroke,
-                // Filled in below, once every part is in.
+                // Filled in below, once every part is in. A draft spent between the two queries
+                // keeps these placeholders (a past `due`, not overdue): callers that show them read
+                // inside one snapshot (`read::list_patient_notes` under `in_snapshot`), #983 T4-b.
                 due: part.last_keystroke,
                 overdue: false,
                 stuck: false,

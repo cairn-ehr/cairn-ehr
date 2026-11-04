@@ -269,5 +269,6 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         // Filled in `main`'s setup hook, which alone can name the config directory.
         terminal_id: std::sync::OnceLock::new(),
         whos_here: tokio::sync::Mutex::new(whos_here::Here::new(cli.idle_lock_minutes)),
+        commit_failed: Default::default(),
     })
 }

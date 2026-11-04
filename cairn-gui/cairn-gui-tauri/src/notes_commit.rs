@@ -11,8 +11,9 @@
 //!
 //! The node, not this file, decides what is overdue: its door re-checks on the database's clock
 //! under the draft's lock, so two windows ticking at once, or a tick racing a Sign, write one
-//! note. This file only asks, and says on stderr what could not go in. And it never gets in the
-//! way: fixture mode and a window without the node key commit nothing, a commit that fails is
+//! note. This file only asks, says on stderr what could not go in, and remembers which drafts'
+//! last commit failed (`AppState::commit_failed`) so the pane says so. And it never gets in the
+//! way: fixture mode (no key, no connection) commits nothing, a commit that fails is
 //! never a failed read (Review Focus 5), each draft is its own short connection hold (a
 //! clinician's press waits behind one draft at most, never a whole pass), and the tick never
 //! reopens a lost connection (the next press does).
@@ -32,10 +33,16 @@ use uuid::Uuid;
 /// hours, so a draft goes in at most a minute late, and an idle pass is one cheap query.
 pub const COMMIT_TICK: Duration = Duration::from_secs(60);
 
-/// Said of an overdue draft still on the chart after the pre-read commit ran: its commit failed,
-/// or it fell due since. Either way it is tried again, which is all that is certain (review I1).
+/// Said of an overdue draft still on the chart after the pre-read commit ran, whose last commit did
+/// not fail: it fell due since, or a save or Sign held its lock. Either way it is tried again,
+/// which is all that is certain (review I1).
 const OVERDUE: &str =
     "overdue — not in the record yet; the window tries again at every check to put it in unsigned";
+/// Said of an overdue draft whose LAST commit in this window failed (the cause is on stderr). Not
+/// "tries again": a failure that repeats every pass would make that a promise nobody keeps, and an
+/// abandoned draft has no other way in, so the clinician is told to act (PR #981 review F1).
+const FAILED: &str = "overdue — could not go into the record by itself (the window's last try \
+     failed; the cause is in its log); sign it, or tell the site's operator";
 /// Said of a STUCK draft: a writer has no vault key, so every commit rolls it back. Not "sign it":
 /// a Sign refuses the same draft (`SignRefusal::NoSuchWriter`), so only re-enrolling them helps.
 const STUCK: &str = "overdue, but cannot go into the record by itself — a writer of it is no \
@@ -80,8 +87,18 @@ pub async fn commit_overdue_impl(
         let Some(mut held) = hold(db, may_reopen).await else {
             break;
         };
-        let outcome = commit_overdue(&mut held, node_sk, draft, &state.node_origin).await;
-        report.record(draft, outcome.map_err(|e| held.explain(e)));
+        let outcome = commit_overdue(&mut held, node_sk, draft, &state.node_origin)
+            .await
+            .map_err(|e| held.explain(e));
+        // What the pane says of the draft follows its LAST try: failed, or not.
+        let mut failed = state.commit_failed.lock().await;
+        if outcome.is_err() {
+            failed.insert(draft);
+        } else {
+            failed.remove(&draft);
+        }
+        drop(failed);
+        report.record(draft, outcome);
     }
     // The draft id and the cause only: never its text or the patient's name (stderr is a log).
     for (draft, cause) in &report.failed {
@@ -105,9 +122,14 @@ async fn hold(db: &NodeConnection, may_reopen: bool) -> Option<ConnectionGuard<'
 /// chart read commits that chart's drafts anyway).
 pub async fn run_ticks(app: tauri::AppHandle) {
     let mut said_stuck = HashSet::new();
+    let mut paused = false;
     loop {
         tokio::time::sleep(COMMIT_TICK).await;
-        let Some(report) = commit_overdue_impl(&app.state::<AppState>(), None, false).await else {
+        let report = commit_overdue_impl(&app.state::<AppState>(), None, false).await;
+        if let Some(line) = pause_change(&mut paused, report.is_some()) {
+            eprintln!("{line}");
+        }
+        let Some(report) = report else {
             continue;
         };
         for draft in newly_stuck(&mut said_stuck, report.stuck) {
@@ -119,6 +141,22 @@ pub async fn run_ticks(app: tauri::AppHandle) {
     }
 }
 
+/// The stderr line, if any, for a tick that `ran` (or did not), `paused` the last tick's state,
+/// which this updates: one line when the tick stops running and one when it runs again, never
+/// one a minute. Without it, a window left open on a lost connection is silently no runner
+/// (PR #981 review F2). Pure.
+fn pause_change(paused: &mut bool, ran: bool) -> Option<&'static str> {
+    let was = std::mem::replace(paused, !ran);
+    match (was, ran) {
+        (false, false) => Some(
+            "the quarantine tick is paused: no open connection, or the overdue drafts could not \
+             be listed; a chart read or the next press reopens it",
+        ),
+        (true, true) => Some("the quarantine tick is running again"),
+        _ => None,
+    }
+}
+
 /// The drafts in `stuck` not yet in `said`, which now holds them too.
 fn newly_stuck(said: &mut HashSet<Uuid>, stuck: Vec<Uuid>) -> Vec<Uuid> {
     stuck.into_iter().filter(|d| said.insert(*d)).collect()
@@ -127,12 +165,13 @@ fn newly_stuck(said: &mut HashSet<Uuid>, stuck: Vec<Uuid>) -> Vec<Uuid> {
 /// When an open draft goes into the record unsigned, in zone `tz` with `today` its date. `stuck`
 /// wins whether or not it is due: such a draft never goes in by itself ([`STUCK`] once
 /// `overdue`, else [`STUCK_NOT_DUE`]). Otherwise: at its `due` time if nobody types in it; or,
-/// `overdue` (the node decided, on its own clock), [`OVERDUE`], which is true after the
-/// pre-read commit ran. Pure.
+/// `overdue` (the node decided, on its own clock), [`FAILED`] when this window's last commit of
+/// it failed, else [`OVERDUE`], which is true after the pre-read commit ran. Pure.
 pub(crate) fn due_words<Tz: TimeZone>(
     due: DateTime<Utc>,
     overdue: bool,
     stuck: bool,
+    failed: bool,
     tz: &Tz,
     today: NaiveDate,
 ) -> String
@@ -142,6 +181,7 @@ where
     match (overdue, stuck) {
         (true, true) => STUCK.into(),
         (false, true) => STUCK_NOT_DUE.into(),
+        (true, false) if failed => FAILED.into(),
         (true, false) => OVERDUE.into(),
         (false, false) => format!(
             "goes into the record unsigned at {} if nobody types in it",

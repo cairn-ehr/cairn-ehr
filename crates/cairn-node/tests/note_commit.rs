@@ -20,7 +20,7 @@ use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
 use cairn_node::note::commit::{
-    commit_overdue, commit_overdue_drafts, draft_due, overdue_drafts, CommitOutcome,
+    commit_overdue, commit_overdue_drafts, overdue_drafts, CommitOutcome,
 };
 use cairn_node::note::draft::{open_drafts, save_part, SaveOutcome};
 use cairn_node::note::read::list_patient_notes;
@@ -32,6 +32,12 @@ use uuid::Uuid;
 
 const ORIGIN: &str = "note-commit-test-node";
 const TERMINAL: &str = "ward-3-pc";
+
+/// db/067's `cairn_note_drafts_due` arithmetic, as the test's oracle: the header's last keystroke
+/// plus the quarantine. Only here — production reads `due` from the database, never computes it.
+fn draft_due(last_keystroke: DateTime<Utc>, quarantine_minutes: i64) -> DateTime<Utc> {
+    last_keystroke + chrono::Duration::minutes(quarantine_minutes)
+}
 
 /// Enrol `Nurse A` (`nurse-a`) as a vault member with a fresh key, as `note_sign_parts.rs`
 /// does. Returns her key id.
@@ -226,6 +232,64 @@ async fn an_overdue_two_writer_draft_goes_in_as_two_node_signed_events() {
     assert!(open_drafts(&c, chart).await.unwrap().is_empty());
 }
 
+/// PR #981 review: a draft whose blank parts sit BETWEEN text parts (a writer cleared their own
+/// tail, then another wrote on). The blank parts are skipped; the first event WRITTEN, not part 1,
+/// is the note the spend names (or db/065's commit-time trigger would refuse every pass, and the
+/// draft would sit overdue forever); and the addendum chain skips the blanks.
+#[tokio::test]
+async fn blank_parts_between_text_parts_are_skipped() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, _, _, b_kid, chart) = common::note_setup(&c).await;
+    enrol_nurse_a(&c).await;
+    let draft = Uuid::now_v7();
+    // A blank part arises only from a writer clearing their OWN tail (a new writer's blank save
+    // makes no part): so each blank here was typed, then cleared.
+    save_as(&c, draft, chart, Some("nurse-a"), "typo", None).await;
+    save_as(&c, draft, chart, Some("nurse-a"), " \n ", None).await;
+    save_as(&c, draft, chart, Some("notewriter"), "plan: review", None).await;
+    save_as(&c, draft, chart, Some("nurse-a"), "typo", None).await;
+    save_as(&c, draft, chart, Some("nurse-a"), "\u{00A0}", None).await;
+    save_as(&c, draft, chart, Some("notewriter"), "obs stable", None).await;
+    assert_eq!(open_drafts(&c, chart).await.unwrap()[0].parts.len(), 4);
+    age(&c, draft, 181).await;
+
+    // `committed` also asserts the spend names the first event written.
+    let ids = committed(
+        commit_overdue(&mut c, &node_sk, draft, ORIGIN)
+            .await
+            .unwrap(),
+    );
+
+    let [first, second] = ids[..] else {
+        panic!("two text parts, two events: {ids:?}");
+    };
+    let one = stored(&c, first).await;
+    let two = stored(&c, second).await;
+    assert_eq!(one.refs, serde_json::json!([]));
+    assert_eq!(
+        two.refs,
+        serde_json::json!([{"rel": "addendum-to", "event": first.to_string()}])
+    );
+    for s in [&one, &two] {
+        assert_eq!(s.contributors[0], contributor(&b_kid, "drafted"));
+    }
+    let mut texts: Vec<_> = list_patient_notes(&c, chart)
+        .await
+        .unwrap()
+        .notes
+        .into_iter()
+        .map(|n| n.text)
+        .collect();
+    texts.sort();
+    assert_eq!(texts, ["obs stable", "plan: review"]);
+    assert!(open_drafts(&c, chart).await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn an_unknown_writers_part_is_the_node_alone() {
     let Some(base) = common::cs() else {
@@ -270,7 +334,7 @@ async fn a_draft_not_yet_due_is_not_due() {
         .await
         .unwrap();
 
-    assert!(matches!(out, CommitOutcome::NotDue), "{out:?}");
+    assert!(matches!(out, CommitOutcome::NothingWritten), "{out:?}");
     assert_eq!(note_count(&c, chart).await, 0);
     assert_eq!(open_drafts(&c, chart).await.unwrap().len(), 1, "kept");
 }
@@ -292,7 +356,7 @@ async fn an_all_blank_overdue_draft_leaves_nothing() {
         .await
         .unwrap();
 
-    assert!(matches!(out, CommitOutcome::NotDue), "{out:?}");
+    assert!(matches!(out, CommitOutcome::NothingWritten), "{out:?}");
     assert_eq!(note_count(&c, chart).await, 0, "no note");
     assert!(open_drafts(&c, chart).await.unwrap().is_empty(), "no draft");
     let spent: i64 = c
@@ -312,7 +376,7 @@ async fn a_writer_with_no_key_is_stuck_and_kept() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (node_sk, _, _, _, chart) = common::note_setup(&c).await;
-    enrol_nurse_a(&c).await;
+    let a_kid = enrol_nurse_a(&c).await;
     let draft = Uuid::now_v7();
     save_as(&c, draft, chart, Some("notewriter"), "obs stable", None).await;
     save_as(&c, draft, chart, Some("nurse-a"), "fluids running", None).await;
@@ -341,6 +405,31 @@ async fn a_writer_with_no_key_is_stuck_and_kept() {
         drafts[0].stuck,
         "and read stuck: it will not go in by itself"
     );
+
+    // ADR-0089 decision 8, as the STUCK words promise: once she is a vault member again, the next
+    // pass puts the draft in, naming her key as the drafting writer. (Her actor stays enrolled; a
+    // second enrol of the same person is refused by the registry, #152.)
+    c.execute(
+        "INSERT INTO vault_member (staff_id, display_name, role, actor_id, signing_key_id, \
+                                   sealed, enrolled_by, contact_email) \
+         SELECT 'nurse-a', 'Nurse A', 'nurse', actor_id, $1, '\\x00'::bytea, 'console', \
+                'a@example.org' \
+           FROM actor_event WHERE signing_key_id = $1 AND op = 'enroll' LIMIT 1",
+        &[&a_kid],
+    )
+    .await
+    .unwrap();
+    let ids = committed(
+        commit_overdue(&mut c, &node_sk, draft, ORIGIN)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(ids.len(), 2, "both parts went in");
+    assert_eq!(
+        stored(&c, ids[1]).await.contributors[0],
+        contributor(&a_kid, "drafted")
+    );
+    assert!(open_drafts(&c, chart).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -371,8 +460,9 @@ async fn one_stuck_draft_does_not_stop_the_others() {
     assert_eq!(note_count(&c, chart).await, 1);
 }
 
-/// Review Focus 2: two windows tick at once on one draft, on two connections. The commit door's
-/// advisory lock makes one wait; it then finds the draft spent and writes nothing.
+/// Review Focus 2: two windows tick at once on one draft, on two connections. One door call wins
+/// the advisory try-lock; the other either finds it held or finds the draft spent, answers zero
+/// rows, and writes nothing.
 #[tokio::test]
 async fn two_commits_race_one_note() {
     let Some(base) = common::cs() else {
@@ -401,7 +491,7 @@ async fn two_commits_race_one_note() {
         .count();
     let losses = outs
         .iter()
-        .filter(|o| matches!(o, CommitOutcome::NotDue))
+        .filter(|o| matches!(o, CommitOutcome::NothingWritten))
         .count();
     assert_eq!((wins, losses), (1, 1), "{outs:?}");
     assert_eq!(note_count(&c, chart).await, 2, "the two parts, once");
@@ -440,7 +530,10 @@ async fn a_held_draft_lock_makes_the_commit_skip_it() {
     .await
     .expect("the timer never waits behind a held draft lock")
     .unwrap();
-    assert!(matches!(skipped, CommitOutcome::NotDue), "{skipped:?}");
+    assert!(
+        matches!(skipped, CommitOutcome::NothingWritten),
+        "{skipped:?}"
+    );
     assert_eq!(note_count(&c, chart).await, 0, "nothing written");
     assert_eq!(
         open_drafts(&c, chart).await.unwrap().len(),

@@ -141,8 +141,10 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
         });
     };
     // Overdue drafts go in FIRST, so the pane never shows one the next tick takes away. Its
-    // answer is ignored: a commit that cannot run never blocks the read (Review Focus 5).
+    // answer is ignored: a commit that cannot run never blocks the read (Review Focus 5). What it
+    // failed to commit is in `commit_failed`, which the pane's words read.
     let _ = commit::commit_overdue_impl(state, Some(patient), true).await;
+    let failed = state.commit_failed.lock().await.clone();
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
     let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;
@@ -157,7 +159,14 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     let today = Utc::now().with_timezone(&chrono::Local).date_naive();
     // The claim decides only which part the editor may open on; a save never reads it.
     let claim = state.whos_here.lock().await.claim().clone();
-    Ok(note_pane(list, terminal, &claim, &chrono::Local, today))
+    Ok(note_pane(
+        list,
+        terminal,
+        &claim,
+        &failed,
+        &chrono::Local,
+        today,
+    ))
 }
 
 /// Save the text on screen as `writer`'s part of draft `draft_id` of the chart on screen, held by

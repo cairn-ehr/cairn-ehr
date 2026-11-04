@@ -222,9 +222,10 @@ pub enum AuthorshipConfidence {
     /// token) — a forgery OR an author authenticated by a scheme this node is too old to parse.
     /// Rendered "authorship claimed, not authenticated here", never `Attested`, and upgradable.
     Unverified,
-    /// No responsibility-bearing contributor, but a contributory one (other than the device's
-    /// own `recorded`) whose actor is a known human: a note that went into the record UNSIGNED
-    /// with a named writer. Rendered "went in unsigned", never "signed", and upgradable by a
+    /// No responsibility-bearing contributor, but a contributory one (any role other than the
+    /// device's own `recorded`, so `transcribed` or `suggested` as well as `drafted`) whose actor
+    /// the caller passed as a known human. Today only the note read produces it, for a `drafted`
+    /// writer: a note that went into the record UNSIGNED with a named writer. Rendered "went in unsigned", never "signed", and upgradable by a
     /// later vouch (sign-in slice 3c). Only [`classify_authorship_with_humans`] produces it.
     Asserted,
     /// No responsibility-bearing contributor — the honest device-additive default (`recorded`).

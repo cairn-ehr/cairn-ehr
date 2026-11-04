@@ -406,7 +406,7 @@ observed \_\_.
 | The open commits first; with no `--key` the chart reads and the draft says overdue | | |
 | Typing into a committed draft: the committed sentence, a new draft; after editing the saved text, all kept | | |
 | Sign on a committed draft: "had already gone into the record unsigned — nothing was signed" | | |
-| Stuck: kept, nothing in, the stuck sentence; before due it says: \_\_ (#982); stderr once | | |
+| Stuck: kept, nothing in, the stuck sentence; before due the no-time stuck sentence; stderr once | | |
 
 | Accessibility check | Verdict | Notes |
 |---|---|---|

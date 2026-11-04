@@ -49,6 +49,7 @@ impl AppState {
             whos_here: tokio::sync::Mutex::new(crate::whos_here::Here::new(
                 crate::whos_here::DEFAULT_IDLE_LOCK,
             )),
+            commit_failed: Default::default(),
         }
     }
 

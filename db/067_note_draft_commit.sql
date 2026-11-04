@@ -4,8 +4,9 @@
 -- the folder, readable by anyone, plainly not signed. A Cairn draft (db/065 + db/066) is not in
 -- the record until someone signs it. So a draft nobody has typed into for the site's QUARANTINE
 -- time (default 3 hours) goes in by itself, unsigned: the window's runner asks this file's doors
--- which drafts are overdue, builds one node-signed `clinical.note.asserted` per non-blank part,
--- and spends the draft through cairn_note_draft_commit_overdue in the same transaction.
+-- which drafts are overdue, then, per draft and in ONE transaction, cairn_node::note::commit spends
+-- it through cairn_note_draft_commit_overdue (which returns its non-blank parts) and builds and
+-- submits one node-signed `clinical.note.asserted` per returned part.
 --
 -- WHY THE CLOCK IS THE DATABASE'S (design §3.3). A draft has one home, the database it lives in,
 -- and that database already stamps every keystroke save (db/066's last_keystroke). Comparing
@@ -58,8 +59,9 @@ BEGIN
 END;
 $$;
 
--- The site's quarantine in minutes: the stored value, else 180. A definer, because the window
--- shows when a draft falls due but may not read note_policy.
+-- The site's quarantine in minutes: the stored value, else 180. A definer, because nobody but the
+-- owner may read note_policy: the console verb reads back what is in force through it, and the
+-- other doors here call it.
 CREATE OR REPLACE FUNCTION cairn_note_quarantine_minutes()
 RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT COALESCE((SELECT p.quarantine_minutes FROM note_policy p), 180);

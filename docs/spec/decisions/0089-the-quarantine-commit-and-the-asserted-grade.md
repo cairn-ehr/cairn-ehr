@@ -5,7 +5,7 @@
   Consequences left to the maintainer, [#974](https://github.com/cairn-ehr/cairn-ehr/issues/974), decision 13)
 - **Date:** 2026-11-04
 - **Spec version at acceptance:** 0.91
-- **Issues:** draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981) (GUI sign-in slice 3b-2a). Design:
+- **Issues:** PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981) (GUI sign-in slice 3b-2a). Design:
   `docs/superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md` (§3.3, §3.7, §4.1, §7);
   plan: `docs/superpowers/plans/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted.md` (its four
   "Decisions taken with the maintainer on 2026-11-04" are cited below as *maintainer decision 1* to *4*, never to be
@@ -49,7 +49,7 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
    is operational only and never touches the stated time, `t_effective` or `t_recorded`. *Continue here* (the take
    door) moves a draft by changing `note_draft.terminal_id` alone, so it does **not** restart the clock: a take
    changes no text (controller ruling, 3b-2a Task 1). Pins: db/tests/067's `not_overdue_commits_nothing` (179
-   minutes), `overdue_returns_parts_and_spends_by_timer` (181 minutes).
+   minutes), `overdue_returns_parts_and_spends_by_timer` (181 minutes), `a_take_does_not_restart_the_clock`.
 
 2. **The quarantine is site policy: one row, set only at the owner's console, outside every backup.**
    `note_policy` holds `quarantine_minutes`, 1 to 43 200 (30 days), with no row or NULL meaning **180**. The table is
@@ -68,7 +68,7 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
    `cairn_note_draft_commit_overdue(draft, event)` takes the draft's advisory lock (`'note_draft:' || draft_id`),
    then the header row `FOR UPDATE`, which is every draft door's lock order (ADR-0088's "Harder"), and only then
    compares the header's `last_keystroke` against the policy. It alone TRIES the lock (`pg_try_advisory_xact_lock`)
-   where every other draft door waits for it: a held lock means a save or a Sign is acting on the draft, so it is not
+   where every other draft door that writes waits for it: a held lock means a save or a Sign is acting on the draft, so it is not
    abandoned, and the timer must never make a chart read or a tick wait behind a clinician's press. An absent,
    already spent, not yet overdue or locked draft returns no rows and writes nothing; the next pass tries again.
    Otherwise it returns the non-blank parts in writing order, with the same columns as db/066's
@@ -96,7 +96,9 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
    floor's one test (ADR-0088 decision 10). With no spend row, a later save of the same draft id starts a fresh draft
    rather than answering `committed`: nothing went into the record. Pins: db/tests/067's
    `an_all_blank_overdue_draft_is_deleted_without_a_spend` (NBSP and U+3000) and its source pin;
-   `note_commit.rs::an_all_blank_overdue_draft_leaves_nothing`.
+   `note_commit.rs::an_all_blank_overdue_draft_leaves_nothing`; blank parts BETWEEN text parts are skipped, the first
+   event written (not part 1) is the one the spend names, and the addendum chain skips the blanks:
+   `note_commit.rs::blank_parts_between_text_parts_are_skipped`.
 
 ### The commit (`cairn_node::note::commit`, `cairn_event::contributor`)
 
@@ -123,7 +125,8 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
    and it answers `CommitOutcome::Stuck`. One stuck draft never holds the others back: each draft is its own
    transaction. A Sign of the same draft is refused `NoSuchWriter`, so only enrolling that writer again moves it:
    then the next check commits it, or a Sign can. Pins: `commit.rs::a_named_writer_without_a_key_is_stuck`;
-   `note_commit.rs::a_writer_with_no_key_is_stuck_and_kept`, `one_stuck_draft_does_not_stop_the_others`.
+   `note_commit.rs::a_writer_with_no_key_is_stuck_and_kept` (which also pins that the draft goes in once she is a
+   vault member again), `one_stuck_draft_does_not_stop_the_others`.
 
 ### The grade (`cairn_event::contributor`, `cairn_node::note::{read, view}`)
 
@@ -152,7 +155,8 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
     (ADR-0088 decision 16's marks). A part with no writer reads "writer not known", as any node-recorded note does.
     Pins: `view.rs::every_authorship_grade_has_its_words`, `every_grade_and_writer_reads_true`,
     `a_went_in_unsigned_byline_marks_the_name_in_speech`; `note_commit.rs::the_read_grades_a_committed_part_asserted`;
-    `note_read.rs::a_note_drafted_by_an_agent_key_never_grades_went_in_unsigned`.
+    `note_read.rs::a_note_drafted_by_an_agent_key_never_grades_went_in_unsigned`; db/tests/067's
+    `a_rotated_human_key_is_human` (a re-keyed writer's current key is on a `rotate-key` row).
 
 ### The runner (`cairn-gui-tauri/src/notes_commit.rs`, `notes.rs`, `src-ui/notes_save.js`)
 
@@ -161,27 +165,35 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
     first, so a launch is never slowed. It is a **Rust task, not a webview timer**, because WebKit throttles the
     timers of a hidden window and a minimised window must still commit. And **before every chart read**:
     `note_list_impl` commits that chart's overdue drafts before it reads, so the pane never shows a draft the next
-    tick is about to take away. Neither does anything in fixture mode or without the node key. Each draft is its own
+    tick is about to take away. Neither does anything in fixture mode (no key, no connection). Each draft is its own
     connection hold, after one short hold that lists them, so a clinician's press waits behind one draft at most. The
     tick never reopens a lost connection (`lock_if_open`; the next press does); the pre-read commit may. A failed
     commit is never a failed read: its error goes to stderr with the draft id and cause only, never text or a
-    patient's name, and the draft stays listed. The tick says a stuck draft on stderr once per window run. Pins:
+    patient's name, and the draft stays listed. The window remembers which drafts' LAST commit failed
+    (`AppState::commit_failed`, cleared by a try that did not fail), and the pane says so (decision 12). The tick
+    says a stuck draft on stderr once per window run, and says once when it stops running (no open connection) and
+    once when it runs again. Pins:
     `notes_commit_tests.rs::the_tick_is_spawned_once_in_setup`,
     `each_draft_is_its_own_hold_and_the_tick_never_reopens`, `fixture_mode_commits_nothing`,
-    `a_failed_commit_never_blocks_the_read`, `opening_a_chart_commits_its_overdue_draft_first`,
-    `a_stuck_draft_is_said_once`.
+    `a_failed_commit_never_blocks_the_read` (a node key never enrolled, so the commit really fails),
+    `a_window_without_the_node_key_still_reads`, `opening_a_chart_commits_its_overdue_draft_first`,
+    `a_stuck_draft_is_said_once`, `a_paused_tick_is_said_once_each_way`.
 
-12. **An open draft says when it goes in, from the same row the door reads.** A fifth door in db/067,
+12. **An open draft says when it goes in, from the same row the door reads.** A door in db/067,
     `cairn_note_drafts_due(patient)` (granted to `cairn_window`), answers each open draft's `due` and `overdue` from
     the HEADER's `last_keystroke` plus the policy, the commit door's own input, and `stuck` by the commit's own rule
     (a non-blank part whose writer has no vault key), whether or not the draft is due yet. Reading the parts' times
     instead could disagree with the door after a backward clock step, and a displayed time is a claim. The draft's
-    words end with one of four sentences, and `stuck` wins whether or not the draft is due, because a stuck draft
+    words end with one of five sentences, and `stuck` wins whether or not the draft is due, because a stuck draft
     never goes in at its due time: for a stuck draft not yet due, "cannot go into the record by itself — a writer of
     it is no longer enrolled on this node; it can go in only once they are enrolled again"; for one overdue,
     "overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes
     in once they are enrolled again"; otherwise "goes into the record unsigned at HH:MM if nobody types in it", and
-    once overdue, "overdue — not in the record yet; the window tries again at every check to put it in unsigned".
+    once overdue, "overdue — not in the record yet; the window tries again at every check to put it in unsigned",
+    or, when this window's last commit of it FAILED, "overdue — could not go into the record by itself (the
+    window's last try failed; the cause is in its log); sign it, or tell the site's operator" — never "tries again",
+    which a failure repeating every pass (a node key the floor refuses) would make a broken promise to a clinician
+    whose abandoned draft has no other way in.
     A save that answers `committed` keeps what was typed since the last save as a **new draft**, with its own three
     sentences ("This note went into the record unsigned after it was left untouched. …"), **even when this window's
     Sign set `mayBeSigned`**: a timer's commit is never this window's Sign (ADR-0088 decision 12's fork, with one
@@ -239,8 +251,10 @@ is an overlay. ADR-0088 split slice 3b in two; 3b-2 was split again on 2026-11-0
   still open): each real save still writes a full-text copy, a draft typed into for hours keeps every one, and a stuck
   draft, or a node where no such window ticks and no chart is read, keeps them indefinitely.
 - **Which terminal an unattributed draft came from is not recorded** (decision 14, #979).
-- **The tick's own cost and its stderr lines are not measured or surfaced in the window.** A stuck draft is said on
-  stderr once per window run, and a failed commit on every pass, where only an operator reading the log sees it.
+- **The tick's own cost and the CAUSE of a failed commit are not measured or surfaced in the window.** The pane says
+  a draft's last commit failed and asks for a Sign; why is on stderr only (a stuck draft once per window run, a
+  failed commit on every pass, #983 M8), where only an operator reading the log sees it. Another window's failure is
+  not known to this one.
 
 ## Consequences
 

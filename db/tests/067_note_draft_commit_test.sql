@@ -265,7 +265,46 @@ BEGIN
     END IF;
 END $$;
 
--- the_console_door_has_no_window_grant; the other three are the window's; all four definer-run
+-- a_take_does_not_restart_the_clock (ADR-0089 decision 1): carrying a draft to another terminal
+-- is not typing in it, so an overdue draft taken stays overdue and still goes in.
+DO $$
+DECLARE
+    p uuid := 'bbbbbbbb-0067-7000-8000-000000000001';
+    d uuid := 'dddddddd-0067-7000-8000-0000000000a1';
+    w text;
+BEGIN
+    PERFORM cairn_note_draft_part_save(d, p, 'term-1', 'nurse-a', 'obs stable', NULL);
+    PERFORM pg_temp.idle(d, 181);
+    w := cairn_note_draft_take(d, p, 'term-2');
+    IF w IS DISTINCT FROM 'taken' THEN RAISE EXCEPTION 'a_take_does_not_restart_the_clock: take answered %', w; END IF;
+    IF NOT EXISTS (SELECT 1 FROM cairn_note_drafts_overdue(p) o WHERE o.draft_id = d) THEN
+        RAISE EXCEPTION 'a_take_does_not_restart_the_clock: the taken draft is no longer overdue';
+    END IF;
+    PERFORM pg_temp.note('eeeeeeee-0067-7000-8000-0000000000a1', p, 67);
+    IF NOT EXISTS (SELECT 1 FROM cairn_note_draft_commit_overdue(d, 'eeeeeeee-0067-7000-8000-0000000000a1')) THEN
+        RAISE EXCEPTION 'a_take_does_not_restart_the_clock: the taken draft did not go in';
+    END IF;
+END $$;
+
+-- a_rotated_human_key_is_human: the commit names a writer's CURRENT key, which after a re-key is
+-- on a rotate-key row; it is human only because cairn_actor_append copies the enrol row's kind
+-- (db/004). If that copy regressed, a re-keyed nurse's unsigned note would grade "writer not
+-- known" under her own name. A device key is never human.
+DO $$
+DECLARE a bytea;
+BEGIN
+    a := enroll_actor('human', '{"role":"clinician","handle":"k067-rot"}', 'k067-human-1');
+    PERFORM cairn_actor_append(a, 'rotate-key', 'k067-human-2', NULL, NULL);
+    PERFORM enroll_actor('device', '{"role":"registration-desk","node_key":"k067"}', 'k067-device');
+    IF NOT cairn_note_key_is_human('k067-human-1') OR NOT cairn_note_key_is_human('k067-human-2') THEN
+        RAISE EXCEPTION 'a_rotated_human_key_is_human: a human key (enrolled or rotated) is not human';
+    END IF;
+    IF cairn_note_key_is_human('k067-device') OR cairn_note_key_is_human('k067-nobody') THEN
+        RAISE EXCEPTION 'a_rotated_human_key_is_human: a device or unknown key is human';
+    END IF;
+END $$;
+
+-- the_console_door_has_no_window_grant; the other five are the window's; all six definer-run
 -- with a pinned search_path; the policy table is nobody's.
 DO $$
 DECLARE f text;

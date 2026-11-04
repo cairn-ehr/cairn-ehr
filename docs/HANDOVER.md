@@ -61,7 +61,13 @@
 >   · **#980** (a co-signed discard, not built) · **#982** (a stuck draft not yet due promised a time; built in the
 >   final-review fix, left open for the maintainer) · **#983** (the final review's residual minors, M1/M3/M4/M7/M8 +
 >   the per-task deferred minors);
->   commented #968 (revision rows now bounded in life, not size). Owed by a human: **RUNBOOK §20** (the tick ≤ 60 s past
+>   commented #968 (revision rows now bounded in life, not size). **Second (PR) review, 2026-11-04, fixed on the
+>   branch:** a draft whose LAST commit failed now says so ("could not go into the record by itself … sign it, or
+>   tell the site's operator", `AppState::commit_failed`), never "tries again"; the tick says once when it pauses
+>   and resumes; `a_failed_commit_never_blocks_the_read` now really fails a commit (#983 M4); `draft_due` moved into
+>   the test (#983 M3, half); `NotDue` → `NothingWritten`; new pins for blank parts between text parts, a stuck draft
+>   going in once its writer is a member again, a take not restarting the clock, a rotated human key; RUNBOOK §20's
+>   three false expectations corrected. Its residuals are a comment on #983. Owed by a human: **RUNBOOK §20** (the tick ≤ 60 s past
 >   due with the window on another chart; a chart open that commits first ≤ the single-chart open + 200 ms; typing
 >   into a just-committed draft; VoiceOver "written by unverified Nurse A · went in unsigned").
 >
@@ -295,6 +301,11 @@ slice's own rules are its block in `developers/durable-rules.md`). **Every sessi
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
 ### 2026-11-04 — sign-in slice 3b-2a (draft PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981)): plan → SDD, 5 tasks
+
+- **⇒ A failure the user can act on must reach the user, not only stderr.** The second review found the pre-read
+  commit's report dropped (`let _ =`) so a commit failing on every pass read "the window tries again" forever; an
+  abandoned draft has no other way in. "Never block the read" and "say what failed" are both owed; the first does not
+  excuse dropping the second.
 
 Each task reviewed and re-reviewed (ledger: `.superpowers/sdd/2026-11-04-sign-in-slice-3b-2a-quarantine-commit-and-asserted/`,
 gitignored); the rules that bind later slices are ADR-0089 and the 3b-2a durable-rules block.

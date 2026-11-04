@@ -12,7 +12,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 **⇒ GUI SIGN-IN SLICE 3b-2a — THE QUARANTINE COMMIT AND THE `Asserted` GRADE (ADR-0089, db/067, db/065 + db/066 in
 place) — do not undo** (pins: `db/tests/067_note_draft_commit_test.sql`, `crates/cairn-event/src/contributor.rs`'s
-tests, `crates/cairn-node/tests/{note_commit,authority_lockstep,window_role_grants_notes}.rs`,
+tests, `crates/cairn-node/tests/{note_commit,note_read,authority_lockstep,window_role_grants_notes}.rs`,
 `cairn-gui-tauri/src/{notes_commit,notes,notes_fork_webview}_tests.rs`):
 - **The door decides "overdue" — never the caller, never a terminal clock.** `cairn_note_draft_commit_overdue`
   re-checks the header's `last_keystroke + quarantine` against `clock_timestamp()` AFTER the draft's advisory lock
@@ -20,7 +20,7 @@ tests, `crates/cairn-node/tests/{note_commit,authority_lockstep,window_role_gran
   **Tempting wrong fixes:** commit every draft the listing returned "since we just checked" (a save between the list
   and the commit restarts the clock, and a draft goes in mid-sentence); pass the window's `now` to the door "for
   testability" (a terminal clock then decides, and a raw-SQL client commits anyone's draft early); test overdue
-  before taking the lock; make this door WAIT for the lock "as every other draft door does" (it alone tries it: a
+  before taking the lock; make this door WAIT for the lock "as every other draft door that writes does" (it alone tries it: a
   held lock means a save or Sign is acting on the draft, and a waiting timer stalls a chart read behind that press).
   Pins: db/tests/067's `not_overdue_commits_nothing`, `a_spent_draft_commits_nothing`;
   `note_commit.rs::two_commits_race_one_note`, `a_held_draft_lock_makes_the_commit_skip_it`,
@@ -63,6 +63,12 @@ tests, `crates/cairn-node/tests/{note_commit,authority_lockstep,window_role_gran
   behind every overdue draft on the node); reopen from the tick (a dead node is hammered every minute with nobody
   there to read why). Pins: `notes_commit_tests.rs::the_tick_is_spawned_once_in_setup`,
   `each_draft_is_its_own_hold_and_the_tick_never_reopens`, `a_failed_commit_never_blocks_the_read`.
+- **A draft whose last commit FAILED says so; it never promises another try.** The window keeps the drafts whose
+  last commit failed (`AppState::commit_failed`, cleared by any try that did not fail) and the pane reads them.
+  **Tempting wrong fixes:** drop the commit's report at the chart read (`let _ =`) "because a failed commit must not
+  block the read" (the read must not be blocked, but a failure repeating every pass then reads "the window tries
+  again", and the next clinician leaves an abandoned note nobody will ever sign); show only "overdue" (the same
+  broken promise). Pins: `notes_commit_tests.rs::due_words_before_and_after`, `a_failed_commit_never_blocks_the_read`.
 
 **⇒ GUI SIGN-IN SLICE 3b-1 — WHO'S HERE AND A DRAFT'S PARTS (ADR-0088, db/066, db/065 in place) — do not undo**
 (pins: `db/tests/066_note_draft_parts_test.sql`, `crates/cairn-event/src/contributor.rs`'s tests,

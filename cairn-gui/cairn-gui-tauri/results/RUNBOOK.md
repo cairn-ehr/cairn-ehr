@@ -1528,8 +1528,7 @@ an `M > N` case:** paper's unsigned entry is in the folder at once, Cairn's only
 outside its budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
 
 **Setup.** Section 19's setup (`nurse-a` and `dr-b` enrolled from the window) and **two** charts, A and B (the
-section 2 chart and one more). Launch as section 3, which passes `--key "$NODE_KEY"`: a window without the node key
-commits nothing. Set the quarantine to two minutes at the console, and put it back at the end:
+section 2 chart and one more). Launch as section 3, which passes `--key "$NODE_KEY"`. Set the quarantine to two minutes at the console, and put it back at the end:
 
 ```bash
 cnode note-set-quarantine --minutes 2     # prints: a draft left untouched for 2 minutes goes into the record unsigned
@@ -1550,8 +1549,9 @@ the log in a second terminal with `\watch 1` on `went`'s query. Five runs.
       it", HH:MM matching `due`.
 - [ ] Record the seconds from `due` to the rows appearing (budget ≤ 60 s). `went` shows **two** notes:
       `[{nurse-a's key, drafted}, {node, recorded}]` and `[{dr-b's key, drafted}, {node, recorded}]`, both signed by
-      the node key, the second an `addendum-to` the first (`signed`), and `by_timer` true on the spend. `parts` and
-      `revs` are empty.
+      the node key, the second an `addendum-to` the first (`signed`). `parts` and
+      `revs` are empty. `by_timer` is true on the FIRST note's row only (the spend names the first event;
+      the second's reads empty).
 - [ ] Open chart A: two notes, read "written by ?Nurse A · went in unsigned" and "written by ?Dr B · went in
       unsigned". No "signed by" anywhere on them.
 
@@ -1561,11 +1561,6 @@ before the first tick (it waits a minute after launch). Five runs, and five open
 baseline.
 
 - [ ] Chart A shows the note, "went in unsigned", and no draft. Record the open times against the baseline.
-- [ ] **No node key.** Quit the window. Make a fresh overdue draft: launch as usual, type a draft on chart A as
-      `nurse-a`, quit, and wait until `due` says `overdue` is true for it. Relaunch **without** `--key` (a window with
-      no node key commits nothing) and open chart A: it still reads, the draft is still listed (`parts`), nothing went
-      in (`went`), and the draft reads "… · overdue — not in the record yet; the window tries again at every check to
-      put it in unsigned". Quit, and relaunch with `--key` before the next measurement.
 
 **Measurement 3 — typing into a just-committed draft.** With the editor open on chart A's draft, stop typing past
 `due` and wait for the tick (`went` shows the note). Then type `; later: BP 90/60`.
@@ -1575,15 +1570,17 @@ baseline.
       (`parts` shows a new draft id). Repeat, but after the commit first delete a word of the text that was saved, then
       type: the status line reads the "Everything on this screen is kept here as a new draft; what was saved before is
       also in that note." sentence, and the whole editor is kept.
-- [ ] Repeat pressing *Sign note* instead of typing (with the passphrase typed): "this note had already gone into the
-      record unsigned — nothing was signed; your text is still here". Nothing is signed (`went`).
+- [ ] Repeat pressing *Sign note* instead of typing (with the passphrase typed): "Could not sign this note: this note
+      had already gone into the record unsigned — nothing was signed", then the new-draft sentence above (or the
+      editor closes, when nothing was unsaved). Nothing is signed (`went`).
 
 **Measurement 4 — a stuck draft (on this throwaway database only).** Leave a draft by `nurse-a`, then remove her
 member row as the owner: `psql "$CONN" -c "DELETE FROM vault_attempt WHERE staff_id = 'nurse-a'; DELETE FROM
 vault_member WHERE staff_id = 'nurse-a'"`. Check the first box **at once, before `due`**; then wait past `due` and
 two ticks.
 
-- [ ] Before `due`: `due` already shows `stuck` true. Record what the draft says (#982: it still promises a time).
+- [ ] Before `due`: `due` already shows `stuck` true, and the draft reads "… · cannot go into the record by itself —
+      a writer of it is no longer enrolled on this node; it can go in only once they are enrolled again" (no time).
 - [ ] After `due` and two ticks: the draft is still there (`parts`), nothing went in (`went`), and it reads "… ·
       overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes in
       once they are enrolled again".
