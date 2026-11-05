@@ -268,6 +268,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         words: "w".into(),
         parts: vec![],
         addendum_to: None,
+        adding_to: None,
     };
     let tail = PartView {
         writer_shown: "?A".into(),

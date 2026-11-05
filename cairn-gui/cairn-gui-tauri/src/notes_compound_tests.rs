@@ -1,6 +1,6 @@
 //! Tests for `notes_compound.rs`: a note and its addenda as the pane shows them — ONE text, one
 //! heading, a parts disclosure only when there is more than one part — and an addendum draft's
-//! "Adding to…" words (sign-in slice 3c-1). Pure: no state, no database.
+//! "Adding to…" line (sign-in slice 3c-1). Pure: no state, no database.
 use super::*;
 use crate::notes::parse_target;
 use crate::notes::parts::{draft_view, note_pane};
@@ -150,14 +150,19 @@ fn draft(n: u128, addendum_to: Option<Uuid>) -> NoteDraft {
     }
 }
 
-/// An addendum draft's line begins with what it adds to: the note's time when the pane shows
-/// that note, "a note not shown here" when it does not. A new note's draft reads as before.
+/// An addendum draft has its own line saying what it adds to, apart from its `words`: the note's
+/// stated time, or when its writing began when no time was stated (never "no stated time · writing
+/// began …", which would run into the draft's own "started …" and leave two unstated notes alike);
+/// "a note not shown here" when the pane does not show it. A new note's draft has no such line.
 #[test]
 fn an_addendum_draft_says_what_it_adds_to() {
+    let mut unstated = note(5, OPENED, None, -60, signed("Dr Cy"));
+    unstated.effective_basis = "recording-started".into();
     let list = PatientNoteList {
         notes: vec![
             note(1, OPENED, None, 0, signed("Dr Ada")),
             note(2, OPENED, Some(1), 10, signed("Dr Bo")),
+            unstated,
         ],
         withheld_on_linked: 0,
         drafts: vec![
@@ -167,6 +172,7 @@ fn an_addendum_draft_says_what_it_adds_to() {
             // A target that is a later part, not the root: the raw-SQL case, and the one where
             // a link judgement shows the note an orphan added to. The note IS shown.
             draft(53, Some(id(2))),
+            draft(54, Some(id(5))),
         ],
         discards: vec![],
         discards_withheld_on_linked: 0,
@@ -180,6 +186,18 @@ fn an_addendum_draft_says_what_it_adds_to() {
         &bne(),
         nov(3),
     );
+    let lines: Vec<Option<&str>> = pane.drafts.iter().map(|d| d.adding_to.as_deref()).collect();
+    assert_eq!(
+        lines,
+        [
+            Some("Adding to the note of 3 Nov 2025 03:00 (stated)"),
+            Some("Adding to a note not shown here"),
+            None,
+            Some("Adding to the note of 3 Nov 2025 03:00 (stated)"),
+            Some("Adding to the note begun 3 Nov 2025 02:00"),
+        ]
+    );
+    // The words are a draft's words, as before 3c-1: the line is said once, on its own.
     let new_note = draft_view(
         &draft(52, None),
         Some("pc-1"),
@@ -189,21 +207,11 @@ fn an_addendum_draft_says_what_it_adds_to() {
         nov(3),
         &Default::default(),
     );
-    let words: Vec<&str> = pane.drafts.iter().map(|d| d.words.as_str()).collect();
-    assert_eq!(
-        words[0],
-        format!(
-            "Adding to the note of 3 Nov 2025 03:00 (stated) · {}",
-            new_note.words
-        )
-    );
-    assert_eq!(
-        words[1],
-        format!("Adding to a note not shown here · {}", new_note.words)
-    );
-    assert_eq!(words[2], new_note.words, "a new note's draft is unchanged");
-    assert_eq!(words[3], words[0], "the compound's time, whichever part");
     assert!(new_note.words.starts_with("unsigned draft · "));
+    for d in &pane.drafts {
+        assert_eq!(d.words, new_note.words);
+        assert!(!d.words.contains("Adding to"), "{}", d.words);
+    }
     // The window sends back exactly the draft's own target with every save, Sign and Discard:
     // a different one would be refused as `elsewhere` (worded "belongs to another chart").
     let targets: Vec<Option<String>> = pane.drafts.iter().map(|d| d.addendum_to.clone()).collect();
@@ -213,10 +221,11 @@ fn an_addendum_draft_says_what_it_adds_to() {
             Some(id(1).to_string()),
             Some(id(404).to_string()),
             None,
-            Some(id(2).to_string())
+            Some(id(2).to_string()),
+            Some(id(5).to_string()),
         ]
     );
-    assert_eq!(pane.notes.len(), 1, "a note and its addendum are one");
+    assert_eq!(pane.notes.len(), 2, "a note and its addendum are one");
 }
 
 /// The target the webview sends: absent is a new note; a malformed id is refused, never read as

@@ -73,11 +73,15 @@ where
         .iter()
         .map(|c| compound_view(c, opened, tz, today))
         .collect();
-    // Every shown part's id → its compound's time: what an addendum draft says it adds to.
+    // Every shown part's id → its compound's "Adding to…" line (any part, not only the root: a
+    // link judgement can show the root of a note an addendum's orphan target was part of).
     let shown: HashMap<Uuid, String> = grouped
         .iter()
         .zip(&notes)
-        .flat_map(|(c, v)| c.parts.iter().map(|p| (p.event_id, v.when.clone())))
+        .flat_map(|(c, v)| {
+            let line = adding_to_shown(&c.parts[0], &v.when, tz, today);
+            c.parts.iter().map(move |p| (p.event_id, line.clone()))
+        })
         .collect();
     let drafts = list
         .drafts
@@ -241,6 +245,9 @@ pub struct DraftView {
     /// The note this draft adds to (its root's event id), exactly as the node holds it; `None`
     /// for a new note. The webview sends it back with every save, Sign and Discard.
     pub addendum_to: Option<String>,
+    /// What an addendum draft adds to, as its own line in the drafts list and above the editor
+    /// (`adding_to_line`); `None` for a new note's draft.
+    pub adding_to: Option<String>,
 }
 
 /// Is `part` the current claim's? A named writer by staff id (both normalised by the vault), or an
@@ -253,22 +260,40 @@ fn is_claims(part: &DraftPart, claim: &Claim) -> bool {
     }
 }
 
-/// The lead of an addendum draft's line, from `shown` (every part the pane shows → its note's
-/// time): "Adding to the note of 3 Nov 03:00 · ", or "Adding to a note not shown here · " when the
-/// note it adds to is not on screen (withheld on a doubted link). Empty for a new note's draft.
-fn adding_to_words(addendum_to: Option<Uuid>, shown: &HashMap<Uuid, String>) -> String {
-    match addendum_to {
-        None => String::new(),
-        Some(target) => match shown.get(&target) {
-            Some(when) => format!("Adding to the note of {when} · "),
-            None => "Adding to a note not shown here · ".to_string(),
-        },
+/// The "Adding to…" line for a draft adding to the note whose root is `root` and whose words say
+/// it applies `when`. A stated time names the note: "Adding to the note of 3 Nov 03:00 (stated)".
+/// With none stated, `when` would read "no stated time · writing began …" — run into the draft's
+/// own "started …" and alike for every unstated note — so the line names when its writing began
+/// instead: "Adding to the note begun 3 Nov 02:00". Pure.
+fn adding_to_shown<Tz: TimeZone>(root: &NoteRow, when: &str, tz: &Tz, today: NaiveDate) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    if root.effective_basis == "stated" {
+        format!("Adding to the note of {when}")
+    } else {
+        format!(
+            "Adding to the note begun {}",
+            instant(root.recording_started, tz, today)
+        )
     }
 }
 
+/// A draft's "Adding to…" line, from `shown` (every part the pane shows → its note's line,
+/// `adding_to_shown`): "Adding to a note not shown here" when the note it adds to is not on screen
+/// (withheld on a doubted link); `None` for a new note's draft. Pure.
+fn adding_to_line(addendum_to: Option<Uuid>, shown: &HashMap<Uuid, String>) -> Option<String> {
+    addendum_to.map(|target| {
+        shown
+            .get(&target)
+            .cloned()
+            .unwrap_or_else(|| "Adding to a note not shown here".to_string())
+    })
+}
+
 /// One draft's words, its parts, and which part the current claim may edit. `failed`: this
-/// window's last commit of it failed; `shown`: every note part the pane shows → its note's time
-/// (`adding_to_words`).
+/// window's last commit of it failed; `shown`: every note part the pane shows → its note's
+/// "Adding to…" line (`adding_to_line`).
 pub(crate) fn draft_view<Tz: TimeZone>(
     draft: &NoteDraft,
     terminal: Option<&str>,
@@ -284,8 +309,7 @@ where
     // `None`: this terminal's id is not read yet, so no draft can be known to be this one's.
     let here = terminal == Some(draft.terminal_id.as_str());
     let mut words = format!(
-        "{}unsigned draft · started {} · last typed {}",
-        adding_to_words(draft.addendum_to, shown),
+        "unsigned draft · started {} · last typed {}",
         instant(draft.recording_started, tz, today),
         instant(draft.last_keystroke, tz, today)
     );
@@ -328,6 +352,7 @@ where
         words,
         parts,
         addendum_to: draft.addendum_to.map(|id| id.to_string()),
+        adding_to: adding_to_line(draft.addendum_to, shown),
     }
 }
 
