@@ -1699,8 +1699,9 @@ casing and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*Thr
 ## 22. Add to a note, and read a note with its parts (GUI sign-in slice 3c-1, ADR-0091)
 
 The slice's gestures: **Add to this note** on a signed note of the chart on screen, then type and *Sign note* with
-section 16's strip; and reading a **compound note**: one text under the first writer's heading, a state line, and a
-closed **"{n} parts"** disclosure holding each part with its own heading. Paper counterpart: writing below an entry
+section 16's strip; and reading a **compound note**: the first writer's heading and a state line ABOVE one text, each
+later part led by a seam line ("Added: {its writer} · {its time}"), and a closed **"{n} parts"** disclosure holding
+each part with its own heading. Paper counterpart: writing below an entry
 on the progress sheet and signing; the page reads as one entry, and the handwriting shows who wrote which lines.
 **Live only**: a `--mock` window holds no notes and refuses every note write ("fixture mode…").
 
@@ -1714,7 +1715,7 @@ on the progress sheet and signing; the page reads as one entry, and the handwrit
 
 Steps: adding to a note and signing it paper *N* = 3 (find the entry, write below it, sign) → forced *M* = 3 (*Add to
 this note*, type, Sign + the strip) → target *K* = 3; reading a note with additions 0 → 0 → 0; seeing who wrote which
-part 0 → 0 → **1** (open the parts; the maintainer's chosen display, `M = N`); adding to a linked chart's note 3 → 3 →
+part, and when, 0 → 0 → 0 (each later part's seam line); adding to a linked chart's note 3 → 3 →
 **4** (open that chart first; a UI limit, #993). The write half is timed by the node (`gesture_kind = 'note-sign'`,
 section 5). **A figure outside its budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
 
@@ -1723,16 +1724,19 @@ signed note on it by `nurse-a` (*New note*, `obs stable, BP 120/80`, a stated ti
 `signed` is section 19's helper (it shows each note's `refs`).
 
 **Measurement 1 — add to a note and sign it (≤ 3 s).** As `dr-b`: press *Add to this note* on Nurse A's note. Five
-runs, each on a fresh note.
+runs: the first on Setup's note; before each later run, sign a new note as `nurse-a` (Setup's steps) and add to that
+one.
 
 - [ ] The editor opens with "Adding to the note of {its time}" above the text box. With nobody named at who's here,
       the picker asks first and the editor opens only once it is answered.
 - [ ] Type `reviewed, plan unchanged`, then the strip's Staff ID and passphrase, then *Sign note*. Record the time
       from the first keystroke in the Staff ID until the addendum shows inside Nurse A's note (budget ≤ 3 s), and
       `ui_gesture_timing`'s `note-sign` row.
-- [ ] No dialog. The chart shows ONE note: its text runs on with the addendum after a blank line, under Nurse A's
-      heading, with "every part signed" and a closed "2 parts". `signed` shows the addendum's `refs` as
-      `[{"rel": "addendum-to", "event": <Nurse A's note>}]`.
+- [ ] No dialog. The chart shows ONE note: Nurse A's heading ("signed by Nurse A · {its time}") and "every part
+      signed" ABOVE its text, never under the addendum's words; the addendum follows Nurse A's text after its seam
+      line, "Added: signed by Dr B · {the addendum's time}"; then a closed "2 parts". `signed` shows the addendum's
+      `refs` as `[{"rel": "addendum-to", "event": <Nurse A's note>}]`. The note keeps its place in the list (it is
+      placed by Nurse A's time, not the addendum's).
 - [ ] Press *Sign note* within half a second of the last keystroke of a new addendum: it still lands inside the note,
       never as a new note.
 - [ ] Close the window mid-addendum (text typed, not signed) and relaunch: the draft reopens with its "Adding to …"
@@ -1743,16 +1747,18 @@ runs, each on a fresh note.
 **Measurement 2 — read a note with its parts (≤ 1 s).** Let a draft added to a note go in by the timer (section 20,
 quarantine set low), so one part went in unsigned.
 
-- [ ] The note's state line reads "includes an unsigned part" with no press.
+- [ ] The note's state line reads "includes an unsigned part" with no press, and the timer's part's seam line names
+      its writer with the `?` and "went in unsigned" ("Added: written by ?{its writer} · went in unsigned · …").
 - [ ] Press "3 parts" (or however many): record the time until every part's heading and text are on screen (budget
       ≤ 1 s). Each part reads with its own writer and how it went in ("went in unsigned" for the timer's part).
 
-**Measurement 3 — the orphan heading (on this throwaway database only).** As the owner, hide Nurse A's note from the
-read: `psql "$CONN" -c "DELETE FROM clinical_note WHERE event_id = '<Nurse A's note>'"`. Reopen the chart.
+**Measurement 3 — the orphan heading (on this throwaway database only).** First, as `dr-b`, press *Add to this
+note* on Nurse A's note (Setup's), type a line and leave the draft unsigned, with section 20's quarantine back above a
+few minutes so the timer does not commit it. Then, as the owner, hide Nurse A's note from the read:
+`psql "$CONN" -c "DELETE FROM clinical_note WHERE event_id = '<Nurse A's note>'"`. Reopen the chart.
 
 - [ ] The addendum shows as a note of its own, its heading led by "Adds to a note not shown here · ", never as an
-      ordinary note. A draft added to that note before the `DELETE` (left unsigned) reads "Adding to a
-      note not shown here".
+      ordinary note. The unsigned draft started before the `DELETE` reads "Adding to a note not shown here".
 - [ ] Put the row back (`psql "$CONN" -c "SELECT cairn_reproject('clinical.note.')"`) and reopen the chart: one note
       again.
 
@@ -1762,7 +1768,10 @@ read: `psql "$CONN" -c "DELETE FROM clinical_note WHERE event_id = '<Nurse A's n
       {the note's time}", so a list of notes is not a list of identical buttons. A linked chart's note has none.
 - [ ] The "{n} parts" disclosure is read as collapsed; Space or Enter opens it, and each part's heading and text are
       read; a claimed name reads "unverified …" (section 19).
-- [ ] The "Adding to …" line is read with the editor; the state line is read with the note.
+- [ ] The "Adding to …" line is read with the editor; the heading and the state line are read BEFORE the note's text.
+- [ ] Each seam line is read before its part's text, naming that part's writer and time; a claimed name reads
+      "Added: written by unverified …", never a bare `?`. Tab and the arrow keys reach no seam as a control (it is
+      text).
 - [ ] No dialog appears at any point.
 
 **Chromium and WebKit.** The window is WebKit (Tauri on macOS). Compare each step above with the headless walk
@@ -1774,5 +1783,6 @@ floor rule, the header-sourced target, the timer's addendum, two addenda signed 
 run against throwaway databases by the slice's DB-gated tests, and the window's commands by `cairn-gui-tauri`'s
 DB-gated tests (CI never runs those, #905). The compound, "Add to this note", the "Adding to …" line, a reopened
 addendum draft and the target on every save and Sign were walked headlessly in Chromium and WebKit (Playwright,
-against a stubbed `invoke`; sign-in slice 3c-1, Task 6); the real Tauri window, its argument casing (`addendumTo`)
+against a stubbed `invoke`; sign-in slice 3c-1, Task 6), and the heading-above-the-text order and the seam lines
+again in the final fix wave; the real Tauri window, its argument casing (`addendumTo`)
 and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*Add to a note*).

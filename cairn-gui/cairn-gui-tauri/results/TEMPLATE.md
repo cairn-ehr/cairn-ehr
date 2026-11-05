@@ -451,25 +451,28 @@ gesture · seeing a discard 0 → 0 → observed \_\_.
 | `ui_gesture_timing` `note-sign` (the write half) | | | | — | |
 | Open a compound's parts: the press → every part on screen | | | | ≤ 1 s | |
 
-Steps: adding to a note paper *N* = 3 → forced *M* = 3 → observed \_\_ · who wrote which part 0 → 0 → observed \_\_ ·
+Steps: adding to a note paper *N* = 3 → forced *M* = 3 → observed \_\_ · who wrote which part, and when, 0 → 0 →
+observed \_\_ ·
 a linked chart's note 3 → 3 → observed \_\_ (#993).
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
 | Add opens the editor with "Adding to the note of …"; with nobody named, the picker asks first | | |
-| The addendum signs inside the note: one text, "every part signed", a closed "2 parts"; `refs` names the note | | |
+| The addendum signs inside the note: Nurse A's heading and "every part signed" ABOVE the text, a closed "2 parts"; `refs` names the note | | |
+| The addendum's seam line, "Added: signed by Dr B · {its time}", sits before its text; the note keeps its place | | |
 | Sign pressed inside the debounce: still an addendum, never a new note | | |
 | A restart mid-addendum: the draft reopens with its line and signs inside the note | | |
 | Two addenda signed at once on two terminals: both inside the one note, in order begun | | |
-| A timer-committed addendum: "includes an unsigned part" with no press | | |
-| The orphan: "Adds to a note not shown here · …"; its draft's line says the same; one note again after the reproject | | |
+| A timer-committed addendum: "includes an unsigned part" with no press; its seam reads "Added: written by ?… · went in unsigned · …" | | |
+| The orphan: heading "Adds to a note not shown here · …"; the draft begun before the `DELETE` reads "Adding to a note not shown here"; one note again after the reproject | | |
 | WebKit (the real window) against the headless walk: any difference noted (a stale button: #994) | | |
 
 | Accessibility check | Verdict | Notes |
 |---|---|---|
 | *Add to this note* by keyboard, read as "Add to this note: {time}"; none on a linked chart's note | | |
 | "{n} parts" read as collapsed; opened by Space/Enter; each part's heading and text read | | |
-| The "Adding to …" line and the state line read | | |
+| The "Adding to …" line read; the heading and state line read before the text | | |
+| Each seam read before its part, with that part's writer and time; a claimed name heard "unverified …" | | |
 | No dialog | | |
 
 ## Verdict

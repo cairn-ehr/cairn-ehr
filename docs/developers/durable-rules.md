@@ -14,14 +14,15 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 undo** (pins: `db/tests/070_note_addendum_test.sql`, `db/tests/064_clinical_note_test.sql`,
 `crates/cairn-node/src/note/compound.rs`'s tests,
 `crates/cairn-node/tests/{note_addendum_doors,note_addendum_sign,note_addendum_ahead_of_target}.rs`,
-`cairn-gui-tauri/src/{notes_compound,notes_compound_webview}_tests.rs`):
+`cairn-gui/cairn-gui-tauri/src/{notes_compound,notes_compound_webview}_tests.rs`):
 - **The target is the ROOT, set once in the header, and Sign and the timer read it from there.** db/070's door sets
   `note_draft.addendum_to` when it makes the header; no door updates it; Sign reads it under the draft's lock after its
   own save, the timer before `commit_overdue_parts`. The window's `addendum_to` only picks the save door. **Tempting
   wrong fixes:** take the target from the window at Sign "because the window already knows it" (a restarted window
   sends `None`, and the draft would sign as a new note); let a later save update the column "to fix a wrong target"
   (a reader then needs the lock, and a new note's draft could become an addendum); name the compound's LATEST part
-  (the target then depends on which parts this window has read). Pins:
+  (the target then depends on which parts this window has read; pinned by
+  `note_addendum_sign.rs::signing_an_addendum_names_the_root`, `two_addenda_signed_at_once_both_join_the_note`). Pins:
   `note_addendum_sign.rs::sign_takes_the_target_from_the_header_not_the_window`,
   `sign_inside_the_debounce_still_makes_an_addendum`, `the_timer_commits_an_addendum_as_an_addendum`;
   `note_addendum_doors.rs::a_later_plain_save_keeps_the_target`, `a_new_notes_draft_refuses_a_target_later`.
@@ -46,6 +47,15 @@ undo** (pins: `db/tests/070_note_addendum_test.sql`, `db/tests/064_clinical_note
   (Task 6's review; the condition pin passed). **Tempting wrong fix:** move the draw back to the top "next to the
   withheld line". Pin: `notes_compound_webview_tests.rs::the_notes_are_drawn_after_a_draft_reopens`. The "Adding to …"
   line is its own field (`DraftView.adding_to`, `CompoundView.adds_line`), never a prefix parsed out of `words`.
+- **A note of two or more parts is HEADED by its root, and each later part is SEAMED.** `compoundItem` draws the
+  root's byline and the state line ABOVE the text, then the text a part at a time (`CompoundView.segments`), each
+  later part after its Rust-worded seam, "Added: <its byline> · <its time>" (spoken form for the `?`, #973).
+  **Tempting wrong fixes:** reuse `noteItem` for a compound "since its fields are a note's" (it draws text, then
+  byline: the root writer's "signed by Nurse A" then sits under the LAST writer's words and reads as signing them —
+  the final review's Important 1); draw the joined `text` "because it is simpler" (a later part's writer and time
+  vanish behind the disclosure); re-sort compounds by their latest part (the note jumps in the list; the seam carries
+  the time). Pins: `notes_compound_webview_tests.rs::a_compound_is_headed_by_its_root_and_seamed_at_each_part`;
+  `notes_compound_tests.rs::each_later_part_is_seamed_with_its_writer_and_time`.
 
 **⇒ GUI SIGN-IN SLICE 3b-2b — THE AUDITED DISCARD (ADR-0090, db/068 + db/069, db/037 + db/044 + db/065 + db/066 in
 place) — do not undo** (pins: `db/tests/068_clinical_note_discard_test.sql`, `db/tests/069_note_draft_discard_test.sql`,

@@ -41,8 +41,8 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
    unconfirmed". **3c-3**: the pending-sign-offs menu and #918's display half.
 
 2. **#948 stays penned.** An addendum that reaches a peer before the note it adds to is refused, penned by the
-   puller and admitted once the note lands, where its body can be read (decision 14). No code changes for it; this slice adds a test and this record
-   (decision 14).
+   puller and admitted once the note lands, where its body can be read (decision 14). No code changes for it; this
+   slice adds a test and this record (decision 14).
 
 3. **3c-2's vouch shape is decided; 3c-2's ADR builds it and records it in full.** A vouch is **one event per vouched
    part**, of a new type `clinical.note-attestation.asserted`. Its contributors are `{human, attested | co-signed,
@@ -92,9 +92,10 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
    because the column never changes. The first part's body then gets `addendum_to` = that target. So Sign pressed
    inside the one-second save debounce still makes an addendum (its own save makes the header), and a restarted
    window that sends `None` for an existing addendum draft still signs an addendum. A Sign whose save would make an
-   addendum header for a note this node does not show on this chart is refused `SignRefusal::NoSuchNote` ("The note this adds to is not on this chart; nothing was
-   saved."). Discard passes the target too; its `no-such-note` (no header, so nothing to throw away) is
-   `DiscardRefusal::Gone`. The drafts list reads each draft's target in the same statement as its parts. Pins:
+   addendum header for a note this node does not show on this chart is refused `SignRefusal::NoSuchNote` ("The note
+   this adds to is not on this chart; nothing was saved."). Discard passes the target too; its `no-such-note` (no
+   header, so nothing to throw away) is `DiscardRefusal::Gone`. The drafts list reads each draft's target in the
+   same statement as its parts. Pins:
    `note_addendum_sign.rs::sign_takes_the_target_from_the_header_not_the_window`,
    `sign_inside_the_debounce_still_makes_an_addendum`, `the_timer_commits_an_addendum_as_an_addendum`,
    `an_addendum_target_on_another_chart_refuses_the_sign`, `the_drafts_list_carries_the_target`.
@@ -118,10 +119,10 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
    `addendum_to` through the notes in the read. A note with no target is a root. A note whose target is not in the
    read is a root marked **orphan**: its target is withheld on a doubted linked chart, or held but not shown here (a
    newer profile R8 keeps unprojected, or a sealed body this node cannot read). The walk is bounded by the read's
-   length; a row still unresolved after the bound (a cycle: no honest client makes one, but a bound costs nothing) becomes its own orphan root, so
-   every row lands in exactly one compound. Parts: the root first, then the rest by `(recording_started,
-   event_id)`. Compounds: newest root `t_effective` first, ties by root id. Pins: `compound.rs`'s tests
-   (`a_multi_part_sign_is_one_compound_in_writing_order`, `two_addenda_to_one_root_join_it_in_recording_order`,
+   length; a row still unresolved after the bound (a cycle: no honest client makes one, but a bound costs nothing)
+   becomes its own orphan root, so every row lands in exactly one compound. Parts: the root first, then the rest by
+   `(recording_started, event_id)`. Compounds: newest root `t_effective` first, ties by root id. Pins:
+   `compound.rs`'s tests (`a_multi_part_sign_is_one_compound_in_writing_order`, `two_addenda_to_one_root_join_it_in_recording_order`,
    `an_addendum_whose_note_is_not_read_is_an_orphan_root`, `compounds_are_newest_root_first`, `a_cycle_is_bounded`).
 
 10. **The compound's state, in exactly these words.** A one-part note has none (its byline says it). Otherwise:
@@ -131,13 +132,24 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
 
 ### The window (`notes_compound.rs`, `notes_parts.rs`, `src-ui/notes_compound.js`, `notes.js`)
 
-11. **A compound reads as one note.** Its text is the parts' texts in part order, joined by a blank line. Its heading
-    is the root's byline and time. An orphan's shown and spoken bylines are led by "Adds to a note not shown here ·
-    ". A note of two or more parts adds its state line and a closed `<details>` whose summary is "{n} parts", holding
-    each part with its own byline. Every word is Rust's and is set as text. Pins:
-    `notes_compound_tests.rs::a_one_part_note_has_no_parts_label_or_state`, `a_three_part_note_reads_as_one_text`,
+11. **A compound reads as one note, headed by its root.** A one-part note is drawn as before 3c-1: its text
+    (`CompoundView.text`), then its byline and time. A note of two or more parts is drawn heading first: the root's
+    byline and time, then its state line. Drawn after the text, the root writer's "signed by …" would sit under the
+    last writer's words and read as signing them. Then comes the text, a part at a time in part order
+    (`CompoundView.segments`). Each later part is preceded by a **seam** line, "Added: " + that part's byline + " · "
+    + its time, e.g. "Added: written by ?Nurse A · went in unsigned · 03:30 (stated)". Its spoken form hears the `?`
+    as "unverified" (#973). So who wrote each part, and when it applies, are read at the join, not only behind the
+    disclosure. "Added" says only that the part was added to the note, never that it applies later: a stated time
+    may precede the root's. The root has no seam; the heading is its. Last comes a closed `<details>` whose summary
+    is "{n} parts", holding each part with its own byline. An orphan's shown and spoken bylines are led by "Adds to a
+    note not shown here · ". A compound keeps its place in the list by its ROOT's time (decision 9), so adding to a
+    note never moves it; the seam carries the later part's time. Every word of the compound is Rust's and is set as
+    text; only the button's label "Add to this note" and its accessible-name prefix (decision 12) are the script's.
+    Pins: `notes_compound_tests.rs::a_one_part_note_has_no_parts_label_or_state`,
+    `a_three_part_note_reads_as_one_text`, `each_later_part_is_seamed_with_its_writer_and_time`,
     `an_orphan_says_it_adds_to_a_note_not_shown`;
-    `notes_compound_webview_tests.rs::a_compound_is_one_text_with_its_parts_behind_a_disclosure`.
+    `notes_compound_webview_tests.rs::a_compound_is_one_text_with_its_parts_behind_a_disclosure`,
+    `a_compound_is_headed_by_its_root_and_seamed_at_each_part`.
 
 12. **"Add to this note" is offered only on a note of the chart on screen, while the editor is free.**
     `CompoundView.can_add` is true when the root's chart is the opened chart. A linked chart's note has no button:
@@ -212,20 +224,21 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
 - **Easier.** A note and everything added to it read as one note, and anyone may add to a note on the chart. Steps
   (paper *N* → built *M* → target *K*): adding to a note and signing it 3 → 3 → 3 (Add on the note, type, Sign +
   the strip); reading a note with additions 0 → 0 → 0 (the compound and its state line show at once); seeing who
-  wrote which part 0 (the handwriting) → 0 (the read carries every part's writer) → **1** (open "{n} parts"), which
-  is the maintainer's chosen display (design §3.7: one continuous text with a way to drill down), `M = N`, so no
-  architecture defect; the state line keeps the safety-relevant fact, an unsigned part, at 0 presses. Adding to a
+  wrote which part, and when it applies, 0 (the handwriting, the dated line) → 0 (the read carries every part's
+  writer and time) → 0 (each later part's seam line names them, in the one continuous text of design §3.7; "{n}
+  parts" drills down to each part's own byline); the state line keeps the safety-relevant fact, an unsigned part,
+  at 0 presses too. Adding to a
   linked chart's note 3 → 3 → **4** (open that chart first): a UI limit, not `M > N`
   ([#993](https://github.com/cairn-ehr/cairn-ehr/issues/993)). Time budget, owed by a human in RUNBOOK §22: add and
   sign ≤ 3 s (Sign's, RUNBOOK §16; the `note-sign` timing kind); open a compound's parts ≤ 1 s.
 - **Harder.** Every future draft door must leave `note_draft.addendum_to` alone once set. Any future reader of a
   chart's notes that shows them grouped must use `compounds`, not its own walk. A future change to rule 6 must not
   tighten the remote door: that would turn #948's pen into a permanent refusal for a peer whose floor is older.
-- **The bet.** That one continuous text with a state line and a closed "{n} parts" is enough for the next clinician
-  to see that a note was added to, and by whom, without reading every part. We would know it is wrong if clinicians
-  miss who wrote a line that mattered, or open the parts on every note.
+- **The bet.** That one continuous text with a state line, a seam line at each later part and a closed "{n} parts"
+  is enough for the next clinician to see that a note was added to, by whom and when, without opening the parts.
+  We would know it is wrong if clinicians miss who wrote a line that mattered, or open the parts on every note.
 - **Pinned by** `db/tests/064_clinical_note_test.sql`, `db/tests/070_note_addendum_test.sql`,
   `crates/cairn-node/src/note/compound.rs`'s tests,
   `crates/cairn-node/tests/{note_addendum_doors,note_addendum_sign,note_addendum_ahead_of_target,window_role_grants_notes,floor_execute_grants}.rs`
-  and `cairn-gui-tauri/src/{notes_compound,notes_compound_webview,notes_parts,notes}_tests.rs`. RUNBOOK §22 carries
-  the human measurements.
+  and `cairn-gui/cairn-gui-tauri/src/{notes_compound,notes_compound_webview,notes_parts,notes}_tests.rs`.
+  RUNBOOK §22 carries the human measurements.
