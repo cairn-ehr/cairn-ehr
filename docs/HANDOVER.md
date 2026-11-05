@@ -60,9 +60,11 @@
 >   **"Add to this note"** on the opened chart's notes: an addendum is an ordinary note `addendum-to` the ROOT, the
 >   target set once in the draft header and read from there by Sign and the timer; db/064 rule 6a holds it to a note
 >   of the same chart at the AUTHORING door only; a note and its parts read as **one compound note** (pure grouping in
->   `cairn-node`, a state line, a closed "{n} parts"); **#948 penned** where the body is readable (no code). Open:
+>   `cairn-node`; the root's byline and state line ABOVE the text, a Rust-worded seam "Added: {byline} · {time}" before
+>   each later part, a closed "{n} parts"; compounds sort by the root's time); **#948 penned** where the body is readable (no code). Open:
 >   **#993** (no Add on a linked chart's note, `K = 4 > N = 3`) · **#994** (Add / Continue here buttons stay up, dead,
->   once the editor opens) · **#995** (#948's sealed cases untested) · **#996** (review residuals). Owed by a human:
+>   once the editor opens) · **#995** (#948's sealed cases untested) · **#996** (review residuals) · **#998** (window-drawn lines look like typed text: a typed line can pass as a seam) ·
+>   **#999** (four byline orders, footer vs heading — a decision). Owed by a human:
 >   **RUNBOOK §22** (add + sign ≤ 3 s; open the parts ≤ 1 s; the orphan heading; keyboard + VoiceOver; WebKit).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
