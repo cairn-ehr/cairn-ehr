@@ -12,10 +12,10 @@ The core store. Clinical content is recorded as **immutable, signed events** tha
 referencing the originals. See [principle 1](../spec/index.md) and the [data model](../spec/data-model.md).
 
 ### Projection
-A queryable "current state" table (e.g. `patient_identifier`, `patient_name`, `patient_demographic`)
-that is **derived** from the event log by triggers/functions. Projections are caches — rebuildable
-from the log at any time. You never write a projection directly; you submit an event and the
-projection updates.
+A queryable "current state" table (e.g. `patient_identifier`, `patient_name`, the medication tables,
+`clinical_note`) that is **derived** from the event log by each event type's registered applier.
+Projections are caches — rebuildable from the log at any time (`cairn-node reproject`). You never
+write a projection directly; you submit an event and the projection updates.
 
 ### The floor (in-DB enforcement floor)
 The safety-critical validation that lives **inside PostgreSQL** — the validated `submit_event` door,
@@ -24,10 +24,28 @@ even a client connecting with raw SQL cannot break the record. Proven against a 
 [Spike 0002](../spikes/0002-advisory-actor-write-contract.md).
 See [Architecture for developers](architecture-for-developers.md#3-the-four-layer-model).
 
-### `submit_event`
-The single validated write door into the event log (`db/005_submit.sql`). It verifies the signature
-(via the in-DB `cairn_verify`), runs the per-type structural floor checks, and appends to `event_log`.
-There is no other write path. See [ADR-0022](../spec/decisions/0022-validated-submit-surface-the-write-path.md).
+### `submit_event` — the strict door
+The validated write door for events **authored on this node** (`db/005_submit.sql`). It verifies the
+signature (via the in-DB `cairn_verify`), runs the per-type structural floor checks through a
+registry, and appends to `event_log`. It **fails closed**: an unknown type, or a chart whose first
+event is not its registration, is refused. See
+[ADR-0022](../spec/decisions/0022-validated-submit-surface-the-write-path.md).
+
+### `apply_remote_event` — the remote door
+The door for events **learned from a peer or a backup medium** (`db/020`). It admits what an honest
+peer could legitimately send even when this node cannot interpret it — an unknown type is stored
+uninterpreted ([ADR-0056](../spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md)), a
+clinical event may precede its registration — and **grades** claims it cannot check rather than
+refusing them. Only the node's own role may call it. The two doors are the *only* ways into
+`event_log`. See [Architecture §5](architecture-for-developers.md#5-two-doors-two-planes).
+
+### Quarantine (sync) / re-adjudication
+An event the remote door cannot yet verify — typically because the key that signed it has not
+arrived — is held in a durable quarantine (`db/021`, `db/022`) and **re-adjudicated** when what it
+was waiting for lands (`db/043`; `cairn-sync`'s `requeue`). Nothing valid is silently dropped
+([ADR-0070](../spec/decisions/0070-a-late-key-reaches-the-chart.md),
+[ADR-0074](../spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md)). Not
+to be confused with the note **quarantine commit** below.
 
 ### Fat Postgres, thin daemon
 The architecture's central engineering choice: safety-critical logic lives **in the database**, and
@@ -135,8 +153,136 @@ consequences), under `docs/spec/decisions/`. A reversal is a *new superseding AD
 in Rust. `cairn_pgx` (`extensions/`) is Cairn's in-database Rust surface — currently the
 `cairn_verify` signature gate the floor calls. Built with `cargo pgrx`, not plain `cargo`.
 
-### `cairn_pgx` runtime role / `db_floor ENFORCED`
-The daemon should connect as an **unprivileged** login role granted the `cairn_node` (NOLOGIN) role,
-so the in-DB floor genuinely binds it — a raw `INSERT` is then denied (SQLSTATE 42501) while
-`submit_event` still works. `cairn-node status` reports `db_floor ENFORCED` vs. `BYPASSABLE` so you
-can tell which path you're on.
+### Roles: `cairn_node`, `cairn_agent`, `cairn_window` / `db_floor ENFORCED`
+Every component connects under a role that holds only the grants it needs, so the in-DB floor
+genuinely binds it — a raw `INSERT` is denied (SQLSTATE 42501) while the validated doors still work.
+`cairn_node` (provisioned by `cairn-node provision-runtime-role`) holds the peer-admission doors;
+`cairn_agent` (`db/004`) is the advisory-actor role — the submit doors and projection reads;
+`cairn_window` (`db/062`, provisioned by `cairn-node provision-window-role`) is the reference
+window's group role: `cairn_agent` plus a short named list, **never** `cairn_node`
+([ADR-0084](../spec/decisions/0084-the-window-never-holds-the-owners-keys.md)). The database owner
+loads the schema; nothing else does. `cairn-node status` reports `db_floor ENFORCED` vs.
+`BYPASSABLE` so you can tell which path you're on.
+
+### Two planes (node plane / clinical plane)
+The **node plane** (`node_event`) records who the nodes are, who is peered and which keys are
+trusted; `cairn-node` syncs it. The **clinical plane** (`event_log`) is the record; `cairn-sync`
+syncs it over `cairn-wire`. Code and schema travel neither: they move on a separate signed
+distribution plane, and a node's schema generation is a local property
+([ADR-0012](../spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md)).
+
+### Schema generation / schema stamp
+`SCHEMA_GENERATION` (`crates/cairn-event/src/schema_generation.rs`) numbers the migration set a
+build carries. On connect, `cairn-node` replays `db/*.sql` only when the database's `node_schema`
+stamp says something changed, and refuses a database stamped by a **newer** build (a replay by an
+older binary would silently roll the floor back)
+([ADR-0080](../spec/decisions/0080-a-connect-replays-the-schema-only-when-it-changed.md)). The
+reference window refuses a database prepared by a different build.
+
+### Born-sealed body / DEK / crypto-shred
+Every clinical event body is **encrypted at write** under its own data-encryption key (DEK),
+wrapped for the node ([ADR-0052](../spec/decisions/0052-born-sealed-clinical-bodies.md)). This is
+*not* confidentiality — the node reads its own data freely — it is what keeps erasure possible for
+every event, forever: destroying a DEK's custody (`cairn-node shred`) makes that body unreadable
+without touching the append-only log. See *Erasure* above.
+
+### Contributor set / authored / recorded / attested
+Who had a hand in an event, as a closed set of `{kind, role}` pairs carried in the signed body. A
+clinical write carries `{human, authored}` + `{node, recorded}`: the human signed it, the node
+sealed and stored it ([ADR-0053](../spec/decisions/0053-per-write-human-authorship.md)). *Signing*
+proves origin; *attestation* (`attested`, `co-signed`) confers responsibility, and may be absent or
+come later ([ADR-0051](../spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md)).
+
+### Authorship grade / `Asserted`
+How confidently the record can say who is responsible for an event, read back from its contributor
+set and shown to the reader. `Asserted` is the grade of an event a named human wrote but nobody
+signed — e.g. a draft that went in by quarantine commit — and reads "went in unsigned"
+([ADR-0089](../spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md)).
+
+### Key vault / release / enroller / superuser
+Clinicians hold no key files. Each member's signing key is stored in the node's database sealed
+under their own passphrase (`db/061`), readable by no role; the **release** door checks the
+passphrase inside Postgres, counts every guess, and hands the key back for **one act**
+([ADR-0083](../spec/decisions/0083-the-human-key-vault.md)). A **superuser** (the first made at the
+console with `vault-bootstrap-superuser`) or an **enroller** enrols staff in person; an enrolment
+by an enroller stays *unconfirmed* — never blocking signing — until a superuser confirms it
+([ADR-0085](../spec/decisions/0085-in-person-enrolment-and-re-key.md)).
+
+### Signer strip / terminal lock / key hold
+The reference window's sign-in affordances. The **terminal lock** gatekeeps the terminal; the
+**signer strip** is where the staff ID and passphrase for *this* act are typed, before the press —
+no dialog; the **key hold** (`--key-hold-seconds`, 0 on a shared terminal) lets a personal
+workstation keep the last signer's key for their next acts.
+
+### Who's here
+A claim, never a sign-in: the terminal names the person currently writing, which labels a draft's
+parts. Naming someone releases no key and signs nothing; an unverified claim displays as
+`?Name` ([ADR-0088](../spec/decisions/0088-whos-here-and-a-drafts-parts.md)).
+
+### Draft / parts / Sign / quarantine commit / discard
+A progress note being typed is a **draft**: node-local, autosaved, deliberately mutable, never
+synced or backed up — **not an event** ([ADR-0087](../spec/decisions/0087-the-first-note-stream-and-its-draft.md)).
+It holds one **part** per writer. **Sign** turns it into one sealed, human-signed
+`clinical.note.asserted` per non-blank part, in one transaction. A draft untouched for the site's
+quarantine (`cairn-node note-set-quarantine`) goes in by **quarantine commit**, unsigned and graded
+`Asserted`. **Discard** throws away only your own writing and leaves an audited, signed
+`clinical.note-discard.asserted` marker on the chart
+([ADR-0090](../spec/decisions/0090-the-audited-discard.md)).
+
+### Registration act / search-before-create funnel
+A new chart begins with `identity.registration.asserted`, and a standard registration **carries the
+search that preceded it** — its attestation names the candidates that were displayed
+([ADR-0061](../spec/decisions/0061-registration-is-an-act-that-carries-its-search.md)). The strict
+door refuses a chart whose first event is not its registration. The window's front door is the
+**funnel** that enforces "search, then create only if nothing fits" (spec §5.3/§5.8).
+
+### John Doe (unidentified registration)
+A chart for a patient who cannot be identified yet (unconscious, unknown), registered with no search
+and a node-local ordinal for a human-usable label; identified later by an `identify` event, never by
+editing the chart ([identity §5.4](../spec/identity.md)).
+
+### Linked charts / person / duplicate repair
+Two charts judged to be the same person are **linked**, never merged. A linked set opens as **one
+combined record** with every row naming its source chart (`cairn_person_charts`, `db/054`), like two
+paper folders clipped together; a human judgement outranks a machine's, and a link can be undone by
+an unlink event ([ADR-0076](../spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)).
+The **duplicate check** (`cairn-matcher watch`) proposes candidates; see
+[Running the duplicate check](running-the-duplicate-check.md).
+
+### Sensitivity stream / safety projection
+Sensitivity is an append-only stream of graded assertions about an event, a thread or a whole
+patient; the effective grade is the strictest standing one
+([ADR-0062](../spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md)). The
+**safety projection** lets decision support warn about a sealed, sensitive item at a coarsened
+level ("confidential medication, severity X") without disclosing it
+([ADR-0063](../spec/decisions/0063-the-safety-projection-and-the-seal-as-coarsening-boundary.md)).
+
+### Partial validity
+A defect on one line of a composite clinical object (one drug on a medication list, one part of a
+note) never invalidates the others; validity, signature currency and actionability belong to the
+individual line
+([ADR-0060](../spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)).
+
+### Backup medium / restore
+Off-node durability: `cairn-node backup` writes both planes to a self-verifying medium
+(`cairn-medium`), and `restore` rebuilds a node from it into a fresh database, needing only the
+medium and one recovery secret, nothing about the dead node
+([ADR-0026](../spec/decisions/0026-node-durability-and-disaster-recovery.md),
+[ADR-0067](../spec/decisions/0067-a-restore-reads-the-clinical-plane.md)).
+
+### Paper-parity benchmark (N → M → K)
+The section every clinical-surface slice plan carries (house rule 7): the paper counterpart's step
+count *N*, the steps the architecture forces *M*, and the steps the UI targets *K*. `M > N` is an
+architecture defect. The time budget is measured by a human, following the slice's `RUNBOOK.md`
+section. See [Contributing workflow](contributing-workflow.md#the-coding-house-rules).
+
+### Durable rule / pin
+A rule a later change could undo in good faith, recorded in [Durable rules](durable-rules.md) with
+its **pin** — the test that fails if it is undone — and the tempting wrong fix. Read the block for a
+file before you change it.
+
+### Reference window
+The steward's own UI (`cairn-gui/cairn-gui-tauri`, Tauri 2): the funnel, the chart, duplicate
+review, notes and sign-in. It has no privilege another UI could not have, runs on its own
+low-privilege login, and makes every clinical display decision in tested Rust; `--mock` runs it on
+fixtures with no database.
