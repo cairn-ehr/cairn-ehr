@@ -47,11 +47,12 @@ let noteDraft = null;
 /** The newest note read started; an older answer is dropped. */
 let notesRevision = 0;
 /**
- * The last Sign, as a promise of its outcome ("signed", "not-signed", "unknown", or null when
- * nothing was pressed); it never rejects. The idle re-lock and a switch of who's here wait for it.
+ * The last Sign or Discard, as a promise of its outcome — a Sign's "signed", "not-signed" or
+ * "unknown"; a Discard's "discarded", "not-discarded" or "discard-unknown"; or null when nothing
+ * was pressed. It never rejects. The idle re-lock and a switch of who's here wait for it.
  */
 let noteSigning = Promise.resolve(null);
-/** A Sign was pressed and has not settled: a switch then says its outcome in the picker. */
+/** A Sign or Discard was pressed and has not settled: a switch then says its outcome in the picker. */
 let noteSignInFlight = false;
 
 /** Read the note pane for `patient` (main.js's `refresh`, beside the medication list). */
@@ -86,6 +87,7 @@ function renderNotes(pane) {
   }
   const listed = pane.drafts.filter((draft) => !(noteDraft && noteDraft.draftId === draft.draft_id));
   el("note-drafts").replaceChildren(...listed.map(draftItem));
+  renderDiscards(pane); // notes_discard.js: their own list, never among the notes
 }
 
 /**
@@ -241,8 +243,12 @@ async function signNote() {
   noteSaveTimer = null;
   // From this press on, a `spent` save of this draft may be this Sign's own: its text went with
   // the Sign, so it is never kept again as a new draft (final review I1).
+  // What the press carries is remembered, so text typed after it (an unknown outcome leaves the
+  // editor live) is still kept as a new draft (notes_save.js `sendDraft`, PR #984 review).
   const wasMaybeSigned = Boolean(held.mayBeSigned);
+  const wasPressedText = held.pressedText;
   held.mayBeSigned = true;
+  held.pressedText = el("note-text").value;
   setSigning(true);
   let report;
   try {
@@ -259,7 +265,10 @@ async function signNote() {
     clearSigner();
     setSigning(false);
     // Every refusal but an interrupted commit recorded nothing: this press signed nothing.
-    if (behindTheRecord(failure) !== "unknown") held.mayBeSigned = wasMaybeSigned;
+    if (behindTheRecord(failure) !== "unknown") {
+      held.mayBeSigned = wasMaybeSigned;
+      held.pressedText = wasPressedText;
+    }
     noteStatus("Could not sign this note: " + failureText(failure));
     // The cancelled save's text is still only on screen: save it now. A draft signed in another
     // window answers `spent`, and what it lacks is kept as a new draft (#945); one this window may
@@ -284,12 +293,15 @@ async function signNote() {
   return report.behind_the_record ? "unknown" : "signed";
 }
 
-/** The last Sign, done, as its outcome (idle.js's re-lock and whos_here.js's switch wait for it). */
+/**
+ * The last Sign or Discard, done, as its outcome (`noteSigning`'s values). idle.js's re-lock and
+ * whos_here.js's switch wait for it.
+ */
 function signsSettled() {
   return noteSigning;
 }
 
-/** Whether a Sign is in flight right now. */
+/** Whether a Sign or Discard is in flight right now. */
 function signInFlight() {
   return noteSignInFlight;
 }
@@ -307,11 +319,13 @@ function showEditor(open) {
 }
 
 /**
- * While a Sign is in flight (`on`), Sign is down and the editor read-only (ruling R13): a key
- * pressed then would be in neither the signed note nor any draft.
+ * While a Sign or a Discard is in flight (`on`), both buttons are down and the editor read-only
+ * (ruling R13): a key pressed then would be in neither the signed note (or the discard's audit
+ * copy) nor any draft.
  */
 function setSigning(on) {
   el("note-sign").disabled = on; // one press, one note
+  el("note-discard").disabled = on;
   el("note-text").readOnly = on;
   el("note-when").readOnly = on;
 }
@@ -346,6 +360,7 @@ function clearNotes() {
   closeEditor();
   el("note-list").replaceChildren();
   el("note-drafts").replaceChildren();
+  el("note-discards").replaceChildren();
   setMessage(el("notes-withheld"), "");
   setMessage(el("notes-error"), "");
   noteStatus("");
@@ -360,6 +375,22 @@ el("note-sign").addEventListener("click", () => {
     .catch((failure) => {
       console.error(failure);
       return "unknown"; // a fault in this window mid-sign: whether it signed is not known
+    })
+    .finally(() => {
+      noteSignInFlight = false;
+    });
+});
+// A Discard shares Sign's in-flight flags: idle.js's re-lock and whos_here.js's switch wait on
+// `signsSettled()` / `signInFlight()`, and must wait for a discard exactly as for a Sign. Its
+// "unknown" is renamed "discard-unknown", so the picker never words it as an unknown SIGNATURE
+// ("discarded" and "not-discarded" are already a discard's own).
+el("note-discard").addEventListener("click", () => {
+  noteSignInFlight = true;
+  noteSigning = discardNote()
+    .then((outcome) => (outcome === "unknown" ? "discard-unknown" : outcome))
+    .catch((failure) => {
+      console.error(failure);
+      return "discard-unknown"; // a fault in this window mid-discard: whether it discarded is not known
     })
     .finally(() => {
       noteSignInFlight = false;

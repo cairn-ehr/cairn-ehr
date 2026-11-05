@@ -12,9 +12,10 @@
 --     cannot silently overwrite each other's text.
 --   * A spent draft can never come back: spending moves the row into note_draft_spent, and a
 --     later save of that id answers 'spent' (or 'committed', when the quarantine timer spent it,
---     db/067). A deferred constraint trigger refuses, at COMMIT,
+--     db/067; or 'discarded', db/069). A deferred constraint trigger refuses, at COMMIT,
 --     a spend that names no clinical.note.asserted event of that chart INSERTED IN THE SAME
---     TRANSACTION (ruling R9) — so a draft cannot be "spent" without the note it became.
+--     TRANSACTION (ruling R9) — so a draft cannot be "spent" without the note it became. A
+--     discard's spend must instead name the discard event, signed by the discarder's key.
 --   * Drafts hold the RAW text as typed (the window escapes markup only when it signs, ADR-0041);
 --     the doors store and return it byte-for-byte.
 --
@@ -53,11 +54,16 @@ CREATE TABLE IF NOT EXISTS note_draft_spent (
     -- true = the quarantine timer committed it unsigned (db/067), false = a clinician signed it.
     -- Lives HERE, not in db/067, because db/066's save and take doors read it: a column a door
     -- reads is created by its table's own file, so an upgrade replay never runs a body ahead of it.
-    by_timer   boolean NOT NULL DEFAULT false
+    by_timer   boolean NOT NULL DEFAULT false,
+    -- NULL = the draft became a note (a Sign, or the timer). Otherwise it was DISCARDED (db/069),
+    -- and this is the discarder's signing key: the key the backing discard event must be signed
+    -- by (the trigger below). Here, not in db/069, for the same reason as by_timer.
+    discarded_by text
 );
 
--- Paired ALTER for a database created before by_timer existed (#207's rule).
+-- Paired ALTERs for a database created before by_timer / discarded_by existed (#207's rule).
 ALTER TABLE note_draft_spent ADD COLUMN IF NOT EXISTS by_timer boolean NOT NULL DEFAULT false;
+ALTER TABLE note_draft_spent ADD COLUMN IF NOT EXISTS discarded_by text;
 
 -- Paired ALTER for a database created before UNIQUE existed (#207's rule). Constraint name is
 -- the one Postgres gives an inline UNIQUE.
@@ -79,9 +85,37 @@ REVOKE ALL ON note_draft, note_draft_spent FROM PUBLIC;
 -- SECURITY DEFINER with a pinned search_path and a qualified table: a caller must not be able to
 -- shadow event_log with a TEMP table and fake the evidence. Deferred so the spend and the note's
 -- submit can happen in either order inside one transaction.
+--
+-- A DISCARD (db/069, slice 3b-2b) is a spend with discarded_by set, and has its own arm: the
+-- named event must be a clinical.note-discard.asserted of this chart, inserted in this same
+-- transaction, AND SIGNED BY discarded_by. WHY THE SIGNER IS THE WHOLE PROOF. The discard door
+-- checks "only your own writing" against the key its CALLER names, and a key id is public: a
+-- raw-SQL client can pass a colleague's key id and the door will agree the draft is "theirs".
+-- What that client cannot do is make an event_log row signed by that key: the strict door only
+-- writes a row whose signature verifies under signer_key_id, which takes the private key. So
+-- the door's answer is only a claim until this arm ties it to a signature, and a forged
+-- discard consumes the draft only to be refused here, at COMMIT, with every write rolled back.
+-- WHY THE INSTANT TOO. A signature alone proves "this key signed A discard", not "this one": a
+-- client holding a colleague's genuine discard event (captured from another node, not yet
+-- synced here) could replay it. So the event's t_effective must equal NEW.spent_at, the
+-- instant db/069 minted inside the door, under the draft's lock, and returned for the caller to
+-- sign. An event signed before that call can never carry it. (Both are microsecond timestamptz.)
+-- The note arm (discarded_by IS NULL) is unchanged.
 CREATE OR REPLACE FUNCTION note_draft_spent_names_its_note() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
+    IF NEW.discarded_by IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM public.event_log e
+                        WHERE e.event_id = NEW.event_id
+                          AND e.event_type = 'clinical.note-discard.asserted'
+                          AND e.patient_id = NEW.patient_id
+                          AND e.xmin = pg_current_xact_id()::xid
+                          AND e.signer_key_id = NEW.discarded_by
+                          AND e.t_effective = NEW.spent_at) THEN
+            RAISE EXCEPTION 'a note draft can only be discarded by a clinical.note-discard.asserted event of the same chart, signed by the discarder''s key, effective at the discard instant, submitted in the same transaction';
+        END IF;
+        RETURN NULL;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM public.event_log e
                     WHERE e.event_id = NEW.event_id
                       AND e.event_type = 'clinical.note.asserted'

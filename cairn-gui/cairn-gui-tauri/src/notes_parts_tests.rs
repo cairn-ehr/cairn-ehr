@@ -4,6 +4,7 @@
 use super::*;
 use crate::notes::tests::{bne, utc};
 use crate::notes::time::stated_time_in;
+use cairn_node::note::read::{DiscardMarker, DiscardedText};
 use cairn_node::note::view::{NoteGrade, PartWriter};
 use uuid::Uuid;
 
@@ -158,6 +159,8 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
         }],
         withheld_on_linked: 2,
         drafts: vec![draft("pc-1")],
+        discards: vec![],
+        discards_withheld_on_linked: 0,
     };
     let pane = note_pane(
         list,
@@ -184,6 +187,8 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             notes: vec![],
             withheld_on_linked: 0,
             drafts: vec![],
+            discards: vec![],
+            discards_withheld_on_linked: 0,
         },
         Some("pc-1"),
         &Claim::NotAsked,
@@ -238,6 +243,8 @@ fn without_a_terminal_id_no_draft_is_here() {
         notes: vec![],
         withheld_on_linked: 0,
         drafts: vec![draft("pc-1")],
+        discards: vec![],
+        discards_withheld_on_linked: 0,
     };
     let pane = note_pane(
         list,
@@ -260,6 +267,8 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
         notes: vec![],
         withheld_on_linked: 0,
         drafts: vec![two_writers()],
+        discards: vec![],
+        discards_withheld_on_linked: 0,
     };
     let dr_b = Claim::Named {
         staff_id: "dr-b".into(),
@@ -286,4 +295,98 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
     );
     assert_eq!(nobody.claim.kind, "not-asked");
     assert_eq!(nobody.claim.staff_id, None);
+}
+
+fn marker(discarder: Option<&str>) -> DiscardMarker {
+    DiscardMarker {
+        event_id: Uuid::from_u128(77),
+        chart: Uuid::from_u128(7),
+        discarded_at: utc("2026-11-02T17:40:00Z"),
+        discarder: discarder.map(str::to_string),
+        parts: vec![
+            DiscardedText {
+                by_discarder: true,
+                text: "BP <90 <b>".into(),
+                stated: None,
+                recording_started: utc("2026-11-02T17:12:00Z"),
+                recording_ended: utc("2026-11-02T17:30:00Z"),
+            },
+            DiscardedText {
+                by_discarder: false,
+                text: "pale".into(),
+                stated: None,
+                recording_started: utc("2026-11-02T17:31:00Z"),
+                recording_ended: utc("2026-11-02T17:35:00Z"),
+            },
+        ],
+    }
+}
+
+/// The marker's one-line summary and each part's heading, word for word. The text is carried
+/// exactly as typed (the webview sets it as `textContent`).
+#[test]
+fn the_marker_summary_and_headings_are_exact() {
+    let v = discard_view(&marker(Some("Nurse A")), &bne(), nov(3));
+    assert_eq!(v.event_id, Uuid::from_u128(77).to_string());
+    assert_eq!(v.summary, "Draft discarded by Nurse A · 03:40");
+    assert_eq!(
+        v.parts[0].heading,
+        "Part 1, written by Nurse A · started 03:12"
+    );
+    assert_eq!(v.parts[0].text, "BP <90 <b>");
+    assert_eq!(
+        v.parts[1].heading,
+        "Part 2, writer not known · started 03:31"
+    );
+    let nameless = discard_view(&marker(None), &bne(), nov(3));
+    assert_eq!(
+        nameless.summary,
+        "Draft discarded by someone this node cannot name · 03:40"
+    );
+    assert_eq!(
+        nameless.parts[0].heading,
+        "Part 1, written by someone this node cannot name · started 03:12"
+    );
+}
+
+/// All four combinations of held-back notes and held-back discards, word for word.
+#[test]
+fn the_withheld_sentence_counts_discards() {
+    let rest = " on this patient's linked charts are not shown: a link in this record is in \
+         doubt, so the node cannot yet vouch that they are this patient's. They are shown \
+         once a clinician has judged the record's links (\"How these charts are linked\").";
+    assert_eq!(withheld_words(0, 0), None);
+    assert_eq!(withheld_words(2, 0), Some(format!("2 note(s){rest}")));
+    assert_eq!(
+        withheld_words(2, 3),
+        Some(format!(
+            "2 note(s){rest} 3 discarded draft(s) on those charts are held back for the same reason."
+        ))
+    );
+    assert_eq!(
+        withheld_words(0, 3),
+        Some(format!("3 discarded draft(s){rest}"))
+    );
+}
+
+/// The pane carries the markers, newest first, and says what it withheld.
+#[test]
+fn the_pane_lists_discard_markers() {
+    let list = PatientNoteList {
+        notes: vec![],
+        withheld_on_linked: 0,
+        drafts: vec![],
+        discards: vec![marker(Some("Nurse A"))],
+        discards_withheld_on_linked: 1,
+    };
+    let pane = note_pane(
+        list,
+        None,
+        &Claim::NotAsked,
+        &Default::default(),
+        &bne(),
+        nov(3),
+    );
+    assert_eq!(pane.discards.len(), 1);
+    assert!(pane.withheld_sentence.is_some());
 }

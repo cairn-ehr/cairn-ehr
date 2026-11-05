@@ -165,6 +165,58 @@ fn spent_sentence_exact() {
     );
 }
 
+/// PR #984 review (critical): a save read AFTER this window's own press (Sign note or Discard
+/// draft) whose outcome was not known, answering `spent` or `discarded`, carried text typed after
+/// the press. The press took only what it carried, so the rest is kept as a new draft, with words
+/// true whichever window's press it was: never "in another window", and never "since the last
+/// save" (the press, not a save, is the line). Only `spent` and `discarded` have a press.
+#[test]
+fn a_press_of_this_window_forks_with_its_own_words() {
+    let spent = save_view(SaveOutcome::Spent)
+        .pressed_fork
+        .expect("a spend may be this window's press");
+    assert_eq!(
+        spent.kept,
+        "This note was signed. What you typed after pressing Sign note is kept here as a new draft."
+    );
+    assert_eq!(
+        spent.nothing_new,
+        "This note was signed; it is no longer open."
+    );
+    assert_eq!(
+        spent.everything,
+        "This note was signed. The text here was changed after you pressed Sign note, so all of \
+         it is kept here as a new draft."
+    );
+    let discarded = save_view(SaveOutcome::Discarded)
+        .pressed_fork
+        .expect("a discard may be this window's press");
+    assert_eq!(
+        discarded.kept,
+        "This draft was discarded. What you typed after pressing Discard draft is kept here as a \
+         new draft."
+    );
+    assert_eq!(
+        discarded.nothing_new,
+        "This draft was discarded; it is no longer open."
+    );
+    assert_eq!(
+        discarded.everything,
+        "This draft was discarded. The text here was changed after you pressed Discard draft, so \
+         all of it is kept here as a new draft."
+    );
+    for other in [
+        SaveOutcome::Saved,
+        SaveOutcome::Moved,
+        SaveOutcome::Elsewhere,
+        SaveOutcome::NoChart,
+        SaveOutcome::NoSuchWriter,
+        SaveOutcome::Committed,
+    ] {
+        assert!(save_view(other).pressed_fork.is_none(), "{other:?}");
+    }
+}
+
 /// Slice 3b-2a: a save answering `committed` means the quarantine timer put the draft into the
 /// record unsigned. That is never this window's own Sign, so the webview always keeps what it had
 /// not saved as a new draft (Review Focus 1), with these words; the take and the sign say the
@@ -396,4 +448,27 @@ fn a_note_command_before_the_terminal_id_is_read_refuses() {
     let err = terminal_of(&state).unwrap_err();
     assert_eq!(err.retry, Retry::Now);
     assert!(err.text.contains("terminal's id"), "{}", err.text);
+}
+
+/// A discarded draft's fork never says "signed": no note exists (controller ruling 1). Each of
+/// the three sentences is pinned exactly.
+#[test]
+fn discarded_fork_words_never_say_signed() {
+    use super::words::{
+        DISCARDED_ELSEWHERE, DISCARDED_ELSEWHERE_EVERYTHING, DISCARDED_ELSEWHERE_NOTHING_NEW,
+    };
+    let fork = save_view(SaveOutcome::Discarded).fork.expect("it forks");
+    for (got, want) in [
+        (&fork.kept, DISCARDED_ELSEWHERE),
+        (&fork.nothing_new, DISCARDED_ELSEWHERE_NOTHING_NEW),
+        (&fork.everything, DISCARDED_ELSEWHERE_EVERYTHING),
+    ] {
+        assert_eq!(got, want);
+        assert!(!got.contains("signed"), "{got}");
+    }
+    assert_eq!(
+        fork.nothing_new,
+        "This draft was discarded in another window. Everything typed here was saved into it \
+         first, and the record keeps it only as a discarded draft, never as a note."
+    );
 }

@@ -44,6 +44,10 @@ pub(crate) mod parts;
 #[path = "notes_commit.rs"]
 pub(crate) mod commit;
 
+/// The discard command (`notes_discard.rs`).
+#[path = "notes_discard.rs"]
+pub(crate) mod discard;
+
 /// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
 #[path = "notes_words.rs"]
 pub(crate) mod words;
@@ -137,6 +141,7 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             notes: vec![],
             withheld_sentence: None,
             drafts: vec![],
+            discards: vec![],
             claim: crate::whos_here::claim_view(&claim),
         });
     };

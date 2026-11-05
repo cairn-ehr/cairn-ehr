@@ -43,7 +43,7 @@ async fn dispatcher_is_the_only_event_log_insert_trigger() {
 /// `sensitivity_assertion_apply` and `sensitivity.grade-withdrawal.asserted` →
 /// `sensitivity_withdrawal_apply` — + db/059's two ADR-0081 rows,
 /// `medication_withhold_apply` and `medication_withhold_release_apply`), + db/060's #857 row
-/// `medication_cessation_reason_apply` = 30, + db/064's ADR-0041 row `clinical_note_apply` = 31.
+/// `medication_cessation_reason_apply` = 30, + db/064's ADR-0041 row `clinical_note_apply` = 31, + db/068's ADR-0089 row `clinical_note_discard_apply` = 32.
 /// A new projection slice bumps this AND db/tests/039_projection_registry_test.sql
 /// (the #212 two-places discipline; a missed bump fails CI, not drifts).
 #[tokio::test]
@@ -62,7 +62,7 @@ async fn registry_row_count_is_pinned() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 31, "cairn_projection_apply row count drifted");
+    assert_eq!(n, 32, "cairn_projection_apply row count drifted");
 }
 
 /// A registry row naming an apply fn that does not exist with the (event_log)

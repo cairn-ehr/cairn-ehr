@@ -238,3 +238,46 @@ async fn the_windows_quarantine_commit_runs_under_its_own_login() {
         Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
     );
 }
+
+/// The audited discard (slice 3b-2b) under the window's login, driven to its deep path: the
+/// save, db/069's door, the seal and the strict submit all run as `cairn_window`, and db/065's
+/// commit-time trigger accepts the event. Then the note pane's read decodes the marker (the
+/// projection, `cairn_t_effective` and `cairn_note_signer_name`) under the same login.
+#[tokio::test]
+async fn the_windows_discard_runs_under_its_own_login() {
+    use cairn_node::note::discard::{discard_draft, DiscardOutcome};
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, mut window) = owner_and_window(&base).await;
+    let (sk, _, sk_h, kid_h, a) = note_setup(&owner).await;
+    let author = AuthorParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let draft = Uuid::now_v7();
+    let input = SignNoteInput {
+        draft,
+        patient: a,
+        terminal: "pc-window",
+        writer: Some("notewriter"),
+        narrative: "wrong patient",
+        stated: Some("2026-11-04T09:00:00Z".parse().unwrap()),
+        node_origin: ORIGIN,
+    };
+    let r = discard_draft(&mut window, &sk, &input, &author).await;
+    let out = expect_as_window("note::discard::discard_draft", r);
+    assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
+
+    let r = note_pane_read(&mut window, a).await;
+    let list = expect_as_window("note pane read (discard markers)", r);
+    assert_eq!(list.discards.len(), 1);
+    assert_eq!(
+        list.discards[0].discarder.as_deref(),
+        Some(common::NOTE_AUTHOR)
+    );
+    assert_eq!(list.discards[0].parts[0].text, "wrong patient");
+    assert_eq!(list.discards[0].parts[0].stated, input.stated);
+}

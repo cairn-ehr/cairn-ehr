@@ -1600,3 +1600,98 @@ pre-read commit by `cairn-gui-tauri`'s DB-gated tests (CI never runs those, #905
 headlessly in Chromium only, against a stubbed `invoke` (sign-in slice 3b-2a, Task 4); WebKit, a hidden or
 minimised window's tick over a real minute, and Tauri's runtime spawning the tick were not seen. `TEMPLATE.md`
 carries a matching block (*A draft left untouched goes in unsigned*).
+
+## 21. Throw away your own draft (GUI sign-in slice 3b-2b, ADR-0090)
+
+The slice's gesture: **Discard draft**, beside *Sign note*, with the signer strip of section 16. The draft leaves the
+chart's drafts; the log keeps a signed record of what it said, and the chart lists it as one closed line, "Draft
+discarded by Nurse A · HH:MM", its text behind a click. Paper counterpart: tearing up your own page before it goes in
+the folder. You cannot tear a colleague's writing out of it. **Live only**: a `--mock` window holds no drafts and
+refuses every note write ("fixture mode…").
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Discard a draft, credential included | the first keystroke in the strip's Staff ID | "Discarded. The draft is gone from the chart; the record keeps what it said." | **≤ 3 s** (Sign's, section 16) |
+| See that a draft was discarded | — | — | **0 acts** (the marker is in the list) |
+| Read what it said | the marker | its text | **1 press** |
+
+Steps: discarding your own draft paper *N* = 1 (tear it up) → forced *M* = 1 (*Discard draft* + the strip, counted as
+Sign is) → target *K* = 1; a draft of unknown writing 1 → 1 → 1; a draft holding a colleague's part: paper permits no
+tear-up → refused; it goes in by the timer, or stays stuck (section 20) → no gesture. The write half is also timed by the node
+(`gesture_kind = 'note-discard'`, section 5). **A figure outside its budget, or an `M > N`, is the finding — file an
+issue; never adjust the budget.**
+
+**Setup.** Section 19's setup (`nurse-a` and `dr-b` enrolled from the window) and the section 2 chart. Launch as
+section 3. `parts` is section 19's helper; add:
+
+```bash
+discards() { psql "$CONN" -c "SELECT e.event_id, e.signer_key_id, e.contributors, e.t_effective, d.parts FROM clinical_note_discard d JOIN event_log e USING (event_id) ORDER BY e.t_effective"; }
+spends()   { psql "$CONN" -c "SELECT draft_id, event_id, spent_at, by_timer, discarded_by FROM note_draft_spent ORDER BY spent_at"; }
+```
+
+**Measurement 1 — discard your own draft (≤ 3 s).** As `nurse-a`: *New note*, type `obs stable, BP 120/80`, wait two
+seconds, then type the strip's Staff ID and passphrase and press *Discard draft*. Five runs.
+
+- [ ] Record the time from the first keystroke in the Staff ID to "Discarded. The draft is gone from the chart; the
+      record keeps what it said." (budget ≤ 3 s), and `ui_gesture_timing`'s `note-discard` row (section 5).
+- [ ] No dialog. The editor closes; the draft is gone from the drafts (`parts`); no note was added.
+- [ ] `discards` shows one event, signed by nurse-a's key, contributors `[{nurse-a's key, authored}, {node,
+      recorded}]`, one part with `writer` `discarder` and the text as typed (escaped, as a note's is). `spends` shows
+      its spend with `discarded_by` = nurse-a's key and `spent_at` = the event's `t_effective`.
+- [ ] Repeat with an empty editor (*New note*, type a letter, delete it, *Discard draft*): "Discarded. The draft was
+      empty, so nothing was kept." No event, no spend, no marker.
+- [ ] With the strip empty and no key held, press *Discard draft*: "Not discarded: Enter your staff ID and passphrase
+      to discard this draft." A key refusal under Discard never says "sign" (PR #984 review).
+
+**Measurement 2 — a colleague's draft.** As `nurse-a` type `obs stable`; switch to `dr-b` and reopen the chart (Nurse
+A's part is drawn read-only above dr-b's editor, as in section 19, Measurement 2), then press *Discard draft* with
+dr-b's credential.
+
+- [ ] The status line reads "Not discarded: someone else wrote part of this draft, and only its writer may throw
+      their part away — nothing was thrown away; your text is still here." The draft is
+      still there with nurse-a's part (`parts`), the editor still holds any text dr-b typed (it is saved again), and
+      `discards` and `spends` are unchanged.
+- [ ] Reopen the chart: the draft row's words say when it goes into the record unsigned (section 20's words), and the
+      window offers no other step. (The editor itself shows no such line: #988.)
+
+**Measurement 3 — a stuck draft (on this throwaway database only).** Leave a draft by `nurse-a`, then remove her
+member row as the owner (section 20, Measurement 4's two `DELETE`s). As `dr-b`, reopen the chart and press *Discard
+draft*.
+
+- [ ] The same "Not discarded: someone else wrote part of this draft …" sentence; the draft is kept. Reopen the
+      chart: the draft row's words say "stuck" (section 20's stuck sentence), never a time.
+
+**Measurement 4 — a discard during the debounce.** As `nurse-a`, type `obs stable` and, within half a second of the
+last keystroke, type `; recheck 1h` and press *Discard draft* at once (the strip filled beforehand).
+
+- [ ] The marker's text (and `discards`' part) ends `; recheck 1h`: the audit copy holds what was on screen, not the
+      last autosave.
+
+**Measurement 5 — a who's-here switch during a discard.** Press *Discard draft* and, before the outcome shows, press
+the hot key (Ctrl+Shift+H, Cmd+Shift+H on macOS).
+
+- [ ] The picker opens only after the discard settles, and says "Your draft was discarded." above its heading. With
+      the strip's passphrase wrong, it says "Your draft was NOT discarded — open the chart to see where it stands."
+      It never says "signed".
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] *Discard draft* is reached by Tab after *Sign note* and pressed with Space or Enter; both are down while it runs.
+- [ ] The marker is a closed disclosure ("Discarded drafts" list): VoiceOver reads its summary line and that it is
+      collapsed; Space or Enter opens it, and each part's heading and text are read; the text is read as typed (markup
+      characters as characters).
+- [ ] The outcome on `#note-status` is read once; a refusal's sentence in full.
+- [ ] No dialog appears at any point.
+
+**Chromium and WebKit.** The window is WebKit (Tauri on macOS). Compare each step above with the headless walk
+(below), and note any difference: the disclosure's keyboard behaviour, focus after the editor closes, and the
+read-only editor during the discard.
+
+**What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. The door, the
+rule, the race with a Sign, the commit-time refusal and the marker read were run against throwaway databases by the
+slice's DB-gated tests, and the window's discard by `cairn-gui-tauri`'s DB-gated tests (CI never runs those, #905).
+The button, the marker, a refusal, the debounce and a switch during a discard were walked headlessly in Chromium and
+WebKit (Playwright, against a stubbed `invoke`; sign-in slice 3b-2b, Task 6); the real Tauri window, its argument
+casing and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*Throw away your own draft*).

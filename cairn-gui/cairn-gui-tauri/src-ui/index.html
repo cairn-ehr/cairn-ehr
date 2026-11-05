@@ -381,6 +381,8 @@
           <p id="notes-withheld" hidden></p>
           <p id="notes-error" role="alert" hidden></p>
           <ol id="note-list"></ol>
+          <!-- Discarded drafts (slice 3b-2b): one closed line each, never a note (notes_discard.js). -->
+          <ul id="note-discards" aria-label="Discarded drafts"></ul>
           <ul id="note-drafts"></ul>
           <button id="new-note" type="button">New note</button>
           <div id="note-editor" hidden>
@@ -392,6 +394,7 @@
             <label for="note-when">When it happened — leave empty if it is now</label>
             <input id="note-when" type="datetime-local" />
             <button id="note-sign" type="button">Sign note</button>
+            <button id="note-discard" type="button">Discard draft</button>
           </div>
           <p id="note-status" role="status" aria-live="polite"></p>
         </section>
@@ -431,6 +434,7 @@
     <script src="signer.js"></script>
     <script src="notes_save.js"></script>
     <script src="notes.js"></script>
+    <script src="notes_discard.js"></script>
     <script src="whos_here.js"></script>
     <script src="idle.js"></script>
     <script src="enrol.js"></script>

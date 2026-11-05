@@ -8,8 +8,13 @@
 //! Notes are read ONLY from the `clinical_note` projection, never from the event log's clear
 //! view (ruling R8): the projection is what keeps a newer, unchecked note profile carried by a
 //! peer off the screen. `event_log` is joined only for what grades authorship.
+//!
+//! Discarded drafts (slice 3b-2b) are listed BESIDE the notes, as markers, read only from the
+//! `clinical_note_discard` projection and under the same doubted-link rule. They are never
+//! joined into the notes, never counted as one, and `NOTES_SQL` does not know they exist.
 use cairn_event::contributor::{classify_authorship_with_humans, VerifiedKid};
 use cairn_event::note::unescape_note_markup;
+use cairn_event::note_discard::DiscardedWriter;
 use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -38,6 +43,36 @@ pub struct NoteRow {
     pub writer: PartWriter,
 }
 
+/// One discarded draft, as the chart lists it beside (never among) its notes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscardMarker {
+    /// The discard event this marker was projected from.
+    pub event_id: Uuid,
+    /// The chart the draft was on (a linked chart's, when the read combines them).
+    pub chart: Uuid,
+    /// The discard instant (the event's `t_effective`).
+    pub discarded_at: DateTime<Utc>,
+    /// Who discarded it (`cairn_note_signer_name` of the signing key); `None` if not nameable.
+    pub discarder: Option<String>,
+    /// Its non-blank parts, in writing order.
+    pub parts: Vec<DiscardedText>,
+}
+
+/// One part of a discarded draft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscardedText {
+    /// The discarder wrote it; `false` = writer not known.
+    pub by_discarder: bool,
+    /// The text as typed (unescaped).
+    pub text: String,
+    /// The writer's claimed time for this part; `None` means not stated (principle 4).
+    pub stated: Option<DateTime<Utc>>,
+    /// When the part began being recorded.
+    pub recording_started: DateTime<Utc>,
+    /// The part's last real keystroke.
+    pub recording_ended: DateTime<Utc>,
+}
+
 /// What the note pane shows for one opened chart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatientNoteList {
@@ -47,6 +82,10 @@ pub struct PatientNoteList {
     pub withheld_on_linked: usize,
     /// The opened chart's open drafts.
     pub drafts: Vec<NoteDraft>,
+    /// Discarded drafts on the set's charts, newest `discarded_at` first (slice 3b-2b).
+    pub discards: Vec<DiscardMarker>,
+    /// Discard markers on other charts of a set holding a doubted link: counted, not shown.
+    pub discards_withheld_on_linked: usize,
 }
 
 /// The notes of every chart in `charts`, with what grades their authorship.
@@ -90,7 +129,85 @@ const NOTES_SQL: &str = "\
       FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      WHERE n.patient_id = ANY($1::text[]::uuid[])";
 
-/// Read the notes of the person `patient` is a chart of, plus `patient`'s open drafts.
+/// One row per PART of each discard on the given charts, with its 1-based position (`ord`).
+///
+/// Only the five named part keys are read: db/068 stores `parts` as received (its floor does not
+/// refuse an extra key), so a key a raw-SQL client added beside them must never reach the screen.
+/// The times go through `cairn_t_effective`, the very validator the floor admitted them with, so
+/// every row the floor let in reads here: as `NOTES_SQL` reads a ref as `::uuid::text`, one odd
+/// spelling cannot make the chart's whole list fail. `stated_time` JSON null reads as SQL NULL (not stated).
+const DISCARDS_SQL: &str = "\
+    SELECT d.event_id::text, d.patient_id::text, d.t_effective, \
+           cairn_note_signer_name(e.signer_key_id), x.ord, \
+           x.p ->> 'writer', x.p ->> 'narrative', cairn_t_effective(x.p ->> 'stated_time'), \
+           cairn_t_effective(x.p ->> 'recording_started'), \
+           cairn_t_effective(x.p ->> 'recording_ended') \
+      FROM clinical_note_discard d JOIN event_log e ON e.event_id = d.event_id \
+     CROSS JOIN LATERAL jsonb_array_elements(d.parts) WITH ORDINALITY AS x(p, ord) \
+     WHERE d.patient_id = ANY($1::text[]::uuid[])";
+
+/// Whether a stored discard part's `writer` word names the discarder. The floor admits only the
+/// two words this build knows, so an unknown word (or none) is an ERROR, never "not known": a
+/// later value must not be shown as either (PR #984 review). The match is exhaustive, so a new
+/// `DiscardedWriter` value cannot compile without deciding how the marker heads it. Unlike an odd
+/// time spelling (above), such a word fails the chart's list: the floor admitted no such row, so
+/// only a defect can put one there, and saying so beats heading someone's text with the wrong
+/// writer.
+fn by_discarder(word: Option<&str>) -> anyhow::Result<bool> {
+    match word.and_then(DiscardedWriter::from_wire) {
+        Some(DiscardedWriter::Discarder) => Ok(true),
+        Some(DiscardedWriter::NotKnown) => Ok(false),
+        None => {
+            anyhow::bail!("a discarded part's writer is {word:?}, which this build does not know")
+        }
+    }
+}
+
+/// The discard markers of `members`, minus those a doubted set withholds (on a chart other than
+/// `patient`), which are only counted. Returns `(markers newest first, withheld count)`.
+async fn discard_markers(
+    client: &(impl GenericClient + Sync),
+    patient: Uuid,
+    members: &[String],
+    doubted: bool,
+) -> anyhow::Result<(Vec<DiscardMarker>, usize)> {
+    // (ord, marker-with-this-part) per row; grouped below by event. Ordered in Rust (ADR-0045).
+    let mut rows: Vec<(i64, DiscardMarker)> = Vec::new();
+    for r in client.query(DISCARDS_SQL, &[&members]).await? {
+        rows.push((
+            r.get(4),
+            DiscardMarker {
+                event_id: r.get::<_, String>(0).parse()?,
+                chart: r.get::<_, String>(1).parse()?,
+                discarded_at: r.get(2),
+                discarder: r.get(3),
+                parts: vec![DiscardedText {
+                    by_discarder: by_discarder(r.get::<_, Option<String>>(5).as_deref())?,
+                    text: unescape_note_markup(&r.get::<_, String>(6)),
+                    stated: r.get(7),
+                    recording_started: r.get(8),
+                    recording_ended: r.get(9),
+                }],
+            },
+        ));
+    }
+    rows.sort_by_key(|(ord, m)| (m.event_id, *ord));
+    let mut markers: Vec<DiscardMarker> = Vec::new();
+    for (_, m) in rows {
+        match markers.last_mut() {
+            Some(last) if last.event_id == m.event_id => last.parts.extend(m.parts),
+            _ => markers.push(m),
+        }
+    }
+    let before = markers.len();
+    markers.retain(|m| !doubted || m.chart == patient);
+    let withheld = before - markers.len();
+    markers.sort_by_key(|m| std::cmp::Reverse((m.discarded_at, m.event_id)));
+    Ok((markers, withheld))
+}
+
+/// Read the notes of the person `patient` is a chart of, plus `patient`'s open drafts and the
+/// set's discard markers.
 pub async fn list_patient_notes(
     client: &(impl GenericClient + Sync),
     patient: Uuid,
@@ -138,16 +255,30 @@ pub async fn list_patient_notes(
     }
     // Ordered here rather than by SQL ORDER BY (ADR-0045); the id breaks a tie stably.
     notes.sort_by_key(|n| std::cmp::Reverse((n.t_effective, n.event_id)));
+    let (discards, discards_withheld_on_linked) =
+        discard_markers(client, patient, &members, doubted).await?;
     Ok(PatientNoteList {
         notes,
         withheld_on_linked,
         drafts: open_drafts(client, patient).await?,
+        discards,
+        discards_withheld_on_linked,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::NOTES_SQL;
+    use super::{by_discarder, NOTES_SQL};
+
+    /// PR #984 review: the marker reads the writer word back, never defaults it.
+    #[test]
+    fn a_writer_word_this_build_does_not_know_is_an_error() {
+        assert!(by_discarder(Some("discarder")).unwrap());
+        assert!(!by_discarder(Some("not-known")).unwrap());
+        for unknown in [None, Some(""), Some("colleague")] {
+            assert!(by_discarder(unknown).is_err(), "{unknown:?}");
+        }
+    }
 
     /// #412 guard (PR #931 review): the note list reads the attester ONLY through the vouch
     /// door. Reading `event_log.attester_key` directly would mint a `VerifiedKid` from a peer's

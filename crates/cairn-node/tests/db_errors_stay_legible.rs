@@ -735,6 +735,7 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/identity_evidence.rs",
     "crates/cairn-node/src/note/sign.rs",
     "crates/cairn-node/src/note/commit.rs",
+    "crates/cairn-node/src/note/discard.rs",
 ];
 
 /// Commits inside a MARKED file that write no event, so there is nothing to double: how many,
@@ -755,6 +756,12 @@ const EVENTLESS_COMMITS: &[(&str, usize, &str)] = &[
         "a commit door call that returned no part wrote no event: it either did nothing or \
          deleted an all-blank overdue draft, and a re-run after a lost commit finds the draft \
          gone or deletes it again",
+    ),
+    (
+        "crates/cairn-node/src/note/discard.rs",
+        1,
+        "a discard of an all-blank draft writes no event: the door deleted the draft with no \
+         spend, and a retry after a lost commit finds it gone or deletes it again",
     ),
 ];
 
@@ -801,6 +808,12 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
         "a test fixture, not a production commit: `notes_commit.rs`'s `#[cfg(test)]` module \
          (kept beside it by `#[path]`), whose `an_overdue_draft` enrols the draft's writer on a \
          scratch database",
+    ),
+    (
+        "cairn-gui/cairn-gui-tauri/src/notes_discard_tests.rs",
+        "a test fixture, not a production commit: `notes_discard.rs`'s `#[cfg(test)]` module \
+         (kept beside it by `#[path]`), whose DB-gated test enrols the discarder on a scratch \
+         database",
     ),
     (
         "crates/cairn-sync/src/main.rs",

@@ -262,6 +262,13 @@ BEGIN
     ASSERT NOT has_any_column_privilege('cairn_window', 'note_draft', 'SELECT'), 'window cannot read note_draft';
     ASSERT NOT has_any_column_privilege('cairn_window', 'note_draft_spent', 'SELECT'), 'window cannot read note_draft_spent';
     ASSERT NOT has_table_privilege('cairn_window', 'note_draft', 'INSERT'), 'window cannot write note_draft';
+    -- PR #984 review: the replay defence rests on `spent_at` and `discarded_by` being written
+    -- ONLY by the definer doors (the commit-time check is AFTER INSERT, so an UPDATE is never
+    -- checked). A stray grant would let a raw client pick the instant a captured discard carries.
+    ASSERT NOT has_table_privilege('cairn_window', 'note_draft_spent', 'INSERT'), 'window cannot insert a spend';
+    ASSERT NOT has_table_privilege('cairn_window', 'note_draft_spent', 'UPDATE'), 'window cannot change a spend';
+    ASSERT NOT has_table_privilege('cairn_window', 'note_draft_spent', 'DELETE'), 'window cannot delete a spend';
+    ASSERT NOT has_table_privilege('cairn_window', 'note_draft_spent', 'TRUNCATE'), 'window cannot empty the spends';
 END $$;
 
 CREATE ROLE note_draft_probe NOLOGIN;

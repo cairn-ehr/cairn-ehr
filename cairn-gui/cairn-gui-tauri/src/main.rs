@@ -38,6 +38,8 @@ mod link;
 mod node_lock_explains_tests;
 mod notes;
 #[cfg(test)]
+mod notes_discard_webview_tests;
+#[cfg(test)]
 mod notes_fork_webview_tests;
 #[cfg(test)]
 mod notes_webview_tests;
@@ -165,6 +167,7 @@ fn main() -> anyhow::Result<()> {
             notes::note_list,
             notes::note_draft_save,
             notes::note_sign,
+            notes::discard::note_discard,
             notes::note_draft_take,
             whos_here::whos_here_directory,
             whos_here::whos_here_pick,

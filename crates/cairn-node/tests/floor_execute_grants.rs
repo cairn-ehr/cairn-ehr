@@ -159,12 +159,12 @@ const APPLY_FAMILY: &str = "p.proname IN (SELECT apply_fn FROM cairn_projection_
 /// The dispatcher that routes an event type to its validator, identified by NAME because a
 /// family of one has no list to read (#443).
 ///
-/// Note what it does NOT dispatch to: all twenty-six of them (counts as of db/064). The `cairn_event_twin_check`
-/// registry holds 27 rows naming **18 distinct** `cairn_check_*` functions; the remaining eight
+/// Note what it does NOT dispatch to: all twenty-seven of them (counts as of db/068). The `cairn_event_twin_check`
+/// registry holds 28 rows naming **19 distinct** `cairn_check_*` functions; the remaining eight
 /// prefix-siblings are helpers no registration mentions (`cairn_check_coding_object`,
 /// `cairn_check_safety_signal` and the like — `db/005_submit.sql` says so where it explains why
-/// [`CHECK_FAMILY`] is read from a name prefix rather than from a registry). The twenty-six is
-/// the REVOKE *convention's* membership, which is the set this file cares about; the eighteen is
+/// [`CHECK_FAMILY`] is read from a name prefix rather than from a registry). The twenty-seven is
+/// the REVOKE *convention's* membership, which is the set this file cares about; the nineteen is
 /// the dispatch fan-out, which it does not. Conflating them is what #443's title did, and the
 /// arithmetic was wrong in both directions at once.
 ///

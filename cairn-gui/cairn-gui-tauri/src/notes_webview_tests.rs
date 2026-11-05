@@ -275,6 +275,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         notes: vec![],
         withheld_sentence: None,
         drafts: vec![],
+        discards: vec![],
         claim: claim_view(&Claim::Unknown),
     };
     let view = SaveView {
@@ -282,8 +283,10 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         moved: false,
         spent: false,
         committed: false,
+        discarded: false,
         sentence: None,
         fork: None,
+        pressed_fork: None,
     };
     let fork_words = ForkWords {
         kept: "k".into(),
@@ -330,6 +333,9 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
             );
         }
     }
+    // A save answering `discarded` (slice 3b-2b) is read off `view`, checked above; the markers'
+    // own fields are checked in notes_discard_webview_tests.rs.
+    assert!(NOTES_JS.contains("view.discarded"));
 }
 
 /// Fix round 1, I1. Closing a chart waits for every queued save BEFORE it sends `close_chart`.

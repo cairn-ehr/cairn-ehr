@@ -18,12 +18,13 @@ const NOTES_JS: &str = concat!(
     include_str!("../src-ui/notes.js"),
     include_str!("../src-ui/notes_save.js")
 );
+const DISCARD_JS: &str = include_str!("../src-ui/notes_discard.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 
-/// The eight functions that send a signed act (the eighth write, `confirm_link`, is
-/// `confirmCompared`; `link_records`/`record_different_people` share `sendJudgement`).
-const WRITERS: [(&str, &str, &str); 8] = [
+/// The nine functions that send a signed act (`confirm_link` is `confirmCompared`;
+/// `link_records`/`record_different_people` share `sendJudgement`; a note's Discard is signed too).
+const WRITERS: [(&str, &str, &str); 9] = [
     ("main.js", "signOff", MAIN_JS),
     ("main.js", "cease", MAIN_JS),
     ("holds.js", "withhold", HOLDS_JS),
@@ -32,6 +33,7 @@ const WRITERS: [(&str, &str, &str); 8] = [
     ("unlink.js", "unlinkCompared", UNLINK_JS),
     ("unlink.js", "confirmCompared", UNLINK_JS),
     ("notes.js", "signNote", NOTES_JS),
+    ("notes_discard.js", "discardNote", DISCARD_JS),
 ];
 
 #[test]
