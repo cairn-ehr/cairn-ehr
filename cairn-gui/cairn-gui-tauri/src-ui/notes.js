@@ -81,13 +81,15 @@ async function readNotes(patient) {
  */
 function renderNotes(pane) {
   setMessage(el("notes-error"), "");
-  el("note-list").replaceChildren(...pane.notes.map(compoundItem)); // notes_compound.js
-  setMessage(el("notes-withheld"), pane.withheld_sentence);
   // The claim Rust chose `editable` for: the editor writes as THAT claim (final review item 7).
   const claim = pane.claim;
   for (const draft of pane.drafts) {
     if (draft.here && noteDraft === null && readForThisClaim(claim)) openDraft(draft, claim.staff_id);
   }
+  // Drawn only now, as the drafts below are: a draft reopened just above holds the editor, and a
+  // note drawn before it would offer an "Add to this note" that does nothing.
+  el("note-list").replaceChildren(...pane.notes.map(compoundItem)); // notes_compound.js
+  setMessage(el("notes-withheld"), pane.withheld_sentence);
   const listed = pane.drafts.filter((draft) => !(noteDraft && noteDraft.draftId === draft.draft_id));
   el("note-drafts").replaceChildren(...listed.map(draftItem));
   renderDiscards(pane); // notes_discard.js: their own list, never among the notes

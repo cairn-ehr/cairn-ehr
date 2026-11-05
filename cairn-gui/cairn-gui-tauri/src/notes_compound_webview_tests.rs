@@ -201,3 +201,20 @@ fn notes_compound_js_reads_no_field_the_backend_does_not_send() {
         );
     }
 }
+
+/// Fix round 1: a pane read that reopens a here-draft opens the editor INSIDE `renderNotes`, so
+/// the notes are drawn after it — drawn before, every note would keep an "Add to this note" that
+/// does nothing (the drafts' "Continue here" is drawn after it for the same reason).
+#[test]
+fn the_notes_are_drawn_after_a_draft_reopens() {
+    let render = js_fn(NOTES_JS, "renderNotes");
+    let reopen = position(render, "openDraft(draft, claim.staff_id)");
+    assert!(
+        reopen < position(render, "pane.notes.map(compoundItem)"),
+        "{render}"
+    );
+    assert!(
+        reopen < position(render, "listed.map(draftItem)"),
+        "{render}"
+    );
+}
