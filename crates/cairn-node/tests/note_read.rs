@@ -33,7 +33,7 @@ async fn sign_on(
     text: &str,
 ) {
     let draft = Uuid::now_v7();
-    save_part(c, draft, chart, "pc-1", None, text, None)
+    save_part(c, draft, chart, "pc-1", None, text, None, None)
         .await
         .unwrap();
     let input = SignNoteInput {
@@ -44,6 +44,7 @@ async fn sign_on(
         narrative: text,
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     };
     sign_note(c, node_sk, &input, author)
         .await
@@ -310,9 +311,18 @@ async fn discard_on(
     text: &str,
 ) {
     let draft = Uuid::now_v7();
-    save_part(c, draft, chart, "pc-1", Some("notewriter"), text, None)
-        .await
-        .unwrap();
+    save_part(
+        c,
+        draft,
+        chart,
+        "pc-1",
+        Some("notewriter"),
+        text,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let input = SignNoteInput {
         draft,
         patient: chart,
@@ -321,6 +331,7 @@ async fn discard_on(
         narrative: text,
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     };
     let out = discard_draft(c, node_sk, &input, author).await.unwrap();
     assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
@@ -420,7 +431,7 @@ async fn discard_two_parts_on(
     mine: &str,
 ) {
     let draft = Uuid::now_v7();
-    save_part(c, draft, chart, "pc-1", None, found, None)
+    save_part(c, draft, chart, "pc-1", None, found, None, None)
         .await
         .unwrap();
     let input = SignNoteInput {
@@ -431,6 +442,7 @@ async fn discard_two_parts_on(
         narrative: mine,
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     };
     let out = discard_draft(c, node_sk, &input, author).await.unwrap();
     assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");

@@ -30,7 +30,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::draft::{save_part, spend_parts, SaveOutcome, SpentPart};
+use super::draft::{draft_addendum_to, save_part, spend_parts, SaveOutcome, SpentPart};
 use crate::db_diagnosis::Committed;
 use crate::medication::sealed_submit::{prepare_sealed, prepare_sealed_as, Prepared};
 use crate::medication::AuthorParams;
@@ -49,6 +49,10 @@ pub struct SignNoteInput<'a> {
     pub stated: Option<DateTime<Utc>>,
     /// This node's id, the HLC's origin (`identity::load_local`'s `node_id_hex`).
     pub node_origin: &'a str,
+    /// The note this draft adds to (the ROOT of the compound pressed on, slice 3c-1); `None` = a
+    /// new note. It only picks the save door: the signed event's target is read back from the
+    /// draft's header, never taken from here.
+    pub addendum_to: Option<Uuid>,
 }
 
 /// Why a sign wrote nothing — typed, so the window can word each case.
@@ -70,6 +74,8 @@ pub enum SignRefusal {
     Committed,
     /// The draft was discarded (slice 3b-2b): it is no longer open.
     Discarded,
+    /// The note this addendum adds to is not a note of this chart on this node (slice 3c-1).
+    NoSuchNote,
 }
 
 /// RFC 3339 UTC, to the microsecond — the precision Postgres stores and the floor's
@@ -107,8 +113,9 @@ pub fn note_body(
 
 /// Build the note from a SPENT draft part (ruling R1): its text escaped here, its recording
 /// times as the database stamped them, `recording_ended` = the part's last real keystroke.
-/// `addendum_to` is the event of the part signed just before this one (`None` for the first
-/// non-blank part). Shared with the quarantine commit (`commit.rs`), which builds the same body.
+/// `addendum_to` is the event of the part signed just before this one; for the first non-blank
+/// part, the root its draft's header adds to (`None` for a new note). Shared with the quarantine
+/// commit (`commit.rs`), which builds the same body.
 pub(super) fn body_from_spent(
     event_id: Uuid,
     spent: &SpentPart,
@@ -144,6 +151,7 @@ fn refusal_for(outcome: SaveOutcome) -> Option<SignRefusal> {
         SaveOutcome::NoSuchWriter => Some(SignRefusal::NoSuchWriter),
         SaveOutcome::Committed => Some(SignRefusal::Committed),
         SaveOutcome::Discarded => Some(SignRefusal::Discarded),
+        SaveOutcome::NoSuchNote => Some(SignRefusal::NoSuchNote),
     }
 }
 
@@ -233,13 +241,19 @@ pub async fn sign_note(
         input.writer,
         input.narrative,
         input.stated,
+        input.addendum_to,
     )
     .await?;
     if let Some(refusal) = refusal_for(saved) {
         return Ok(Err(refusal));
     }
-    // `Saved` means the draft exists unspent, and this transaction holds its per-draft lock
-    // until it ends, so nobody can spend it in between: no part back means every part is blank.
+    // What the first part adds to, from the HEADER (the spend below deletes it): read now, while
+    // this transaction holds the draft's lock. `None` = a new note.
+    let root = draft_addendum_to(&tx, input.draft).await?;
+    // `Saved` means the draft is unspent, and this transaction holds its per-draft lock until it
+    // ends, so nobody can spend it in between: no part back means every part is blank — or, for
+    // an addendum whose first text was blank, that db/070 made no header at all. Either way there
+    // is nothing to sign.
     let parts = spend_parts(&tx, input.draft, first).await?;
     if parts.is_empty() {
         return Ok(Err(SignRefusal::Empty));
@@ -258,7 +272,8 @@ pub async fn sign_note(
         };
         // One tick per part, INSIDE the transaction: a refused sign rolls its ticks back too.
         let hlc = crate::db::next_hlc(&tx, input.node_origin).await?;
-        let body = body_from_spent(id, part, &node_kid, hlc, ids.last().copied());
+        // The first part adds to the header's root (if any); each later one to the part before.
+        let body = body_from_spent(id, part, &node_kid, hlc, ids.last().copied().or(root));
         let Prepared {
             signed_bytes, dek, ..
         } = seal_part(&tx, node_sk, body, who, author).await?;
@@ -394,6 +409,10 @@ mod tests {
         assert_eq!(
             refusal_for(SaveOutcome::Discarded),
             Some(SignRefusal::Discarded)
+        );
+        assert_eq!(
+            refusal_for(SaveOutcome::NoSuchNote),
+            Some(SignRefusal::NoSuchNote)
         );
     }
 }

@@ -6,7 +6,8 @@
 --   narrative          the markdown narrative, as the window ESCAPED it before signing
 --                      (cairn_event::note::escape_note_markup)
 --   media              the attachment manifest — [] from this window
---   refs               [{rel, event}] inter-event relationships — [] from this window
+--   refs               [{rel, event}] inter-event relationships — from this window, [] for a
+--                      new note's first part, else [{rel:"addendum-to", event:<the note it adds to>}]
 --   encounter          the reserved grouping slot — null from this window
 --   recording_started  RFC 3339, the database clock at the draft's first save (writing began)
 --   recording_ended    RFC 3339, the last save that changed the text (never before the start)
@@ -24,8 +25,10 @@
 -- THE TWO DOORS. A rule that only this window's own output obeys (media empty, encounter null)
 -- is enforced at the AUTHORING door only (`cairn.remote_apply` <> 'on', the db/031 inn_code
 -- idiom): at the remote door a future media-capable peer must never be wedged (ADR-0056), so
--- there the general anchor↔manifest rule applies instead. Every other rule runs at both doors —
--- for a /1 body. A NEWER profile arriving at the remote door is carried unchecked and never
+-- there the general anchor↔manifest rule applies instead. Rule (6a) is authoring-door-only for
+-- a different reason: an addendum's target must be a note of this chart, but at the remote door a
+-- refusal is what the puller pens (#948), so there only (6)'s existence check runs. Every other
+-- rule runs at both doors — for a /1 body. A NEWER profile arriving at the remote door is carried unchecked and never
 -- projected (ruling R8; the floor's rule (1) and clinical_note_apply say why).
 BEGIN;
 
@@ -192,8 +195,9 @@ BEGIN
     PERFORM cairn_check_note_anchors(v_text, p -> 'media');
 
     -- (6) refs: a closed rel enum and a target this node holds (ADR-0041 decision 8). Sync is
-    --     set-union, not causally ordered, so a target that arrives after its note is refused
-    --     at the remote door today (#948).
+    --     set-union, not causally ordered, so a note that arrives before its target is refused
+    --     at the remote door, by design: the puller pens it and re-offers it until the target
+    --     lands (#948, ADR-0091 decision 14).
     IF jsonb_typeof(p -> 'refs') IS DISTINCT FROM 'array' THEN
         RAISE EXCEPTION 'note assertion: refs must be an array';
     END IF;
@@ -210,6 +214,20 @@ BEGIN
         END;
         IF v_ref_id IS NULL OR NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_ref_id) THEN
             RAISE EXCEPTION 'note assertion: refs event % is not held on this node (a dangling reference)', v_ref ->> 'event';
+        END IF;
+        -- (6a) Slice 3c-1: at the AUTHORING door an addendum adds to a NOTE of THIS chart. On
+        --      paper you write an addendum under the note it adds to, in that patient's folder;
+        --      a raw-SQL client naming another chart's note, or a medication event, is refused.
+        --      The REMOTE door keeps the existence check above alone, deliberately: its bare
+        --      RAISE is what the sync puller pens and re-offers (#948), and a peer's event is
+        --      carried, not re-judged. correction-of and transcript-of are not tightened
+        --      (nothing writes them yet).
+        IF v_authoring AND (v_ref ->> 'rel') = 'addendum-to' AND NOT EXISTS (
+            SELECT 1 FROM event_log
+             WHERE event_id = v_ref_id
+               AND event_type = 'clinical.note.asserted'
+               AND patient_id = (b ->> 'patient_id')::uuid) THEN
+            RAISE EXCEPTION 'note assertion: an addendum-to target must be a note on this chart, got %', v_ref ->> 'event';
         END IF;
     END LOOP;
 

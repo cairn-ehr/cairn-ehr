@@ -155,6 +155,12 @@ pub(crate) const SIGN_NO_SUCH_WRITER: &str =
 pub(crate) const NO_CHART: &str = "this patient has no chart on this node";
 /// … when nothing but whitespace was typed.
 const EMPTY: &str = "there is nothing to sign — the note is empty";
+/// … when an addendum's first save or Sign names a note this node does not show on this chart
+/// (slice 3c-1; e.g. the note was erased after Add was pressed): no draft was made. The same
+/// words for a save and a Sign; a clause, like its siblings, because Sign leads it with "Could
+/// not sign this note: ". It names the way on, since every later save is refused the same way.
+pub(crate) const NO_SUCH_NOTE: &str = "the note this adds to is no longer shown on this chart — \
+     nothing was saved; your text is still here, so copy it into a new note";
 
 /// A save's answer as the webview reads it. Pure.
 pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
@@ -167,6 +173,7 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         SaveOutcome::NoSuchWriter => Some(NO_SUCH_WRITER),
         SaveOutcome::Committed => Some(COMMITTED),
         SaveOutcome::Discarded => Some(DISCARDED),
+        SaveOutcome::NoSuchNote => Some(NO_SUCH_NOTE),
     };
     let fork = match outcome {
         SaveOutcome::Moved => Some([MOVED, MOVED_NOTHING_NEW, MOVED_EVERYTHING]),
@@ -185,7 +192,8 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         SaveOutcome::Saved
         | SaveOutcome::Elsewhere
         | SaveOutcome::NoChart
-        | SaveOutcome::NoSuchWriter => None,
+        | SaveOutcome::NoSuchWriter
+        | SaveOutcome::NoSuchNote => None,
     };
     // Only a spend or a discard can be this window's own press (Sign note, Discard draft).
     let pressed_fork = match outcome {
@@ -204,7 +212,8 @@ pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {
         | SaveOutcome::Elsewhere
         | SaveOutcome::NoChart
         | SaveOutcome::NoSuchWriter
-        | SaveOutcome::Committed => None,
+        | SaveOutcome::Committed
+        | SaveOutcome::NoSuchNote => None,
     };
     let words = |[kept, nothing_new, everything]: [&str; 3]| ForkWords {
         kept: kept.into(),
@@ -252,5 +261,6 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
         SignRefusal::NoSuchWriter => refused(SIGN_NO_SUCH_WRITER),
         SignRefusal::Committed => stale(SIGN_COMMITTED),
         SignRefusal::Discarded => stale(DISCARDED),
+        SignRefusal::NoSuchNote => refused(NO_SUCH_NOTE),
     }
 }

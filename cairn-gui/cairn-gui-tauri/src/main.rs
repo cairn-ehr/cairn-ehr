@@ -38,6 +38,8 @@ mod link;
 mod node_lock_explains_tests;
 mod notes;
 #[cfg(test)]
+mod notes_compound_webview_tests;
+#[cfg(test)]
 mod notes_discard_webview_tests;
 #[cfg(test)]
 mod notes_fork_webview_tests;

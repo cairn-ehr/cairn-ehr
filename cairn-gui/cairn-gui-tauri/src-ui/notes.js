@@ -34,10 +34,13 @@ const PARTLY_TYPED_TIME =
   "the time it happened is only partly typed — finish it, or clear it if the note is about now";
 
 /**
- * The draft in the editor, `{ draftId, patientId, statedTime, savedText, writer }` — its own
- * chart, never "whatever is open"; the last stated time and text the node TOOK for its part (a
- * partly typed time is never saved); and the staff id of whoever was here when it opened (null
- * for "Don't know"), sent verbatim with every save and the sign. Two marks are added later:
+ * The draft in the editor, `{ draftId, patientId, statedTime, savedText, writer, addendumTo }`
+ * — its own chart, never "whatever is open"; the last stated time and text the node TOOK for its
+ * part (a partly typed time is never saved); the staff id of whoever was here when it opened (null
+ * for "Don't know"), sent verbatim with every save and the sign; and the root of the note it adds
+ * to (slice 3c-1; null for a new note), sent with every save, Sign and Discard. A draft kept as a
+ * new one (notes_save.js's `keepUnsavedText`) copies it: text typed as an addendum stays one.
+ * Two marks are added later:
  * `mayBeSigned`, once a Sign of it might have signed (a `spent` save then forks nothing), and
  * `keptOnScreen`, once its unsaved text has been kept as a new draft (notes_save.js).
  * Read into a local named `held`, never `draft`: `draft` is a Rust `DraftView` here, and the
@@ -78,13 +81,15 @@ async function readNotes(patient) {
  */
 function renderNotes(pane) {
   setMessage(el("notes-error"), "");
-  el("note-list").replaceChildren(...pane.notes.map(noteItem));
-  setMessage(el("notes-withheld"), pane.withheld_sentence);
   // The claim Rust chose `editable` for: the editor writes as THAT claim (final review item 7).
   const claim = pane.claim;
   for (const draft of pane.drafts) {
     if (draft.here && noteDraft === null && readForThisClaim(claim)) openDraft(draft, claim.staff_id);
   }
+  // Drawn only now, as the drafts below are: a draft reopened just above holds the editor, and a
+  // note drawn before it would offer an "Add to this note" that does nothing.
+  el("note-list").replaceChildren(...pane.notes.map(compoundItem)); // notes_compound.js
+  setMessage(el("notes-withheld"), pane.withheld_sentence);
   const listed = pane.drafts.filter((draft) => !(noteDraft && noteDraft.draftId === draft.draft_id));
   el("note-drafts").replaceChildren(...listed.map(draftItem));
   renderDiscards(pane); // notes_discard.js: their own list, never among the notes
@@ -99,21 +104,29 @@ function readForThisClaim(claim) {
 }
 
 /**
- * One signed note: its text exactly as typed, then who wrote and signed it and when it applies.
- * The byline is heard in its spoken form ("written by unverified Nurse A", #973): a screen reader
- * skips a bare `?`, and a paragraph's aria-label is not read, so the shown words are hidden from
- * it and the spoken ones are visually hidden.
+ * One signed note: its text exactly as typed, then who wrote and signed it and when it applies
+ * (`bylineOf`, heard in its spoken form, #973).
  */
 function noteItem(note) {
   const li = document.createElement("li");
+  li.append(cell("p", note.text, { class: "note-text" }), bylineOf(note));
+  return li;
+}
+
+/**
+ * A note's byline and time as one paragraph. A screen reader skips a bare `?`, and a paragraph's
+ * aria-label is not read, so the shown byline is hidden from it and the spoken one ("written by
+ * unverified Nurse A", #973) from the eye. Shared with
+ * notes_compound.js, which draws it ABOVE a compound's text.
+ */
+function bylineOf(note) {
   const byline = document.createElement("p");
   byline.append(
     cell("span", note.byline, { "aria-hidden": "true" }),
     cell("span", note.byline_spoken, { class: "visually-hidden" }),
     " · " + note.when,
   );
-  li.append(cell("p", note.text, { class: "note-text" }), byline);
-  return li;
+  return byline;
 }
 
 /**
@@ -124,6 +137,8 @@ function draftItem(draft) {
   const li = document.createElement("li");
   const parts = document.createElement("ol");
   parts.append(...draft.parts.map(partBlock));
+  // An addendum draft says what it adds to on its own line, above its words (Rust's wording).
+  if (draft.adding_to) li.append(cell("p", draft.adding_to));
   li.append(cell("p", draft.words), parts);
   if (noteDraft === null) {
     const go = cell("button", "Continue here", { type: "button", "aria-label": "Continue here: " + draft.words });
@@ -164,7 +179,9 @@ function openDraft(draft, writer) {
     statedTime: editing ? tail.stated_time || "" : "",
     savedText: editing ? tail.text : "",
     writer: writer,
+    addendumTo: draft.addendum_to, // the node's own target, sent back verbatim (null: a new note)
   };
+  showAddsTo(draft.adding_to);
   el("note-parts").replaceChildren(...above.map(partBlock));
   el("note-text").value = editing ? tail.text : "";
   el("note-when").value = noteDraft.statedTime;
@@ -177,9 +194,8 @@ function openDraft(draft, writer) {
 }
 
 /**
- * Start a note: a fresh draft id, minted here; nothing is saved until something is typed.
- * Writing needs somebody to have said who is here (a name or "Don't know"): if nobody has, the
- * picker asks first and the editor opens once it is answered.
+ * Start a note. Writing needs somebody to have said who is here (a name or "Don't know"): if
+ * nobody has, the picker asks first and the editor opens once it is answered.
  */
 function newNote() {
   if (displayedPatient === null || noteDraft !== null) return;
@@ -187,16 +203,37 @@ function newNote() {
     askWhosHere(newNote);
     return;
   }
+  startNote(null, null);
+}
+
+/**
+ * Open the editor on a fresh draft: its id minted here, nothing saved until something is typed.
+ * `addendumTo` is the root of the note it adds to (notes_compound.js's `addToNote`), null for a
+ * new note (`newNote`); `addsTo` is Rust's "Adding to…" line for it, shown above the text box.
+ */
+function startNote(addendumTo, addsTo) {
   noteDraft = {
     draftId: crypto.randomUUID(),
     patientId: displayedPatient,
     statedTime: "",
     savedText: "",
     writer: whosHere().staff_id,
+    addendumTo: addendumTo,
   };
+  showAddsTo(addsTo);
   showEditor(true);
   noteStatus("");
   el("note-text").focus();
+}
+
+/**
+ * Say, above the text box, what the draft in the editor adds to — `line`, worded in Rust — or
+ * take the line down: it is shown only while an addendum draft is open.
+ */
+function showAddsTo(line) {
+  const addsTo = el("note-adds-to");
+  addsTo.textContent = line || "";
+  addsTo.hidden = noteDraft === null || noteDraft.addendumTo === null;
 }
 
 /**
@@ -259,6 +296,7 @@ async function signNote() {
       statedTime: when.value,
       writer: held.writer,
       credential: signerCredential(),
+      addendumTo: held.addendumTo,
     });
     clearSigner(true);
   } catch (failure) {
@@ -337,6 +375,7 @@ function closeEditor() {
   noteDraft = null;
   noteUnsaved = false;
   noteLastSave = -Infinity;
+  showAddsTo(null);
   el("note-parts").replaceChildren();
   el("note-text").value = "";
   const when = el("note-when");

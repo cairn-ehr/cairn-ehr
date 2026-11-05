@@ -34,6 +34,9 @@ pub enum SaveOutcome {
     Committed,
     /// The draft was discarded (slice 3b-2b): a late debounced save must not resurrect it.
     Discarded,
+    /// An addendum draft's first save named a note this node does not show on this chart
+    /// (db/070, slice 3c-1): no draft was made.
+    NoSuchNote,
 }
 
 /// Map the save door's answer word to an outcome. An unknown word is an ERROR, never a default:
@@ -48,6 +51,7 @@ fn outcome_from_word(word: &str) -> anyhow::Result<SaveOutcome> {
         "no-such-writer" => Ok(SaveOutcome::NoSuchWriter),
         "committed" => Ok(SaveOutcome::Committed),
         "discarded" => Ok(SaveOutcome::Discarded),
+        "no-such-note" => Ok(SaveOutcome::NoSuchNote),
         other => {
             anyhow::bail!("the note draft save answered {other:?}, which this build does not know")
         }
@@ -59,6 +63,13 @@ fn outcome_from_word(word: &str) -> anyhow::Result<SaveOutcome> {
 /// (the door normalises case and spaces) or `None` for a writer not known. Creates the draft on
 /// first save. The door rewrites `writer`'s own tail part, or appends a new part, and moves
 /// `last_keystroke` only when the text or stated time really changed.
+///
+/// `addendum_to` picks the door (slice 3c-1): `Some(root)` saves through db/070's addendum door,
+/// which makes the draft's header naming `root` on the first non-blank save (and answers
+/// `NoSuchNote` if `root` is not a note of this chart), then applies db/066's rules; `None` is
+/// db/066's door, a new note. The window sends the target with EVERY save, Sign and Discard, so
+/// a press that lands before any autosave still makes an addendum's header, never a new note's.
+#[allow(clippy::too_many_arguments)]
 pub async fn save_part(
     client: &(impl GenericClient + Sync),
     draft: Uuid,
@@ -67,22 +78,57 @@ pub async fn save_part(
     writer: Option<&str>,
     narrative: &str,
     stated: Option<DateTime<Utc>>,
+    addendum_to: Option<Uuid>,
 ) -> anyhow::Result<SaveOutcome> {
-    let word: String = client
+    let draft = draft.to_string();
+    let patient = patient.to_string();
+    let row =
+        match addendum_to {
+            None => client
+                .query_one(
+                    "SELECT cairn_note_draft_part_save($1::text::uuid, $2::text::uuid, $3, $4, \
+                            $5, $6)",
+                    &[&draft, &patient, &terminal, &writer, &narrative, &stated],
+                )
+                .await?,
+            Some(root) => {
+                client
+                    .query_one(
+                        "SELECT cairn_note_draft_addendum_part_save($1::text::uuid, \
+                            $2::text::uuid, $3, $4, $5, $6, $7::text::uuid)",
+                        &[
+                            &draft,
+                            &patient,
+                            &terminal,
+                            &writer,
+                            &narrative,
+                            &stated,
+                            &root.to_string(),
+                        ],
+                    )
+                    .await?
+            }
+        };
+    outcome_from_word(&row.get::<_, String>(0))
+}
+
+/// The note draft `draft` adds to, as its HEADER records it (db/070's
+/// `cairn_note_draft_addendum_to`): `None` for a new note's draft, or for no such draft (never
+/// made, or already spent — a spend deletes the header). Sign and the quarantine timer read the
+/// target here, never from the window: the header is what the draft became. The column is never
+/// updated once set, so reading it needs no lock.
+pub async fn draft_addendum_to(
+    client: &(impl GenericClient + Sync),
+    draft: Uuid,
+) -> anyhow::Result<Option<Uuid>> {
+    let target: Option<String> = client
         .query_one(
-            "SELECT cairn_note_draft_part_save($1::text::uuid, $2::text::uuid, $3, $4, $5, $6)",
-            &[
-                &draft.to_string(),
-                &patient.to_string(),
-                &terminal,
-                &writer,
-                &narrative,
-                &stated,
-            ],
+            "SELECT cairn_note_draft_addendum_to($1::text::uuid)::text",
+            &[&draft.to_string()],
         )
         .await?
         .get(0);
-    outcome_from_word(&word)
+    Ok(target.map(|t| t.parse()).transpose()?)
 }
 
 /// One writer's part of an open draft.
@@ -112,6 +158,8 @@ pub struct NoteDraft {
     pub last_keystroke: DateTime<Utc>,
     /// Its parts in writing order (never empty: a draft is created with its part 1).
     pub parts: Vec<DraftPart>,
+    /// The note this draft adds to (the root its header names, slice 3c-1); `None` = a new note.
+    pub addendum_to: Option<Uuid>,
     /// When it goes into the record unsigned if nobody types in it: the draft HEADER's last
     /// keystroke plus the site's quarantine (db/067's `cairn_note_drafts_due`) — the commit door's
     /// own input, which a backward clock step can set apart from `last_keystroke` above (the
@@ -138,7 +186,8 @@ pub async fn open_drafts(
     let rows = client
         .query(
             "SELECT draft_id::text, terminal_id, seq, writer, writer_name, narrative, stated_time, \
-                    recording_started, last_keystroke \
+                    recording_started, last_keystroke, \
+                    cairn_note_draft_addendum_to(draft_id)::text \
                FROM cairn_note_draft_parts($1::text::uuid)",
             &[&patient.to_string()],
         )
@@ -164,6 +213,11 @@ pub async fn open_drafts(
             _ => drafts.push(NoteDraft {
                 draft_id,
                 terminal_id: r.get(1),
+                // Read in the same statement as the parts (one snapshot); the header's column.
+                addendum_to: r
+                    .get::<_, Option<String>>(9)
+                    .map(|t| t.parse())
+                    .transpose()?,
                 recording_started: part.recording_started,
                 last_keystroke: part.last_keystroke,
                 // Filled in below, once every part is in. A draft spent between the two queries
@@ -329,6 +383,7 @@ mod tests {
             ("no-such-writer", SaveOutcome::NoSuchWriter),
             ("committed", SaveOutcome::Committed),
             ("discarded", SaveOutcome::Discarded),
+            ("no-such-note", SaveOutcome::NoSuchNote),
         ] {
             assert_eq!(outcome_from_word(word).unwrap(), outcome, "{word}");
         }

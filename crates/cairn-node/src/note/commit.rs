@@ -30,7 +30,7 @@ use cairn_event::SigningKey;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::draft::commit_overdue_parts;
+use super::draft::{commit_overdue_parts, draft_addendum_to};
 use super::sign::{body_from_spent, writer_key};
 use crate::db_diagnosis::Committed;
 use crate::medication::sealed_submit::{prepare_sealed_as, Prepared};
@@ -94,6 +94,9 @@ pub async fn commit_overdue(
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     // Every early return below drops `tx` uncommitted, which rolls the whole commit back.
     let tx = client.transaction().await?;
+    // What the first part adds to (slice 3c-1), read BEFORE the commit door deletes the header.
+    // No lock needed: the column is never updated once set. `None` = a new note.
+    let root = draft_addendum_to(&tx, draft).await?;
     let parts = commit_overdue_parts(&tx, draft, first).await?;
     if parts.is_empty() {
         // Commit even so: an overdue all-blank draft was deleted by the door, and that must
@@ -114,7 +117,8 @@ pub async fn commit_overdue(
         };
         // One tick per part, INSIDE the transaction, as a Sign's.
         let hlc = crate::db::next_hlc(&tx, node_origin).await?;
-        let body = body_from_spent(id, part, &node_kid, hlc, ids.last().copied());
+        // The first part adds to the header's root (if any), as a Sign's; later ones chain.
+        let body = body_from_spent(id, part, &node_kid, hlc, ids.last().copied().or(root));
         let body = with_drafting_writer(body, writer_kid.as_deref());
         let Prepared {
             signed_bytes, dek, ..

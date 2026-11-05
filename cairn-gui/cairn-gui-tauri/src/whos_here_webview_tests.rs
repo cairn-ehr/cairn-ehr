@@ -86,7 +86,8 @@ fn switch_awaits_the_save_queue_before_picking() {
 /// note would record its signer as `attested` instead of `authored`, in an immutable record.
 #[test]
 fn the_writer_is_set_once_at_editor_open() {
-    assert!(js_fn(NOTES_JS, "newNote").contains("writer: whosHere().staff_id,"));
+    // New note and Add to this note both open the editor through `startNote`.
+    assert!(js_fn(NOTES_JS, "startNote").contains("writer: whosHere().staff_id,"));
     // A reopened draft writes as the claim the pane chose `editable` for (final review item 7):
     // the part it opens on and the writer it saves as can never diverge.
     assert!(js_fn(NOTES_JS, "openDraft").contains("writer: writer,"));
@@ -119,7 +120,7 @@ fn the_writer_is_set_once_at_editor_open() {
     // Nobody asked yet: New note asks first, and opens the editor once a claim is made.
     let new_note = js_fn(NOTES_JS, "newNote");
     assert!(
-        position(new_note, "askWhosHere(newNote);") < position(new_note, "crypto.randomUUID()"),
+        position(new_note, "askWhosHere(newNote);") < position(new_note, "startNote(null, null);"),
         "{new_note}"
     );
     // ...and a here-draft is reopened for writing only once somebody has said who is writing,
@@ -320,7 +321,7 @@ fn parts_drawn_through_cell() {
     // A signed part's byline is HEARD in its spoken form, "unverified Nurse A" (#973): the shown
     // words, with their bare `?`, are hidden from a screen reader, the spoken ones from the eye
     // (a paragraph's aria-label is not read out). Both are drawn through `cell`.
-    let item = js_fn(NOTES_JS, "noteItem");
+    let item = js_fn(NOTES_JS, "bylineOf");
     for line in [
         "cell(\"span\", note.byline, { \"aria-hidden\": \"true\" }),",
         "cell(\"span\", note.byline_spoken, { class: \"visually-hidden\" }),",

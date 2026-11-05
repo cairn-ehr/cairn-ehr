@@ -22,7 +22,7 @@ fn a_draft() -> String {
 async fn discard_refuses_a_chart_not_on_screen() {
     let (state, _) = on_screen();
     let other = Uuid::from_u128(424_242).to_string();
-    let err = note_discard_impl(&state, &other, &a_draft(), "seen", None, None, None)
+    let err = note_discard_impl(&state, &other, &a_draft(), "seen", None, None, None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
@@ -31,7 +31,7 @@ async fn discard_refuses_a_chart_not_on_screen() {
 #[tokio::test]
 async fn discard_in_fixture_mode_refuses() {
     let (state, chart) = on_screen();
-    let err = note_discard_impl(&state, &chart, &a_draft(), "seen", None, None, None)
+    let err = note_discard_impl(&state, &chart, &a_draft(), "seen", None, None, None, None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, Retry::Never);
@@ -212,6 +212,11 @@ fn discard_words_each_outcome() {
         EMPTY_DISCARDED,
         "Discarded. The draft was empty, so nothing was kept."
     );
+    assert_eq!(
+        NEVER_SAVED_DISCARDED,
+        "Discarded. The note this adds to is not shown on this chart, so nothing of this draft \
+         had been saved, and nothing was kept."
+    );
 }
 
 /// A discarded save is not worded as signed (ruling 1), and a take and a sign say it is closed.
@@ -316,6 +321,7 @@ async fn note_discard_impl_discards_under_the_window_login() {
         Some("notewriter"),
         "obs stable",
         None,
+        None,
     )
     .await
     .unwrap();
@@ -342,6 +348,7 @@ async fn note_discard_impl_discards_under_the_window_login() {
         "obs stable",
         None,
         Some("notewriter"),
+        None,
         None,
     )
     .await

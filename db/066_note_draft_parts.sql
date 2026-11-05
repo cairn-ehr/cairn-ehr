@@ -135,6 +135,8 @@ BEGIN
         RETURN v_spent;
     END IF;
     -- ONE clock reading per call, so a new draft's header and part 1 start at the same instant.
+    -- (An addendum's header is made by db/070's door with its own reading, just before this
+    -- call, so there part 1 starts a moment after the header.)
     v_now := clock_timestamp();
     SELECT * INTO v_head FROM note_draft WHERE draft_id = p_draft FOR UPDATE;
     IF NOT FOUND THEN

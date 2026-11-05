@@ -26,6 +26,7 @@ fn draft(terminal: &str) -> NoteDraft {
         due: utc("2026-11-02T20:40:00Z"),
         overdue: false,
         stuck: false,
+        addendum_to: None,
     }
 }
 
@@ -57,11 +58,19 @@ fn named(staff_id: &str) -> Claim {
 fn only_the_current_writers_tail_is_editable() {
     let d = two_writers();
     let editable = |claim: &Claim, terminal| -> Vec<bool> {
-        draft_view(&d, Some(terminal), claim, false, &bne(), nov(3))
-            .parts
-            .iter()
-            .map(|p| p.editable)
-            .collect()
+        draft_view(
+            &d,
+            Some(terminal),
+            claim,
+            false,
+            &bne(),
+            nov(3),
+            &Default::default(),
+        )
+        .parts
+        .iter()
+        .map(|p| p.editable)
+        .collect()
     };
     assert_eq!(editable(&named("dr-b"), "pc-1"), [false, true]);
     assert_eq!(
@@ -72,7 +81,15 @@ fn only_the_current_writers_tail_is_editable() {
     assert_eq!(editable(&named("dr-b"), "pc-2"), [false, false], "not here");
     assert_eq!(editable(&Claim::NotAsked, "pc-1"), [false, false]);
     assert_eq!(editable(&Claim::Unknown, "pc-1"), [false, false]);
-    let view = draft_view(&d, Some("pc-1"), &named("dr-b"), false, &bne(), nov(3));
+    let view = draft_view(
+        &d,
+        Some("pc-1"),
+        &named("dr-b"),
+        false,
+        &bne(),
+        nov(3),
+        &Default::default(),
+    );
     let (a, b) = (&view.parts[0], &view.parts[1]);
     assert_eq!(
         (a.writer_shown.as_str(), a.writer_spoken.as_str()),
@@ -93,12 +110,32 @@ fn only_the_current_writers_tail_is_editable() {
 #[test]
 fn an_unknown_tail_stays_editable_for_dont_know() {
     let d = draft("pc-1");
-    let view = draft_view(&d, Some("pc-1"), &Claim::Unknown, false, &bne(), nov(3));
+    let view = draft_view(
+        &d,
+        Some("pc-1"),
+        &Claim::Unknown,
+        false,
+        &bne(),
+        nov(3),
+        &Default::default(),
+    );
     let tail = &view.parts[0];
     assert!(tail.editable);
     assert_eq!(tail.text, "BP <90");
     assert_eq!(tail.writer_shown, "writer not known");
-    assert!(!draft_view(&d, Some("pc-1"), &named("dr-b"), false, &bne(), nov(3)).parts[0].editable);
+    assert!(
+        !draft_view(
+            &d,
+            Some("pc-1"),
+            &named("dr-b"),
+            false,
+            &bne(),
+            nov(3),
+            &Default::default()
+        )
+        .parts[0]
+            .editable
+    );
 }
 
 fn nov(d: u32) -> NaiveDate {
@@ -114,6 +151,7 @@ fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
         false,
         &bne(),
         nov(3),
+        &Default::default(),
     );
     assert!(here.here);
     assert_eq!(
@@ -129,6 +167,7 @@ fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
         false,
         &bne(),
         nov(4),
+        &Default::default(),
     );
     assert!(!there.here);
     assert_eq!(
@@ -164,6 +203,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
     };
     let pane = note_pane(
         list,
+        Uuid::from_u128(7),
         Some("pc-1"),
         &Claim::NotAsked,
         &Default::default(),
@@ -190,6 +230,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             discards: vec![],
             discards_withheld_on_linked: 0,
         },
+        Uuid::from_u128(7),
         Some("pc-1"),
         &Claim::NotAsked,
         &Default::default(),
@@ -228,7 +269,15 @@ fn the_other_parts_are_those_the_editor_does_not_replace() {
 fn a_stated_time_with_seconds_survives_reopening() {
     let mut d = draft("pc-1");
     d.parts[0].stated_time = Some(utc("2026-11-02T17:00:30Z"));
-    let view = draft_view(&d, Some("pc-1"), &Claim::Unknown, false, &bne(), nov(3));
+    let view = draft_view(
+        &d,
+        Some("pc-1"),
+        &Claim::Unknown,
+        false,
+        &bne(),
+        nov(3),
+        &Default::default(),
+    );
     let stated = view.parts[0].stated_time.as_deref();
     assert_eq!(stated, Some("2026-11-03T03:00:30"));
     let back = stated_time_in(stated.unwrap(), &bne());
@@ -248,6 +297,7 @@ fn without_a_terminal_id_no_draft_is_here() {
     };
     let pane = note_pane(
         list,
+        Uuid::from_u128(7),
         None,
         &Claim::Unknown,
         &Default::default(),
@@ -276,6 +326,7 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
     };
     let pane = note_pane(
         list(),
+        Uuid::from_u128(7),
         Some("pc-1"),
         &dr_b,
         &Default::default(),
@@ -287,6 +338,7 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
     assert!(pane.drafts[0].parts[1].editable, "Dr B's own tail");
     let nobody = note_pane(
         list(),
+        Uuid::from_u128(7),
         Some("pc-1"),
         &Claim::NotAsked,
         &Default::default(),
@@ -381,6 +433,7 @@ fn the_pane_lists_discard_markers() {
     };
     let pane = note_pane(
         list,
+        Uuid::from_u128(7),
         None,
         &Claim::NotAsked,
         &Default::default(),

@@ -65,20 +65,29 @@ pub enum DiscardOutcome {
     Recorded(Committed<Uuid>),
     /// Every part was blank: the draft was deleted, with no event (nothing to audit).
     Empty,
+    /// The node held nothing for this draft: an addendum whose note this chart does not show, so
+    /// the addendum door answered `no-such-note`, which it does only before a header exists
+    /// (db/070). Nothing was ever saved, so there is nothing to audit and nothing is written.
+    NeverSaved,
 }
 
-/// The refusal a non-`Saved` save answer means; `None` for `Saved`.
-fn refusal_for(outcome: SaveOutcome) -> Option<DiscardRefusal> {
-    match outcome {
-        SaveOutcome::Saved => None,
-        SaveOutcome::Spent => Some(DiscardRefusal::Spent),
-        SaveOutcome::Moved => Some(DiscardRefusal::Moved),
-        SaveOutcome::Elsewhere => Some(DiscardRefusal::Elsewhere),
-        SaveOutcome::NoChart => Some(DiscardRefusal::NoChart),
-        SaveOutcome::NoSuchWriter => Some(DiscardRefusal::NoSuchWriter),
-        SaveOutcome::Committed => Some(DiscardRefusal::Committed),
-        SaveOutcome::Discarded => Some(DiscardRefusal::Discarded),
-    }
+/// What a non-`Saved` save answer means for a discard: the whole answer, with no door call.
+/// `None` for `Saved` (go on to db/069's door).
+fn early_answer(outcome: SaveOutcome) -> Option<Result<DiscardOutcome, DiscardRefusal>> {
+    let refusal = match outcome {
+        SaveOutcome::Saved => return None,
+        // Not a refusal: the node holds nothing for this draft, so throwing it away is done
+        // (review of PR #992: `Gone`'s "no longer open" read as "saved somewhere else").
+        SaveOutcome::NoSuchNote => return Some(Ok(DiscardOutcome::NeverSaved)),
+        SaveOutcome::Spent => DiscardRefusal::Spent,
+        SaveOutcome::Moved => DiscardRefusal::Moved,
+        SaveOutcome::Elsewhere => DiscardRefusal::Elsewhere,
+        SaveOutcome::NoChart => DiscardRefusal::NoChart,
+        SaveOutcome::NoSuchWriter => DiscardRefusal::NoSuchWriter,
+        SaveOutcome::Committed => DiscardRefusal::Committed,
+        SaveOutcome::Discarded => DiscardRefusal::Discarded,
+    };
+    Some(Err(refusal))
 }
 
 /// Map a refusal word of db/069's door. An unknown word is an ERROR, never a default: a future
@@ -178,10 +187,11 @@ pub async fn discard_draft(
         input.writer,
         input.narrative,
         input.stated,
+        input.addendum_to,
     )
     .await?;
-    if let Some(refusal) = refusal_for(saved) {
-        return Ok(Err(refusal));
+    if let Some(answer) = early_answer(saved) {
+        return Ok(answer);
     }
     let rows = tx
         .query(
@@ -268,15 +278,25 @@ mod tests {
         ] {
             assert_eq!(refusal_from_word(word).unwrap(), refusal, "{word}");
         }
-        assert_eq!(refusal_for(SaveOutcome::Saved), None);
-        assert_eq!(
-            refusal_for(SaveOutcome::Discarded),
-            Some(DiscardRefusal::Discarded)
-        );
-        assert_eq!(
-            refusal_for(SaveOutcome::NoChart),
-            Some(DiscardRefusal::NoChart)
-        );
+        assert!(early_answer(SaveOutcome::Saved).is_none());
+        assert!(matches!(
+            early_answer(SaveOutcome::Discarded),
+            Some(Err(DiscardRefusal::Discarded))
+        ));
+        assert!(matches!(
+            early_answer(SaveOutcome::NoChart),
+            Some(Err(DiscardRefusal::NoChart))
+        ));
+    }
+
+    /// An addendum the node holds nothing of (`no-such-note`) is thrown away with nothing
+    /// written: never `Gone`, whose "no longer open" reads as "it went somewhere".
+    #[test]
+    fn a_never_saved_addendum_is_discarded_with_nothing_written() {
+        assert!(matches!(
+            early_answer(SaveOutcome::NoSuchNote),
+            Some(Ok(DiscardOutcome::NeverSaved))
+        ));
     }
 
     #[test]

@@ -33,14 +33,23 @@ async fn sign_refuses_a_chart_not_on_screen() {
         None,
         None,
         None,
+        None,
     )
     .await
     .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
     // A save as well: a debounced save for the chart just left must not land on it.
-    let err = note_draft_save_impl(&state, &another_chart(), &a_draft(), "seen", None, None)
-        .await
-        .unwrap_err();
+    let err = note_draft_save_impl(
+        &state,
+        &another_chart(),
+        &a_draft(),
+        "seen",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
     // And a take: Continue here acts only on the chart on screen.
     let err = note_draft_take_impl(&state, &another_chart(), &a_draft())
@@ -54,12 +63,12 @@ async fn sign_refuses_a_chart_not_on_screen() {
 #[tokio::test]
 async fn sign_in_fixture_mode_refuses() {
     let (state, chart) = on_screen();
-    let err = note_sign_impl(&state, &chart, &a_draft(), "seen", None, None, None)
+    let err = note_sign_impl(&state, &chart, &a_draft(), "seen", None, None, None, None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, Retry::Never);
     assert!(err.text.contains("fixture mode"), "{}", err.text);
-    let err = note_draft_save_impl(&state, &chart, &a_draft(), "seen", None, None)
+    let err = note_draft_save_impl(&state, &chart, &a_draft(), "seen", None, None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("fixture mode"), "{}", err.text);
@@ -335,6 +344,20 @@ fn sign_words_each_refusal() {
         gone.contains("nothing was signed; your text is still here"),
         "a sign's refusal says nothing was SIGNED: {gone}"
     );
+}
+
+/// Slice 3c-1: an addendum whose note is not on this chart is refused, in the same words, by a
+/// save and by a Sign — a verdict a re-read cannot mend, and never a fork.
+#[test]
+fn an_addendum_to_a_note_not_here_is_worded() {
+    const WORDS: &str = "the note this adds to is no longer shown on this chart — nothing was \
+                         saved; your text is still here, so copy it into a new note";
+    let save = save_view(SaveOutcome::NoSuchNote);
+    assert!(!save.saved && save.fork.is_none() && save.pressed_fork.is_none());
+    assert_eq!(save.sentence.as_deref(), Some(WORDS));
+    let sign = sign_refusal_view(SignRefusal::NoSuchNote);
+    assert_eq!(sign.text, WORDS);
+    assert_eq!(sign.retry, Retry::Never);
 }
 
 /// What a sign refuses before it asks for the key — a passphrase that signs nothing is a step

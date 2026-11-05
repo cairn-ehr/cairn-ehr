@@ -1,5 +1,5 @@
 //! The text progress note (`clinical.note.asserted`, ADR-0041, sign-in slice 3a) — the node side
-//! the window calls. Seven small parts, each a file:
+//! the window calls. Eight small parts, each a file:
 //!
 //! * `draft` — the text being typed, one part per writer (db/066). It lives in the one
 //!   deliberately MUTABLE store (db/065/066), reachable only through definer doors, and is never
@@ -14,10 +14,14 @@
 //!   `clinical.note-discard.asserted` recording what it said (slice 3b-2b); never a note.
 //! * `read` — a chart's notes (over every linked chart, as the medication list reads, ADR-0076)
 //!   with each one's authorship grade, plus the chart's open drafts.
+//! * `compound` — groups a chart's notes into compound notes, each note with all its later parts
+//!   (addenda, and the later writers' parts of one signed draft), so any UI can show one note
+//!   where paper has one entry (slice 3c-1). Pure.
 //! * `view` — the pure words the window shows: who wrote and who signed, and when the note applies.
 //!
 //! The pure wire builders (payload, twin, markup escaping) are `cairn_event::note`'s.
 pub mod commit;
+pub mod compound;
 pub mod discard;
 pub mod draft;
 pub mod read;

@@ -10,7 +10,7 @@
 //! pure function so the wording is pinned without a database (`notes_discard_tests.rs`).
 use super::time::{parse_stated, year_the_record_holds};
 use super::words::{DISCARDED, GONE, NO_CHART, SPENT};
-use super::{terminal_of, NoteSignReport, FIXTURE};
+use super::{parse_target, terminal_of, NoteSignReport, FIXTURE};
 use crate::commands::record_timing;
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use crate::link::judgement_view::{refused, stale};
@@ -27,6 +27,10 @@ pub(crate) const RECORDED: &str =
     "Discarded. The draft is gone from the chart; the record keeps what it said.";
 /// … when the draft was empty: nothing to keep, so nothing was recorded.
 pub(crate) const EMPTY_DISCARDED: &str = "Discarded. The draft was empty, so nothing was kept.";
+/// … when the draft was an addendum the node never saved: its note is not shown on this chart,
+/// so no part reached the node and there was nothing to keep (`DiscardOutcome::NeverSaved`).
+pub(crate) const NEVER_SAVED_DISCARDED: &str = "Discarded. The note this adds to is not shown on \
+     this chart, so nothing of this draft had been saved, and nothing was kept.";
 /// … when a colleague wrote part of the draft: only its writer may throw their part away.
 const NOT_YOURS: &str = "Not discarded: someone else wrote part of this draft, and only its \
      writer may throw their part away — nothing was thrown away; your text is still here.";
@@ -50,7 +54,9 @@ const NOT_DISCARDED: &str = "Not discarded: ";
 /// The lead of a failure whose commit may have landed: the discard may or may not be recorded.
 const DISCARD_UNKNOWN: &str = "Whether this draft was discarded is NOT known: ";
 
-/// Discard the draft on screen (the webview sends the same object as for Sign).
+/// Discard the draft on screen (the webview sends the same object as for Sign, `addendumTo`
+/// included: a Discard inside the debounce saves the text as the addendum it is first).
+#[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 #[tauri::command]
 pub async fn note_discard(
     state: tauri::State<'_, AppState>,
@@ -60,6 +66,7 @@ pub async fn note_discard(
     stated_time: Option<String>,
     writer: Option<String>,
     credential: Option<Credential>,
+    addendum_to: Option<String>,
 ) -> Result<NoteSignReport, ErrorView> {
     note_discard_impl(
         &state,
@@ -69,6 +76,7 @@ pub async fn note_discard(
         stated_time.as_deref(),
         writer.as_deref(),
         credential,
+        addendum_to.as_deref(),
     )
     .await
 }
@@ -169,6 +177,7 @@ pub(crate) fn led_failure(failure: ErrorView) -> ErrorView {
 /// copy (as Sign carries it). See the module doc; the steps are `note_sign_impl`'s. The node's
 /// own refusals are worded whole (`discard_refusal_view`); every other failure is led by what it
 /// means for the discard (`led_failure`).
+#[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 pub async fn note_discard_impl(
     state: &AppState,
     patient_id: &str,
@@ -177,6 +186,7 @@ pub async fn note_discard_impl(
     stated_time: Option<&str>,
     writer: Option<&str>,
     credential: Option<Credential>,
+    addendum_to: Option<&str>,
 ) -> Result<NoteSignReport, ErrorView> {
     let attempt = discard_attempt(
         state,
@@ -186,6 +196,7 @@ pub async fn note_discard_impl(
         stated_time,
         writer,
         credential,
+        addendum_to,
     );
     match attempt.await {
         Ok(Ok(report)) => Ok(report),
@@ -196,6 +207,7 @@ pub async fn note_discard_impl(
 
 /// `note_discard_impl`'s steps. The node's refusal comes back apart (`Ok(Err(refusal))`) from
 /// every other failure (`Err`), so the caller words each its own way.
+#[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 async fn discard_attempt(
     state: &AppState,
     patient_id: &str,
@@ -204,12 +216,14 @@ async fn discard_attempt(
     stated_time: Option<&str>,
     writer: Option<&str>,
     credential: Option<Credential>,
+    addendum_to: Option<&str>,
 ) -> Result<Result<NoteSignReport, DiscardRefusal>, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     if state.is_mock() {
         return Err(refused(FIXTURE));
     }
     let (draft, stated) = discard_checks_before_the_key(draft_id, stated_time)?;
+    let target = parse_target(addendum_to)?;
     let terminal = terminal_of(state)?;
     let (human_sk, human_kid) = state
         .signer_for_act(credential, Now::read())
@@ -236,6 +250,7 @@ async fn discard_attempt(
             narrative,
             stated,
             node_origin: &state.node_origin,
+            addendum_to: target,
         };
         let author = cairn_node::medication::AuthorParams {
             human_sk: &human_sk,
@@ -250,6 +265,7 @@ async fn discard_attempt(
     let (text, behind_the_record) = match result {
         Ok(Ok(DiscardOutcome::Recorded(_))) => (RECORDED.to_string(), None),
         Ok(Ok(DiscardOutcome::Empty)) => (EMPTY_DISCARDED.to_string(), None),
+        Ok(Ok(DiscardOutcome::NeverSaved)) => (NEVER_SAVED_DISCARDED.to_string(), None),
         Ok(Err(refusal)) => return Ok(Err(refusal)),
         Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
             Some(event) => (

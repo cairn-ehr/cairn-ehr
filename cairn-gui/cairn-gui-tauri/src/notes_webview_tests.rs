@@ -157,7 +157,7 @@ fn saves_go_out_once_a_second_while_typing_and_draft_ids_are_minted_here() {
     assert!(js_fn(NOTES_JS, "saveNoteNow").contains("noteLastSave = performance.now();"));
     // A fresh draft's first keystroke saves at once, whenever the last draft's save went.
     assert!(js_fn(NOTES_JS, "closeEditor").contains("noteLastSave = -Infinity;"));
-    assert!(js_fn(NOTES_JS, "newNote").contains("crypto.randomUUID()"));
+    assert!(js_fn(NOTES_JS, "startNote").contains("crypto.randomUUID()"));
 }
 
 /// Final review M7: after a Sign that worked, the re-read may reopen another of this terminal's
@@ -243,25 +243,34 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
 #[test]
 fn notes_js_reads_no_field_the_backend_does_not_send() {
     use crate::commands::tests::fields_read_in;
-    use crate::notes::parts::{DraftView, NotePane, NoteRowView, PartView};
+    use crate::notes::compound::CompoundView;
+    use crate::notes::parts::{DraftView, NotePane, PartView};
     use crate::notes::words::ForkWords;
     use crate::notes::{NoteSignReport, SaveView, TakeView};
     use crate::whos_here::{claim_view, Claim};
     let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()
     };
-    let note = NoteRowView {
-        event_id: "e".into(),
+    let note = CompoundView {
+        root_event_id: "e".into(),
         text: "t".into(),
         byline: "b".into(),
         byline_spoken: "b".into(),
         when: "w".into(),
+        state: None,
+        parts_label: None,
+        parts: vec![],
+        segments: vec![],
+        can_add: true,
+        adds_line: "a".into(),
     };
     let draft = DraftView {
         draft_id: "d".into(),
         here: true,
         words: "w".into(),
         parts: vec![],
+        addendum_to: None,
+        adding_to: None,
     };
     let tail = PartView {
         writer_shown: "?A".into(),
@@ -392,7 +401,7 @@ fn a_partly_typed_time_saves_the_last_complete_one() {
             .contains("statedTime: editing ? tail.stated_time || \"\" : \"\","),
         "a reopened draft holds the time it was saved with"
     );
-    assert!(js_fn(NOTES_JS, "newNote").contains("statedTime: \"\""));
+    assert!(js_fn(NOTES_JS, "startNote").contains("statedTime: \"\""));
 }
 
 /// Fix round 1, I3 (ruling R13). While a Sign is in flight the editor is read-only: a keystroke
