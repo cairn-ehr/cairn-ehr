@@ -41,7 +41,7 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
    unconfirmed". **3c-3**: the pending-sign-offs menu and #918's display half.
 
 2. **#948 stays penned.** An addendum that reaches a peer before the note it adds to is refused, penned by the
-   puller and admitted once the note lands. No code changes for it; this slice adds a test and this record
+   puller and admitted once the note lands, where its body can be read (decision 14). No code changes for it; this slice adds a test and this record
    (decision 14).
 
 3. **3c-2's vouch shape is decided; 3c-2's ADR builds it and records it in full.** A vouch is **one event per vouched
@@ -167,7 +167,9 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
     remote door, rule 6's existence check refuses it with a bare `RAISE` (`P0001`, "… is not held on this node (a
     dangling reference)"). `cairn-sync` reads `P0001` as a deliberate refusal: it pens the bytes and re-offers them
     every sweep until they apply. Meanwhile the receiving node shows nothing of the addendum. The cost is one pen row
-    on that node, re-offered every sweep until it applies. Pins: `note_addendum_ahead_of_target.rs` (the door half,
+    on that node, and a loud (failing) pull cycle for each sweep that re-offers it before the note lands: the
+    refusal counts as `refused_verifiable`, so `cycle_is_loud` (`crates/cairn-sync/src/main.rs`) turns the cycle into
+    a `PullIntegrityError`, not a clean exit. Pins: `note_addendum_ahead_of_target.rs` (the door half,
     unsealed bodies: P0001 first, the same bytes admitted once the note is applied, both projected);
     `cairn-sync`'s `clinical_pull.rs::refused_apply_pens_the_bytes_and_recovers_without_loss` (the puller half, with
     a different P0001, an un-enrolled signer).
