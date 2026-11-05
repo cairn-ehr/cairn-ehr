@@ -522,3 +522,11 @@ incremental writing lives pre-commit in the durable draft store
 > (`clinical.note-discard/1`), whose payload carries the draft's non-blank parts and whose twin begins "Draft
 > discarded; it was never entered in the record." It is never a note: it never enters `clinical_note`, and the chart
 > shows it as a one-line marker with its text behind a click.
+>
+> **Since sign-in slice 3c-1** ([ADR-0091](decisions/0091-the-compound-note-and-the-addendum.md), `db/070`, db/064 +
+> db/065 in place), a clinician can add to a signed note. The addendum is an ordinary `clinical.note.asserted`: its
+> first non-blank part carries `refs: [{"rel": "addendum-to", "event": <the note's root>}]`, so there is no wire
+> change. At the authoring door the floor holds an `addendum-to` target to a note of the same chart; the remote door
+> checks only that the target is held, so an addendum that arrives before its note is refused, penned and admitted
+> once the note lands (#948), wherever its body can be read. A note and all its later parts read as one compound note, grouped by a pure function in
+> `cairn-node`.

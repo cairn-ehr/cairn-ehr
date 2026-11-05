@@ -10,6 +10,43 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3c-1 — THE COMPOUND NOTE AND THE ADDENDUM (ADR-0091, db/070, db/064 + db/065 in place) — do not
+undo** (pins: `db/tests/070_note_addendum_test.sql`, `db/tests/064_clinical_note_test.sql`,
+`crates/cairn-node/src/note/compound.rs`'s tests,
+`crates/cairn-node/tests/{note_addendum_doors,note_addendum_sign,note_addendum_ahead_of_target}.rs`,
+`cairn-gui-tauri/src/{notes_compound,notes_compound_webview}_tests.rs`):
+- **The target is the ROOT, set once in the header, and Sign and the timer read it from there.** db/070's door sets
+  `note_draft.addendum_to` when it makes the header; no door updates it; Sign reads it under the draft's lock after its
+  own save, the timer before `commit_overdue_parts`. The window's `addendum_to` only picks the save door. **Tempting
+  wrong fixes:** take the target from the window at Sign "because the window already knows it" (a restarted window
+  sends `None`, and the draft would sign as a new note); let a later save update the column "to fix a wrong target"
+  (a reader then needs the lock, and a new note's draft could become an addendum); name the compound's LATEST part
+  (the target then depends on which parts this window has read). Pins:
+  `note_addendum_sign.rs::sign_takes_the_target_from_the_header_not_the_window`,
+  `sign_inside_the_debounce_still_makes_an_addendum`, `the_timer_commits_an_addendum_as_an_addendum`;
+  `note_addendum_doors.rs::a_later_plain_save_keeps_the_target`, `a_new_notes_draft_refuses_a_target_later`.
+- **The same-chart floor arm (db/064 rule 6a) is AUTHORING-ONLY; never tighten the remote door.** The remote door keeps
+  rule 6's existence check alone, and its bare `RAISE` (`P0001`) is what `cairn-sync` pens and re-offers (#948).
+  **Tempting wrong fix:** "make both doors agree" by running 6a at the remote door too: an addendum a peer's older floor
+  admitted (to another chart's note) would then be refused for ever, and #948's pen would become a permanent refusal.
+  Never give rule 6 a `USING ERRCODE` either (the puller reads only `P0001` as a verdict). Pins:
+  `note_addendum_doors.rs::the_remote_door_still_admits_a_held_target_on_another_chart`;
+  `note_addendum_ahead_of_target.rs::an_addendum_ahead_of_its_note_is_penned_then_admitted` (it asserts `P0001`
+  exactly; Task 2 saw it fail when rule 6 raised `XX000`).
+- **Grouping is pure and lives in `cairn-node`** (`note::compound::compounds`, `compound_state`, `state_words`), so
+  every UI groups and words a note the same way (ADR-0021). **Tempting wrong fix:** group in the webview or in the
+  window's Rust "because it is only display" (a second UI then walks `addendum-to` its own way, and two screens show
+  one note differently). Pins: `compound.rs`'s tests, `the_state_words_are_exact`.
+- **A door that delegates must not leave a half-made row behind on the delegate's refusal.** db/070 makes the header,
+  then calls db/066's save; if that refuses (only `no-such-writer` can), the header it made is deleted, so "every
+  answer but `saved` wrote nothing" stays true. **Tempting wrong fix:** copy db/066's writer check into db/070 "so
+  it refuses first" (two copies of one rule drift). Pin: db/tests/070's `a_refused_writer_leaves_no_header`.
+- **A pin on a condition's TEXT does not pin WHEN it is evaluated.** `renderNotes` draws the notes AFTER its loop that
+  reopens a draft; drawn before it, `noteDraft === null` still held, and every reopen left a dead "Add to this note"
+  (Task 6's review; the condition pin passed). **Tempting wrong fix:** move the draw back to the top "next to the
+  withheld line". Pin: `notes_compound_webview_tests.rs::the_notes_are_drawn_after_a_draft_reopens`. The "Adding to …"
+  line is its own field (`DraftView.adding_to`, `CompoundView.adds_line`), never a prefix parsed out of `words`.
+
 **⇒ GUI SIGN-IN SLICE 3b-2b — THE AUDITED DISCARD (ADR-0090, db/068 + db/069, db/037 + db/044 + db/065 + db/066 in
 place) — do not undo** (pins: `db/tests/068_clinical_note_discard_test.sql`, `db/tests/069_note_draft_discard_test.sql`,
 `crates/cairn-event/src/note_discard.rs`'s tests, `crates/cairn-node/tests/{note_discard,note_discard_floor,note_read,window_role_grants_notes}.rs`,

@@ -19,7 +19,11 @@
 //! WHAT IT DOES NOT PROVE: the puller half — that a `P0001` refusal is penned, re-offered and
 //! released. That lives in `crates/cairn-sync/tests/clinical_pull.rs::
 //! refused_apply_pens_the_bytes_and_recovers_without_loss` (there the refusal is an un-enrolled
-//! signer, the same `P0001` class this test pins).
+//! signer, the same `P0001` class this test pins). Nor does it prove anything of a SEALED
+//! addendum. One that arrives WITHOUT its DEK (a node that is not a custody holder, or a
+//! byte-lazy pull) is admitted uninterpreted by db/020 step 7: the floor cannot see its `refs`,
+//! so rule 6 never runs and it is never penned. It is not projected until its body can be read.
+//! The sealed cases, with and without the DEK, are untested: issue #995 (ADR-0091).
 //!
 //! UNSEALED BODIES, deliberately. A real note is born sealed (ADR-0052), but only the STRICT door
 //! enforces that; the remote door's lenient arm admits an unsealed `clinical.*` body and runs the
