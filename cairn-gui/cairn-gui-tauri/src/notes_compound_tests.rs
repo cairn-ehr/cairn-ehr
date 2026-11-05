@@ -103,6 +103,57 @@ fn a_three_part_note_reads_as_one_text() {
     assert_eq!(both.parts_label.as_deref(), Some("2 parts"));
 }
 
+/// Final review, Important 2: in the continuous text, each later part is preceded by a SEAM line
+/// saying who added it and when it applies, in the very words its own heading uses in the
+/// disclosure — paper shows each addition's writer and date inline, so the time must not hide
+/// behind "{n} parts". The root has no seam (the compound's heading is its). Walked through each
+/// writer's case: a signed part, a part that went in unsigned under a drafted (unverified) name,
+/// writer not known, and a part with no stated time.
+#[test]
+fn each_later_part_is_seamed_with_its_writer_and_time() {
+    let mut unknown = note(4, OPENED, Some(3), 40, NoteGrade::WriterNotKnown);
+    unknown.writer = PartWriter::NotKnown;
+    unknown.effective_basis = "recording-started".into();
+    let mut drafted = note(3, OPENED, Some(2), 30, NoteGrade::WentInUnsigned);
+    drafted.writer = PartWriter::Drafted("Nurse A".into());
+    let v = view_of(&one(vec![
+        unknown,
+        drafted,
+        note(1, OPENED, None, 0, signed("Dr Ada")),
+        note(2, OPENED, Some(1), 10, signed("Dr Bo")),
+    ]));
+    let seams: Vec<(Option<&str>, Option<&str>, &str)> = v
+        .segments
+        .iter()
+        .map(|s| (s.seam.as_deref(), s.seam_spoken.as_deref(), s.text.as_str()))
+        .collect();
+    let same = |s| (Some(s), Some(s));
+    let (a, b) = same("Added: signed by Dr Bo · 3 Nov 2025 03:10 (stated)");
+    let (c, d) = same("Added: writer not known · no stated time · writing began 3 Nov 2025 03:40");
+    assert_eq!(
+        seams,
+        [
+            (None, None, "part 1"),
+            (a, b, "part 2"),
+            (
+                Some("Added: written by ?Nurse A · went in unsigned · 3 Nov 2025 03:30 (stated)"),
+                // The `?` is heard as "unverified" (#973), never skipped as a bare glyph.
+                Some(
+                    "Added: written by unverified Nurse A · went in unsigned · 3 Nov 2025 03:30 \
+                     (stated)"
+                ),
+                "part 3"
+            ),
+            (c, d, "part 4"),
+        ]
+    );
+    // The heading stays the ROOT's: the compound keeps its place by the root's time.
+    assert_eq!(v.byline, "signed by Dr Ada");
+    // A one-part note has no segments: it is drawn from `text`, as before 3c-1.
+    let lone = view_of(&one(vec![note(1, OPENED, None, 0, signed("Dr Ada"))]));
+    assert!(lone.segments.is_empty());
+}
+
 /// A note on a linked chart is shown, but offers no "Add to this note": the draft would live on a
 /// chart this pane does not list.
 #[test]

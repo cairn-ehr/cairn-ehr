@@ -104,21 +104,29 @@ function readForThisClaim(claim) {
 }
 
 /**
- * One signed note: its text exactly as typed, then who wrote and signed it and when it applies.
- * The byline is heard in its spoken form ("written by unverified Nurse A", #973): a screen reader
- * skips a bare `?`, and a paragraph's aria-label is not read, so the shown words are hidden from
- * it and the spoken ones are visually hidden.
+ * One signed note: its text exactly as typed, then who wrote and signed it and when it applies
+ * (`bylineOf`, heard in its spoken form, #973).
  */
 function noteItem(note) {
   const li = document.createElement("li");
+  li.append(cell("p", note.text, { class: "note-text" }), bylineOf(note));
+  return li;
+}
+
+/**
+ * A note's byline and time as one paragraph. A screen reader skips a bare `?`, and a paragraph's
+ * aria-label is not read, so the shown byline is hidden from it and the spoken one ("written by
+ * unverified Nurse A", #973) from the eye. Shared with
+ * notes_compound.js, which draws it ABOVE a compound's text.
+ */
+function bylineOf(note) {
   const byline = document.createElement("p");
   byline.append(
     cell("span", note.byline, { "aria-hidden": "true" }),
     cell("span", note.byline_spoken, { class: "visually-hidden" }),
     " · " + note.when,
   );
-  li.append(cell("p", note.text, { class: "note-text" }), byline);
-  return li;
+  return byline;
 }
 
 /**

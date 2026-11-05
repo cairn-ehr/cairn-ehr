@@ -260,6 +260,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         state: None,
         parts_label: None,
         parts: vec![],
+        segments: vec![],
         can_add: true,
         adds_line: "a".into(),
     };

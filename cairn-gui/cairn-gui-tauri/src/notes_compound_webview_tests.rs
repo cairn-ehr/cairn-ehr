@@ -18,7 +18,7 @@ const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 /// name says WHICH note, since a list of notes would otherwise read as a list of identical buttons.
 #[test]
 fn add_is_offered_only_on_this_charts_note_while_the_editor_is_free() {
-    let item = js_fn(COMPOUND_JS, "compoundItem");
+    let item = js_fn(COMPOUND_JS, "withAdd");
     let offered = position(item, "if (compound.can_add && noteDraft === null) {");
     assert!(
         offered < position(item, "cell(\"button\", \"Add to this note\""),
@@ -131,13 +131,13 @@ fn the_adding_to_line_shows_only_for_an_addendum() {
 
 /// A compound reads as one text, with its parts behind a `<details>` disclosure (keyboard-operable
 /// by default) each drawn as the note it is (`noteItem`, whose byline is heard in its spoken form,
-/// #973). Every word is Rust's, set as text — the typed text is never parsed as markup (ADR-0041).
+/// #973). The compound's words are Rust's, set as text — the typed text is never parsed as markup
+/// (ADR-0041).
 #[test]
 fn a_compound_is_one_text_with_its_parts_behind_a_disclosure() {
     assert!(js_fn(NOTES_JS, "renderNotes").contains("pane.notes.map(compoundItem)"));
     let item = js_fn(COMPOUND_JS, "compoundItem");
     for line in [
-        "const li = noteItem(compound);",
         "if (compound.state) li.append(cell(\"p\", compound.state));",
         "const details = document.createElement(\"details\");",
         "parts.append(...compound.parts.map(noteItem));",
@@ -171,13 +171,61 @@ fn a_compound_is_one_text_with_its_parts_behind_a_disclosure() {
     );
 }
 
+/// Final review, Important 1 and 2: a compound of two or more parts is HEADED by the root's
+/// byline (spec §3.7) — drawn after the text, as `noteItem` draws a one-part note, the root
+/// writer's "signed by Nurse A" would sit under the LAST writer's words and read as Nurse A
+/// signing them. Then its state line, then the text a part at a time, each later part after its
+/// own seam line (who added it, and when it applies), heard in its spoken form like a byline.
+/// A one-part note is still `noteItem`'s, unchanged.
+#[test]
+fn a_compound_is_headed_by_its_root_and_seamed_at_each_part() {
+    let item = js_fn(COMPOUND_JS, "compoundItem");
+    let one = position(
+        item,
+        "if (compound.parts.length === 0) return withAdd(noteItem(compound), compound);",
+    );
+    let heading = position(item, "li.append(bylineOf(compound));");
+    let state = position(
+        item,
+        "if (compound.state) li.append(cell(\"p\", compound.state));",
+    );
+    let seam = position(item, "if (segment.seam) li.append(seamLine(segment));");
+    let text = position(
+        item,
+        "li.append(cell(\"p\", segment.text, { class: \"note-text\" }));",
+    );
+    let details = position(item, "const details = document.createElement(\"details\");");
+    assert!(
+        one < heading && heading < state && state < seam && seam < text && text < details,
+        "{item}"
+    );
+    assert!(
+        item.contains("for (const segment of compound.segments) {"),
+        "{item}"
+    );
+    let line = js_fn(COMPOUND_JS, "seamLine");
+    for part in [
+        "cell(\"span\", segment.seam, { \"aria-hidden\": \"true\" }),",
+        "cell(\"span\", segment.seam_spoken, { class: \"visually-hidden\" }),",
+    ] {
+        assert!(line.contains(part), "{line}");
+    }
+    // A one-part note: text, then its byline — the byline drawn by the same `bylineOf`.
+    let note = js_fn(NOTES_JS, "noteItem");
+    assert!(
+        position(note, "cell(\"p\", note.text, { class: \"note-text\" })")
+            < position(note, "bylineOf(note)"),
+        "{note}"
+    );
+}
+
 /// The drift guard (`commands::tests::fields_read_in`): every field notes_compound.js reads off a
 /// compound is one Rust's `CompoundView` sends — a renamed `can_add` would otherwise read
 /// `undefined`, and no note could ever be added to.
 #[test]
 fn notes_compound_js_reads_no_field_the_backend_does_not_send() {
     use crate::commands::tests::fields_read_in;
-    use crate::notes::compound::CompoundView;
+    use crate::notes::compound::{CompoundView, SegmentView};
     let compound = CompoundView {
         root_event_id: "e".into(),
         text: "t".into(),
@@ -187,18 +235,25 @@ fn notes_compound_js_reads_no_field_the_backend_does_not_send() {
         state: None,
         parts_label: None,
         parts: vec![],
+        segments: vec![SegmentView {
+            seam: None,
+            seam_spoken: None,
+            text: "t".into(),
+        }],
         can_add: true,
         adds_line: "a".into(),
     };
     let value = serde_json::to_value(&compound).unwrap();
-    let available = value.as_object().expect("an object");
-    let read = fields_read_in(COMPOUND_JS, "compound");
-    assert!(!read.is_empty(), "notes_compound.js reads `compound`");
-    for field in read {
-        assert!(
-            available.contains_key(&field),
-            "notes_compound.js reads `compound.{field}`, not sent"
-        );
+    for (binding, sent) in [("compound", &value), ("segment", &value["segments"][0])] {
+        let available = sent.as_object().expect("an object");
+        let read = fields_read_in(COMPOUND_JS, binding);
+        assert!(!read.is_empty(), "notes_compound.js reads `{binding}`");
+        for field in read {
+            assert!(
+                available.contains_key(&field),
+                "notes_compound.js reads `{binding}.{field}`, not sent"
+            );
+        }
     }
 }
 

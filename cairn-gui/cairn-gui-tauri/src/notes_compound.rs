@@ -3,9 +3,10 @@
 //! A multi-writer draft signs as one event per writer's part, and a clinician can add to a note
 //! already on the chart ("Add to this note"); on paper, all of that is one page someone wrote
 //! more on. The node groups the events (`cairn_node::note::compound::compounds`); this module
-//! words a group for the window: the parts' texts run together as one text, under the root's
-//! heading, with a "{n} parts" disclosure holding each part's own heading when there is more
-//! than one. Pure functions, so every sentence is pinned without a database or a webview.
+//! words a group for the window: the parts' texts run together as one text, headed by the root's
+//! byline, each later part preceded by a seam line saying who added it and when it applies, with a
+//! "{n} parts" disclosure holding each part's own heading when there is more than one. Pure
+//! functions, so every sentence is pinned without a database or a webview.
 use super::parts::{note_row_view, NoteRowView};
 use cairn_node::note::compound::{compound_state, state_words, CompoundNote};
 use cairn_node::note::read::NoteRow;
@@ -23,7 +24,9 @@ pub(crate) const ORPHAN_LEAD: &str = "Adds to a note not shown here · ";
 pub struct CompoundView {
     /// The root note's event id — what an addendum draft names as its target.
     pub root_event_id: String,
-    /// Every part's text, in part order, one blank line between: the note as it reads.
+    /// Every part's text, in part order, one blank line between: the note as it reads. The window
+    /// draws a one-part note from it (`noteItem`); a longer one from `segments`, which add the
+    /// seams. Kept whole for any reader that wants the note's text in one piece.
     pub text: String,
     /// The root's byline (`view::byline_words`), led by [`ORPHAN_LEAD`] for an orphan.
     pub byline: String,
@@ -38,6 +41,9 @@ pub struct CompoundView {
     pub parts_label: Option<String>,
     /// Each part as its own note, root first; empty for a one-part note.
     pub parts: Vec<NoteRowView>,
+    /// The continuous text of a note of two or more parts, one segment per part, root first,
+    /// each later one led by its seam; empty for a one-part note, which is drawn from `text`.
+    pub segments: Vec<SegmentView>,
     /// Whether "Add to this note" is offered: the root is on the chart on screen. A linked chart's
     /// note is not — the draft would live on a chart this pane does not list.
     pub can_add: bool,
@@ -45,6 +51,43 @@ pub struct CompoundView {
     /// note" opens the editor with, the very words the draft's `DraftView::adding_to` says once
     /// the pane is read again.
     pub adds_line: String,
+}
+
+/// One part's place in a compound's continuous text.
+#[derive(Debug, serde::Serialize)]
+pub struct SegmentView {
+    /// "Added: signed by Dr Bo · 03:10 (stated)" — the part's own byline and time, in its own
+    /// heading's words ([`seam_words`]); `None` for the root, which the compound's heading heads.
+    pub seam: Option<String>,
+    /// The seam as a screen reader should say it ("written by unverified Nurse A", #973).
+    pub seam_spoken: Option<String>,
+    /// The part's text exactly as typed; the webview sets it as `textContent`.
+    pub text: String,
+}
+
+/// The seam before a later part: "Added: " and the part's heading as the disclosure shows it
+/// (`byline · when`), so a reader of the continuous text sees, at the join, that another writer —
+/// or the same one, later — wrote on, and when that part applies. "Added" claims only that the
+/// part was added to the note (it is an addendum event), never that it was written later in time:
+/// a stated time may precede the root's. Pure.
+fn seam_words(byline: &str, when: &str) -> String {
+    format!("Added: {byline} · {when}")
+}
+
+/// The segments of a compound of `views` (its parts, root first); empty for one part. Pure.
+fn segments(views: &[NoteRowView]) -> Vec<SegmentView> {
+    if views.len() < 2 {
+        return vec![];
+    }
+    views
+        .iter()
+        .enumerate()
+        .map(|(i, v)| SegmentView {
+            seam: (i > 0).then(|| seam_words(&v.byline, &v.when)),
+            seam_spoken: (i > 0).then(|| seam_words(&v.byline_spoken, &v.when)),
+            text: v.text.clone(),
+        })
+        .collect()
 }
 
 /// Compound `c` worded for the pane, `opened` being the chart on screen, dated against `today`
@@ -76,6 +119,7 @@ where
         .map(|p| p.text.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
+    let segments = segments(&views);
     CompoundView {
         root_event_id: c.root.to_string(),
         text,
@@ -85,6 +129,7 @@ where
         state: state_words(compound_state(&c.parts)).map(str::to_string),
         parts_label: (n >= 2).then(|| format!("{n} parts")),
         parts: if n >= 2 { views } else { vec![] },
+        segments,
         can_add: c.chart == opened,
         adds_line,
     }

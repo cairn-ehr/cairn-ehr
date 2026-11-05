@@ -321,7 +321,7 @@ fn parts_drawn_through_cell() {
     // A signed part's byline is HEARD in its spoken form, "unverified Nurse A" (#973): the shown
     // words, with their bare `?`, are hidden from a screen reader, the spoken ones from the eye
     // (a paragraph's aria-label is not read out). Both are drawn through `cell`.
-    let item = js_fn(NOTES_JS, "noteItem");
+    let item = js_fn(NOTES_JS, "bylineOf");
     for line in [
         "cell(\"span\", note.byline, { \"aria-hidden\": \"true\" }),",
         "cell(\"span\", note.byline_spoken, { class: \"visually-hidden\" }),",
