@@ -350,7 +350,8 @@ fn sign_words_each_refusal() {
 /// save and by a Sign — a verdict a re-read cannot mend, and never a fork.
 #[test]
 fn an_addendum_to_a_note_not_here_is_worded() {
-    const WORDS: &str = "The note this adds to is not on this chart; nothing was saved.";
+    const WORDS: &str = "the note this adds to is no longer shown on this chart — nothing was \
+                         saved; your text is still here, so copy it into a new note";
     let save = save_view(SaveOutcome::NoSuchNote);
     assert!(!save.saved && save.fork.is_none() && save.pressed_fork.is_none());
     assert_eq!(save.sentence.as_deref(), Some(WORDS));

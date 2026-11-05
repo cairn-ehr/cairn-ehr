@@ -21,13 +21,13 @@
 //! refused_apply_pens_the_bytes_and_recovers_without_loss` (there the refusal is an un-enrolled
 //! signer, the same `P0001` class this test pins). Nor does it prove anything of a SEALED
 //! addendum. One that arrives WITHOUT its DEK (a node that is not a custody holder, or a
-//! byte-lazy pull) is admitted uninterpreted by db/020 step 7: the floor cannot see its `refs`,
+//! byte-lazy pull) is admitted on structural checks only by db/020 step 7: the floor cannot see its `refs`,
 //! so rule 6 never runs and it is never penned. It is not projected until its body can be read.
 //! The sealed cases, with and without the DEK, are untested: issue #995 (ADR-0091).
 //!
 //! UNSEALED BODIES, deliberately. A real note is born sealed (ADR-0052), but only the STRICT door
 //! enforces that; the remote door's lenient arm admits an unsealed `clinical.*` body and runs the
-//! full floor on it (db/020 step 7), which is what reaches rule 6. A sealed A would need its DEK
+//! full floor on it (db/020 step 8), which is what reaches rule 6. A sealed A would need its DEK
 //! sidecar for the floor to see its `refs` at all, and the sealing path (`prepare_sealed`) is
 //! crate-private; the unsealed body exercises the same rule with no custody plumbing.
 //!
@@ -133,4 +133,46 @@ async fn an_addendum_ahead_of_its_note_is_penned_then_admitted() {
         Some(serde_json::json!([{"rel": "addendum-to", "event": n_id.to_string()}])),
         "A is projected, still naming N"
     );
+}
+
+/// Rule 6a (an addendum adds to a note of THIS chart) is the AUTHORING door's only: through the
+/// real remote door a peer's addendum naming a held note of ANOTHER chart is admitted (ADR-0091
+/// (g)). Driven through `apply_remote_event` itself, not the floor with the marker set by hand, so
+/// a db/020 change that ran step 8 before raising `cairn.remote_apply` would fail here: 6a would
+/// refuse with P0001, which the puller pens forever (PR #992 review).
+#[tokio::test]
+async fn the_remote_door_admits_a_peers_addendum_to_another_charts_note() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, _, _, chart) = note_setup(&c).await;
+    let other = Uuid::now_v7();
+    common::submit_registration(&c, &node_sk, &node_kid, other, 0).await;
+    let (peer_sk, peer_kid) = enroll_human_with_role(&c, "peer-clinician").await;
+    let wall = chrono::Utc::now().timestamp_millis();
+    let (n_id, n_bytes) = peer_note(&peer_sk, &peer_kid, other, wall, None);
+    let (a_id, a_bytes) = peer_note(&peer_sk, &peer_kid, chart, wall + 1, Some(n_id));
+
+    apply(&c, &n_bytes)
+        .await
+        .expect("the other chart's note applies");
+    apply(&c, &a_bytes).await.unwrap_or_else(|e| {
+        panic!(
+            "the remote door must not apply rule 6a to a peer's addendum: {}",
+            db_msg(&e)
+        )
+    });
+    let held: i64 = c
+        .query_one(
+            "SELECT count(*) FROM clinical_note WHERE event_id = $1::text::uuid \
+               AND patient_id = $2::text::uuid",
+            &[&a_id.to_string(), &chart.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(held, 1, "the addendum is projected on its own chart");
 }

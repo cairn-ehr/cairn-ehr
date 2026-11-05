@@ -14,8 +14,8 @@ use cairn_node::note::view::instant;
 use chrono::{NaiveDate, TimeZone};
 use uuid::Uuid;
 
-/// Heads a compound whose root adds to a note this read does not hold (withheld on a doubted
-/// linked chart, or kept off the screen): the clinician must not read it as a note of its own.
+/// Heads a compound whose root adds to a note this read does not hold (any of
+/// `CompoundNote::orphan`'s causes): the clinician must not read it as a note of its own.
 pub(crate) const ORPHAN_LEAD: &str = "Adds to a note not shown here · ";
 
 /// One compound note, as the pane shows it. The `text`/`byline`/`byline_spoken`/`when` names are
@@ -102,35 +102,35 @@ where
     Tz::Offset: std::fmt::Display,
 {
     let views: Vec<NoteRowView> = c
-        .parts
+        .parts()
         .iter()
         .map(|p| note_row_view(p, tz, today))
         .collect();
     let n = views.len();
-    let lead = if c.orphan { ORPHAN_LEAD } else { "" };
+    let lead = if c.is_orphan() { ORPHAN_LEAD } else { "" };
     // `compounds` never makes an empty compound: `views[0]` is the root.
     let byline = format!("{lead}{}", views[0].byline);
     let byline_spoken = format!("{lead}{}", views[0].byline_spoken);
     let when = views[0].when.clone();
-    let adds_line = adding_to_shown(&c.parts[0], &when, tz, today);
+    let adds_line = adding_to_shown(&c.parts()[0], &when, tz, today);
     let text = c
-        .parts
+        .parts()
         .iter()
         .map(|p| p.text.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
     let segments = segments(&views);
     CompoundView {
-        root_event_id: c.root.to_string(),
+        root_event_id: c.root().to_string(),
         text,
         byline,
         byline_spoken,
         when,
-        state: state_words(compound_state(&c.parts)).map(str::to_string),
+        state: state_words(compound_state(c.parts())).map(str::to_string),
         parts_label: (n >= 2).then(|| format!("{n} parts")),
         parts: if n >= 2 { views } else { vec![] },
         segments,
-        can_add: c.chart == opened,
+        can_add: c.chart() == opened,
         adds_line,
     }
 }

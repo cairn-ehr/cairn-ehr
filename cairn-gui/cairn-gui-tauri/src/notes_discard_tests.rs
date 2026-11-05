@@ -212,6 +212,11 @@ fn discard_words_each_outcome() {
         EMPTY_DISCARDED,
         "Discarded. The draft was empty, so nothing was kept."
     );
+    assert_eq!(
+        NEVER_SAVED_DISCARDED,
+        "Discarded. The note this adds to is not shown on this chart, so nothing of this draft \
+         had been saved, and nothing was kept."
+    );
 }
 
 /// A discarded save is not worded as signed (ruling 1), and a take and a sign say it is closed.

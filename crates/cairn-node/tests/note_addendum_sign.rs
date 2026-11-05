@@ -304,6 +304,42 @@ async fn the_timer_commits_an_addendum_as_an_addendum() {
     assert_eq!(refs(&c, ids[0]).await, addendum_to(root));
 }
 
+/// The timer's chain is Sign's: only the FIRST part of a two-writer addendum names the root, and
+/// part 2 chains to part 1 (ADR-0088 decision 14). `commit.rs` repeats Sign's
+/// `ids.last().or(root)` and nothing else pins it; a swap would make every part name the root,
+/// which the compound would still group, so only the wire shows it (PR #992 review).
+#[tokio::test]
+async fn a_two_writer_addendum_committed_by_the_timer_chains_part_two_to_part_one() {
+    setup!(_base, c, node_sk, _node_kid, _author, chart, root);
+    enrol_nurse_a(&c).await;
+    let draft = Uuid::now_v7();
+    save_as(&c, draft, chart, Some("nurse-a"), "obs stable", Some(root)).await;
+    save_as(
+        &c,
+        draft,
+        chart,
+        Some("notewriter"),
+        "plan: review",
+        Some(root),
+    )
+    .await;
+    age(&c, draft, 181).await;
+
+    let ids = match commit_overdue(&mut c, &node_sk, draft, ORIGIN)
+        .await
+        .unwrap()
+    {
+        CommitOutcome::Committed(done) => done.value,
+        other => panic!("expected Committed, got {other:?}"),
+    };
+
+    let [first, second] = ids[..] else {
+        panic!("two parts, two events: {ids:?}");
+    };
+    assert_eq!(refs(&c, first).await, addendum_to(root));
+    assert_eq!(refs(&c, second).await, addendum_to(first));
+}
+
 /// Review Focus 1: two clinicians add to the same note at once, on two terminals (two drafts, two
 /// connections). Both name the root and both land inside the ONE compound, three parts.
 #[tokio::test]
@@ -326,8 +362,8 @@ async fn two_addenda_signed_at_once_both_join_the_note() {
     let read = list_patient_notes(&c, chart).await.unwrap();
     let grouped = compounds(read.notes);
     assert_eq!(grouped.len(), 1, "{grouped:?}");
-    assert_eq!(grouped[0].root, root);
-    assert_eq!(grouped[0].parts.len(), 3);
+    assert_eq!(grouped[0].root(), root);
+    assert_eq!(grouped[0].parts().len(), 3);
 }
 
 /// A target that is not a note on this chart (here: another chart's note) refuses the Sign

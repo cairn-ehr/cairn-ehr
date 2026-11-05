@@ -3,11 +3,12 @@
 - **Status:** Accepted (builds the slice 3 design's §3.4 addenda and §3.7 compound note, read with
   [ADR-0088](0088-whos-here-and-a-drafts-parts.md) decision 14 (Sign's parts); adds one authoring-door arm to
   [ADR-0087](0087-the-first-note-stream-and-its-draft.md) decision 3's floor rule 6; settles
-  [#948](https://github.com/cairn-ehr/cairn-ehr/issues/948), which ADR-0087 and ADR-0088 left open; supersedes no ADR
-  decision)
+  [#948](https://github.com/cairn-ehr/cairn-ehr/issues/948), which ADR-0087 and ADR-0088 left open — the issue stays
+  open until its sealed cases are tested, [#995](https://github.com/cairn-ehr/cairn-ehr/issues/995); supersedes no
+  ADR decision)
 - **Date:** 2026-11-05
 - **Spec version at acceptance:** 0.93
-- **Issues:** draft PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992) (GUI sign-in slice 3c-1). Design:
+- **Issues:** PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992) (GUI sign-in slice 3c-1). Design:
   `docs/superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md` (§3.4, §3.7, §5); plan:
   `docs/superpowers/plans/2026-11-05-sign-in-slice-3c-1-compound-note-and-addendum.md`. Filed by the build:
   [#993](https://github.com/cairn-ehr/cairn-ehr/issues/993) (no "Add to this note" on a linked chart's note) ·
@@ -92,13 +93,17 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
    because the column never changes. The first part's body then gets `addendum_to` = that target. So Sign pressed
    inside the one-second save debounce still makes an addendum (its own save makes the header), and a restarted
    window that sends `None` for an existing addendum draft still signs an addendum. A Sign whose save would make an
-   addendum header for a note this node does not show on this chart is refused `SignRefusal::NoSuchNote` ("The note
-   this adds to is not on this chart; nothing was saved."). Discard passes the target too; its `no-such-note` (no
-   header, so nothing to throw away) is `DiscardRefusal::Gone`. The drafts list reads each draft's target in the
-   same statement as its parts. Pins:
+   addendum header for a note this node does not show on this chart is refused `SignRefusal::NoSuchNote` ("the note
+   this adds to is no longer shown on this chart — nothing was saved; your text is still here, so copy it into a new
+   note"). Discard passes the target too; its `no-such-note` (no header: the node holds nothing of the draft) is
+   `DiscardOutcome::NeverSaved`, a discard that writes nothing, worded as one ("Discarded. … nothing was kept"),
+   never a refusal that would leave the clinician unable to close the editor. The drafts list reads each draft's
+   target in the same statement as its parts. Pins:
    `note_addendum_sign.rs::sign_takes_the_target_from_the_header_not_the_window`,
    `sign_inside_the_debounce_still_makes_an_addendum`, `the_timer_commits_an_addendum_as_an_addendum`,
-   `an_addendum_target_on_another_chart_refuses_the_sign`, `the_drafts_list_carries_the_target`.
+   `a_two_writer_addendum_committed_by_the_timer_chains_part_two_to_part_one`,
+   `an_addendum_target_on_another_chart_refuses_the_sign`, `the_drafts_list_carries_the_target`;
+   `discard.rs::a_never_saved_addendum_is_discarded_with_nothing_written`.
 
 ### The floor (`db/064` rule 6a, in place)
 
@@ -166,7 +171,9 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
     stated, "Adding to the note begun {when its writing began}" otherwise (an unstated time would read "no stated
     time · writing began …" and run into the draft's own words), and "Adding to a note not shown here" when the pane
     shows no part with the target's id. The line is `CompoundView.adds_line`, which Add opens the editor with, and
-    `DraftView.adding_to`, which the draft reads back with, so the two are always the same words. It is never part of
+    `DraftView.adding_to`, which the draft reads back with: both are built by the same words from the same compound,
+    so they agree while the grouping and the day stay the same (a missing note that is shown later regroups an
+    orphan under the new root, and "today" becomes a date after midnight). It is never part of
     `DraftView.words`. The window sends the draft's own target back with every save, Sign and Discard; text kept as a
     new draft after a fork keeps the target, because text typed as an addition must never become a new note. Pins:
     `notes_compound_tests.rs::an_addendum_draft_says_what_it_adds_to`;
@@ -187,10 +194,13 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
     a different P0001, an un-enrolled signer).
 
     **Where the body cannot be read, nothing is penned.** A sealed addendum that arrives WITHOUT its DEK (a node that
-    is not a custody holder, or a byte-lazy pull) is admitted uninterpreted by db/020 step 7: the floor cannot see its
-    `refs`, so rule 6 never runs. It is not projected until its body can be read. When a key does land, both doors
-    that can land one run the floor on the clear body first (db/020 step 8; db/005's `submit_event`), so a key
-    arriving while the note is still missing meets rule 6 again. The sealed cases, with and without the DEK, are
+    is not a custody holder, or a byte-lazy pull) is admitted on structural checks only by db/020 step 7 (ADR-0052's
+    lenient sealed arm): the floor cannot see its `refs`, so rule 6 never runs. It is not projected until its body
+    can be read. When a key does land, both doors that can land one run the floor on the clear body first (db/020
+    step 8; db/005's `submit_event`), so a key arriving while the note is still missing meets rule 6 again. The two
+    doors judge that late landing differently: db/020 in the remote posture (rule 6 only), db/005 in the strict one
+    (db/005: "a late landing at the strict door is judged in the strict posture"), so a key landed through
+    `submit_event` also meets rule 6a. The sealed cases, with and without the DEK, are
     untested ([#995](https://github.com/cairn-ehr/cairn-ehr/issues/995)).
 
 ## What is not guaranteed
@@ -215,6 +225,10 @@ never a new note. It needs no wire change: the `refs` slot and its `addendum-to`
   missing note's.
 - **(g) A peer's addendum to another chart's note is admitted** at the remote door, where only existence is checked
   (decision 8). It shows inside its root's compound when both charts are in the read, and as an orphan otherwise.
+  One path is stricter: a sealed one whose key later lands through db/005's `submit_event` is judged in the strict
+  posture there (decision 14), so rule 6a refuses it. No honest peer meets this: rule 6a compares the envelope's
+  `patient_id`, which no chart link ever changes, so an addendum its own authoring door admitted passes 6a
+  everywhere. Untested, with the other sealed cases ([#995](https://github.com/cairn-ehr/cairn-ehr/issues/995)).
 - **(h) Minor residuals of the reviews** are [#996](https://github.com/cairn-ehr/cairn-ehr/issues/996): among them, a
   mismatched target on an existing draft answers `elsewhere`, which the window words as "another chart" (the window
   always sends the draft's own target, so only a raw or faulty client meets it).

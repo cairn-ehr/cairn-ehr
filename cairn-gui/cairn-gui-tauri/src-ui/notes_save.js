@@ -87,8 +87,8 @@ function notesSaved() {
  * moved, timer-committed or signed-elsewhere draft whose unsaved text was kept as a new draft
  * (`keepUnsavedText`); or a spend or discard this window's own press may have made (the text that
  * press carried went with it; text typed after the press is kept as a new draft). A refusal that
- * wrote nothing — elsewhere, no chart, no such writer — resolves false and leaves the editor
- * UNSAVED: the text exists only on screen, and nothing may treat it as kept (PR #966 review).
+ * wrote nothing — elsewhere, no chart, no such writer, no such note — resolves false and leaves
+ * the editor UNSAVED: the text exists only on screen, and nothing may treat it as kept (PR #966 review).
  */
 async function sendDraft(sent) {
   const mine = () => noteDraft === sent.held;

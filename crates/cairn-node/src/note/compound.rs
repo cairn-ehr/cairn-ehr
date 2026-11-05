@@ -11,17 +11,36 @@ use uuid::Uuid;
 use super::read::NoteRow;
 use super::view::NoteGrade;
 
-/// One note with all its parts. `parts[0]` is the root; the rest follow in
-/// `(recording_started, event_id)` order.
+/// One note with all its parts. `parts()[0]` is the root; the rest follow in
+/// `(recording_started, event_id)` order. Built only by [`compounds`], so `parts` is never empty
+/// and the root, its chart and its orphan mark are read off the first part, never stored beside
+/// it: a hand-built compound cannot name one root and show another (PR #992 review).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompoundNote {
-    pub root: Uuid,
+    parts: Vec<NoteRow>,
+}
+
+impl CompoundNote {
+    /// The root's event id: the root of what this read holds (for an orphan, itself an addendum).
+    pub fn root(&self) -> Uuid {
+        self.parts[0].event_id
+    }
     /// The root's chart.
-    pub chart: Uuid,
-    /// The root names a note this read does not contain (withheld on a doubted linked chart, or
-    /// kept off the screen by a newer profile ruling): it is shown as a root, marked.
-    pub orphan: bool,
-    pub parts: Vec<NoteRow>,
+    pub fn chart(&self) -> Uuid {
+        self.parts[0].chart
+    }
+    /// The root names a note this read does not contain (withheld on a doubted linked chart, on
+    /// a chart not in the read, kept off the screen by a newer profile ruling, or a sealed or
+    /// erased body this node cannot show): it is shown as a root, marked. A root with a target
+    /// is an orphan by construction: [`compounds`] stops only at a row with no target, a target
+    /// not in the read, or (a cycle) a row it then makes its own root.
+    pub fn is_orphan(&self) -> bool {
+        self.parts[0].addendum_to.is_some()
+    }
+    /// Every part, the root first.
+    pub fn parts(&self) -> &[NoteRow] {
+        &self.parts
+    }
 }
 
 /// Group `notes` into compounds, newest root `t_effective` first (ties by root id, so the order
@@ -32,54 +51,50 @@ pub fn compounds(notes: Vec<NoteRow>) -> Vec<CompoundNote> {
         .enumerate()
         .map(|(i, n)| (n.event_id, i))
         .collect();
-    // For each row: (root index, root is an orphan).
-    let resolved: Vec<(usize, bool)> = (0..notes.len())
+    // For each row: its root's index.
+    let resolved: Vec<usize> = (0..notes.len())
         .map(|start| {
             let mut at = start;
-            // Bounded by the read's length: a cycle cannot be signed, but a bound costs nothing.
+            // Bounded by the read's length: no honest client makes a cycle (rule 6 makes a target
+            // exist first), but a sealed body admitted without its key skips that check, and a
+            // bound costs nothing.
             for _ in 0..notes.len() {
                 match notes[at].addendum_to {
-                    None => return (at, false),
+                    None => return at,
                     Some(target) => match index.get(&target) {
                         Some(&next) => at = next,
-                        None => return (at, true), // target not in the read
+                        None => return at, // target not in the read: an orphan root
                     },
                 }
             }
-            (start, true) // still unresolved after the bound: this row is its own root
+            start // still unresolved after the bound: this row is its own (orphan) root
         })
         .collect();
-    let mut roots: Vec<(usize, bool)> = Vec::new();
+    let mut roots: Vec<usize> = Vec::new();
     let mut seen_root: HashSet<usize> = HashSet::new();
-    for &(r, orphan) in &resolved {
+    for &r in &resolved {
         if seen_root.insert(r) {
-            roots.push((r, orphan));
+            roots.push(r);
         }
     }
-    let part_of: Vec<usize> = resolved.iter().map(|&(r, _)| r).collect();
     let mut out: Vec<CompoundNote> = roots
         .iter()
-        .map(|&(r, orphan)| {
+        .map(|&r| {
             let mut rest: Vec<NoteRow> = (0..notes.len())
-                .filter(|&i| i != r && part_of[i] == r)
+                .filter(|&i| i != r && resolved[i] == r)
                 .map(|i| notes[i].clone())
                 .collect();
             rest.sort_by_key(|n| (n.recording_started, n.event_id));
             let mut parts = vec![notes[r].clone()];
             parts.extend(rest);
-            CompoundNote {
-                root: notes[r].event_id,
-                chart: notes[r].chart,
-                orphan,
-                parts,
-            }
+            CompoundNote { parts }
         })
         .collect();
     out.sort_by(|a, b| {
         b.parts[0]
             .t_effective
             .cmp(&a.parts[0].t_effective)
-            .then(a.root.cmp(&b.root))
+            .then(a.root().cmp(&b.root()))
     });
     out
 }
@@ -161,7 +176,7 @@ mod tests {
     }
 
     fn ids(c: &CompoundNote) -> Vec<Uuid> {
-        c.parts.iter().map(|p| p.event_id).collect()
+        c.parts().iter().map(|p| p.event_id).collect()
     }
 
     #[test]
@@ -169,10 +184,10 @@ mod tests {
         let c = compounds(vec![row(1, None, 0, 0, signed())]);
         assert_eq!(c.len(), 1);
         assert_eq!(
-            (c[0].root, c[0].orphan, c[0].parts.len()),
+            (c[0].root(), c[0].is_orphan(), c[0].parts().len()),
             (id(1), false, 1)
         );
-        assert_eq!(c[0].chart, id(900));
+        assert_eq!(c[0].chart(), id(900));
     }
 
     #[test]
@@ -206,7 +221,7 @@ mod tests {
             row(3, Some(2), 1, 0, signed()),
         ]);
         assert_eq!(c.len(), 1);
-        assert!(c[0].orphan);
+        assert!(c[0].is_orphan());
         assert_eq!(ids(&c[0]), vec![id(2), id(3)]);
     }
 
@@ -218,7 +233,7 @@ mod tests {
             row(3, Some(1), 0, 50, signed()), // a later part does not move its root
             row(4, None, 0, 20, signed()),
         ]);
-        let roots: Vec<Uuid> = c.iter().map(|c| c.root).collect();
+        let roots: Vec<Uuid> = c.iter().map(|c| c.root()).collect();
         assert_eq!(roots, vec![id(2), id(4), id(1)]);
     }
 

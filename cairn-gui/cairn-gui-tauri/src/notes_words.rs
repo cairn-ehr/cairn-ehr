@@ -156,9 +156,11 @@ pub(crate) const NO_CHART: &str = "this patient has no chart on this node";
 /// … when nothing but whitespace was typed.
 const EMPTY: &str = "there is nothing to sign — the note is empty";
 /// … when an addendum's first save or Sign names a note this node does not show on this chart
-/// (slice 3c-1): no draft was made. The same words for a save and a Sign.
-pub(crate) const NO_SUCH_NOTE: &str =
-    "The note this adds to is not on this chart; nothing was saved.";
+/// (slice 3c-1; e.g. the note was erased after Add was pressed): no draft was made. The same
+/// words for a save and a Sign; a clause, like its siblings, because Sign leads it with "Could
+/// not sign this note: ". It names the way on, since every later save is refused the same way.
+pub(crate) const NO_SUCH_NOTE: &str = "the note this adds to is no longer shown on this chart — \
+     nothing was saved; your text is still here, so copy it into a new note";
 
 /// A save's answer as the webview reads it. Pure.
 pub(crate) fn save_view(outcome: SaveOutcome) -> SaveView {

@@ -250,8 +250,10 @@ pub async fn sign_note(
     // What the first part adds to, from the HEADER (the spend below deletes it): read now, while
     // this transaction holds the draft's lock. `None` = a new note.
     let root = draft_addendum_to(&tx, input.draft).await?;
-    // `Saved` means the draft exists unspent, and this transaction holds its per-draft lock
-    // until it ends, so nobody can spend it in between: no part back means every part is blank.
+    // `Saved` means the draft is unspent, and this transaction holds its per-draft lock until it
+    // ends, so nobody can spend it in between: no part back means every part is blank — or, for
+    // an addendum whose first text was blank, that db/070 made no header at all. Either way there
+    // is nothing to sign.
     let parts = spend_parts(&tx, input.draft, first).await?;
     if parts.is_empty() {
         return Ok(Err(SignRefusal::Empty));

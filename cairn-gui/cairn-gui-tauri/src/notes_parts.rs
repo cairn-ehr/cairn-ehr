@@ -78,7 +78,7 @@ where
     let shown: HashMap<Uuid, String> = grouped
         .iter()
         .zip(&notes)
-        .flat_map(|(c, v)| c.parts.iter().map(|p| (p.event_id, v.adds_line.clone())))
+        .flat_map(|(c, v)| c.parts().iter().map(|p| (p.event_id, v.adds_line.clone())))
         .collect();
     let drafts = list
         .drafts
@@ -261,8 +261,10 @@ fn is_claims(part: &DraftPart, claim: &Claim) -> bool {
 /// `CompoundView::adds_line`); `None` for a new note's draft. "Adding to a note not shown here"
 /// when its target is not among the shown parts. That is never a doubted link's withholding: a
 /// draft's target must be a note this node shows on the draft's own chart when its header is made
-/// (db/070's door), and a chart's own notes are never withheld. It is the honest fallback for a
-/// header no door made (a raw writer of `note_draft`), never a guess at which note it was. Pure.
+/// (db/070's door), and a chart's own notes are never withheld. It is the honest fallback when
+/// the target left the projection after the header was made (an erasure deletes its
+/// `clinical_note` row, db/037) or for a header no door made, never a guess at which note it
+/// was. Pure.
 fn adding_to_line(addendum_to: Option<Uuid>, shown: &HashMap<Uuid, String>) -> Option<String> {
     addendum_to.map(|target| {
         shown

@@ -27,6 +27,10 @@ pub(crate) const RECORDED: &str =
     "Discarded. The draft is gone from the chart; the record keeps what it said.";
 /// … when the draft was empty: nothing to keep, so nothing was recorded.
 pub(crate) const EMPTY_DISCARDED: &str = "Discarded. The draft was empty, so nothing was kept.";
+/// … when the draft was an addendum the node never saved: its note is not shown on this chart,
+/// so no part reached the node and there was nothing to keep (`DiscardOutcome::NeverSaved`).
+pub(crate) const NEVER_SAVED_DISCARDED: &str = "Discarded. The note this adds to is not shown on \
+     this chart, so nothing of this draft had been saved, and nothing was kept.";
 /// … when a colleague wrote part of the draft: only its writer may throw their part away.
 const NOT_YOURS: &str = "Not discarded: someone else wrote part of this draft, and only its \
      writer may throw their part away — nothing was thrown away; your text is still here.";
@@ -261,6 +265,7 @@ async fn discard_attempt(
     let (text, behind_the_record) = match result {
         Ok(Ok(DiscardOutcome::Recorded(_))) => (RECORDED.to_string(), None),
         Ok(Ok(DiscardOutcome::Empty)) => (EMPTY_DISCARDED.to_string(), None),
+        Ok(Ok(DiscardOutcome::NeverSaved)) => (NEVER_SAVED_DISCARDED.to_string(), None),
         Ok(Err(refusal)) => return Ok(Err(refusal)),
         Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
             Some(event) => (

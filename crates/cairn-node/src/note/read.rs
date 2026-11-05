@@ -35,7 +35,8 @@ pub struct NoteRow {
     pub effective_basis: String,
     pub recording_started: DateTime<Utc>,
     pub grade: NoteGrade,
-    /// The note this one continues (its `addendum-to` ref): a later writer's part of one draft.
+    /// The note this one continues (its `addendum-to` ref): a later writer's part of one draft,
+    /// or an addendum to a note already in the record (slice 3c-1, ADR-0091).
     pub addendum_to: Option<Uuid>,
     /// Who typed it (`view::part_writer`): the signer, a `drafted` contributor (named when this
     /// node can name that key, through `cairn_note_signer_name`), or nobody recorded when the
