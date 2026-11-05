@@ -35,20 +35,27 @@ the code in front of you.
 
 ## Read these in order
 
-1. **[Getting started](getting-started.md)** — install the toolchain, build every component, and get
-   your first test passing. Start here.
+1. **[Getting started](getting-started.md)** — install the toolchain, build every component (three
+   cargo trees, the extension, the window, the matcher, the docs), and get your first test passing.
+   Start here.
 2. **[Architecture for developers](architecture-for-developers.md)** — the mental model you need
-   before the code makes sense: the four layers, *fat Postgres / thin daemon*, and the append-only
-   event spine. Follows one real write from Rust through the database to a projection.
-3. **[Repository map](repository-map.md)** — what every top-level directory is and which ones are
-   load-bearing versus historical.
-4. **[Codebase tour](codebase-tour.md)** — a guided reading path through the actual source, using the
-   demographics slice as the worked example end-to-end.
+   before the code makes sense: the four layers, *fat Postgres / thin daemon*, the append-only event
+   spine, the two doors and two planes, and what a clinical write signed by a human looks like.
+3. **[Repository map](repository-map.md)** — what every top-level directory and crate is, and which
+   ones are load-bearing versus historical.
+4. **[Codebase tour](codebase-tour.md)** — a guided reading path through the actual source:
+   demographics end-to-end, the matcher's veto/score split, the progress note, the reference window,
+   and the CLI.
 5. **[Contributing workflow](contributing-workflow.md)** — how a change is actually made here:
-   branches, sign-off, the brainstorm→spec→plan→TDD loop, ADRs, reviews, and how to pick your first
-   task.
-6. **[Glossary](glossary.md)** — every Cairn-specific term in one place (HLC, the twin, the floor, a
-   veto, a projection, an actor, a slice…).
+   the eight house rules, branches, sign-off, the brainstorm→spec→plan→TDD loop, ADRs, reviews, and
+   how to pick your first task.
+6. **[Running the duplicate check](running-the-duplicate-check.md)** — operating the matcher's
+   commit-time worker on a real node.
+7. **[Durable rules](durable-rules.md)** — the per-slice "do not undo this" rules and the numbered
+   traps, each with the test that pins it. Not a cover-to-cover read: **read the block for any code
+   you are about to touch.**
+8. **[Glossary](glossary.md)** — every Cairn-specific term in one place (HLC, the twin, the floor,
+   the two doors, born-sealed, the key vault, a draft, a slice…).
 
 You don't have to read all of it before contributing. Read 1 and 2, skim 3–5, and come back.
 
@@ -59,26 +66,40 @@ You don't have to read all of it before contributing. Read 1 and 2, skim 3–5, 
 Cairn's **architecture is complete** (every original open question is closed and recorded
 in the [ADR log](../spec/decisions/README.md); the current spec version is stated in
 [`spec/index.md`](../spec/index.md)), viability was proven by
-[proof-of-concept spikes](../spikes/README.md), and the **first production clinical surface is now
-under construction** — the patient **demographics** subsystem on the `cairn-node` crate, built
-slice by slice.
+[proof-of-concept spikes](../spikes/README.md), and the **first production clinical surface is under
+construction** on the `cairn-node` crate, built slice by slice. In broad strokes, what exists:
+
+- **The event core, the in-DB floor and federation** — signed events, the strict and remote doors,
+  node-plane and clinical-plane sync, backup and disaster-recovery restore.
+- **Patient identity** — demographics, the advisory matcher and its in-DB veto, the identity
+  algebra (link, unlink, dispute, identify, repudiate), John Doe, registration as an act that
+  carries its search, and the duplicate repair path.
+- **Clinical content** — `clinical.medication` and `clinical.note` (progress notes with drafts), all
+  under **born-sealed bodies** and **per-write human authorship**, plus the sensitivity stream and
+  the safety projection.
+- **A runnable reference window** (`cairn-gui/`, Tauri 2) — the search-before-create front door,
+  the chart, duplicate review, the clinicians' **key vault** and sign-in, and the note editor.
+
+There are still **no allergies, prescriptions, orders, or results**, and no native API yet. Don't
+assume build/run instructions beyond what this manual and `cairn-node --help` describe.
 
 Two living documents track the moving edge — and because they move, this manual deliberately does
 **not** restate their contents, it points at them:
 
 - **`docs/HANDOVER.md`** — the single most current snapshot of *exactly* what was built last session,
-  what is in flight, and what is deferred. **Read it at the start of every session.** It is
-  disposable working scaffolding (regenerated each session), not a source of truth — when it
+  what is in flight, and what is deferred. **Read it at the start of every session**, and then check
+  the open pull requests: HANDOVER describes `main`, and the newest work is often on a draft PR. It
+  is disposable working scaffolding (regenerated each session), not a source of truth — when it
   disagrees with the spec or an ADR, the canonical docs win.
 - **[`docs/ROADMAP.md`](../ROADMAP.md)** — the foundation build order (wire core → in-DB floor → sync
   → identity → security → federation → blobs → native API) and how far each phase has progressed.
 
 > [!IMPORTANT]
-> The high-authority [Governance](../principles/GOVERNANCE.md) and root `CONTRIBUTING.md` describe
-> the project's *pre-code* phase ("most contribution today is design work"). That was true when they
-> were written and remains true for the **rules** they state (licensing, DCO, the decision process).
-> The build has since moved into code — this manual covers that code phase. The governing rules in
-> those documents still apply unchanged.
+> The high-authority [Governance](../principles/GOVERNANCE.md) still describes the project's
+> *pre-code* phase in places ("most contribution today is design work"). That was true when it was
+> written and remains true for the **rules** it states (licensing, DCO, the decision process). The
+> build has since moved into code — this manual covers that code phase. The governing rules in that
+> document still apply unchanged.
 
 ---
 
@@ -94,15 +115,22 @@ discipline that keeps it true:
   [`docs/ROADMAP.md`](../ROADMAP.md), and [`spec/index.md`](../spec/index.md), which are the
   single sources of truth this manual links to.
 - **Update triggers.** Touch the relevant page in the *same change* when you:
-  - add, remove, or rename a **top-level directory** or a **crate** → [Repository map](repository-map.md);
+  - add, remove, or rename a **top-level directory**, a **crate** (in any of the three cargo trees),
+    or a **script** → [Repository map](repository-map.md);
   - change how a component is **built or tested** (toolchain version, a new `cargo`/`uv` invocation,
-    a new env var) → [Getting started](getting-started.md);
-  - change the **contribution mechanics** (branching, sign-off, the SDD/TDD loop) →
+    a new env var, a new required CI check) → [Getting started](getting-started.md) (and the root
+    `CONTRIBUTING.md`, which tables the required checks);
+  - change the **contribution mechanics** (branching, sign-off, the SDD/TDD loop, a house rule) →
     [Contributing workflow](contributing-workflow.md);
+  - add a rule a later change could undo in good faith → its block in [Durable rules](durable-rules.md),
+    with the test that pins it;
+  - build a new **clinical stream** or a new reference-window surface → the
+    [Codebase tour](codebase-tour.md) if it changes the recommended reading path, and the
+    "where the project is" list above;
   - introduce a **new core concept** worth a newcomer knowing → [Glossary](glossary.md) and, if it
     changes the mental model, [Architecture for developers](architecture-for-developers.md).
 - **The site build is strict.** `mkdocs build --strict` runs on every PR (see
-  [Getting started → The docs site](getting-started.md#6-the-documentation-site)); a dead internal link
+  [Getting started → The docs site](getting-started.md#7-the-documentation-site)); a dead internal link
   or a broken nav entry blocks the merge button. Run it locally before you push doc changes.
 - **When in doubt, link don't copy.** Prefer a link to the canonical doc over a paraphrase that can
   rot.

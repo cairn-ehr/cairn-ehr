@@ -1,21 +1,36 @@
 # `cairn-gui-tauri` — the reference window
 
 Cairn's first runnable clinical surface ([#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)): a
-Tauri 2 window whose **front door is the §5.3/§5.8 search-before-create funnel** (slice 2c) — browse for
-an existing chart, or register a new patient only if nothing fits — opening onto **one patient's
-medication chart** under a persistent identity header, with whole-list sign-off as one human gesture and
-per-row cease.
+Tauri 2 window whose **front door is the §5.3/§5.8 search-before-create funnel** — browse for an existing
+chart, or register a new patient only if nothing fits — opening onto the patient's chart under a
+persistent identity header. The chart carries the **medication list** (whole-list sign-off as one human
+gesture, per-row cease with a reason, withhold/release), **progress notes** (drafts with autosave and
+per-writer parts, Sign, Discard, the quarantine commit), and the **duplicate repair path** (compare and
+link, review or undo a link, the possible-duplicate banner and tray). Around it sit the clinicians' key
+vault and sign-in: the terminal lock, the signer strip, *Who's here*, *Enrol staff*, re-key, and the
+superuser panel.
+
+This crate is in the `cairn-gui/` cargo workspace, which the root workspace excludes, so run it from
+there:
 
 ```bash
+cd cairn-gui
+
 # Fixture mode — no database, no clinical writes (registering adds to an in-memory population).
 cargo run -p cairn-gui-tauri -- --mock
 # ...straight onto the sample medication chart (what the accessibility pass uses).
 cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001
 
-# Against a real node: the front door, or straight onto one chart with --patient.
-cargo run --release -p cairn-gui-tauri -- \
-    --conn "$CONN" --key node.key [--key-hold-seconds 900] [--patient <uuid>]
+# Against a real node: the front door, or straight onto one chart with --patient. The connection is
+# the WINDOW's own login (cairn-node provision-window-role), passed in the environment, never --conn
+# on a shared machine: a command-line argument is visible to every account (`ps`).
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
+    --key node.key [--key-hold-seconds 900] [--patient <uuid>]
 ```
+
+Setting up a node for the window — the cluster, `init`, `provision-window-role`, the first superuser —
+is [`results/RUNBOOK.md`](results/RUNBOOK.md) §0 and §16, and the developer manual's *Getting started*
+(`docs/developers/getting-started.md` §5).
 
 The window opens no clinician key file. Each clinical act carries the clinician's staff ID and
 passphrase, and the node's key vault (db/061) releases their key for that act. `--key-hold-seconds`
@@ -64,13 +79,14 @@ An order may be cancelled only by somebody **taking ownership** and **giving a r
 still accepts neither ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342)) — that fix is
 local-authoring-only by design, and this window is already on the right side of it.
 
-## What this window deliberately does not do
+## What this window deliberately does not do (yet)
 
-No dedupe or merge UI, no John-Doe path, no identifier entry at registration
+No John-Doe registration path, no identifier entry at registration
 ([#672](https://github.com/cairn-ehr/cairn-ehr/issues/672)), no dose editing, no prescribing, no
-reconciliation. The pane/routing/freshness state machine in
-`cairn-gui-shell` survived the iced retirement and is tested but not yet wired.
+reconciliation, and no allergies. The pane/routing/freshness state machine in `cairn-gui-shell` survived
+the iced retirement and is tested but not yet wired.
 
-The §1.2 paper-parity **stopwatch figures are not yet measured**; that is a human act — see
-[`results/RUNBOOK.md`](results/RUNBOOK.md) (section 8 for the front door). How often the step-3 prompt
+The §1.2 paper-parity **stopwatch figures** are human acts, one numbered section per slice in
+[`results/RUNBOOK.md`](results/RUNBOOK.md) (section 8 for the front door); `docs/HANDOVER.md` says which
+are still owed. How often the step-3 prompt
 truncates IS measured: [`results/2026-09-23-funnel-prompt-truncation.md`](results/2026-09-23-funnel-prompt-truncation.md).
