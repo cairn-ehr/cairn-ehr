@@ -21,7 +21,7 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
-/// The five #115 widenings (table, column) — extend this list when a future slice widens
+/// The #115 widenings and later ones (table, column) — extend this list when a future slice widens
 /// an existing CREATE TABLE IF NOT EXISTS (and add the matching ALTER in its migration).
 const WIDENED: &[(&str, &str)] = &[
     ("patient_chart", "demo_content_address"),
@@ -34,6 +34,11 @@ const WIDENED: &[(&str, &str)] = &[
     // #194: the two set-union demographic projections gained the same tiebreak column.
     ("patient_identifier", "content_address"),
     ("patient_demographic", "content_address"),
+    // Sign-in 3b-2a / 3b-2b: how a draft was spent (the timer, a discard), paired ALTERs in db/065.
+    ("note_draft_spent", "by_timer"),
+    ("note_draft_spent", "discarded_by"),
+    // Sign-in 3c-1: the note an addendum draft adds to, paired ALTER in db/065.
+    ("note_draft", "addendum_to"),
 ];
 
 #[tokio::test]
