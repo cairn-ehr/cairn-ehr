@@ -206,6 +206,29 @@ async fn signing_an_addendum_names_the_root() {
     );
 }
 
+/// Sign takes the target from the draft's HEADER, never from the window: a draft made as an
+/// addendum, signed by a window that sends no target (db/066's door, which keeps the header),
+/// still signs as an addendum to the root.
+#[tokio::test]
+async fn sign_takes_the_target_from_the_header_not_the_window() {
+    setup!(_base, c, node_sk, _node_kid, author, chart, root);
+    let draft = Uuid::now_v7();
+    save_as(&c, draft, chart, Some("notewriter"), "adding", Some(root)).await;
+
+    let ids = sign_note(
+        &mut c,
+        &node_sk,
+        &input(draft, chart, "adding", None),
+        &author,
+    )
+    .await
+    .unwrap()
+    .expect("the addendum signs")
+    .value;
+
+    assert_eq!(refs(&c, ids[0]).await, addendum_to(root));
+}
+
 /// Review Focus 2: Sign pressed inside the window's debounce, before any save made the header.
 /// Sign's own save must create the ADDENDUM header, so the event is an addendum, not a new note.
 #[tokio::test]
