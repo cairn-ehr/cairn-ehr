@@ -54,10 +54,20 @@ async fn two_writers_read_back_as_two_parts() {
         (Some("notewriter"), "obs stable"),
         (Some(" Nurse-B "), "fluids running"),
     ] {
-        let r = save_part(&window, draft, chart, "pc-1", writer, text, None).await;
+        let r = save_part(&window, draft, chart, "pc-1", writer, text, None, None).await;
         assert_eq!(expect_as_window("save_part", r), SaveOutcome::Saved);
     }
-    let r = save_part(&window, draft, chart, "pc-1", Some("nobody"), "x", None).await;
+    let r = save_part(
+        &window,
+        draft,
+        chart,
+        "pc-1",
+        Some("nobody"),
+        "x",
+        None,
+        None,
+    )
+    .await;
     assert_eq!(expect_as_window("save_part", r), SaveOutcome::NoSuchWriter);
 
     let drafts = expect_as_window("open_drafts", open_drafts(&window, chart).await);
@@ -102,14 +112,24 @@ async fn a_take_then_the_old_terminal_saves_moved() {
     let (owner, window) = owner_and_window(&base).await;
     let (_, _, _, _, chart) = note_setup(&owner).await;
     let draft = Uuid::now_v7();
-    let r = save_part(&window, draft, chart, "pc-1", None, "begun at pc-1", None).await;
+    let r = save_part(
+        &window,
+        draft,
+        chart,
+        "pc-1",
+        None,
+        "begun at pc-1",
+        None,
+        None,
+    )
+    .await;
     assert_eq!(expect_as_window("save_part", r), SaveOutcome::Saved);
 
     let r = take_draft(&window, draft, chart, "pc-2").await;
     assert_eq!(expect_as_window("take_draft", r), TakeOutcome::Taken);
-    let r = save_part(&window, draft, chart, "pc-1", None, "late", None).await;
+    let r = save_part(&window, draft, chart, "pc-1", None, "late", None, None).await;
     assert_eq!(expect_as_window("save_part (old)", r), SaveOutcome::Moved);
-    let r = save_part(&window, draft, chart, "pc-2", None, "continued", None).await;
+    let r = save_part(&window, draft, chart, "pc-2", None, "continued", None, None).await;
     assert_eq!(expect_as_window("save_part (new)", r), SaveOutcome::Saved);
 
     let r = take_draft(&window, draft, Uuid::now_v7(), "pc-3").await;

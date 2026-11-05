@@ -316,6 +316,7 @@ async fn note_discard_impl_discards_under_the_window_login() {
         Some("notewriter"),
         "obs stable",
         None,
+        None,
     )
     .await
     .unwrap();

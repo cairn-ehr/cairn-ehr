@@ -202,7 +202,7 @@ pub async fn note_draft_save_impl(
         .lock()
         .await?;
     let outcome = cairn_node::note::draft::save_part(
-        &*db, draft, patient, terminal, writer, narrative, stated,
+        &*db, draft, patient, terminal, writer, narrative, stated, None,
     )
     .await
     .map_err(|e| node_failure(&db.explain(e)))?;
@@ -283,6 +283,7 @@ pub async fn note_sign_impl(
             narrative,
             stated,
             node_origin: &state.node_origin,
+            addendum_to: None,
         };
         let author = cairn_node::medication::AuthorParams {
             human_sk: &human_sk,

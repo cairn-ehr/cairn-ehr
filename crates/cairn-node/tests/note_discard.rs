@@ -39,11 +39,12 @@ fn input(draft: Uuid, patient: Uuid, narrative: &str) -> SignNoteInput<'_> {
         narrative,
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     }
 }
 
 async fn save_as(c: &Client, draft: Uuid, chart: Uuid, writer: Option<&str>, text: &str) {
-    let saved = save_part(c, draft, chart, TERMINAL, writer, text, None)
+    let saved = save_part(c, draft, chart, TERMINAL, writer, text, None, None)
         .await
         .unwrap();
     assert_eq!(saved, SaveOutcome::Saved, "{writer:?} saves {text:?}");
@@ -323,7 +324,7 @@ async fn sign_after_discard_is_refused_discarded() {
     .await
     .unwrap();
     assert!(matches!(again, Err(DiscardRefusal::Discarded)), "{again:?}");
-    let save = save_part(&c, draft, chart, TERMINAL, None, "late", None)
+    let save = save_part(&c, draft, chart, TERMINAL, None, "late", None, None)
         .await
         .unwrap();
     assert_eq!(save, SaveOutcome::Discarded);
@@ -403,6 +404,7 @@ async fn discarded_at_follows_a_save_that_held_the_lock() {
         Some("notewriter"),
         "ab",
         None,
+        None,
     )
     .await
     .unwrap();
@@ -420,6 +422,7 @@ async fn discarded_at_follows_a_save_that_held_the_lock() {
             TERMINAL,
             Some("notewriter"),
             "abc",
+            None,
             None,
         )
         .await

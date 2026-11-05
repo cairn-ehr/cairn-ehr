@@ -236,6 +236,7 @@ async fn discard_attempt(
             narrative,
             stated,
             node_origin: &state.node_origin,
+            addendum_to: None,
         };
         let author = cairn_node::medication::AuthorParams {
             human_sk: &human_sk,

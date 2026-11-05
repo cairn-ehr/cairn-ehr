@@ -80,7 +80,7 @@ async fn save_as(
     text: &str,
     stated: Option<DateTime<Utc>>,
 ) {
-    let saved = save_part(c, draft, chart, TERMINAL, writer, text, stated)
+    let saved = save_part(c, draft, chart, TERMINAL, writer, text, stated, None)
         .await
         .unwrap();
     assert_eq!(saved, SaveOutcome::Saved, "{writer:?} saves {text:?}");
@@ -580,6 +580,7 @@ async fn a_sign_after_the_timer_is_refused_committed() {
         narrative: "chest clear, more",
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     };
 
     let out = sign_note(&mut c, &node_sk, &input, &author).await.unwrap();

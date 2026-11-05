@@ -60,6 +60,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
             Some("notewriter"),
             text,
             None,
+            None,
         )
         .await;
         assert_eq!(
@@ -76,6 +77,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
             narrative: text,
             stated: None,
             node_origin: ORIGIN,
+            addendum_to: None,
         };
         let r = sign_note(&mut window, &sk, &input, &author).await;
         expect_as_window("note::sign::sign_note", r).expect("the note is signed");
@@ -92,6 +94,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
         Some("notewriter"),
         "still typing",
         Some(stated),
+        None,
     )
     .await;
     assert_eq!(
@@ -193,6 +196,7 @@ async fn the_windows_quarantine_commit_runs_under_its_own_login() {
         Some("notewriter"),
         "left",
         None,
+        None,
     )
     .await;
     assert_eq!(expect_as_window("save_part", r), SaveOutcome::Saved);
@@ -266,6 +270,7 @@ async fn the_windows_discard_runs_under_its_own_login() {
         narrative: "wrong patient",
         stated: Some("2026-11-04T09:00:00Z".parse().unwrap()),
         node_origin: ORIGIN,
+        addendum_to: None,
     };
     let r = discard_draft(&mut window, &sk, &input, &author).await;
     let out = expect_as_window("note::discard::discard_draft", r);
@@ -306,6 +311,7 @@ async fn the_windows_addendum_doors_run_under_its_own_login() {
         narrative: "the note added to",
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     };
     let r = sign_note(&mut window, &sk, &input, &author).await;
     let root = expect_as_window("note::sign::sign_note", r)

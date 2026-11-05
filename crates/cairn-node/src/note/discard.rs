@@ -78,6 +78,9 @@ fn refusal_for(outcome: SaveOutcome) -> Option<DiscardRefusal> {
         SaveOutcome::NoSuchWriter => Some(DiscardRefusal::NoSuchWriter),
         SaveOutcome::Committed => Some(DiscardRefusal::Committed),
         SaveOutcome::Discarded => Some(DiscardRefusal::Discarded),
+        // The addendum door answers this only when the draft has no header yet: there is no
+        // draft to throw away, which is what `Gone` says.
+        SaveOutcome::NoSuchNote => Some(DiscardRefusal::Gone),
     }
 }
 
@@ -178,6 +181,7 @@ pub async fn discard_draft(
         input.writer,
         input.narrative,
         input.stated,
+        input.addendum_to,
     )
     .await?;
     if let Some(refusal) = refusal_for(saved) {

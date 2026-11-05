@@ -26,6 +26,7 @@ fn draft(terminal: &str) -> NoteDraft {
         due: utc("2026-11-02T20:40:00Z"),
         overdue: false,
         stuck: false,
+        addendum_to: None,
     }
 }
 

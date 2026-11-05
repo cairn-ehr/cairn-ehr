@@ -38,6 +38,7 @@ fn input(draft: Uuid, patient: Uuid, narrative: &str) -> SignNoteInput<'_> {
         narrative,
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     }
 }
 
@@ -79,7 +80,7 @@ async fn enrol_nurse_a(c: &Client) -> String {
 
 /// Save `text` as `writer`'s part of `draft` on `chart`, as the window's autosave would.
 async fn save_as(c: &Client, draft: Uuid, chart: Uuid, writer: Option<&str>, text: &str) {
-    let saved = save_part(c, draft, chart, TERMINAL, writer, text, None)
+    let saved = save_part(c, draft, chart, TERMINAL, writer, text, None, None)
         .await
         .unwrap();
     assert_eq!(saved, SaveOutcome::Saved, "{writer:?} saves {text:?}");

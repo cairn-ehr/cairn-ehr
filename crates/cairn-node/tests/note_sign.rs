@@ -34,6 +34,7 @@ fn input(draft: Uuid, patient: Uuid, narrative: &str) -> SignNoteInput<'_> {
         narrative,
         stated: None,
         node_origin: ORIGIN,
+        addendum_to: None,
     }
 }
 
@@ -51,7 +52,7 @@ async fn note_count(c: &Client, patient: Uuid) -> i64 {
 /// Autosave `text` into a new draft on `chart`, as the window's autosave would.
 async fn autosave(c: &Client, chart: Uuid, text: &str) -> Uuid {
     let draft = Uuid::now_v7();
-    let saved = save_part(c, draft, chart, TERMINAL, None, text, None)
+    let saved = save_part(c, draft, chart, TERMINAL, None, text, None, None)
         .await
         .unwrap();
     assert_eq!(saved, SaveOutcome::Saved);

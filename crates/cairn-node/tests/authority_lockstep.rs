@@ -334,6 +334,7 @@ async fn asserted_in_rust_is_unverified_in_sql() {
         Some("notewriter"),
         "obs stable",
         None,
+        None,
     )
     .await
     .unwrap();
