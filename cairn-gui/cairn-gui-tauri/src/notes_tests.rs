@@ -33,14 +33,23 @@ async fn sign_refuses_a_chart_not_on_screen() {
         None,
         None,
         None,
+        None,
     )
     .await
     .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
     // A save as well: a debounced save for the chart just left must not land on it.
-    let err = note_draft_save_impl(&state, &another_chart(), &a_draft(), "seen", None, None)
-        .await
-        .unwrap_err();
+    let err = note_draft_save_impl(
+        &state,
+        &another_chart(),
+        &a_draft(),
+        "seen",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
     // And a take: Continue here acts only on the chart on screen.
     let err = note_draft_take_impl(&state, &another_chart(), &a_draft())
@@ -54,12 +63,12 @@ async fn sign_refuses_a_chart_not_on_screen() {
 #[tokio::test]
 async fn sign_in_fixture_mode_refuses() {
     let (state, chart) = on_screen();
-    let err = note_sign_impl(&state, &chart, &a_draft(), "seen", None, None, None)
+    let err = note_sign_impl(&state, &chart, &a_draft(), "seen", None, None, None, None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, Retry::Never);
     assert!(err.text.contains("fixture mode"), "{}", err.text);
-    let err = note_draft_save_impl(&state, &chart, &a_draft(), "seen", None, None)
+    let err = note_draft_save_impl(&state, &chart, &a_draft(), "seen", None, None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("fixture mode"), "{}", err.text);

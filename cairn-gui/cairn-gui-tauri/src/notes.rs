@@ -40,6 +40,10 @@ mod time;
 #[path = "notes_parts.rs"]
 pub(crate) mod parts;
 
+/// A note and its addenda as ONE compound note, as the pane shows it (`notes_compound.rs`).
+#[path = "notes_compound.rs"]
+pub(crate) mod compound;
+
 /// The quarantine commit's runner: the tick, the pre-read commit, the due words (`notes_commit.rs`).
 #[path = "notes_commit.rs"]
 pub(crate) mod commit;
@@ -73,6 +77,7 @@ pub async fn note_list(
 
 /// Save the text on screen into its draft as `writer`'s part (the webview calls this, debounced,
 /// as the clinician types). `writer` is the editor's captured staff id; null = "Don't know".
+/// `addendum_to` (JS `addendumTo`): the root of the note this draft adds to; null = a new note.
 #[tauri::command]
 pub async fn note_draft_save(
     state: tauri::State<'_, AppState>,
@@ -81,6 +86,7 @@ pub async fn note_draft_save(
     narrative: String,
     stated_time: Option<String>,
     writer: Option<String>,
+    addendum_to: Option<String>,
 ) -> Result<SaveView, ErrorView> {
     note_draft_save_impl(
         &state,
@@ -89,6 +95,7 @@ pub async fn note_draft_save(
         &narrative,
         stated_time.as_deref(),
         writer.as_deref(),
+        addendum_to.as_deref(),
     )
     .await
 }
@@ -104,6 +111,8 @@ pub async fn note_draft_take(
 }
 
 /// Sign the note on screen — the text sent WITH Sign, never an older autosave (Review Focus 4).
+/// `addendum_to` as `note_draft_save`'s: a Sign inside the debounce still saves an addendum.
+#[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 #[tauri::command]
 pub async fn note_sign(
     state: tauri::State<'_, AppState>,
@@ -113,6 +122,7 @@ pub async fn note_sign(
     stated_time: Option<String>,
     writer: Option<String>,
     credential: Option<Credential>,
+    addendum_to: Option<String>,
 ) -> Result<NoteSignReport, ErrorView> {
     note_sign_impl(
         &state,
@@ -122,6 +132,7 @@ pub async fn note_sign(
         stated_time.as_deref(),
         writer.as_deref(),
         credential,
+        addendum_to.as_deref(),
     )
     .await
 }
@@ -166,6 +177,7 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     let claim = state.whos_here.lock().await.claim().clone();
     Ok(note_pane(
         list,
+        patient,
         terminal,
         &claim,
         &failed,
@@ -175,9 +187,9 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
 }
 
 /// Save the text on screen as `writer`'s part of draft `draft_id` of the chart on screen, held by
-/// this terminal. A save that wrote nothing (`spent`, `moved`, `elsewhere`, `no-chart`,
-/// `no-such-writer`) is an `Ok` with its sentence, not an error: the connection worked, and the
-/// webview keeps the text either way.
+/// this terminal; `addendum_to`: the note it adds to (`parse_target`). A save that wrote nothing
+/// (`spent`, `moved`, `elsewhere`, `no-chart`, `no-such-writer`, `no-such-note`) is an `Ok` with
+/// its sentence, not an error: the connection worked, and the webview keeps the text either way.
 pub async fn note_draft_save_impl(
     state: &AppState,
     patient_id: &str,
@@ -185,6 +197,7 @@ pub async fn note_draft_save_impl(
     narrative: &str,
     stated_time: Option<&str>,
     writer: Option<&str>,
+    addendum_to: Option<&str>,
 ) -> Result<SaveView, ErrorView> {
     // The save names the chart the webview is showing, so a debounced save that fires after the
     // clinician switched charts is refused here, never written to the chart now open.
@@ -193,6 +206,7 @@ pub async fn note_draft_save_impl(
         return Err(refused(FIXTURE));
     }
     let draft: Uuid = draft_id.parse().map_err(|_| refused("not a draft id"))?;
+    let target = parse_target(addendum_to)?;
     let stated = parse_stated(stated_time).map_err(refused)?;
     let terminal = terminal_of(state)?;
     let db = state
@@ -202,7 +216,7 @@ pub async fn note_draft_save_impl(
         .lock()
         .await?;
     let outcome = cairn_node::note::draft::save_part(
-        &*db, draft, patient, terminal, writer, narrative, stated, None,
+        &*db, draft, patient, terminal, writer, narrative, stated, target,
     )
     .await
     .map_err(|e| node_failure(&db.explain(e)))?;
@@ -240,6 +254,7 @@ pub async fn note_draft_take_impl(
 /// time that cannot be read), and only then the key — a passphrase that signs nothing is a step
 /// paper never has. The raw text goes to `sign_note`, which escapes it, with `writer` — the
 /// editor's captured writer, so the signer's own part signs `authored`, not `attested`.
+#[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 pub async fn note_sign_impl(
     state: &AppState,
     patient_id: &str,
@@ -248,6 +263,7 @@ pub async fn note_sign_impl(
     stated_time: Option<&str>,
     writer: Option<&str>,
     credential: Option<Credential>,
+    addendum_to: Option<&str>,
 ) -> Result<NoteSignReport, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     if state.is_mock() {
@@ -257,6 +273,7 @@ pub async fn note_sign_impl(
     let others = narrative.trim().is_empty()
         && other_parts_have_text(state, patient, draft_id, writer).await?;
     let (draft, stated) = sign_checks_before_the_key(draft_id, narrative, others, stated_time)?;
+    let target = parse_target(addendum_to)?;
     let terminal = terminal_of(state)?;
     let (human_sk, human_kid) = state
         .signer_for_act(credential, Now::read())
@@ -283,7 +300,7 @@ pub async fn note_sign_impl(
             narrative,
             stated,
             node_origin: &state.node_origin,
-            addendum_to: None,
+            addendum_to: target,
         };
         let author = cairn_node::medication::AuthorParams {
             human_sk: &human_sk,
@@ -366,6 +383,15 @@ async fn other_parts_have_text(
         .iter()
         .find(|d| d.draft_id == draft)
         .is_some_and(|d| others_have_text(&d.parts, writer)))
+}
+
+/// The note a save, Sign or Discard adds to, read from what the webview sent (the draft's own
+/// `DraftView::addendum_to`): `None` is a new note. A malformed id is refused — never read as a
+/// new note, which would put the addendum in as a note of its own. Said before the key. Pure.
+pub(crate) fn parse_target(addendum_to: Option<&str>) -> Result<Option<Uuid>, ErrorView> {
+    addendum_to
+        .map(|t| t.parse().map_err(|_| refused("not a note id")))
+        .transpose()
 }
 
 /// The refusals a sign says before it asks for the key, and the draft id and stated time read

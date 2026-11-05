@@ -9,13 +9,15 @@
 //! (ruling M3: two unknown writers share it, since the floor cannot tell them apart; the editor
 //! must show its text, or an empty editor would REPLACE it on the next save). Pure functions.
 use super::commit::due_words;
+use super::compound::{compound_view, CompoundView};
 use super::time::datetime_local;
 use crate::whos_here::{claim_view, claimed_name, Claim, ClaimView};
+use cairn_node::note::compound::compounds;
 use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{DiscardMarker, NoteRow, PatientNoteList};
 use cairn_node::note::view::{byline_words, instant, time_words};
 use chrono::{NaiveDate, TimeZone};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// One signed note, as the pane shows it.
@@ -37,7 +39,8 @@ pub struct NoteRowView {
 /// What the note pane shows for the chart on screen.
 #[derive(Debug, serde::Serialize)]
 pub struct NotePane {
-    pub notes: Vec<NoteRowView>,
+    /// The notes, each with all its later parts as ONE note (`notes_compound.rs`), newest first.
+    pub notes: Vec<CompoundView>,
     /// Said when notes on a linked chart are held back because a link is in doubt.
     pub withheld_sentence: Option<String>,
     pub drafts: Vec<DraftView>,
@@ -49,10 +52,11 @@ pub struct NotePane {
 }
 
 /// The read as the pane shows it, in zone `tz` with `today` its date, the editable part chosen for
-/// `claim`; `failed`: the drafts whose last commit in this window failed (`commit::due_words`).
-/// Pure.
+/// `claim`; `opened`: the chart on screen (only its notes can be added to); `failed`: the drafts
+/// whose last commit in this window failed (`commit::due_words`). Pure.
 pub(crate) fn note_pane<Tz: TimeZone>(
     list: PatientNoteList,
+    opened: Uuid,
     terminal: Option<&str>,
     claim: &Claim,
     failed: &HashSet<Uuid>,
@@ -64,18 +68,29 @@ where
 {
     let withheld_sentence =
         withheld_words(list.withheld_on_linked, list.discards_withheld_on_linked);
+    let grouped = compounds(list.notes);
+    let notes: Vec<CompoundView> = grouped
+        .iter()
+        .map(|c| compound_view(c, opened, tz, today))
+        .collect();
+    // Every shown part's id → its compound's time: what an addendum draft says it adds to.
+    let shown: HashMap<Uuid, String> = grouped
+        .iter()
+        .zip(&notes)
+        .flat_map(|(c, v)| c.parts.iter().map(|p| (p.event_id, v.when.clone())))
+        .collect();
+    let drafts = list
+        .drafts
+        .iter()
+        .map(|d| {
+            let failed = failed.contains(&d.draft_id);
+            draft_view(d, terminal, claim, failed, tz, today, &shown)
+        })
+        .collect();
     NotePane {
-        notes: list
-            .notes
-            .iter()
-            .map(|n| note_row_view(n, tz, today))
-            .collect(),
+        notes,
         withheld_sentence,
-        drafts: list
-            .drafts
-            .iter()
-            .map(|d| draft_view(d, terminal, claim, failed.contains(&d.draft_id), tz, today))
-            .collect(),
+        drafts,
         discards: list
             .discards
             .iter()
@@ -174,7 +189,7 @@ where
 }
 
 /// One note's words, dated against `today`. Pure.
-fn note_row_view<Tz: TimeZone>(note: &NoteRow, tz: &Tz, today: NaiveDate) -> NoteRowView
+pub(crate) fn note_row_view<Tz: TimeZone>(note: &NoteRow, tz: &Tz, today: NaiveDate) -> NoteRowView
 where
     Tz::Offset: std::fmt::Display,
 {
@@ -223,6 +238,9 @@ pub struct DraftView {
     pub words: String,
     /// Its parts in writing order.
     pub parts: Vec<PartView>,
+    /// The note this draft adds to (its root's event id), exactly as the node holds it; `None`
+    /// for a new note. The webview sends it back with every save, Sign and Discard.
+    pub addendum_to: Option<String>,
 }
 
 /// Is `part` the current claim's? A named writer by staff id (both normalised by the vault), or an
@@ -235,8 +253,22 @@ fn is_claims(part: &DraftPart, claim: &Claim) -> bool {
     }
 }
 
+/// The lead of an addendum draft's line, from `shown` (every part the pane shows → its note's
+/// time): "Adding to the note of 3 Nov 03:00 · ", or "Adding to a note not shown here · " when the
+/// note it adds to is not on screen (withheld on a doubted link). Empty for a new note's draft.
+fn adding_to_words(addendum_to: Option<Uuid>, shown: &HashMap<Uuid, String>) -> String {
+    match addendum_to {
+        None => String::new(),
+        Some(target) => match shown.get(&target) {
+            Some(when) => format!("Adding to the note of {when} · "),
+            None => "Adding to a note not shown here · ".to_string(),
+        },
+    }
+}
+
 /// One draft's words, its parts, and which part the current claim may edit. `failed`: this
-/// window's last commit of it failed.
+/// window's last commit of it failed; `shown`: every note part the pane shows → its note's time
+/// (`adding_to_words`).
 pub(crate) fn draft_view<Tz: TimeZone>(
     draft: &NoteDraft,
     terminal: Option<&str>,
@@ -244,6 +276,7 @@ pub(crate) fn draft_view<Tz: TimeZone>(
     failed: bool,
     tz: &Tz,
     today: NaiveDate,
+    shown: &HashMap<Uuid, String>,
 ) -> DraftView
 where
     Tz::Offset: std::fmt::Display,
@@ -251,7 +284,8 @@ where
     // `None`: this terminal's id is not read yet, so no draft can be known to be this one's.
     let here = terminal == Some(draft.terminal_id.as_str());
     let mut words = format!(
-        "unsigned draft · started {} · last typed {}",
+        "{}unsigned draft · started {} · last typed {}",
+        adding_to_words(draft.addendum_to, shown),
         instant(draft.recording_started, tz, today),
         instant(draft.last_keystroke, tz, today)
     );
@@ -293,6 +327,7 @@ where
         here,
         words,
         parts,
+        addendum_to: draft.addendum_to.map(|id| id.to_string()),
     }
 }
 

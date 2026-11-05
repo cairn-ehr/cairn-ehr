@@ -243,25 +243,31 @@ fn the_editor_is_labelled_and_never_asks_to_confirm() {
 #[test]
 fn notes_js_reads_no_field_the_backend_does_not_send() {
     use crate::commands::tests::fields_read_in;
-    use crate::notes::parts::{DraftView, NotePane, NoteRowView, PartView};
+    use crate::notes::compound::CompoundView;
+    use crate::notes::parts::{DraftView, NotePane, PartView};
     use crate::notes::words::ForkWords;
     use crate::notes::{NoteSignReport, SaveView, TakeView};
     use crate::whos_here::{claim_view, Claim};
     let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()
     };
-    let note = NoteRowView {
-        event_id: "e".into(),
+    let note = CompoundView {
+        root_event_id: "e".into(),
         text: "t".into(),
         byline: "b".into(),
         byline_spoken: "b".into(),
         when: "w".into(),
+        state: None,
+        parts_label: None,
+        parts: vec![],
+        can_add: true,
     };
     let draft = DraftView {
         draft_id: "d".into(),
         here: true,
         words: "w".into(),
         parts: vec![],
+        addendum_to: None,
     };
     let tail = PartView {
         writer_shown: "?A".into(),
