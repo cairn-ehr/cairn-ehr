@@ -54,8 +54,8 @@
 >   tick plus a commit before every chart read; a draft whose last commit failed says so. **#974 ruled not `M > N`**
 >   (closed). Filed **#979** (deferred) · **#980** · #982 (built, closed) · **#983** (residual minors); commented #968.
 >   Owed by a human: **RUNBOOK §20**.
-> - **Slice 3b-2b BUILT 2026-11-05 — draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (branch
->   `plan/sign-in-slice-3b-2b-audited-discard`; [ADR-0090](spec/decisions/0090-the-audited-discard.md), spec **v0.92**,
+> - **Slice 3b-2b MERGED 2026-11-05 — PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)**
+>   ([ADR-0090](spec/decisions/0090-the-audited-discard.md), spec **v0.92**,
 >   `db/068` + `db/069` with `db/037`, `db/044`, `db/065`, `db/066` edited in place, `SCHEMA_GENERATION` **69**; plan
 >   [`superpowers/plans/2026-11-04-sign-in-slice-3b-2b-audited-discard.md`](superpowers/plans/2026-11-04-sign-in-slice-3b-2b-audited-discard.md)).
 >   **Discard draft** beside Sign, same strip, no dialog: a signed, sealed `clinical.note-discard.asserted` keeps what
@@ -115,7 +115,15 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **3b-2b built and gated locally (the full `run-db-gated-tests.sh` passed at 4a83ea23: 3214 tests, 0 failed, 0 skipped); CI passed at 927efa40. The PR review round (2026-11-05) then fixed one critical and four important findings in the window, node and docs, re-gated by the GUI tree's gates and the touched DB suites, not by a second full run; CI at the new head is owed. Then the maintainer reviews and merges draft PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984)** (above). **Then 3c** (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
+> 1. **3b-2b MERGED 2026-11-05 (PR #984).** **Next: 3c, split by the maintainer (2026-11-05) into three PRs:**
+>    **3c-1** (the compound note + "Add to this note" + #948; no wire change) — PLANNED, plan
+>    [`superpowers/plans/2026-11-05-sign-in-slice-3c-1-compound-note-and-addendum.md`](superpowers/plans/2026-11-05-sign-in-slice-3c-1-compound-note-and-addendum.md),
+>    branch `plan/sign-in-slice-3c-1`; **3c-2** (the vouch overlay, "Sign off this note", student label, "not
+>    co-signed", per-part "signer unconfirmed"); **3c-3** (pending-sign-offs menu, #918's display half). **Decided
+>    2026-11-05, not yet in an ADR (ADR-0091 records them):** #948 stays **penned** (a test, no code); the vouch is
+>    **one event per vouched part**, new type `clinical.note-attestation.asserted`, contributors `{human, attested |
+>    co-signed, responsibility}`, payload = target event + content address + act (`addendum` | `sign-off`),
+>    offline-first at the remote door. 3c as a whole (addenda to signed notes, "sign off this note", the compound note, a vouch that upgrades
 >    `Asserted` — it must answer #948 too). Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979),
 >    4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
