@@ -101,6 +101,7 @@ async function sendDraft(sent) {
       narrative: sent.narrative,
       statedTime: asked,
       writer: sent.held.writer,
+      addendumTo: sent.held.addendumTo, // a save inside the debounce still makes an addendum's header
     });
     // The draft went on without this window — moved to another terminal, put into the record
     // unsigned by the quarantine timer (slice 3b-2a), or signed in another window (final review

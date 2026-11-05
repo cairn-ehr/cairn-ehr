@@ -69,6 +69,11 @@ fn a_one_part_note_has_no_parts_label_or_state() {
     assert_eq!((v.state, v.parts_label), (None, None));
     assert!(v.parts.is_empty(), "no disclosure for one part");
     assert!(v.can_add, "a note on the chart on screen can be added to");
+    // What "Add to this note" opens the editor saying, before any draft exists to read it from.
+    assert_eq!(
+        v.adds_line,
+        "Adding to the note of 3 Nov 2025 03:00 (stated)"
+    );
 }
 
 /// Three parts (a later writer's, then an addendum by another clinician) read as one text in
@@ -226,6 +231,14 @@ fn an_addendum_draft_says_what_it_adds_to() {
         ]
     );
     assert_eq!(pane.notes.len(), 2, "a note and its addendum are one");
+    // The editor "Add to this note" opens says the note's own line, the very words its draft
+    // reads back with once the pane is read again (stated and unstated alike).
+    for (note, d) in [
+        (&pane.notes[0], &pane.drafts[0]),
+        (&pane.notes[1], &pane.drafts[4]),
+    ] {
+        assert_eq!(d.adding_to.as_deref(), Some(note.adds_line.as_str()));
+    }
 }
 
 /// The target the webview sends: absent is a new note; a malformed id is refused, never read as

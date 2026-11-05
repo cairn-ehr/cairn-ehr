@@ -78,10 +78,7 @@ where
     let shown: HashMap<Uuid, String> = grouped
         .iter()
         .zip(&notes)
-        .flat_map(|(c, v)| {
-            let line = adding_to_shown(&c.parts[0], &v.when, tz, today);
-            c.parts.iter().map(move |p| (p.event_id, line.clone()))
-        })
+        .flat_map(|(c, v)| c.parts.iter().map(|p| (p.event_id, v.adds_line.clone())))
         .collect();
     let drafts = list
         .drafts
@@ -260,27 +257,8 @@ fn is_claims(part: &DraftPart, claim: &Claim) -> bool {
     }
 }
 
-/// The "Adding to…" line for a draft adding to the note whose root is `root` and whose words say
-/// it applies `when`. A stated time names the note: "Adding to the note of 3 Nov 03:00 (stated)".
-/// With none stated, `when` would read "no stated time · writing began …" — run into the draft's
-/// own "started …" and alike for every unstated note — so the line names when its writing began
-/// instead: "Adding to the note begun 3 Nov 02:00". Pure.
-fn adding_to_shown<Tz: TimeZone>(root: &NoteRow, when: &str, tz: &Tz, today: NaiveDate) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    if root.effective_basis == "stated" {
-        format!("Adding to the note of {when}")
-    } else {
-        format!(
-            "Adding to the note begun {}",
-            instant(root.recording_started, tz, today)
-        )
-    }
-}
-
 /// A draft's "Adding to…" line, from `shown` (every part the pane shows → its note's line,
-/// `adding_to_shown`): "Adding to a note not shown here" when the note it adds to is not on screen
+/// `CompoundView::adds_line`): "Adding to a note not shown here" when the note it adds to is not on screen
 /// (withheld on a doubted link); `None` for a new note's draft. Pure.
 fn adding_to_line(addendum_to: Option<Uuid>, shown: &HashMap<Uuid, String>) -> Option<String> {
     addendum_to.map(|target| {

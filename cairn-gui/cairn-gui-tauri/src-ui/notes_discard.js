@@ -64,6 +64,7 @@ async function discardNote() {
       statedTime: when.value,
       writer: held.writer,
       credential: signerCredential(),
+      addendumTo: held.addendumTo,
     });
     clearSigner(true);
   } catch (failure) {

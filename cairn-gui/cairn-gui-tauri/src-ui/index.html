@@ -386,6 +386,8 @@
           <ul id="note-drafts"></ul>
           <button id="new-note" type="button">New note</button>
           <div id="note-editor" hidden>
+            <!-- What an addendum draft adds to (slice 3c-1), worded in Rust; hidden for a new note. -->
+            <p id="note-adds-to" hidden></p>
             <!-- A draft's parts by other writers (or the claim's own earlier ones), read-only
                  above the editor, each headed by its claimed writer (notes.js). -->
             <ol id="note-parts" aria-label="Written so far on this note"></ol>
@@ -433,6 +435,7 @@
     <script src="main.js"></script>
     <script src="signer.js"></script>
     <script src="notes_save.js"></script>
+    <script src="notes_compound.js"></script>
     <script src="notes.js"></script>
     <script src="notes_discard.js"></script>
     <script src="whos_here.js"></script>
