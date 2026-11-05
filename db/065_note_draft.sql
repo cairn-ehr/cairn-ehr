@@ -39,7 +39,12 @@ CREATE TABLE IF NOT EXISTS note_draft (
     stated_time       timestamptz,
     recording_started timestamptz NOT NULL,
     -- The latest REAL change over the draft's parts (see db/066's cairn_note_draft_part_save).
-    last_keystroke    timestamptz NOT NULL
+    last_keystroke    timestamptz NOT NULL,
+    -- NULL = a new note. Otherwise the signed note this draft ADDS TO (slice 3c-1, db/070): set
+    -- once, when db/070's door makes the header, and never updated by any door, so a reader may
+    -- read it without the draft's lock. Here, not in db/070, because db/070's doors read it (3b-2a's
+    -- rule: a column a door reads lives with its table).
+    addendum_to       uuid
 );
 CREATE INDEX IF NOT EXISTS note_draft_patient_idx ON note_draft (patient_id, recording_started);
 
@@ -64,6 +69,8 @@ CREATE TABLE IF NOT EXISTS note_draft_spent (
 -- Paired ALTERs for a database created before by_timer / discarded_by existed (#207's rule).
 ALTER TABLE note_draft_spent ADD COLUMN IF NOT EXISTS by_timer boolean NOT NULL DEFAULT false;
 ALTER TABLE note_draft_spent ADD COLUMN IF NOT EXISTS discarded_by text;
+-- ... and before note_draft.addendum_to existed (slice 3c-1).
+ALTER TABLE note_draft ADD COLUMN IF NOT EXISTS addendum_to uuid;
 
 -- Paired ALTER for a database created before UNIQUE existed (#207's rule). Constraint name is
 -- the one Postgres gives an inline UNIQUE.

@@ -441,6 +441,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "069_note_draft_discard",
         include_str!("../../../db/069_note_draft_discard.sql"),
     ),
+    // db/070 (sign-in slice 3c-1): "Add to this note" — the addendum draft's save door and its
+    // target reader (note_draft.addendum_to lives in db/065; the same-chart floor rule in db/064).
+    (
+        "070_note_addendum",
+        include_str!("../../../db/070_note_addendum.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

@@ -431,3 +431,19 @@ async fn the_declared_twin_provenance_read_surface_still_works() {
         );
     }
 }
+
+/// The two addendum doors (sign-in slice 3c-1, db/070), named because a family of two has no
+/// registry to read. They are `SECURITY DEFINER` and write the draft tables, so PUBLIC must not
+/// reach them: only `cairn_window` holds EXECUTE (driven in `window_role_grants_notes.rs`). The
+/// floor of 2 catches a rename or a failed load that would otherwise pass by examining nothing.
+#[tokio::test]
+async fn public_cannot_execute_the_addendum_doors() {
+    assert_public_cannot_execute(
+        "p.proname IN ('cairn_note_draft_addendum_part_save', 'cairn_note_draft_addendum_to')",
+        2,
+        "note addendum door",
+        "Fix: `REVOKE EXECUTE ON FUNCTION <name>(<args>) FROM PUBLIC;` at the end of \
+         db/070_note_addendum.sql, beside its GRANT to cairn_window.",
+    )
+    .await;
+}

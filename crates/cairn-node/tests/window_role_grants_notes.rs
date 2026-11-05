@@ -281,3 +281,61 @@ async fn the_windows_discard_runs_under_its_own_login() {
     assert_eq!(list.discards[0].parts[0].text, "wrong patient");
     assert_eq!(list.discards[0].parts[0].stated, input.stated);
 }
+
+/// The addendum doors (slice 3c-1, db/070) under the window's login, each driven to its deep
+/// path: a signed note on the chart, then an addendum draft that names it (`saved`, the header
+/// made and db/066's part save reached through the delegation), and the reader that says so.
+#[tokio::test]
+async fn the_windows_addendum_doors_run_under_its_own_login() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, mut window) = owner_and_window(&base).await;
+    let (sk, _, sk_h, kid_h, a) = note_setup(&owner).await;
+    let author = AuthorParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let input = SignNoteInput {
+        draft: Uuid::now_v7(),
+        patient: a,
+        terminal: "pc-window",
+        writer: Some("notewriter"),
+        narrative: "the note added to",
+        stated: None,
+        node_origin: ORIGIN,
+    };
+    let r = sign_note(&mut window, &sk, &input, &author).await;
+    let root = expect_as_window("note::sign::sign_note", r)
+        .expect("the root note is signed")
+        .event_id;
+
+    let draft = Uuid::now_v7();
+    let r = window
+        .query_one(
+            "SELECT cairn_note_draft_addendum_part_save($1::text::uuid, $2::text::uuid, \
+                    'pc-window', 'notewriter', 'plan: review', NULL, $3::text::uuid)",
+            &[&draft.to_string(), &a.to_string(), &root.to_string()],
+        )
+        .await
+        .map(|row| row.get::<_, String>(0))
+        .map_err(anyhow::Error::from);
+    assert_eq!(
+        expect_as_window("cairn_note_draft_addendum_part_save", r),
+        "saved"
+    );
+    let r = window
+        .query_one(
+            "SELECT cairn_note_draft_addendum_to($1::text::uuid)::text",
+            &[&draft.to_string()],
+        )
+        .await
+        .map(|row| row.get::<_, Option<String>>(0))
+        .map_err(anyhow::Error::from);
+    assert_eq!(
+        expect_as_window("cairn_note_draft_addendum_to", r),
+        Some(root.to_string())
+    );
+}

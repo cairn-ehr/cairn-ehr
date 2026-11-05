@@ -211,6 +211,20 @@ BEGIN
         IF v_ref_id IS NULL OR NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_ref_id) THEN
             RAISE EXCEPTION 'note assertion: refs event % is not held on this node (a dangling reference)', v_ref ->> 'event';
         END IF;
+        -- (6a) Slice 3c-1: at the AUTHORING door an addendum adds to a NOTE of THIS chart. On
+        --      paper you write an addendum under the note it adds to, in that patient's folder;
+        --      a raw-SQL client naming another chart's note, or a medication event, is refused.
+        --      The REMOTE door keeps the existence check above alone, deliberately: its bare
+        --      RAISE is what the sync puller pens and re-offers (#948), and a peer's event is
+        --      carried, not re-judged. correction-of and transcript-of are not tightened
+        --      (nothing writes them yet).
+        IF v_authoring AND (v_ref ->> 'rel') = 'addendum-to' AND NOT EXISTS (
+            SELECT 1 FROM event_log
+             WHERE event_id = v_ref_id
+               AND event_type = 'clinical.note.asserted'
+               AND patient_id = (b ->> 'patient_id')::uuid) THEN
+            RAISE EXCEPTION 'note assertion: an addendum-to target must be a note on this chart, got %', v_ref ->> 'event';
+        END IF;
     END LOOP;
 
     -- (7) The reserved encounter slot is inside the signed bytes from day one (ADR-0041

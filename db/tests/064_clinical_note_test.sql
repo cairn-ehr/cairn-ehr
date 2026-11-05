@@ -166,9 +166,13 @@ VALUES ('64646464-6464-7464-8464-646464646464', gen_random_uuid(), 'note.added',
         '1', 1, 1, 'n1', '\x64'::bytea,
         '\x1220'::bytea || digest('\x64'::bytea, 'sha256'),
         '{}'::jsonb, '[]'::jsonb, 'deadbeef', 'mirror fixture');
+-- addendum-to is held to a NOTE of the event's own chart at this door (rule 6a, slice 3c-1), so
+-- this fixture (a non-note on no chart) is refused for it; db/tests/070 pins 6a both ways.
 SELECT pg_temp.accepts(pg_temp.note_body(jsonb_build_object('refs', jsonb_build_array(
     jsonb_build_object('rel', rel, 'event', '64646464-6464-7464-8464-646464646464')))))
-FROM unnest(ARRAY['addendum-to', 'correction-of', 'transcript-of']) AS rel;
+FROM unnest(ARRAY['correction-of', 'transcript-of']) AS rel;
+SELECT pg_temp.refuses(pg_temp.note_body(
+    '{"refs":[{"rel":"addendum-to","event":"64646464-6464-7464-8464-646464646464"}]}'), 'a note on this chart');
 SELECT pg_temp.refuses(pg_temp.note_body('{"refs":{}}'), 'refs');
 SELECT pg_temp.refuses(pg_temp.note_body(
     '{"refs":[{"rel":"supersedes","event":"64646464-6464-7464-8464-646464646464"}]}'), 'rel');
