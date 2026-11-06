@@ -2,7 +2,10 @@
 //!
 //! A part of a note is SIGNED when its own event carries a verified human signature
 //! (`NoteRow::signed_by`) or when someone later vouched for it (`NoteRow::vouches`, a
-//! `clinical.note-attestation.asserted` event — see `vouch_read`). The pure rules below answer
+//! `clinical.note-attestation.asserted` event — see `vouch_read`), in either case under a key
+//! that still stands. A since-REPUDIATED key's signature or vouch counts for nothing, and a part
+//! it signed is signed again only once the real person re-signs it (ADR-0093, [`part_is_signed`]):
+//! never read `signed_by.is_some()` as "signed". The pure rules below answer
 //! the questions the window asks of a compound note: does it still need a supervisor's
 //! sign-off, who signed it off, and — when a clinician presses "Sign off this note" — which
 //! parts must they vouch for, and how.
@@ -67,6 +70,13 @@ pub fn re_signed(p: &NoteRow) -> bool {
         .is_some_and(|s| p.vouches.iter().any(|v| re_signs(s, v)))
 }
 
+/// Part `p` COUNTS AS UNSIGNED for want of a re-sign: its own signer's key was repudiated and the
+/// real person has not [`re_signed`] it (ADR-0093). The one predicate the byline's
+/// " — counts as unsigned" and [`sign_off_vouches`]' attested-not-co-signed rule share.
+pub fn counts_as_unsigned(p: &NoteRow) -> bool {
+    p.signed_by.as_ref().is_some_and(|s| s.repudiated) && !re_signed(p)
+}
+
 /// Whether `actor` is among the people who signed `p`.
 fn has_signed(p: &NoteRow, actor: &str) -> bool {
     signed_for(p).iter().any(|s| same_actor(&s.actor, actor))
@@ -100,7 +110,8 @@ pub fn full_signers(parts: &[NoteRow]) -> impl Iterator<Item = &Signer> {
 }
 
 /// Who signed the whole note off: the first non-student, in the root's [`signed_for`] order, who
-/// has signed EVERY part. `None` when no one has (the note still needs a sign-off).
+/// has signed EVERY part ([`full_signers`]). `None` when no one has, or while any part is not
+/// [`part_is_signed`] (a repudiated part not yet re-signed): the note still needs a sign-off.
 pub fn signed_off_by(parts: &[NoteRow]) -> Option<&Signer> {
     full_signers(parts).next()
 }
@@ -123,15 +134,16 @@ pub fn needs_sign_off(parts: &[NoteRow]) -> bool {
 /// key is `Attested` too until the real person [`re_signed`] it, even though the registry knows
 /// its human: a `co-signed` over a possibly forged signature would read as a real co-sign
 /// (ADR-0093). Once re-signed, the signature stands again and is co-signed as any other (#1009).
-/// It is offered to everyone, its own re-keyed writer included, since [`signed_for`] no longer
-/// counts the dead key.
+/// It is offered to anyone who has not vouched it under a standing key, its own re-keyed writer
+/// included, since [`signed_for`] no longer counts the dead key; a colleague who already vouched
+/// it is not offered it again (ADR-0093 (c)).
 pub fn sign_off_vouches(parts: &[NoteRow], presser_actor: &str) -> Vec<(Uuid, VouchRole)> {
     parts
         .iter()
         .filter(|p| !has_signed(p, presser_actor))
         .map(|p| {
             // (A part gone in unsigned has no `signed_by`; its human envelope still co-signs.)
-            let dead_key = p.signed_by.as_ref().is_some_and(|s| s.repudiated) && !re_signed(p);
+            let dead_key = counts_as_unsigned(p);
             let role = match &p.signer_human_actor {
                 Some(a) if !dead_key && !same_actor(a, presser_actor) => VouchRole::CoSigned,
                 _ => VouchRole::Attested,

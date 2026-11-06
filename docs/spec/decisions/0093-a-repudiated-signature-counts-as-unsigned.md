@@ -161,10 +161,13 @@ pure rules and the words.
   `cairn_note_key_is_human` ([#1007](https://github.com/cairn-ehr/cairn-ehr/issues/1007)).
 - **(c) After a colleague signs off a repudiated part, the button stays offered to them** (`needs_sign_off` is still
   true) and pressing it answers `NothingToSign`, the pattern a student meets today (ADR-0092 (e);
-  [#1008](https://github.com/cairn-ehr/cairn-ehr/issues/1008)).
+  [#1008](https://github.com/cairn-ehr/cairn-ehr/issues/1008)). Their first press is answered "Signed off — every part
+  of this note now carries your signature.", true of the signature but read as "done" though it cleared nothing
+  ([#1012](https://github.com/cairn-ehr/cairn-ehr/issues/1012)).
 - **(d) A supervisor's sign-off made before a student's re-sign leaves the part uncountersigned.** It was planned
   `Attested` (decision 6), so after the re-sign the part reads " — not co-signed". The supervisor is in `signed_for`,
-  so a second press answers `NothingToSign`; and once the supervisor has signed every part, `needs_sign_off` is false
+  so a second press answers `NothingToSign`; and once the student has re-signed and the supervisor has signed every
+  part, `needs_sign_off` is false
   and the button is gone for everyone. The note's state line can then read "signed off by Dr B" while the student's
   part's byline still says "— not co-signed" ([#1010](https://github.com/cairn-ehr/cairn-ehr/issues/1010)). A
   sign-off made after the re-sign co-signs (#1009, fixed).
@@ -177,9 +180,10 @@ pure rules and the words.
   ([#918](https://github.com/cairn-ehr/cairn-ehr/issues/918)).
 - **(h) Re-signing one's own part signs off the other writers' parts too.** "Sign off this note" is the only way to
   re-sign, and it vouches every part the presser has not signed (`sign_off_vouches`). On a note several people
-  wrote, the re-keyed writer also co-signs a colleague's signed part (" · co-signed by Nurse A", which clears a
-  student's "— not co-signed"), vouches a part that went in unsigned so that it counts as signed on her authority,
-  and the note reads "signed off by" her. On paper she initials only her own entry. A re-sign covering only the
+  wrote, the re-keyed writer also co-signs a colleague's signed part when its envelope key is the colleague's
+  (" · co-signed by Nurse A", which clears a student's "— not co-signed"; otherwise it is attested), vouches a part
+  that went in unsigned so that it counts as signed on her authority, and, unless she is a student, the note reads
+  "signed off by" her. On paper she initials only her own entry. A re-sign covering only the
   presser's own parts is new gesture design ([#1011](https://github.com/cairn-ehr/cairn-ehr/issues/1011)).
 - **(i) The mark is only where this node's registry holds the repudiation.** A repudiation is an `actor_event` row,
   which replicates nowhere (ADR-0085 decision 8; it travels only in this node's local-state export). A peer node

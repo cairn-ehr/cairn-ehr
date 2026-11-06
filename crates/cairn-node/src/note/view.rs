@@ -5,7 +5,7 @@ use cairn_event::note_attestation::{VouchAct, VouchRole};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
 use super::read::NoteRow;
-use super::vouch::{re_signed, re_signs, same_actor};
+use super::vouch::{counts_as_unsigned, re_signs, same_actor};
 use super::vouch_read::{PartVouch, Signer};
 
 /// What a signing key reads as when this node cannot name its holder.
@@ -122,7 +122,8 @@ fn byline_marked(grade: &NoteGrade, writer: &PartWriter, unverified: &str) -> St
 /// A signer's name as the chart shows it: their name, then `" (student)"` for a student and
 /// `" (signer unconfirmed)"` while their key's enrolment is unconfirmed or doubtful, or
 /// `" (key had been repudiated)"` once the key was repudiated (ADR-0093: the reader must see
-/// WHY the name carries no weight). The two are exclusive: the key's state is one word. Pure.
+/// WHY the name carries no weight). `(signer unconfirmed)` and `(key had been repudiated)` are
+/// exclusive, the key's state being one word; `(student)` stacks with either. Pure.
 pub fn signer_words(s: &Signer) -> String {
     let student = if s.student { " (student)" } else { "" };
     let unconfirmed = if s.unconfirmed {
@@ -192,7 +193,7 @@ fn part_byline_marked(p: &NoteRow, unverified: &str) -> String {
             });
             // A repudiated, not re-signed signature counts as unsigned (ADR-0093); that is the
             // stronger statement, so it takes the place of "not co-signed" (never both).
-            let pending = if s.repudiated && !re_signed(p) {
+            let pending = if counts_as_unsigned(p) {
                 " — counts as unsigned"
             } else if s.student && !co_signed {
                 " — not co-signed"

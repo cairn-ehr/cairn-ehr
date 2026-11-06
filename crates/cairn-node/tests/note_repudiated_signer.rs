@@ -91,8 +91,10 @@ async fn note(c: &Client, w: &Ward, root: Uuid) -> CompoundNote {
         .expect("the note is read")
 }
 
-/// Repudiate `m`'s key and give the same person (same actor) a fresh one, as ADR-0085/0086 do
-/// after a stolen key: rotate first, then repudiate the OLD key. Returns the member on the new key.
+/// Repudiate `m`'s key and give the same person (same actor) a fresh one: the end state ADR-0085/0086
+/// reach after a stolen key (repudiate, then re-key), reached here directly through
+/// `cairn_actor_append` in the opposite order (rotate, then repudiate the OLD key), around the
+/// judgement door, which repudiates only a current key. Returns the member on the new key.
 async fn repudiate_and_rekey(c: &Client, m: &Member) -> Member {
     let aid: Vec<u8> = c
         .query_one(

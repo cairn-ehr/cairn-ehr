@@ -1924,7 +1924,7 @@ of hers, a second two-part note of hers alone (`fluids`, then `reviewed`), and a
 `bp 120/80`, then `dr-b` presses *Add to this note*, types `agree`, *Sign note* — all for Measurement 2. As `boss`,
 in *Superuser: enrollers and keys*, press *Repudiate key* on `nurse-a`'s row ("The key is repudiated. Give the member
 a new key from the re-key form."). `conf` says `repudiated` for her. Re-key her from *Forgotten passphrase* with
-`boss` in the strip (section 17): the same person, a new key; `conf` now shows the new key, not `repudiated`.
+`boss` in the strip (section 17): the same person, a new key; `conf` now says `confirmed` for her (a superuser's re-key is confirmed at once).
 
 - [ ] Reopen the chart. Each of Nurse A's parts reads "signed by Nurse A (key had been repudiated) — counts as
       unsigned", then its time. Each of her two-part notes' state line reads "includes an unsigned part", and so

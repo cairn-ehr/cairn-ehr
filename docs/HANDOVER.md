@@ -82,8 +82,9 @@
 >   only by the real person's own re-sign under a standing key (`vouch::re_signs`, THE one predicate); a repudiated
 >   key's vouch counts nothing; a re-signed part can be co-signed again (#1009, fixed on the branch). Open: **#1007**
 >   (envelope key's repudiation unread) · **#1008** (a colleague who vouched is still offered Sign off) · **#1010**
->   (pre-re-sign attested sign-off leaves "— not co-signed" unofferable — 3c-3a's offer rule resolves it) ·
->   **#1011** (re-signing one's own part via Sign off vouches the other writers' parts — needs a gesture design).
+>   (pre-re-sign attested sign-off leaves "— not co-signed" unofferable — 3c-3a's offer rule answers it) ·
+>   **#1011** (re-signing one's own part via Sign off vouches the other writers' parts — needs a gesture design) ·
+>   **#1012** (a colleague's sign-off over a repudiated part reads "Signed off — every part…" though it clears nothing).
 >   #918's link half stays open. Owed by a human: **RUNBOOK §24**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
@@ -139,7 +140,7 @@
 >    DRAFT PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95): it needs the maintainer's
 >    merge, and a decision on whether a re-sign under an UNCONFIRMED key should count (it does today, read
 >    "(signer unconfirmed)"). **Next: plan + build 3c-3a** (supervision, `needs_cosigning`, "Co-sign as reviewed"; design
->    §3.1–§3.3; its offer rule also resolves #1010), **then 3c-3c** (the person menu, design §3.4). Design §10's findings 1–2 are
+>    §3.1–§3.3; #1010 is answered by its offer rule), **then 3c-3c** (the person menu, design §3.4). Design §10's findings 1–2 are
 >    decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930, merged; it also carries the per-note "unconfirmed" marker and #918's display half). The maintainer picks

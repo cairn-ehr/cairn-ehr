@@ -297,3 +297,57 @@ fn a_colleagues_earlier_sign_off_counts_once_re_signed() {
     let parts = [p];
     assert_eq!(signed_off_by(&parts).map(|s| s.actor.as_str()), Some("z"));
 }
+
+/// A co-sign under a key since repudiated (a stolen-key co-sign) counts for nothing in the
+/// note-level rules too, not only in the byline: the student's note still needs signing off, and
+/// the real Dr Zed, re-keyed, is offered the part again as a co-sign.
+#[test]
+fn a_repudiated_co_signers_vouch_signs_nothing_off() {
+    let mut p = part(1, Some(student("s", "Sam")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::CoSigned,
+        repudiated("z", "Dr Zed"),
+    ));
+    let id = p.event_id;
+    let parts = [p];
+    assert!(needs_sign_off(&parts));
+    assert!(signed_off_by(&parts).is_none());
+    assert_eq!(
+        sign_off_vouches(&parts, "z"),
+        vec![(id, VouchRole::CoSigned)]
+    );
+}
+
+/// ADR-0093 (c): a colleague who already signed off a repudiated, not re-signed part stays in
+/// `signed_for`, so a second press plans nothing: it never files a second immutable vouch.
+#[test]
+fn a_colleague_who_vouched_a_repudiated_part_is_not_offered_it_again() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z", "Dr Zed"),
+    ));
+    assert!(signed_for(&p).iter().any(|s| s.actor == "z"));
+    assert!(sign_off_vouches(&[p], "z").is_empty());
+}
+
+/// The dead-key rule is decided PER PART: a repudiated part beside a standing student part is
+/// attested while the student's part is still co-signed, by a colleague and (ADR-0093 (h), #1011)
+/// by the re-keyed writer alike.
+#[test]
+fn a_repudiated_part_beside_a_standing_one_is_attested_alone() {
+    let parts = [
+        part(1, Some(repudiated("a", "Dr A"))),
+        part(2, Some(student("s", "Sam"))),
+    ];
+    let plan = vec![
+        (Uuid::from_u128(1), VouchRole::Attested),
+        (Uuid::from_u128(2), VouchRole::CoSigned),
+    ];
+    assert_eq!(sign_off_vouches(&parts, "z"), plan);
+    assert_eq!(sign_off_vouches(&parts, "a"), plan);
+}

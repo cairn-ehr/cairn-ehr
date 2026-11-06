@@ -107,8 +107,9 @@ pub fn compounds(notes: Vec<NoteRow>) -> Vec<CompoundNote> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompoundState {
     OnePart,
-    /// Signed off: the first non-student, in the root's order, who has signed every part AND made
-    /// a `sign-off` vouch on this note (`vouch::full_signers`). Carries their name as shown
+    /// Signed off: every part is signed (`vouch::part_is_signed`), and the first non-student, in
+    /// the root's order, who has signed every part made a `sign-off` vouch on this note under a
+    /// key that still stands (`vouch::full_signers`, ADR-0093). Carries their name as shown
     /// (`view::signer_words`).
     SignedOff(String),
     EverySigned,
@@ -117,9 +118,10 @@ pub enum CompoundState {
 }
 
 /// The compound's state, from each part's signatures (`vouch::part_is_signed`): a part that went
-/// in unsigned and was vouched for since no longer makes the note "unsigned". A one-part note is
-/// `OnePart` whatever it says (its byline already says it); an empty slice cannot come out of
-/// [`compounds`] and also reads `OnePart`.
+/// in unsigned and was vouched for since, under a key that still stands, no longer makes the note
+/// "unsigned"; a part signed by a since-repudiated key and not re-signed does (ADR-0093). A
+/// one-part note is `OnePart` whatever it says (its byline already says it); an empty slice
+/// cannot come out of [`compounds`] and also reads `OnePart`.
 pub fn compound_state(parts: &[NoteRow]) -> CompoundState {
     if parts.len() < 2 {
         return CompoundState::OnePart;

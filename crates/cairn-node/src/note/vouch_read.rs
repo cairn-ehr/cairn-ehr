@@ -57,19 +57,37 @@ pub struct PartVouch {
 /// Build a [`Signer`] from what the doors say about one key. Pure. `None` from a door means the
 /// node does not know: no actor (matches no one), the unknown-signer words, not a student, and
 /// not marked unconfirmed (`cairn_key_confirmation` says `unknown`, not `unconfirmed`).
+///
+/// A confirmation word outside db/004's six is an ERROR (as `act_of` treats an act's): the word
+/// decides whether the signature counts at all (ADR-0093), so reading an unknown word as a
+/// standing key would fail open.
 pub fn signer_of(
     actor: Option<String>,
     name: Option<String>,
     pinned_role: Option<&str>,
     confirmation: Option<&str>,
-) -> Signer {
-    Signer {
+) -> anyhow::Result<Signer> {
+    if let Some(w) = confirmation {
+        let known = [
+            "unknown",
+            "repudiated",
+            "outside",
+            "confirmed",
+            "doubtful",
+            "unconfirmed",
+        ];
+        anyhow::ensure!(
+            known.contains(&w),
+            "a key's confirmation is {w:?}, which this build does not know"
+        );
+    }
+    Ok(Signer {
         actor: actor.unwrap_or_default(),
         name: name.unwrap_or_else(|| UNKNOWN_SIGNER.into()),
         student: pinned_role == Some("student"),
         unconfirmed: matches!(confirmation, Some("unconfirmed" | "doubtful")),
         repudiated: confirmation == Some("repudiated"),
-    }
+    })
 }
 
 /// The note statement's vouch column: a JSON array of the part's verified vouches, unordered
@@ -146,7 +164,7 @@ pub fn parse_vouches(column: &str) -> anyhow::Result<Vec<PartVouch>> {
                     v.name,
                     v.pinned_role.as_deref(),
                     v.confirmation.as_deref(),
-                ),
+                )?,
             },
         ));
     }
@@ -191,9 +209,28 @@ mod tests {
         }
     }
 
+    /// A confirmation word this build does not know is an ERROR, never a standing key: the word
+    /// decides whether a signature counts at all (ADR-0093), so guessing fails open.
+    #[test]
+    fn a_confirmation_word_this_build_does_not_know_is_an_error() {
+        assert!(signer_of(None, None, None, Some("compromised")).is_err());
+        for w in [
+            "unknown",
+            "repudiated",
+            "outside",
+            "confirmed",
+            "doubtful",
+            "unconfirmed",
+        ] {
+            assert!(signer_of(None, None, None, Some(w)).is_ok(), "{w}");
+        }
+        assert!(signer_of(None, None, None, None).is_ok());
+    }
+
     #[test]
     fn a_key_the_node_does_not_know_matches_no_actor_and_is_named_so() {
-        let s = signer_of(None, None, None, Some("unknown"));
+        let signer = |role, conf| signer_of(None, None, role, conf).unwrap();
+        let s = signer(None, Some("unknown"));
         assert_eq!(
             s,
             Signer {
@@ -204,10 +241,10 @@ mod tests {
                 repudiated: false,
             }
         );
-        assert!(signer_of(None, None, Some("student"), Some("doubtful")).student);
-        assert!(signer_of(None, None, None, Some("doubtful")).unconfirmed);
-        assert!(signer_of(None, None, None, Some("unconfirmed")).unconfirmed);
-        let r = signer_of(None, None, None, Some("repudiated"));
+        assert!(signer(Some("student"), Some("doubtful")).student);
+        assert!(signer(None, Some("doubtful")).unconfirmed);
+        assert!(signer(None, Some("unconfirmed")).unconfirmed);
+        let r = signer(None, Some("repudiated"));
         assert!(r.repudiated && !r.unconfirmed);
     }
 
