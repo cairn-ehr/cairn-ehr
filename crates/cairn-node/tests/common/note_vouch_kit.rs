@@ -13,7 +13,9 @@ use cairn_event::note_attestation::{
     note_attestation_payload, render_note_attestation_twin, vouch_contributors, NoteVouch,
     VouchAct, VouchRole, NOTE_ATTESTATION_EVENT_TYPE, NOTE_ATTESTATION_SCHEMA_VERSION,
 };
-use cairn_event::{event_address, sign_attestation, ClockGrade, EventBody, Hlc, SigningKey};
+use cairn_event::{
+    event_address, generate_key, sign_attestation, ClockGrade, EventBody, Hlc, SigningKey,
+};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_and_sign;
 use cairn_node::medication::AuthorParams;
@@ -25,6 +27,44 @@ use uuid::Uuid;
 
 pub const ORIGIN: &str = "note-vouch-kit-node";
 const TERMINAL: &str = "ward-3-pc";
+
+/// A vault member: their key and staff id.
+pub struct Member {
+    pub sk: SigningKey,
+    pub kid: String,
+    pub staff: &'static str,
+}
+
+impl Member {
+    pub fn author(&self) -> AuthorParams<'_> {
+        AuthorParams {
+            human_sk: &self.sk,
+            human_kid: &self.kid,
+        }
+    }
+}
+
+/// Enrol a human actor pinned with `role` (and a handle of their own, so each is a distinct
+/// actor) and give them a vault row named `name`, as the window's enrolment does.
+pub async fn member(c: &Client, staff: &'static str, name: &str, role: &str) -> Member {
+    let (sk, kid) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', jsonb_build_object('role', $2::text, 'handle', $3::text), $1)",
+        &[&kid, &role, &staff],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "INSERT INTO vault_member (staff_id, display_name, role, actor_id, signing_key_id, \
+                                   sealed, enrolled_by, contact_email) \
+         SELECT $2, $3, $4, actor_id, $1, '\\x00'::bytea, 'console', 'w@example.org' \
+           FROM actor_event WHERE signing_key_id = $1 AND op = 'enroll' LIMIT 1",
+        &[&kid, &staff, &name, &role],
+    )
+    .await
+    .unwrap();
+    Member { sk, kid, staff }
+}
 
 /// Everything one vouch says, and who says it.
 pub struct Vouch<'a> {
@@ -117,6 +157,7 @@ pub async fn signed_part(
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     sign_note(c, node_sk, &input, author)
         .await
@@ -128,6 +169,17 @@ pub async fn signed_part(
 /// A note part `notewriter` drafted and nobody signed: the quarantine timer committed it, so it
 /// is NODE-signed with `{writer, drafted} + {node, recorded}`. Returns its event id.
 pub async fn timer_part(c: &mut Client, node_sk: &SigningKey, chart: Uuid) -> Uuid {
+    timer_part_to(c, node_sk, chart, None).await
+}
+
+/// [`timer_part`], as an addendum to the note `to` when given: `notewriter` added to it and never
+/// signed, so the timer committed the addendum unsigned too.
+pub async fn timer_part_to(
+    c: &mut Client,
+    node_sk: &SigningKey,
+    chart: Uuid,
+    to: Option<Uuid>,
+) -> Uuid {
     let draft = Uuid::now_v7();
     let saved = save_part(
         c,
@@ -137,7 +189,7 @@ pub async fn timer_part(c: &mut Client, node_sk: &SigningKey, chart: Uuid) -> Uu
         Some("notewriter"),
         "obs stable",
         None,
-        None,
+        to,
     )
     .await
     .unwrap();

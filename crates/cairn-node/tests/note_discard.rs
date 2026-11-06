@@ -40,6 +40,7 @@ fn input(draft: Uuid, patient: Uuid, narrative: &str) -> SignNoteInput<'_> {
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     }
 }
 

@@ -301,6 +301,7 @@ pub async fn note_sign_impl(
             stated,
             node_origin: &state.node_origin,
             addendum_to: target,
+            also_vouches: &[],
         };
         let author = cairn_node::medication::AuthorParams {
             human_sk: &human_sk,

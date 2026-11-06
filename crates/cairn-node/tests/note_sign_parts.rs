@@ -39,6 +39,7 @@ fn input(draft: Uuid, patient: Uuid, narrative: &str) -> SignNoteInput<'_> {
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     }
 }
 
@@ -132,7 +133,11 @@ async fn a_one_writer_draft_signs_as_the_signers_own_authored_note() {
         .unwrap()
         .expect("signs");
 
-    assert_eq!(signed.value, vec![signed.event_id], "one part, one event");
+    assert_eq!(
+        signed.value.parts,
+        vec![signed.event_id],
+        "one part, one event"
+    );
     let (contributors, refs) = stored(&c, signed.event_id).await;
     assert_eq!(
         contributors,
@@ -178,8 +183,8 @@ async fn a_two_writer_draft_signs_as_two_events_chained_by_addendum_to() {
         .unwrap()
         .expect("signs");
 
-    let [first, second] = signed.value[..] else {
-        panic!("two parts, two events: {:?}", signed.value);
+    let [first, second] = signed.value.parts[..] else {
+        panic!("two parts, two events: {:?}", signed.value.parts);
     };
     assert_eq!(signed.event_id, first, "the spend names part 1's event");
     let (c1, r1) = stored(&c, first).await;
@@ -355,8 +360,8 @@ async fn empty_parts_are_skipped_and_an_all_empty_draft_is_refused_empty() {
         .unwrap()
         .expect("the typed parts sign");
 
-    let [first, third] = signed.value[..] else {
-        panic!("two typed parts, two events: {:?}", signed.value);
+    let [first, third] = signed.value.parts[..] else {
+        panic!("two typed parts, two events: {:?}", signed.value.parts);
     };
     let (_, refs) = stored(&c, third).await;
     assert_eq!(
@@ -417,8 +422,8 @@ async fn a_blank_first_part_makes_the_next_the_note_and_each_part_continues_the_
         .unwrap()
         .expect("signs");
 
-    let [second, third, fourth] = signed.value[..] else {
-        panic!("three typed parts, three events: {:?}", signed.value);
+    let [second, third, fourth] = signed.value.parts[..] else {
+        panic!("three typed parts, three events: {:?}", signed.value.parts);
     };
     assert_eq!(
         signed.event_id, second,
@@ -467,7 +472,11 @@ async fn the_signs_own_save_of_a_colleagues_part_signs_as_drafted_and_attested()
         .unwrap()
         .expect("signs");
 
-    assert_eq!(signed.value, vec![signed.event_id], "one part, one event");
+    assert_eq!(
+        signed.value.parts,
+        vec![signed.event_id],
+        "one part, one event"
+    );
     let (contributors, _) = stored(&c, signed.event_id).await;
     assert_eq!(
         contributors,

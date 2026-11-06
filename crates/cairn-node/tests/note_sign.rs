@@ -35,6 +35,7 @@ fn input(draft: Uuid, patient: Uuid, narrative: &str) -> SignNoteInput<'_> {
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     }
 }
 
@@ -93,7 +94,7 @@ async fn a_signed_note_is_attested_and_spends_its_draft() {
         .unwrap()
         .get(0);
     assert_eq!(projected, 1, "the signed event is the projected note");
-    assert_eq!(signed.value, vec![signed.event_id]);
+    assert_eq!(signed.value.parts, vec![signed.event_id]);
     assert!(
         open_drafts(&c, chart).await.unwrap().is_empty(),
         "signing spends the draft"

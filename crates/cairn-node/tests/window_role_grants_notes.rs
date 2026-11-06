@@ -81,6 +81,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
             stated: None,
             node_origin: ORIGIN,
             addendum_to: None,
+            also_vouches: &[],
         };
         let r = sign_note(&mut window, &sk, &input, &author).await;
         expect_as_window("note::sign::sign_note", r).expect("the note is signed");
@@ -274,6 +275,7 @@ async fn the_windows_discard_runs_under_its_own_login() {
         stated: Some("2026-11-04T09:00:00Z".parse().unwrap()),
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     let r = discard_draft(&mut window, &sk, &input, &author).await;
     let out = expect_as_window("note::discard::discard_draft", r);
@@ -315,6 +317,7 @@ async fn the_windows_addendum_doors_run_under_its_own_login() {
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     let r = sign_note(&mut window, &sk, &input, &author).await;
     let root = expect_as_window("note::sign::sign_note", r)

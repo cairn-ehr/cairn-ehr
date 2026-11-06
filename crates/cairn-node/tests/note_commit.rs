@@ -581,6 +581,7 @@ async fn a_sign_after_the_timer_is_refused_committed() {
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
 
     let out = sign_note(&mut c, &node_sk, &input, &author).await.unwrap();

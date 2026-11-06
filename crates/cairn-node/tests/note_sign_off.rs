@@ -18,9 +18,8 @@ mod note_vouch_kit;
 use cairn_event::contributor::with_human_author;
 use cairn_event::note::{EscapedNarrative, NoteAssertion, StatedTime};
 use cairn_event::note_attestation::{VouchAct, VouchRole};
-use cairn_event::{event_address, generate_key, SigningKey};
+use cairn_event::{event_address, SigningKey};
 use cairn_node::db;
-use cairn_node::medication::AuthorParams;
 use cairn_node::note::compound::{compound_state, compounds, CompoundNote, CompoundState};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{note_body, sign_note, SignNoteInput};
@@ -28,25 +27,9 @@ use cairn_node::note::view::part_byline;
 use cairn_node::note::vouch::{needs_sign_off, sign_off_note, SignOffInput, SignOffRefusal};
 use cairn_node::shred::shred_event;
 use common::note_setup;
-use note_vouch_kit::{projected, timer_part, vouch_body, Vouch, ORIGIN};
+use note_vouch_kit::{member, projected, timer_part, vouch_body, Member, Vouch, ORIGIN};
 use tokio_postgres::Client;
 use uuid::Uuid;
-
-/// A vault member: their key and staff id.
-struct Member {
-    sk: SigningKey,
-    kid: String,
-    staff: &'static str,
-}
-
-impl Member {
-    fn author(&self) -> AuthorParams<'_> {
-        AuthorParams {
-            human_sk: &self.sk,
-            human_kid: &self.kid,
-        }
-    }
-}
 
 /// The suite's fixture: the node, a chart, and three people — `notewriter` (Dr Ada Notewriter,
 /// the note fixture's clinician), Sam (a student) and Dr Zed (a registrar).
@@ -57,28 +40,6 @@ struct Ward {
     ada: Member,
     sam: Member,
     zed: Member,
-}
-
-/// Enrol a human actor pinned with `role` (and a handle of their own, so each is a distinct
-/// actor) and give them a vault row named `name`, as the window's enrolment does.
-async fn member(c: &Client, staff: &'static str, name: &str, role: &str) -> Member {
-    let (sk, kid) = generate_key().unwrap();
-    c.execute(
-        "SELECT enroll_actor('human', jsonb_build_object('role', $2::text, 'handle', $3::text), $1)",
-        &[&kid, &role, &staff],
-    )
-    .await
-    .unwrap();
-    c.execute(
-        "INSERT INTO vault_member (staff_id, display_name, role, actor_id, signing_key_id, \
-                                   sealed, enrolled_by, contact_email) \
-         SELECT $2, $3, $4, actor_id, $1, '\\x00'::bytea, 'console', 'w@example.org' \
-           FROM actor_event WHERE signing_key_id = $1 AND op = 'enroll' LIMIT 1",
-        &[&kid, &staff, &name, &role],
-    )
-    .await
-    .unwrap();
-    Member { sk, kid, staff }
 }
 
 async fn ward(c: &Client) -> Ward {
@@ -108,6 +69,7 @@ async fn sign_as(c: &mut Client, w: &Ward, m: &Member, chart: Uuid, to: Option<U
         stated: None,
         node_origin: ORIGIN,
         addendum_to: to,
+        also_vouches: &[],
     };
     sign_note(c, &w.node_sk, &input, &m.author())
         .await

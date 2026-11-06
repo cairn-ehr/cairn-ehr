@@ -1,5 +1,5 @@
 //! The text progress note (`clinical.note.asserted`, ADR-0041, sign-in slice 3a) — the node side
-//! the window calls. Ten small parts, each a file:
+//! the window calls. Eleven small parts, each a file:
 //!
 //! * `draft` — the text being typed, one part per writer (db/066). It lives in the one
 //!   deliberately MUTABLE store (db/065/066), reachable only through definer doors, and is never
@@ -8,6 +8,7 @@
 //! * `sign` — turns a draft into signed, sealed note events — one per writer's non-blank part,
 //!   each later part an addendum to the one before — in ONE transaction that spends the draft,
 //!   so a draft can never be both a note and still open.
+//!   An addendum's sign also vouches for the signer's own earlier unsigned parts (`sign_vouch`).
 //! * `commit` — the quarantine timer: a draft left untouched for the site's quarantine goes into
 //!   the record UNSIGNED, as node-signed note events, one per non-blank part (slice 3b-2a).
 //! * `discard` — throws away a draft the discarder alone wrote, as ONE signed
@@ -30,6 +31,7 @@ pub mod discard;
 pub mod draft;
 pub mod read;
 pub mod sign;
+mod sign_vouch;
 pub mod view;
 pub mod vouch;
 pub mod vouch_read;
