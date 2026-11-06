@@ -36,8 +36,10 @@ pub fn same_actor(a: &str, b: &str) -> bool {
     !a.is_empty() && a == b
 }
 
-/// Everyone whose signature on part `p` COUNTS: its own signer first, then each vouch's signer
-/// in order. A since-repudiated key is skipped (ADR-0093): the words it signed may be an
+/// Every signer of part `p` whose key still stands: its own signer first, then each vouch's
+/// signer in order. Whether the part itself is signed is [`part_is_signed`]'s answer, not this
+/// list's (a colleague's vouch of a repudiated part is listed here but does not sign it). A
+/// since-repudiated key is skipped (ADR-0093): the words it signed may be an
 /// impostor's, so neither its own signature nor a vouch it filed vouches for anything.
 pub fn signed_for(p: &NoteRow) -> Vec<&Signer> {
     p.signed_by

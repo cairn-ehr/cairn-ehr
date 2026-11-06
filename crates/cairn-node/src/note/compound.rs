@@ -125,10 +125,10 @@ pub fn compound_state(parts: &[NoteRow]) -> CompoundState {
         return CompoundState::OnePart;
     }
     let pressed_sign_off = |s: &Signer| {
-        parts
-            .iter()
-            .flat_map(|p| &p.vouches)
-            .any(|v| v.act == VouchAct::SignOff && same_actor(&v.by.actor, &s.actor))
+        parts.iter().flat_map(|p| &p.vouches).any(|v| {
+            // A sign-off under a repudiated key never signs the note off (ADR-0093).
+            v.act == VouchAct::SignOff && !v.by.repudiated && same_actor(&v.by.actor, &s.actor)
+        })
     };
     if let Some(s) = full_signers(parts).find(|s| pressed_sign_off(s)) {
         return CompoundState::SignedOff(signer_words(s));
@@ -137,8 +137,10 @@ pub fn compound_state(parts: &[NoteRow]) -> CompoundState {
     let (mut unsigned, mut unverified) = (false, false);
     for p in parts.iter().filter(|p| !part_is_signed(p)) {
         match p.grade {
-            // Not reached: a `Signed` part carries `signed_by`, so it is signed.
-            NoteGrade::Signed { .. } => {}
+            // Reached only for a part signed by a since-repudiated key and not re-signed: its
+            // signature counts for nothing, so the note includes an unsigned part (ADR-0093).
+            // (Any other `Signed` part is signed, so the filter above dropped it.)
+            NoteGrade::Signed { .. } => unsigned = true,
             NoteGrade::Claimed => unverified = true,
             NoteGrade::WentInUnsigned | NoteGrade::WriterNotKnown => unsigned = true,
         }
@@ -381,6 +383,45 @@ mod tests {
         parts[1]
             .vouches
             .push(vouch(9, VouchAct::Addendum, VouchRole::Attested, ada));
+        assert_eq!(compound_state(&parts), CompoundState::EverySigned);
+    }
+
+    /// ADR-0093: a part signed by a since-repudiated key counts as unsigned until the real
+    /// person re-signs it.
+    #[test]
+    fn a_repudiated_part_makes_the_note_include_an_unsigned_part() {
+        let ada = who("a1", "Dr Ada");
+        let mut parts = vec![
+            part(1, Some(ada.clone())),
+            part(2, Some(fixture::repudiated("r1", "Dr Rex"))),
+        ];
+        assert_eq!(
+            state_words(&compound_state(&parts)).as_deref(),
+            Some("includes an unsigned part")
+        );
+        parts[1].vouches.push(vouch(
+            9,
+            VouchAct::Addendum,
+            VouchRole::Attested,
+            who("r1", "Dr Rex"),
+        ));
+        assert_eq!(
+            state_words(&compound_state(&parts)).as_deref(),
+            Some("every part signed")
+        );
+    }
+
+    /// A sign-off filed under a repudiated key never makes the note read "signed off by".
+    #[test]
+    fn a_repudiated_keys_sign_off_does_not_sign_the_note_off() {
+        let ada = who("a", "Dr Ada");
+        let mut parts = vec![part(1, Some(ada.clone())), part(2, Some(ada))];
+        parts[0].vouches.push(vouch(
+            10,
+            VouchAct::SignOff,
+            VouchRole::Attested,
+            fixture::repudiated("a", "Dr Ada"),
+        ));
         assert_eq!(compound_state(&parts), CompoundState::EverySigned);
     }
 }

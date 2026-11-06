@@ -5,7 +5,7 @@ use cairn_event::note_attestation::{VouchAct, VouchRole};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
 use super::read::NoteRow;
-use super::vouch::same_actor;
+use super::vouch::{re_signed, same_actor};
 use super::vouch_read::{PartVouch, Signer};
 
 /// What a signing key reads as when this node cannot name its holder.
@@ -120,11 +120,15 @@ fn byline_marked(grade: &NoteGrade, writer: &PartWriter, unverified: &str) -> St
 }
 
 /// A signer's name as the chart shows it: their name, then `" (student)"` for a student and
-/// `" (signer unconfirmed)"` while their key's enrolment is unconfirmed or doubtful. Pure.
+/// `" (signer unconfirmed)"` while their key's enrolment is unconfirmed or doubtful, or
+/// `" (key had been repudiated)"` once the key was repudiated (ADR-0093: the reader must see
+/// WHY the name carries no weight). The two are exclusive: the key's state is one word. Pure.
 pub fn signer_words(s: &Signer) -> String {
     let student = if s.student { " (student)" } else { "" };
     let unconfirmed = if s.unconfirmed {
         " (signer unconfirmed)"
+    } else if s.repudiated {
+        " (key had been repudiated)"
     } else {
         ""
     };
@@ -133,8 +137,12 @@ pub fn signer_words(s: &Signer) -> String {
 
 /// What one vouch adds to a byline, `" · co-signed by Dr Zed"`. Exhaustive: a new act or role
 /// must decide how it reads. (`Addendum` with `CoSigned` is never stored: the floor refuses it
-/// and the projection skips it.)
-fn vouch_words(v: &PartVouch) -> String {
+/// and the projection skips it.) `re_signs` marks the vouch that re-signs a repudiated part: it
+/// reads `" · re-signed by …"` whatever its act or role, because that is what it MEANS there.
+fn vouch_words(v: &PartVouch, re_signs: bool) -> String {
+    if re_signs {
+        return format!(" · re-signed by {}", signer_words(&v.by));
+    }
     let how = match (v.act, v.role) {
         (VouchAct::Addendum, _) => "signed later",
         (VouchAct::SignOff, VouchRole::Attested) => "signed off",
@@ -169,9 +177,15 @@ fn part_byline_marked(p: &NoteRow, unverified: &str) -> String {
                 v.role == VouchRole::CoSigned
                     && !v.by.actor.is_empty()
                     && !v.by.student
+                    // A repudiated key's co-sign counts for nothing (ADR-0093).
+                    && !v.by.repudiated
                     && !same_actor(&v.by.actor, &s.actor)
             });
-            let pending = if s.student && !co_signed {
+            // A repudiated, not re-signed signature counts as unsigned (ADR-0093); that is the
+            // stronger statement, so it takes the place of "not co-signed" (never both).
+            let pending = if s.repudiated && !re_signed(p) {
+                " — counts as unsigned"
+            } else if s.student && !co_signed {
                 " — not co-signed"
             } else {
                 ""
@@ -184,8 +198,12 @@ fn part_byline_marked(p: &NoteRow, unverified: &str) -> String {
         None => p.grade.clone(),
     };
     let mut words = byline_marked(&grade, &p.writer, unverified);
+    // The vouch that re-signs a repudiated part: not repudiated, same actor as the signer.
+    let signer = p.signed_by.as_ref().filter(|s| s.repudiated);
     for v in &p.vouches {
-        words.push_str(&vouch_words(v));
+        let re_signs =
+            signer.is_some_and(|s| !v.by.repudiated && same_actor(&v.by.actor, &s.actor));
+        words.push_str(&vouch_words(v, re_signs));
     }
     words
 }
