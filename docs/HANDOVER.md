@@ -53,7 +53,7 @@
 >   text; filed by the ADR) · **#985** (a raw-SQL Sign spends a colleague's draft) · **#986** (Sign's unknown-outcome
 >   lead) · **#988** (the editor should show its due words) · **#989** (a lost answer on an empty-discard commit) · **#990** (the discard's markup messages are labelled "note") · **#991** (split `reread_webview_tests.rs`) · #980 still. Owed by a human: **RUNBOOK §21** (discard ≤ 3 s; the colleague's-draft and stuck refusals; the
 >   marker by keyboard + VoiceOver; WebKit).
-> - **Slice 3c-1 BUILT 2026-11-05 — PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)**
+> - **Slice 3c-1 MERGED 2026-11-05 — PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)**
 >   ([ADR-0091](spec/decisions/0091-the-compound-note-and-the-addendum.md), spec **v0.93**, `db/070` with db/064 +
 >   db/065 in place, `SCHEMA_GENERATION` **70**; plan
 >   [`superpowers/plans/2026-11-05-sign-in-slice-3c-1-compound-note-and-addendum.md`](superpowers/plans/2026-11-05-sign-in-slice-3c-1-compound-note-and-addendum.md)).
@@ -114,7 +114,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **3c-1 BUILT on PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)** (ADR-0091, spec v0.93,
+> 1. **3c-1 MERGED in PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)** (ADR-0091, spec v0.93,
 >    `db/070`, `SCHEMA_GENERATION` 70; the slice bullet above has its issues); owed by a human: **RUNBOOK §22**. **Next:
 >    3c-2** (the vouch overlay, "Sign off this note", the `student` label, "not co-signed", the per-part "signer
 >    unconfirmed"), **then 3c-3** (the pending-sign-offs menu, #918's display half). The 2026-11-05 decisions (#948
