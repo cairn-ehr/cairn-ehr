@@ -6,6 +6,7 @@ use crate::notes::tests::{bne, utc};
 use crate::notes::time::stated_time_in;
 use cairn_node::note::read::{DiscardMarker, DiscardedText};
 use cairn_node::note::view::{NoteGrade, PartWriter};
+use cairn_node::note::vouch_read::Signer;
 use uuid::Uuid;
 
 fn draft(terminal: &str) -> NoteDraft {
@@ -195,6 +196,14 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             },
             addendum_to: None,
             writer: PartWriter::Drafted("Nurse A".into()),
+            signed_by: Some(Signer {
+                actor: "a1".into(),
+                name: "Dr Ada".into(),
+                student: false,
+                unconfirmed: false,
+            }),
+            drafted_actor: None,
+            vouches: vec![],
         }],
         withheld_on_linked: 2,
         drafts: vec![draft("pc-1")],

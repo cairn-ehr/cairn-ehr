@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use super::draft::{open_drafts, NoteDraft};
 use super::view::{note_grade, part_writer, NoteGrade, PartWriter};
+use super::vouch_read::{parse_vouches, signer_of, vouches_column, PartVouch, Signer};
 
 /// One signed note, ready for the window to word (`view::time_words`, `view::grade_words`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +43,13 @@ pub struct NoteRow {
     /// node can name that key, through `cairn_note_signer_name`), or nobody recorded when the
     /// signer only attested it.
     pub writer: PartWriter,
+    /// Who the `Signed` grade authenticated (slice 3c-2): `Some` exactly when `grade` is
+    /// `NoteGrade::Signed`.
+    pub signed_by: Option<Signer>,
+    /// The actor of the part's `drafted` contributor key (lower hex), when this node knows it.
+    pub drafted_actor: Option<String>,
+    /// The part's verified vouches for its own bytes, in HLC order (`vouch_read`).
+    pub vouches: Vec<PartVouch>,
 }
 
 /// One discarded draft, as the chart lists it beside (never among) its notes.
@@ -112,11 +120,19 @@ pub struct PatientNoteList {
 /// rather than `Device`. Being NAMED is not enough: `cairn_note_signer_name` also names device and
 /// agent keys by their pinned handle (final review M6). It is never an attester: the #412 guard
 /// below still holds.
-const NOTES_SQL: &str = "\
-    SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
+///
+/// `g.k` is the key the `Signed` grade authenticates: the verified attester when there is one,
+/// else the signer (db/005 stores a token only for the contributor that bears responsibility, so
+/// the attester, when present, is whom the grade names); the signer name column is read for it
+/// too, so `signed_by` and the grade name the same person. The three columns after the human
+/// drafted key say who `g.k` is (`vouch_read::signer_of`); the next is the drafted key's actor
+/// (for `vouch::addendum_covers`). The last column is the part's verified vouches
+/// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot.
+const NOTES_SQL: &str = concat!(
+    "SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
            cairn_note_vouched_attester(e.event_id), \
-           cairn_note_signer_name(e.signer_key_id), \
+           cairn_note_signer_name(g.k), \
            (SELECT (r ->> 'event')::uuid::text FROM jsonb_array_elements(n.refs) r \
              WHERE r ->> 'rel' = 'addendum-to' LIMIT 1), \
            cairn_note_signer_name((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
@@ -126,9 +142,15 @@ const NOTES_SQL: &str = "\
                     WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id), \
            (SELECT k FROM (SELECT c ->> 'actor_id' AS k FROM jsonb_array_elements(e.contributors) c \
                             WHERE c ->> 'role' = 'drafted' LIMIT 1) d \
-             WHERE cairn_note_key_is_human(d.k)) \
-      FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
-     WHERE n.patient_id = ANY($1::text[]::uuid[])";
+             WHERE cairn_note_key_is_human(d.k)), \
+           cairn_note_key_actor(g.k), cairn_note_key_role(g.k), cairn_key_confirmation(g.k), \
+           cairn_note_key_actor((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
+                                  WHERE c ->> 'role' = 'drafted' LIMIT 1)), ",
+    vouches_column!(),
+    " FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
+     CROSS JOIN LATERAL (SELECT COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id) AS k) g \
+     WHERE n.patient_id = ANY($1::text[]::uuid[])"
+);
 
 /// One row per PART of each discard on the given charts, with its 1-based position (`ord`).
 ///
@@ -239,6 +261,15 @@ pub async fn list_patient_notes(
             attester.as_deref().map(VerifiedKid::from_event_log_column),
             &humans,
         );
+        let grade = note_grade(confidence, r.get(9));
+        let signed_by = matches!(grade, NoteGrade::Signed { .. }).then(|| {
+            signer_of(
+                r.get(15),
+                r.get(9),
+                r.get::<_, Option<String>>(16).as_deref(),
+                r.get::<_, Option<String>>(17).as_deref(),
+            )
+        });
         notes.push(NoteRow {
             event_id: r.get::<_, String>(0).parse()?,
             chart,
@@ -246,12 +277,15 @@ pub async fn list_patient_notes(
             t_effective: r.get(3),
             effective_basis: r.get(4),
             recording_started: r.get(5),
-            grade: note_grade(confidence, r.get(9)),
+            grade,
             addendum_to: r
                 .get::<_, Option<String>>(10)
                 .map(|s| s.parse())
                 .transpose()?,
             writer: part_writer(r.get(12), drafted_by, r.get(13)),
+            signed_by,
+            drafted_actor: r.get(18),
+            vouches: parse_vouches(&r.get::<_, String>(19))?,
         });
     }
     // Ordered here rather than by SQL ORDER BY (ADR-0045); the id breaks a tie stably.

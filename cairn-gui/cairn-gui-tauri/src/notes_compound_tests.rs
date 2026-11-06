@@ -10,6 +10,7 @@ use cairn_node::note::compound::compounds;
 use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::view::{NoteGrade, PartWriter};
+use cairn_node::note::vouch_read::Signer;
 
 /// The chart on screen.
 const OPENED: u128 = 7;
@@ -35,9 +36,21 @@ fn note(n: u128, chart: u128, to: Option<u128>, min: i64, grade: NoteGrade) -> N
         t_effective: t,
         effective_basis: "stated".into(),
         recording_started: t,
+        // `Some` exactly when the grade is `Signed`, as the node's read builds it.
+        signed_by: match &grade {
+            NoteGrade::Signed { by } => Some(Signer {
+                actor: format!("actor-{by}"),
+                name: by.clone(),
+                student: false,
+                unconfirmed: false,
+            }),
+            _ => None,
+        },
         grade,
         addendum_to: to.map(id),
         writer: PartWriter::TheSigner,
+        drafted_actor: None,
+        vouches: vec![],
     }
 }
 

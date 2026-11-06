@@ -126,7 +126,7 @@ where
         byline,
         byline_spoken,
         when,
-        state: state_words(compound_state(c.parts())).map(str::to_string),
+        state: state_words(&compound_state(c.parts())),
         parts_label: (n >= 2).then(|| format!("{n} parts")),
         parts: if n >= 2 { views } else { vec![] },
         segments,
