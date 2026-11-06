@@ -298,8 +298,11 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 ### 2026-11-06 — sign-in slice 3c-2 (draft PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)): plan → SDD, 7 tasks
 
 Each task reviewed and re-reviewed (ledger: `.superpowers/sdd/2026-11-06-sign-in-slice-3c-2-vouch-and-sign-off/`,
-gitignored); the binding rules are ADR-0092 and the 3c-2 durable-rules block. A full DB gate passed at `45f4af16`
-(3303 passed, 0 skipped; Tasks 6–7 touch only the webview and docs).
+gitignored); the binding rules are ADR-0092 and the 3c-2 durable-rules block. Then a whole-branch final review (0
+Critical; 1 Important: a sign-off's outcome went unsaid after a who's-here switch) and ONE fix wave (that, plus the
+planner co-signing only where the floor admits it, a vouch counted only under its part's own chart, "signed off by"
+naming a signer who pressed); residuals in #1003. The full DB gate passed at the final code head `c382e734` (3308
+passed, 0 failed, 0 skipped). Owed before merge: CI green on PR #1000, and a human's RUNBOOK §23.
 - **⇒ A new act can break an invariant the old acts only implied.** Every note act in flight used to hold the editor
   open, so `noteDraft !== null` doubled as "a press is in flight". The sign-off runs with the editor FREE, and the
   review found New note / Add / Continue here could open mid-press and a Sign reuse the strip's passphrase. Name the
