@@ -50,6 +50,7 @@ fn note(n: u128, chart: u128, to: Option<u128>, min: i64, grade: NoteGrade) -> N
         addendum_to: to.map(id),
         writer: PartWriter::TheSigner,
         drafted_actor: None,
+        signer_human_actor: None,
         vouches: vec![],
     }
 }

@@ -54,13 +54,22 @@ pub fn part_is_signed(p: &NoteRow) -> bool {
     p.signed_by.is_some() || !p.vouches.is_empty()
 }
 
+/// Every non-student who has signed EVERY part, in the root's [`signed_for`] order (empty for no
+/// parts). [`signed_off_by`] takes the first; `compound::compound_state` takes the first who also
+/// pressed sign-off, so a full signer who never pressed cannot hide one who did.
+pub fn full_signers(parts: &[NoteRow]) -> impl Iterator<Item = &Signer> {
+    parts
+        .first()
+        .map(signed_for)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(move |s| !s.student && parts.iter().all(|p| has_signed(p, &s.actor)))
+}
+
 /// Who signed the whole note off: the first non-student, in the root's [`signed_for`] order, who
 /// has signed EVERY part. `None` when no one has (the note still needs a sign-off).
 pub fn signed_off_by(parts: &[NoteRow]) -> Option<&Signer> {
-    let root = parts.first()?;
-    signed_for(root)
-        .into_iter()
-        .find(|s| !s.student && parts.iter().all(|p| has_signed(p, &s.actor)))
+    full_signers(parts).next()
 }
 
 /// The note still needs someone to sign it off as a whole.
@@ -69,20 +78,22 @@ pub fn needs_sign_off(parts: &[NoteRow]) -> bool {
 }
 
 /// What "Sign off this note" vouches, part by part, for the presser `presser_actor`: nothing for
-/// a part they have already signed; `CoSigned` for a part someone else signed; `Attested` for a
-/// part nobody signed. Empty means there is nothing left for them to sign.
+/// a part they have already signed; `CoSigned` for a part someone else signed; `Attested` for
+/// every other part. Empty means there is nothing left for them to sign.
 ///
-/// A part signed by a key this node cannot place (an empty actor) is `Attested` too: db/071's
-/// floor co-signs only a part whose signer it knows as a human's, so a co-sign would be refused
-/// and take the whole sign-off with it. An attested sign-off on a signed part is admitted and
-/// reads honestly, "signed off by V".
+/// "Someone else signed" is db/071's co-sign rule exactly, so the floor never refuses the plan
+/// (a refused vouch would take the whole sign-off with it): the part's ENVELOPE was signed by a
+/// key the registry enrolled for a human ([`NoteRow::signer_human_actor`]) of an actor other than
+/// the presser's. Not the key the part's grade names, which may be an attester. So a part signed
+/// by a device, by a key this node cannot place, or by the presser's own envelope key is
+/// `Attested`: admitted, and read honestly as "signed off by V".
 pub fn sign_off_vouches(parts: &[NoteRow], presser_actor: &str) -> Vec<(Uuid, VouchRole)> {
     parts
         .iter()
         .filter(|p| !has_signed(p, presser_actor))
         .map(|p| {
-            let role = match &p.signed_by {
-                Some(s) if !s.actor.is_empty() => VouchRole::CoSigned,
+            let role = match &p.signer_human_actor {
+                Some(a) if !same_actor(a, presser_actor) => VouchRole::CoSigned,
                 _ => VouchRole::Attested,
             };
             (p.event_id, role)
@@ -313,7 +324,8 @@ pub(crate) mod fixture {
         }
     }
 
-    /// Part `n`: signed by `signer` (its grade `Signed`) or, for `None`, gone in unsigned.
+    /// Part `n`: signed by `signer` (its grade `Signed`, and its envelope, when the signer's
+    /// actor is known) or, for `None`, gone in unsigned.
     pub fn part(n: u128, signer: Option<Signer>) -> NoteRow {
         let t = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         NoteRow {
@@ -329,6 +341,10 @@ pub(crate) mod fixture {
             },
             addendum_to: None,
             writer: PartWriter::TheSigner,
+            signer_human_actor: signer
+                .as_ref()
+                .map(|s| s.actor.clone())
+                .filter(|a| !a.is_empty()),
             signed_by: signer,
             drafted_actor: None,
             vouches: vec![],
@@ -337,160 +353,5 @@ pub(crate) mod fixture {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::fixture::*;
-    use super::*;
-
-    fn ids(n: &[u128]) -> Vec<Uuid> {
-        n.iter().map(|&n| Uuid::from_u128(n)).collect()
-    }
-
-    #[test]
-    fn a_note_signed_wholly_by_its_author_needs_no_sign_off() {
-        let ada = who("a1", "Dr Ada");
-        let parts = vec![part(1, Some(ada.clone())), part(2, Some(ada.clone()))];
-        assert_eq!(signed_off_by(&parts), Some(&ada));
-        assert!(!needs_sign_off(&parts));
-        assert!(!needs_sign_off(&parts[..1]), "a one-part note too");
-    }
-
-    #[test]
-    fn a_students_note_needs_sign_off_until_co_signed() {
-        let mut parts = vec![part(1, Some(student("s1", "Sam")))];
-        assert!(needs_sign_off(&parts), "a student never signs a note off");
-        parts[0].vouches.push(vouch(
-            10,
-            VouchAct::SignOff,
-            VouchRole::CoSigned,
-            who("z1", "Dr Zed"),
-        ));
-        assert_eq!(
-            signed_off_by(&parts).map(|s| s.name.as_str()),
-            Some("Dr Zed")
-        );
-        assert!(!needs_sign_off(&parts));
-    }
-
-    #[test]
-    fn two_clinicians_parts_need_sign_off() {
-        let parts = vec![
-            part(1, Some(who("a1", "Dr Ada"))),
-            part(2, Some(who("b1", "Nurse Bo"))),
-        ];
-        assert!(needs_sign_off(&parts));
-        assert!(needs_sign_off(&[part(1, None)]), "an unsigned part too");
-    }
-
-    /// An unknown key (empty actor) signs nothing off and matches no presser.
-    #[test]
-    fn a_key_this_node_does_not_know_matches_no_one() {
-        let parts = vec![part(1, Some(who("", "a key this node does not know")))];
-        assert!(needs_sign_off(&parts));
-        assert_eq!(
-            sign_off_vouches(&parts, "").len(),
-            1,
-            "not even an empty presser"
-        );
-    }
-
-    /// The floor co-signs only a part a key it can place as a human's signed, so a part signed by
-    /// a key this node cannot place is ATTESTED ("signed off by"), never co-signed.
-    #[test]
-    fn a_part_signed_by_a_key_this_node_cannot_place_is_attested_not_co_signed() {
-        let parts = vec![
-            part(1, Some(who("", "a key this node does not know"))),
-            part(2, Some(student("s1", "Sam"))),
-        ];
-        assert_eq!(
-            sign_off_vouches(&parts, "z1"),
-            vec![
-                (Uuid::from_u128(1), VouchRole::Attested),
-                (Uuid::from_u128(2), VouchRole::CoSigned),
-            ]
-        );
-    }
-
-    #[test]
-    fn sign_off_co_signs_others_signed_parts_attests_unsigned_ones_and_skips_ones_own() {
-        let parts = vec![
-            part(1, Some(student("s1", "Sam"))),
-            part(2, None),
-            part(3, Some(who("z1", "Dr Zed"))),
-        ];
-        assert_eq!(
-            sign_off_vouches(&parts, "z1"),
-            vec![
-                (Uuid::from_u128(1), VouchRole::CoSigned),
-                (Uuid::from_u128(2), VouchRole::Attested),
-            ]
-        );
-        // A part the presser already vouched for is theirs too.
-        let mut vouched = parts.clone();
-        vouched[1].vouches.push(vouch(
-            9,
-            VouchAct::SignOff,
-            VouchRole::Attested,
-            who("z1", "Dr Zed"),
-        ));
-        assert_eq!(
-            sign_off_vouches(&vouched, "z1"),
-            vec![(Uuid::from_u128(1), VouchRole::CoSigned)]
-        );
-    }
-
-    #[test]
-    fn addendum_covers_only_the_actors_unsigned_parts() {
-        let mut mine_unsigned = part(1, None);
-        mine_unsigned.drafted_actor = Some("n1".into());
-        let mut theirs_unsigned = part(2, None);
-        theirs_unsigned.drafted_actor = Some("n2".into());
-        let mut mine_vouched = part(3, None);
-        mine_vouched.drafted_actor = Some("n1".into());
-        mine_vouched.vouches.push(vouch(
-            9,
-            VouchAct::Addendum,
-            VouchRole::Attested,
-            who("n1", "Nurse N"),
-        ));
-        let mut mine_signed = part(4, Some(who("n1", "Nurse N")));
-        mine_signed.drafted_actor = Some("n1".into());
-        let parts = vec![
-            mine_unsigned,
-            theirs_unsigned,
-            mine_vouched,
-            mine_signed,
-            part(5, None),
-        ];
-        assert_eq!(addendum_covers(&parts, "n1"), ids(&[1]));
-        assert!(
-            addendum_covers(&parts, "").is_empty(),
-            "an unknown actor covers nothing"
-        );
-    }
-
-    #[test]
-    fn a_later_addendum_by_another_brings_the_offer_back() {
-        let ada = who("a1", "Dr Ada");
-        let mut parts = vec![part(1, Some(ada.clone()))];
-        assert!(!needs_sign_off(&parts));
-        parts.push(part(2, Some(who("b1", "Nurse Bo"))));
-        assert!(needs_sign_off(&parts));
-        assert_eq!(
-            sign_off_vouches(&parts, "a1"),
-            vec![(Uuid::from_u128(2), VouchRole::CoSigned)]
-        );
-    }
-
-    #[test]
-    fn the_shown_parts_must_be_exactly_the_notes() {
-        let parts = vec![part(1, None), part(2, None)];
-        assert!(shows_exactly(&parts, &ids(&[2, 1])));
-        assert!(!shows_exactly(&parts, &ids(&[1])), "a part not shown");
-        assert!(!shows_exactly(&parts, &ids(&[1, 2, 3])), "a part gone");
-        assert!(
-            !shows_exactly(&parts, &ids(&[1, 1, 2])),
-            "the same count, too"
-        );
-        assert!(!shows_exactly(&parts, &ids(&[1, 1])), "and the same set");
-    }
-}
+#[path = "vouch_tests.rs"]
+mod tests;

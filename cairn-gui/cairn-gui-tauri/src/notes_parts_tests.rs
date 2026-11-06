@@ -203,6 +203,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
                 unconfirmed: false,
             }),
             drafted_actor: None,
+            signer_human_actor: None,
             vouches: vec![],
         }],
         withheld_on_linked: 2,

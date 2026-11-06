@@ -62,6 +62,8 @@ fn part(
             Some(_) => PartWriter::Drafted("Nurse A".into()),
             None => PartWriter::TheSigner,
         },
+        // The envelope's signer is the grade's, as the window's own Sign makes it.
+        signer_human_actor: signer.as_ref().map(|s| s.actor.clone()),
         signed_by: signer,
         drafted_actor: drafted.map(str::to_string),
         vouches: vec![],

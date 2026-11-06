@@ -48,6 +48,11 @@ pub struct NoteRow {
     pub signed_by: Option<Signer>,
     /// The actor of the part's `drafted` contributor key (lower hex), when this node knows it.
     pub drafted_actor: Option<String>,
+    /// The actor of the key that signed the part's ENVELOPE (`signer_key_id`), only when the
+    /// registry enrolled that key for a human (`cairn_note_key_is_human`) and can place it; `None`
+    /// otherwise. It is what db/071's co-sign rule reads (not the grade's key, which may be an
+    /// attester), so `vouch::sign_off_vouches` plans `CoSigned` only where the floor admits it.
+    pub signer_human_actor: Option<String>,
     /// The part's verified vouches for its own bytes, in HLC order (`vouch_read`).
     pub vouches: Vec<PartVouch>,
 }
@@ -126,8 +131,10 @@ pub struct PatientNoteList {
 /// the attester, when present, is whom the grade names); the signer name column is read for it
 /// too, so `signed_by` and the grade name the same person. The three columns after the human
 /// drafted key say who `g.k` is (`vouch_read::signer_of`); the next is the drafted key's actor
-/// (for `vouch::addendum_covers`). The last column is the part's verified vouches
-/// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot.
+/// (for `vouch::addendum_covers`). Then come the part's verified vouches
+/// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot. The
+/// last column is the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule
+/// reads (`NoteRow::signer_human_actor`).
 const NOTES_SQL: &str = concat!(
     "SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
@@ -147,7 +154,8 @@ const NOTES_SQL: &str = concat!(
            cairn_note_key_actor((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
                                   WHERE c ->> 'role' = 'drafted' LIMIT 1)), ",
     vouches_column!(),
-    " FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
+    ", CASE WHEN cairn_note_key_is_human(e.signer_key_id) THEN cairn_note_key_actor(e.signer_key_id) END \
+     FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      CROSS JOIN LATERAL (SELECT COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id) AS k) g \
      WHERE n.patient_id = ANY($1::text[]::uuid[])"
 );
@@ -285,6 +293,7 @@ pub async fn list_patient_notes(
             writer: part_writer(r.get(12), drafted_by, r.get(13)),
             signed_by,
             drafted_actor: r.get(18),
+            signer_human_actor: r.get(20),
             vouches: parse_vouches(&r.get::<_, String>(19))?,
         });
     }

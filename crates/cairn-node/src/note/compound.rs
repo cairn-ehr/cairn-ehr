@@ -12,7 +12,8 @@ use cairn_event::note_attestation::VouchAct;
 
 use super::read::NoteRow;
 use super::view::{signer_words, NoteGrade};
-use super::vouch::{part_is_signed, same_actor, signed_off_by};
+use super::vouch::{full_signers, part_is_signed, same_actor};
+use super::vouch_read::Signer;
 
 /// One note with all its parts. `parts()[0]` is the root; the rest follow in
 /// `(recording_started, event_id)` order. Built only by [`compounds`], so `parts` is never empty
@@ -106,8 +107,9 @@ pub fn compounds(notes: Vec<NoteRow>) -> Vec<CompoundNote> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompoundState {
     OnePart,
-    /// Signed off: `vouch::signed_off_by` has signed every part AND made a `sign-off` vouch on
-    /// this note. Carries their name as shown (`view::signer_words`).
+    /// Signed off: the first non-student, in the root's order, who has signed every part AND made
+    /// a `sign-off` vouch on this note (`vouch::full_signers`). Carries their name as shown
+    /// (`view::signer_words`).
     SignedOff(String),
     EverySigned,
     IncludesUnsigned,
@@ -122,14 +124,14 @@ pub fn compound_state(parts: &[NoteRow]) -> CompoundState {
     if parts.len() < 2 {
         return CompoundState::OnePart;
     }
-    if let Some(s) = signed_off_by(parts) {
-        let made_sign_off = parts
+    let pressed_sign_off = |s: &Signer| {
+        parts
             .iter()
             .flat_map(|p| &p.vouches)
-            .any(|v| v.act == VouchAct::SignOff && same_actor(&v.by.actor, &s.actor));
-        if made_sign_off {
-            return CompoundState::SignedOff(signer_words(s));
-        }
+            .any(|v| v.act == VouchAct::SignOff && same_actor(&v.by.actor, &s.actor))
+    };
+    if let Some(s) = full_signers(parts).find(|s| pressed_sign_off(s)) {
+        return CompoundState::SignedOff(signer_words(s));
     }
     // Exhaustive, no `_` arm: a new grade must break the build here (#412).
     let (mut unsigned, mut unverified) = (false, false);
@@ -195,6 +197,7 @@ mod tests {
             },
             grade,
             drafted_actor: None,
+            signer_human_actor: None,
             vouches: vec![],
         }
     }
@@ -341,6 +344,32 @@ mod tests {
         assert_eq!(
             state_words(&compound_state(&unconfirmed)).as_deref(),
             Some("signed off by Dr Zed (signer unconfirmed)")
+        );
+    }
+
+    /// Final review M6: the state names the first full signer who also PRESSED sign-off, not the
+    /// first full signer. Dr Ada signed every part (her own, then an addendum vouch) but never
+    /// pressed; Dr Zed later signed the note off: it reads "signed off by Dr Zed".
+    #[test]
+    fn the_state_skips_a_full_signer_who_never_pressed_sign_off() {
+        let ada = who("a1", "Dr Ada");
+        let zed = who("z1", "Dr Zed");
+        let mut parts = vec![part(1, Some(ada.clone())), part(2, None)];
+        parts[1]
+            .vouches
+            .push(vouch(9, VouchAct::Addendum, VouchRole::Attested, ada));
+        parts[0].vouches.push(vouch(
+            10,
+            VouchAct::SignOff,
+            VouchRole::CoSigned,
+            zed.clone(),
+        ));
+        parts[1]
+            .vouches
+            .push(vouch(11, VouchAct::SignOff, VouchRole::Attested, zed));
+        assert_eq!(
+            compound_state(&parts),
+            CompoundState::SignedOff("Dr Zed".into())
         );
     }
 
