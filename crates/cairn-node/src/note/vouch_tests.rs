@@ -256,3 +256,22 @@ fn an_addendum_does_not_cover_a_repudiated_part() {
     p.drafted_actor = Some("a".into());
     assert!(addendum_covers(&[p], "a").is_empty());
 }
+
+/// #1009: once the real person has re-signed, their signature stands again, so a supervisor's
+/// sign-off of it is a co-sign like any other (the floor admits it: a human's envelope key, another
+/// actor) and can clear a student's "— not co-signed".
+#[test]
+fn a_re_signed_part_is_co_signed_again() {
+    let mut sam = student("s", "Sam");
+    sam.repudiated = true;
+    let mut p = part(1, Some(sam));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        student("s", "Sam"),
+    ));
+    assert!(re_signed(&p));
+    let id = p.event_id;
+    assert_eq!(sign_off_vouches(&[p], "z"), vec![(id, VouchRole::CoSigned)]);
+}

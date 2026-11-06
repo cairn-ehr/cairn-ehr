@@ -115,16 +115,18 @@ pub fn needs_sign_off(parts: &[NoteRow]) -> bool {
 /// the presser's. Not the key the part's grade names, which may be an attester. So a part signed
 /// by a device, by a key this node cannot place, or by the presser's own envelope key is
 /// `Attested`: admitted, and read honestly as "signed off by V". A part signed by a REPUDIATED
-/// key is always `Attested` too, even though the registry knows its human: a `co-signed` over a
-/// forged signature would read as a real co-sign (ADR-0093). And it is offered to everyone, its
-/// own re-keyed writer included, since [`signed_for`] no longer counts the dead key.
+/// key is `Attested` too until the real person [`re_signed`] it, even though the registry knows
+/// its human: a `co-signed` over a possibly forged signature would read as a real co-sign
+/// (ADR-0093). Once re-signed, the signature stands again and is co-signed as any other (#1009).
+/// It is offered to everyone, its own re-keyed writer included, since [`signed_for`] no longer
+/// counts the dead key.
 pub fn sign_off_vouches(parts: &[NoteRow], presser_actor: &str) -> Vec<(Uuid, VouchRole)> {
     parts
         .iter()
         .filter(|p| !has_signed(p, presser_actor))
         .map(|p| {
             // (A part gone in unsigned has no `signed_by`; its human envelope still co-signs.)
-            let dead_key = p.signed_by.as_ref().is_some_and(|s| s.repudiated);
+            let dead_key = p.signed_by.as_ref().is_some_and(|s| s.repudiated) && !re_signed(p);
             let role = match &p.signer_human_actor {
                 Some(a) if !dead_key && !same_actor(a, presser_actor) => VouchRole::CoSigned,
                 _ => VouchRole::Attested,

@@ -194,3 +194,33 @@ db_test!(a_colleagues_vouch_on_a_repudiated_part_is_attested, |c| {
     let row = projected(&c, ids[0]).await.expect("the vouch is projected");
     assert_eq!(row.4, "attested", "never co-signed over a forged signature");
 });
+
+// #1009: once the real person re-signs, a supervisor's sign-off co-signs the part again, the
+// floor admits it, and a student's "— not co-signed" clears.
+db_test!(
+    a_re_signed_students_part_is_co_signed_by_a_supervisor,
+    |c| {
+        let w = ward(&c).await;
+        let sam = member(&c, "sam", "Sam", "student").await;
+        let p = sign_as(&mut c, &w, &sam).await;
+        let sam2 = repudiate_and_rekey(&c, &sam).await;
+
+        sign_off(&mut c, &sam2, &w, p).await.expect("Sam re-signs");
+        let n = note(&c, &w, p).await;
+        assert_eq!(
+            part_byline(&n.parts()[0]).shown,
+            "signed by Sam (student) (key had been repudiated) — not co-signed · \
+         re-signed by Sam (student)"
+        );
+
+        let ids = sign_off(&mut c, &w.zed, &w, p).await.expect("Zed co-signs");
+        let row = projected(&c, ids[0]).await.expect("the vouch is projected");
+        assert_eq!(row.4, "co-signed", "the re-signed signature stands again");
+        let n = note(&c, &w, p).await;
+        assert_eq!(
+            part_byline(&n.parts()[0]).shown,
+            "signed by Sam (student) (key had been repudiated) · re-signed by Sam (student) · \
+         co-signed by Dr Zed"
+        );
+    }
+);

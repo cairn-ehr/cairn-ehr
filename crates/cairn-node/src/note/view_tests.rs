@@ -403,3 +403,32 @@ fn a_repudiated_co_signer_does_not_clear_not_co_signed() {
         "signed by Sam (student) — not co-signed · co-signed by Dr Zed (key had been repudiated)"
     );
 }
+
+/// #1009: a re-signed repudiated student part reads "— not co-signed", as any student part, until a
+/// supervisor co-signs it; then the mark clears.
+#[test]
+fn a_re_signed_students_part_reads_not_co_signed_until_a_supervisor_co_signs() {
+    let mut sam = student("s", "Sam");
+    sam.repudiated = true;
+    let mut p = part(1, Some(sam));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        student("s", "Sam"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Sam (student) (key had been repudiated) — not co-signed · re-signed by Sam (student)"
+    );
+    p.vouches.push(vouch(
+        11,
+        VouchAct::SignOff,
+        VouchRole::CoSigned,
+        who("z", "Dr Zed"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Sam (student) (key had been repudiated) · re-signed by Sam (student) · co-signed by Dr Zed"
+    );
+}
