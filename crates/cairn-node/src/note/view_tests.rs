@@ -232,6 +232,24 @@ fn another_students_co_sign_does_not_clear_not_co_signed() {
     );
 }
 
+/// A co-signer whose key this node cannot place (empty actor — e.g. the student's own re-keyed key
+/// whose `rotate-key` row has not synced here yet) might be anyone, the student included, so it
+/// never clears the mark (ADR-0092 D10/D12).
+#[test]
+fn an_unplaceable_co_signer_does_not_clear_not_co_signed() {
+    let mut p = part(1, Some(student("s1", "Sam")));
+    p.vouches.push(vouch(
+        9,
+        VouchAct::SignOff,
+        VouchRole::CoSigned,
+        who("", UNKNOWN_SIGNER),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        format!("signed by Sam (student) — not co-signed · co-signed by {UNKNOWN_SIGNER}")
+    );
+}
+
 #[test]
 fn an_unconfirmed_signer_is_marked() {
     let mut s = who("a1", "Dr Ada");

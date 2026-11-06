@@ -249,7 +249,13 @@ FROM (VALUES ('71717171-0011-7871-8871-717171717171', 'clinical.note-attestation
              -- 0016: an addendum carrying co-signed.
              ('71717171-0016-7871-8871-717171717171', 'clinical.note-attestation/1', 6, '\x7116'::bytea,
               jsonb_build_array(pg_temp.bearing(pg_temp.kid(), 'co-signed')),
-              pg_temp.body('{"act":"addendum"}') -> 'payload'))
+              pg_temp.body('{"act":"addendum"}') -> 'payload'),
+             -- 0017: a target that is not a uuid (the applier's ::uuid would raise, failing the heal).
+             ('71717171-0017-7871-8871-717171717171', 'clinical.note-attestation/1', 7, '\x7117'::bytea,
+              pg_temp.body() -> 'contributors', pg_temp.body('{"target":"not-a-uuid"}') -> 'payload'),
+             -- 0018: a target_address that is not even-length hex (decode() would raise).
+             ('71717171-0018-7871-8871-717171717171', 'clinical.note-attestation/1', 8, '\x7118'::bytea,
+              pg_temp.body() -> 'contributors', pg_temp.body('{"target_address":"abc"}') -> 'payload'))
      AS r(id, v, n, sb, c, pl);
 DO $$
 BEGIN
@@ -269,6 +275,10 @@ BEGIN
         'an_act_outside_the_closed_list_is_skipped';
     ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0016-7871-8871-717171717171'),
         'an_addendum_carrying_co_signed_is_skipped';
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0017-7871-8871-717171717171'),
+        'a_target_that_is_not_a_uuid_is_skipped';
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0018-7871-8871-717171717171'),
+        'a_target_address_that_is_not_even_length_hex_is_skipped';
 END $$;
 
 -- a_shred_scrubs_the_vouch_row (db/037).

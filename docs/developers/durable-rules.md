@@ -20,7 +20,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `co-signed`, or whose target/address is malformed, because the heal path reaches a sealed vouch the floor never
   saw (db/020 step 7). **Tempting wrong fixes:** delete the "redundant" guard because "the floor already refuses
   these" (it never ran on that body); turn it into a table CHECK or a `RAISE` "to be loud" (either fails the heal).
-  Pin: db/tests/071 rows 0013–0016 (each asserts no projection row).
+  Pin: db/tests/071 rows 0013–0018 (each breaks one skip rule and asserts no projection row; 0017/0018, the
+  bad uuid and bad hex, fail with a raise if the skip is removed).
 - **A vouch counts only when its token is verified AND it names the part's own bytes.** The vouch column filters on
   `cairn_note_vouched_attester(a.event_id) = a.signer_key_id` AND `a.target_address = e.content_address`, inside the
   note statement (one snapshot). **Tempting wrong fixes:** join on `target` alone "since the strict door already
@@ -51,12 +52,14 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   clear each other's flag). Pins: `notes_sign_off_webview_tests.rs::nothing_opens_the_editor_while_a_press_is_in_flight`,
   `sign_and_discard_refuse_to_start_while_a_press_is_in_flight`. The medication pane is not yet guarded (#1002).
 - **`view::part_byline` is the one producer of a part's byline** (the root's heading, each part, each seam), with the
-  "(student)", "— not co-signed", "(signer unconfirmed)" and vouch words. `byline_words` has no production caller left
-  (its own tests and `note_read.rs` use it). **Tempting wrong fixes:** call `byline_words(grade, writer)` in a new window path "because it is the
-  old name" (the student and vouch words vanish there); let any `CoSigned` vouch clear "— not co-signed" (a student's
-  own co-sign, admitted remotely, would hide the pending mark). Pins: `view_tests.rs::a_students_own_co_sign_does_not_clear_not_co_signed`,
-  `another_students_co_sign_does_not_clear_not_co_signed`; the window's use only DB-gated
-  (`notes_sign_off_db_tests.rs`, #905).
+  "(student)", "— not co-signed", "(signer unconfirmed)" and vouch words. `byline_words` has no production caller
+  left (its own tests and `note_read.rs` use it). **Tempting wrong fixes:** call `byline_words(grade, writer)` in a
+  new window path "because it is the old name" (the student and vouch words vanish there); let any `CoSigned` vouch
+  clear "— not co-signed" (a student's own co-sign admitted remotely, or one by a key this node cannot place, which
+  might be the student's, would hide the pending mark). Pins:
+  `view_tests.rs::a_students_own_co_sign_does_not_clear_not_co_signed`,
+  `another_students_co_sign_does_not_clear_not_co_signed`, `an_unplaceable_co_signer_does_not_clear_not_co_signed`;
+  the window's use only DB-gated (`notes_sign_off_db_tests.rs`, #905).
 
 **⇒ GUI SIGN-IN SLICE 3c-1 — THE COMPOUND NOTE AND THE ADDENDUM (ADR-0091, db/070, db/064 + db/065 in place) — do not
 undo** (pins: `db/tests/070_note_addendum_test.sql`, `db/tests/064_clinical_note_test.sql`,

@@ -77,7 +77,10 @@ reads "(signer unconfirmed)".
 
 ### The floor (`cairn_check_note_attestation`, db/071)
 
-3. **Every message starts `note attestation: `**, and each rule raises its own, so the mirror can tell which fired.
+3. **Every message starts `note attestation: ` and names the rule that fired**, so the mirror can tell which one
+   did, with two exceptions, each message shared by two conditions: "target … is not a note held on this node" covers both a
+   target not held and one held but not a note, and "exactly one contributor must carry responsibility" covers both
+   a `contributors` that is not an array and a wrong count ([#1003](https://github.com/cairn-ehr/cairn-ehr/issues/1003)).
    The check is registered in `cairn_event_twin_check` with "note attestation requires a non-empty authored twin
    (§3.13/§3.19)". The type is `additive`, targets no other author, and stays off db/048's no-thread list, as notes
    do.
@@ -131,7 +134,7 @@ reads "(signer unconfirmed)".
    missing or not `attested`/`co-signed`, whose act is not `addendum`/`sign-off`, whose addendum carries
    `co-signed`, whose target is not a uuid, or whose `target_address` is not even-length hex. So the table holds only
    what the read's `VouchRole`/`VouchAct` can name. A shred deletes its rows by `content_address` (db/037, in place,
-   beside `clinical_note_discard`). Pins: db/tests/071 (rows 0011–0016, through the real dispatcher);
+   beside `clinical_note_discard`). Pins: db/tests/071 (rows 0011–0018, through the real dispatcher; 0013–0018 each break one skip rule);
    `note_attestation_floor.rs::a_shred_scrubs_the_projection`; the registry counts (`twin_registry.rs` and
    db/tests/034 28 → 29; `projection_registry.rs` 32 → 33 and db/tests/039 34 → 35).
 
@@ -209,7 +212,8 @@ reads "(signer unconfirmed)".
     - **" — not co-signed"** follows a student signer's name straight away. It clears **only** for a `CoSigned`
       vouch by a non-student of a different actor from the signer's (controller ruling; design §3.4: the
       SUPERVISOR's co-sign). A student's own co-sign, or another student's, does not clear it, though a peer's remote
-      door may admit one.
+      door may admit one. Nor does a co-signer whose key this node cannot place (an empty actor): it might be anyone,
+      the student included, for example the student's own re-keyed key before its `rotate-key` row syncs here.
     - **Each vouch** then follows in order: " · signed later by {V}" (an addendum), " · signed off by {V}" (a
       sign-off, attested), " · co-signed by {V}" (a sign-off, co-signed).
     - **The spoken form** keeps the `?` → "unverified " rule (#973).
@@ -226,7 +230,7 @@ reads "(signer unconfirmed)".
     A note one doctor signed throughout, which nobody pressed sign-off on, reads "every part signed". The match over
     grades has no `_` arm. Pins: `view_tests.rs`'s `a_student_part_reads_not_co_signed`, `a_co_signed_student_part`,
     `a_students_own_co_sign_does_not_clear_not_co_signed`, `another_students_co_sign_does_not_clear_not_co_signed`,
-    `an_unconfirmed_signer_is_marked`, `a_vouched_unsigned_part_reads_signed_later`; `compound.rs`'s
+    `an_unplaceable_co_signer_does_not_clear_not_co_signed`, `an_unconfirmed_signer_is_marked`, `a_vouched_unsigned_part_reads_signed_later`; `compound.rs`'s
     `the_state_reads_signed_off_by`, `a_vouched_part_no_longer_makes_the_note_unsigned`,
     `the_state_words_are_exact`.
 
@@ -342,7 +346,7 @@ reads "(signer unconfirmed)".
   custody projects nothing (`cairn_clear_payload` is NULL), so there the part reads as it did before the vouch: an
   under-claim, never an over-claim.
 - **(b) A sealed vouch admitted remotely without its DEK, then healed, is untested.** Decision 7 says what the
-  applier does; the SQL mirror pins the skip on unsealed rows only. Same class as #948's sealed cases
+  applier does; the SQL mirror pins every skip rule (rows 0013–0018) on unsealed rows only. Same class as #948's sealed cases
   ([#995](https://github.com/cairn-ehr/cairn-ehr/issues/995), extended).
 - **(c) A repudiated signer is not marked.** "(signer unconfirmed)" covers `unconfirmed` and `doubtful` only, so a
   part signed by a since-repudiated key reads plainly signed until 3c-3 builds #918's display half
@@ -350,10 +354,10 @@ reads "(signer unconfirmed)".
 - **(d) No pending-sign-offs menu.** A supervisor finds a note to sign off by opening its chart; the menu is 3c-3's.
 - **(e) Whether a student may sign off is site policy, not mechanism** (principle 9;
   [ADR-0028](0028-finalized-closed-contributor-role-enum.md): `co-signed` has a slot because deployments gate on it).
-  The button is offered to any claim
-  (controller ruling). A student's sign-off vouches read "(student)", and `signed_off_by` skips students, so the note
-  never reads "signed off by" a student and keeps offering the button. A student who has signed every part already is
-  answered `NothingToSign`.
+  The button is offered to any claim (controller ruling). A student's sign-off vouches read "(student)", and
+  `signed_off_by` skips students. So the note's state line never reads "signed off by" a student, though a part's
+  byline can (" · signed off by Sam (student)"), and the note keeps offering the button. A student who has signed
+  every part already is answered `NothingToSign`.
 - **(f) Concurrent addenda can double-vouch a part.** Two addenda by the same writer, signed at once and both listing
   the same unsigned part, file two vouches for it; the byline then reads "signed later by Ada" twice. Harmless: both
   are true.
