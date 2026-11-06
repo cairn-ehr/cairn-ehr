@@ -94,13 +94,13 @@ async fn registry_is_seeded_with_the_expected_mapping() {
     .await
     .unwrap();
 
-    // Assert the full 28-row mapping is present so a dropped registration is caught.
+    // Assert the full 29-row mapping is present so a dropped registration is caught.
     let n: i64 = c
         .query_one("SELECT count(*) FROM cairn_event_twin_check", &[])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 28, "expected 28 seeded twin-check rows");
+    assert_eq!(n, 29, "expected 29 seeded twin-check rows");
 
     // Lock the FULL registry contract. This table is now the single source of floor-wiring
     // truth, so assert every (event_type → check_fn, twin_required_msg) mapping byte-for-byte
@@ -257,6 +257,12 @@ async fn registry_is_seeded_with_the_expected_mapping() {
             "clinical.note-discard.asserted",
             "cairn_check_note_discard",
             Some("note discard requires a non-empty authored twin (§3.13/§3.19)"),
+        ),
+        // db/071 (ADR-0091, sign-in slice 3c-2): the later vouch for a note part.
+        (
+            "clinical.note-attestation.asserted",
+            "cairn_check_note_attestation",
+            Some("note attestation requires a non-empty authored twin (§3.13/§3.19)"),
         ),
     ];
     expected.sort();

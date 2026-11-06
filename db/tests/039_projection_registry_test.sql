@@ -15,7 +15,8 @@ BEGIN;
 --    → `sensitivity_withdrawal_apply`; 29 = 27 + db/059's two ADR-0081 rows,
 --    `medication_withhold_apply` and `medication_withhold_release_apply`; 30 = 29 + db/060's
 --    #857 row, `medication_cessation_reason_apply`; 31 = 30 + db/064's ADR-0041 row,
---    `clinical_note_apply`; 32 = 31 + db/068's ADR-0089 row, `clinical_note_discard_apply`.)
+--    `clinical_note_apply`; 32 = 31 + db/068's ADR-0089 row, `clinical_note_discard_apply`; 33 = 32 + db/071's
+--    ADR-0091 row, `clinical_note_attestation_apply`.)
 --
 --    #345 left the PRODUCT count unchanged at 25 and dropped db/008's from 3 to 2:
 --    retiring `patient.created` removed one product row (its patient_chart_apply
@@ -24,14 +25,14 @@ BEGIN;
 --    `identity.registration.asserted` → patient_chart_apply, the chart-birth
 --    projection registration took over.
 --    Kept in lockstep with the Rust mirror
---    (projection_registry.rs::registry_row_count_is_pinned, which asserts 32 on
+--    (projection_registry.rs::registry_row_count_is_pinned, which asserts 33 on
 --    the product-loader DB that never loads db/008).
 DO $$
 DECLARE n bigint;
 BEGIN
     SELECT count(*) INTO n FROM cairn_projection_apply;
-    IF n <> 34 THEN
-        RAISE EXCEPTION 'cairn_projection_apply: expected 34 rows on the sqltest DB, found %', n;
+    IF n <> 35 THEN
+        RAISE EXCEPTION 'cairn_projection_apply: expected 35 rows on the sqltest DB, found %', n;
     END IF;
 END $$;
 

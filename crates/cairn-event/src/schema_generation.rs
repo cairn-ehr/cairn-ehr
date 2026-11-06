@@ -39,10 +39,10 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/070_note_addendum.sql` → 70).
+/// (`db/071_clinical_note_attestation.sql` → 71).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 70;
+pub const SCHEMA_GENERATION: i32 = 71;
 
 /// Advisory-lock key (ASCII `"CARNLOAD"`) serializing a loader's whole
 /// check→replay→stamp sequence against every other loader on the same database.

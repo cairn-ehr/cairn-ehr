@@ -353,6 +353,10 @@ BEGIN
         IF to_regclass('public.clinical_note_discard') IS NOT NULL THEN
             DELETE FROM clinical_note_discard WHERE content_address = v_ca;
         END IF;
+        -- A later vouch for a note part (db/071, sign-in slice 3c-2): which part, and who signed.
+        IF to_regclass('public.clinical_note_attestation') IS NOT NULL THEN
+            DELETE FROM clinical_note_attestation WHERE content_address = v_ca;
+        END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;
