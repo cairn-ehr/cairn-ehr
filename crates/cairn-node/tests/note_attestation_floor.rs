@@ -320,7 +320,8 @@ db_test!(a_vouch_without_a_token_is_refused, |c| {
 });
 
 // Review Focus 4: a peer's vouch reaches this node before its note. Admitted (no error, so the
-// puller pens nothing) and projected; the read counts it only once the note lands (Task 3).
+// puller pens nothing) and projected; that the read counts it once the note lands is pinned end
+// to end by `note_vouch_remote_read.rs::a_vouch_ahead_of_its_note_counts_once_the_note_lands`.
 // UNSEALED through the remote door, as note_addendum_ahead_of_target.rs explains: the lenient
 // arm admits it and runs the full floor on a clear body.
 db_test!(the_remote_door_admits_a_vouch_whose_note_is_not_held, |c| {

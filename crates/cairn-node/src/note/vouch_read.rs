@@ -7,7 +7,10 @@
 //! * its token is verified — `cairn_note_vouched_attester(vouch)` returns the vouch's own signer
 //!   key (db/020 can store a peer's token unverified; such a vouch vouches for nothing), and
 //! * it names the part's CURRENT bytes — `target_address` equals the part's own
-//!   `event_log.content_address`, so a vouch for a different version of the part is not read.
+//!   `event_log.content_address`, so a vouch for a different version of the part is not read —
+//!   and it is filed under the part's OWN chart (`a.patient_id = n.patient_id`): the strict door
+//!   demands that, but the remote door checks structure only, so a peer's vouch filed under
+//!   another chart is admitted there and must not sign this part.
 //!
 //! The vouches are read as one column of the note statement itself (`vouches_column!`), so they
 //! come from the same snapshot as the notes they belong to: a vouch can never be attached to a
@@ -80,6 +83,7 @@ macro_rules! vouches_column {
                     'confirmation', cairn_key_confirmation(a.signer_key_id))), '[]'::jsonb)::text \
             FROM clinical_note_attestation a \
            WHERE a.target = n.event_id \
+             AND a.patient_id = n.patient_id \
              AND a.target_address = e.content_address \
              AND cairn_note_vouched_attester(a.event_id) = a.signer_key_id)"
     };
@@ -200,10 +204,12 @@ mod tests {
         assert!(signer_of(None, None, None, Some("unconfirmed")).unconfirmed);
     }
 
-    /// Review Focus 3: only a VERIFIED vouch naming the part's OWN bytes is read.
+    /// Review Focus 3: only a VERIFIED vouch naming the part's OWN bytes, filed under the part's
+    /// own chart, is read.
     #[test]
     fn only_a_verified_vouch_for_the_parts_own_bytes_is_read() {
         assert!(VOUCHES_SQL.contains("a.target_address = e.content_address"));
+        assert!(VOUCHES_SQL.contains("a.patient_id = n.patient_id"));
         assert!(VOUCHES_SQL.contains("cairn_note_vouched_attester(a.event_id) = a.signer_key_id"));
         assert!(!VOUCHES_SQL.contains("attester_key"), "{VOUCHES_SQL}");
     }
