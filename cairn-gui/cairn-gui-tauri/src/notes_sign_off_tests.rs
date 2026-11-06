@@ -117,6 +117,16 @@ fn can_sign_off_follows_needs_sign_off() {
     );
 }
 
+/// A part signed by a since-repudiated key counts as unsigned (ADR-0093), so the note offers the
+/// press even though a signer is named.
+#[test]
+fn a_repudiated_part_offers_sign_off() {
+    let mut rex = who("act-rex", "Dr Rex");
+    rex.repudiated = true;
+    let c = one(vec![part(1, OPENED, None, 0, Some(rex), None)]);
+    assert!(view(&c, None).can_sign_off);
+}
+
 /// The window sends back the ids it showed; the node refuses if the note holds any other.
 #[test]
 fn shown_parts_are_the_compounds_part_ids_in_order() {
