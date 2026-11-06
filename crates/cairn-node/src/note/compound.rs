@@ -424,4 +424,30 @@ mod tests {
         ));
         assert_eq!(compound_state(&parts), CompoundState::EverySigned);
     }
+
+    /// ADR-0093: a note one writer wrote and signed alone, her key then repudiated, reads
+    /// "includes an unsigned part"; once she presses "Sign off this note" under her standing key
+    /// (an `Attested` sign-off on every part, as `sign_off_vouches` plans it for a dead key) the
+    /// note reads signed off by her — she re-signed every part and pressed sign-off.
+    #[test]
+    fn a_writer_who_re_signs_her_whole_note_signed_it_off() {
+        let dead = fixture::repudiated("n1", "Nurse A");
+        let mut parts = vec![part(1, Some(dead.clone())), part(2, Some(dead))];
+        assert_eq!(
+            state_words(&compound_state(&parts)).as_deref(),
+            Some("includes an unsigned part")
+        );
+        for (n, p) in parts.iter_mut().enumerate() {
+            p.vouches.push(vouch(
+                10 + n as u128,
+                VouchAct::SignOff,
+                VouchRole::Attested,
+                who("n1", "Nurse A"),
+            ));
+        }
+        assert_eq!(
+            state_words(&compound_state(&parts)).as_deref(),
+            Some("signed off by Nurse A")
+        );
+    }
 }

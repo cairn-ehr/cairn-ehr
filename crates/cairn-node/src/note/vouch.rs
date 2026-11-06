@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use super::compound::compounds;
 use super::read::{list_patient_notes, NoteRow};
-use super::vouch_read::Signer;
+use super::vouch_read::{PartVouch, Signer};
 use crate::medication::sealed_submit::{prepare_sealed_as, Prepared};
 use crate::medication::AuthorParams;
 
@@ -49,17 +49,22 @@ pub fn signed_for(p: &NoteRow) -> Vec<&Signer> {
         .collect()
 }
 
-/// A part whose own signer's key was repudiated has been RE-SIGNED: a vouch, by a key that is
-/// not itself repudiated, from the same actor (the real person, re-keyed). Only that person can
-/// say the words were theirs; a colleague's vouch cannot (ADR-0093). False for any part whose
-/// signer is absent or not repudiated. The one predicate the rules and the words share.
+/// Vouch `v` RE-SIGNS a part whose own signer is `signer`: the signer's key was repudiated, and
+/// `v` was filed by a key that is not itself repudiated, of the same actor (the real person,
+/// re-keyed). Only that person can say the words were theirs; a colleague's vouch cannot
+/// (ADR-0093). This is THE one predicate the rules ([`re_signed`], and through it
+/// [`part_is_signed`]) and the words (`view::part_byline`'s " · re-signed by …") share, so the
+/// byline can never call a vouch a re-sign that the rules do not count as one, or the reverse.
+pub fn re_signs(signer: &Signer, v: &PartVouch) -> bool {
+    signer.repudiated && !v.by.repudiated && same_actor(&v.by.actor, &signer.actor)
+}
+
+/// A part whose own signer's key was repudiated has been RE-SIGNED: some vouch on it
+/// [`re_signs`] it. False for any part whose signer is absent or not repudiated.
 pub fn re_signed(p: &NoteRow) -> bool {
-    p.signed_by.as_ref().is_some_and(|s| {
-        s.repudiated
-            && p.vouches
-                .iter()
-                .any(|v| !v.by.repudiated && same_actor(&v.by.actor, &s.actor))
-    })
+    p.signed_by
+        .as_ref()
+        .is_some_and(|s| p.vouches.iter().any(|v| re_signs(s, v)))
 }
 
 /// Whether `actor` is among the people who signed `p`.
@@ -330,7 +335,6 @@ pub async fn sign_off_note(
 pub(crate) mod fixture {
     use super::*;
     use crate::note::view::{NoteGrade, PartWriter};
-    use crate::note::vouch_read::PartVouch;
     use chrono::{TimeZone, Utc};
 
     /// A known, confirmed, non-student signer with actor `actor` and name `name`.
