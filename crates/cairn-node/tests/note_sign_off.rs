@@ -15,15 +15,18 @@ mod common;
 #[path = "common/note_vouch_kit.rs"]
 mod note_vouch_kit;
 
+use cairn_event::contributor::with_human_author;
+use cairn_event::note::{EscapedNarrative, NoteAssertion, StatedTime};
 use cairn_event::note_attestation::{VouchAct, VouchRole};
 use cairn_event::{event_address, generate_key, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
 use cairn_node::note::compound::{compound_state, compounds, CompoundNote, CompoundState};
 use cairn_node::note::read::list_patient_notes;
-use cairn_node::note::sign::{sign_note, SignNoteInput};
+use cairn_node::note::sign::{note_body, sign_note, SignNoteInput};
 use cairn_node::note::view::part_byline;
 use cairn_node::note::vouch::{needs_sign_off, sign_off_note, SignOffInput, SignOffRefusal};
+use cairn_node::shred::shred_event;
 use common::note_setup;
 use note_vouch_kit::{projected, timer_part, vouch_body, Vouch, ORIGIN};
 use tokio_postgres::Client;
@@ -366,6 +369,99 @@ db_test!(
         assert_eq!(
             part_byline(&note(&c, w.chart, p).await.parts()[0]).shown,
             "signed by Sam (student) · co-signed by Dr Zed"
+        );
+    }
+);
+
+// Review Focus 2, the other way a note changes: a part shredded after the note was shown.
+db_test!(
+    a_part_shredded_after_the_note_was_shown_refuses_changed,
+    |_base, c| {
+        let w = ward(&c).await;
+        let p = sign_as(&mut c, &w, &w.sam, w.chart, None).await;
+        let a = sign_as(&mut c, &w, &w.ada, w.chart, Some(p)).await;
+        let shown = [p, a];
+        assert_eq!(note(&c, w.chart, p).await.parts().len(), 2);
+        shred_event(
+            &mut c,
+            &w.node_sk,
+            &w.node_kid,
+            ORIGIN,
+            a,
+            "retention ceiling",
+            None,
+        )
+        .await
+        .expect("the shred is admitted");
+
+        assert_eq!(
+            sign_off(&mut c, &w.zed, w.chart, p, &shown).await,
+            Err(SignOffRefusal::Changed)
+        );
+        assert_eq!(vouch_count(&c).await, 0, "nothing was signed");
+    }
+);
+
+// A peer's note signed by a key this node cannot place (its registry no longer holds the key, as
+// a restored node's may not): the floor co-signs only a key it knows as a human's, so the
+// sign-off ATTESTS the part, and succeeds.
+db_test!(
+    signing_off_a_part_signed_by_an_unknown_key_attests_it,
+    |_base, c| {
+        let w = ward(&c).await;
+        // The remote door admits only an enrolled signer, so the peer is enrolled for the apply.
+        let (peer_sk, peer_kid) = common::enroll_human_with_role(&c, "peer-clinician").await;
+        let a = NoteAssertion {
+            narrative: EscapedNarrative::of_typed("seen at the clinic"),
+            stated: StatedTime::NotStated,
+            recording_started: "2026-11-01T01:00:00Z",
+            recording_ended: "2026-11-01T01:05:00Z",
+            addendum_to: None,
+        };
+        let hlc = cairn_event::Hlc {
+            wall: chrono::Utc::now().timestamp_millis(),
+            counter: 0,
+            node_origin: "peer".into(),
+        };
+        let p = Uuid::now_v7();
+        let body = with_human_author(note_body(p, w.chart, &peer_kid, hlc, &a), &peer_kid);
+        common::apply_remote_raw(&c, &peer_sk, body)
+            .await
+            .unwrap_or_else(|e| panic!("the remote door admits it: {}", common::db_msg(&e)));
+        // Then the registry forgets the key. `actor_event` is append-only (db/004's trigger), so the
+        // trigger comes off for this one fixture act, as dr_clinical_guarantee_gap.rs does; a node
+        // never does this.
+        c.execute(
+            "ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update",
+            &[],
+        )
+        .await
+        .unwrap();
+        c.execute(
+            "DELETE FROM actor_event WHERE signing_key_id = $1",
+            &[&peer_kid],
+        )
+        .await
+        .unwrap();
+        c.execute(
+            "ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update",
+            &[],
+        )
+        .await
+        .unwrap();
+        let before = note(&c, w.chart, p).await;
+        let signer = before.parts()[0].signed_by.clone().expect("a signed part");
+        assert_eq!(signer.actor, "", "a key this node cannot place");
+        assert!(needs_sign_off(before.parts()));
+
+        let ids = sign_off(&mut c, &w.zed, w.chart, p, &[p])
+            .await
+            .expect("the sign-off stands");
+        let row = projected(&c, ids[0]).await.unwrap();
+        assert_eq!((row.3.as_str(), row.4.as_str()), ("sign-off", "attested"));
+        assert_eq!(
+            part_byline(&note(&c, w.chart, p).await.parts()[0]).shown,
+            "signed by a key this node does not know · signed off by Dr Zed"
         );
     }
 );

@@ -5,6 +5,7 @@ use cairn_event::note_attestation::{VouchAct, VouchRole};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
 use super::read::NoteRow;
+use super::vouch::same_actor;
 use super::vouch_read::{PartVouch, Signer};
 
 /// What a signing key reads as when this node cannot name its holder.
@@ -144,7 +145,8 @@ fn vouch_words(v: &PartVouch) -> String {
 
 /// A part's byline with who signed it and who vouched for it since (slice 3c-2):
 /// [`byline_words`] with the signer's name as [`signer_words`] gives it, `" — not co-signed"`
-/// straight after a student's name until someone co-signs the part, then each vouch in order.
+/// straight after a student's name until a non-student other than them co-signs the part, then
+/// each vouch in order.
 /// "signed by Sam (student) — not co-signed"; "signed by Sam (student) · co-signed by Dr Zed".
 /// The spoken form marks a drafted name "unverified", as [`byline_words`] does. Pure.
 pub fn part_byline(p: &NoteRow) -> Byline {
@@ -158,7 +160,11 @@ pub fn part_byline(p: &NoteRow) -> Byline {
 fn part_byline_marked(p: &NoteRow, unverified: &str) -> String {
     let grade = match &p.signed_by {
         Some(s) => {
-            let co_signed = p.vouches.iter().any(|v| v.role == VouchRole::CoSigned);
+            // Only a supervisor's co-sign clears the mark (design §3.4): not the student's own, nor
+            // another student's, either of which a peer's remote door may have admitted.
+            let co_signed = p.vouches.iter().any(|v| {
+                v.role == VouchRole::CoSigned && !v.by.student && !same_actor(&v.by.actor, &s.actor)
+            });
             let pending = if s.student && !co_signed {
                 " — not co-signed"
             } else {

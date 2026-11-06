@@ -203,6 +203,35 @@ fn a_co_signed_student_part() {
     );
 }
 
+/// Design §3.4: the supervisor's sign-off co-signs a student's part. A co-sign by the student
+/// themselves, or by another student (each admitted at a peer's remote door), leaves the mark.
+#[test]
+fn a_students_own_co_sign_does_not_clear_not_co_signed() {
+    let sam = student("s1", "Sam");
+    let mut p = part(1, Some(sam.clone()));
+    p.vouches
+        .push(vouch(9, VouchAct::SignOff, VouchRole::CoSigned, sam));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Sam (student) — not co-signed · co-signed by Sam (student)"
+    );
+}
+
+#[test]
+fn another_students_co_sign_does_not_clear_not_co_signed() {
+    let mut p = part(1, Some(student("s1", "Sam")));
+    p.vouches.push(vouch(
+        9,
+        VouchAct::SignOff,
+        VouchRole::CoSigned,
+        student("t1", "Tess"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Sam (student) — not co-signed · co-signed by Tess (student)"
+    );
+}
+
 #[test]
 fn an_unconfirmed_signer_is_marked() {
     let mut s = who("a1", "Dr Ada");

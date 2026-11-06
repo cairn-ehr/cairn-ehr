@@ -71,15 +71,19 @@ pub fn needs_sign_off(parts: &[NoteRow]) -> bool {
 /// What "Sign off this note" vouches, part by part, for the presser `presser_actor`: nothing for
 /// a part they have already signed; `CoSigned` for a part someone else signed; `Attested` for a
 /// part nobody signed. Empty means there is nothing left for them to sign.
+///
+/// A part signed by a key this node cannot place (an empty actor) is `Attested` too: db/071's
+/// floor co-signs only a part whose signer it knows as a human's, so a co-sign would be refused
+/// and take the whole sign-off with it. An attested sign-off on a signed part is admitted and
+/// reads honestly, "signed off by V".
 pub fn sign_off_vouches(parts: &[NoteRow], presser_actor: &str) -> Vec<(Uuid, VouchRole)> {
     parts
         .iter()
         .filter(|p| !has_signed(p, presser_actor))
         .map(|p| {
-            let role = if p.signed_by.is_some() {
-                VouchRole::CoSigned
-            } else {
-                VouchRole::Attested
+            let role = match &p.signed_by {
+                Some(s) if !s.actor.is_empty() => VouchRole::CoSigned,
+                _ => VouchRole::Attested,
             };
             (p.event_id, role)
         })
@@ -378,13 +382,32 @@ mod tests {
     }
 
     /// An unknown key (empty actor) signs nothing off and matches no presser.
+    /// An unknown key (empty actor) signs nothing off and matches no presser.
     #[test]
     fn a_key_this_node_does_not_know_matches_no_one() {
         let parts = vec![part(1, Some(who("", "a key this node does not know")))];
         assert!(needs_sign_off(&parts));
         assert_eq!(
-            sign_off_vouches(&parts, ""),
-            [(Uuid::from_u128(1), VouchRole::CoSigned)]
+            sign_off_vouches(&parts, "").len(),
+            1,
+            "not even an empty presser"
+        );
+    }
+
+    /// The floor co-signs only a part a key it can place as a human's signed, so a part signed by
+    /// a key this node cannot place is ATTESTED ("signed off by"), never co-signed.
+    #[test]
+    fn a_part_signed_by_a_key_this_node_cannot_place_is_attested_not_co_signed() {
+        let parts = vec![
+            part(1, Some(who("", "a key this node does not know"))),
+            part(2, Some(student("s1", "Sam"))),
+        ];
+        assert_eq!(
+            sign_off_vouches(&parts, "z1"),
+            vec![
+                (Uuid::from_u128(1), VouchRole::Attested),
+                (Uuid::from_u128(2), VouchRole::CoSigned),
+            ]
         );
     }
 
