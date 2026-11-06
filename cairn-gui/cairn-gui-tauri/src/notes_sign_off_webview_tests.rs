@@ -94,9 +94,11 @@ fn sign_off_sits_behind_the_whos_here_gate() {
         press[ask..down].contains("return;"),
         "nothing is sent before the picker is answered: {press}"
     );
-    let settled = &press[tracked..];
+    // Both come back only when the press has SETTLED, whatever its outcome: inside `.finally(`.
+    let settled = position(press, ".finally(");
+    assert!(tracked < settled, "{press}");
     for line in ["noteSignInFlight = false;", "button.disabled = false;"] {
-        assert!(settled.contains(line), "{line} in {press}");
+        assert!(settled < position(press, line), "{line} in {press}");
     }
     let sign_off = js_fn(COMPOUND_JS, "signOffNote");
     let caught = position(sign_off, "} catch (failure) {");
@@ -182,11 +184,58 @@ fn the_covers_line_is_text_and_sign_sends_its_ids() {
 fn no_dialog() {
     for dialog in ["confirm(", "alert(", "prompt("] {
         assert!(
-            !COMPOUND_JS.contains(dialog),
-            "notes_compound.js uses {dialog}"
+            !NOTE_SCRIPTS.contains(dialog),
+            "a note script uses {dialog}"
         );
     }
     assert!(!INDEX_HTML.contains("<dialog"));
+}
+
+/// Fix round 1 (Important): a sign-off is the first note-pane act in flight with the editor FREE,
+/// so every way to open the editor refuses while one is in flight — before anything else it does
+/// (the picker included). Otherwise the editor's Sign would reuse the passphrase still in the
+/// strip (one typing, two acts), and the two presses would overwrite each other's in-flight
+/// flags, so a who's-here switch or the idle re-lock could close the chart with an outcome unsaid.
+#[test]
+fn nothing_opens_the_editor_while_a_press_is_in_flight() {
+    let new_note = js_fn(NOTES_JS, "newNote");
+    assert!(
+        new_note.starts_with(
+            "function newNote() {\n  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;"
+        ),
+        "{new_note}"
+    );
+    let add = js_fn(COMPOUND_JS, "addToNote");
+    assert!(
+        add.starts_with(
+            "function addToNote(compound) {\n  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;"
+        ),
+        "{add}"
+    );
+    let go = js_fn(NOTES_JS, "continueHere");
+    assert!(
+        go.starts_with("function continueHere(draft) {\n  if (signInFlight()) return;"),
+        "{go}"
+    );
+}
+
+/// Fix round 1: the editor's Sign and Discard refuse to START while another press is in flight
+/// (a draft can reopen into the editor on a re-read during a sign-off): the check comes before
+/// the press claims the in-flight flags.
+#[test]
+fn sign_and_discard_refuse_to_start_while_a_press_is_in_flight() {
+    for button in ["note-sign", "note-discard"] {
+        let wired = &NOTES_JS[position(
+            NOTES_JS,
+            &format!("el(\"{button}\").addEventListener(\"click\", () => {{"),
+        )..];
+        let wired = &wired[..position(wired, "\n});")];
+        assert!(
+            position(wired, "if (signInFlight()) return;")
+                < position(wired, "noteSignInFlight = true;"),
+            "{wired}"
+        );
+    }
 }
 
 /// A student is enrolled as one, after nurse in the list, so the node can word "(student)" and

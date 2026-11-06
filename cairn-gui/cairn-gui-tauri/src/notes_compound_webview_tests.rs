@@ -38,7 +38,7 @@ fn add_asks_whos_here_first_and_names_the_root() {
     let add = js_fn(COMPOUND_JS, "addToNote");
     let free = position(
         add,
-        "if (displayedPatient === null || noteDraft !== null) return;",
+        "if (displayedPatient === null || noteDraft !== null || signInFlight()) return;",
     );
     let asked = position(add, "if (!claimAsked()) {");
     let ask = position(add, "askWhosHere(() => addToNote(compound));");

@@ -200,10 +200,12 @@ function openDraft(draft, writer) {
 
 /**
  * Start a note. Writing needs somebody to have said who is here (a name or "Don't know"): if
- * nobody has, the picker asks first and the editor opens once it is answered.
+ * nobody has, the picker asks first and the editor opens once it is answered. Nothing opens while
+ * a press is in flight: a sign-off holds the strip's credential with the editor free, and a Sign
+ * opened now would sign with the same typed passphrase (one typing, two acts).
  */
 function newNote() {
-  if (displayedPatient === null || noteDraft !== null) return;
+  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;
   if (!claimAsked()) {
     askWhosHere(newNote);
     return;
@@ -262,6 +264,7 @@ function showCovers(line) {
  * picker asks first.
  */
 async function continueHere(draft) {
+  if (signInFlight()) return; // a press holds the strip's credential (newNote's doc)
   if (!claimAsked()) {
     askWhosHere(() => void continueHere(draft));
     return;
@@ -430,7 +433,11 @@ function clearNotes() {
 el("new-note").addEventListener("click", newNote);
 el("note-text").addEventListener("input", onNoteInput);
 el("note-when").addEventListener("input", onNoteInput);
+// Neither press starts while another is in flight (a sign-off's, notes_compound.js — a draft can
+// reopen into the editor on a re-read meanwhile): one strip credential serves one act, and a
+// second press would overwrite the first's flags, so its outcome could go unsaid.
 el("note-sign").addEventListener("click", () => {
+  if (signInFlight()) return;
   noteSignInFlight = true;
   noteSigning = signNote()
     .catch((failure) => {
@@ -446,6 +453,7 @@ el("note-sign").addEventListener("click", () => {
 // "unknown" is renamed "discard-unknown", so the picker never words it as an unknown SIGNATURE
 // ("discarded" and "not-discarded" are already a discard's own).
 el("note-discard").addEventListener("click", () => {
+  if (signInFlight()) return;
   noteSignInFlight = true;
   noteSigning = discardNote()
     .then((outcome) => (outcome === "unknown" ? "discard-unknown" : outcome))

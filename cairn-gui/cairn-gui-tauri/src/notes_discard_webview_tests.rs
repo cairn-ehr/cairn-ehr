@@ -101,7 +101,7 @@ fn the_editor_is_read_only_while_a_discard_is_in_flight() {
     let caught = &discard[position(discard, "catch (failure) {")..];
     assert!(caught.contains("setSigning(false);"), "{discard}");
     assert!(NOTES_JS.contains(
-        "el(\"note-discard\").addEventListener(\"click\", () => {\n  noteSignInFlight = true;\n  noteSigning = discardNote()\n    .then("
+        "el(\"note-discard\").addEventListener(\"click\", () => {\n  if (signInFlight()) return;\n  noteSignInFlight = true;\n  noteSigning = discardNote()\n    .then("
     ));
 }
 

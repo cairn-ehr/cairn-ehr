@@ -84,11 +84,13 @@ function withButtons(li, compound) {
 /**
  * "Add to this note": open the editor on a new draft adding to `compound`'s root, saying Rust's
  * "Adding to…" line for it (`adds_line` — the same words the draft reads back with once it
- * exists), and below it what its signature also covers (`covers_line`, with the ids `covers`). Behind the same gate as New note: somebody must have said who is writing, so the picker
- * asks first and the editor opens once it is answered.
+ * exists), and below it what its signature also covers (`covers_line`, with the ids `covers`).
+ * Behind the same gate as New note: somebody must have said who is writing, so the picker asks
+ * first and the editor opens once it is answered. Nothing opens while a press is in flight
+ * (a sign-off holds the strip's credential with the editor free).
  */
 function addToNote(compound) {
-  if (displayedPatient === null || noteDraft !== null) return;
+  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;
   if (!claimAsked()) {
     askWhosHere(() => addToNote(compound));
     return;
