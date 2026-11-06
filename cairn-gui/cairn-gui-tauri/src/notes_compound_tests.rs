@@ -10,6 +10,7 @@ use cairn_node::note::compound::compounds;
 use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{NoteRow, PatientNoteList};
 use cairn_node::note::view::{NoteGrade, PartWriter};
+use cairn_node::note::vouch_read::Signer;
 
 /// The chart on screen.
 const OPENED: u128 = 7;
@@ -35,9 +36,22 @@ fn note(n: u128, chart: u128, to: Option<u128>, min: i64, grade: NoteGrade) -> N
         t_effective: t,
         effective_basis: "stated".into(),
         recording_started: t,
+        // `Some` exactly when the grade is `Signed`, as the node's read builds it.
+        signed_by: match &grade {
+            NoteGrade::Signed { by } => Some(Signer {
+                actor: format!("actor-{by}"),
+                name: by.clone(),
+                student: false,
+                unconfirmed: false,
+            }),
+            _ => None,
+        },
         grade,
         addendum_to: to.map(id),
         writer: PartWriter::TheSigner,
+        drafted_actor: None,
+        signer_human_actor: None,
+        vouches: vec![],
     }
 }
 
@@ -53,7 +67,7 @@ fn one(notes: Vec<NoteRow>) -> CompoundNote {
 }
 
 fn view_of(c: &CompoundNote) -> CompoundView {
-    compound_view(c, id(OPENED), &bne(), nov(3))
+    compound_view(c, id(OPENED), None, &bne(), nov(3))
 }
 
 /// A one-part note reads exactly as a note did before 3c-1: its own text and heading, no
@@ -238,6 +252,7 @@ fn an_addendum_draft_says_what_it_adds_to() {
         id(OPENED),
         Some("pc-1"),
         &Claim::NotAsked,
+        None,
         &Default::default(),
         &bne(),
         nov(3),

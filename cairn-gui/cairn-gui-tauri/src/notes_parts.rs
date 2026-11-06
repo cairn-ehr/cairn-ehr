@@ -15,7 +15,7 @@ use crate::whos_here::{claim_view, claimed_name, Claim, ClaimView};
 use cairn_node::note::compound::compounds;
 use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{DiscardMarker, NoteRow, PatientNoteList};
-use cairn_node::note::view::{byline_words, instant, time_words};
+use cairn_node::note::view::{instant, part_byline, time_words};
 use chrono::{NaiveDate, TimeZone};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -26,9 +26,9 @@ pub struct NoteRowView {
     pub event_id: String,
     /// The text exactly as its writer typed it. The webview sets it as `textContent`.
     pub text: String,
-    /// Who signed it, graded (`view::byline_words`): "signed by …", a claim, or writer not known,
+    /// Who signed it, graded (`view::part_byline`): "signed by …", a claim, or writer not known,
     /// headed by who typed it when that is not the signer ("written by ?Nurse A", "writer not
-    /// known", …).
+    /// known", …), then who vouched for it since ("· co-signed by Dr Zed", slice 3c-2).
     pub byline: String,
     /// The byline as a screen reader should say it: "written by unverified Nurse A · …" (#973).
     pub byline_spoken: String,
@@ -52,13 +52,17 @@ pub struct NotePane {
 }
 
 /// The read as the pane shows it, in zone `tz` with `today` its date, the editable part chosen for
-/// `claim`; `opened`: the chart on screen (only its notes can be added to); `failed`: the drafts
-/// whose last commit in this window failed (`commit::due_words`). Pure.
+/// `claim`; `claim_actor`: that claim's actor, read beside the notes (`None` with no named claim
+/// or one this node cannot place), for the "also covers" line (`compound::covers_of`); `opened`:
+/// the chart on screen (only its notes can be added to); `failed`: the drafts whose last commit
+/// in this window failed (`commit::due_words`). Pure.
+#[allow(clippy::too_many_arguments)] // each is one independent input of the pane's words
 pub(crate) fn note_pane<Tz: TimeZone>(
     list: PatientNoteList,
     opened: Uuid,
     terminal: Option<&str>,
     claim: &Claim,
+    claim_actor: Option<&str>,
     failed: &HashSet<Uuid>,
     tz: &Tz,
     today: NaiveDate,
@@ -71,14 +75,15 @@ where
     let grouped = compounds(list.notes);
     let notes: Vec<CompoundView> = grouped
         .iter()
-        .map(|c| compound_view(c, opened, tz, today))
+        .map(|c| compound_view(c, opened, claim_actor, tz, today))
         .collect();
-    // Every shown part's id → its compound's "Adding to…" line (any part, not only the root: a
-    // link judgement can show the root of a note an addendum's orphan target was part of).
-    let shown: HashMap<Uuid, String> = grouped
+    // Every shown part's id → its compound's view, whose "Adding to…" and "also covers" lines a
+    // draft adding to it repeats (any part, not only the root: a link judgement can show the
+    // root of a note an addendum's orphan target was part of).
+    let shown: HashMap<Uuid, &CompoundView> = grouped
         .iter()
         .zip(&notes)
-        .flat_map(|(c, v)| c.parts().iter().map(|p| (p.event_id, v.adds_line.clone())))
+        .flat_map(|(c, v)| c.parts().iter().map(move |p| (p.event_id, v)))
         .collect();
     let drafts = list
         .drafts
@@ -194,7 +199,7 @@ pub(crate) fn note_row_view<Tz: TimeZone>(note: &NoteRow, tz: &Tz, today: NaiveD
 where
     Tz::Offset: std::fmt::Display,
 {
-    let byline = byline_words(&note.grade, &note.writer);
+    let byline = part_byline(note);
     NoteRowView {
         event_id: note.event_id.to_string(),
         text: note.text.clone(),
@@ -228,8 +233,8 @@ pub struct PartView {
     pub editable: bool,
 }
 
-/// One open draft on the chart.
-#[derive(Debug, serde::Serialize)]
+/// One open draft on the chart. (`Default` only so a drift guard's literal may leave fields out.)
+#[derive(Debug, Default, serde::Serialize)]
 pub struct DraftView {
     pub draft_id: String,
     /// Whether the draft is held by THIS terminal — the only place it may be edited.
@@ -245,6 +250,12 @@ pub struct DraftView {
     /// What an addendum draft adds to, as its own line in the drafts list and above the editor
     /// (`adding_to_line`); `None` for a new note's draft.
     pub adding_to: Option<String>,
+    /// The line below `adding_to`: what this addendum's signature also covers of the who's-here
+    /// claim's own unsigned parts — its note's `CompoundView::covers_line`, the same words "Add
+    /// to this note" opened with. `None` for a new note, a note not shown, or nothing covered.
+    pub covers_line: Option<String>,
+    /// Those parts' ids (`CompoundView::covers`): what Sign sends as `also_vouches`.
+    pub covers: Vec<String>,
 }
 
 /// Is `part` the current claim's? A named writer by staff id (both normalised by the vault), or an
@@ -257,26 +268,29 @@ fn is_claims(part: &DraftPart, claim: &Claim) -> bool {
     }
 }
 
-/// A draft's "Adding to…" line, from `shown` (every part the pane shows → its note's line,
-/// `CompoundView::adds_line`); `None` for a new note's draft. "Adding to a note not shown here"
+/// A draft's "Adding to…" line, from `shown` (every part the pane shows → its note's view, whose
+/// `CompoundView::adds_line` it is); `None` for a new note's draft. "Adding to a note not shown here"
 /// when its target is not among the shown parts. That is never a doubted link's withholding: a
 /// draft's target must be a note this node shows on the draft's own chart when its header is made
 /// (db/070's door), and a chart's own notes are never withheld. It is the honest fallback when
 /// the target left the projection after the header was made (an erasure deletes its
 /// `clinical_note` row, db/037) or for a header no door made, never a guess at which note it
 /// was. Pure.
-fn adding_to_line(addendum_to: Option<Uuid>, shown: &HashMap<Uuid, String>) -> Option<String> {
+fn adding_to_line(
+    addendum_to: Option<Uuid>,
+    shown: &HashMap<Uuid, &CompoundView>,
+) -> Option<String> {
     addendum_to.map(|target| {
         shown
             .get(&target)
-            .cloned()
+            .map(|v| v.adds_line.clone())
             .unwrap_or_else(|| "Adding to a note not shown here".to_string())
     })
 }
 
 /// One draft's words, its parts, and which part the current claim may edit. `failed`: this
-/// window's last commit of it failed; `shown`: every note part the pane shows → its note's
-/// "Adding to…" line (`adding_to_line`).
+/// window's last commit of it failed; `shown`: every note part the pane shows → its note's view
+/// (`adding_to_line`, and the "also covers" line it repeats).
 pub(crate) fn draft_view<Tz: TimeZone>(
     draft: &NoteDraft,
     terminal: Option<&str>,
@@ -284,7 +298,7 @@ pub(crate) fn draft_view<Tz: TimeZone>(
     failed: bool,
     tz: &Tz,
     today: NaiveDate,
-    shown: &HashMap<Uuid, String>,
+    shown: &HashMap<Uuid, &CompoundView>,
 ) -> DraftView
 where
     Tz::Offset: std::fmt::Display,
@@ -308,6 +322,8 @@ where
         tz,
         today,
     ));
+    // The note this draft adds to, when the pane shows it: its "also covers" words are this draft's.
+    let target = draft.addendum_to.and_then(|t| shown.get(&t).copied());
     let tail = draft.parts.len().saturating_sub(1);
     let parts = draft
         .parts
@@ -336,6 +352,8 @@ where
         parts,
         addendum_to: draft.addendum_to.map(|id| id.to_string()),
         adding_to: adding_to_line(draft.addendum_to, shown),
+        covers_line: target.and_then(|v| v.covers_line.clone()),
+        covers: target.map_or_else(Vec::new, |v| v.covers.clone()),
     }
 }
 

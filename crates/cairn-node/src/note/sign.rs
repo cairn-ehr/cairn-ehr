@@ -53,6 +53,19 @@ pub struct SignNoteInput<'a> {
     /// new note. It only picks the save door: the signed event's target is read back from the
     /// draft's header, never taken from here.
     pub addendum_to: Option<Uuid>,
+    /// The earlier unsigned parts the window's strip said this signature also covers (slice
+    /// 3c-2); empty for a new note. Only those that are the signer's own by key, in the note the
+    /// header adds to, are vouched (`sign_vouch`): a listed part that is not is skipped, never
+    /// refused.
+    pub also_vouches: &'a [Uuid],
+}
+
+/// What a sign wrote: the parts' events in writing order (`parts[0]` = the note), and the
+/// `addendum` vouches filed for the signer's earlier unsigned parts, in `also_vouches` order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedNote {
+    pub parts: Vec<Uuid>,
+    pub vouched: Vec<Uuid>,
 }
 
 /// Why a sign wrote nothing — typed, so the window can word each case.
@@ -216,9 +229,10 @@ async fn seal_part(
     }
 }
 
-/// Sign the draft in `input` as `author`, one event per non-empty part, spending the draft.
-/// `Ok(Ok(_))` names the parts' events in writing order (`event_id` = the first non-blank
-/// part's, the note);
+/// Sign the draft in `input` as `author`, one event per non-empty part, spending the draft, and
+/// — for an addendum — vouch for the signer's own earlier unsigned parts the strip listed
+/// (`sign_vouch`). `Ok(Ok(_))` names the parts' events in writing order (`event_id` = the first
+/// non-blank part's, the note) and the vouches;
 /// `Ok(Err(_))` is a refusal that wrote nothing; `Err` is a database failure or a floor
 /// refusal, which also wrote nothing — unless the commit's answer was lost, which
 /// `commit_failure` marks.
@@ -227,7 +241,7 @@ pub async fn sign_note(
     node_sk: &SigningKey,
     input: &SignNoteInput<'_>,
     author: &AuthorParams<'_>,
-) -> anyhow::Result<Result<Committed<Vec<Uuid>>, SignRefusal>> {
+) -> anyhow::Result<Result<Committed<SignedNote>, SignRefusal>> {
     let first = Uuid::now_v7();
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
@@ -288,11 +302,24 @@ pub async fn sign_note(
         .await?;
         ids.push(id);
     }
+    // The signer's earlier unsigned parts the strip listed, in this same transaction (3c-2).
+    let vouched = super::sign_vouch::vouch_own_earlier_parts(
+        &tx,
+        author,
+        input.patient,
+        root,
+        input.also_vouches,
+        input.node_origin,
+    )
+    .await?;
     tx.commit()
         .await
         .map_err(|e| crate::db_diagnosis::commit_failure(first, e.into()))?;
     Ok(Ok(Committed {
-        value: ids,
+        value: SignedNote {
+            parts: ids,
+            vouched,
+        },
         event_id: first,
     }))
 }

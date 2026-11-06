@@ -6,6 +6,7 @@ use crate::notes::tests::{bne, utc};
 use crate::notes::time::stated_time_in;
 use cairn_node::note::read::{DiscardMarker, DiscardedText};
 use cairn_node::note::view::{NoteGrade, PartWriter};
+use cairn_node::note::vouch_read::Signer;
 use uuid::Uuid;
 
 fn draft(terminal: &str) -> NoteDraft {
@@ -195,6 +196,15 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             },
             addendum_to: None,
             writer: PartWriter::Drafted("Nurse A".into()),
+            signed_by: Some(Signer {
+                actor: "a1".into(),
+                name: "Dr Ada".into(),
+                student: false,
+                unconfirmed: false,
+            }),
+            drafted_actor: None,
+            signer_human_actor: None,
+            vouches: vec![],
         }],
         withheld_on_linked: 2,
         drafts: vec![draft("pc-1")],
@@ -206,6 +216,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
         Uuid::from_u128(7),
         Some("pc-1"),
         &Claim::NotAsked,
+        None,
         &Default::default(),
         &bne(),
         nov(3),
@@ -233,6 +244,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
         Uuid::from_u128(7),
         Some("pc-1"),
         &Claim::NotAsked,
+        None,
         &Default::default(),
         &bne(),
         nov(3),
@@ -300,6 +312,7 @@ fn without_a_terminal_id_no_draft_is_here() {
         Uuid::from_u128(7),
         None,
         &Claim::Unknown,
+        None,
         &Default::default(),
         &bne(),
         nov(3),
@@ -329,6 +342,7 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
         Uuid::from_u128(7),
         Some("pc-1"),
         &dr_b,
+        None,
         &Default::default(),
         &bne(),
         nov(3),
@@ -341,6 +355,7 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
         Uuid::from_u128(7),
         Some("pc-1"),
         &Claim::NotAsked,
+        None,
         &Default::default(),
         &bne(),
         nov(3),
@@ -436,6 +451,7 @@ fn the_pane_lists_discard_markers() {
         Uuid::from_u128(7),
         None,
         &Claim::NotAsked,
+        None,
         &Default::default(),
         &bne(),
         nov(3),

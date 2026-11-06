@@ -202,7 +202,7 @@ fn relock_waits_for_a_sign_in_flight() {
     );
     // The Sign in flight is a promise the re-lock can wait on, and it never rejects.
     assert!(NOTES_JS.contains(
-        "el(\"note-sign\").addEventListener(\"click\", () => {\n  noteSignInFlight = true;"
+        "el(\"note-sign\").addEventListener(\"click\", () => {\n  if (signInFlight()) return;\n  noteSignInFlight = true;"
     ));
     assert!(NOTES_JS.contains("    .finally(() => {\n      noteSignInFlight = false;"));
     assert!(js_fn(NOTES_JS, "signsSettled").contains("return noteSigning;"));

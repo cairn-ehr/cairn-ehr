@@ -11,6 +11,7 @@ use super::parts::{note_row_view, NoteRowView};
 use cairn_node::note::compound::{compound_state, state_words, CompoundNote};
 use cairn_node::note::read::NoteRow;
 use cairn_node::note::view::instant;
+use cairn_node::note::vouch::{addendum_covers, needs_sign_off};
 use chrono::{NaiveDate, TimeZone};
 use uuid::Uuid;
 
@@ -20,7 +21,8 @@ pub(crate) const ORPHAN_LEAD: &str = "Adds to a note not shown here · ";
 
 /// One compound note, as the pane shows it. The `text`/`byline`/`byline_spoken`/`when` names are
 /// a one-part note's own (`NoteRowView`), so a webview that only knows notes still shows it.
-#[derive(Debug, serde::Serialize)]
+// `Default` only so a drift guard's literal may leave the fields it does not read.
+#[derive(Debug, Default, serde::Serialize)]
 pub struct CompoundView {
     /// The root note's event id — what an addendum draft names as its target.
     pub root_event_id: String,
@@ -28,7 +30,7 @@ pub struct CompoundView {
     /// draws a one-part note from it (`noteItem`); a longer one from `segments`, which add the
     /// seams. Kept whole for any reader that wants the note's text in one piece.
     pub text: String,
-    /// The root's byline (`view::byline_words`), led by [`ORPHAN_LEAD`] for an orphan.
+    /// The root's byline (`view::part_byline`), led by [`ORPHAN_LEAD`] for an orphan.
     pub byline: String,
     /// The byline as a screen reader should say it, led the same way.
     pub byline_spoken: String,
@@ -51,6 +53,19 @@ pub struct CompoundView {
     /// note" opens the editor with, the very words the draft's `DraftView::adding_to` says once
     /// the pane is read again.
     pub adds_line: String,
+    /// Whether "Sign off this note" is offered: no one but a student has yet signed every part
+    /// (`vouch::needs_sign_off`). A linked chart's note too: each vouch files under its part's
+    /// own chart, and no draft is involved.
+    pub can_sign_off: bool,
+    /// Every part's event id, in part order: what "Sign off this note" sends back, so the node
+    /// refuses (`Changed`) if the note now holds any other.
+    pub shown_parts: Vec<String>,
+    /// The line below "Adding to …" when an addendum's signature would also cover the who's-here
+    /// claim's own unsigned parts of this note ([`covers_of`]); `None` when there are none. The
+    /// draft's `DraftView::covers_line` says the same once the pane is read again.
+    pub covers_line: Option<String>,
+    /// Those parts' event ids: what Sign sends as `also_vouches`. Empty with no line.
+    pub covers: Vec<String>,
 }
 
 /// One part's place in a compound's continuous text.
@@ -90,11 +105,51 @@ fn segments(views: &[NoteRowView]) -> Vec<SegmentView> {
         .collect()
 }
 
-/// Compound `c` worded for the pane, `opened` being the chart on screen, dated against `today`
-/// in zone `tz`. Pure.
+/// What an addendum's signature also covers for the person `claim_actor` (the who's-here claim's
+/// actor, `None` with no claim or one this node cannot place): the parts of `c` they drafted and
+/// nobody signed (`vouch::addendum_covers`), as the strip's line — each part named by its stated
+/// time (its `views` words), or, with none stated, "begun …" (as `adding_to_shown` names a note:
+/// "no stated time · writing began …" would run into the next part's words) — and their ids,
+/// dated against `today` in zone `tz`. `(None, [])` when there are none: the line is information
+/// shown only when there is something to say, never a question. Pure.
+fn covers_of<Tz: TimeZone>(
+    c: &CompoundNote,
+    views: &[NoteRowView],
+    claim_actor: Option<&str>,
+    tz: &Tz,
+    today: NaiveDate,
+) -> (Option<String>, Vec<String>)
+where
+    Tz::Offset: std::fmt::Display,
+{
+    let covered = claim_actor.map_or_else(Vec::new, |a| addendum_covers(c.parts(), a));
+    if covered.is_empty() {
+        return (None, vec![]);
+    }
+    let times: Vec<String> = c
+        .parts()
+        .iter()
+        .zip(views)
+        .filter(|(p, _)| covered.contains(&p.event_id))
+        .map(|(p, v)| match p.effective_basis.as_str() {
+            "stated" => v.when.clone(),
+            _ => format!("begun {}", instant(p.recording_started, tz, today)),
+        })
+        .collect();
+    let s = if covered.len() == 1 { "" } else { "s" };
+    let line = format!(
+        "Your signature also covers your earlier unsigned part{s} of this note: {}",
+        times.join("; ")
+    );
+    (Some(line), covered.iter().map(Uuid::to_string).collect())
+}
+
+/// Compound `c` worded for the pane, `opened` being the chart on screen, `claim_actor` the
+/// who's-here claim's actor ([`covers_of`]), dated against `today` in zone `tz`. Pure.
 pub(crate) fn compound_view<Tz: TimeZone>(
     c: &CompoundNote,
     opened: Uuid,
+    claim_actor: Option<&str>,
     tz: &Tz,
     today: NaiveDate,
 ) -> CompoundView
@@ -120,18 +175,23 @@ where
         .collect::<Vec<_>>()
         .join("\n\n");
     let segments = segments(&views);
+    let (covers_line, covers) = covers_of(c, &views, claim_actor, tz, today);
     CompoundView {
         root_event_id: c.root().to_string(),
         text,
         byline,
         byline_spoken,
         when,
-        state: state_words(compound_state(c.parts())).map(str::to_string),
+        state: state_words(&compound_state(c.parts())),
         parts_label: (n >= 2).then(|| format!("{n} parts")),
         parts: if n >= 2 { views } else { vec![] },
         segments,
         can_add: c.chart() == opened,
         adds_line,
+        can_sign_off: needs_sign_off(c.parts()),
+        shown_parts: c.parts().iter().map(|p| p.event_id.to_string()).collect(),
+        covers_line,
+        covers,
     }
 }
 

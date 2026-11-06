@@ -45,6 +45,7 @@ async fn sign_on(
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     sign_note(c, node_sk, &input, author)
         .await
@@ -332,6 +333,7 @@ async fn discard_on(
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     let out = discard_draft(c, node_sk, &input, author).await.unwrap();
     assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
@@ -443,6 +445,7 @@ async fn discard_two_parts_on(
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     let out = discard_draft(c, node_sk, &input, author).await.unwrap();
     assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");

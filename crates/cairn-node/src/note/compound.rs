@@ -8,8 +8,12 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
+use cairn_event::note_attestation::VouchAct;
+
 use super::read::NoteRow;
-use super::view::NoteGrade;
+use super::view::{signer_words, NoteGrade};
+use super::vouch::{full_signers, part_is_signed, same_actor};
+use super::vouch_read::Signer;
 
 /// One note with all its parts. `parts()[0]` is the root; the rest follow in
 /// `(recording_started, event_id)` order. Built only by [`compounds`], so `parts` is never empty
@@ -99,25 +103,41 @@ pub fn compounds(notes: Vec<NoteRow>) -> Vec<CompoundNote> {
     out
 }
 
-/// What the parts' grades say about the note as a whole.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What the parts' signatures say about the note as a whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompoundState {
     OnePart,
+    /// Signed off: the first non-student, in the root's order, who has signed every part AND made
+    /// a `sign-off` vouch on this note (`vouch::full_signers`). Carries their name as shown
+    /// (`view::signer_words`).
+    SignedOff(String),
     EverySigned,
     IncludesUnsigned,
     IncludesUnverified,
 }
 
-/// The compound's state. A one-part note is `OnePart` whatever its grade (its byline already
-/// says it); an empty slice cannot come out of [`compounds`] and also reads `OnePart`.
+/// The compound's state, from each part's signatures (`vouch::part_is_signed`): a part that went
+/// in unsigned and was vouched for since no longer makes the note "unsigned". A one-part note is
+/// `OnePart` whatever it says (its byline already says it); an empty slice cannot come out of
+/// [`compounds`] and also reads `OnePart`.
 pub fn compound_state(parts: &[NoteRow]) -> CompoundState {
     if parts.len() < 2 {
         return CompoundState::OnePart;
     }
+    let pressed_sign_off = |s: &Signer| {
+        parts
+            .iter()
+            .flat_map(|p| &p.vouches)
+            .any(|v| v.act == VouchAct::SignOff && same_actor(&v.by.actor, &s.actor))
+    };
+    if let Some(s) = full_signers(parts).find(|s| pressed_sign_off(s)) {
+        return CompoundState::SignedOff(signer_words(s));
+    }
     // Exhaustive, no `_` arm: a new grade must break the build here (#412).
     let (mut unsigned, mut unverified) = (false, false);
-    for p in parts {
+    for p in parts.iter().filter(|p| !part_is_signed(p)) {
         match p.grade {
+            // Not reached: a `Signed` part carries `signed_by`, so it is signed.
             NoteGrade::Signed { .. } => {}
             NoteGrade::Claimed => unverified = true,
             NoteGrade::WentInUnsigned | NoteGrade::WriterNotKnown => unsigned = true,
@@ -133,13 +153,14 @@ pub fn compound_state(parts: &[NoteRow]) -> CompoundState {
 }
 
 /// The words the window shows for a state; `None` for a one-part note.
-pub fn state_words(s: CompoundState) -> Option<&'static str> {
+pub fn state_words(s: &CompoundState) -> Option<String> {
     match s {
         CompoundState::OnePart => None,
-        CompoundState::EverySigned => Some("every part signed"),
-        CompoundState::IncludesUnsigned => Some("includes an unsigned part"),
+        CompoundState::SignedOff(by) => Some(format!("signed off by {by}")),
+        CompoundState::EverySigned => Some("every part signed".into()),
+        CompoundState::IncludesUnsigned => Some("includes an unsigned part".into()),
         CompoundState::IncludesUnverified => {
-            Some("includes a part whose signature this node cannot verify")
+            Some("includes a part whose signature this node cannot verify".into())
         }
     }
 }
@@ -148,6 +169,8 @@ pub fn state_words(s: CompoundState) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::note::view::PartWriter;
+    use crate::note::vouch::fixture::{self, part, student, vouch, who};
+    use cairn_event::note_attestation::VouchRole;
     use chrono::{Duration, TimeZone, Utc};
 
     fn id(n: u128) -> Uuid {
@@ -165,9 +188,17 @@ mod tests {
             t_effective: origin + Duration::minutes(eff),
             effective_basis: "stated".into(),
             recording_started: origin + Duration::minutes(rec),
-            grade,
             addendum_to: to.map(id),
             writer: PartWriter::TheSigner,
+            // `Some` exactly when the grade is `Signed`, as the read builds it.
+            signed_by: match &grade {
+                NoteGrade::Signed { by } => Some(fixture::who("a1", by)),
+                _ => None,
+            },
+            grade,
+            drafted_actor: None,
+            signer_human_actor: None,
+            vouches: vec![],
         }
     }
 
@@ -256,21 +287,100 @@ mod tests {
                 .enumerate()
                 .map(|(i, g)| row(i as u128 + 1, None, 0, 0, g))
                 .collect();
-            state_words(compound_state(&parts))
+            state_words(&compound_state(&parts))
         };
         assert_eq!(w(vec![NoteGrade::Claimed]), None);
-        assert_eq!(w(vec![signed(), signed()]), Some("every part signed"));
         assert_eq!(
-            w(vec![signed(), NoteGrade::WentInUnsigned]),
+            w(vec![signed(), signed()]).as_deref(),
+            Some("every part signed")
+        );
+        assert_eq!(
+            w(vec![signed(), NoteGrade::WentInUnsigned]).as_deref(),
             Some("includes an unsigned part")
         );
         assert_eq!(
-            w(vec![NoteGrade::WriterNotKnown, NoteGrade::Claimed]),
+            w(vec![NoteGrade::WriterNotKnown, NoteGrade::Claimed]).as_deref(),
             Some("includes an unsigned part")
         );
         assert_eq!(
-            w(vec![signed(), NoteGrade::Claimed]),
+            w(vec![signed(), NoteGrade::Claimed]).as_deref(),
             Some("includes a part whose signature this node cannot verify")
         );
+    }
+
+    /// Signed off only by someone who signed every part AND made a sign-off vouch on this note;
+    /// the first such signer in the root's order (Review Focus 5).
+    #[test]
+    fn the_state_reads_signed_off_by() {
+        let zed = who("z1", "Dr Zed");
+        let yan = who("y1", "Dr Yan");
+        let mut parts = vec![part(1, Some(student("s1", "Sam"))), part(2, None)];
+        for (n, by) in [(10, &zed), (20, &yan)] {
+            parts[0]
+                .vouches
+                .push(vouch(n, VouchAct::SignOff, VouchRole::CoSigned, by.clone()));
+            parts[1].vouches.push(vouch(
+                n + 1,
+                VouchAct::SignOff,
+                VouchRole::Attested,
+                by.clone(),
+            ));
+        }
+        let state = compound_state(&parts);
+        assert_eq!(state, CompoundState::SignedOff("Dr Zed".into()));
+        assert_eq!(state_words(&state).as_deref(), Some("signed off by Dr Zed"));
+
+        // Every part signed by one doctor, but nobody PRESSED sign-off: not "signed off".
+        let ada = who("a1", "Dr Ada");
+        let own = vec![part(1, Some(ada.clone())), part(2, Some(ada))];
+        assert_eq!(compound_state(&own), CompoundState::EverySigned);
+
+        // An unconfirmed signer is named as shown.
+        let mut unconfirmed = parts.clone();
+        for p in &mut unconfirmed {
+            p.vouches.retain(|v| v.by.actor == "z1");
+            p.vouches[0].by.unconfirmed = true;
+        }
+        assert_eq!(
+            state_words(&compound_state(&unconfirmed)).as_deref(),
+            Some("signed off by Dr Zed (signer unconfirmed)")
+        );
+    }
+
+    /// Final review M6: the state names the first full signer who also PRESSED sign-off, not the
+    /// first full signer. Dr Ada signed every part (her own, then an addendum vouch) but never
+    /// pressed; Dr Zed later signed the note off: it reads "signed off by Dr Zed".
+    #[test]
+    fn the_state_skips_a_full_signer_who_never_pressed_sign_off() {
+        let ada = who("a1", "Dr Ada");
+        let zed = who("z1", "Dr Zed");
+        let mut parts = vec![part(1, Some(ada.clone())), part(2, None)];
+        parts[1]
+            .vouches
+            .push(vouch(9, VouchAct::Addendum, VouchRole::Attested, ada));
+        parts[0].vouches.push(vouch(
+            10,
+            VouchAct::SignOff,
+            VouchRole::CoSigned,
+            zed.clone(),
+        ));
+        parts[1]
+            .vouches
+            .push(vouch(11, VouchAct::SignOff, VouchRole::Attested, zed));
+        assert_eq!(
+            compound_state(&parts),
+            CompoundState::SignedOff("Dr Zed".into())
+        );
+    }
+
+    #[test]
+    fn a_vouched_part_no_longer_makes_the_note_unsigned() {
+        let ada = who("a1", "Dr Ada");
+        let mut parts = vec![part(1, Some(ada.clone())), part(2, None)];
+        assert_eq!(compound_state(&parts), CompoundState::IncludesUnsigned);
+        parts[1]
+            .vouches
+            .push(vouch(9, VouchAct::Addendum, VouchRole::Attested, ada));
+        assert_eq!(compound_state(&parts), CompoundState::EverySigned);
     }
 }

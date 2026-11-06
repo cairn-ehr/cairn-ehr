@@ -9,7 +9,10 @@
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`. Key material is minted
 //! at runtime.
 mod common;
+#[path = "common/note_vouch_kit.rs"]
+mod note_vouch_kit;
 
+use cairn_event::note_attestation::{VouchAct, VouchRole};
 use cairn_node::chart_link::canonical_pair;
 use cairn_node::db;
 use cairn_node::medication::snapshot::in_snapshot;
@@ -78,6 +81,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
             stated: None,
             node_origin: ORIGIN,
             addendum_to: None,
+            also_vouches: &[],
         };
         let r = sign_note(&mut window, &sk, &input, &author).await;
         expect_as_window("note::sign::sign_note", r).expect("the note is signed");
@@ -271,6 +275,7 @@ async fn the_windows_discard_runs_under_its_own_login() {
         stated: Some("2026-11-04T09:00:00Z".parse().unwrap()),
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     let r = discard_draft(&mut window, &sk, &input, &author).await;
     let out = expect_as_window("note::discard::discard_draft", r);
@@ -312,6 +317,7 @@ async fn the_windows_addendum_doors_run_under_its_own_login() {
         stated: None,
         node_origin: ORIGIN,
         addendum_to: None,
+        also_vouches: &[],
     };
     let r = sign_note(&mut window, &sk, &input, &author).await;
     let root = expect_as_window("note::sign::sign_note", r)
@@ -344,4 +350,51 @@ async fn the_windows_addendum_doors_run_under_its_own_login() {
         expect_as_window("cairn_note_draft_addendum_to", r),
         Some(root.to_string())
     );
+}
+
+/// The vouch stream (slice 3c-2, db/071) under the window's login: a colleague's sign-off vouch
+/// submitted through the strict door (its floor reads the part as the definer), and the three
+/// reader doors the note read and the who's-here line call.
+#[tokio::test]
+async fn the_windows_vouch_and_its_doors_run_under_its_own_login() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (mut owner, window) = owner_and_window(&base).await;
+    let (sk, _, sk_h, kid_h, a) = note_setup(&owner).await;
+    let author = AuthorParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let part = note_vouch_kit::signed_part(&mut owner, &sk, &author, a).await;
+    let (b_sk, b_kid) = common::enroll_human_with_role(&owner, "registrar").await;
+    let v = note_vouch_kit::Vouch {
+        patient: a,
+        target: part,
+        address: note_vouch_kit::address_hex(&owner, part).await,
+        act: VouchAct::SignOff,
+        role: VouchRole::CoSigned,
+        sk: &b_sk,
+        kid: &b_kid,
+    };
+    let r = note_vouch_kit::submit_vouch(&window, &v)
+        .await
+        .map_err(anyhow::Error::msg);
+    let vouch = expect_as_window("submit_event (a vouch)", r);
+    assert!(note_vouch_kit::projected(&owner, vouch).await.is_some());
+
+    for (door, arg) in [
+        ("cairn_note_key_actor", b_kid.as_str()),
+        ("cairn_note_key_role", b_kid.as_str()),
+        ("cairn_note_staff_actor", "notewriter"),
+    ] {
+        let r = window
+            .query_one(&format!("SELECT {door}($1)"), &[&arg])
+            .await
+            .map(|row| row.get::<_, Option<String>>(0))
+            .map_err(anyhow::Error::from);
+        assert!(expect_as_window(door, r).is_some(), "{door} answers");
+    }
 }

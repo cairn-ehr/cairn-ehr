@@ -736,6 +736,7 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/note/sign.rs",
     "crates/cairn-node/src/note/commit.rs",
     "crates/cairn-node/src/note/discard.rs",
+    "crates/cairn-node/src/note/vouch.rs",
 ];
 
 /// Commits inside a MARKED file that write no event, so there is nothing to double: how many,
@@ -814,6 +815,12 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
         "a test fixture, not a production commit: `notes_discard.rs`'s `#[cfg(test)]` module \
          (kept beside it by `#[path]`), whose DB-gated test enrols the discarder on a scratch \
          database",
+    ),
+    (
+        "cairn-gui/cairn-gui-tauri/src/notes_sign_off_db_tests.rs",
+        "a test fixture, not a production commit: `notes_sign_off.rs`'s `#[cfg(test)]` module \
+         (kept beside it by `#[path]`), whose DB-gated test enrols the signer and commits a \
+         timer note on a scratch database",
     ),
     (
         "crates/cairn-sync/src/main.rs",

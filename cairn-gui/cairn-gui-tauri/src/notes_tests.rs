@@ -34,6 +34,7 @@ async fn sign_refuses_a_chart_not_on_screen() {
         None,
         None,
         None,
+        None,
     )
     .await
     .unwrap_err();
@@ -63,7 +64,8 @@ async fn sign_refuses_a_chart_not_on_screen() {
 #[tokio::test]
 async fn sign_in_fixture_mode_refuses() {
     let (state, chart) = on_screen();
-    let err = note_sign_impl(&state, &chart, &a_draft(), "seen", None, None, None, None)
+    let d = a_draft();
+    let err = note_sign_impl(&state, &chart, &d, "seen", None, None, None, None, None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, Retry::Never);

@@ -1276,7 +1276,7 @@ pub const NOTE_AUTHOR: &str = "Dr Ada Notewriter";
 /// is a placeholder no test ever releases.
 pub async fn note_setup(c: &Client) -> (SigningKey, String, SigningKey, String, Uuid) {
     c.batch_execute(
-        "TRUNCATE clinical_note, clinical_note_discard, note_draft, note_draft_spent, note_policy, vault_member, \
+        "TRUNCATE clinical_note, clinical_note_discard, clinical_note_attestation, note_draft, note_draft_spent, note_policy, vault_member, \
          patient_link, person_member, link_veto_flag CASCADE",
     )
     .await

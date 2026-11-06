@@ -215,7 +215,7 @@ fn the_enrol_panel_is_labelled_warns_about_the_hint_and_clears_both_ways() {
             "{id} needs a <label for>"
         );
     }
-    for role in ["clinician", "nurse", "admin", "superuser"] {
+    for role in ["clinician", "nurse", "student", "admin", "superuser"] {
         assert!(INDEX_HTML.contains(&format!("<option value=\"{role}\">")));
     }
     assert!(

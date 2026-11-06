@@ -40,9 +40,9 @@ use zeroize::Zeroizing;
 pub struct NewMemberForm {
     pub staff_id: String,
     pub display_name: String,
-    /// `clinician`, `nurse`, `admin` or `superuser` from the form's list (only a superuser may
-    /// approve the last two). A soft list: the floor accepts any role string (#168), so this
-    /// window only insists it is not blank.
+    /// `clinician`, `nurse`, `student`, `admin` or `superuser` from the form's list (only a
+    /// superuser may approve the last two). A soft list: the floor accepts any role string
+    /// (#168), so this window only insists it is not blank.
     pub role: String,
     pub phone: String,
     pub email: String,

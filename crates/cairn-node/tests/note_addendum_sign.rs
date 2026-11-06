@@ -47,6 +47,7 @@ fn input<'a>(
         stated: None,
         node_origin: ORIGIN,
         addendum_to: target,
+        also_vouches: &[],
     }
 }
 
@@ -195,7 +196,8 @@ async fn signing_an_addendum_names_the_root() {
     .await
     .unwrap()
     .expect("the addendum signs")
-    .value;
+    .value
+    .parts;
 
     assert_eq!(ids.len(), 1);
     assert_eq!(refs(&c, ids[0]).await, addendum_to(root));
@@ -224,7 +226,8 @@ async fn sign_takes_the_target_from_the_header_not_the_window() {
     .await
     .unwrap()
     .expect("the addendum signs")
-    .value;
+    .value
+    .parts;
 
     assert_eq!(refs(&c, ids[0]).await, addendum_to(root));
 }
@@ -245,7 +248,8 @@ async fn sign_inside_the_debounce_still_makes_an_addendum() {
     .await
     .unwrap()
     .expect("the addendum signs")
-    .value;
+    .value
+    .parts;
 
     assert_eq!(refs(&c, ids[0]).await, addendum_to(root));
 }
@@ -267,7 +271,8 @@ async fn a_two_writer_addendum_chains_part_two_to_part_one() {
     .await
     .unwrap()
     .expect("the addendum signs")
-    .value;
+    .value
+    .parts;
 
     let [first, second] = ids[..] else {
         panic!("two parts, two events: {ids:?}");
@@ -356,7 +361,7 @@ async fn two_addenda_signed_at_once_both_join_the_note() {
     );
 
     for out in [x, y] {
-        let ids = out.unwrap().expect("each addendum signs").value;
+        let ids = out.unwrap().expect("each addendum signs").value.parts;
         assert_eq!(refs(&c, ids[0]).await, addendum_to(root));
     }
     let read = list_patient_notes(&c, chart).await.unwrap();

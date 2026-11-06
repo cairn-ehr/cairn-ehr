@@ -447,3 +447,20 @@ async fn public_cannot_execute_the_addendum_doors() {
     )
     .await;
 }
+
+/// The vouch stream's definer doors and helper (sign-in slice 3c-2, db/071), named because a
+/// family of four has no registry to read: the three reader doors only `cairn_window` may call
+/// (driven in `window_role_grants_notes.rs`), and the floor's owner-only "same person" helper.
+/// The check fn and the applier are covered by the families above.
+#[tokio::test]
+async fn public_cannot_execute_the_vouch_doors() {
+    assert_public_cannot_execute(
+        "p.proname IN ('cairn_note_key_actor', 'cairn_note_key_role', 'cairn_note_staff_actor', \
+                       'cairn_note_keys_share_actor')",
+        4,
+        "note vouch door",
+        "Fix: `REVOKE EXECUTE ON FUNCTION <name>(<args>) FROM PUBLIC;` in \
+         db/071_clinical_note_attestation.sql, beside its GRANT to cairn_window.",
+    )
+    .await;
+}

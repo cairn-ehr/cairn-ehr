@@ -264,3 +264,26 @@ pub(crate) fn sign_refusal_view(refusal: SignRefusal) -> ErrorView {
         SignRefusal::NoSuchNote => refused(NO_SUCH_NOTE),
     }
 }
+
+/// What a Sign that went through says: the note is on the chart, then — when the strip's "also
+/// covers" line listed `listed` of the signer's earlier unsigned parts — how many of them now read
+/// as signed (`vouched`, what the node vouched), and how many it did not cover: the key that
+/// signed is not the one that drafted them (Review Focus 1: who's here still named a colleague),
+/// or someone signed them since the strip was read. Pure.
+pub(crate) fn signed_words(vouched: usize, listed: usize) -> String {
+    let mut words = "Signed — the note is on the chart.".to_string();
+    match vouched {
+        0 => {}
+        1 => words.push_str(" Your earlier unsigned part now reads as signed."),
+        n => words.push_str(&format!(
+            " Your {n} earlier unsigned parts now read as signed."
+        )),
+    }
+    if vouched < listed {
+        let k = listed - vouched;
+        words.push_str(&format!(
+            " {k} listed part(s) were not covered: not yours by key, or already signed."
+        ));
+    }
+    words
+}

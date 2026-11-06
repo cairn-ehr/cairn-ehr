@@ -475,6 +475,39 @@ a linked chart's note 3 → 3 → observed \_\_ (#993).
 | Each seam read before its part, with that part's writer and time; a claimed name heard "unverified …" | | |
 | No dialog | | |
 
+## Sign off a note, and sign your own earlier part later (GUI sign-in slice 3c-2, runbook §23)
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| Sign off: Staff ID keystroke → "Signed off — …" and the byline re-read | | | | ≤ 3 s | |
+| `ui_gesture_timing` `note-sign-off` (the write half) | | | | — | |
+| Finish your own unsigned note: Staff ID keystroke → the earlier part reads "signed later by …" | | | | ≤ 3 s | |
+
+Steps: countersigning paper *N* = 2 → forced *M* = 2 → observed \_\_ · finishing one's own unsigned note 3 → 3 →
+observed \_\_ · seeing a student's part not yet countersigned 0 → 0 → observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| A student's part reads "(student) — not co-signed" and offers *Sign off this note*; a note one doctor signed alone offers none | | |
+| A doctor's sign-off: "· co-signed by Dr B", the mark cleared, the button gone; one `sign-off`/`co-signed` vouch row on the part's chart | | |
+| Another student's co-sign leaves "— not co-signed"; a student on their own note is told "already signed every part" | | |
+| A colleague's addendum lands after the note was shown: "This note changed since it was shown …"; nothing written | | |
+| Nothing opens, and no other press starts, while a sign-off is in flight | | |
+| The covers line names the writer's own unsigned part; Sign says it "now reads as signed"; the state line drops "includes an unsigned part" | | |
+| A restart mid-addendum: the draft reopens with its covers line | | |
+| Who's here A, strip B: "1 listed part(s) were not covered …"; A's part stays unsigned | | |
+| "signed off by Dr B" on a note with a timer part | | |
+| "(signer unconfirmed)" on an unconfirmed key's part, gone after *Confirm* | | |
+| WebKit (the real window) against the headless walk: any difference noted (#994, #1001) | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| *Sign off this note* by keyboard, read as "Sign off this note: {time}" | | |
+| "(student) — not co-signed", "(signer unconfirmed)" and each vouch read with the heading | | |
+| The covers line read after "Adding to …" and before the text box | | |
+| The outcome lines read when they appear | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

@@ -34,12 +34,15 @@ const PARTLY_TYPED_TIME =
   "the time it happened is only partly typed — finish it, or clear it if the note is about now";
 
 /**
- * The draft in the editor, `{ draftId, patientId, statedTime, savedText, writer, addendumTo }`
+ * The draft in the editor, `{ draftId, patientId, statedTime, savedText, writer, addendumTo, covers }`
  * — its own chart, never "whatever is open"; the last stated time and text the node TOOK for its
  * part (a partly typed time is never saved); the staff id of whoever was here when it opened (null
  * for "Don't know"), sent verbatim with every save and the sign; and the root of the note it adds
- * to (slice 3c-1; null for a new note), sent with every save, Sign and Discard. A draft kept as a
- * new one (notes_save.js's `keepUnsavedText`) copies it: text typed as an addendum stays one.
+ * to (slice 3c-1; null for a new note), sent with every save, Sign and Discard; and the ids of the
+ * writer's earlier unsigned parts the editor's "also covers" line names (slice 3c-2; empty for a new
+ * note), sent with every Sign as `alsoVouches`, so what the strip showed is what Sign vouches. A
+ * draft kept as a new one (notes_save.js's `keepUnsavedText`) copies both: text typed as an
+ * addendum stays one.
  * Two marks are added later:
  * `mayBeSigned`, once a Sign of it might have signed (a `spent` save then forks nothing), and
  * `keptOnScreen`, once its unsaved text has been kept as a new draft (notes_save.js).
@@ -50,12 +53,14 @@ let noteDraft = null;
 /** The newest note read started; an older answer is dropped. */
 let notesRevision = 0;
 /**
- * The last Sign or Discard, as a promise of its outcome — a Sign's "signed", "not-signed" or
- * "unknown"; a Discard's "discarded", "not-discarded" or "discard-unknown"; or null when nothing
- * was pressed. It never rejects. The idle re-lock and a switch of who's here wait for it.
+ * The last Sign, Discard or sign-off, as a promise of its outcome — a Sign's "signed",
+ * "not-signed" or "unknown"; a Discard's "discarded", "not-discarded" or "discard-unknown"; a
+ * sign-off's "signed-off", "not-signed-off" or "sign-off-unknown" (notes_compound.js); or null
+ * when nothing was pressed. It never rejects. The idle re-lock and a switch of who's here wait for it.
  */
 let noteSigning = Promise.resolve(null);
-/** A Sign or Discard was pressed and has not settled: a switch then says its outcome in the picker. */
+/** A Sign, Discard or sign-off was pressed and has not settled: a switch then says its outcome in
+ * the picker. */
 let noteSignInFlight = false;
 
 /** Read the note pane for `patient` (main.js's `refresh`, beside the medication list). */
@@ -180,8 +185,10 @@ function openDraft(draft, writer) {
     savedText: editing ? tail.text : "",
     writer: writer,
     addendumTo: draft.addendum_to, // the node's own target, sent back verbatim (null: a new note)
+    covers: draft.covers,
   };
   showAddsTo(draft.adding_to);
+  showCovers(draft.covers_line);
   el("note-parts").replaceChildren(...above.map(partBlock));
   el("note-text").value = editing ? tail.text : "";
   el("note-when").value = noteDraft.statedTime;
@@ -195,10 +202,12 @@ function openDraft(draft, writer) {
 
 /**
  * Start a note. Writing needs somebody to have said who is here (a name or "Don't know"): if
- * nobody has, the picker asks first and the editor opens once it is answered.
+ * nobody has, the picker asks first and the editor opens once it is answered. Nothing opens while
+ * a press is in flight: a sign-off holds the strip's credential with the editor free, and a Sign
+ * opened now would sign with the same typed passphrase (one typing, two acts).
  */
 function newNote() {
-  if (displayedPatient === null || noteDraft !== null) return;
+  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;
   if (!claimAsked()) {
     askWhosHere(newNote);
     return;
@@ -209,9 +218,11 @@ function newNote() {
 /**
  * Open the editor on a fresh draft: its id minted here, nothing saved until something is typed.
  * `addendumTo` is the root of the note it adds to (notes_compound.js's `addToNote`), null for a
- * new note (`newNote`); `addsTo` is Rust's "Adding to…" line for it, shown above the text box.
+ * new note (`newNote`); `addsTo` is Rust's "Adding to…" line for it, shown above the text box;
+ * `coversLine` the line below it naming what the signature also covers, and `covers` those parts'
+ * ids (both absent for a new note, which covers nothing).
  */
-function startNote(addendumTo, addsTo) {
+function startNote(addendumTo, addsTo, coversLine, covers) {
   noteDraft = {
     draftId: crypto.randomUUID(),
     patientId: displayedPatient,
@@ -219,8 +230,10 @@ function startNote(addendumTo, addsTo) {
     savedText: "",
     writer: whosHere().staff_id,
     addendumTo: addendumTo,
+    covers: covers || [],
   };
   showAddsTo(addsTo);
+  showCovers(coversLine);
   showEditor(true);
   noteStatus("");
   el("note-text").focus();
@@ -237,11 +250,23 @@ function showAddsTo(line) {
 }
 
 /**
+ * Say, below the "Adding to…" line, which of the writer's earlier unsigned parts this draft's
+ * signature also covers — `line`, worded in Rust — or take it down: shown only when there is one.
+ * Information, never a question: Sign asks nothing more.
+ */
+function showCovers(line) {
+  const covers = el("note-covers");
+  covers.textContent = line || "";
+  covers.hidden = !line;
+}
+
+/**
  * "Continue here" on a listed draft: a draft held at another terminal is MOVED here (maintainer
  * decision 2), then the pane is read again, which opens it in the editor. Nobody asked yet: the
  * picker asks first.
  */
 async function continueHere(draft) {
+  if (signInFlight()) return; // a press holds the strip's credential (newNote's doc)
   if (!claimAsked()) {
     askWhosHere(() => void continueHere(draft));
     return;
@@ -297,6 +322,7 @@ async function signNote() {
       writer: held.writer,
       credential: signerCredential(),
       addendumTo: held.addendumTo,
+      alsoVouches: held.covers,
     });
     clearSigner(true);
   } catch (failure) {
@@ -332,14 +358,14 @@ async function signNote() {
 }
 
 /**
- * The last Sign or Discard, done, as its outcome (`noteSigning`'s values). idle.js's re-lock and
+ * The last Sign, Discard or sign-off, done, as its outcome (`noteSigning`'s values). idle.js's re-lock and
  * whos_here.js's switch wait for it.
  */
 function signsSettled() {
   return noteSigning;
 }
 
-/** Whether a Sign or Discard is in flight right now. */
+/** Whether a Sign, Discard or sign-off is in flight right now. */
 function signInFlight() {
   return noteSignInFlight;
 }
@@ -376,6 +402,7 @@ function closeEditor() {
   noteUnsaved = false;
   noteLastSave = -Infinity;
   showAddsTo(null);
+  showCovers(null);
   el("note-parts").replaceChildren();
   el("note-text").value = "";
   const when = el("note-when");
@@ -408,7 +435,11 @@ function clearNotes() {
 el("new-note").addEventListener("click", newNote);
 el("note-text").addEventListener("input", onNoteInput);
 el("note-when").addEventListener("input", onNoteInput);
+// Neither press starts while another is in flight (a sign-off's, notes_compound.js — a draft can
+// reopen into the editor on a re-read meanwhile): one strip credential serves one act, and a
+// second press would overwrite the first's flags, so its outcome could go unsaid.
 el("note-sign").addEventListener("click", () => {
+  if (signInFlight()) return;
   noteSignInFlight = true;
   noteSigning = signNote()
     .catch((failure) => {
@@ -424,6 +455,7 @@ el("note-sign").addEventListener("click", () => {
 // "unknown" is renamed "discard-unknown", so the picker never words it as an unknown SIGNATURE
 // ("discarded" and "not-discarded" are already a discard's own).
 el("note-discard").addEventListener("click", () => {
+  if (signInFlight()) return;
   noteSignInFlight = true;
   noteSigning = discardNote()
     .then((outcome) => (outcome === "unknown" ? "discard-unknown" : outcome))
