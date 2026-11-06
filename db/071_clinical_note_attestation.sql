@@ -36,9 +36,11 @@ INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
 ON CONFLICT (event_type) DO NOTHING;
 
 -- "The same person": two signing keys share an actor (ADR-0011: a rotate-key row keeps the actor
--- id, so a re-keyed member is still the same person). A key registered to several actors matches
--- if ANY of them is shared, which makes both strict-door uses below fail closed: an addendum is
--- admitted only for a shared actor, and a co-signature is refused on one. Owner-only: the floor
+-- id, so a re-keyed member is still the same person). Which actor a key names cannot be
+-- ambiguous: db/004's cairn_key_actor_id_conflict (#166) refuses an enroll or rotate-key that
+-- would bind a key already bound to a different actor, so each key has at most one. (Were it
+-- otherwise, "ANY shared actor" would fail closed only for the co-sign use below, where a match
+-- refuses; for the addendum use, where a match admits, it would fail open.) Owner-only: the floor
 -- calls it from inside submit_event (SECURITY DEFINER).
 CREATE OR REPLACE FUNCTION cairn_note_keys_share_actor(p_a text, p_b text) RETURNS boolean
 LANGUAGE sql STABLE AS $$
