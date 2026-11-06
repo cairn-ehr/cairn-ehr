@@ -382,7 +382,6 @@ mod tests {
     }
 
     /// An unknown key (empty actor) signs nothing off and matches no presser.
-    /// An unknown key (empty actor) signs nothing off and matches no presser.
     #[test]
     fn a_key_this_node_does_not_know_matches_no_one() {
         let parts = vec![part(1, Some(who("", "a key this node does not know")))];

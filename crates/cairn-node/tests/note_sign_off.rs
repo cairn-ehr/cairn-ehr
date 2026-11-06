@@ -430,23 +430,16 @@ db_test!(
             .unwrap_or_else(|e| panic!("the remote door admits it: {}", common::db_msg(&e)));
         // Then the registry forgets the key. `actor_event` is append-only (db/004's trigger), so the
         // trigger comes off for this one fixture act, as dr_clinical_guarantee_gap.rs does; a node
-        // never does this.
-        c.execute(
-            "ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update",
-            &[],
-        )
-        .await
-        .unwrap();
-        c.execute(
-            "DELETE FROM actor_event WHERE signing_key_id = $1",
-            &[&peer_kid],
-        )
-        .await
-        .unwrap();
-        c.execute(
-            "ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update",
-            &[],
-        )
+        // never does this. ONE batch, so one implicit transaction: `DISABLE TRIGGER` is persistent
+        // DDL, and a failure part-way must roll it back rather than leave the shared test database
+        // without its append-only floor. The key is lower hex (`generate_key`), checked before it
+        // is spliced into the SQL.
+        assert!(peer_kid.bytes().all(|b| b.is_ascii_hexdigit()));
+        c.batch_execute(&format!(
+            "ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update;
+             DELETE FROM actor_event WHERE signing_key_id = '{peer_kid}';
+             ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update;"
+        ))
         .await
         .unwrap();
         let before = note(&c, w.chart, p).await;
