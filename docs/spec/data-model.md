@@ -540,3 +540,9 @@ incremental writing lives pre-commit in the durable draft store
 > `t_effective`. The remote door checks its structure only, so a vouch may arrive before its note. The strict door
 > holds it to the part it names. The chart counts a vouch only when its token is verified, it names the part's
 > current bytes and it is filed under the part's own chart.
+>
+> **Since sign-in slice 3c-3b** ([ADR-0093](decisions/0093-a-repudiated-signature-counts-as-unsigned.md), no wire or
+> SQL change), a part signed by a key a superuser has since repudiated still verifies, but the chart counts it as
+> unsigned and reads "(key had been repudiated) — counts as unsigned". Only the real person's own re-signature, a
+> vouch by the same actor under a key that is not repudiated, makes it count again; a colleague's sign-off is
+> recorded and clears nothing. A vouch by a repudiated key counts for nothing either.
