@@ -46,7 +46,7 @@ reads "(signer unconfirmed)".
    note signed by its author alone has no button. A student's note, a note with an unsigned part, and a note two
    clinicians each signed all show it, and a later addendum by someone else brings it back. The rule is
    `vouch::needs_sign_off` = `signed_off_by(parts).is_none()` (decision 11); the window offers the button exactly
-   when it holds (`CompoundView.can_sign_off`, decision 17). Pins: `vouch.rs`'s
+   when it holds (`CompoundView.can_sign_off`, decision 17). Pins: `vouch_tests.rs`'s
    `a_note_signed_wholly_by_its_author_needs_no_sign_off`, `a_students_note_needs_sign_off_until_co_signed`,
    `two_clinicians_parts_need_sign_off`, `a_later_addendum_by_another_brings_the_offer_back`;
    `notes_sign_off_tests.rs::can_sign_off_follows_needs_sign_off`.
@@ -117,8 +117,11 @@ reads "(signer unconfirmed)".
    extra contributory entries beside the one bearing contributor (ADR-0051: refusing a verifiable peer event for an
    addition this node does not need would break set-union losslessness); the read looks only at the bearing one. A
    vouch whose note is not held is admitted without error, so the puller pens nothing, and is projected. The read
-   counts it only once its note is projected here with the very bytes it names (decision 9). Pin:
-   `note_attestation_floor.rs::the_remote_door_admits_a_vouch_whose_note_is_not_held`.
+   counts it only once its note is projected here with the very bytes it names, under the note's own chart (decision
+   9), and from then on with no re-offer and no pen row. Pins:
+   `note_attestation_floor.rs::the_remote_door_admits_a_vouch_whose_note_is_not_held`;
+   `note_vouch_remote_read.rs::a_vouch_ahead_of_its_note_counts_once_the_note_lands` (the vouch first, then the note,
+   then the byline carries it).
 
 ### The projection and the doors (`db/071`; `db/037`, `db/044` in place)
 
@@ -157,20 +160,24 @@ reads "(signer unconfirmed)".
 
 ### The read (`cairn_node::note::read`, `note::vouch_read`)
 
-9. **A vouch counts only when its token is verified AND it names the part's own bytes.** The vouch column reads a
-   `clinical_note_attestation` row for part `n` only where `a.target = n.event_id`, `a.target_address =
-   e.content_address` (the part's `event_log` row), and `cairn_note_vouched_attester(a.event_id) = a.signer_key_id`
-   (db/020 may store a peer's token unverified; such a vouch vouches for nothing). It is one column of the note
+9. **A vouch counts only when its token is verified AND it names the part's own bytes, under the part's own
+   chart.** The vouch column reads a `clinical_note_attestation` row for part `n` only where `a.target = n.event_id`,
+   `a.patient_id = n.patient_id` (the strict door demands it, but the remote door checks structure only, so a peer's
+   vouch filed under another chart is admitted there; final review), `a.target_address = e.content_address` (the
+   part's `event_log` row), and `cairn_note_vouched_attester(a.event_id) = a.signer_key_id` (db/020 may store a
+   peer's token unverified; such a vouch vouches for nothing). It is one column of the note
    statement itself, so the vouches come from the same snapshot as their notes. The words are parsed strictly: an act
    or role word this build does not know is an error, never a guess. Vouches are ordered by `(hlc_wall,
    hlc_counter, event_id)`. Pins: `note_sign_off.rs::a_forged_vouch_is_not_read` (a vouch for stale bytes and one
    with an unvouched token are projected but not read; an honest remote vouch is, the positive control);
+   `note_vouch_remote_read.rs::a_vouch_filed_under_another_chart_changes_no_byline`;
    `vouch_read.rs`'s `only_a_verified_vouch_for_the_parts_own_bytes_is_read`, `vouches_are_read_in_hlc_order`,
    `a_word_this_build_does_not_know_is_an_error`.
 
 10. **Who signed a part is read from the key the `Signed` grade authenticated.** `NoteRow` gains `signed_by:
     Option<Signer>` (`Some` exactly when the grade is `Signed`), `drafted_actor` (the actor of the part's `drafted`
-    key) and `vouches`. The grade's key is `COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id)`: the
+    key), `signer_human_actor` (the actor of the ENVELOPE's `signer_key_id`, only when `cairn_note_key_is_human`
+    says the registry enrolled that key for a human; decision 11) and `vouches`. The grade's key is `COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id)`: the
     verified attester when there is one, else the signer. The grade's name is now read for that same key, so
     `signed_by` and the grade name one person. A `Signer` is `{actor, name, student, unconfirmed}`:
     - `actor` is the key's actor, EMPTY when the node cannot place the key; an empty actor matches no one,
@@ -191,14 +198,16 @@ reads "(signer unconfirmed)".
     - `signed_off_by(parts)` is the first non-student, in the ROOT's `signed_for` order, who is in `signed_for` of
       every part;
     - `needs_sign_off` is its absence;
-    - `sign_off_vouches(parts, presser)` skips a part the presser has signed, plans `CoSigned` for a part with
-      `signed_by` whose actor is known, and `Attested` otherwise;
+    - `sign_off_vouches(parts, presser)` skips a part the presser has signed, plans `CoSigned` exactly where the
+      floor admits it (decision 5): the part's ENVELOPE signer is a human's key (`signer_human_actor` is `Some`) of an
+      actor that is not the presser's (`!same_actor`); and `Attested` otherwise;
     - `addendum_covers(parts, actor)` is every part with `!part_is_signed` whose `drafted_actor` is that actor.
 
-    **A part signed by a key this node cannot place is planned `Attested`, not `CoSigned`** (controller ruling): the
-    floor co-signs only a part whose signer it knows as a human's, so a co-sign would be refused and take the whole
-    sign-off with it. An attested sign-off on a signed part is admitted (what is not guaranteed, (g)). Pins: the
-    `vouch.rs` tests of decision 1, `sign_off_co_signs_others_signed_parts_attests_unsigned_ones_and_skips_ones_own`,
+    **The plan co-signs only what the floor would admit** (controller ruling, final review): the floor reads the
+    envelope's signer, not the grade's key (which may be an attester), so a part whose envelope a device, a key this
+    node cannot place, or the presser's own key signed is planned `Attested`; a co-sign there would be refused and take
+    the whole sign-off with it. An attested sign-off on a signed part is admitted (what is not guaranteed, (g)). Pins:
+    the `vouch_tests.rs` tests of decision 1, `sign_off_co_signs_only_what_the_floor_admits`, `sign_off_co_signs_others_signed_parts_attests_unsigned_ones_and_skips_ones_own`,
     `addendum_covers_only_the_actors_unsigned_parts`, `a_key_this_node_does_not_know_matches_no_one`,
     `a_part_signed_by_a_key_this_node_cannot_place_is_attested_not_co_signed`;
     `note_sign_off.rs::signing_off_a_part_signed_by_an_unknown_key_attests_it`.
@@ -221,7 +230,9 @@ reads "(signer unconfirmed)".
     E.g. "signed by Sam (student) — not co-signed"; "signed by Sam (student) · co-signed by Dr Zed".
 
     **The compound state** of a note of two or more parts reads, in this order:
-    1. "signed off by {S}", when `signed_off_by` is S AND the compound holds a `sign-off` vouch by S;
+    1. "signed off by {S}", when S is the first non-student, in the root's `signed_for` order, who has signed every
+       part AND made a `sign-off` vouch on the compound (`vouch::full_signers`; final review: a full signer who never
+       pressed cannot hide a later one who did);
     2. "includes an unsigned part", when a part that is not `part_is_signed` grades `WentInUnsigned` or
        `WriterNotKnown`;
     3. "includes a part whose signature this node cannot verify", for such a part that grades `Claimed`;
@@ -231,7 +242,7 @@ reads "(signer unconfirmed)".
     grades has no `_` arm. Pins: `view_tests.rs`'s `a_student_part_reads_not_co_signed`, `a_co_signed_student_part`,
     `a_students_own_co_sign_does_not_clear_not_co_signed`, `another_students_co_sign_does_not_clear_not_co_signed`,
     `an_unplaceable_co_signer_does_not_clear_not_co_signed`, `an_unconfirmed_signer_is_marked`, `a_vouched_unsigned_part_reads_signed_later`; `compound.rs`'s
-    `the_state_reads_signed_off_by`, `a_vouched_part_no_longer_makes_the_note_unsigned`,
+    `the_state_reads_signed_off_by`, `the_state_skips_a_full_signer_who_never_pressed_sign_off`, `a_vouched_part_no_longer_makes_the_note_unsigned`,
     `the_state_words_are_exact`.
 
 ### "Sign off this note", as shown (`note::vouch::sign_off_note`, `notes_sign_off.rs`)
@@ -255,7 +266,7 @@ reads "(signer unconfirmed)".
     `a_part_added_after_the_note_was_shown_refuses_changed`,
     `a_part_shredded_after_the_note_was_shown_refuses_changed`,
     `signing_off_a_note_one_signed_wholly_is_nothing_to_sign`, `two_sign_offs_at_once_both_stand`,
-    `a_linked_charts_part_is_vouched_on_its_own_chart`; `vouch.rs::the_shown_parts_must_be_exactly_the_notes`.
+    `a_linked_charts_part_is_vouched_on_its_own_chart`; `vouch_tests.rs::the_shown_parts_must_be_exactly_the_notes`.
 
 14. **The window's command `note_sign_off` keeps `note_sign_impl`'s order.** The checks run in this order: the chart
     on screen, then fixture mode, then the ids read ("not a note id"), then the key. A passphrase that signs nothing
@@ -266,11 +277,14 @@ reads "(signer unconfirmed)".
     - `NothingToSign`: "You have already signed every part of this note. Nothing more was signed.";
     - an unknown outcome: "Whether this note was signed off is NOT known — no ordinary answer came back while signing
       it off (event {id}: {cause}). Once the window can reach the node again, the chart shows whether it was signed
-      off.". It never says "the note is there": the note exists either way.
+      off.". It never says "the note is there": the note exists either way;
+    - an ordinary node failure: "Could not sign off this note: " then the node's own sentence (final review; Sign's
+      lead-in is "Could not sign this note: "). A refusal and the key's words are whole sentences and take none.
 
     Both refusals ask for a re-read (`stale`). Only a sign-off that went through is timed, as `gesture_kind =
     'note-sign-off'`; a refusal, a failure or an unknown outcome is no sample. Pins:
-    `notes_sign_off_tests.rs::sign_off_refusals_are_worded_exactly`, `sign_off_asks_for_no_key_on_a_malformed_id`;
+    `notes_sign_off_tests.rs::sign_off_refusals_are_worded_exactly`, `a_failed_sign_off_leads_with_what_failed`,
+    `sign_off_asks_for_no_key_on_a_malformed_id`;
     `notes_sign_off_db_tests.rs::note_sign_off_impl_signs_off_under_the_window_login`.
 
 ### The addendum's vouch (`note::sign`, `note::sign_vouch`)
@@ -322,17 +336,23 @@ reads "(signer unconfirmed)".
 
     One strip credential serves one act at a time (controller ruling). A press holds its button down, and does
     nothing while the editor holds a draft or another press is in flight. It rides the note pane's `noteSigning` /
-    `noteSignInFlight`, so the idle re-lock and a who's-here switch wait for it; it settles as `null`, and the re-read
-    chart says whether the note was signed off. A sign-off is the first note act in flight with the editor FREE, so
+    `noteSignInFlight`, so the idle re-lock and a who's-here switch wait for it. It settles with its outcome, as Sign
+    and Discard do (final review: the switch closes the chart, so a null outcome left it unsaid): "signed-off",
+    "not-signed-off" (nothing written: a refusal, the key's words, a node failure) or "sign-off-unknown" (#814, or a
+    fault in this window mid-press). The switch's picker words them "Your sign-off went through: every part of the
+    note now carries your signature.", "Your sign-off signed nothing — open the chart to see where the note stands."
+    and "Whether your sign-off went through is not known — check the chart." (`whos_here.js`'s constants beside
+    Sign's and Discard's; no patient named). The idle re-lock only waits, and words no outcome of any act. A sign-off is the first note act in flight with the editor FREE, so
     `newNote`, `addToNote`, `continueHere` and the editor's Sign and Discard all refuse to start while
     `signInFlight()`. An act in flight used to imply an open editor; without these guards a Sign opened mid-press
     would reuse the passphrase still in the strip, and the two presses would clear each other's flag. Sign sends
     `alsoVouches: held.covers` (`[]` for a new note). Every word is Rust's, except the label "Sign off this note" and
-    its accessible-name prefix. Pins: `notes_sign_off_webview_tests.rs`'s
+    its accessible-name prefix, and the picker's lines, which `whos_here.js` holds for every act. Pins: `notes_sign_off_webview_tests.rs`'s
     `sign_off_is_offered_only_when_the_view_says_so`, `sign_off_sends_the_shown_parts_and_the_strips_credential`,
     `sign_off_sits_behind_the_whos_here_gate`, `its_accessible_name_is_sign_off_this_note_plus_the_time`,
     `the_covers_line_is_text_and_sign_sends_its_ids`, `no_dialog`,
-    `nothing_opens_the_editor_while_a_press_is_in_flight`, `sign_and_discard_refuse_to_start_while_a_press_is_in_flight`.
+    `nothing_opens_the_editor_while_a_press_is_in_flight`, `sign_and_discard_refuse_to_start_while_a_press_is_in_flight`,
+    `a_switch_during_a_sign_off_says_what_the_sign_off_did`.
 
 18. **`student` is offered in the enrolment AND re-key role lists**, after `nurse`. Re-keying is in the list too
     (controller ruling): a re-key never changes a role, so without the option a student could not be re-keyed at
@@ -364,7 +384,7 @@ reads "(signer unconfirmed)".
 - **(g) An `attested` sign-off of a part another human signed is admitted.** The floor constrains only `co-signed`
   (controller ruling); a raw client can make such a part read "signed off by V" instead of "co-signed by V", which
   does not clear a student's "— not co-signed". It is still V's real signature, never a forgery. The node plans it
-  only for a part whose signer it cannot place (decision 11).
+  only for a part whose envelope the floor would not let it co-sign (decision 11).
 - **(h) A forked draft can keep a stale covers line** ([#1001](https://github.com/cairn-ehr/cairn-ehr/issues/1001)).
   The fork copies `covers`, and the line may be false after the draft was signed elsewhere. Nothing over-claims: the
   node re-reads and covers only what is still the signer's and unsigned, and the success line says how many were not
@@ -385,7 +405,10 @@ reads "(signer unconfirmed)".
   countersigning a note 2 (read, sign) → 2 ("Sign off this note", then the strip's passphrase, one act as slice 1
   counts it) → 2; finishing one's own unsigned note 3 → 3 (Add, type, Sign; the earlier part is covered by the same
   press) → 3, which **ends ADR-0091's under-claim (d)**; seeing that a student's part is not yet countersigned 0 (no
-  second signature on the page) → 0 → 0 (the byline says "— not co-signed"). No `M > N`. Time budget, owed by a
+  second signature on the page) → 0 → 0 (the byline says "— not co-signed" after a student's own signature; a
+  student's part signed only by a later vouch, e.g. a timer-committed part the student then signed by addendum or
+  sign-off, does not yet say it: extending the rule needs a design call, since a supervisor's sign-off of an
+  unsigned part is `Attested`, not `CoSigned`; [#1003](https://github.com/cairn-ehr/cairn-ehr/issues/1003)). No `M > N`. Time budget, owed by a
   human in RUNBOOK §23: sign off ≤ 3 s (Sign's, RUNBOOK §16; the `note-sign-off` timing kind). The "also covers" line
   is read before the press; it forces no decision and never blocks.
 - **Harder.** Every reader of a note part's signatures must go through `vouch_read`'s two checks (a verified token,
@@ -397,7 +420,7 @@ reads "(signer unconfirmed)".
   until 3c-3's menu. We would know it is wrong if supervisors miss a student's uncountersigned entry, or press "Sign
   off this note" on notes they meant to leave.
 - **Pinned by** `db/tests/071_clinical_note_attestation_test.sql`, `crates/cairn-event/src/note_attestation.rs`'s
-  tests, `crates/cairn-node/src/note/{vouch,vouch_read,view_tests,compound,sign_vouch}.rs`'s tests,
-  `crates/cairn-node/tests/{note_attestation_floor,note_sign_off,note_addendum_vouch,window_role_grants_notes,floor_execute_grants}.rs`
+  tests, `crates/cairn-node/src/note/{vouch_tests,vouch_read,view_tests,compound,sign_vouch}.rs`'s tests,
+  `crates/cairn-node/tests/{note_attestation_floor,note_sign_off,note_addendum_vouch,note_vouch_remote_read,window_role_grants_notes,floor_execute_grants}.rs`
   and `cairn-gui/cairn-gui-tauri/src/{notes_sign_off,notes_sign_off_db,notes_sign_off_webview}_tests.rs`. RUNBOOK §23
   carries the human measurements.
