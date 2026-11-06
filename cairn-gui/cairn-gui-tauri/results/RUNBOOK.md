@@ -1786,3 +1786,105 @@ addendum draft and the target on every save and Sign were walked headlessly in C
 against a stubbed `invoke`; sign-in slice 3c-1, Task 6), and the heading-above-the-text order and the seam lines
 again in the final fix wave; the real Tauri window, its argument casing (`addendumTo`)
 and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*Add to a note*).
+
+## 23. Sign off a note, and sign your own earlier part later (GUI sign-in slice 3c-2, ADR-0092)
+
+The slice's gestures: **Sign off this note** on a note that still needs a sign-off, with section 16's strip; and an
+addendum's **Sign note** that also signs the writer's own earlier unsigned part, which the editor names on its "Your
+signature also covers …" line before the press. The chart's new words are: "(student)" and "— not co-signed" on a
+student's signed part; "(signer unconfirmed)"; a vouch's " · signed later by …", " · signed off by …" or " ·
+co-signed by …"; and the state line "signed off by …". Paper counterpart: a supervisor countersigning beneath a
+student's entry, and a nurse who comes back, writes a line and signs, covering her own earlier unsigned line.
+**Live only**, like section 16.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Sign off a note, credential included | the first keystroke in the strip's Staff ID | "Signed off — …" on screen and the byline re-read | **≤ 3 s** (Sign's, section 16) |
+| Finish your own unsigned note | the press of *Add to this note* | the addendum inside the note, the earlier part reading "signed later by …" | Sign's **≤ 3 s** from the strip's first keystroke |
+| See that a student's part is not yet countersigned | — | — | **0 acts** (the byline) |
+
+Steps: countersigning a note paper *N* = 2 (read, sign) → forced *M* = 2 (*Sign off this note*, the strip's
+passphrase) → target *K* = 2; finishing one's own unsigned note 3 → 3 (*Add to this note*, type, Sign) → 3; seeing
+a student's part not yet countersigned 0 → 0 → 0. The write half is timed by the node (`gesture_kind =
+'note-sign-off'` for the sign-off, `'note-sign'` for the addendum, section 5). **A figure outside its budget, or an
+`M > N`, is the finding — file an issue; never adjust the budget.**
+
+**Setup.** Section 19's setup (`nurse-a` and `dr-b` enrolled from the window) and the section 2 chart. Enrol from
+*Enrol staff*, approved by `boss`, two students: `sam` ("Sam") and `sue` ("Sue"), each with role **student**. The
+role list offers *student* after *nurse*, in *Enrol staff* and in the re-key form. For Measurement 3 you also need a
+member whose key is still **unconfirmed**: one an enroller approved and no superuser has confirmed (section 17's
+`locum-b`, or enrol one the same way). Check with section 17's `cairn_key_confirmation` query. Launch as section 3.
+`signed` is section 19's helper. Add:
+
+```bash
+vouches() { psql "$CONN" -c "SELECT a.target, a.act, a.role, m.staff_id AS by, a.patient_id FROM clinical_note_attestation a LEFT JOIN vault_member m ON m.signing_key_id = a.signer_key_id ORDER BY a.hlc_wall, a.hlc_counter"; }
+```
+
+**Measurement 1 — sign off a student's note (≤ 3 s).** As `sam`: *New note*, `obs stable, BP 120/80`, a stated time,
+*Sign note*. Five runs, each on a new note of Sam's.
+
+- [ ] Sam's note reads "signed by Sam (student) — not co-signed · {its time}" and offers *Sign off this note*. A note
+      `dr-b` signed alone offers none.
+- [ ] As `dr-b` (who's here and the strip): record the time from the first keystroke in the strip's Staff ID, through
+      the press of *Sign off this note*, until "Signed off — every part of this note now carries your signature."
+      shows and the note is re-read (budget ≤ 3 s), and `ui_gesture_timing`'s `note-sign-off` row.
+- [ ] No dialog. The byline now reads "signed by Sam (student) · co-signed by Dr B", with no "— not co-signed", and
+      the button is gone. `vouches` shows one row: Sam's note, `sign-off`, `co-signed`, by `dr-b`, on Sam's chart.
+- [ ] Sue presses *Sign off this note* on another of Sam's notes: it reads "… · co-signed by Sue (student)" and STILL
+      "— not co-signed", and the button stays. Only a non-student's co-sign clears the mark.
+- [ ] Sam presses *Sign off this note* on his own note: "You have already signed every part of this note. Nothing
+      more was signed." Nothing is written.
+- [ ] Two terminals, both showing one of Sam's notes. On one, `nurse-a` adds to it and signs. On the other, `dr-b`,
+      without reopening the chart, presses *Sign off this note*: "This note changed since it was shown — read the
+      chart again, then sign it off. Nothing was signed." The pane re-reads, and *Sign off this note* is still offered
+      on the note, now two parts.
+- [ ] While a sign-off press is in flight, *New note*, *Add to this note* and *Continue here* do nothing, and the
+      button is down until the press settles.
+
+**Measurement 2 — finish your own unsigned note (≤ 3 s), and the covers line.** As `nurse-a`, write a note and let
+it go in by the timer (section 20, quarantine set low; put it back above a few minutes afterwards). It reads
+"written by ?Nurse A · went in unsigned · …".
+
+- [ ] With who's here naming `nurse-a`, press *Add to this note*. Below "Adding to the note …" the editor reads "Your
+      signature also covers your earlier unsigned part of this note: begun {its time}" (or its stated time with
+      "(stated)", if one was stated). It is text, not a question, and nothing is asked before the press.
+- [ ] Type `reviewed, all done`, fill the strip as `nurse-a`, press *Sign note*: "Signed — the note is on the chart.
+      Your earlier unsigned part now reads as signed." Record the time (budget ≤ 3 s). The first part's byline now
+      ends " · signed later by Nurse A", and the state line reads "every part signed", not "includes an unsigned part".
+- [ ] Close the window mid-addendum (text typed, not signed) and relaunch. The draft reopens with its "Adding to …"
+      line AND its covers line, and its Sign covers the part.
+- [ ] **Review Focus 1.** Repeat with a fresh unsigned part of `nurse-a`'s. Who's here names `nurse-a`, but fill the
+      strip as `dr-b`. The covers line names Nurse A's part. Sign: "Signed — the note is on the chart. 1 listed part(s)
+      were not covered: not yours by key, or already signed." Nurse A's part still reads "went in unsigned" with no
+      "signed later by", and `vouches` has no new row.
+- [ ] As `dr-b`, sign off that note: the state line reads "signed off by Dr B", and the timer's part reads "… · signed
+      off by Dr B".
+
+**Measurement 3 — the unconfirmed mark.** As the unconfirmed member, sign a note. Its byline reads "signed by {them}
+(signer unconfirmed)". As `boss`, *Confirm* their key (section 17), then reopen the chart: the mark is gone.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] *Sign off this note* is reached by Tab and pressed with Space or Enter. VoiceOver reads it as "Sign off this
+      note: {the note's time}", so a list of notes is not a list of identical buttons.
+- [ ] The byline's "(student) — not co-signed", "(signer unconfirmed)" and each " · co-signed by …" / " · signed
+      later by …" are read with the note's heading. A claimed name still reads "unverified …" (section 19).
+- [ ] The covers line is read with the editor, after the "Adding to …" line and before the text box.
+- [ ] The outcome lines ("Signed off — …", "This note changed …", "You have already signed …") are read when they
+      appear.
+- [ ] No dialog appears at any point.
+
+**Chromium and WebKit.** The window is WebKit (Tauri on macOS). Compare each step with the headless walk below and
+note any difference: focus after a sign-off re-reads the pane; whether a button drawn before the editor opened is
+still on screen (it does nothing, #994, now *Sign off this note* too); a forked draft's covers line (#1001).
+
+**What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. Several things
+were run against throwaway databases by the slice's DB-gated tests: the floor at both doors, the projection, the
+read's two checks, the sign-off as shown, two sign-offs at once, an unplaceable signer's part, a shredded part, and
+the addendum's vouch with key and claim differing. The window's commands were run by `cairn-gui-tauri`'s DB-gated
+tests (CI never runs those, #905). The button, the gate, the in-flight guards, the covers line and `alsoVouches` on
+Sign were walked headlessly in Chromium only (Playwright, against a stubbed `invoke`; sign-in slice 3c-2, Task 6).
+WebKit, the real Tauri window, its argument casing (`shownParts`, `alsoVouches`) and VoiceOver were not seen.
+`TEMPLATE.md` carries a matching block (*Sign off a note*).

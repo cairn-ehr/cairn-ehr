@@ -10,6 +10,54 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3c-2 — THE VOUCH AND THE SIGN-OFF (ADR-0092, db/071, db/037 + db/044 in place) — do not undo**
+(pins: `db/tests/071_clinical_note_attestation_test.sql`, `crates/cairn-event/src/note_attestation.rs`'s tests,
+`crates/cairn-node/src/note/{vouch,vouch_read,view_tests,compound,sign_vouch}.rs`'s tests,
+`crates/cairn-node/tests/{note_attestation_floor,note_sign_off,note_addendum_vouch}.rs`,
+`cairn-gui/cairn-gui-tauri/src/{notes_sign_off,notes_sign_off_db,notes_sign_off_webview}_tests.rs`):
+- **The applier holds the floor's closed vocabularies, as a SKIP.** `clinical_note_attestation_apply` drops a `/1`
+  body whose bearing role is not `attested`/`co-signed`, whose act is not `addendum`/`sign-off`, whose addendum is
+  `co-signed`, or whose target/address is malformed, because the heal path reaches a sealed vouch the floor never
+  saw (db/020 step 7). **Tempting wrong fixes:** delete the "redundant" guard because "the floor already refuses
+  these" (it never ran on that body); turn it into a table CHECK or a `RAISE` "to be loud" (either fails the heal).
+  Pin: db/tests/071 rows 0013–0016 (each asserts no projection row).
+- **A vouch counts only when its token is verified AND it names the part's own bytes.** The vouch column filters on
+  `cairn_note_vouched_attester(a.event_id) = a.signer_key_id` AND `a.target_address = e.content_address`, inside the
+  note statement (one snapshot). **Tempting wrong fixes:** join on `target` alone "since the strict door already
+  checked the address" (the remote door did not, and a vouch for another version would sign this one); read
+  `event_log.attester_key` directly (db/020 stores a peer's token unverified); read the vouches in a second statement
+  (a second snapshot). Pins: `note_sign_off.rs::a_forged_vouch_is_not_read`,
+  `vouch_read.rs::only_a_verified_vouch_for_the_parts_own_bytes_is_read`.
+- **People are compared by ACTOR, never by key, and an empty actor matches no one.** `vouch::same_actor`;
+  `cairn_note_keys_share_actor` at the floor. **Tempting wrong fixes:** compare `signer_key_id`s "because it is
+  simpler" (a re-keyed writer stops matching their own part); let `""` equal `""` (two unknown keys become one
+  person, and an unknown key could sign off a note). Pins: `a_re_keyed_writer_vouches_for_a_part_drafted_under_the_old_key`,
+  `vouch.rs::a_key_this_node_does_not_know_matches_no_one`.
+- **The sign-off is as shown.** `sign_off_note` re-reads the compound in its transaction and answers `Changed` unless
+  its parts are exactly the ids the window sent. **Tempting wrong fix:** drop `shown_parts` "because the node
+  re-reads anyway" (a colleague's addendum landing after the read would then be signed unseen). Pins:
+  `note_sign_off.rs::a_part_added_after_the_note_was_shown_refuses_changed`,
+  `a_part_shredded_after_the_note_was_shown_refuses_changed`.
+- **An addendum vouches `also_vouches ∩ addendum_covers`, for the signing KEY's actor.** The strip's list is computed
+  for the who's-here CLAIM, so it is a ceiling, never the answer. **Tempting wrong fixes:** vouch whatever the strip
+  listed "because the clinician saw the line" (Nurse B would sign Nurse A's part); take the actor from the claim
+  (`cairn_note_staff_actor`) rather than the key (Task 4's mutant; the floor refused it loudly). Pins:
+  `note_addendum_vouch.rs::a_listed_part_that_is_not_the_signers_is_not_vouched` (key and claim DIFFER),
+  `an_unlisted_own_part_is_not_vouched`.
+- **No note act starts while a press is in flight.** A sign-off is the first note act in flight with the editor
+  FREE: `newNote`, `addToNote`, `continueHere`, `pressSignOff` and the editor's Sign and Discard listeners all start
+  with a `signInFlight()` guard. **Tempting wrong fix:** remove a guard "because `noteDraft !== null` already covers
+  it" (it does not with the editor free; a Sign opened mid-press reuses the strip's passphrase, and the two presses
+  clear each other's flag). Pins: `notes_sign_off_webview_tests.rs::nothing_opens_the_editor_while_a_press_is_in_flight`,
+  `sign_and_discard_refuse_to_start_while_a_press_is_in_flight`. The medication pane is not yet guarded (#1002).
+- **`view::part_byline` is the one producer of a part's byline** (the root's heading, each part, each seam), with the
+  "(student)", "— not co-signed", "(signer unconfirmed)" and vouch words. `byline_words` has no production caller left
+  (its own tests and `note_read.rs` use it). **Tempting wrong fixes:** call `byline_words(grade, writer)` in a new window path "because it is the
+  old name" (the student and vouch words vanish there); let any `CoSigned` vouch clear "— not co-signed" (a student's
+  own co-sign, admitted remotely, would hide the pending mark). Pins: `view_tests.rs::a_students_own_co_sign_does_not_clear_not_co_signed`,
+  `another_students_co_sign_does_not_clear_not_co_signed`; the window's use only DB-gated
+  (`notes_sign_off_db_tests.rs`, #905).
+
 **⇒ GUI SIGN-IN SLICE 3c-1 — THE COMPOUND NOTE AND THE ADDENDUM (ADR-0091, db/070, db/064 + db/065 in place) — do not
 undo** (pins: `db/tests/070_note_addendum_test.sql`, `db/tests/064_clinical_note_test.sql`,
 `crates/cairn-node/src/note/compound.rs`'s tests,

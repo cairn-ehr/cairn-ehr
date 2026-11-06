@@ -530,3 +530,13 @@ incremental writing lives pre-commit in the durable draft store
 > checks only that the target is held, so an addendum that arrives before its note is refused, penned and admitted
 > once the note lands (#948), wherever its body can be read. A note and all its later parts read as one compound note, grouped by a pure function in
 > `cairn-node`.
+>
+> **Since sign-in slice 3c-2** ([ADR-0092](decisions/0092-the-vouch-and-the-sign-off.md), `db/071`, db/037 + db/044
+> in place), a part may be signed LATER, by a separate event that never touches it:
+> `clinical.note-attestation.asserted` (`clinical.note-attestation/1`), one per vouched part. It is sealed, signed and
+> attested by one human, whose contributor is `attested` or `co-signed`. Its payload names the part's event id, the
+> part's content address and the act (`addendum`: the writer signing their own earlier part alongside a new
+> addendum; `sign-off`: a clinician signing a whole note off). It is filed under the part's own chart and carries no
+> `t_effective`. The remote door checks its structure only, so a vouch may arrive before its note. The strict door
+> holds it to the part it names. The chart counts a vouch only when its token is verified and it names the part's
+> current bytes.
