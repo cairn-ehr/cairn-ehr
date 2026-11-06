@@ -420,3 +420,141 @@ db_test!(
         );
     }
 );
+
+// Final-check review (2026-11-06): a student's vouch read THROUGH the database. The floor admits
+// another student's co-sign at either door (it never checks the student role), so the read's
+// `pinned_role` → `student` flag is what keeps it from clearing the mark; the pure tests built
+// that flag by hand.
+db_test!(
+    another_students_sign_off_leaves_the_note_needing_one,
+    |_base, c| {
+        let w = ward(&c).await;
+        let pat = member(&c, "pat", "Pat", "student").await;
+        let p = sign_as(&mut c, &w, &w.sam, w.chart, None).await;
+
+        let ids = sign_off(&mut c, &pat, w.chart, p, &[p]).await.unwrap();
+        assert_eq!(ids.len(), 1, "the floor admits a student's co-sign");
+
+        let after = note(&c, w.chart, p).await;
+        assert_eq!(
+            part_byline(&after.parts()[0]).shown,
+            "signed by Sam (student) — not co-signed · co-signed by Pat (student)"
+        );
+        assert!(needs_sign_off(after.parts()), "a supervisor is still owed");
+    }
+);
+
+/// Remove the second-vouch switch (healing a leaked copy first).
+const DROP_FAIL_SECOND_VOUCH: &str =
+    "DROP TRIGGER IF EXISTS cairn_test_fail_second_vouch ON clinical_note_attestation;
+     DROP FUNCTION IF EXISTS cairn_test_fail_second_vouch() CASCADE;";
+
+/// A switch that makes the SECOND vouch's projection fail, only for a session that set
+/// `cairn.test_fail_second_vouch` (so every other suite on the shared database is untouched).
+const CREATE_FAIL_SECOND_VOUCH: &str = "CREATE FUNCTION cairn_test_fail_second_vouch()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF coalesce(current_setting('cairn.test_fail_second_vouch', true), '') = 'on'
+           AND EXISTS (SELECT 1 FROM clinical_note_attestation) THEN
+            RAISE EXCEPTION 'cairn-test: the second vouch failed';
+        END IF;
+        RETURN NEW;
+    END $$;
+    CREATE TRIGGER cairn_test_fail_second_vouch BEFORE INSERT ON clinical_note_attestation
+        FOR EACH ROW EXECUTE FUNCTION cairn_test_fail_second_vouch();";
+
+// Final-check review (2026-11-06), ADR-0092 decision 13: a sign-off is ONE transaction. A failure
+// at its second part must leave the first unvouched too; otherwise the window says "signed
+// nothing" while part of the note reads "co-signed by" the presser.
+db_test!(
+    a_sign_off_that_fails_part_way_vouches_nothing,
+    |_base, c| {
+        let w = ward(&c).await;
+        let p = sign_as(&mut c, &w, &w.sam, w.chart, None).await;
+        let q = sign_as(&mut c, &w, &w.sam, w.chart, Some(p)).await;
+
+        c.batch_execute(DROP_FAIL_SECOND_VOUCH).await.unwrap();
+        c.batch_execute(CREATE_FAIL_SECOND_VOUCH).await.unwrap();
+        c.batch_execute("SET cairn.test_fail_second_vouch = 'on'")
+            .await
+            .unwrap();
+        let input = SignOffInput {
+            patient: w.chart,
+            root: p,
+            shown_parts: &[p, q],
+            node_origin: ORIGIN,
+        };
+        let outcome = sign_off_note(&mut c, &input, &w.zed.author()).await;
+        c.batch_execute("RESET cairn.test_fail_second_vouch")
+            .await
+            .unwrap();
+        c.batch_execute(DROP_FAIL_SECOND_VOUCH).await.unwrap();
+
+        let failure = format!(
+            "{:#}",
+            outcome.expect_err("the second vouch's failure is the sign-off's")
+        );
+        assert!(failure.contains("the second vouch failed"), "{failure}");
+        assert_eq!(
+            vouch_count(&c).await,
+            0,
+            "the first vouch rolled back with it"
+        );
+        assert!(needs_sign_off(note(&c, w.chart, p).await.parts()));
+    }
+);
+
+/// [`member`], but enrolled through the in-person mechanism (an approver and a token) and never
+/// confirmed, so `cairn_key_confirmation` reads `unconfirmed` (ADR-0085).
+async fn unconfirmed_member(c: &Client, staff: &'static str, name: &str, role: &str) -> Member {
+    let (sk, kid) = cairn_event::generate_key().unwrap();
+    let (_, approver) = cairn_event::generate_key().unwrap();
+    let token: Vec<u8> = (0..16u8).map(|i| i.wrapping_mul(11)).collect();
+    c.execute(
+        "SELECT enroll_actor('human', jsonb_build_object('role', $2::text, 'handle', $3::text), \
+                             $1, $4, $5)",
+        &[&kid, &role, &staff, &approver, &token],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "INSERT INTO vault_member (staff_id, display_name, role, actor_id, signing_key_id, \
+                                   sealed, enrolled_by, contact_email) \
+         SELECT $2, $3, $4, actor_id, $1, '\\x00'::bytea, 'console', 'u@example.org' \
+           FROM actor_event WHERE signing_key_id = $1 AND op = 'enroll' LIMIT 1",
+        &[&kid, &staff, &name, &role],
+    )
+    .await
+    .unwrap();
+    let confirmation: String = c
+        .query_one("SELECT cairn_key_confirmation($1)", &[&kid])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(confirmation, "unconfirmed", "the fixture's premise");
+    Member { sk, kid, staff }
+}
+
+// Final-check review (2026-11-06): "(signer unconfirmed)" read THROUGH the database, for a part's
+// own signer (`read.rs`'s confirmation column) and for a vouch's signer (the vouch column's
+// `confirmation`); the pure tests built the flag by hand, so a wrong column went unseen.
+db_test!(
+    an_unconfirmed_signer_reads_unconfirmed_as_writer_and_as_co_signer,
+    |_base, c| {
+        let w = ward(&c).await;
+        let una = unconfirmed_member(&c, "una", "Dr Una", "locum").await;
+
+        let own = sign_as(&mut c, &w, &una, w.chart, None).await;
+        assert_eq!(
+            part_byline(&note(&c, w.chart, own).await.parts()[0]).shown,
+            "signed by Dr Una (signer unconfirmed)"
+        );
+
+        let p = sign_as(&mut c, &w, &w.sam, w.chart, None).await;
+        sign_off(&mut c, &una, w.chart, p, &[p]).await.unwrap();
+        assert_eq!(
+            part_byline(&note(&c, w.chart, p).await.parts()[0]).shown,
+            "signed by Sam (student) · co-signed by Dr Una (signer unconfirmed)"
+        );
+    }
+);

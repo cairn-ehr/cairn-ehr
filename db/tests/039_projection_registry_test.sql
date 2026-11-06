@@ -16,7 +16,7 @@ BEGIN;
 --    `medication_withhold_apply` and `medication_withhold_release_apply`; 30 = 29 + db/060's
 --    #857 row, `medication_cessation_reason_apply`; 31 = 30 + db/064's ADR-0041 row,
 --    `clinical_note_apply`; 32 = 31 + db/068's ADR-0089 row, `clinical_note_discard_apply`; 33 = 32 + db/071's
---    ADR-0091 row, `clinical_note_attestation_apply`.)
+--    ADR-0092 row, `clinical_note_attestation_apply`.)
 --
 --    #345 left the PRODUCT count unchanged at 25 and dropped db/008's from 3 to 2:
 --    retiring `patient.created` removed one product row (its patient_chart_apply

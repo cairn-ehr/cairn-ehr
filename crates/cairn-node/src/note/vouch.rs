@@ -228,8 +228,8 @@ fn shows_exactly(parts: &[NoteRow], shown: &[Uuid]) -> bool {
 /// chart (`list_patient_notes`: its linked charts, the doubted-link rule), so what is signed is
 /// what the window could show. If that compound's parts are not exactly `input.shown_parts`,
 /// nothing is written (`Changed`). `Ok(Ok(ids))` names the vouches written; `Err` is a database
-/// failure or a floor refusal, which wrote nothing — unless the commit's answer was lost, which
-/// `commit_failure` marks.
+/// failure, a floor refusal, or a presser whose key belongs to no enrolled person, none of which
+/// wrote anything — unless the commit's answer was lost, which `commit_failure` marks.
 pub async fn sign_off_note(
     client: &mut Client,
     input: &SignOffInput<'_>,

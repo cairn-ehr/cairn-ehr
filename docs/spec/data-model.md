@@ -538,5 +538,5 @@ incremental writing lives pre-commit in the durable draft store
 > part's content address and the act (`addendum`: the writer signing their own earlier part alongside a new
 > addendum; `sign-off`: a clinician signing a whole note off). It is filed under the part's own chart and carries no
 > `t_effective`. The remote door checks its structure only, so a vouch may arrive before its note. The strict door
-> holds it to the part it names. The chart counts a vouch only when its token is verified and it names the part's
-> current bytes.
+> holds it to the part it names. The chart counts a vouch only when its token is verified, it names the part's
+> current bytes and it is filed under the part's own chart.

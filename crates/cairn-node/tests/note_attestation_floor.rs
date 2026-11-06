@@ -19,7 +19,7 @@ mod common;
 mod note_vouch_kit;
 
 use cairn_event::note_attestation::{VouchAct, VouchRole};
-use cairn_event::{event_address, generate_key, SigningKey};
+use cairn_event::{event_address, generate_key, sign, sign_attestation, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
 use cairn_node::shred::shred_event;
@@ -464,3 +464,66 @@ db_test!(the_doors_answer_actor_role_and_staff_actor, |c| {
         None
     );
 });
+
+/// `v` through the REMOTE door as a peer would deliver it, its token carrying `v`'s own role
+/// (`common::apply_remote_attested` fixes the role to `attested`).
+async fn apply_remote_vouch(c: &Client, v: &Vouch<'_>) -> Result<u64, String> {
+    let hlc = cairn_event::Hlc {
+        wall: chrono::Utc::now().timestamp_millis(),
+        counter: 0,
+        node_origin: "peer".into(),
+    };
+    let signed = sign(&vouch_body(Uuid::now_v7(), hlc, v), v.sk).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, v.kid, v.role.as_wire(), v.sk).unwrap();
+    let vk = v.sk.verifying_key().to_bytes().to_vec();
+    c.execute(
+        "SELECT apply_remote_event($1,$2,$3)",
+        &[&signed.signed_bytes, &token, &vk],
+    )
+    .await
+    .map_err(|e| common::db_msg(&e))
+}
+
+// Final-check review (2026-11-06), plan Review Focus 3: the remote door admits the two forgeries
+// the strict door refuses EVEN WHILE the note is held, because the part rules read node-local
+// state (a writer's `rotate-key` row may not have synced yet): judging them there would fork the
+// event set (ADR-0091 decision 3). The read, not the door, keeps them from counting.
+db_test!(
+    the_remote_door_admits_a_part_rule_forgery_for_a_held_note,
+    |c| {
+        let w = ward(&c).await;
+        let (peer_sk, peer_kid) = colleague(&c).await;
+        let unsigned = timer_part(&mut c, &w.node_sk, w.chart).await;
+        let own = writers_signed_part(&mut c, &w).await;
+
+        // An addendum vouch for a part someone else drafted.
+        let v = vouch_for(
+            &c,
+            &w,
+            unsigned,
+            VouchAct::Addendum,
+            VouchRole::Attested,
+            &peer_sk,
+            &peer_kid,
+        )
+        .await;
+        apply_remote_vouch(&c, &v)
+            .await
+            .unwrap_or_else(|e| panic!("an addendum for another's part is admitted: {e}"));
+        // A co-sign of one's own signature.
+        let v = vouch_for(
+            &c,
+            &w,
+            own,
+            VouchAct::SignOff,
+            VouchRole::CoSigned,
+            &w.writer_sk,
+            &w.writer_kid,
+        )
+        .await;
+        apply_remote_vouch(&c, &v)
+            .await
+            .unwrap_or_else(|e| panic!("a co-sign of one's own signature is admitted: {e}"));
+    }
+);

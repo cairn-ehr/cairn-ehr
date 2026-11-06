@@ -1,10 +1,10 @@
 //! The later vouch for one part of a progress note, `clinical.note-attestation.asserted`
 //! (sign-in slice 3c-2). Pure: no clock, no randomness, no I/O.
 //!
-//! Why it exists: a note part may go in unsigned (its writer was not known, or the
-//! clinician signed in later). A vouch is a SEPARATE event in which a human says "I stand
-//! behind that part": either its own writer signing it later (an `addendum`), or a second
-//! clinician signing a finished note off (`sign-off`). The part itself is never edited.
+//! Why it exists: a note part may go in unsigned (the quarantine timer committed it, or its
+//! writer was not known). A vouch is a SEPARATE event in which a human says "I stand
+//! behind that part": either its own writer signing it later (an `addendum`), or a
+//! clinician signing a note off (`sign-off`). The part itself is never edited.
 //! The vouch names the part by id AND by content address, so a vouch for a different
 //! version of a part can never be mistaken for a vouch for this one.
 use serde_json::{json, Value};
@@ -34,7 +34,9 @@ impl VouchAct {
 /// The responsibility the vouching human takes. Frozen wire words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VouchRole {
-    /// The part was unsigned; the vouch is its first signature.
+    /// Any vouch that is not a second signature by someone else over a human's signed envelope:
+    /// the first signature of an unsigned part, or a sign-off of a part whose signer this node
+    /// cannot place as another human (`vouch::sign_off_vouches`; ADR-0092 decision 11).
     Attested,
     /// The part was already signed by someone else; this is a second signature.
     CoSigned,

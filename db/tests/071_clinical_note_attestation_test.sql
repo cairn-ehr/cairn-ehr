@@ -255,7 +255,13 @@ FROM (VALUES ('71717171-0011-7871-8871-717171717171', 'clinical.note-attestation
               pg_temp.body() -> 'contributors', pg_temp.body('{"target":"not-a-uuid"}') -> 'payload'),
              -- 0018: a target_address that is not even-length hex (decode() would raise).
              ('71717171-0018-7871-8871-717171717171', 'clinical.note-attestation/1', 8, '\x7118'::bytea,
-              pg_temp.body() -> 'contributors', pg_temp.body('{"target_address":"abc"}') -> 'payload'))
+              pg_temp.body() -> 'contributors', pg_temp.body('{"target_address":"abc"}') -> 'payload'),
+             -- 0019: an extra NON-bearing entry with another role, listed first (the remote door
+             -- admits extra contributory entries): the projected role is the BEARING one's, so a
+             -- peer's raw-SQL body can never make an attested vouch read as a co-sign.
+             ('71717171-0019-7871-8871-717171717171', 'clinical.note-attestation/1', 9, '\x7119'::bytea,
+              jsonb_build_array(jsonb_build_object('actor_id', pg_temp.kid(), 'role', 'co-signed'),
+                                pg_temp.bearing(pg_temp.kid(), 'attested')), NULL))
      AS r(id, v, n, sb, c, pl);
 DO $$
 BEGIN
@@ -279,6 +285,9 @@ BEGIN
         'a_target_that_is_not_a_uuid_is_skipped';
     ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0018-7871-8871-717171717171'),
         'a_target_address_that_is_not_even_length_hex_is_skipped';
+    ASSERT (SELECT role = 'attested' FROM clinical_note_attestation
+             WHERE event_id = '71717171-0019-7871-8871-717171717171'),
+        'the_projected_role_is_the_bearing_contributors';
 END $$;
 
 -- a_shred_scrubs_the_vouch_row (db/037).

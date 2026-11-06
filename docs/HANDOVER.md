@@ -57,12 +57,15 @@
 >   [`superpowers/plans/2026-11-06-sign-in-slice-3c-2-vouch-and-sign-off.md`](superpowers/plans/2026-11-06-sign-in-slice-3c-2-vouch-and-sign-off.md)).
 >   The **vouch**: one sealed, human-signed `clinical.note-attestation.asserted` per vouched part (target + content
 >   address + act `addendum` | `sign-off`), offline-first at the remote door, held to the part at the strict door; read
->   only when its token is verified AND it names the part's own bytes; people compared by actor. **"Sign off this
+>   only when its token is verified AND it names the part's own bytes AND its own chart; people compared by actor. **"Sign off this
 >   note"** (offered unless one non-student has signed every part — maintainer, 2026-11-06) is AS SHOWN (`Changed`
 >   unless the re-read compound has exactly the shown parts); an addendum's Sign also vouches the signing KEY's own
 >   earlier unsigned parts that the strip's "also covers" line listed. `student` role; "— not co-signed";
 >   "(signer unconfirmed)"; "signed off by …". Open: **#1001** (a forked draft keeps a stale covers line) · **#1002**
->   (the medication pane reads the strip while a note act is in flight) · **#1003** (review residuals); #995 extended
+>   (the medication pane reads the strip while a note act is in flight) · **#1003** (review residuals) · **#1005**
+>   (Sign's "not covered" line misstates why when the note it adds to is no longer readable). The `/finalcheck` pass
+>   fixed an addendum's Sign vouching nothing when its header targets a middle part (it now takes the compound
+>   CONTAINING the target, ADR-0092 decision 15), pinned five untested rules, and corrected seven doc sentences; #995 extended
 >   (the sealed heal path). Owed by a human: **RUNBOOK §23** (sign off ≤ 3 s; the student byline and its clearing; the
 >   covers line on Add and on reopen; keyboard + VoiceOver; WebKit).
 >

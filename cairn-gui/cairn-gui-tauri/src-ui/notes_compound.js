@@ -136,7 +136,7 @@ function pressSignOff(compound, button) {
 
 /**
  * Sign off `compound`: the part ids the pane showed and the strip's credential go to the node;
- * the strip is cleared both ways out (remembered as a signer only on success); then Rust's words
+ * the strip is cleared both ways out (remembered as a signer unless refused or failed: an unknown outcome released the key too); then Rust's words
  * are said — signed off, refused (nothing signed), or NOT known (#814) — and the chart is read
  * again on every path, so the note's state line shows what the record now holds. Answers the
  * outcome for the picker: "signed-off", "not-signed-off" (nothing was written: a refusal, the

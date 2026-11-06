@@ -220,8 +220,8 @@ reads "(signer unconfirmed)".
       is unconfirmed or doubtful (`signer_words`). This holds for a vouch's signer too.
     - **" — not co-signed"** follows a student signer's name straight away. It clears **only** for a `CoSigned`
       vouch by a non-student of a different actor from the signer's (controller ruling; design §3.4: the
-      SUPERVISOR's co-sign). A student's own co-sign, or another student's, does not clear it, though a peer's remote
-      door may admit one. Nor does a co-signer whose key this node cannot place (an empty actor): it might be anyone,
+      SUPERVISOR's co-sign). A student's own co-sign (which a peer's remote door may admit) does not clear it, nor does
+      another student's (which either door admits, as the floor never checks the student role). Nor does a co-signer whose key this node cannot place (an empty actor): it might be anyone,
       the student included, for example the student's own re-keyed key before its `rotate-key` row syncs here.
     - **Each vouch** then follows in order: " · signed later by {V}" (an addendum), " · signed off by {V}" (a
       sign-off, attested), " · co-signed by {V}" (a sign-off, co-signed).
@@ -293,12 +293,15 @@ reads "(signer unconfirmed)".
     `SignNoteInput.also_vouches` names the ids the strip listed. Inside Sign's transaction, after the new parts are
     submitted, the node:
     - reads the signing key's actor (NULL matches no one);
-    - re-reads the chart set's notes and takes the compound whose root is the draft HEADER's target (ADR-0091
-      decision 7), never one the window names;
+    - re-reads the chart set's notes and takes the compound that CONTAINS the draft HEADER's target (ADR-0091
+      decision 7), never one the window names. Contains, not is rooted at: db/070 admits any note of the chart as a
+      header target, and a link judgement or a healed body can turn an orphan root into a middle part while the
+      draft waits; the window's covers line matches any part too (pin
+      `an_addendum_to_a_middle_part_vouches_the_writers_listed_parts`);
     - vouches (`addendum`, `attested`) each listed id that is also covered, in listed order and once each, under its
       part's own chart.
 
-    A new note, an empty list, a header target that roots no compound, or a key this node cannot place vouches
+    A new note, an empty list, a header target in no compound, or a key this node cannot place vouches
     nothing: an under-claim, never a refusal of a Sign that is otherwise good. A refused vouch rolls the whole Sign
     back. `sign_note` returns `Committed<SignedNote { parts, vouched }>`. **Review Focus 1:** when Nurse B signs while
     who's here still names Nurse A, the strip listed A's parts and B's key covers none of them, so nothing is vouched
@@ -332,7 +335,7 @@ reads "(signer unconfirmed)".
     files under its part's own chart, and no draft is involved; unlike Add, #993). Its accessible name is "Sign off
     this note: " + the note's time. It sits behind the who's-here gate (`claimAsked()`, else `askWhosHere`). It sends
     `shownParts` and the strip's `signerCredential()`, then clears the strip (its staff ID joins the type-ahead
-    list only on success), says Rust's words and re-reads the chart on every path.
+    list unless the press was refused or failed: an unknown outcome released the key too), says Rust's words and re-reads the chart on every path.
 
     One strip credential serves one act at a time (controller ruling). A press holds its button down, and does
     nothing while the editor holds a draft or another press is in flight. It rides the note pane's `noteSigning` /

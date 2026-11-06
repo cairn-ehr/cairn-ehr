@@ -14,9 +14,12 @@
 //!   signer's actor) — never vouch someone else's, even if a stale strip listed it (Nurse B
 //!   signing while who's-here still says Nurse A).
 //!
-//! The note is the one the draft's HEADER adds to, re-read here inside the transaction (ADR-0091
-//! decision 7), never one the window names. A missing note, or a signer this node cannot place,
-//! vouches nothing: an under-claim, never a refusal of a sign that is otherwise good.
+//! The note is the one CONTAINING the part the draft's HEADER adds to, re-read here inside the
+//! transaction (ADR-0091 decision 7), never one the window names. Containing, not rooted at: the
+//! header may name any part (db/070), and a link judgement or a healed body can make an orphan
+//! root a middle part while the draft waits; the window's covers line matches any part too.
+//! A missing note, or a signer this node cannot place, vouches nothing: an under-claim, never a
+//! refusal of a sign that is otherwise good.
 use std::collections::HashSet;
 
 use cairn_event::note_attestation::{VouchAct, VouchRole};
@@ -39,19 +42,21 @@ fn to_vouch(listed: &[Uuid], covered: &[Uuid]) -> Vec<Uuid> {
 }
 
 /// Vouch, as `author`, for each part in `listed` that is the author's own unsigned part of the
-/// note rooted at `root` (the draft header's target; `None` = a new note, which covers nothing),
-/// as chart `patient` reads it. Runs in Sign's transaction AFTER the new parts are submitted:
+/// note containing `target` (the draft header's target; `None` = a new note, which covers
+/// nothing), as chart `patient` reads it. Runs in Sign's transaction AFTER the new parts are submitted:
 /// they are in the note now, but signed, so never covered. Returns the vouches' event ids, in
 /// `listed` order. Each vouch is filed under its part's own chart (a linked chart's part too).
 pub(super) async fn vouch_own_earlier_parts(
     tx: &Transaction<'_>,
     author: &AuthorParams<'_>,
     patient: Uuid,
-    root: Option<Uuid>,
+    target: Option<Uuid>,
     listed: &[Uuid],
     node_origin: &str,
 ) -> anyhow::Result<Vec<Uuid>> {
-    let Some(root) = root else { return Ok(vec![]) };
+    let Some(target) = target else {
+        return Ok(vec![]);
+    };
     if listed.is_empty() {
         return Ok(vec![]);
     }
@@ -61,7 +66,10 @@ pub(super) async fn vouch_own_earlier_parts(
         .await?
         .get(0);
     let notes = list_patient_notes(tx, patient).await?.notes;
-    let Some(note) = compounds(notes).into_iter().find(|c| c.root() == root) else {
+    let Some(note) = compounds(notes)
+        .into_iter()
+        .find(|c| c.parts().iter().any(|p| p.event_id == target))
+    else {
         return Ok(vec![]);
     };
     let covered = addendum_covers(note.parts(), signer.as_deref().unwrap_or(""));

@@ -258,7 +258,7 @@ async fn registry_is_seeded_with_the_expected_mapping() {
             "cairn_check_note_discard",
             Some("note discard requires a non-empty authored twin (§3.13/§3.19)"),
         ),
-        // db/071 (ADR-0091, sign-in slice 3c-2): the later vouch for a note part.
+        // db/071 (ADR-0092, sign-in slice 3c-2): the later vouch for a note part.
         (
             "clinical.note-attestation.asserted",
             "cairn_check_note_attestation",

@@ -160,9 +160,11 @@ pub fn part_byline(p: &NoteRow) -> Byline {
 fn part_byline_marked(p: &NoteRow, unverified: &str) -> String {
     let grade = match &p.signed_by {
         Some(s) => {
-            // Only a supervisor's co-sign clears the mark (design §3.4): not the student's own, nor
-            // another student's, either of which a peer's remote door may have admitted, nor a key
-            // this node cannot place (empty actor: it might be anyone, the student included).
+            // Only a supervisor's co-sign clears the mark (design §3.4): not the student's own (a
+            // peer's remote door may admit one), nor another student's (either door admits it, as
+            // the floor never checks the student role, and this node plans one for a student
+            // presser), nor a key this node cannot place (empty actor: it might be anyone, the
+            // student included).
             let co_signed = p.vouches.iter().any(|v| {
                 v.role == VouchRole::CoSigned
                     && !v.by.actor.is_empty()

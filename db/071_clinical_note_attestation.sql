@@ -1,5 +1,5 @@
 -- 071_clinical_note_attestation.sql — the later vouch for one part of a progress note,
--- `clinical.note-attestation.asserted` (sign-in slice 3c-2; ADR-0091).
+-- `clinical.note-attestation.asserted` (sign-in slice 3c-2; ADR-0092, shape per ADR-0091).
 --
 -- WHY A VOUCH IS ITS OWN EVENT. A note part may go into the record unsigned: the quarantine timer
 -- committed it (db/067), or its writer was not known. A part is never edited (principle 1), so a
@@ -21,9 +21,9 @@
 -- does not support it (Review Focus 3). The REMOTE door checks structure only (ADR-0091 decision
 -- 3): set-union sync may deliver a vouch before its note, and where a note lives is node-local
 -- knowledge, so judging it there would fork the event set (the db/034 #689 argument). The read
--- (cairn_node::note::read) counts a vouch only when its target_address is the part's own and its
--- token is verified, so a structurally sound forgery admitted remotely is never shown as a
--- signature.
+-- (cairn_node::note::read) counts a vouch only when its target_address is the part's own, its
+-- token is verified and it is filed under the part's own chart, so a structurally sound forgery
+-- admitted remotely is never shown as a signature.
 --
 -- Replay: the loader re-runs every db/*.sql on each connect, so each statement converges.
 BEGIN;
@@ -182,7 +182,8 @@ WHERE (cairn_event_twin_check.check_fn, cairn_event_twin_check.twin_required_msg
       IS DISTINCT FROM (EXCLUDED.check_fn, EXCLUDED.twin_required_msg);
 
 -- 4. The projection: one row per vouch. The read joins it to the part by `target` and counts it
---    only when `target_address` is the part's own content address. content_address is what a
+--    only when `target_address` is the part's own content address, its token is verified and it
+--    is filed under the part's own chart (ADR-0092 decision 9). content_address is what a
 --    shred scrubs by (db/037), as for every clinical projection.
 CREATE TABLE IF NOT EXISTS clinical_note_attestation (
     event_id        UUID PRIMARY KEY,

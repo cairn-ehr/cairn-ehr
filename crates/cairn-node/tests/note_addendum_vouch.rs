@@ -214,3 +214,27 @@ db_test!(the_timer_commit_vouches_nothing, |c| {
         CompoundState::IncludesUnsigned
     );
 });
+
+// Final-check review (2026-11-06): the header may target ANY part of a note, not only its root
+// (db/070's door admits any note of the chart; a link judgement or a healed body can turn an
+// orphan root into a middle part while the draft waits). The window shows the covers line for
+// the note CONTAINING the target, so Sign must vouch within that same note.
+db_test!(
+    an_addendum_to_a_middle_part_vouches_the_writers_listed_parts,
+    |c| {
+        let w = ward(&c).await;
+        let p = timer_part(&mut c, &w.node_sk, w.chart).await;
+        let q = timer_part_to(&mut c, &w.node_sk, w.chart, Some(p)).await;
+
+        let signed = sign(&mut c, &w, &w.ada, Some(q), &[p, q]).await;
+        assert_eq!(
+            signed.vouched.len(),
+            2,
+            "both listed parts of the note are vouched"
+        );
+        assert_eq!(
+            compound_state(note(&c, &w, p).await.parts()),
+            CompoundState::EverySigned
+        );
+    }
+);
