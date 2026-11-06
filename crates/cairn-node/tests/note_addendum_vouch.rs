@@ -49,8 +49,8 @@ async fn ward(c: &Client) -> Ward {
     }
 }
 
-/// `m` signs a one-part draft adding to `to` (`None` = a new note), the strip having listed
-/// `listed` as the parts the signature also covers. Returns what Sign reports.
+/// `m` signs a one-part draft of their own adding to `to` (`None` = a new note), the strip
+/// having listed `listed` as the parts the signature also covers. Returns what Sign reports.
 async fn sign(
     c: &mut Client,
     w: &Ward,
@@ -58,11 +58,24 @@ async fn sign(
     to: Option<Uuid>,
     listed: &[Uuid],
 ) -> SignedNote {
+    sign_claimed(c, w, m, m.staff, to, listed).await
+}
+
+/// [`sign`], but with `m`'s KEY while the who's-here claim names `writer` (the claim and the key
+/// can disagree: a colleague presses Sign at a terminal still claimed by someone else).
+async fn sign_claimed(
+    c: &mut Client,
+    w: &Ward,
+    m: &Member,
+    writer: &str,
+    to: Option<Uuid>,
+    listed: &[Uuid],
+) -> SignedNote {
     let input = SignNoteInput {
         draft: Uuid::now_v7(),
         patient: w.chart,
         terminal: "ward-3-pc",
-        writer: Some(m.staff),
+        writer: Some(writer),
         narrative: "reviewed, obs stable",
         stated: None,
         node_origin: ORIGIN,
@@ -140,12 +153,13 @@ db_test!(
     }
 );
 
-// Review Focus 1: Nurse B signs while the strip (who's here) still lists Nurse A's parts.
+// Review Focus 1: Nurse B signs while the strip (who's here) still lists Nurse A's parts. The
+// claim still names Ada, so the strip listed her part; the KEY is Zed's, and the key decides.
 db_test!(a_listed_part_that_is_not_the_signers_is_not_vouched, |c| {
     let w = ward(&c).await;
     let p = timer_part(&mut c, &w.node_sk, w.chart).await;
 
-    let signed = sign(&mut c, &w, &w.zed, Some(p), &[p]).await;
+    let signed = sign_claimed(&mut c, &w, &w.zed, w.ada.staff, Some(p), &[p]).await;
     assert_eq!(signed.parts.len(), 1, "Zed's addendum still signs");
     assert!(signed.vouched.is_empty(), "Ada's part is not Zed's by key");
     assert_eq!(vouch_count(&c).await, 0);
