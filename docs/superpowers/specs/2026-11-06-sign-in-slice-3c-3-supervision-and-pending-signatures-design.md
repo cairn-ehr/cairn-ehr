@@ -210,9 +210,9 @@ This slice makes three things true:
 - **Steps:** find what waits for my signature — paper: walk to each folder (*N* = one per folder) → built *M* = 2
   (open the menu, read it) → *K* = 1 (the count on the bar already says whether anything waits). Countersign one
   note from the menu — paper 2 (open folder, sign) → 3 ("Open note", "Sign off"/"Co-sign as reviewed", passphrase) →
-  *K* 3, with the passphrase as slice 1 counts it. **`M > N` for the single-note case must be judged by the plan**:
-  paper's "open folder" includes walking to it, the menu's "Open note" does not; say so in the plan rather than
-  assume it. Record a supervision link — paper 1 (write a list) → 1 act + passphrase.
+  *K* 3, with the passphrase as slice 1 counts it. **Ruled not an `M > N` defect** (maintainer, 2026-11-07): paper's
+  "open folder" includes finding and walking to it, the menu's "Open note" does not — "much better than paper,
+  because now we do not have to waste a lot of time searching for the notes that require supervision". Record a supervision link — paper 1 (write a list) → 1 act + passphrase.
 - **Time + cognitive load:** the menu opens ≤ 1 s with 20 supervisees and a week of notes (*my call*; measured by
   3c-3c's RUNBOOK section); co-sign ≤ 3 s (Sign's budget, RUNBOOK §16/§23). Cognitive load: the count names only
   obligations; the review list is opt-in.
