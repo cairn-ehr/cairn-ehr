@@ -263,6 +263,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         segments: vec![],
         can_add: true,
         adds_line: "a".into(),
+        ..Default::default()
     };
     let draft = DraftView {
         draft_id: "d".into(),
@@ -271,6 +272,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
         parts: vec![],
         addendum_to: None,
         adding_to: None,
+        ..Default::default()
     };
     let tail = PartView {
         writer_shown: "?A".into(),

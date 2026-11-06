@@ -242,6 +242,10 @@ fn notes_compound_js_reads_no_field_the_backend_does_not_send() {
         }],
         can_add: true,
         adds_line: "a".into(),
+        can_sign_off: true,
+        shown_parts: vec!["e".into()],
+        covers_line: Some("c".into()),
+        covers: vec!["e".into()],
     };
     let value = serde_json::to_value(&compound).unwrap();
     for (binding, sent) in [("compound", &value), ("segment", &value["segments"][0])] {

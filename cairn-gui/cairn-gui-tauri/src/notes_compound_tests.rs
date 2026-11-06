@@ -66,7 +66,7 @@ fn one(notes: Vec<NoteRow>) -> CompoundNote {
 }
 
 fn view_of(c: &CompoundNote) -> CompoundView {
-    compound_view(c, id(OPENED), &bne(), nov(3))
+    compound_view(c, id(OPENED), None, &bne(), nov(3))
 }
 
 /// A one-part note reads exactly as a note did before 3c-1: its own text and heading, no
@@ -251,6 +251,7 @@ fn an_addendum_draft_says_what_it_adds_to() {
         id(OPENED),
         Some("pc-1"),
         &Claim::NotAsked,
+        None,
         &Default::default(),
         &bne(),
         nov(3),

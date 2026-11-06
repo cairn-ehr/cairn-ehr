@@ -24,6 +24,7 @@ use crate::funnel::view::{ErrorView, Recorded, Retry};
 use crate::link::judgement_view::refused;
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
+use crate::whos_here::Claim;
 use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
 use cairn_node::note::sign::SignRefusal;
 use chrono::{DateTime, Utc};
@@ -52,10 +53,14 @@ pub(crate) mod commit;
 #[path = "notes_discard.rs"]
 pub(crate) mod discard;
 
+/// "Sign off this note" (`notes_sign_off.rs`).
+#[path = "notes_sign_off.rs"]
+pub(crate) mod sign_off;
+
 /// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
 #[path = "notes_words.rs"]
 pub(crate) mod words;
-pub(crate) use words::{save_view, sign_refusal_view, take_view};
+pub(crate) use words::{save_view, sign_refusal_view, signed_words, take_view};
 pub use words::{SaveView, TakeView};
 
 /// What one Sign did: signed, or — its commit got no ordinary answer (#814) — NOT known.
@@ -112,6 +117,9 @@ pub async fn note_draft_take(
 
 /// Sign the note on screen — the text sent WITH Sign, never an older autosave (Review Focus 4).
 /// `addendum_to` as `note_draft_save`'s: a Sign inside the debounce still saves an addendum.
+/// `also_vouches` (JS `alsoVouches`): the earlier unsigned parts the strip's "also covers" line
+/// listed (`DraftView::covers`), empty for a new note; the node vouches only those that are the
+/// signer's own by key.
 #[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 #[tauri::command]
 pub async fn note_sign(
@@ -123,6 +131,7 @@ pub async fn note_sign(
     writer: Option<String>,
     credential: Option<Credential>,
     addendum_to: Option<String>,
+    also_vouches: Vec<String>,
 ) -> Result<NoteSignReport, ErrorView> {
     note_sign_impl(
         &state,
@@ -133,6 +142,7 @@ pub async fn note_sign(
         writer.as_deref(),
         credential,
         addendum_to.as_deref(),
+        &also_vouches,
     )
     .await
 }
@@ -146,8 +156,10 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     // Bound to the chart the webview is showing: a read for a chart since left must not be drawn
     // under the next one's header.
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
+    // The claim decides which part the editor may open on and whose unsigned parts an addendum
+    // would cover; a save never reads it. Read once, before the notes, so both use one claim.
+    let claim = state.whos_here.lock().await.claim().clone();
     let Some(db) = state.db.as_ref() else {
-        let claim = state.whos_here.lock().await.claim().clone();
         return Ok(NotePane {
             notes: vec![],
             withheld_sentence: None,
@@ -164,22 +176,35 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
     let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;
+    let staff_id = match &claim {
+        Claim::Named { staff_id, .. } => Some(staff_id.as_str()),
+        Claim::NotAsked | Claim::Unknown => None,
+    };
     // ONE snapshot (ruling R12): the notes and the drafts are two statements, and a sign
-    // committing between them would show the clinician neither the note nor its draft.
-    let list = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
-        cairn_node::note::read::list_patient_notes(tx, patient).await
+    // committing between them would show the clinician neither the note nor its draft. The
+    // claim's actor is read in it too, so the "also covers" line matches the parts it names.
+    let (list, claim_actor) = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+        let list = cairn_node::note::read::list_patient_notes(tx, patient).await?;
+        let actor: Option<String> = match staff_id {
+            // NULL for a staff id this node cannot place: then nothing is covered.
+            Some(s) => tx
+                .query_one("SELECT cairn_note_staff_actor($1)", &[&s])
+                .await?
+                .get(0),
+            None => None,
+        };
+        Ok((list, actor))
     })
     .await
     .map_err(|e| chart_read_failed(db.explain(e)))?;
     // The window supplies the zone (ruling R10): the node never knows the terminal's.
     let today = Utc::now().with_timezone(&chrono::Local).date_naive();
-    // The claim decides only which part the editor may open on; a save never reads it.
-    let claim = state.whos_here.lock().await.claim().clone();
     Ok(note_pane(
         list,
         patient,
         terminal,
         &claim,
+        claim_actor.as_deref(),
         &failed,
         &chrono::Local,
         today,
@@ -253,7 +278,8 @@ pub async fn note_draft_take_impl(
 /// then fixture mode, then every refusal that is a verdict on the gesture (empty text, a stated
 /// time that cannot be read), and only then the key — a passphrase that signs nothing is a step
 /// paper never has. The raw text goes to `sign_note`, which escapes it, with `writer` — the
-/// editor's captured writer, so the signer's own part signs `authored`, not `attested`.
+/// editor's captured writer, so the signer's own part signs `authored`, not `attested` — and
+/// `also_vouches`, the strip's list, which the success line counts against what was vouched.
 #[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 pub async fn note_sign_impl(
     state: &AppState,
@@ -264,6 +290,7 @@ pub async fn note_sign_impl(
     writer: Option<&str>,
     credential: Option<Credential>,
     addendum_to: Option<&str>,
+    also_vouches: &[String],
 ) -> Result<NoteSignReport, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     if state.is_mock() {
@@ -274,6 +301,7 @@ pub async fn note_sign_impl(
         && other_parts_have_text(state, patient, draft_id, writer).await?;
     let (draft, stated) = sign_checks_before_the_key(draft_id, narrative, others, stated_time)?;
     let target = parse_target(addendum_to)?;
+    let listed = parse_note_ids(also_vouches)?;
     let terminal = terminal_of(state)?;
     let (human_sk, human_kid) = state
         .signer_for_act(credential, Now::read())
@@ -301,7 +329,7 @@ pub async fn note_sign_impl(
             stated,
             node_origin: &state.node_origin,
             addendum_to: target,
-            also_vouches: &[],
+            also_vouches: &listed,
         };
         let author = cairn_node::medication::AuthorParams {
             human_sk: &human_sk,
@@ -314,7 +342,7 @@ pub async fn note_sign_impl(
     // ONE write, so one outcome: signed, refused (nothing written), NOT known (#814), or an
     // ordinary failure returned as the node's own sentence.
     let (text, behind_the_record) = match result {
-        Ok(Ok(_signed)) => ("Signed — the note is on the chart.".to_string(), None),
+        Ok(Ok(signed)) => (signed_words(signed.value.vouched.len(), listed.len()), None),
         Ok(Err(refusal)) => return Err(sign_refusal_view(refusal)),
         Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
             Some(event) => (
@@ -393,6 +421,15 @@ pub(crate) fn parse_target(addendum_to: Option<&str>) -> Result<Option<Uuid>, Er
     addendum_to
         .map(|t| t.parse().map_err(|_| refused("not a note id")))
         .transpose()
+}
+
+/// Note ids the webview sent (Sign's `also_vouches`, a sign-off's shown parts), in order. A
+/// malformed one is refused, never dropped — a dropped id would quietly sign less than was
+/// shown. Said before the key. Pure.
+pub(crate) fn parse_note_ids(ids: &[String]) -> Result<Vec<Uuid>, ErrorView> {
+    ids.iter()
+        .map(|i| i.parse().map_err(|_| refused("not a note id")))
+        .collect()
 }
 
 /// The refusals a sign says before it asks for the key, and the draft id and stated time read
