@@ -40,6 +40,9 @@ pub struct Signer {
     /// The key's enrolment is not yet confirmed (`unconfirmed`), or was approved by a key since
     /// repudiated (`doubtful`).
     pub unconfirmed: bool,
+    /// The key was repudiated by a superuser since: its signature counts for nothing (ADR-0093).
+    /// Exclusive with `unconfirmed`, as `cairn_key_confirmation` returns one word.
+    pub repudiated: bool,
 }
 
 /// One verified vouch for a part.
@@ -65,6 +68,7 @@ pub fn signer_of(
         name: name.unwrap_or_else(|| UNKNOWN_SIGNER.into()),
         student: pinned_role == Some("student"),
         unconfirmed: matches!(confirmation, Some("unconfirmed" | "doubtful")),
+        repudiated: confirmation == Some("repudiated"),
     }
 }
 
@@ -197,11 +201,14 @@ mod tests {
                 name: UNKNOWN_SIGNER.into(),
                 student: false,
                 unconfirmed: false,
+                repudiated: false,
             }
         );
         assert!(signer_of(None, None, Some("student"), Some("doubtful")).student);
         assert!(signer_of(None, None, None, Some("doubtful")).unconfirmed);
         assert!(signer_of(None, None, None, Some("unconfirmed")).unconfirmed);
+        let r = signer_of(None, None, None, Some("repudiated"));
+        assert!(r.repudiated && !r.unconfirmed);
     }
 
     /// Review Focus 3: only a VERIFIED vouch naming the part's OWN bytes, filed under the part's

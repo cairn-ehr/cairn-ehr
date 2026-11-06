@@ -179,3 +179,80 @@ fn sign_off_co_signs_only_what_the_floor_admits() {
         ]
     );
 }
+
+// ---- sign-in slice 3c-3b (ADR-0093): a since-repudiated key's signature counts for nothing ----
+
+#[test]
+fn a_repudiated_signature_counts_as_unsigned() {
+    let p = part(1, Some(repudiated("a", "Dr A")));
+    assert!(!part_is_signed(&p));
+    assert!(signed_for(&p).is_empty());
+    assert!(needs_sign_off(&[p]));
+}
+
+/// Review Focus 1: a colleague's sign-off of a repudiated part clears nothing.
+#[test]
+fn a_colleagues_sign_off_does_not_clear_a_repudiated_part() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z", "Dr Zed"),
+    ));
+    assert!(!part_is_signed(&p));
+    let parts = [p];
+    assert!(needs_sign_off(&parts));
+    assert!(signed_off_by(&parts).is_none());
+}
+
+#[test]
+fn only_the_real_persons_re_sign_clears_it() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("a", "Dr A"),
+    ));
+    assert!(re_signed(&p));
+    assert!(part_is_signed(&p));
+    assert!(!needs_sign_off(&[p]));
+}
+
+/// Review Focus 2: the re-keyed writer must not be answered "nothing to sign".
+#[test]
+fn the_re_keyed_writer_is_offered_their_repudiated_part() {
+    let p = part(1, Some(repudiated("a", "Dr A")));
+    let id = p.event_id;
+    assert_eq!(sign_off_vouches(&[p], "a"), vec![(id, VouchRole::Attested)]);
+}
+
+/// Review Focus 3: never plan a co-sign over a repudiated signature.
+#[test]
+fn a_repudiated_part_is_never_planned_as_a_co_sign() {
+    let p = part(1, Some(repudiated("a", "Dr A")));
+    assert_eq!(p.signer_human_actor.as_deref(), Some("a"));
+    let id = p.event_id;
+    assert_eq!(sign_off_vouches(&[p], "z"), vec![(id, VouchRole::Attested)]);
+}
+
+/// Review Focus 5: a repudiated key's vouch counts nothing.
+#[test]
+fn a_repudiated_keys_vouch_counts_nothing() {
+    let mut p = part(2, None);
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        repudiated("z", "Dr Zed"),
+    ));
+    assert!(!part_is_signed(&p));
+}
+
+#[test]
+fn an_addendum_does_not_cover_a_repudiated_part() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.drafted_actor = Some("a".into());
+    assert!(addendum_covers(&[p], "a").is_empty());
+}

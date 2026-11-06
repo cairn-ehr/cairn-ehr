@@ -31,6 +31,7 @@ fn who(actor: &str, name: &str) -> Signer {
         name: name.into(),
         student: false,
         unconfirmed: false,
+        repudiated: false,
     }
 }
 

@@ -201,6 +201,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
                 name: "Dr Ada".into(),
                 student: false,
                 unconfirmed: false,
+                repudiated: false,
             }),
             drafted_actor: None,
             signer_human_actor: None,
