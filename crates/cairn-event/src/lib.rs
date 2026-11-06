@@ -56,6 +56,7 @@ pub mod john_doe;
 pub mod keys;
 pub mod medication;
 pub mod note;
+pub mod note_attestation;
 pub mod note_discard;
 pub mod registration;
 pub mod safety;
