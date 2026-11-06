@@ -334,6 +334,23 @@ async fn sign_off_refusals_are_worded_exactly() {
     assert!(err.text.contains("fixture mode"), "{}", err.text);
 }
 
+/// Final review M7: a sign-off the node failed says what failed before the node's own sentence,
+/// as Sign's "Could not sign this note: " does, with the node failure's retry unchanged. Only the
+/// node's sentence takes it: a refusal and the key's words are whole sentences already.
+#[test]
+fn a_failed_sign_off_leads_with_what_failed() {
+    let e = anyhow::anyhow!("note attestation: the floor said no");
+    let view = sign_off_failure(&e);
+    assert_eq!(
+        view.text,
+        "Could not sign off this note: note attestation: the floor said no"
+    );
+    assert_eq!(view.retry, node_failure(&e).retry);
+    let source = include_str!("notes_sign_off.rs");
+    assert!(source.contains("None => return Err(sign_off_failure(&e)),"));
+    assert!(!source.contains("Err(node_failure(&e))"), "{source}");
+}
+
 /// A malformed root or shown id is refused as "not a note id" before the key is asked for: a
 /// passphrase that signs nothing is a step paper never has. Sign's list is read the same way.
 #[test]

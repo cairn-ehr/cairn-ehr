@@ -53,12 +53,14 @@ let noteDraft = null;
 /** The newest note read started; an older answer is dropped. */
 let notesRevision = 0;
 /**
- * The last Sign or Discard, as a promise of its outcome — a Sign's "signed", "not-signed" or
- * "unknown"; a Discard's "discarded", "not-discarded" or "discard-unknown"; or null when nothing
- * was pressed. It never rejects. The idle re-lock and a switch of who's here wait for it.
+ * The last Sign, Discard or sign-off, as a promise of its outcome — a Sign's "signed",
+ * "not-signed" or "unknown"; a Discard's "discarded", "not-discarded" or "discard-unknown"; a
+ * sign-off's "signed-off", "not-signed-off" or "sign-off-unknown" (notes_compound.js); or null
+ * when nothing was pressed. It never rejects. The idle re-lock and a switch of who's here wait for it.
  */
 let noteSigning = Promise.resolve(null);
-/** A Sign or Discard was pressed and has not settled: a switch then says its outcome in the picker. */
+/** A Sign, Discard or sign-off was pressed and has not settled: a switch then says its outcome in
+ * the picker. */
 let noteSignInFlight = false;
 
 /** Read the note pane for `patient` (main.js's `refresh`, beside the medication list). */
@@ -356,14 +358,14 @@ async function signNote() {
 }
 
 /**
- * The last Sign or Discard, done, as its outcome (`noteSigning`'s values). idle.js's re-lock and
+ * The last Sign, Discard or sign-off, done, as its outcome (`noteSigning`'s values). idle.js's re-lock and
  * whos_here.js's switch wait for it.
  */
 function signsSettled() {
   return noteSigning;
 }
 
-/** Whether a Sign or Discard is in flight right now. */
+/** Whether a Sign, Discard or sign-off is in flight right now. */
 function signInFlight() {
   return noteSignInFlight;
 }

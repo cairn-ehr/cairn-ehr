@@ -63,6 +63,20 @@ pub(crate) fn sign_off_refusal_view(refusal: SignOffRefusal) -> ErrorView {
     }
 }
 
+/// What a failed sign-off leads with, before the node's own sentence (Sign's is
+/// "Could not sign this note: ", in notes.js).
+const SIGN_OFF_FAILED: &str = "Could not sign off this note: ";
+
+/// A sign-off the node failed (nothing written; not an unknown outcome): the node's own sentence
+/// after [`SIGN_OFF_FAILED`], with `node_failure`'s retry. Pure.
+pub(crate) fn sign_off_failure(e: &anyhow::Error) -> ErrorView {
+    let view = node_failure(e);
+    ErrorView {
+        text: format!("{SIGN_OFF_FAILED}{}", view.text),
+        ..view
+    }
+}
+
 /// The root and shown part ids read from what the webview sent, or "not a note id" — said before
 /// the key. Pure.
 pub(crate) fn sign_off_ids(root: &str, shown: &[String]) -> Result<(Uuid, Vec<Uuid>), ErrorView> {
@@ -82,7 +96,8 @@ pub(crate) fn sign_off_unknown_words(event: Uuid, cause: &str) -> String {
 
 /// Sign off the note (see the module doc for the order of the checks). ONE node call, so one
 /// outcome: signed off, refused (nothing written), NOT known (#814: the commit's answer was lost,
-/// so the pane may be behind the record), or an ordinary failure in the node's own words.
+/// so the pane may be behind the record), or an ordinary failure in the node's own words, led by
+/// [`SIGN_OFF_FAILED`].
 pub async fn note_sign_off_impl(
     state: &AppState,
     patient_id: &str,
@@ -130,7 +145,7 @@ pub async fn note_sign_off_impl(
                 sign_off_unknown_words(event, &cairn_gui_live::cause_of(&e)),
                 Some(Recorded::Unknown),
             ),
-            None => return Err(node_failure(&e)),
+            None => return Err(sign_off_failure(&e)),
         },
     };
     // A gesture with an unknown outcome is no timing sample (#818 review).

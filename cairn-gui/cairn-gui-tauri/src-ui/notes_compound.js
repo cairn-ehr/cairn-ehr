@@ -111,8 +111,9 @@ function signOffButton(compound) {
  * serves one act at a time, so nothing goes while the editor holds a draft or a Sign, Discard or
  * other sign-off is in flight, and the button is down until its own press settles. The press
  * rides the note pane's in-flight flags, so idle.js's re-lock and whos_here.js's switch wait for
- * it as for a Sign; it settles as null, a Sign's outcome being the only one the picker words —
- * the re-read chart shows whether the note was signed off.
+ * it as for a Sign, and it settles with its outcome ("signed-off", "not-signed-off" or
+ * "sign-off-unknown"), which the switch's picker words (`signOutcomeLine`): the switch closes
+ * the chart, so without it the clinician would never learn how the press went.
  */
 function pressSignOff(compound, button) {
   if (displayedPatient === null || noteDraft !== null || signInFlight()) return;
@@ -123,8 +124,10 @@ function pressSignOff(compound, button) {
   button.disabled = true;
   noteSignInFlight = true;
   noteSigning = signOffNote(compound)
-    .catch((failure) => console.error(failure))
-    .then(() => null)
+    .catch((failure) => {
+      console.error(failure);
+      return "sign-off-unknown"; // a fault in this window mid-press: whether it signed off is not known
+    })
     .finally(() => {
       noteSignInFlight = false;
       button.disabled = false;
@@ -135,12 +138,15 @@ function pressSignOff(compound, button) {
  * Sign off `compound`: the part ids the pane showed and the strip's credential go to the node;
  * the strip is cleared both ways out (remembered as a signer only on success); then Rust's words
  * are said — signed off, refused (nothing signed), or NOT known (#814) — and the chart is read
- * again on every path, so the note's state line shows what the record now holds.
+ * again on every path, so the note's state line shows what the record now holds. Answers the
+ * outcome for the picker: "signed-off", "not-signed-off" (nothing was written: a refusal, the
+ * key's words, a node failure) or "sign-off-unknown" (an interrupted commit MAY have signed).
  */
 async function signOffNote(compound) {
   const patient = displayedPatient;
   let said;
   let behind;
+  let outcome;
   try {
     const report = await invoke("note_sign_off", {
       patientId: patient,
@@ -151,11 +157,14 @@ async function signOffNote(compound) {
     clearSigner(true);
     said = report.text; // worded in Rust: `notes::sign_off::note_sign_off_impl`
     behind = report.behind_the_record;
+    outcome = behind ? "sign-off-unknown" : "signed-off";
   } catch (failure) {
     clearSigner();
     said = failureText(failure); // already a whole sentence in Rust's words
     behind = behindTheRecord(failure);
+    outcome = behind === "unknown" ? "sign-off-unknown" : "not-signed-off";
   }
   noteStatus(said);
   await refresh(said, behind);
+  return outcome;
 }

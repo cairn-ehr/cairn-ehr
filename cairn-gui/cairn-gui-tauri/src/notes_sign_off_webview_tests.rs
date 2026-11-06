@@ -254,3 +254,62 @@ fn the_student_role_is_offered() {
         );
     }
 }
+
+/// Final review (Important): a who's-here switch waits for a sign-off as for a Sign (they share
+/// `noteSigning`), then closes the chart, so the press must SETTLE with its outcome or the
+/// clinician never learns it: signed off, signed nothing (a refusal, a wrong passphrase, a node
+/// failure), or not known (#814, or a fault in this window mid-press). The picker words each in
+/// a sign-off's OWN words, never a Sign's, and none names a patient (the next person may read it).
+#[test]
+fn a_switch_during_a_sign_off_says_what_the_sign_off_did() {
+    use crate::source_guard::js_const;
+    const WHOS_HERE_JS: &str = include_str!("../src-ui/whos_here.js");
+    let press = js_fn(COMPOUND_JS, "pressSignOff");
+    assert!(
+        press.contains(
+            "noteSigning = signOffNote(compound)\n    .catch((failure) => {\n      console.error(failure);\n      return \"sign-off-unknown\";"
+        ),
+        "{press}"
+    );
+    assert!(
+        !press.contains("=> null"),
+        "the press never settles as null: {press}"
+    );
+    let sign_off = js_fn(COMPOUND_JS, "signOffNote");
+    let caught = position(sign_off, "} catch (failure) {");
+    assert!(
+        sign_off[..caught].contains("outcome = behind ? \"sign-off-unknown\" : \"signed-off\";"),
+        "{sign_off}"
+    );
+    assert!(
+        sign_off[caught..].contains(
+            "outcome = behind === \"unknown\" ? \"sign-off-unknown\" : \"not-signed-off\";"
+        ),
+        "{sign_off}"
+    );
+    // Said and re-read first, so the chart reads the outcome before the switch takes it away.
+    assert!(
+        position(sign_off, "await refresh(said, behind);") < position(sign_off, "return outcome;"),
+        "{sign_off}"
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "SIGNED_OFF_LINE"),
+        "Your sign-off went through: every part of the note now carries your signature."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "NOT_SIGNED_OFF_LINE"),
+        "Your sign-off signed nothing \u{2014} open the chart to see where the note stands."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "SIGN_OFF_UNKNOWN_LINE"),
+        "Whether your sign-off went through is not known \u{2014} check the chart."
+    );
+    let line = js_fn(WHOS_HERE_JS, "signOutcomeLine");
+    for arm in [
+        "if (outcome === \"signed-off\") return SIGNED_OFF_LINE;",
+        "if (outcome === \"not-signed-off\") return NOT_SIGNED_OFF_LINE;",
+        "if (outcome === \"sign-off-unknown\") return SIGN_OFF_UNKNOWN_LINE;",
+    ] {
+        assert!(line.contains(arm), "{line}");
+    }
+}

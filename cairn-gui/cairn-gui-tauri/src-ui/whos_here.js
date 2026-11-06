@@ -32,6 +32,13 @@ const SIGN_UNKNOWN_LINE = "Whether your note was signed is not known — check t
 const DISCARDED_LINE = "Your draft was discarded.";
 const NOT_DISCARDED_LINE = "Your draft was NOT discarded — open the chart to see where it stands.";
 const DISCARD_UNKNOWN_LINE = "Whether your draft was discarded is not known — check the chart.";
+/** … and for "Sign off this note" (slice 3c-2). A sign-off that went through wrote a vouch for
+ * every part the presser had not signed; one that did not wrote nothing (a refusal, the key's
+ * words, or a node failure, all said in the cleared pane); one whose commit lost its answer may
+ * have done either. */
+const SIGNED_OFF_LINE = "Your sign-off went through: every part of the note now carries your signature.";
+const NOT_SIGNED_OFF_LINE = "Your sign-off signed nothing — open the chart to see where the note stands.";
+const SIGN_OFF_UNKNOWN_LINE = "Whether your sign-off went through is not known — check the chart.";
 /** The bar's words when a refused pick's claim could not be read back: nobody is named. */
 const CLAIM_UNREAD = "Nobody is named at this terminal — say who's here";
 
@@ -84,8 +91,8 @@ function takeClaim(claim) {
 }
 
 /**
- * "Who's here?" and the hot key. A Sign or Discard in flight settles first, so its outcome is
- * said on the chart it acted on (the pick also forgets the held key). Then the chart leaves the screen, its
+ * "Who's here?" and the hot key. A Sign, Discard or sign-off in flight settles first, so its
+ * outcome is said on the chart it acted on (the pick also forgets the held key). Then the chart leaves the screen, its
  * queued saves awaited (`closeChart`), so nothing typed is saved under the next person; then
  * the picker opens.
  */
@@ -99,7 +106,8 @@ async function switchWhosHere() {
 }
 
 /**
- * The picker's line for a Sign's or a Discard's outcome (notes.js's `noteSigning`); "" for none.
+ * The picker's line for a Sign's, a Discard's or a sign-off's outcome (notes.js's `noteSigning`);
+ * "" for none.
  * Pure.
  */
 function signOutcomeLine(outcome) {
@@ -109,6 +117,9 @@ function signOutcomeLine(outcome) {
   if (outcome === "discarded") return DISCARDED_LINE;
   if (outcome === "not-discarded") return NOT_DISCARDED_LINE;
   if (outcome === "discard-unknown") return DISCARD_UNKNOWN_LINE;
+  if (outcome === "signed-off") return SIGNED_OFF_LINE;
+  if (outcome === "not-signed-off") return NOT_SIGNED_OFF_LINE;
+  if (outcome === "sign-off-unknown") return SIGN_OFF_UNKNOWN_LINE;
   return "";
 }
 
@@ -120,7 +131,8 @@ function askWhosHere(then) {
 
 /**
  * Show the picker over the page, the rest of it out of Tab's reach, the search focused. `signed`
- * is the outcome of a Sign or Discard the switch waited for, said above the heading, or null.
+ * is the outcome of a Sign, Discard or sign-off the switch waited for, said above the heading, or
+ * null.
  */
 async function openPicker(then, signed) {
   afterPick = then;
