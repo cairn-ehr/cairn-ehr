@@ -27,16 +27,20 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   back to `signed_by` plus every vouch's `by`. Pins: `vouch_tests.rs::the_re_keyed_writer_is_offered_their_repudiated_part`;
   `note_repudiated_signer.rs::a_repudiated_signers_part_reads_unsigned_until_they_re_sign`.
 - **Ask `part_is_signed`, never `signed_by.is_some()`.** A repudiated `signed_by` is present and counts for nothing;
-  `full_signers` yields nobody unless every part `part_is_signed`, so a colleague who vouched a repudiated part never
-  reads "signed off by". **Tempting wrong fix:** test `signed_by` in a new reader "because the grade is `Signed`".
-  Pins: `vouch_tests.rs::a_repudiated_signature_counts_as_unsigned`;
-  `compound.rs::a_repudiated_part_makes_the_note_include_an_unsigned_part`.
-- **A repudiated `signed_by` is planned `Attested`, never `CoSigned`; only a repudiated one.** A co-sign would read
-  "co-signed by" over a possibly forged signature. **Tempting wrong fix:** refuse `CoSigned` whenever `signed_by` is
-  not a standing `Some` (a part gone in unsigned under a human envelope key is co-signed by the floor's own rule).
-  Pins: `vouch_tests.rs`'s `a_repudiated_part_is_never_planned_as_a_co_sign`,
-  `sign_off_co_signs_only_what_the_floor_admits`; `note_repudiated_signer.rs::a_colleagues_vouch_on_a_repudiated_part_is_attested`.
-  Known gaps: #1007 (a repudiated envelope key), #1009 (a re-signed student part).
+  `full_signers` yields nobody unless every part `part_is_signed`, so while a repudiated part is not re-signed, a
+  colleague who vouched it never reads "signed off by" (once the real person re-signs, that earlier vouch counts as an
+  ordinary sign-off of the same bytes: ADR-0093 decision 5). **Tempting wrong fix:** test `signed_by` in a new reader "because the grade is `Signed`".
+  Pins: `vouch_tests.rs::a_repudiated_signature_counts_as_unsigned`,
+  `a_colleagues_earlier_sign_off_counts_once_re_signed`; `compound.rs::a_repudiated_part_makes_the_note_include_an_unsigned_part`.
+- **A repudiated, not re-signed `signed_by` is planned `Attested`, never `CoSigned`; only that one.** A co-sign would
+  read "co-signed by" over a possibly forged signature. Once re-signed, the signature stands and is co-signed as any
+  other (#1009). **Tempting wrong fixes:** refuse `CoSigned` whenever `signed_by` is not a standing `Some` (a part gone
+  in unsigned under a human envelope key is co-signed by the floor's own rule); drop the `!re_signed(p)` half "to be
+  safe" (a supervisor could then never clear a re-signed student part's "— not co-signed"). Pins: `vouch_tests.rs`'s
+  `a_repudiated_part_is_never_planned_as_a_co_sign`, `a_re_signed_part_is_co_signed_again`,
+  `sign_off_co_signs_only_what_the_floor_admits`; `note_repudiated_signer.rs`'s
+  `a_colleagues_vouch_on_a_repudiated_part_is_attested`, `a_re_signed_students_part_is_co_signed_by_a_supervisor`.
+  Known gaps: #1007 (a repudiated envelope key), #1010 (a sign-off made before a student's re-sign).
 - **A vouch by a repudiated key counts nothing**: not as a signature of an unsigned part, not as the co-sign that
   clears a student's "— not co-signed", not as the sign-off that makes the note read "signed off by". Pins:
   `vouch_tests.rs::a_repudiated_keys_vouch_counts_nothing`, `view_tests.rs::a_repudiated_co_signer_does_not_clear_not_co_signed`,

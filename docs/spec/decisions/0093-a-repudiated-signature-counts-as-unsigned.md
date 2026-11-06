@@ -11,7 +11,9 @@
   [#918](https://github.com/cairn-ehr/cairn-ehr/issues/918), which stays open for its link half. Filed by the build:
   [#1007](https://github.com/cairn-ehr/cairn-ehr/issues/1007) (a co-sign over a repudiated envelope key) ·
   [#1008](https://github.com/cairn-ehr/cairn-ehr/issues/1008) (the offer outlives a colleague's sign-off) ·
-  [#1009](https://github.com/cairn-ehr/cairn-ehr/issues/1009) (a re-signed student part is never co-signed).
+  [#1009](https://github.com/cairn-ehr/cairn-ehr/issues/1009) (a re-signed student part was never co-signed; fixed by
+  this slice, decision 6) · [#1010](https://github.com/cairn-ehr/cairn-ehr/issues/1010) (a sign-off before the
+  re-sign leaves a student's part uncountersigned).
 - **Builds on:** [ADR-0092](0092-the-vouch-and-the-sign-off.md) (the vouch, the sign-off, the pure rules and the
   words) · [ADR-0085](0085-in-person-enrolment-and-re-key.md) (repudiation; `rotate-key` keeps the actor) ·
   [ADR-0007](0007-authorship-and-accountability.md) (signature proves origin, attestation confers responsibility) ·
@@ -40,7 +42,9 @@ pure rules and the words.
 2. **Only the real person's own re-signature clears it**: a vouch by the same actor under a key that is not
    repudiated. A colleague's sign-off, or a supervisor's co-sign, is recorded and read, but the part stays unsigned,
    because the words may be the impostor's. **If the real person has left, the part stays unsigned for good**,
-   annotated "key had been repudiated".
+   annotated "key had been repudiated". That annotation is the maintainer's wording (2026-11-07); the byline built
+   from it, "(key had been repudiated) — counts as unsigned", replaces the design §3.5 example "signed with a key since
+   repudiated".
 
 ### The read (`note::vouch_read`)
 
@@ -63,25 +67,34 @@ pure rules and the words.
      needs it); whether the part is signed is `part_is_signed`'s answer, not this list's;
    - `part_is_signed(p)` is `re_signed(p)` for a repudiated `signed_by`, true for any other `signed_by`, and, with no
      `signed_by`, whether some vouch's signer is not repudiated;
-   - `full_signers(parts)` yields nobody unless every part `part_is_signed`, so a colleague who vouched a repudiated
-     part never reads as having signed the note off, and `needs_sign_off` stays true.
+   - `full_signers(parts)` yields nobody unless every part `part_is_signed`, so while a repudiated part is not
+     re-signed, a colleague who vouched it never reads as having signed the note off, and `needs_sign_off` stays true.
 
    Pins: `vouch_tests.rs`'s `a_repudiated_signature_counts_as_unsigned`,
    `a_colleagues_sign_off_does_not_clear_a_repudiated_part`, `a_repudiated_keys_vouch_counts_nothing`.
 
-6. **"Sign off this note" offers a repudiated part to its own re-keyed writer, and never co-signs it.**
+   **A colleague's sign-off made before the re-sign starts counting after it** (controller ruling). The vouch named
+   the part's exact bytes (its content address, ADR-0092 decision 9), and once the real person says those words were
+   theirs, the colleague's vouch is an ordinary sign-off of them: the colleague is in `signed_for`, the part is
+   `part_is_signed`, and `signed_off_by` names that colleague (on a note of two or more parts the state can read
+   "signed off by" them). Pin: `vouch_tests.rs::a_colleagues_earlier_sign_off_counts_once_re_signed`.
+
+6. **"Sign off this note" offers a repudiated part to its own re-keyed writer, and co-signs it only once re-signed.**
    `sign_off_vouches` still skips a part the presser `has_signed`; because `signed_for` no longer lists the
    repudiated key, which shares the re-keyed writer's actor (`cairn_note_key_actor` does not filter repudiation), the
    real person is planned a vouch rather than answered `NothingToSign`. The plan is `Attested` for every part whose
-   `signed_by` is repudiated, even though the registry knows its human: a `co-signed` vouch would read "co-signed by
-   Dr Zed" over a possibly forged signature, as if Zed had put a second signature under the real person's. **Only a REPUDIATED
-   `signed_by` refuses `CoSigned`** (controller ruling): a part with no `signed_by` whose envelope key is a human's
-   keeps `CoSigned`, the floor's own rule (ADR-0092 decision 11). The re-sign needs no floor change: db/071's strict
-   door asks who the signer is only of an `addendum` act and a `co-signed` role, so it admits a `sign-off` vouch with
-   role `attested` by the part's own actor. Pins: `vouch_tests.rs`'s `the_re_keyed_writer_is_offered_their_repudiated_part`,
-   `a_repudiated_part_is_never_planned_as_a_co_sign`, `sign_off_co_signs_only_what_the_floor_admits`;
-   `note_repudiated_signer.rs`'s `a_repudiated_signers_part_reads_unsigned_until_they_re_sign`,
-   `a_colleagues_vouch_on_a_repudiated_part_is_attested` (through the planner and the floor).
+   `signed_by` is repudiated and not `re_signed`, even though the registry knows its human: a `co-signed` vouch would
+   read "co-signed by Dr Zed" over a possibly forged signature, as if Zed had put a second signature under the real
+   person's. Once the part is re-signed, its signature stands again and is co-signed as any other (#1009), which the
+   floor admits (a human's envelope key, another actor), so a supervisor can clear a re-signed student part's "— not
+   co-signed". **Only a REPUDIATED, not re-signed `signed_by` refuses `CoSigned`** (controller ruling): a part with no
+   `signed_by` whose envelope key is a human's keeps `CoSigned`, the floor's own rule (ADR-0092 decision 11). The
+   re-sign needs no floor change: db/071's strict door asks who the signer is only of an `addendum` act and a
+   `co-signed` role, so it admits a `sign-off` vouch with role `attested` by the part's own actor. Pins: `vouch_tests.rs`'s `the_re_keyed_writer_is_offered_their_repudiated_part`,
+   `a_repudiated_part_is_never_planned_as_a_co_sign`, `a_re_signed_part_is_co_signed_again`,
+   `sign_off_co_signs_only_what_the_floor_admits`; `note_repudiated_signer.rs`'s
+   `a_repudiated_signers_part_reads_unsigned_until_they_re_sign`, `a_colleagues_vouch_on_a_repudiated_part_is_attested`,
+   `a_re_signed_students_part_is_co_signed_by_a_supervisor` (through the planner and the floor).
 
 7. **An addendum never covers a part that has a `signed_by`**, so never a repudiated part: `addendum_covers` takes
    only parts with no `signed_by` that are not `part_is_signed`. A repudiated part is re-signed with "Sign off this
@@ -99,13 +112,18 @@ pure rules and the words.
      student's " — not co-signed" goes, and instead of it (never both);
    - the vouch that re-signs it (decision 4's predicate, applied to that vouch) reads **" · re-signed by {name}"**,
      whatever its act or role; every other vouch keeps ADR-0092's words;
+   - once re-signed, a student's part reads " — not co-signed" again, as any student part, until a supervisor
+     co-signs it;
    - a `CoSigned` vouch by a repudiated key does not clear a student's " — not co-signed".
 
    E.g., with the note fixture's clinician: "signed by Dr Ada Notewriter (key had been repudiated) — counts as
    unsigned"; after Dr Zed's sign-off, "… — counts as unsigned · signed off by Dr Zed"; after her re-sign, "signed by
    Dr Ada Notewriter (key had been repudiated) · signed off by Dr Zed · re-signed by Dr Ada Notewriter". A re-sign by
-   a key that is itself repudiated later stops counting, and the part reads "— counts as unsigned" again. Pins:
-   `view_tests.rs`'s `a_repudiated_signers_byline_says_it_counts_as_unsigned`,
+   a key that is itself repudiated later stops counting, and the part reads "— counts as unsigned" again. A student:
+   "signed by Sam (student) (key had been repudiated) — not co-signed · re-signed by Sam (student)", then, after a
+   supervisor's co-sign, "signed by Sam (student) (key had been repudiated) · re-signed by Sam (student) · co-signed by
+   Dr Zed". Pins: `view_tests.rs`'s `a_repudiated_signers_byline_says_it_counts_as_unsigned`,
+   `a_re_signed_students_part_reads_not_co_signed_until_a_supervisor_co_signs`,
    `a_repudiated_students_part_counts_as_unsigned_not_uncosigned`, `a_re_sign_by_a_key_since_repudiated_counts_nothing`,
    `a_repudiated_co_signer_does_not_clear_not_co_signed`.
 
@@ -115,8 +133,8 @@ pure rules and the words.
     - a part signed by a repudiated key and not re-signed makes the note read "includes an unsigned part". The
       `Signed` arm of the unsigned scan, unreachable before, is reached for exactly that part.
 
-    The window offers "Sign off this note" exactly when `needs_sign_off` holds, unchanged (ADR-0092 decision 17), so a
-    repudiated part brings the button. Pins: `compound.rs`'s `a_repudiated_part_makes_the_note_include_an_unsigned_part`,
+    The window offers "Sign off this note" whenever `needs_sign_off` holds and the editor is free, unchanged (ADR-0092
+    decision 17), so a repudiated part brings the button. Pins: `compound.rs`'s `a_repudiated_part_makes_the_note_include_an_unsigned_part`,
     `a_repudiated_keys_sign_off_does_not_sign_the_note_off`; `notes_sign_off_tests.rs::a_repudiated_part_offers_sign_off`.
 
 ## What is not guaranteed
@@ -125,16 +143,20 @@ pure rules and the words.
   `cairn_note_key_is_human` (db/067), which ignores repudiation, so it admits one by another actor. It is read
   (" · co-signed by Dr Zed"); while the part is not re-signed it clears nothing, because decisions 5 and 9 ask
   `re_signed` first. Once the real person re-signs, it counts as an ordinary co-sign of their words (it would clear a
-  student's "— not co-signed"). The floor was left unchanged (the plan's ruling): the node never plans one.
+  student's "— not co-signed"). The floor was left unchanged (the plan's ruling): the node never plans one while the
+  part is not re-signed.
 - **(b) A co-sign can still be planned over a repudiated ENVELOPE key** when the part has no `signed_by`: the read
   carries no repudiation word for the envelope's `signer_key_id`, and `signer_human_actor` comes from
   `cairn_note_key_is_human` ([#1007](https://github.com/cairn-ehr/cairn-ehr/issues/1007)).
 - **(c) After a colleague signs off a repudiated part, the button stays offered to them** (`needs_sign_off` is still
   true) and pressing it answers `NothingToSign`, the pattern a student meets today (ADR-0092 (e);
   [#1008](https://github.com/cairn-ehr/cairn-ehr/issues/1008)).
-- **(d) A re-signed student part can never be co-signed through the node.** Decision 6 plans `Attested` for any part
-  whose `signed_by` is repudiated, re-signed or not, so a supervisor's sign-off never clears that student's "— not
-  co-signed" ([#1009](https://github.com/cairn-ehr/cairn-ehr/issues/1009)).
+- **(d) A supervisor's sign-off made before a student's re-sign leaves the part uncountersigned.** It was planned
+  `Attested` (decision 6), so after the re-sign the part reads " — not co-signed". The supervisor is now in
+  `signed_for`, so a second press answers `NothingToSign`; and once the supervisor has signed every part,
+  `needs_sign_off` is false and the button is gone for everyone
+  ([#1010](https://github.com/cairn-ehr/cairn-ehr/issues/1010)). A sign-off made after the re-sign co-signs
+  (#1009, fixed).
 - **(e) The parts to re-sign are found chart by chart.** Nothing lists a person's repudiated parts across charts
   until 3c-3c's person menu (design §3.4, group 1).
 - **(f) An addendum never covers a repudiated part** (decision 7). A writer who adds to the note and signs is not

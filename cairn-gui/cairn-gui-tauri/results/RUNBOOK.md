@@ -1912,7 +1912,7 @@ timed by the node (`gesture_kind = 'note-sign-off'`, section 5). **A figure outs
 the finding — file an issue; never adjust the budget.**
 
 **Setup.** Section 23's setup (`nurse-a`, `dr-b`, the student `sam`, the section 2 chart, its `vouches` helper),
-and section 17's superuser `boss`. Launch as section 3. Add:
+and section 16's superuser `boss`. Launch as section 3. Add:
 
 ```bash
 conf() { psql "$CONN" -c "SELECT staff_id, cairn_key_confirmation(signing_key_id) FROM vault_member ORDER BY staff_id"; }
@@ -1946,10 +1946,12 @@ the new key, not `repudiated`.
       reads "signed by Nurse A (key had been repudiated) · re-signed by Nurse A".
 - [ ] A student: as `sam`, sign a note; repudiate and re-key `sam`. The part reads "signed by Sam (student) (key had
       been repudiated) — counts as unsigned", with no "— not co-signed" beside it. Note how the two parentheses read
-      to a clinician. After Sam re-signs, it reads "… — not co-signed · re-signed by Sam (student)"; a `dr-b` sign-off
-      then adds "· signed off by Dr B" and the mark STAYS (ADR-0093 (d), #1009: record it, it is known).
-- [ ] An addendum does not cover a repudiated part: with who's here naming `nurse-a`, *Add to this note* on a
-      repudiated note shows no "Your signature also covers …" line for it.
+      to a clinician. After Sam re-signs, it reads "… — not co-signed · re-signed by Sam (student)". Then `dr-b`
+      presses *Sign off this note*: it reads "signed by Sam (student) (key had been repudiated) · re-signed by Sam
+      (student) · co-signed by Dr B", the mark cleared, and `vouches` shows Dr B's row as `co-signed`.
+- [ ] The known gap (ADR-0093 (d), #1010): on another of Sam's notes, `dr-b` signs off BEFORE Sam re-signs. After
+      Sam's re-sign the part reads "— not co-signed · signed off by Dr B · re-signed by Sam (student)" and no button
+      is offered. Record it.
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
