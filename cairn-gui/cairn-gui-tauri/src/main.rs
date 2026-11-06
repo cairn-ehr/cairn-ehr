@@ -44,6 +44,8 @@ mod notes_discard_webview_tests;
 #[cfg(test)]
 mod notes_fork_webview_tests;
 #[cfg(test)]
+mod notes_sign_off_webview_tests;
+#[cfg(test)]
 mod notes_webview_tests;
 #[cfg(test)]
 mod read_again_webview_tests;

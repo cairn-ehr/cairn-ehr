@@ -18,7 +18,7 @@ const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 /// name says WHICH note, since a list of notes would otherwise read as a list of identical buttons.
 #[test]
 fn add_is_offered_only_on_this_charts_note_while_the_editor_is_free() {
-    let item = js_fn(COMPOUND_JS, "withAdd");
+    let item = js_fn(COMPOUND_JS, "withButtons");
     let offered = position(item, "if (compound.can_add && noteDraft === null) {");
     assert!(
         offered < position(item, "cell(\"button\", \"Add to this note\""),
@@ -44,7 +44,7 @@ fn add_asks_whos_here_first_and_names_the_root() {
     let ask = position(add, "askWhosHere(() => addToNote(compound));");
     let start = position(
         add,
-        "startNote(compound.root_event_id, compound.adds_line);",
+        "startNote(compound.root_event_id, compound.adds_line, compound.covers_line, compound.covers);",
     );
     assert!(free < asked && asked < ask && ask < start, "{add}");
     assert!(
@@ -182,7 +182,7 @@ fn a_compound_is_headed_by_its_root_and_seamed_at_each_part() {
     let item = js_fn(COMPOUND_JS, "compoundItem");
     let one = position(
         item,
-        "if (compound.parts.length === 0) return withAdd(noteItem(compound), compound);",
+        "if (compound.parts.length === 0) return withButtons(noteItem(compound), compound);",
     );
     let heading = position(item, "li.append(bylineOf(compound));");
     let state = position(

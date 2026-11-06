@@ -78,6 +78,7 @@
           <select id="enrol-role">
             <option value="clinician">clinician</option>
             <option value="nurse">nurse</option>
+            <option value="student">student</option>
             <option value="admin">admin</option>
             <option value="superuser">superuser</option>
           </select>
@@ -113,6 +114,7 @@
           <select id="rekey-role">
             <option value="clinician">clinician</option>
             <option value="nurse">nurse</option>
+            <option value="student">student</option>
             <option value="admin">admin</option>
           </select>
           <label for="rekey-name">Display name (blank keeps the one on record)</label>
@@ -388,6 +390,9 @@
           <div id="note-editor" hidden>
             <!-- What an addendum draft adds to (slice 3c-1), worded in Rust; hidden for a new note. -->
             <p id="note-adds-to" hidden></p>
+            <!-- What its signature also covers of the writer's earlier unsigned parts (slice 3c-2),
+                 worded in Rust; hidden when nothing. Information, never a question. -->
+            <p id="note-covers" hidden></p>
             <!-- A draft's parts by other writers (or the claim's own earlier ones), read-only
                  above the editor, each headed by its claimed writer (notes.js). -->
             <ol id="note-parts" aria-label="Written so far on this note"></ol>

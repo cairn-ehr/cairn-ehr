@@ -6,17 +6,25 @@
 // state line when the parts went in differently, the parts' texts run together as one text with
 // a seam line before each later part (who added it, when it applies), and a "{n} parts"
 // disclosure holding each part's own heading. Every word of the compound is Rust's, set as text;
-// only the "Add to this note" button's label and its accessible-name prefix are this file's.
+// only the "Add to this note" and "Sign off this note" buttons' labels and their accessible-name
+// prefixes are this file's.
 //
 // "Add to this note" opens the editor on a fresh draft that names the compound's ROOT as the note
 // it adds to (`noteDraft.addendumTo`); every save, Sign and Discard sends that target back, so a
 // press inside the save debounce still makes an addendum. Pinned in
 // notes_compound_webview_tests.rs.
 //
+// "Sign off this note" (slice 3c-2) is the co-signature at the foot of a paper page: one press
+// signs every part of the note the presser has not yet signed. It sends back the part ids the
+// pane SHOWED (`shown_parts`), so the node refuses a note that changed since it was read, rather
+// than sign a part nobody saw. Pinned in notes_sign_off_webview_tests.rs.
+//
 // Classic script, loaded right before notes.js, sharing main.js's global scope (`cell`,
-// `displayedPatient`), notes.js's `noteItem`, `bylineOf`, `noteDraft` and `startNote`, and
-// whos_here.js's `claimAsked`/`askWhosHere` — all read only when a chart is read or a button
-// pressed, long after every script has loaded.
+// `displayedPatient`, `invoke`, `refresh`), notes.js's `noteItem`, `bylineOf`, `noteDraft`,
+// `startNote`, `noteStatus` and its in-flight flags (`noteSigning`, `noteSignInFlight`,
+// `signInFlight`), signer.js's `signerCredential`/`clearSigner`, funnel.js's `failureText`,
+// chart_stale.js's `behindTheRecord` and whos_here.js's `claimAsked`/`askWhosHere` — all read
+// only when a chart is read or a button pressed, long after every script has loaded.
 "use strict";
 
 /**
@@ -26,10 +34,10 @@
  * would sit beneath the last writer's words and read as signing them — then its state line, then
  * the text a part at a time, each later part after its seam line (who added it, and when it
  * applies), then the parts behind a `<details>` disclosure (keyboard-operable by default, closed
- * until opened). "Add to this note" follows when this chart's note may be added to.
+ * until opened). Its buttons follow (`withButtons`).
  */
 function compoundItem(compound) {
-  if (compound.parts.length === 0) return withAdd(noteItem(compound), compound);
+  if (compound.parts.length === 0) return withButtons(noteItem(compound), compound);
   const li = document.createElement("li");
   li.append(bylineOf(compound));
   if (compound.state) li.append(cell("p", compound.state));
@@ -42,7 +50,7 @@ function compoundItem(compound) {
   parts.append(...compound.parts.map(noteItem));
   details.append(cell("summary", compound.parts_label), parts);
   li.append(details);
-  return withAdd(li, compound);
+  return withButtons(li, compound);
 }
 
 /**
@@ -59,23 +67,24 @@ function seamLine(segment) {
 }
 
 /**
- * `li`, with "Add to this note" appended when this chart's note may be added to and the editor
- * is free.
+ * `li`, with its buttons appended while the editor is free: "Add to this note" when this chart's
+ * note may be added to, "Sign off this note" when Rust says it still needs a sign-off.
  */
-function withAdd(li, compound) {
+function withButtons(li, compound) {
   if (compound.can_add && noteDraft === null) {
     // The accessible name says WHICH note: a list of notes is otherwise a list of identical buttons.
     const add = cell("button", "Add to this note", { type: "button", "aria-label": "Add to this note: " + compound.when });
     add.addEventListener("click", () => addToNote(compound));
     li.append(add);
   }
+  if (compound.can_sign_off && noteDraft === null) li.append(signOffButton(compound));
   return li;
 }
 
 /**
  * "Add to this note": open the editor on a new draft adding to `compound`'s root, saying Rust's
  * "Adding to…" line for it (`adds_line` — the same words the draft reads back with once it
- * exists). Behind the same gate as New note: somebody must have said who is writing, so the picker
+ * exists), and below it what its signature also covers (`covers_line`, with the ids `covers`). Behind the same gate as New note: somebody must have said who is writing, so the picker
  * asks first and the editor opens once it is answered.
  */
 function addToNote(compound) {
@@ -84,5 +93,67 @@ function addToNote(compound) {
     askWhosHere(() => addToNote(compound));
     return;
   }
-  startNote(compound.root_event_id, compound.adds_line);
+  startNote(compound.root_event_id, compound.adds_line, compound.covers_line, compound.covers);
+}
+
+/** The "Sign off this note" button; its accessible name says WHICH note, as Add's does. */
+function signOffButton(compound) {
+  const button = cell("button", "Sign off this note", { type: "button", "aria-label": "Sign off this note: " + compound.when });
+  button.addEventListener("click", () => pressSignOff(compound, button));
+  return button;
+}
+
+/**
+ * A press of "Sign off this note". Behind the same gate as Add: somebody must have said who is
+ * here, so the picker asks first and the press goes once it is answered. One strip credential
+ * serves one act at a time, so nothing goes while the editor holds a draft or a Sign, Discard or
+ * other sign-off is in flight, and the button is down until its own press settles. The press
+ * rides the note pane's in-flight flags, so idle.js's re-lock and whos_here.js's switch wait for
+ * it as for a Sign; it settles as null, a Sign's outcome being the only one the picker words —
+ * the re-read chart shows whether the note was signed off.
+ */
+function pressSignOff(compound, button) {
+  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;
+  if (!claimAsked()) {
+    askWhosHere(() => pressSignOff(compound, button));
+    return;
+  }
+  button.disabled = true;
+  noteSignInFlight = true;
+  noteSigning = signOffNote(compound)
+    .catch((failure) => console.error(failure))
+    .then(() => null)
+    .finally(() => {
+      noteSignInFlight = false;
+      button.disabled = false;
+    });
+}
+
+/**
+ * Sign off `compound`: the part ids the pane showed and the strip's credential go to the node;
+ * the strip is cleared both ways out (remembered as a signer only on success); then Rust's words
+ * are said — signed off, refused (nothing signed), or NOT known (#814) — and the chart is read
+ * again on every path, so the note's state line shows what the record now holds.
+ */
+async function signOffNote(compound) {
+  const patient = displayedPatient;
+  let said;
+  let behind;
+  try {
+    const report = await invoke("note_sign_off", {
+      patientId: patient,
+      rootEventId: compound.root_event_id,
+      shownParts: compound.shown_parts,
+      credential: signerCredential(),
+    });
+    clearSigner(true);
+    said = report.text; // worded in Rust: `notes::sign_off::note_sign_off_impl`
+    behind = report.behind_the_record;
+  } catch (failure) {
+    clearSigner();
+    said = failureText(failure); // already a whole sentence in Rust's words
+    behind = behindTheRecord(failure);
+  }
+  noteStatus(said);
+  await refresh(said, behind);
 }

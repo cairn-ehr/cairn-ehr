@@ -34,12 +34,15 @@ const PARTLY_TYPED_TIME =
   "the time it happened is only partly typed — finish it, or clear it if the note is about now";
 
 /**
- * The draft in the editor, `{ draftId, patientId, statedTime, savedText, writer, addendumTo }`
+ * The draft in the editor, `{ draftId, patientId, statedTime, savedText, writer, addendumTo, covers }`
  * — its own chart, never "whatever is open"; the last stated time and text the node TOOK for its
  * part (a partly typed time is never saved); the staff id of whoever was here when it opened (null
  * for "Don't know"), sent verbatim with every save and the sign; and the root of the note it adds
- * to (slice 3c-1; null for a new note), sent with every save, Sign and Discard. A draft kept as a
- * new one (notes_save.js's `keepUnsavedText`) copies it: text typed as an addendum stays one.
+ * to (slice 3c-1; null for a new note), sent with every save, Sign and Discard; and the ids of the
+ * writer's earlier unsigned parts the editor's "also covers" line names (slice 3c-2; empty for a new
+ * note), sent with every Sign as `alsoVouches`, so what the strip showed is what Sign vouches. A
+ * draft kept as a new one (notes_save.js's `keepUnsavedText`) copies both: text typed as an
+ * addendum stays one.
  * Two marks are added later:
  * `mayBeSigned`, once a Sign of it might have signed (a `spent` save then forks nothing), and
  * `keptOnScreen`, once its unsaved text has been kept as a new draft (notes_save.js).
@@ -180,8 +183,10 @@ function openDraft(draft, writer) {
     savedText: editing ? tail.text : "",
     writer: writer,
     addendumTo: draft.addendum_to, // the node's own target, sent back verbatim (null: a new note)
+    covers: draft.covers,
   };
   showAddsTo(draft.adding_to);
+  showCovers(draft.covers_line);
   el("note-parts").replaceChildren(...above.map(partBlock));
   el("note-text").value = editing ? tail.text : "";
   el("note-when").value = noteDraft.statedTime;
@@ -209,9 +214,11 @@ function newNote() {
 /**
  * Open the editor on a fresh draft: its id minted here, nothing saved until something is typed.
  * `addendumTo` is the root of the note it adds to (notes_compound.js's `addToNote`), null for a
- * new note (`newNote`); `addsTo` is Rust's "Adding to…" line for it, shown above the text box.
+ * new note (`newNote`); `addsTo` is Rust's "Adding to…" line for it, shown above the text box;
+ * `coversLine` the line below it naming what the signature also covers, and `covers` those parts'
+ * ids (both absent for a new note, which covers nothing).
  */
-function startNote(addendumTo, addsTo) {
+function startNote(addendumTo, addsTo, coversLine, covers) {
   noteDraft = {
     draftId: crypto.randomUUID(),
     patientId: displayedPatient,
@@ -219,8 +226,10 @@ function startNote(addendumTo, addsTo) {
     savedText: "",
     writer: whosHere().staff_id,
     addendumTo: addendumTo,
+    covers: covers || [],
   };
   showAddsTo(addsTo);
+  showCovers(coversLine);
   showEditor(true);
   noteStatus("");
   el("note-text").focus();
@@ -234,6 +243,17 @@ function showAddsTo(line) {
   const addsTo = el("note-adds-to");
   addsTo.textContent = line || "";
   addsTo.hidden = noteDraft === null || noteDraft.addendumTo === null;
+}
+
+/**
+ * Say, below the "Adding to…" line, which of the writer's earlier unsigned parts this draft's
+ * signature also covers — `line`, worded in Rust — or take it down: shown only when there is one.
+ * Information, never a question: Sign asks nothing more.
+ */
+function showCovers(line) {
+  const covers = el("note-covers");
+  covers.textContent = line || "";
+  covers.hidden = !line;
 }
 
 /**
@@ -297,6 +317,7 @@ async function signNote() {
       writer: held.writer,
       credential: signerCredential(),
       addendumTo: held.addendumTo,
+      alsoVouches: held.covers,
     });
     clearSigner(true);
   } catch (failure) {
@@ -376,6 +397,7 @@ function closeEditor() {
   noteUnsaved = false;
   noteLastSave = -Infinity;
   showAddsTo(null);
+  showCovers(null);
   el("note-parts").replaceChildren();
   el("note-text").value = "";
   const when = el("note-when");
