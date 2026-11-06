@@ -275,3 +275,25 @@ fn a_re_signed_part_is_co_signed_again() {
     let id = p.event_id;
     assert_eq!(sign_off_vouches(&[p], "z"), vec![(id, VouchRole::CoSigned)]);
 }
+
+/// ADR-0093 decision 5: a colleague's sign-off made BEFORE the re-sign starts counting after it.
+/// It named the part's exact bytes, and the real person has since said the words were theirs.
+#[test]
+fn a_colleagues_earlier_sign_off_counts_once_re_signed() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z", "Dr Zed"),
+    ));
+    assert!(signed_off_by(std::slice::from_ref(&p)).is_none());
+    p.vouches.push(vouch(
+        11,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("a", "Dr A"),
+    ));
+    let parts = [p];
+    assert_eq!(signed_off_by(&parts).map(|s| s.actor.as_str()), Some("z"));
+}
