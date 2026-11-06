@@ -184,6 +184,31 @@ fn the_covers_line_names_the_claims_own_unsigned_parts() {
         )
     );
     assert_eq!(v.covers, [id(3).to_string()]);
+    // A part with no stated time is named by when its writing began, as "Adding to …" does —
+    // never "no stated time · writing began …", which would run into the next part's words.
+    let unstated = |n, min| {
+        let mut p = part(n, OPENED, Some(1), min, None, Some("act-a"));
+        p.effective_basis = "recording-started".into();
+        p
+    };
+    let root = || part(1, OPENED, None, 0, Some(who("act-bo", "Dr Bo")), None);
+    let v = view(&one(vec![root(), unstated(2, 10)]), Some("act-a"));
+    assert_eq!(
+        v.covers_line.as_deref(),
+        Some(
+            "Your signature also covers your earlier unsigned part of this note: \
+             begun 3 Nov 2025 03:10"
+        )
+    );
+    let stated = part(3, OPENED, Some(1), 20, None, Some("act-a"));
+    let v = view(&one(vec![root(), stated, unstated(4, 30)]), Some("act-a"));
+    assert_eq!(
+        v.covers_line.as_deref(),
+        Some(
+            "Your signature also covers your earlier unsigned parts of this note: \
+             3 Nov 2025 03:20 (stated); begun 3 Nov 2025 03:30"
+        )
+    );
     // A reopened draft reads back the very same line and ids.
     let list = PatientNoteList {
         notes: notes(),
@@ -284,6 +309,15 @@ async fn sign_off_refusals_are_worded_exactly() {
         SIGNED_OFF,
         "Signed off — every part of this note now carries your signature."
     );
+    assert_eq!(
+        sign_off_unknown_words(id(5), "connection reset"),
+        format!(
+            "Whether this note was signed off is NOT known — no ordinary answer came back while \
+             signing it off (event {}: connection reset). Once the window can reach the node \
+             again, the chart shows whether it was signed off.",
+            id(5)
+        )
+    );
 
     let chart = id(OPENED);
     let state = AppState::mock(Some(chart));
@@ -315,16 +349,29 @@ fn sign_off_asks_for_no_key_on_a_malformed_id() {
         sign_off_ids(&good, &["junk".into()]).unwrap_err().text,
         "not a note id"
     );
+    // A Sign the webview sent without a list under-claims (vouches nothing), never fails.
     assert_eq!(
-        crate::notes::parse_note_ids(&[]).unwrap(),
+        crate::notes::parse_note_ids(None).unwrap(),
         Vec::<Uuid>::new()
     );
     assert_eq!(
-        crate::notes::parse_note_ids(&["junk".into()])
+        crate::notes::parse_note_ids(Some(&[])).unwrap(),
+        Vec::<Uuid>::new()
+    );
+    assert_eq!(
+        crate::notes::parse_note_ids(Some(&["junk".into()]))
             .unwrap_err()
             .text,
         "not a note id"
     );
+    // The sign-off reads its ids before the key, as Sign does (a CI-running source pin: the
+    // fixture window refuses before either is reached).
+    let flat: String =
+        crate::source_guard::rust_fn(include_str!("notes_sign_off.rs"), "note_sign_off_impl")
+            .split_whitespace()
+            .collect();
+    let ids = flat.find("sign_off_ids(").expect(&flat);
+    assert!(ids < flat.find("signer_for_act").unwrap(), "{flat}");
     // Sign parses its list before the key, and hands the node exactly that list.
     let flat: String = crate::source_guard::rust_fn(include_str!("notes.rs"), "note_sign_impl")
         .split_whitespace()
@@ -350,13 +397,13 @@ fn the_sign_success_line_counts_vouched_and_unvouched() {
     );
     assert_eq!(
         signed_words(0, 2),
-        format!("{SIGNED} 2 listed part(s) were not yours by key, so they were not signed.")
+        format!("{SIGNED} 2 listed part(s) were not covered: not yours by key, or already signed.")
     );
     assert_eq!(
         signed_words(1, 3),
         format!(
             "{SIGNED} Your earlier unsigned part now reads as signed. 2 listed part(s) were \
-             not yours by key, so they were not signed."
+             not covered: not yours by key, or already signed."
         )
     );
 }

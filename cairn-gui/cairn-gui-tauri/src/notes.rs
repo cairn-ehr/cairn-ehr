@@ -18,7 +18,8 @@
 //! * read who's here when it saves or signs — the writer is the one the editor captured when it
 //!   opened (`noteDraft.writer`) and sends with every save, so a debounced save landing after a
 //!   switch still names the person who typed it. Only the LIST reads the current claim, to say
-//!   which part the editor may open on (`notes_parts.rs`).
+//!   which part the editor may open on (`notes_parts.rs`), and — with that claim's actor, read
+//!   in the same snapshot — which of their unsigned parts an addendum would also cover (3c-2).
 use crate::commands::record_timing;
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use crate::link::judgement_view::refused;
@@ -119,7 +120,8 @@ pub async fn note_draft_take(
 /// `addendum_to` as `note_draft_save`'s: a Sign inside the debounce still saves an addendum.
 /// `also_vouches` (JS `alsoVouches`): the earlier unsigned parts the strip's "also covers" line
 /// listed (`DraftView::covers`), empty for a new note; the node vouches only those that are the
-/// signer's own by key.
+/// signer's own by key. Optional, so a Sign path that sends no list under-claims (vouches
+/// nothing) rather than failing.
 #[allow(clippy::too_many_arguments)] // the Sign object's fields, one argument each, as Tauri maps them
 #[tauri::command]
 pub async fn note_sign(
@@ -131,7 +133,7 @@ pub async fn note_sign(
     writer: Option<String>,
     credential: Option<Credential>,
     addendum_to: Option<String>,
-    also_vouches: Vec<String>,
+    also_vouches: Option<Vec<String>>,
 ) -> Result<NoteSignReport, ErrorView> {
     note_sign_impl(
         &state,
@@ -142,7 +144,7 @@ pub async fn note_sign(
         writer.as_deref(),
         credential,
         addendum_to.as_deref(),
-        &also_vouches,
+        also_vouches.as_deref(),
     )
     .await
 }
@@ -290,7 +292,7 @@ pub async fn note_sign_impl(
     writer: Option<&str>,
     credential: Option<Credential>,
     addendum_to: Option<&str>,
-    also_vouches: &[String],
+    also_vouches: Option<&[String]>,
 ) -> Result<NoteSignReport, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     if state.is_mock() {
@@ -423,11 +425,12 @@ pub(crate) fn parse_target(addendum_to: Option<&str>) -> Result<Option<Uuid>, Er
         .transpose()
 }
 
-/// Note ids the webview sent (Sign's `also_vouches`, a sign-off's shown parts), in order. A
-/// malformed one is refused, never dropped — a dropped id would quietly sign less than was
-/// shown. Said before the key. Pure.
-pub(crate) fn parse_note_ids(ids: &[String]) -> Result<Vec<Uuid>, ErrorView> {
-    ids.iter()
+/// Note ids the webview sent (Sign's `also_vouches`, a sign-off's shown parts), in order; `None`
+/// (no list sent) is an empty list. A malformed one is refused, never dropped — a dropped id
+/// would quietly sign less than was shown. Said before the key. Pure.
+pub(crate) fn parse_note_ids(ids: Option<&[String]>) -> Result<Vec<Uuid>, ErrorView> {
+    ids.unwrap_or_default()
+        .iter()
         .map(|i| i.parse().map_err(|_| refused("not a note id")))
         .collect()
 }

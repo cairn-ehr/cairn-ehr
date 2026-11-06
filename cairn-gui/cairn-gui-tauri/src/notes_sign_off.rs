@@ -67,7 +67,17 @@ pub(crate) fn sign_off_refusal_view(refusal: SignOffRefusal) -> ErrorView {
 /// the key. Pure.
 pub(crate) fn sign_off_ids(root: &str, shown: &[String]) -> Result<(Uuid, Vec<Uuid>), ErrorView> {
     let root = root.parse().map_err(|_| refused("not a note id"))?;
-    Ok((root, parse_note_ids(shown)?))
+    Ok((root, parse_note_ids(Some(shown))?))
+}
+
+/// What a sign-off whose commit got no ordinary answer says (#814): `event` the first vouch's id,
+/// `cause` the failure. Never "the note is there": the note exists either way. Pure.
+pub(crate) fn sign_off_unknown_words(event: Uuid, cause: &str) -> String {
+    format!(
+        "Whether this note was signed off is NOT known — no ordinary answer came back while \
+         signing it off (event {event}: {cause}). Once the window can reach the node again, the \
+         chart shows whether it was signed off."
+    )
 }
 
 /// Sign off the note (see the module doc for the order of the checks). ONE node call, so one
@@ -117,12 +127,7 @@ pub async fn note_sign_off_impl(
         Ok(Err(refusal)) => return Err(sign_off_refusal_view(refusal)),
         Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
             Some(event) => (
-                format!(
-                    "Whether this note was signed off is NOT known — no ordinary answer came \
-                     back while signing it off (event {event}: {}). Once the window can reach \
-                     the node again, the chart shows whether it was signed off.",
-                    cairn_gui_live::cause_of(&e)
-                ),
+                sign_off_unknown_words(event, &cairn_gui_live::cause_of(&e)),
                 Some(Recorded::Unknown),
             ),
             None => return Err(node_failure(&e)),

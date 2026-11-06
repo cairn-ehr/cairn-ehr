@@ -53,7 +53,7 @@ pub struct CompoundView {
     /// note" opens the editor with, the very words the draft's `DraftView::adding_to` says once
     /// the pane is read again.
     pub adds_line: String,
-    /// Whether "Sign off this note" is offered: no one has yet signed every part
+    /// Whether "Sign off this note" is offered: no one but a student has yet signed every part
     /// (`vouch::needs_sign_off`). A linked chart's note too: each vouch files under its part's
     /// own chart, and no draft is involved.
     pub can_sign_off: bool,
@@ -107,24 +107,34 @@ fn segments(views: &[NoteRowView]) -> Vec<SegmentView> {
 
 /// What an addendum's signature also covers for the person `claim_actor` (the who's-here claim's
 /// actor, `None` with no claim or one this node cannot place): the parts of `c` they drafted and
-/// nobody signed (`vouch::addendum_covers`), as the strip's line — each part named by its time,
-/// `views` being `c`'s parts worded — and their ids. `(None, [])` when there are none: the line
-/// is information shown only when there is something to say, never a question. Pure.
-fn covers_of(
+/// nobody signed (`vouch::addendum_covers`), as the strip's line — each part named by its stated
+/// time (its `views` words), or, with none stated, "begun …" (as `adding_to_shown` names a note:
+/// "no stated time · writing began …" would run into the next part's words) — and their ids,
+/// dated against `today` in zone `tz`. `(None, [])` when there are none: the line is information
+/// shown only when there is something to say, never a question. Pure.
+fn covers_of<Tz: TimeZone>(
     c: &CompoundNote,
     views: &[NoteRowView],
     claim_actor: Option<&str>,
-) -> (Option<String>, Vec<String>) {
+    tz: &Tz,
+    today: NaiveDate,
+) -> (Option<String>, Vec<String>)
+where
+    Tz::Offset: std::fmt::Display,
+{
     let covered = claim_actor.map_or_else(Vec::new, |a| addendum_covers(c.parts(), a));
     if covered.is_empty() {
         return (None, vec![]);
     }
-    let times: Vec<&str> = c
+    let times: Vec<String> = c
         .parts()
         .iter()
         .zip(views)
         .filter(|(p, _)| covered.contains(&p.event_id))
-        .map(|(_, v)| v.when.as_str())
+        .map(|(p, v)| match p.effective_basis.as_str() {
+            "stated" => v.when.clone(),
+            _ => format!("begun {}", instant(p.recording_started, tz, today)),
+        })
         .collect();
     let s = if covered.len() == 1 { "" } else { "s" };
     let line = format!(
@@ -165,7 +175,7 @@ where
         .collect::<Vec<_>>()
         .join("\n\n");
     let segments = segments(&views);
-    let (covers_line, covers) = covers_of(c, &views, claim_actor);
+    let (covers_line, covers) = covers_of(c, &views, claim_actor, tz, today);
     CompoundView {
         root_event_id: c.root().to_string(),
         text,
