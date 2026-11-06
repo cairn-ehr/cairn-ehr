@@ -1920,27 +1920,36 @@ conf() { psql "$CONN" -c "SELECT staff_id, cairn_key_confirmation(signing_key_id
 
 **Measurement 1 — the mark, and a colleague clears nothing.** As `nurse-a`: *New note*, `obs stable`, *Sign note*;
 then *Add to this note*, `reviewed`, *Sign note* again, so the note has two parts. Then sign five more one-part notes
-of hers, for Measurement 2. As `boss`, in *Superuser: enrollers and keys*, press *Repudiate key* on `nurse-a`'s row
-("The key is repudiated. Give the member a new key from the re-key form."). `conf` says `repudiated` for her. Re-key
-her from *Forgotten passphrase* with `boss` in the strip (section 17): the same person, a new key; `conf` now shows
-the new key, not `repudiated`.
+of hers, a second two-part note of hers alone (`fluids`, then `reviewed`), and a note two people write: she signs
+`bp 120/80`, then `dr-b` presses *Add to this note*, types `agree`, *Sign note* — all for Measurement 2. As `boss`,
+in *Superuser: enrollers and keys*, press *Repudiate key* on `nurse-a`'s row ("The key is repudiated. Give the member
+a new key from the re-key form."). `conf` says `repudiated` for her. Re-key her from *Forgotten passphrase* with
+`boss` in the strip (section 17): the same person, a new key; `conf` now shows the new key, not `repudiated`.
 
 - [ ] Reopen the chart. Each of Nurse A's parts reads "signed by Nurse A (key had been repudiated) — counts as
-      unsigned", then its time. The two-part note's state line reads "includes an unsigned part". The old signature is still named:
-      nothing is struck from the chart. *Sign off this note* is offered.
-- [ ] As `dr-b`, press *Sign off this note* on the two-part note: "Signed off — every part of this note now carries
-      your signature." Each part now reads "… — counts as unsigned · signed off by Dr B", the state line still reads "includes an unsigned
-      part", and NOT "signed off by Dr B". `vouches` shows Dr B's rows as `sign-off`, **`attested`** (never
-      `co-signed`).
+      unsigned", then its time. Each of her two-part notes' state line reads "includes an unsigned part", and so
+      does the note she and Dr B wrote. The old signature is still named: nothing is struck from the chart. *Sign
+      off this note* is offered.
+- [ ] As `dr-b`, press *Sign off this note* on the first two-part note (`obs stable`): "Signed off — every part of
+      this note now carries your signature." Each part now reads "… — counts as unsigned · signed off by Dr B", the
+      state line still reads "includes an unsigned part", and NOT "signed off by Dr B". `vouches` shows Dr B's rows
+      as `sign-off`, **`attested`** (never `co-signed`).
 - [ ] Dr B's button is still offered. Pressing it again answers "You have already signed every part of this note.
       Nothing more was signed." (ADR-0093 (c), #1008: record it, it is known).
 
 **Measurement 2 — the real person re-signs (≤ 3 s).** As `nurse-a` on her NEW key.
 
-- [ ] On the two-part note she is offered *Sign off this note* and is NOT told "You have already signed every part
-      …". After her press each part reads "signed by Nurse A (key had been repudiated) · signed off by Dr B ·
+- [ ] On the first two-part note she is offered *Sign off this note* and is NOT told "You have already signed every
+      part …". After her press each part reads "signed by Nurse A (key had been repudiated) · signed off by Dr B ·
       re-signed by Nurse A", with no "— counts as unsigned", and the state line reads "signed off by Dr B". No
       dialog.
+- [ ] On her second two-part note, which no colleague touched, her one press re-signs both parts: each reads
+      "signed by Nurse A (key had been repudiated) · re-signed by Nurse A", and the state line reads "signed off by
+      Nurse A" (ADR-0093 decision 10). `vouches` shows her rows as `sign-off`, `attested`.
+- [ ] The known gap (ADR-0093 (h), #1011): on the note she and Dr B wrote, her press to re-sign her own part also
+      vouches Dr B's. His part reads "signed by Dr B · co-signed by Nurse A", the state line reads "signed off by
+      Nurse A", and `vouches` shows her row on Dr B's part as `co-signed`. On paper she would initial only her own
+      entry. Record it.
 - [ ] Time her press on the five one-part notes: from the first keystroke in the strip's Staff ID until "Signed off
       — …" shows and the note is re-read (budget ≤ 3 s), and `ui_gesture_timing`'s `note-sign-off` row. Each then
       reads "signed by Nurse A (key had been repudiated) · re-signed by Nurse A".

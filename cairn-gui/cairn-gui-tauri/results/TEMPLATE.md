@@ -524,6 +524,8 @@ observed \_\_.
 | A colleague's sign-off: "· signed off by Dr B", `attested` (never `co-signed`), the part still "counts as unsigned", no "signed off by" state | | |
 | The colleague's second press: "already signed every part" (#1008, known) | | |
 | The real person is offered the press, not "already signed"; "· re-signed by Nurse A"; the mark and "includes an unsigned part" gone | | |
+| Her own two-part note, nobody else's vouch on it: one press, each part "· re-signed by Nurse A", the state "signed off by Nurse A" | | |
+| A note she and Dr B wrote: her press also vouches Dr B's part, "· co-signed by Nurse A", the state "signed off by Nurse A" (#1011, known) | | |
 | A repudiated student part: "(student) (key had been repudiated) — counts as unsigned", no "— not co-signed"; after re-sign "— not co-signed · re-signed by Sam (student)"; a doctor's sign-off then "· co-signed by Dr B", the mark cleared | | |
 | A doctor's sign-off BEFORE the student's re-sign: "— not co-signed" stays, no button (#1010, known) | | |
 | WebKit (the real window): wrapping of the longer bylines | | |
