@@ -203,8 +203,13 @@ CREATE INDEX IF NOT EXISTS clinical_note_attestation_content_address_idx ON clin
 -- 5. Fold a vouch into the table. Reads the CLEAR payload (ADR-0052): NULL means this node holds
 --    no custody for the sealed body, so there is nothing to project (the late-custody path re-runs
 --    this when a key lands — heal_safe below). That heal can reach a body the floor never saw (a
---    sealed vouch admitted remotely without its DEK), so a body that is not /1-shaped is skipped
---    rather than allowed to raise: an unprojected vouch is never read as a signature.
+--    sealed vouch admitted remotely without its DEK skips the floor, db/020 step 7), so the
+--    projection re-imposes the floor's closed vocabularies itself. It SKIPS (never raises, never
+--    a table CHECK, either of which would fail the heal) a body whose responsibility-bearing role
+--    is missing or is not attested/co-signed, whose act is not addendum/sign-off, whose addendum
+--    carries co-signed, whose target is not a uuid, or whose target_address is not even-length
+--    hex. The table therefore holds only what the read's VouchRole/VouchAct can name, and an
+--    unprojected vouch is never read as a signature.
 CREATE OR REPLACE FUNCTION clinical_note_attestation_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -218,9 +223,12 @@ BEGIN
                CASE WHEN jsonb_typeof(e.contributors) = 'array' THEN e.contributors ELSE '[]' END) c
      WHERE c ? 'responsibility' LIMIT 1;
     IF v_role IS NULL
+       OR v_role NOT IN ('attested', 'co-signed')
+       OR p ->> 'act' IS NULL
+       OR p ->> 'act' NOT IN ('addendum', 'sign-off')
+       OR (p ->> 'act' = 'addendum' AND v_role <> 'attested')
        OR NOT pg_input_is_valid(p ->> 'target', 'uuid')
-       OR COALESCE(p ->> 'target_address', '') !~ '^([0-9a-fA-F]{2})+$'
-       OR p ->> 'act' IS NULL THEN
+       OR COALESCE(p ->> 'target_address', '') !~ '^([0-9a-fA-F]{2})+$' THEN
         RETURN;
     END IF;
     INSERT INTO clinical_note_attestation

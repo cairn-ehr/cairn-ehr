@@ -229,16 +229,28 @@ INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wal
                        body, contributors, signer_key_id, plaintext_twin)
 SELECT id::uuid, pg_temp.chart()::uuid, 'clinical.note-attestation.asserted', v, 3, n, 'n1',
        NULL, sb, '\x1220'::bytea || digest(sb, 'sha256'),
-       pg_temp.body() -> 'payload', c, pg_temp.kid(), 'a vouch'
+       COALESCE(pl, pg_temp.body() -> 'payload'), c, pg_temp.kid(), 'a vouch'
 FROM (VALUES ('71717171-0011-7871-8871-717171717171', 'clinical.note-attestation/1', 1, '\x7111'::bytea,
-              pg_temp.body() -> 'contributors'),
+              pg_temp.body() -> 'contributors', NULL::jsonb),
              ('71717171-0012-7871-8871-717171717171', 'clinical.note-attestation/2', 2, '\x7112'::bytea,
-              pg_temp.body() -> 'contributors'),
-             -- A /1 body the floor never saw (a sealed vouch admitted remotely without its DEK):
-             -- no responsibility-bearing contributor, so nothing to read as a signature.
+              pg_temp.body() -> 'contributors', NULL),
+             -- /1 bodies the floor never saw (a sealed vouch admitted remotely without its DEK,
+             -- projected when custody lands). Each breaks one closed vocabulary, so the read could
+             -- not represent it: none may be projected, and none may raise.
+             -- 0013: no responsibility-bearing contributor.
              ('71717171-0013-7871-8871-717171717171', 'clinical.note-attestation/1', 3, '\x7113'::bytea,
-              '[]'::jsonb))
-     AS r(id, v, n, sb, c);
+              '[]'::jsonb, NULL),
+             -- 0014: a bearing role that is not a vouch's (authored).
+             ('71717171-0014-7871-8871-717171717171', 'clinical.note-attestation/1', 4, '\x7114'::bytea,
+              jsonb_build_array(pg_temp.bearing(pg_temp.kid(), 'authored')), NULL),
+             -- 0015: an act outside the closed word list.
+             ('71717171-0015-7871-8871-717171717171', 'clinical.note-attestation/1', 5, '\x7115'::bytea,
+              pg_temp.body() -> 'contributors', pg_temp.body('{"act":"xyz"}') -> 'payload'),
+             -- 0016: an addendum carrying co-signed.
+             ('71717171-0016-7871-8871-717171717171', 'clinical.note-attestation/1', 6, '\x7116'::bytea,
+              jsonb_build_array(pg_temp.bearing(pg_temp.kid(), 'co-signed')),
+              pg_temp.body('{"act":"addendum"}') -> 'payload'))
+     AS r(id, v, n, sb, c, pl);
 DO $$
 BEGIN
     ASSERT (SELECT target = pg_temp.note_id()::uuid AND target_address = pg_temp.note_ca()
@@ -251,6 +263,12 @@ BEGIN
         'a_remote_newer_profile_is_carried_not_projected';
     ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0013-7871-8871-717171717171'),
         'a_malformed_one_is_skipped, never raised';
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0014-7871-8871-717171717171'),
+        'a_bearing_role_that_is_not_attested_or_co_signed_is_skipped';
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0015-7871-8871-717171717171'),
+        'an_act_outside_the_closed_list_is_skipped';
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_note_attestation WHERE event_id = '71717171-0016-7871-8871-717171717171'),
+        'an_addendum_carrying_co_signed_is_skipped';
 END $$;
 
 -- a_shred_scrubs_the_vouch_row (db/037).
