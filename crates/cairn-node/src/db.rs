@@ -453,6 +453,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "071_clinical_note_attestation",
         include_str!("../../../db/071_clinical_note_attestation.sql"),
     ),
+    // db/072 (sign-in slice 3c-3a): staff supervision — the signed act door over the six
+    // supervision ops db/004 appends (link/unlink a supervisor, require/lift co-signing,
+    // grant/withdraw the assigner right), its console twin, and the record and staff readers.
+    (
+        "072_supervision",
+        include_str!("../../../db/072_supervision.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

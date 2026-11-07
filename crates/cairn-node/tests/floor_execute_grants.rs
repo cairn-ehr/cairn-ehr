@@ -464,3 +464,19 @@ async fn public_cannot_execute_the_vouch_doors() {
     )
     .await;
 }
+
+/// The supervision doors and helpers (sign-in slice 3c-3a, db/072), named because the family has
+/// no registry to read. The act door, prior and staff list are `cairn_agent`'s, the record
+/// `cairn_window`'s (driven in `window_role_vault_doors.rs`); the console door and every helper
+/// are the owner's alone. Only the pure address keeps PUBLIC EXECUTE, as the vault's addresses do.
+#[tokio::test]
+async fn public_cannot_execute_the_supervision_doors() {
+    assert_public_cannot_execute(
+        "p.proname LIKE 'cairn\\_supervision\\_%' AND p.proname <> 'cairn_supervision_address'",
+        11,
+        "supervision door",
+        "Fix: `REVOKE EXECUTE ON FUNCTION <name>(<args>) FROM PUBLIC;` in the grants block at \
+         the end of db/072_supervision.sql.",
+    )
+    .await;
+}
