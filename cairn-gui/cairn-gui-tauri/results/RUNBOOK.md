@@ -2216,7 +2216,9 @@ A fixture smaller than the budget's is a figure for that size only: say so in th
 
 A fixture this size (about 60 notes) cannot show a cliff that grows with history: the menu's read returns every part
 its keys ever wrote, and the counts' read every person's, so a node with years of notes is slower than any figure
-here ([#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021)).
+here ([#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021)). The reads at scale (no window, no human) are
+measured by `cargo run --release --example measure_person_menu` in `crates/cairn-node`; its figures are in
+[`crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`](../../../crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md).
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 

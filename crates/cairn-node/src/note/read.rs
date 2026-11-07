@@ -146,32 +146,50 @@ pub struct PatientNoteList {
 /// last column is the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule
 /// reads (`NoteRow::signer_human_actor`). The very last column is the part's `e.hlc_wall`
 /// (ms since the epoch), what `NoteRow::recorded_at` and the supervision record are judged at.
+///
+/// **Two CTEs, for cost, not meaning (#1021).** `rows` reads each part once and keeps what is a
+/// fact of the PART; `facts` asks the key doors about each DISTINCT key those rows name (`k`, the
+/// drafted key, the envelope signer) exactly once. The final SELECT joins them back, so the
+/// columns above are unchanged. Measured: per-row key lookups were 88% of a 100 000-note read
+/// over 40 keys; resolved once per key the same read was 5–6× faster with identical output. A NULL
+/// key (no drafted contributor) is left out of `facts`, so its columns read NULL, exactly what
+/// the doors answer for NULL; `k` and the signer are never NULL. One statement, one snapshot: a
+/// key's facts cannot differ between two rows that name it.
 macro_rules! notes_sql {
     ($where:literal) => {
         concat!(
-    "SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
-           n.recording_started, e.signer_key_id, e.contributors::text, \
-           cairn_note_vouched_attester(e.event_id), \
-           cairn_note_signer_name(g.k), \
-           (SELECT (r ->> 'event')::uuid::text FROM jsonb_array_elements(n.refs) r \
-             WHERE r ->> 'rel' = 'addendum-to' LIMIT 1), \
-           cairn_note_signer_name((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
-                                    WHERE c ->> 'role' = 'drafted' LIMIT 1)), \
-           EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c WHERE c ->> 'role' = 'drafted'), \
-           EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
-                    WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id), \
-           (SELECT k FROM (SELECT c ->> 'actor_id' AS k FROM jsonb_array_elements(e.contributors) c \
-                            WHERE c ->> 'role' = 'drafted' LIMIT 1) d \
-             WHERE cairn_note_key_is_human(d.k)), \
-           cairn_note_key_actor(g.k), cairn_note_key_role(g.k), cairn_key_confirmation(g.k), \
-           cairn_note_key_actor((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
-                                  WHERE c ->> 'role' = 'drafted' LIMIT 1)), ",
+    // `rows`: one row per part, everything that is a fact of the PART (the WHERE runs here).
+    "WITH rows AS MATERIALIZED (SELECT n.event_id::text AS event_id, n.patient_id::text AS patient_id, \
+            n.narrative, n.t_effective, n.effective_basis, n.recording_started, e.signer_key_id, \
+            e.contributors::text AS contributors, g.attester, \
+            COALESCE(g.attester, e.signer_key_id) AS k, \
+            (SELECT (r ->> 'event')::uuid::text FROM jsonb_array_elements(n.refs) r \
+              WHERE r ->> 'rel' = 'addendum-to' LIMIT 1) AS addendum_to, \
+            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c WHERE c ->> 'role' = 'drafted') \
+              AS has_drafted, \
+            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
+                     WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id) AS signer_attested, \
+            (SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
+              WHERE c ->> 'role' = 'drafted' LIMIT 1) AS drafted, ",
     vouches_column!(),
-    ", CASE WHEN cairn_note_key_is_human(e.signer_key_id) THEN cairn_note_key_actor(e.signer_key_id) END, \
-     e.hlc_wall \
-     FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
-     CROSS JOIN LATERAL (SELECT COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id) AS k) g \
-     WHERE ", $where)
+    " AS vouches, e.hlc_wall \
+       FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
+      CROSS JOIN LATERAL (SELECT cairn_note_vouched_attester(e.event_id) AS attester) g \
+      WHERE ", $where, "), \
+     facts AS MATERIALIZED (SELECT key, cairn_note_signer_name(key) AS name, cairn_note_key_actor(key) AS actor, \
+            cairn_note_key_role(key) AS role, cairn_key_confirmation(key) AS confirmation, \
+            cairn_note_key_is_human(key) AS human \
+       FROM (SELECT k FROM rows UNION SELECT drafted FROM rows UNION SELECT signer_key_id FROM rows) u(key) \
+      WHERE key IS NOT NULL) \
+    SELECT r.event_id, r.patient_id, r.narrative, r.t_effective, r.effective_basis, r.recording_started, \
+           r.signer_key_id, r.contributors, r.attester, fk.name, r.addendum_to, fd.name, r.has_drafted, \
+           r.signer_attested, CASE WHEN fd.human THEN r.drafted END, \
+           fk.actor, fk.role, fk.confirmation, fd.actor, r.vouches, \
+           CASE WHEN fs.human THEN fs.actor END, r.hlc_wall \
+      FROM rows r \
+      LEFT JOIN facts fk ON fk.key = r.k \
+      LEFT JOIN facts fd ON fd.key = r.drafted \
+      LEFT JOIN facts fs ON fs.key = r.signer_key_id")
     };
 }
 
@@ -183,8 +201,11 @@ const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])");
 /// there). Only the WHERE differs, so the menu's rows cannot drift from the chart's.
 // shortcut: the read grows with ALL-TIME history, not with what is open. It scans every
 // clinical_note row's contributors, and returns every part the keys ever wrote: groups 1-2 are
-// all-time obligations, and only group 3 is cut to 7 days, in Rust (`note::menu`). Upgrade to a
-// projection of open obligations, see #1021; RUNBOOK §26's small fixture cannot show the cliff.
+// all-time obligations, and only group 3 is cut to 7 days, in Rust (`note::menu`). Measured by
+// `examples/measure_person_menu.rs` (results/2026-11-08-person-menu-reads-macos-m3max.md): with the
+// key facts read once per key, a plain pick fits the 1 s budget to 100 000 notes, but a pick made
+// while the picker's counts load misses it from about a ward-year (33 000 notes: 1.05 s).
+// Upgrade to a projection of open obligations, see #1021.
 const NOTES_BY_KEYS_SQL: &str = notes_sql!(
     "e.signer_key_id = ANY($1::text[]) OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
       WHERE c ->> 'actor_id' = ANY($1::text[]))"
@@ -390,6 +411,37 @@ mod tests {
         assert!(!by_discarder(Some("not-known")).unwrap());
         for unknown in [None, Some(""), Some("colleague")] {
             assert!(by_discarder(unknown).is_err(), "{unknown:?}");
+        }
+    }
+
+    /// #1021: the facts about a KEY (who holds it, their name, pinned role, confirmation, whether
+    /// it is a human's) are looked up once per DISTINCT key, in the `facts` CTE, never once per
+    /// row. Measured: at 100 000 notes over 40 keys the per-row calls were 88% of the menu's
+    /// 10.4 s counts read. So outside the vouch column (whose calls run once per VOUCH, a few
+    /// rows) each key-fact function is named exactly once, and the verified attester is computed
+    /// once per row (it was twice: its own column and the lateral `k`).
+    #[test]
+    fn key_facts_are_looked_up_once_per_key_not_once_per_row() {
+        const KEY_FACTS: [&str; 5] = [
+            "cairn_note_signer_name(",
+            "cairn_note_key_actor(",
+            "cairn_note_key_role(",
+            "cairn_key_confirmation(",
+            "cairn_note_key_is_human(",
+        ];
+        for sql in [NOTES_SQL, NOTES_BY_KEYS_SQL] {
+            let outside_vouches = sql.replace(crate::note::vouch_read::VOUCHES_SQL, "");
+            assert!(sql.contains("facts AS MATERIALIZED"), "{sql}");
+            for f in KEY_FACTS {
+                assert_eq!(outside_vouches.matches(f).count(), 1, "{f} in {sql}");
+            }
+            assert_eq!(
+                outside_vouches
+                    .matches("cairn_note_vouched_attester(e.event_id)")
+                    .count(),
+                1,
+                "{sql}"
+            );
         }
     }
 

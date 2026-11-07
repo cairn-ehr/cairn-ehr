@@ -59,8 +59,9 @@
 //!     --conn "$CONN" --key /tmp/menu-node.key --stages 1000,5000,20000,40000
 //! ```
 //!
-//! Stages are CUMULATIVE note totals; run it once against a fresh node (a re-run adds staff with
-//! new keys beside the old ones and measures a different ward).
+//! Stages are CUMULATIVE note totals; seed once against a fresh node (a second seeding run would
+//! enrol `dr-b` again, which the vault refuses). To time the same node again after a change to
+//! the read, pass `--measure-only`.
 
 use anyhow::Context;
 use cairn_event::SigningKey;
@@ -107,6 +108,10 @@ struct Args {
     /// Timed repeats of each read per stage; the median is reported.
     #[arg(long, default_value_t = 5)]
     repeats: usize,
+    /// Seed nothing: time the reads of a node this rig already seeded (e.g. after a change to
+    /// the read). `--stages` and the ward shape are then ignored.
+    #[arg(long)]
+    measure_only: bool,
 }
 
 /// The supervisor whose bar is timed (the RUNBOOK's name for her).
@@ -229,6 +234,12 @@ async fn measure(db: &mut Client, repeats: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The curve's table header (one row per [`measure`]).
+fn print_header() {
+    println!("| clinical_note rows | parts in counts read | dr-b's count | bar | counts | directory | pick behind counts |");
+    println!("|---|---|---|---|---|---|---|");
+}
+
 fn ms(d: Duration) -> String {
     format!("{:.0} ms", d.as_secs_f64() * 1000.0)
 }
@@ -248,6 +259,10 @@ async fn main() -> anyhow::Result<()> {
     let node_sk = cairn_node::keystore::load(&args.key, args.passphrase.as_deref())?;
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let origin = cairn_node::identity::load_local(&db).await?.node_id_hex;
+    if args.measure_only {
+        print_header();
+        return measure(&mut db, args.repeats).await;
+    }
 
     // The ward: staff, dr-b's supervisees (1..=supervisees), the first few needing a co-sign.
     let mut staff = Vec::with_capacity(args.staff);
@@ -284,8 +299,7 @@ async fn main() -> anyhow::Result<()> {
         "ward: {} staff, {} supervised by {SUPERVISOR} ({} need a co-sign), {} charts",
         args.staff, args.supervisees, args.cosign_required, args.charts
     );
-    println!("| clinical_note rows | parts in counts read | dr-b's count | bar | counts | directory | pick behind counts |");
-    println!("|---|---|---|---|---|---|---|");
+    print_header();
 
     let mut signed = 0usize;
     let started = Instant::now();
