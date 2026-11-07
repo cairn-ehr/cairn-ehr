@@ -31,6 +31,11 @@ parts of each), [ADR-0093](../../spec/decisions/0093-a-repudiated-signature-coun
 [ADR-0085](../../spec/decisions/0085-in-person-enrolment-and-re-key.md) (the grant pattern). Before Task 1 read the
 sign-in 3c-3b, 3c-2 and slice-2 blocks of `docs/developers/durable-rules.md`.
 
+**Maintainer, 2026-11-07 (plan review):** the record is ops on `actor_event` (as planned); the wider self-dealing
+rule below is accepted; and, closing 3c-3b's open question, **a re-sign under an UNCONFIRMED key counts**, read
+"(signer unconfirmed)" as built (ADR-0094 states it; ADR-0085: unconfirmed never blocks signing). Executed by
+subagent-driven development.
+
 ## Global Constraints
 
 - **The six ops, exact words**, each a row with NO key and `approved_by NOT NULL`:

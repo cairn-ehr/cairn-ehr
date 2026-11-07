@@ -137,8 +137,9 @@
 > 1. **3c-1 MERGED in PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)** (ADR-0091, spec v0.93,
 >    `db/070`, `SCHEMA_GENERATION` 70); **3c-2 MERGED in PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)**
 >    (ADR-0092, spec v0.94, `db/071`, `SCHEMA_GENERATION` 71; the slice bullet above has its issues). **3c-3b MERGED in PR
->    [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95); still owed: a decision on whether a re-sign under an UNCONFIRMED key should count (it does today, read
->    "(signer unconfirmed)"). **Next: plan + build 3c-3a** (supervision, `needs_cosigning`, "Co-sign as reviewed"; design
+>    [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95); the maintainer ruled 2026-11-07 that a re-sign under an UNCONFIRMED key counts, read
+>    "(signer unconfirmed)" as built (ADR-0094 to state it). **Next: build 3c-3a** — plan
+>    `superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md`, maintainer-reviewed, draft PR #1013 (supervision, `needs_cosigning`, "Co-sign as reviewed"; design
 >    §3.1–§3.3; #1010 is answered by its offer rule), **then 3c-3c** (the person menu, design §3.4). Design §10's findings 1–2 are
 >    decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
