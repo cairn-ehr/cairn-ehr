@@ -79,7 +79,7 @@ pub fn counts_as_unsigned(p: &NoteRow) -> bool {
 }
 
 /// Whether `actor` is among the people who signed `p`.
-fn has_signed(p: &NoteRow, actor: &str) -> bool {
+pub(crate) fn has_signed(p: &NoteRow, actor: &str) -> bool {
     signed_for(p).iter().any(|s| same_actor(&s.actor, actor))
 }
 
@@ -147,16 +147,21 @@ pub fn sign_off_vouches(parts: &[NoteRow], presser_actor: &str) -> Vec<(Uuid, Vo
     parts
         .iter()
         .filter(|p| !has_signed(p, presser_actor))
-        .map(|p| {
-            // (A part gone in unsigned has no `signed_by`; its human envelope still co-signs.)
-            let dead_key = counts_as_unsigned(p);
-            let role = match &p.signer_human_actor {
-                Some(a) if !dead_key && !same_actor(a, presser_actor) => VouchRole::CoSigned,
-                _ => VouchRole::Attested,
-            };
-            (p.event_id, role)
-        })
+        .map(|p| (p.event_id, planned_role(p, presser_actor)))
         .collect()
+}
+
+/// The role a sign-off vouch by `presser` takes on part `p`, as [`sign_off_vouches`] explains:
+/// `CoSigned` exactly where db/071 admits it (a human's envelope, of another actor, not a dead
+/// key's part), `Attested` otherwise. Shared with "Co-sign as reviewed" (`review`), so neither
+/// gesture plans a role the floor would refuse.
+pub(crate) fn planned_role(p: &NoteRow, presser: &str) -> VouchRole {
+    // (A part gone in unsigned has no `signed_by`; its human envelope still co-signs.)
+    let dead_key = counts_as_unsigned(p);
+    match &p.signer_human_actor {
+        Some(a) if !dead_key && !same_actor(a, presser) => VouchRole::CoSigned,
+        _ => VouchRole::Attested,
+    }
 }
 
 /// The parts `actor` drafted that nobody has signed yet: what their next addendum's signature
@@ -270,7 +275,8 @@ pub struct SignOffInput<'a> {
 pub enum SignOffRefusal {
     /// The note now holds other parts than the window showed (or is gone).
     Changed,
-    /// The presser has already signed every part.
+    /// The gesture's plan is empty: Sign off's presser has already signed every part, or
+    /// "Co-sign as reviewed" finds no part of theirs to review (`review`).
     NothingToSign,
 }
 
@@ -295,6 +301,20 @@ pub async fn sign_off_note(
     input: &SignOffInput<'_>,
     author: &AuthorParams<'_>,
 ) -> anyhow::Result<Result<Vec<Uuid>, SignOffRefusal>> {
+    vouch_as_shown(client, input, author, sign_off_vouches).await
+}
+
+/// The one transaction both vouching gestures share (Sign off, and `review`'s "Co-sign as
+/// reviewed"): read the presser's actor from the signing KEY (never the who's-here claim),
+/// re-read the note, refuse `Changed` unless it holds exactly the parts shown, ask `plan` which
+/// parts to vouch and how (`NothingToSign` when none), then file one `sign-off` vouch per planned
+/// part under that part's own chart, and commit. See [`sign_off_note`] for the outcomes.
+pub(crate) async fn vouch_as_shown(
+    client: &mut Client,
+    input: &SignOffInput<'_>,
+    author: &AuthorParams<'_>,
+    plan: impl Fn(&[NoteRow], &str) -> Vec<(Uuid, VouchRole)>,
+) -> anyhow::Result<Result<Vec<Uuid>, SignOffRefusal>> {
     // Every early return drops `tx` uncommitted, which rolls it back.
     let tx = client.transaction().await?;
     let presser: Option<String> = tx
@@ -317,7 +337,7 @@ pub async fn sign_off_note(
     if !shows_exactly(note.parts(), input.shown_parts) {
         return Ok(Err(SignOffRefusal::Changed));
     }
-    let plan = sign_off_vouches(note.parts(), &presser);
+    let plan = plan(note.parts(), &presser);
     if plan.is_empty() {
         return Ok(Err(SignOffRefusal::NothingToSign));
     }
