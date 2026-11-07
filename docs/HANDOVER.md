@@ -86,7 +86,7 @@
 >   **#1011** (re-signing one's own part via Sign off vouches the other writers' parts — needs a gesture design) ·
 >   **#1012** (a colleague's sign-off over a repudiated part reads "Signed off — every part…" though it clears nothing).
 >   #918's link half stays open. Owed by a human: **RUNBOOK §24**.
-> - **Slice 3c-3a BUILT 2026-11-07, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013) READY FOR REVIEW — NOT merged**
+> - **Slice 3c-3a MERGED 2026-11-07 in PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)**
 >   ([ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), spec **v0.96**, `db/072` with db/004 +
 >   db/052 in place, `SCHEMA_GENERATION` **72**; plan
 >   [`superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md`](superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md),
@@ -154,8 +154,8 @@
 >    `db/070`, `SCHEMA_GENERATION` 70); **3c-2 MERGED in PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)**
 >    (ADR-0092, spec v0.94, `db/071`, `SCHEMA_GENERATION` 71; the slice bullet above has its issues). **3c-3b MERGED in PR
 >    [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95); the maintainer ruled 2026-11-07 that a re-sign under an UNCONFIRMED key counts, read
->    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a BUILT, PR #1013 ready for review** (the slice bullet above):
->    it needs the maintainer's review + merge. **Next: 3c-3c** (the person menu, design §3.4; it reads 3c-3a's record and
+>    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a MERGED in PR #1013** (the slice bullet above).
+>    **Next: 3c-3c** (the person menu, design §3.4; it reads 3c-3a's record and
 >    3c-3b's repudiated rows), or **#1014** first if a multi-node pilot nears. Design §10's findings 1–2 are
 >    decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
@@ -306,7 +306,7 @@ complete; **first production clinical surface RUNNING** — `cairn-node` plus a 
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a
 doubted link can be confirmed from the window; clinicians sign in per act and write, autosave and sign a progress note,
-several writers to a draft, an untouched draft goes in unsigned by itself, a clinician can discard their own draft, leaving a signed record of it, and can add to a signed note, which then reads as one note with its parts; a part can be signed later, by its writer or by a supervisor's sign-off (PR #1000), and a part signed by a since-repudiated key counts as unsigned until its real writer re-signs (PR #1006); supervision is recorded, a supervisee's part needing a co-sign waits for a supervisor, and a supervisor can co-sign a supervisee's note as reviewed (PR #1013, ready for review).
+several writers to a draft, an untouched draft goes in unsigned by itself, a clinician can discard their own draft, leaving a signed record of it, and can add to a signed note, which then reads as one note with its parts; a part can be signed later, by its writer or by a supervisor's sign-off (PR #1000), and a part signed by a since-repudiated key counts as unsigned until its real writer re-signs (PR #1006); supervision is recorded, a supervisee's part needing a co-sign waits for a supervisor, and a supervisor can co-sign a supervisee's note as reviewed (PR #1013).
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waited on a clinical-note surface, which 3a now gives it) · §5.4 John-Doe (§5.12
