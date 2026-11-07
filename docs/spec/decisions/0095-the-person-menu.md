@@ -10,7 +10,8 @@
   `docs/superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md` (§3.4, §6);
   plan: `docs/superpowers/plans/2026-11-07-sign-in-slice-3c-3c-person-menu.md`. Touches
   [#963](https://github.com/cairn-ehr/cairn-ehr/issues/963) (not guaranteed (b)) and
-  [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905) ((i)).
+  [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905) ((i)). Residual:
+  [#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020) ((j)).
 - **Builds on:** [ADR-0094](0094-supervision-and-the-mandatory-co-sign.md) (the supervision record, `awaits_cosign`,
   `reviewable`) · [ADR-0093](0093-a-repudiated-signature-counts-as-unsigned.md) (`counts_as_unsigned`) ·
   [ADR-0092](0092-the-vouch-and-the-sign-off.md) (`part_is_signed`, the vouch read) ·
@@ -47,10 +48,11 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
 
 ### Whose menu, and what it counts
 
-5. **The menu is the person a who's-here claim NAMES** (design §3.4, ADR-0088). "Not asked" and "Don't know" get
-   no menu, no count and no database read; the bar's menu element is hidden. A named staff id the node cannot place
-   reads as an empty menu. Reading the menu signs nothing and asks for no passphrase: like the chart, it is shown to
-   whoever is at the terminal (design §2's anti-goals).
+5. **The menu is the person a who's-here claim NAMES** (design §3.4, ADR-0088). Under "Not asked" or "Don't know"
+   the bar gets no menu, no count and no database read, and its menu element is hidden. The picker's counts are read
+   on each opening whatever the claim, so the picker shows them with nobody named. A named staff id the node cannot
+   place reads as an empty menu. Reading the menu signs nothing and asks for no passphrase: like the chart, it is
+   shown to whoever is at the terminal (design §2's anti-goals).
 6. **N counts groups 1 and 2 only** (`PersonMenu::count`, `own + cosign`). The review group is never counted: nothing
    is owed there, and a number that grows with every supervisee's note would train people to ignore it (design
    §3.4; maintainer: it must not nag). The bar reads "Waiting for you: N", named "Waiting for you: N — open the
@@ -78,7 +80,7 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
 8. **The review window is 7 days** (`REVIEW_DAYS`, design §3.4, *my call*; the maintainer did not object), judged on
    the part's `recorded_at` (its `hlc_wall`), never on its freely backdatable `t_effective`.
 9. **Order:** within group 1 the drafts come first, by due time, soonest first; every other row is newest
-   `recorded_at` first, `event_id` breaking a tie, as on the chart.
+   `recorded_at` first, `event_id` breaking a tie (the chart breaks ties the same way, but orders by `t_effective`).
 
 ### The read (`note::read`, `note::menu_read`, db/073)
 
@@ -86,11 +88,11 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
     exists because the facts it answers sit in tables the window's login cannot read: `vault_member` is granted to no
     role (db/061), `actor_event` gives the window its `signing_key_id` column only (db/062), and `note_draft` /
     `note_draft_part` are revoked from PUBLIC (db/065, db/066).
-    - **`cairn_note_people()`** turns keys into people: one row per vault member and per actor the supervision record
-      names, with its staff id (`cairn_supervision_staff_of`: the member row's, else the handle pinned on its enroll
-      row), its display name (NULL without a member row, worded "a writer this node cannot name") and EVERY key it
-      ever enrolled or rotated to, repudiated ones included, so a part signed with an old key maps back to its
-      person.
+    - **`cairn_note_people()`** turns keys into people: one row per distinct actor that is a vault member or that the
+      supervision record names (as subject or supervisor), with its staff id (`cairn_supervision_staff_of`: the
+      member row's, else the handle pinned on its enroll row), its display name (NULL without a member row, worded
+      "a writer this node cannot name") and EVERY key it ever enrolled or rotated to, repudiated ones included, so a
+      part signed with an old key maps back to its person.
     - **`cairn_note_drafts_by_writer()`** finds who has written into which open draft: one row per draft and distinct
       named writer of a non-blank part (the commit door's blank test). `due` and `stuck` are
       `cairn_note_drafts_due`'s (db/067) expressions, so the menu and the chart's draft row agree; the door reads no
@@ -119,21 +121,24 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
     `AppState::shown`, as the duplicate tray does, and a chart opens only through `open_chart_impl`.
     `person_menu_open` re-reads the menu for the person named NOW and opens the chart only while a row of that read
     names it; otherwise it answers "That note no longer waits in your list — the list was read again." and opens
-    nothing. The script first lets a sign in flight settle, closes an open chart (decision 3), and returns at once
-    while a registration is under way, as `openChart` does. On a refusal it redraws the list, then says the sentence
-    and moves focus to it. The opened note pane scrolls to and focuses the part (found through the compound's
+    nothing; a re-read that fails answers the read-failure text instead, and opens nothing either. The script first
+    returns at once while a registration is under way, as `openChart` does; then lets a sign in flight settle; then
+    closes an open chart (decision 3). On a refusal it redraws the list, then says the sentence and moves focus to
+    it. The opened note pane scrolls to and focuses the part (found through the compound's
     `shown_parts`) or the draft (or the editor, if this terminal holds it).
 15. **When the menu is read again:** on a change of the named person, on opening the menu, after each drawn note pane
-    and each closed chart, after a refused "Open note", and every 60 s while the menu is closed. An older answer
-    never draws over a newer one (a revision counter per kind of read). The picker's counts are not read after a
-    failed staff list.
+    and each chart closed (only once the node's `close_chart` has succeeded: a failed close returns before the
+    re-read), after a refused "Open note", and every 60 s while the menu is closed. An older answer never draws over
+    a newer one (a revision counter per kind of read). The picker's counts are not read after a failed staff list.
 
 ### What this ends
 
 16. **ADR-0092 (d)** (no pending-sign-offs menu), **ADR-0093 (e)** (the parts to re-sign found chart by chart) and
-    **ADR-0094 (n)** (finding what to co-sign chart by chart) end, for this node's charts (not guaranteed (c)).
-    ADR-0092's (c), a repudiated signer left unmarked, had already ended with ADR-0093; this slice adds only the
-    cross-chart list of such parts, which is ADR-0093 (e).
+    **ADR-0094 (n)** (finding what to co-sign chart by chart) end, for this node's charts (not guaranteed (c)), with
+    one exception: a part that awaits a co-sign while its writer has no supervisor NOW is in nobody's group 2
+    (decision 7), so such a part, a student's "— not co-signed (no supervisor recorded)" for one, is still found
+    chart by chart (not guaranteed (k)). ADR-0092's (c), a repudiated signer left unmarked, had already ended with
+    ADR-0093; this slice adds only the cross-chart list of such parts, which is ADR-0093 (e).
 
 ## What is not guaranteed
 
@@ -159,6 +164,15 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
 - **(i) The window's commands against a database are pinned only by DB-gated tests**
   (`person_menu_db_tests.rs`), which CI does not run ([#905](https://github.com/cairn-ehr/cairn-ehr/issues/905)).
   The webview was walked in Chromium with a stubbed `invoke`; WebKit and the real Tauri IPC are owed to RUNBOOK §26.
+- **(j) Two people rows can share a staff id, and then the bar and the picker can disagree.** After a restore loses
+  the member rows and the person is enrolled again under another role (a new actor), both actors go by the same
+  staff id. The bar's read takes the first match in actor-hex order (`keys_for_bar`, `MenuRead::person`), while
+  `counts()` emits one count per actor and the picker keeps the last one it is given
+  ([#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020)).
+- **(k) An awaited co-sign with no supervisor now is in nobody's menu.** A part that `awaits_cosign` while its writer
+  has no supervisor recorded now (a student's "(no supervisor recorded)" part, or a required writer's whose
+  supervisors all stepped away) is in nobody's group 2 (decision 7) and so in no count. It is found chart by chart,
+  and while its writer still needs co-signing the assigner's panel shows them as a gap row (ADR-0094).
 
 ## Consequences
 

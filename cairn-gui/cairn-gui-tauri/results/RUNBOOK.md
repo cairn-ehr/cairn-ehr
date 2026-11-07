@@ -2128,14 +2128,17 @@ target *K* = 1 (the bar's count); countersign one note from the menu 2 (open the
 work: pull files at random → 2 (open the menu, open the review group) → 2. Opening the menu shows the last read at
 once and runs the same read again, so a pick, which runs it with a visible stop, is the stopwatch's view of "the menu
 opens". The menu is a read, and the node times
-only writes (section 5), so the stopwatch is the only figure for the first three rows; the co-sign's write half is
+only writes (section 5), so the stopwatch is the only figure for the first two rows; the co-sign's write half is
 timed as **`note-sign-off`**. **A figure outside its budget, or an `M > N`, is the finding — file an issue; never
-adjust the budget.** A miss on the first three rows is the case the query's `shortcut:` comment names: file it as
+adjust the budget.** A miss on the first two rows is the case the query's `shortcut:` comment names: file it as
 the projection of open obligations ADR-0095 decision 1 owes.
 
-**Setup.** Section 25's setup and people (`nurse-a`, `dr-b`, the student `sam`, `dr-p`, `dr-c`, `boss`, the section 2
-chart, `vouches`, `conf`, `sup`), section 20's `due` and `went` helpers, and one more chart, B. Launch as section 3.
-Put the supervision record in this state at the console, then check it with `sup`:
+**Setup.** A FRESH node with section 25's Setup only, not its measurements: section 25's Measurement 2 leaves a
+note of Dr P's without her supervisor's co-sign, which comes back into the lists below once `dr-b` and `dr-c` are
+linked again, and every count below would then be one too many. From that Setup: the people (`nurse-a`, `dr-b`, the
+student `sam`, `dr-p`, `dr-c`, `boss`), the section 2 chart (**chart A** below), `vouches`, `conf` and `sup`; also
+section 20's `due` and `went` helpers, and one more chart, **chart B**. Launch as section 3. Put the supervision
+record in this state at the console, then check it with `sup`:
 
 ```bash
 cairn-node --conn "$CONN" supervision-set --op require-cosign --staff-id dr-p
@@ -2170,22 +2173,26 @@ Dr P needs co-signing and has two supervisors; Nurse A is Dr B's supervisee and 
 - [ ] Open "Who's here?": the list draws at once and the suffixes join it. Dr B's entry ends " · N waiting" with the
       N her bar shows once she is picked; an entry whose count is 0 has no suffix.
 
-**Measurement 2 — Open note, and co-sign from it (≤ 3 s).** Re-require co-signing for Dr P (the first console
-line above) and have her sign five one-part notes on chart A.
+**Measurement 2 — Open note, and co-sign from it (≤ 3 s).** After Measurement 1, Dr B's list holds one row, her
+part that went in unsigned on chart B. Re-require co-signing for Dr P (the first console line above) and have her
+sign **six** one-part notes on chart A, P1 to P6 in order. Name `dr-b`: "Waiting for you: 7".
 
-- [ ] From the front door, with `dr-b` named: *Open note* on one of her rows. Chart A opens, scrolled to that note,
-      which has the focus (VoiceOver reads it). The menu is closed.
-- [ ] From an open chart B with a draft being typed into: *Open note* on another of her rows. The typing is saved
-      (section 19's `parts`), the front door shows for a moment, then chart A opens on that note.
-- [ ] On the opened note press *Sign off this note* and time five, from the first keystroke in the strip's Staff ID
-      until "Signed off — …" shows and the byline is re-read; then `ui_gesture_timing`'s `note-sign-off` rows. The
-      bar's count drops by one each time once the note pane is re-read.
+- [ ] From the front door: *Open note* on P1's row. Chart A opens, scrolled to that note, which has the focus
+      (VoiceOver reads it). The menu is closed.
+- [ ] As `dr-b` on chart B: *New note*, type `later`. With the draft still being typed into, *Open note* on P2's row.
+      The typing is saved (section 19's `parts`), the front door shows for a moment, then chart A opens on P2. Once
+      the note pane draws, "Waiting for you: 8" (the new draft is hers).
+- [ ] P1 to P5, one at a time: *Open note* on its row, press *Sign off this note* and time it, from the first
+      keystroke in the strip's Staff ID until "Signed off — …" shows and the byline is re-read; then
+      `ui_gesture_timing`'s `note-sign-off` rows. The bar's count drops by one each time once the note pane is
+      re-read: 8 → 3 (the part gone in unsigned, the `later` draft, P6).
 - [ ] The same from a review row: *Open note* on Nurse A's note from the review group, then *Co-sign as reviewed*
-      (section 25 Measurement 3); the row leaves the review group, and the count does not change.
-- [ ] A row that vanished: open Dr B's menu on one of Dr P's rows, then at the console
+      (section 25 Measurement 3); the row leaves the review group, and the count stays 3.
+- [ ] A row that vanished: open Dr B's menu on P6's row (her only row on chart A now), then at the console
       `cairn-node --conn "$CONN" supervision-set --op unlink-supervisor --staff-id dr-p --supervisor dr-b` and press
       *Open note* on that row. "That note no longer waits in your list — the list was read again." shows on the bar,
-      with the focus on it; the list is redrawn without Dr P's rows; no chart opens. Link her again afterwards.
+      with the focus on it; the list is redrawn without P6, "Waiting for you: 2"; no chart opens. Link her again
+      afterwards (the second console line above): once the menu is read again, P6 is back and the count is 3.
 - [ ] A drawn row of the previous person: with `dr-b`'s menu drawn, pick `dr-c` in who's here; the bar is re-read for
       Dr C at once, and no row of Dr B's stays on screen.
 
@@ -2197,7 +2204,8 @@ FROM clinical_note"` (the menu's query scans every row of it, ADR-0095 (h)), and
 A fixture smaller than the budget's is a figure for that size only: say so in the template.
 
 - [ ] Time five picks of `dr-b`, from the press on her name in the picker to "Waiting for you: N" on the bar. Pick
-      someone else between runs: a pick of the person already named does not read the menu again.
+      "Don't know" between runs: it hides the menu, so the bar's "Waiting for you: N" coming back is the stop (a pick
+      of the person already named does not read the menu again, and another person's bar may show the same N).
 - [ ] Time five openings of the picker, from its list on screen to the last " · N waiting".
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
