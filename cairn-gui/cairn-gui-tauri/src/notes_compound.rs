@@ -63,9 +63,6 @@ pub struct CompoundView {
     /// Every part's event id, in part order: what "Sign off this note" sends back, so the node
     /// refuses (`Changed`) if the note now holds any other.
     pub shown_parts: Vec<String>,
-    /// Every part's event id, in part order: what the person menu's "Open note" focuses a part by
-    /// (`"part:<id>"`). The same ids as `shown_parts`, named for the reader that finds a part.
-    pub part_ids: Vec<String>,
     /// The line below "Adding to …" when an addendum's signature would also cover the who's-here
     /// claim's own unsigned parts of this note ([`covers_of`]); `None` when there are none. The
     /// draft's `DraftView::covers_line` says the same once the pane is read again.
@@ -201,7 +198,6 @@ where
         adds_line,
         can_sign_off: needs_sign_off(c.parts()),
         shown_parts: c.parts().iter().map(|p| p.event_id.to_string()).collect(),
-        part_ids: c.parts().iter().map(|p| p.event_id.to_string()).collect(),
         covers_line,
         covers,
         can_review: claim_actor.is_some_and(|a| can_review(c.parts(), a)),

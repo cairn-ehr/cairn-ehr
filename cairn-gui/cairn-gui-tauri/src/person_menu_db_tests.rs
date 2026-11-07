@@ -6,7 +6,7 @@ use crate::notes::review::db_tests::{credential, supervised_note};
 use crate::notes::review::note_review_cosign_impl;
 use crate::person_menu_view::PersonMenuView;
 
-/// The rows of one menu, flattened: (group, patient id).
+/// The rows of one menu, flattened: patient ids, group by group (own, co-sign, review).
 fn row_charts(v: &PersonMenuView) -> Vec<String> {
     match v {
         PersonMenuView::Menu {
@@ -112,4 +112,30 @@ async fn the_pickers_count_equals_the_bars() {
     assert_eq!(bar, 1);
     assert_eq!(sue.count, bar);
     assert_eq!(sue.suffix, " · 1 waiting");
+}
+
+/// A re-pick between draw and click: Sue's menu was drawn (her row admitted to `shown`), then who's
+/// here names Zed, who has no rows. "Open note" with Sue's chart is refused, and no chart is set.
+#[tokio::test]
+async fn a_repicked_person_cannot_open_the_previous_persons_row() {
+    let Some((_guard, _owner, state, chart, _part)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    *state.chart.lock().await = None;
+    let drawn = person_menu_impl(&state).await.unwrap();
+    assert_eq!(row_charts(&drawn), [chart.to_string()]);
+    state
+        .whos_here
+        .lock()
+        .await
+        .pick(crate::whos_here::Claim::Named {
+            staff_id: "zed".into(),
+            display_name: "Dr Zed".into(),
+        });
+    let err = person_menu_open_impl(&state, &chart.to_string())
+        .await
+        .unwrap_err();
+    assert_eq!(err, NO_LONGER_WAITS);
+    assert!(state.chart.lock().await.is_none());
 }

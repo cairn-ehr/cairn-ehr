@@ -244,7 +244,6 @@ fn notes_compound_js_reads_no_field_the_backend_does_not_send() {
         adds_line: "a".into(),
         can_sign_off: true,
         shown_parts: vec!["e".into()],
-        part_ids: vec!["e".into()],
         covers_line: Some("c".into()),
         covers: vec!["e".into()],
         can_review: true,

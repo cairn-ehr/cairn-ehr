@@ -12,7 +12,7 @@
 use crate::funnel::commands::open_chart_impl;
 use crate::funnel::view::{ChartHeaderView, ErrorView};
 use crate::person_menu_view::{
-    counts_view, menu_view, PersonMenuView, StaffCountView, NO_LONGER_WAITS,
+    counts_failed_view, counts_view, menu_view, PersonMenuView, StaffCountView, NO_LONGER_WAITS,
 };
 use crate::state::AppState;
 use crate::whos_here::Claim;
@@ -34,6 +34,8 @@ async fn named(state: &AppState) -> Option<String> {
 
 /// What one snapshot read yields: the read, the person's groups, and a candidate per row chart.
 struct Fresh {
+    /// The one instant this command classified and words by.
+    now: chrono::DateTime<Utc>,
     read: MenuRead,
     menu: PersonMenu,
     patients: HashMap<Uuid, Candidate>,
@@ -70,6 +72,7 @@ async fn fresh(
     let patients: HashMap<Uuid, Candidate> = found.into_iter().map(|c| (c.patient_id, c)).collect();
     state.shown.lock().await.extend(patients.clone());
     Ok(Fresh {
+        now,
         read,
         menu,
         patients,
@@ -97,7 +100,7 @@ pub async fn person_menu_impl(state: &AppState) -> Result<PersonMenuView, ErrorV
         ));
     };
     let f = fresh(state, db, &staff).await?;
-    Ok(menu_view(&f.menu, &f.read, &f.patients, &tz, Utc::now()))
+    Ok(menu_view(&f.menu, &f.read, &f.patients, &tz, f.now))
 }
 
 /// "Open note": re-read the menu; only a chart a row there still names is opened.
@@ -133,15 +136,21 @@ pub async fn whos_here_counts_impl(state: &AppState) -> Result<Vec<StaffCountVie
         read_menus(tx, None).await
     })
     .await
-    .map_err(|e| chart_read_failed(db.explain(e)))?;
+    .map_err(|e| {
+        let cause = db.explain(e);
+        eprintln!("waiting counts: {cause:#}");
+        counts_failed_view(chart_read_failed(cause))
+    })?;
     Ok(counts_view(read.counts(now)))
 }
 
+/// The bar's menu, for the webview: forwards to [`person_menu_impl`].
 #[tauri::command]
 pub async fn person_menu(state: tauri::State<'_, AppState>) -> Result<PersonMenuView, ErrorView> {
     person_menu_impl(&state).await
 }
 
+/// "Open note", for the webview: forwards to [`person_menu_open_impl`].
 #[tauri::command]
 pub async fn person_menu_open(
     state: tauri::State<'_, AppState>,
@@ -150,6 +159,7 @@ pub async fn person_menu_open(
     person_menu_open_impl(&state, &patient_id).await
 }
 
+/// The picker's counts, for the webview: forwards to [`whos_here_counts_impl`].
 #[tauri::command]
 pub async fn whos_here_counts(
     state: tauri::State<'_, AppState>,

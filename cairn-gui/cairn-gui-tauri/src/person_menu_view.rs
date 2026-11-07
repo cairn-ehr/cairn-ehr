@@ -30,7 +30,6 @@ pub const UNNAMED_WRITER: &str = "a writer this node cannot name";
 /// an id, it names it "(registration not yet received here)").
 pub const UNNAMED_PATIENT: &str = "a chart this node cannot name";
 /// The picker could not read the counts (shown in `#whos-here-status`).
-#[allow(dead_code)] // the page says it (task 6); kept here so every sentence has one home
 pub const COUNTS_FAILED: &str = "Waiting counts could not be read.";
 
 /// The review group's heading, naming the window it looks back over.
@@ -83,6 +82,16 @@ pub struct StaffCountView {
     pub staff_id: String,
     pub count: usize,
     pub suffix: String,
+}
+
+/// The error the picker's counts answer when their read fails: the clinician-facing sentence is
+/// [`COUNTS_FAILED`]; whether a retry can help (`retry`) is kept from the read's own error. The
+/// explained cause is logged by the caller, as no `ErrorView` has a slot for it. Pure.
+pub fn counts_failed_view(cause: crate::funnel::view::ErrorView) -> crate::funnel::view::ErrorView {
+    crate::funnel::view::ErrorView {
+        text: COUNTS_FAILED.into(),
+        retry: cause.retry,
+    }
 }
 
 /// The picker's counts, worded: `" · 3 waiting"` for a positive count, nothing for zero.
@@ -152,6 +161,8 @@ where
     }
 }
 
+/// One menu item as a row: the patient's name from `patients`, the item's time, what kind of note
+/// it is, the state sentence, and the button's label and focus target. Pure.
 fn row_view<Tz: TimeZone>(
     item: &MenuItem,
     read: &MenuRead,
@@ -186,6 +197,7 @@ where
     }
 }
 
+/// One group: its heading, the "Nothing here." line when it has no items, and a row per item. Pure.
 fn group_view<Tz: TimeZone>(
     heading: String,
     items: &[MenuItem],

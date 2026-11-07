@@ -237,7 +237,12 @@ fn picker_suffix_only_when_positive() {
     assert_eq!(v[0].suffix, " · 3 waiting");
     assert_eq!(v[0].count, 3);
     assert_eq!(v[1].suffix, "");
-    assert_eq!(COUNTS_FAILED, "Waiting counts could not be read.");
+    let failed = counts_failed_view(crate::funnel::view::ErrorView {
+        text: "connection refused".into(),
+        retry: crate::funnel::view::Retry::Now,
+    });
+    assert_eq!(failed.text, "Waiting counts could not be read.");
+    assert_eq!(failed.retry, crate::funnel::view::Retry::Now);
     assert_eq!(
         NO_LONGER_WAITS,
         "That note no longer waits in your list — the list was read again."
