@@ -6,8 +6,9 @@
 -- WHY THIS FILE EXISTS. Until now only a STUDENT's note waited for a co-signature, because the
 -- student role is pinned on the actor (ADR-0092 decision 10). A probationary doctor needs the same
 -- paper countersignature, and only their supervisor's should count. So the node now keeps a
--- RECORD: "B supervises C", "C needs co-signing", "D may assign supervision". Later tasks read it
--- as of a part's signing time to decide whether "— not co-signed" still shows.
+-- RECORD: "B supervises C", "C needs co-signing", "D may assign supervision". The note read
+-- judges each part against it as of the part's commit (its own hlc_wall) to decide whether
+-- "— not co-signed" still shows.
 --
 -- THE RECORD IS THE ACTOR REGISTRY. Each change is one append-only actor_event row (db/004), never
 -- an edit, so it is signed, auditable, carried by backup/restore (db/052) and readable "as of t":
@@ -24,7 +25,8 @@
 -- inherits), so by any raw-SQL client holding it. It never acts without a SIGNED approval checked
 -- HERE, as db/063's vault doors do:
 --   * the approver rule lives in ONE function, cairn_supervision_approver: a member whose key is
---     current, confirmed unless a superuser, whose token verifies over this act's ADDRESS;
+--     current, confirmed (or predating confirmation) unless a superuser, whose token verifies
+--     over this act's ADDRESS;
 --   * the address binds the op, both staff IDs and the family's PRIOR row (its seq), so a token is
 --     good for one change of one state: replayed after the state moved, it verifies against nothing;
 --   * who may do what (the matrix) lives in ONE function, cairn_supervision_apply, which the window
@@ -33,7 +35,9 @@
 -- otherwise they could unlink their supervisors and fall into the no-supervisor fallback, where any
 -- clinician's co-sign clears theirs. Without the assigner right, a supervisor may step away from the
 -- link or lift their supervisee's co-signing, and nothing else; an assigner may also link themselves
--- as someone else's supervisor (ADR-0094 decision 9).
+-- as someone else's supervisor (ADR-0094 decision 9). "Their own" means the same ROLE-ACTOR: a
+-- second role-actor of the same person (an admin holding the assigner right) is not seen until
+-- #168 (ADR-0094 not guaranteed (q), #1017).
 -- Every refusal names its check and never echoes a token.
 
 BEGIN;

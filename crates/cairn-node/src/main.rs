@@ -2088,7 +2088,7 @@ enum Cmd {
         supervisor: Option<String>,
     },
 
-    /// Console-only: list every member with their supervision state, one line each.
+    /// Console-only: list every non-superuser member with their supervision state, one line each.
     SupervisionList,
 
     /// Record clinician-observed identity evidence on an existing chart (§5.4): an

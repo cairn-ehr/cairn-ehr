@@ -13,7 +13,9 @@
   [#1010](https://github.com/cairn-ehr/cairn-ehr/issues/1010) (not guaranteed (b)) and settles the later-vouch mark
   ADR-0092's Consequences left to [#1003](https://github.com/cairn-ehr/cairn-ehr/issues/1003). Residuals:
   [#1014](https://github.com/cairn-ehr/cairn-ehr/issues/1014) (not guaranteed (d)),
-  [#1015](https://github.com/cairn-ehr/cairn-ehr/issues/1015) ((p)) and
+  [#1015](https://github.com/cairn-ehr/cairn-ehr/issues/1015) ((p)),
+  [#1017](https://github.com/cairn-ehr/cairn-ehr/issues/1017) ((q)),
+  [#1018](https://github.com/cairn-ehr/cairn-ehr/issues/1018) (an unconfirmed assigner's refusal words) and
   [#1016](https://github.com/cairn-ehr/cairn-ehr/issues/1016) (the slice's other residuals).
 - **Builds on:** [ADR-0092](0092-the-vouch-and-the-sign-off.md) (the vouch, the sign-off, the pure rules and the
   words) · [ADR-0093](0093-a-repudiated-signature-counts-as-unsigned.md) (a repudiated signature counts as unsigned) ·
@@ -366,6 +368,12 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign when 
 - **(p) When "Sign off this note" and "Co-sign as reviewed" both show, neither says what it covers.** Design §3.3's
   "each says what it covers" is not built: the clinician must know that Sign off vouches every part and a review only
   their supervisees' ([#1015](https://github.com/cairn-ehr/cairn-ehr/issues/1015)).
+- **(q) "Nobody acts on their own supervision" compares role-actors, not persons.** One person can hold two role-actors
+  (db/061), and the person behind them is not modelled until
+  [#168](https://github.com/cairn-ehr/cairn-ehr/issues/168). So a clinician under supervision whose own `admin`
+  role-actor holds the assigner right can unlink their supervisor, or lift their co-signing, by signing as that
+  admin. Decision 9 leaves who may hold the right to site policy, so the door does not refuse it
+  ([#1017](https://github.com/cairn-ehr/cairn-ehr/issues/1017)).
 
 ## Consequences
 

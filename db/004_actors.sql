@@ -115,7 +115,7 @@ BEGIN
     END IF;
 END $$;
 
--- Sign-in slice 3c-3a: the second actor, for the one op that names two (link/unlink-supervisor:
+-- Sign-in slice 3c-3a: the second actor, for the two ops that name one (link/unlink-supervisor:
 -- the row sits on the supervisee, related_actor is the supervisor). Additive column (ADR-0012).
 ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS related_actor BYTEA;
 

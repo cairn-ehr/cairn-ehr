@@ -317,6 +317,66 @@ async fn a_supervisor_may_step_away_and_lift() {
     );
 }
 
+/// A supervisor acts only on THEIR OWN link and THEIR OWN supervisee: a co-supervisor may not end
+/// another's link, and a supervisor of someone else may not lift this person's co-signing.
+#[tokio::test]
+async fn a_supervisor_acts_only_on_their_own_link_and_supervisee() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    team(&c).await;
+    acted(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, LINK, "bwong", Some("plain"), "boss", BOSS).await;
+    refused(
+        supervise(&c, UNLINK, "bwong", Some("plain"), "jsmith", JSMITH).await,
+        "only a superuser, an assigner or the supervisor themself may end this link",
+    );
+    acted(&c, LINK, "stu", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, REQUIRE, "bwong", None, "boss", BOSS).await;
+    acted(&c, UNLINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    // jsmith still supervises stu, but no longer bwong.
+    refused(
+        supervise(&c, LIFT, "bwong", None, "jsmith", JSMITH).await,
+        "a current supervisor of bwong",
+    );
+}
+
+/// A link to a supervisor whose member row is gone (left, or re-enrolled as a new actor) can still
+/// be ended: otherwise only that absent supervisor's co-sign would ever clear the supervisee's
+/// notes. The prior and the apply resolve the supervisor the same way, so the token verifies.
+#[tokio::test]
+async fn a_link_to_a_departed_supervisor_can_still_be_ended() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    team(&c).await;
+    acted(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    let jsmith = hex_actor(&c, "jsmith").await;
+    c.batch_execute(
+        "DELETE FROM vault_attempt WHERE staff_id = 'jsmith'; \
+         DELETE FROM vault_member WHERE staff_id = 'jsmith'",
+    )
+    .await
+    .unwrap();
+    acted(&c, UNLINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    let sup: Vec<String> = c
+        .query_one(
+            "SELECT supervisors FROM cairn_supervision_staff() WHERE staff_id = 'bwong'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(sup.is_empty(), "no supervisor stands: {sup:?}");
+    let last = record(&c).await.pop().unwrap();
+    assert_eq!(
+        last,
+        (
+            UNLINK.to_string(),
+            hex_actor(&c, "bwong").await,
+            Some(jsmith)
+        )
+    );
+}
+
 #[tokio::test]
 async fn the_record_lists_every_act_in_order() {
     db_gated!();

@@ -117,7 +117,7 @@ pub fn done_sentence(op: SupervisionOp, staff_id: &str, supervisor: Option<&str>
         SupervisionOp::RequireCosign => {
             format!("{staff_id} now needs every signed note co-signed.")
         }
-        // Design §3.2: a part is judged as of its own signing, so earlier parts still need one.
+        // Design §3.2: a part is judged as of its own commit, so earlier parts still need one.
         // Worded conditionally: there may be no such notes, or all may be co-signed already.
         SupervisionOp::LiftCosign => format!(
             "{staff_id} no longer needs notes co-signed. Notes signed while it was required \
@@ -207,7 +207,10 @@ pub async fn supervision_act_impl(
     supervisor: Option<String>,
 ) -> Result<String, String> {
     // An unknown word is the page's bug, not the person's: nothing was done.
-    let op = SupervisionOp::from_cli(&op).ok_or(NOT_RECORDED)?;
+    let op = SupervisionOp::from_cli(&op).ok_or_else(|| {
+        eprintln!("supervision_act: unknown op word {op:?} from the page");
+        NOT_RECORDED.to_string()
+    })?;
     let supervisor = supervisor.filter(|s| !s.trim().is_empty());
     let supervisor = match (op.needs_supervisor(), supervisor) {
         (true, None) => return Err(NEED_SUPERVISOR.into()),

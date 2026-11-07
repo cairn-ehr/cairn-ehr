@@ -138,7 +138,7 @@ pub struct StaffSupervision {
     pub supervisors: Vec<String>,
 }
 
-/// Every member with their supervision state now (`cairn_supervision_staff`).
+/// Every non-superuser member with their supervision state now (`cairn_supervision_staff`).
 pub async fn staff(db: &Client) -> anyhow::Result<Vec<StaffSupervision>> {
     let rows = db
         .query(

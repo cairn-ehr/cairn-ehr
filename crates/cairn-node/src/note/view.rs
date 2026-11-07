@@ -128,7 +128,7 @@ fn byline_marked(grade: &NoteGrade, writer: &PartWriter, unverified: &str) -> St
 ///
 /// These words describe the KEY and the person only. Whether the part still waits for a co-sign
 /// is not theirs to say: `part_byline` adds " — not co-signed" after them by
-/// [`awaits_cosign`]'s rule (a student's or a required writer's part, as of its signing, until a
+/// [`awaits_cosign`]'s rule (a student's or a required writer's part, as of its commit, until a
 /// supervisor of theirs as of the co-sign, or with none recorded then any non-student, co-signs
 /// it). Pure.
 pub fn signer_words(s: &Signer) -> String {

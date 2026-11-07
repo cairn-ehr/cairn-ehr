@@ -94,11 +94,13 @@
 >   one act door (approver rule, matrix, nobody acts on their own supervision as the supervisee) + console door
 >   (`cairn-node supervision-set` / `supervision-list`); the note read annotates each part with the record AS OF its HLC
 >   wall (ms floor); "— not co-signed" from the record (students always), cleared only by a supervisor as of the co-sign,
->   else the fallback + "(no supervisor recorded)"; Sign off stays offered while a mandatory co-sign is missing;
+>   else the fallback; the mark adds "(no supervisor recorded)" while the writer has none now; Sign off stays offered while a mandatory co-sign is missing;
 >   "Co-sign as reviewed" (node + window); the assigner panel and "My supervisees". Maintainer 2026-11-07: a re-sign under
 >   an UNCONFIRMED key counts. Open: **#1014** (registry rows vs HLC wall are two clocks — a peer-ratcheted HLC lets a lift
 >   clear earlier parts; **gates any multi-node pilot**) · **#1015** (both buttons, neither says what it covers) ·
->   **#1016** (review residuals). Owed by a human: **RUNBOOK §25**. A local-state export carrying any supervision row is
+>   **#1016** (review residuals) · **#1017** (the self-dealing check compares role-actors: a person's own admin
+>   role-actor holding the assigner right can unlink their supervisor; ADR-0094 (q)) · **#1018** (an unconfirmed
+>   assigner is told they may lack the right). Owed by a human: **RUNBOOK §25**. A local-state export carrying any supervision row is
 >   one-way (an older build's restore refuses the six ops).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
@@ -333,7 +335,8 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 
 Plan maintainer-reviewed (record as `actor_event` ops; the wider self-dealing rule; an unconfirmed re-sign counts).
 Every task reviewed + re-reviewed, an independent ADR fact-check (3 false sentences in round 1, 1 new one in round 2),
-a whole-branch review (3 Important: one fixed, two filed as #1014/#1015) and one fix wave; residuals #1016. Ledger
+a whole-branch review (3 Important: one fixed, two filed as #1014/#1015) and one fix wave; residuals #1016. The `/finalcheck` review added three door and co-sign tests, comment fixes
+and ADR-0094 (q), and filed #1017 and #1018. Ledger
 `.superpowers/sdd/2026-11-07-sign-in-slice-3c-3a-supervision/` (gitignored; deleted at merge). Full local gate at the
 code head: 3393 passed, 0 failed, no self-skips; GUI `--bins` 760 with the DB env.
 - **⇒ Two clocks in one comparison is a finding, even when each is right.** Registry rows are DB-clock, parts are HLC

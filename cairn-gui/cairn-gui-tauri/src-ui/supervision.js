@@ -3,10 +3,11 @@
 // `clearSigner`, funnel.js's `failureText` (called only at run time), and main.js's `el`,
 // `setMessage`, `invoke`.
 //
-// Two panels over one command, `supervision_act`: the assigner's panel (every member, all six
-// acts) and "My supervisees" (the members the person named in who's here supervises: lift their
-// co-signing, or step away). The buttons drawn follow each row's state; whether the act is allowed
-// is the node's decision alone, said back in one sentence. No act asks a question (principle 3):
+// Two panels over one command, `supervision_act`: the assigner's panel (every non-superuser
+// member, all six acts) and "My supervisees" (the members the person named in who's here
+// supervises: lift their co-signing, or step away). The buttons drawn follow each row's state;
+// whether the act is allowed is the node's decision alone, said back in one sentence. No act asks
+// a question (principle 3):
 // each is signed, audited, and undone by its opposite act.
 
 /** A row button whose accessible name says whose row it acts on. */

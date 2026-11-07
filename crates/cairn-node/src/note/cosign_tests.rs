@@ -195,6 +195,38 @@ fn a_part_signed_later_by_its_writer_still_needs_its_co_sign() {
     assert!(!cosign_required(&dead));
 }
 
+/// Under the fallback on a node-signed part, only an attested SIGN-OFF clears it (ADR-0094
+/// decision 13): a colleague's attested addendum vouch is admitted by the floor but is no
+/// countersignature of the part.
+#[test]
+fn a_colleagues_attested_addendum_does_not_clear_it() {
+    let mut p = part(1, None);
+    p.drafted_actor = Some("s1".into());
+    p.vouches.push(vouch(
+        9,
+        VouchAct::Addendum,
+        VouchRole::Attested,
+        student("s1", "Sam"),
+    ));
+    let addendum = vouch(
+        10,
+        VouchAct::Addendum,
+        VouchRole::Attested,
+        who("z1", "Dr Zed"),
+    );
+    assert!(!clears_cosign(&p, &addendum));
+    p.vouches.push(addendum);
+    assert!(awaits_cosign(&p));
+    // The control: the same colleague's attested sign-off does clear it.
+    let sign_off = vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z1", "Dr Zed"),
+    );
+    assert!(clears_cosign(&p, &sign_off));
+}
+
 /// A colleague's sign-off made BEFORE the writer's own later signature still clears it: it named
 /// the same bytes the writer then signed (as a supervisor's earlier vouch would).
 #[test]
