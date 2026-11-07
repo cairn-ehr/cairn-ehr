@@ -119,6 +119,7 @@ DECLARE
     v_succ      BYTEA;
     v_by        TEXT;
     v_appr      BYTEA;
+    v_related   BYTEA;
     v_at        TIMESTAMPTZ;
     v_present   actor_event%ROWTYPE;
     v_differs   TEXT;
@@ -177,10 +178,14 @@ BEGIN
         -- worst possible moment for an illegible refusal.
         v_op := v_row ->> 'op';
         IF v_op IS NULL OR v_op NOT IN ('enroll', 'supersede', 'revoke', 'rotate-key', 'confirm',
-                                       'repudiate', 'grant-enroller', 'withdraw-enroller') THEN
+                                       'repudiate', 'grant-enroller', 'withdraw-enroller',
+                                       'link-supervisor', 'unlink-supervisor', 'require-cosign',
+                                       'lift-cosign', 'grant-assigner', 'withdraw-assigner') THEN
             RAISE EXCEPTION 'restore_actor_registry: row % carries op %, not one of '
                 'enroll/supersede/revoke/rotate-key/confirm/repudiate/grant-enroller/'
-                'withdraw-enroller (the closed actor-event algebra, ADR-0011 + sign-in slice 2)',
+                'withdraw-enroller/link-supervisor/unlink-supervisor/require-cosign/lift-cosign/'
+                'grant-assigner/withdraw-assigner (the closed actor-event algebra, ADR-0011 + '
+                'sign-in slices 2 and 3c-3a)',
                 COALESCE(v_row ->> 'actor_event_id', '(no actor_event_id)'),
                 COALESCE(v_op, 'NULL');
         END IF;
@@ -209,12 +214,15 @@ BEGIN
         v_appr   := CASE WHEN v_row ->> 'approval' IS NULL THEN NULL
                          ELSE cairn_decode_hex_or_raise('approval', v_row ->> 'approval',
                                                         'restore_actor_registry') END;
+        v_related := CASE WHEN v_row ->> 'related_actor' IS NULL THEN NULL
+                          ELSE cairn_decode_hex_or_raise('related_actor', v_row ->> 'related_actor',
+                                                         'restore_actor_registry') END;
         v_at     := v_recorded::TIMESTAMPTZ;
 
         INSERT INTO actor_event
             (actor_event_id, actor_id, op, kind, pinned, signing_key_id, superseded_by,
-             approved_by, approval, recorded_at)
-        VALUES (v_id, v_actor, v_op, v_kind, v_pinned, v_key, v_succ, v_by, v_appr, v_at)
+             approved_by, approval, related_actor, recorded_at)
+        VALUES (v_id, v_actor, v_op, v_kind, v_pinned, v_key, v_succ, v_by, v_appr, v_related, v_at)
         -- Idempotent by row identity, which is what makes a resume safe to re-run any number
         -- of times. Fence 2 has already established that every row present belongs to this
         -- set BY ID; whether it is the SAME row is checked just below.
@@ -240,6 +248,7 @@ BEGIN
                 WHEN v_present.superseded_by  IS DISTINCT FROM v_succ   THEN 'superseded_by'
                 WHEN v_present.approved_by    IS DISTINCT FROM v_by     THEN 'approved_by'
                 WHEN v_present.approval       IS DISTINCT FROM v_appr   THEN 'approval'
+                WHEN v_present.related_actor  IS DISTINCT FROM v_related THEN 'related_actor'
                 WHEN v_present.recorded_at    IS DISTINCT FROM v_at     THEN 'recorded_at'
             END;
             IF v_differs IS NOT NULL THEN

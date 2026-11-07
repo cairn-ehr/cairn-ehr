@@ -203,7 +203,7 @@ fn every_hex_door_still_calls_the_helper() {
         // only copy, and a bare decode() would refuse their registry with `invalid input
         // syntax for type bytea` and no field name — leaving them to guess which of a
         // registry's rows is malformed with no node to inspect it on.
-        ("052_restore_doors.sql", 3),
+        ("052_restore_doors.sql", 4),
     ]
     .iter()
     .map(|(f, n)| (f.to_string(), *n))

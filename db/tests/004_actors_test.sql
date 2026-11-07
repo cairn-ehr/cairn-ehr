@@ -173,4 +173,52 @@ BEGIN
     RAISE NOTICE 'rotate-key / shape / supersede OK';
 END $$;
 
+-- Sign-in slice 3c-3a: the six supervision ops through cairn_actor_append, and their shape.
+DO $$
+DECLARE sv bytea; sup bytea; bot bytea; op text; refused boolean;
+BEGIN
+    sv  := enroll_actor('human', '{"role":"clinician","handle":"sv-a"}', 'svK1');
+    sup := enroll_actor('human', '{"role":"clinician","handle":"sv-b"}', 'svK2');
+    bot := enroll_actor('agent', '{"model":"m","skill_epoch":1}', 'svK3');
+    PERFORM cairn_actor_append(sv, 'link-supervisor',   NULL, 'console', NULL, sup);
+    PERFORM cairn_actor_append(sv, 'unlink-supervisor', NULL, 'console', NULL, sup);
+    FOREACH op IN ARRAY ARRAY['require-cosign','lift-cosign','grant-assigner','withdraw-assigner'] LOOP
+        PERFORM cairn_actor_append(sv, op, NULL, 'console', NULL);
+    END LOOP;
+    IF (SELECT count(*) FROM actor_event WHERE actor_id = sv AND approved_by = 'console') <> 6 THEN
+        RAISE EXCEPTION 'supervision ops FAILED: want 6 rows';
+    END IF;
+    -- 5-argument calls still resolve (DEFAULT NULL).
+    PERFORM cairn_actor_append(sv, 'grant-enroller', NULL, 'console', NULL);
+    -- Each refusal is by name, from the function.
+    refused := false;
+    BEGIN PERFORM cairn_actor_append(sv, 'link-supervisor', NULL, 'console', NULL, NULL);
+    EXCEPTION WHEN raise_exception THEN refused := SQLERRM LIKE '%needs p_related%'; END;
+    IF NOT refused THEN RAISE EXCEPTION 'FAILED: link without a supervisor was not refused by name'; END IF;
+    refused := false;
+    BEGIN PERFORM cairn_actor_append(sv, 'link-supervisor', NULL, 'console', NULL, sv);
+    EXCEPTION WHEN raise_exception THEN refused := SQLERRM LIKE '%its own supervisor%'; END;
+    IF NOT refused THEN RAISE EXCEPTION 'FAILED: self-supervision was not refused by name'; END IF;
+    refused := false;
+    BEGIN PERFORM cairn_actor_append(sv, 'link-supervisor', NULL, 'console', NULL, bot);
+    EXCEPTION WHEN raise_exception THEN refused := SQLERRM LIKE '%not an enrolled human%'; END;
+    IF NOT refused THEN RAISE EXCEPTION 'FAILED: a non-human supervisor was not refused by name'; END IF;
+    refused := false;
+    BEGIN PERFORM cairn_actor_append(sv, 'require-cosign', NULL, 'console', NULL, sup);
+    EXCEPTION WHEN raise_exception THEN refused := SQLERRM LIKE '%does not take a related actor%'; END;
+    IF NOT refused THEN RAISE EXCEPTION 'FAILED: require-cosign with a related actor was not refused'; END IF;
+    -- The shape CHECK is the floor: an old op with a related_actor, and a link without one.
+    BEGIN
+        INSERT INTO actor_event (actor_id, op, signing_key_id, related_actor) VALUES (sv, 'enroll', 'svK9', sup);
+        RAISE EXCEPTION 'shape FAILED: an enroll row carrying related_actor was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    BEGIN
+        INSERT INTO actor_event (actor_id, op, approved_by) VALUES (sv, 'link-supervisor', 'console');
+        RAISE EXCEPTION 'shape FAILED: a link-supervisor row with no related_actor was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    RAISE NOTICE 'supervision ops OK';
+END $$;
+
 ROLLBACK;

@@ -577,6 +577,12 @@ pub struct ActorRegistryRow {
     /// Sign-in slice 2: the approver's attestation token. Travels as HEX in the JSON.
     #[serde(default)]
     pub approval: Option<Vec<u8>>,
+    /// Sign-in slice 3c-3a: the supervisor a `link-supervisor`/`unlink-supervisor` row names
+    /// (travels as HEX). Skipped when absent so an export with no link rows is byte-identical
+    /// to the pre-3c-3a one; an export that DOES carry one will not decode on an older build
+    /// (`deny_unknown_fields`) — a deliberate one-way door.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_actor: Option<Vec<u8>>,
     pub seq: i64,
     /// Required — see the struct doc. A defaulted value here can re-authorise a
     /// recalled actor.
@@ -631,6 +637,9 @@ pub fn actor_registry_rows_to_json(rows: &[ActorRegistryRow]) -> String {
             }
             if let Some(a) = &r.approval {
                 o.insert("approval".into(), hex::encode(a).into());
+            }
+            if let Some(r) = &r.related_actor {
+                o.insert("related_actor".into(), hex::encode(r).into());
             }
             serde_json::Value::Object(o)
         })
