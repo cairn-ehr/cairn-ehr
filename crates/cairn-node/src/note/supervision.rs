@@ -54,9 +54,16 @@ pub struct Supervision {
 
 impl Supervision {
     /// Validate every op word up front, so a bad row fails the read rather than a later query.
-    pub fn from_rows(rows: Vec<SupervisionRow>) -> anyhow::Result<Self> {
-        for r in &rows {
+    ///
+    /// Each row's `at` is floored to the MILLISECOND. A part's or vouch's time is an HLC wall in
+    /// milliseconds, but a registry row's `recorded_at` has microseconds: a requirement recorded at
+    /// 10:00:00.000700 and a part signed in the same millisecond (wall .000) must count as
+    /// "required", not "signed before the requirement". Comparing at the coarser clock's
+    /// resolution makes a same-millisecond row count as in effect.
+    pub fn from_rows(mut rows: Vec<SupervisionRow>) -> anyhow::Result<Self> {
+        for r in &mut rows {
             family(&r.op)?;
+            r.at = DateTime::from_timestamp_millis(r.at.timestamp_millis()).unwrap_or(r.at);
         }
         Ok(Self { rows })
     }
@@ -184,6 +191,8 @@ mod tests {
             row("lift-cosign", "aa", None, 20),
         ]);
         assert!(s.needs_cosigning_at("aa", at(15)));
+        // `<=`: a row recorded exactly at t is in effect at t.
+        assert!(sup(vec![row("require-cosign", "aa", None, 10)]).needs_cosigning_at("aa", at(10)));
         assert!(!s.needs_cosigning_at("aa", at(25)));
         assert!(!s.needs_cosigning_at("aa", at(5)));
         assert!(!s.needs_cosigning_at("bb", at(15)));
@@ -198,12 +207,25 @@ mod tests {
         ]);
         assert!(!s.supervises_at("sv", "aa", at(5)));
         assert!(s.supervises_at("sv", "aa", at(15)));
+        assert!(
+            s.supervises_at("sv", "aa", at(10)),
+            "`<=`: a link at t is in effect at t"
+        );
         assert!(!s.supervises_at("sv", "aa", at(25)));
         assert!(!s.has_supervisor_at("aa", at(25)));
         assert!(s.has_supervisor_at("aa", at(35)));
         assert_eq!(s.supervisors_now("aa"), vec!["s2".to_string()]);
         // The link is on the supervisee, not the supervisor.
         assert!(!s.supervises_at("aa", "sv", at(15)));
+    }
+
+    /// A registry row has microseconds, a part's wall only milliseconds: same-millisecond counts.
+    #[test]
+    fn a_row_in_the_same_millisecond_as_the_part_is_in_effect() {
+        let mut r = row("require-cosign", "aa", None, 0);
+        r.at = DateTime::from_timestamp_micros(1_000_000_700).unwrap(); // .000700
+        let s = sup(vec![r]);
+        assert!(s.needs_cosigning_at("aa", DateTime::from_timestamp_millis(1_000_000).unwrap()));
     }
 
     #[test]
@@ -294,6 +316,17 @@ mod tests {
         );
         assert!(p.vouches.iter().all(|v| v.writer_supervised));
         assert_eq!(p.writer_supervisors, vec!["s2".to_string()]);
+
+        // A vouch dated before EVERY link: the writer had no supervisor then (the fallback), even
+        // though one is linked now. "At the vouch's time" is not "now".
+        let mut early = part(2, Some(who("aa", "Dr A")));
+        let mut v = vouch(20, VouchAct::SignOff, VouchRole::CoSigned, who("s2", "S"));
+        v.at = ms(-60);
+        early.vouches.push(v);
+        annotate(&mut early, &s);
+        assert!(!early.writer_supervisors.is_empty());
+        assert!(!early.vouches[0].writer_supervised);
+        assert!(!early.vouches[0].by_supervisor);
     }
 
     #[test]

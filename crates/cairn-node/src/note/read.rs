@@ -143,7 +143,8 @@ pub struct PatientNoteList {
 /// (for `vouch::addendum_covers`). Then come the part's verified vouches
 /// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot. The
 /// last column is the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule
-/// reads (`NoteRow::signer_human_actor`).
+/// reads (`NoteRow::signer_human_actor`). The very last column is the part's `e.hlc_wall`
+/// (ms since the epoch), what `NoteRow::recorded_at` and the supervision record are judged at.
 const NOTES_SQL: &str = concat!(
     "SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
