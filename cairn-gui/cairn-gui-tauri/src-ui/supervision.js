@@ -1,7 +1,7 @@
 // The supervision panels (sign-in slice 3c-3a, Task 8). Classic script, loaded after superuser.js
 // (uses its `superuserButton` and `superuserItem`), signer.js's `signerCredential` and
-// `clearSigner`, funnel.js's `failureText` (called only at run time), and main.js's `el`,
-// `setMessage`, `invoke`.
+// `clearSigner`, funnel.js's `failureText` and person_menu.js's `refreshMenuCount` (called only at
+// run time), and main.js's `el`, `setMessage`, `invoke`.
 //
 // Two panels over one command, `supervision_act`: the assigner's panel (every non-superuser
 // member, all six acts) and "My supervisees" (the members the person named in who's here
@@ -27,6 +27,8 @@ async function supervisionAct(refresh, statusId, op, staffId, supervisor) {
       staffId,
       supervisor: supervisor || null,
     });
+    // Who co-signs what may have changed: the bar's count is re-read (person_menu.js).
+    void refreshMenuCount();
   } catch (failure) {
     said = typeof failure === "string" ? failure : failureText(failure);
   }

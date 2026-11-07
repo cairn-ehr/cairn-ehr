@@ -38,7 +38,7 @@ fn member<'a>(
 }
 
 /// The strip's staff ID and passphrase for `staff_id`.
-fn credential(staff_id: &str) -> Option<Credential> {
+pub(crate) fn credential(staff_id: &str) -> Option<Credential> {
     Some(Credential {
         staff_id: staff_id.into(),
         passphrase: Zeroizing::new(pass(staff_id)),
@@ -47,7 +47,7 @@ fn credential(staff_id: &str) -> Option<Credential> {
 
 /// The fixture above: the serial guard (bind it), the owner's client, the window's state with
 /// who's here naming Sue, the chart, and Bea's part. `None` without `CAIRN_TEST_PG`.
-async fn supervised_note() -> Option<(
+pub(crate) async fn supervised_note() -> Option<(
     tokio_postgres::Client,
     tokio_postgres::Client,
     AppState,

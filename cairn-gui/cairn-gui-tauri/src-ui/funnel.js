@@ -455,6 +455,7 @@ async function closeChart() {
   resetFrontDoor();
   el("browse-name").focus();
   void refreshTray();
+  void refreshMenuCount(); // person_menu.js: a saved draft may have moved the count
 }
 
 // ---- Start -------------------------------------------------------------------------------

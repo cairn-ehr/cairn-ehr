@@ -556,3 +556,11 @@ incremental writing lives pre-commit in the durable draft store
 > clears it. Where the writer had none then, a `co-signed` vouch by a non-student other than the writer, under a key
 > that still stands, clears it, or, only on a part whose envelope key is not a human's, their attested sign-off. The mark reads "(no supervisor recorded)" while the writer
 > has none. A supervisor may also "Co-sign as reviewed" a supervisee's note that owed no co-sign.
+>
+> **Since sign-in slice 3c-3c** ([ADR-0095](decisions/0095-the-person-menu.md), `db/073`, no wire change), the
+> person who's here names sees "Waiting for you: N" on the who's-here bar, across this node's charts. Group 1 lists
+> their open drafts, their parts that went in unsigned and are still unsigned, and their parts that count as
+> unsigned; group 2 lists their supervisees' parts that still await a co-sign; group 3 lists their supervisees'
+> parts of the last 7 days that they may review. N counts groups 1 and 2 only. Each group asks the chart's own questions of the rows the chart's
+> own query reads, so the menu and the byline cannot disagree, and reading it opens no sealed body. "Open note"
+> reads the list again and opens a chart only while a row of it still names that chart.

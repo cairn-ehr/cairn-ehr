@@ -10,6 +10,52 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3c-3c — THE PERSON MENU, "WAITING FOR YOU" (ADR-0095, db/073) — do not undo**
+(pins: `db/tests/073_person_menu_test.sql`, `crates/cairn-node/src/note/{menu_tests,menu_read,read}.rs`'s tests,
+`crates/cairn-node/tests/{note_menu_doors,note_parts_by_keys,note_person_menu}.rs`,
+`cairn-gui/cairn-gui-tauri/src/{person_menu,person_menu_db,person_menu_webview}_tests.rs`):
+- **The menu's groups ask the chart's own predicates and must never grow their own.** `note::menu::classify` lists
+  group 1 by `part_is_signed` (went in unsigned, `drafted_actor` the person) and `counts_as_unsigned` (`signed_by`
+  the person), group 2 by `cosign::awaits_cosign` with the person among `writer_supervisors`, group 3 by
+  `review::reviewable` within `REVIEW_DAYS`. **Tempting wrong fixes:** test only `signed_by.is_none()` for group 1 (a
+  repudiated part would be missed, and a colleague's sign-off would not take a gone-in-unsigned part off); test
+  `signed_by.student` or `needs_cosigning` for group 2 (a supervisor's co-sign would not clear it); write a SQL
+  "what is owed" query for speed (a second reading of the facts that drifts from the byline; the fix the `shortcut:`
+  owes is a projection the chart reads too). Pins: `menu_tests.rs`'s
+  `a_part_that_went_in_unsigned_is_mine_until_anyone_signs_it`, `a_part_signed_with_my_repudiated_key_is_mine_until_i_re_sign`,
+  `a_repudiated_part_is_in_nobodys_cosign_group`, `a_requirement_lifted_after_signing_keeps_the_part_waiting`,
+  `a_supervisor_who_stepped_away_sees_nothing_of_that_supervisee`;
+  `note_person_menu.rs::require_sign_lift_keeps_the_part_waiting_and_counted`.
+- **The by-keys read is the chart's query with another `WHERE`.** `notes_sql!` builds both `NOTES_SQL` and
+  `NOTES_BY_KEYS_SQL`, and `note_row` parses both. **Tempting wrong fix:** a lean column list "since the menu shows
+  no text" (every grade, vouch and supervision fact would then be computed twice, and could disagree). Pins:
+  `note_parts_by_keys.rs::a_part_read_by_keys_equals_the_same_part_read_by_chart`,
+  `read.rs::the_attester_is_read_only_through_the_vouch_door` (both expansions).
+- **Never count group 3.** `PersonMenu::count` is `own + cosign`; the bar, the picker and their equality all come from
+  it. **Tempting wrong fixes:** add `review.len()` "so supervisors see the work" (the design's anti-goal: a number
+  that grows with every supervisee's note nags, and is then ignored); count in JS from the drawn rows (the picker and
+  the bar could disagree); open the review `<details>` by default. Pins: `menu_tests.rs::a_reviewable_part_is_listed_for_seven_days_and_never_counted`,
+  `person_menu_tests.rs::the_count_is_own_plus_cosign_never_review`, `person_menu_db_tests.rs::the_pickers_count_equals_the_bars`,
+  `note_person_menu.rs::counts_equal_each_persons_menu_count`, `person_menu_webview_tests.rs::the_review_group_is_a_closed_details`.
+- **`person_menu_open` re-reads, and never trusts a drawn row.** It reads the menu again for the person named NOW,
+  opens only a chart a row of that read names, and opens it through `open_chart_impl`; the script first lets a sign
+  settle and closes an open chart. **Tempting wrong fixes:** call `open_chart` from the row's `patient_id` "since the
+  chart is in `shown` already" (a row that vanished, or a previous person's row, would open); send the drawn row to
+  Rust and check it against itself; skip `closeChart()` "to avoid the flash" (the open chart's queued saves would no longer
+  be sure to land while the node still shows it). Pins: `person_menu_db_tests.rs`'s `a_row_that_vanished_is_refused_and_opens_no_chart`,
+  `a_repicked_person_cannot_open_the_previous_persons_row`;
+  `person_menu_webview_tests.rs::open_menu_row_settles_signs_and_closes_the_chart_before_opening`.
+- **The last person's menu leaves the bar before the next person's read.** `showClaim` calls `hideMenu()` (hidden,
+  closed, emptied) before `refreshMenuCount()`, and a failed read hides it too. **Tempting wrong fix:** drop the hide
+  "to avoid the flicker" (Dr A's rows would sit under Dr B's name until B's read lands, or for good if it fails).
+  Pin: `person_menu_webview_tests.rs::the_last_persons_menu_leaves_before_the_next_read`.
+- **The drafts door's `due` and `stuck` are db/067's expressions, copied.** **Tempting wrong fix:** compute the due
+  time in Rust from the quarantine (a second copy of the formula, free to drift from the chart's draft row).
+  Pin: `note_menu_doors.rs::drafts_by_writer_due_agrees_with_the_per_chart_door`.
+- **Every sentence is Rust's.** `person_menu_view.rs` words the rows, the picker's suffix and the counts-failure
+  sentence; `person_menu.js` draws them. **Tempting wrong fix:** build " · N waiting" or "Waiting counts could not be
+  read." in JS "since it is one line". Pin: `person_menu_webview_tests.rs::the_script_writes_no_sentence_the_clinician_reads`.
+
 **⇒ GUI SIGN-IN SLICE 3c-3a — SUPERVISION AND THE MANDATORY CO-SIGN (ADR-0094, db/072, db/004 + db/052 in place) — do not undo**
 (pins: `db/tests/{004_actors,072_supervision}_test.sql`, `crates/cairn-node/src/note/{supervision,cosign_tests,review}.rs`'s
 tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,note_supervision,note_review_cosign,restore_actor_registry_supervision}.rs`,

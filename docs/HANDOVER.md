@@ -40,68 +40,43 @@
 >   untouched draft goes in **unsigned** after the quarantine, `cairn-node note-set-quarantine`, default 180 min; a
 >   keyless named writer leaves it **stuck**; `Asserted` reads "went in unsigned"; #974 ruled not `M > N`). Filed
 >   **#979** (deferred) · **#980** · #982 (built) · **#983**; commented #968; RUNBOOK §20.
-> - **Slices 3b-2b + 3c-1 MERGED 2026-11-05 — PRs [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984) and
->   [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)** (ROADMAP and each ADR have the detail).
->   **3b-2b** ([ADR-0090](spec/decisions/0090-the-audited-discard.md), spec v0.92, `db/068` + `db/069`): **Discard
->   draft** leaves a signed, sealed `clinical.note-discard.asserted`; only a draft whose every non-blank part is the
->   discarder's own **by key** may go; the chart lists a one-line marker, never a note. Open: **#985** · **#986** ·
->   **#987** · **#988** · **#989** · **#990** · **#991** · #980 still; RUNBOOK §21. **3c-1**
->   ([ADR-0091](spec/decisions/0091-the-compound-note-and-the-addendum.md), spec v0.93, `db/070`): **"Add to this
->   note"** makes an addendum `addendum-to` the ROOT, the target set once in the draft header; db/064 rule 6a at the
->   AUTHORING door only; a note and its parts read as **one compound note** (pure grouping in `cairn-node`); #948
->   penned where the body is readable. Open: **#993** (`K = 4 > N = 3`) · **#994** · **#995** · **#996** · **#998** ·
->   **#999** (a decision); RUNBOOK §22.
-> - **Slice 3c-2 MERGED 2026-11-06 in PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)**
->   ([ADR-0092](spec/decisions/0092-the-vouch-and-the-sign-off.md), spec **v0.94**, `db/071` with db/037 + db/044 in
->   place, `SCHEMA_GENERATION` **71**; plan
->   [`superpowers/plans/2026-11-06-sign-in-slice-3c-2-vouch-and-sign-off.md`](superpowers/plans/2026-11-06-sign-in-slice-3c-2-vouch-and-sign-off.md)).
->   The **vouch**: one sealed, human-signed `clinical.note-attestation.asserted` per vouched part (target + content
->   address + act `addendum` | `sign-off`), offline-first at the remote door, held to the part at the strict door; read
->   only when its token is verified AND it names the part's own bytes AND its own chart; people compared by actor. **"Sign off this
->   note"** (offered unless one non-student has signed every part — maintainer, 2026-11-06) is AS SHOWN (`Changed`
->   unless the re-read compound has exactly the shown parts); an addendum's Sign also vouches the signing KEY's own
->   earlier unsigned parts that the strip's "also covers" line listed. `student` role; "— not co-signed";
->   "(signer unconfirmed)"; "signed off by …". Open: **#1001** (a forked draft keeps a stale covers line) · **#1002**
->   (the medication pane reads the strip while a note act is in flight) · **#1003** (review residuals) · **#1005**
->   (Sign's "not covered" line misstates why when the note it adds to is no longer readable). The `/finalcheck` pass
->   fixed an addendum's Sign vouching nothing when its header targets a middle part (it now takes the compound
->   CONTAINING the target, ADR-0092 decision 15), pinned five untested rules, and corrected seven doc sentences; #995 extended
->   (the sealed heal path). Owed by a human: **RUNBOOK §23** (sign off ≤ 3 s; the student byline and its clearing; the
->   covers line on Add and on reopen; keyboard + VoiceOver; WebKit).
-> - **Slice 3c-3 DESIGNED 2026-11-06/07 + 3c-3b MERGED 2026-11-07 in PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006).**
->   Design [`superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md`](superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md)
->   (maintainer-approved): **supervision** many-to-many + a per-staff `needs_cosigning` (students always; others when
->   set; any one supervisor lifts it; no dates; signed, append-only); "— not co-signed" judged as of the part's
->   signing; a mandatory co-sign cleared only by a supervisor of the writer (no supervisor recorded → today's rule +
->   "no supervisor recorded"); "Co-sign as reviewed" for supervisors only; the **person menu** (own signatures ·
->   needs your co-signature · supervisees' recent notes, uncounted); split **3c-3a** supervision → **3c-3b**
->   repudiated signature → **3c-3c** the menu. **3c-3b** ([ADR-0093](spec/decisions/0093-a-repudiated-signature-counts-as-unsigned.md),
->   spec **v0.95**, no SQL/wire change; plan
->   [`superpowers/plans/2026-11-07-sign-in-slice-3c-3b-repudiated-signature.md`](superpowers/plans/2026-11-07-sign-in-slice-3c-3b-repudiated-signature.md)):
->   a part signed by a since-repudiated key reads "(key had been repudiated) — counts as unsigned" and is cleared
->   only by the real person's own re-sign under a standing key (`vouch::re_signs`, THE one predicate); a repudiated
->   key's vouch counts nothing; a re-signed part can be co-signed again (#1009, fixed on the branch). Open: **#1007**
->   (envelope key's repudiation unread) · **#1008** (a colleague who vouched is still offered Sign off) · **#1010**
->   (pre-re-sign attested sign-off leaves "— not co-signed" unofferable — 3c-3a's offer rule answers it) ·
->   **#1011** (re-signing one's own part via Sign off vouches the other writers' parts — needs a gesture design) ·
->   **#1012** (a colleague's sign-off over a repudiated part reads "Signed off — every part…" though it clears nothing).
->   #918's link half stays open. Owed by a human: **RUNBOOK §24**.
-> - **Slice 3c-3a BUILT 2026-11-07, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013) READY FOR REVIEW — NOT merged**
->   ([ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), spec **v0.96**, `db/072` with db/004 +
->   db/052 in place, `SCHEMA_GENERATION` **72**; plan
->   [`superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md`](superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md),
->   maintainer-reviewed). Supervision is six no-key ops on `actor_event` (+ `related_actor`), carried by restore; db/072's
->   one act door (approver rule, matrix, nobody acts on their own supervision as the supervisee) + console door
->   (`cairn-node supervision-set` / `supervision-list`); the note read annotates each part with the record AS OF its HLC
->   wall (ms floor); "— not co-signed" from the record (students always), cleared only by a supervisor as of the co-sign,
->   else the fallback; the mark adds "(no supervisor recorded)" while the writer has none now; Sign off stays offered while a mandatory co-sign is missing;
->   "Co-sign as reviewed" (node + window); the assigner panel and "My supervisees". Maintainer 2026-11-07: a re-sign under
->   an UNCONFIRMED key counts. Open: **#1014** (registry rows vs HLC wall are two clocks — a peer-ratcheted HLC lets a lift
->   clear earlier parts; **gates any multi-node pilot**) · **#1015** (both buttons, neither says what it covers) ·
->   **#1016** (review residuals) · **#1017** (the self-dealing check compares role-actors: a person's own admin
->   role-actor holding the assigner right can unlink their supervisor; ADR-0094 (q)) · **#1018** (an unconfirmed
->   assigner is told they may lack the right). Owed by a human: **RUNBOOK §25**. A local-state export carrying any supervision row is
->   one-way (an older build's restore refuses the six ops).
+> - **Slices 3b-2b → 3c-3b MERGED 2026-11-05 → 11-07** (ROADMAP and each ADR have the detail; open issues by slice):
+>   **3b-2b** (PR #984, [ADR-0090](spec/decisions/0090-the-audited-discard.md), `db/068` + `db/069`: Discard draft leaves
+>   a signed, sealed `clinical.note-discard.asserted`; own parts by KEY only). Open: **#985** · **#986** · **#987** ·
+>   **#988** · **#989** · **#990** · **#991** · #980 still; RUNBOOK §21. **3c-1** (PR #992,
+>   [ADR-0091](spec/decisions/0091-the-compound-note-and-the-addendum.md), `db/070`: "Add to this note" → `addendum-to`
+>   the ROOT; one compound note). Open: **#993** (`K = 4 > N = 3`) · **#994** · **#995** · **#996** · **#998** · **#999**
+>   (a decision); RUNBOOK §22. **3c-2** (PR #1000, [ADR-0092](spec/decisions/0092-the-vouch-and-the-sign-off.md),
+>   `db/071`: the vouch, one sealed human-signed attestation per part, read only verified + naming the part's own bytes
+>   + its own chart; "Sign off this note" AS SHOWN; the `student` role). Open: **#1001** · **#1002** (the medication
+>   pane reads the strip while a note act is in flight) · **#1003** · **#1005**; #995 extended; RUNBOOK §23. **3c-3**
+>   designed in [`superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md`](superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md);
+>   **3c-3b** (PR #1006, [ADR-0093](spec/decisions/0093-a-repudiated-signature-counts-as-unsigned.md), no SQL: a
+>   since-repudiated key's part counts as unsigned until the real writer re-signs, `vouch::re_signs`). Open: **#1007** ·
+>   **#1008** · **#1010** · **#1011** (needs a gesture design) · **#1012**; #918's link half stays open; RUNBOOK §24.
+> - **Slice 3c-3a MERGED 2026-11-07 in PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)**
+>   ([ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), spec v0.96, `db/072`): supervision as six
+>   no-key `actor_event` ops carried by restore; "— not co-signed" judged as of the part's HLC wall; a mandatory co-sign
+>   cleared only by a supervisor as of the co-sign; "Co-sign as reviewed"; the assigner panel and "My supervisees"; an
+>   unconfirmed re-sign counts (maintainer). Open: **#1014** (two clocks — **gates any multi-node pilot**) · **#1015** ·
+>   **#1016** · **#1017** · **#1018**. Owed by a human: **RUNBOOK §25**. A local-state export carrying a supervision
+>   row is one-way.
+> - **Slice 3c-3c BUILT 2026-11-07 — draft PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019), ready for the
+>   maintainer's review, NOT merged** ([ADR-0095](spec/decisions/0095-the-person-menu.md), spec **v0.97**, `db/073`,
+>   `SCHEMA_GENERATION` **73**; plan
+>   [`superpowers/plans/2026-11-07-sign-in-slice-3c-3c-person-menu.md`](superpowers/plans/2026-11-07-sign-in-slice-3c-3c-person-menu.md),
+>   Q1–Q3 ruled as their defaults). "Waiting for you: N" on the who's-here bar for the person NAMED there: (1) their
+>   drafts, parts gone in unsigned, parts signed with their since-repudiated key; (2) supervisees' parts awaiting their
+>   co-sign; (3) supervisees' notes of the last 7 days to review — collapsed, never counted. Every group is the chart's
+>   own predicate over the chart's own query read by keys (`notes_sql!`, `parts_by_keys`, pure `note::menu`); db/073's
+>   two read doors (people + keys; drafts by writer); "Open note" re-reads and keeps the wrong-chart rule; the picker
+>   shows each person's count. Open: **#1020** (two actors sharing a staff id) · **#1021** (the reads grow with all-time
+>   history and serialise with pick/save/Sign — measure at scale) · **#1022** (test hygiene) · **#1023** (residuals,
+>   incl. `funnel.js` at 499 lines) · **#1024** (`note::menu` types: an `Option` staff id, a `MenuItem` target enum).
+>   Owed by a human: **RUNBOOK §26** (also WebKit + real Tauri IPC, walked in Chromium only). The 2026-11-08 final
+>   check fixed ADR-0095 (j)'s wording, made "Open note" stay on the chart when the Sign in flight did not go
+>   through (closing the chart erased that outcome), worded a failed bar read, and made the open check's charts a CI-tested
+>   `PersonMenu::charts()`.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -154,15 +129,18 @@
 >    `db/070`, `SCHEMA_GENERATION` 70); **3c-2 MERGED in PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)**
 >    (ADR-0092, spec v0.94, `db/071`, `SCHEMA_GENERATION` 71; the slice bullet above has its issues). **3c-3b MERGED in PR
 >    [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95); the maintainer ruled 2026-11-07 that a re-sign under an UNCONFIRMED key counts, read
->    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a BUILT, PR #1013 ready for review** (the slice bullet above):
->    it needs the maintainer's review + merge. **Next: 3c-3c** (the person menu, design §3.4; it reads 3c-3a's record and
->    3c-3b's repudiated rows), or **#1014** first if a multi-node pilot nears. Design §10's findings 1–2 are
+>    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a MERGED in PR #1013** (the slice bullet above).
+>    **3c-3c BUILT, draft PR #1019** (the slice bullet above): **it needs the maintainer's review + merge.** With it,
+>    slice 3 (notes, drafts, who's here, sign-off, supervision, the menu) is complete. **Next — the maintainer picks:**
+>    the milestone's missing **allergy** stream (no allergy stream exists; the milestone needs "record an allergy");
+>    slice 4 (the emergency key); **#1014** (first if a multi-node pilot nears); or **#1021**'s measurement at scale.
+>    Design §10's findings 1–2 are
 >    decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930, merged; it also carries the per-note "unconfirmed" marker and #918's display half). The maintainer picks
 >    the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
->    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**; #838's
+>    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**; #838's
 >    **§15** (incl. #861's current-line check); **§14** (c) (the cause on screen; a refused reopen offers no retry; the
 >    front door's top line clears) and (d) (no waiting bar on an ordinary press; a locked `medication_statement` →
 >    "Waiting…", cut off by 15 s, and since #893 the outcome says the window cut it off). **#894** needs the satellite
@@ -298,15 +276,15 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
-**Spec:** **v0.96** (newest ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
+**Session date:** 2026-11-07 (3c-3c plan → SDD, 7 tasks + final fix wave, draft PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)) · 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
+**Spec:** **v0.97** (newest ADR-0095, PR #1019, `db/073`; v0.96 ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
-wording only) · **`SCHEMA_GENERATION`:** **72** (`db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
+wording only) · **`SCHEMA_GENERATION`:** **73** (`db/073`, PR #1019; `db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a
 doubted link can be confirmed from the window; clinicians sign in per act and write, autosave and sign a progress note,
-several writers to a draft, an untouched draft goes in unsigned by itself, a clinician can discard their own draft, leaving a signed record of it, and can add to a signed note, which then reads as one note with its parts; a part can be signed later, by its writer or by a supervisor's sign-off (PR #1000), and a part signed by a since-repudiated key counts as unsigned until its real writer re-signs (PR #1006); supervision is recorded, a supervisee's part needing a co-sign waits for a supervisor, and a supervisor can co-sign a supervisee's note as reviewed (PR #1013, ready for review).
+several writers to a draft, an untouched draft goes in unsigned by itself, a clinician can discard their own draft, leaving a signed record of it, and can add to a signed note, which then reads as one note with its parts; a part can be signed later, by its writer or by a supervisor's sign-off (PR #1000), and a part signed by a since-repudiated key counts as unsigned until its real writer re-signs (PR #1006); supervision is recorded, a supervisee's part needing a co-sign waits for a supervisor, and a supervisor can co-sign a supervisee's note as reviewed (PR #1013); the person named in who's here sees in one menu what waits for their signature or co-signature (PR #1019, not merged).
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waited on a clinical-note surface, which 3a now gives it) · §5.4 John-Doe (§5.12
@@ -331,26 +309,27 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
-### 2026-11-07 — slice 3c-3a (PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)): plan → SDD, 9 tasks
+### 2026-11-07 — slice 3c-3c (draft PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)): plan → SDD, 7 tasks
 
-Plan maintainer-reviewed (record as `actor_event` ops; the wider self-dealing rule; an unconfirmed re-sign counts).
-Every task reviewed + re-reviewed, an independent ADR fact-check (3 false sentences in round 1, 1 new one in round 2),
-a whole-branch review (3 Important: one fixed, two filed as #1014/#1015) and one fix wave; residuals #1016. The `/finalcheck` review added three door and co-sign tests, comment fixes
-and ADR-0094 (q), and filed #1017 and #1018. Ledger
-`.superpowers/sdd/2026-11-07-sign-in-slice-3c-3a-supervision/` (gitignored; deleted at merge). Full local gate at the
-code head: 3393 passed, 0 failed, no self-skips; GUI `--bins` 760 with the DB env.
-- **⇒ Two clocks in one comparison is a finding, even when each is right.** Registry rows are DB-clock, parts are HLC
-  wall (ms vs µs, and an HLC a peer pushed ahead): the "as of signing" promise holds only on one clock (#1014).
-- **⇒ A fallback must accept what the floor can ADMIT on that part**, or it nags forever: a part gone in unsigned is
-  node-enveloped, so the floor refuses `co-signed` there — the plan's "CoSigned only" fallback could never clear it.
-- **⇒ The controller's own copy is a claim too.** Two of my outcome sentences overclaimed in a mixed state (a note with
-  a mandatory part and a reviewable one); a borrowed sibling sentence (Sign off's "every part") was caught before build.
-- **⇒ "Who wrote it" has one predicate per question.** Annotation used `writer_actor` (falls back to `drafted_actor`);
-  the review needed "who SIGNED it" (`writer_signature`) — a timer part signed off by a colleague was offered for review.
+Plan written, maintainer-ruled (Q1–Q3 defaults), then SDD: every task reviewed (Opus on the groups, the window and the
+docs), five fix rounds, an independent ADR fact-check (1 false + 5 imprecise sentences, then 3 more in round 2), a
+whole-branch review (2 Important, fixed in one wave) and its re-review. Full local gate at the code head e3300fb:
+**3431 passed, 0 failed, no self-skips**; after the final wave GUI `--bins` 784, the three menu DB suites 18, root
+guards 74 (DB-free). Ledger `.superpowers/sdd/2026-11-07-sign-in-slice-3c-3c-person-menu/` (gitignored).
+- **⇒ A count belongs to a person: hide it the moment the claim changes**, before the new read (final review I1 —
+  B read A's "Waiting for you: 5" until B's read landed, and forever if it failed).
+- **⇒ A budget's fixture must be able to reach the cliff.** 60 notes cannot show a read that grows with all-time history
+  and serialises with pick/save/Sign on the window's one connection (#1021); say so in the ADR, not only in a `shortcut:`.
+- **⇒ Grep the payload before adding a field**: the plan's `part_ids` already existed as `shown_parts`. **A plan's
+  "one exception" to a house rule is a plan defect** (a JS-worded failure sentence): send the words from Rust.
+- **⇒ "As on the chart" is a claim about the sort KEY, not only the tie-break** — the ADR's one false sentence.
 
-### 2026-11-06/07 — slices 3c-2 (PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) and 3c-3b (PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006))
+### 2026-11-06/07 — slices 3c-2 (PR #1000), 3c-3b (PR #1006), 3c-3a (PR #1013)
 
-Condensed 2026-11-07; each plan → SDD, a final review, one fix wave; RUNBOOK §23/§24 owed (human).
+Condensed 2026-11-07; each plan → SDD, a final review, one fix wave; RUNBOOK §23–§25 owed (human).
+- **⇒ Two clocks in one comparison is a finding, even when each is right** (#1014). **A fallback must accept what the
+  floor can ADMIT on that part**, or it nags forever. **"Who wrote it" has one predicate per question**
+  (`writer_actor` vs `writer_signature`). **The controller's own copy is a claim too.**
 - **⇒ Walk an overlay BEFORE and AFTER its repair** (#1009). **A test filter is a claim about which tests ran**
   (`--bins notes_` matched nothing yet printed "passed"). **The floor's identity helpers answer different questions**
   (`cairn_note_key_actor` ignores repudiation; `cairn_key_confirmation` names it).

@@ -116,6 +116,20 @@ impl Supervision {
     pub fn supervisors_now(&self, actor: &str) -> Vec<String> {
         self.standing(actor, None)
     }
+
+    /// Every actor `supervisor` supervises now, sorted and without repeats (the menu's group 3
+    /// reads their notes). The inverse of `supervisors_now`, by construction.
+    pub fn supervisees_now(&self, supervisor: &str) -> Vec<String> {
+        let mut actors: Vec<String> = self.rows.iter().map(|r| r.actor.clone()).collect();
+        actors.sort();
+        actors.dedup();
+        actors.retain(|a| {
+            self.supervisors_now(a)
+                .iter()
+                .any(|s| same_actor(s, supervisor))
+        });
+        actors
+    }
 }
 
 /// Read the record through its door, on the caller's client (so the caller's snapshot).
@@ -184,6 +198,20 @@ mod tests {
     }
     fn sup(rows: Vec<SupervisionRow>) -> Supervision {
         Supervision::from_rows(rows).unwrap()
+    }
+
+    #[test]
+    fn supervisees_now_lists_each_standing_supervisee_once() {
+        let s = sup(vec![
+            row("link-supervisor", "b", Some("a"), 1),
+            row("link-supervisor", "c", Some("a"), 2),
+            row("unlink-supervisor", "c", Some("a"), 3),
+            row("link-supervisor", "c", Some("a"), 4),
+            row("link-supervisor", "d", Some("e"), 5),
+        ]);
+        assert_eq!(s.supervisees_now("a"), ["b", "c"]);
+        assert_eq!(s.supervisees_now("e"), ["d"]);
+        assert!(s.supervisees_now("zz").is_empty());
     }
 
     #[test]

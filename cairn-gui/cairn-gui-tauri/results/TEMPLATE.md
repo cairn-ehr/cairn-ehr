@@ -574,6 +574,50 @@ observed \_\_.
 | "— not co-signed (no supervisor recorded)" read with the heading | | |
 | No dialog | | |
 
+## The person menu: "Waiting for you" (GUI sign-in slice 3c-3c, runbook §26)
+
+Fixture: supervisees of `dr-b` \_\_ · `clinical_note` rows \_\_ · rows in `dr-b`'s menu \_\_ (smaller than 20
+supervisees and a week of notes? say so: the figure is for this size only). A fixture this size cannot show a cliff that grows
+with history (#1021).
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| The menu read: a pick of `dr-b` → "Waiting for you: N" on the bar | | | | ≤ 1 s | |
+| The picker's counts: its list on screen → the last " · N waiting" | | | | ≤ 1 s | |
+| A pick while the counts load: the press on `dr-b` → her name on the bar | | | | ≤ 1 s | |
+| Co-sign from the menu: Staff ID keystroke on the opened note → "Signed off — …" and the byline re-read | | | | ≤ 3 s | |
+| `ui_gesture_timing` `note-sign-off` (the co-sign's write half) | | | | — | |
+
+Steps: find what waits for my signature paper *N* = one walk per folder → forced *M* = 2 → observed \_\_ ·
+countersign one note from the menu 2 → 3 (ruled not an `M > N` defect) → observed \_\_ · audit a supervisee's
+recent work unbounded → 2 → observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Nobody named: no "Waiting for you"; Dr C named: "Waiting for you: 0", "Nothing here." twice, the review summary closed and uncounted | | |
+| Dr P's part in Dr B's "Needs your co-signature": "By Dr P — needs your co-signature (you or Dr C)"; "(you or Dr B)" for Dr C | | |
+| Nurse A's note in Dr B's review group, "By Nurse A — not yet reviewed", and NOT counted; absent for Dr C | | |
+| Dr B's draft: "Draft note", "goes into the record unsigned at {time} …", first in "Your signature", counted | | |
+| After the quarantine commit: "Went in unsigned — sign it", re-read within 60 s while the menu is closed | | |
+| After *Lift co-signing*: Dr P's earlier part still listed and counted; Dr C's sign-off takes it off Dr B's list | | |
+| The picker: list first, then " · N waiting"; Dr B's N equals her bar's; no suffix at 0 | | |
+| *Open note* from the front door: the chart opens on the note, focused; the menu closed | | |
+| *Open note* from an open chart with a draft being typed: the typing saved, then the chart opens on the note | | |
+| *Open note* on a review row, then *Co-sign as reviewed*: the row leaves the review group; the count unchanged | | |
+| A vanished row: "That note no longer waits in your list — the list was read again." on the bar, focused; no chart opens | | |
+| A who's-here switch: the menu re-read for the new person at once; no row of the previous person's stays | | |
+| WebKit (the real window): any difference from the runbook's words; the 60 s re-read never takes focus from an open menu | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| "Waiting for you: N" by keyboard, read "Waiting for you: N — open the list" | | |
+| Each row's button: visible "Open note", read "Open note: {patient}, {when}" | | |
+| The review summary by keyboard, read with its heading only | | |
+| After *Open note*, the focus on the note (or draft) it named | | |
+| The refusal sentence read and focused | | |
+| The counts failing: no suffix, "Waiting counts could not be read." read in the picker | | |
+| No dialog; no passphrase but the co-sign's strip | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

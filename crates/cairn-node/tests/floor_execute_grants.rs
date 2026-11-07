@@ -465,6 +465,20 @@ async fn public_cannot_execute_the_vouch_doors() {
     .await;
 }
 
+/// The person menu's two reader doors (sign-in slice 3c-3c, db/073): `cairn_window` only
+/// (driven in `window_role_grants_notes.rs`).
+#[tokio::test]
+async fn public_cannot_execute_the_person_menu_doors() {
+    assert_public_cannot_execute(
+        "p.proname IN ('cairn_note_people', 'cairn_note_drafts_by_writer')",
+        2,
+        "person menu door",
+        "Fix: `REVOKE EXECUTE ON FUNCTION <name>() FROM PUBLIC;` in db/073_person_menu.sql, \
+         beside its GRANT to cairn_window.",
+    )
+    .await;
+}
+
 /// The supervision doors and helpers (sign-in slice 3c-3a, db/072), named because the family has
 /// no registry to read. The act door, prior and staff list are `cairn_agent`'s, the record
 /// `cairn_window`'s (driven in `window_role_vault_doors.rs`); the console door and every helper
