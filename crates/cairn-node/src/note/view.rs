@@ -169,9 +169,10 @@ fn vouch_words(v: &PartVouch, is_re_sign: bool) -> String {
 /// AS OF THE PART'S TIME (a requirement lifted later leaves it standing). Only one of the
 /// writer's supervisors, judged at the co-sign's own time, clears it; where the writer had no
 /// supervisor then, any non-student this node can place, other than the writer, clears it with a
-/// sign-off the floor admits (a co-sign, or an attested sign-off on a part that went in unsigned:
-/// the rule before this slice, `cosign::clears_cosign`). When the writer has no supervisor recorded NOW, the mark
-/// reads `" — not co-signed (no supervisor recorded)"`: nobody in particular is waited for. It
+/// sign-off of the strongest kind the floor allows on the part (a co-sign, or, only where the
+/// part's envelope key is not a human's, as for a part that went in unsigned, an attested
+/// sign-off: the fallback, `cosign::clears_cosign`). When the writer has no supervisor recorded
+/// NOW, the mark reads `" — not co-signed (no supervisor recorded)"`: nobody in particular is waited for. It
 /// sits straight after the signer's name or, for a part that went in unsigned and was signed
 /// later by its own writer, straight after that vouch's words (the signature a co-sign
 /// countersigns, [`writer_signature`]).

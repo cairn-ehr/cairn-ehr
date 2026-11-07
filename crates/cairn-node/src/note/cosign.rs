@@ -11,11 +11,16 @@
 //! * It is CLEARED ([`clears_cosign`]) by a vouch under a standing key, of a known actor other
 //!   than the writer's, by someone who supervised the writer when they vouched
 //!   (`PartVouch::by_supervisor`, any role). Where the writer had NO supervisor at that time, the
-//!   rule before this slice applies (the fallback): any non-student's sign-off of the kind the
-//!   floor admits clears it (`co-signed`, or `attested` on a part that went in unsigned).
+//!   fallback applies: a non-student's vouch clears it when it is the strongest countersignature
+//!   the floor allows ON THAT PART — `co-signed`, or, only where the part's envelope key is not a
+//!   human's (db/071 then refuses `co-signed`), an attested `sign-off`. An attested sign-off on a
+//!   human-signed part is admitted by the floor too, but clears nothing.
 //!
-//! With every annotation at its default (no supervision rows at all) these rules are exactly
-//! the pre-slice rule, a student's part waiting until a non-student co-signs it.
+//! With every annotation at its default (no supervision rows at all) these rules are the
+//! pre-slice rule, a student's part waiting until a non-student co-signs it, with two
+//! differences: a part its student writer signed only by a later vouch now carries the mark, and
+//! an attested sign-off on a part whose envelope key is not a human's clears it (the old rule
+//! needed `co-signed`, which the floor refuses there).
 //! `view::part_byline` words [`awaits_cosign`] as " — not co-signed", and
 //! `vouch::needs_sign_off` keeps "Sign off this note" offered while it is true.
 use super::read::NoteRow;
@@ -56,9 +61,10 @@ pub fn cosign_required(p: &NoteRow) -> bool {
 /// nothing, ADR-0093), of a known actor (an empty one might be anyone, the writer included) that
 /// is not the writer's own; then either its signer supervised the writer at the vouch's time
 /// (any role), or, where the writer had no supervisor then, the fallback: a non-student's
-/// sign-off of the kind the floor admits — a `co-signed` one, or, on a part whose envelope is not
-/// a human's (it went in unsigned under the node's key, where db/071 refuses `co-signed`), an
-/// attested `sign-off`. A student's vouch never clears it: the floor never checks the student
+/// strongest countersignature the floor allows on this part — a `co-signed` one, or, only on a
+/// part whose envelope key is not a human's (as one that went in unsigned under the node's key,
+/// where db/071 refuses `co-signed`), an attested `sign-off`. An attested sign-off on a
+/// human-signed part is admitted by the floor but does not clear it. A student's vouch never clears it: the floor never checks the student
 /// role, so one may be stored.
 ///
 /// Order does not matter: a vouch made BEFORE the writer's own later signature still counts, as

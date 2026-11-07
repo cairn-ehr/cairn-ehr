@@ -2064,8 +2064,8 @@ re-read.
 **Measurement 3 — Co-sign as reviewed (≤ 3 s).** Dr P no longer needs co-signing; `dr-b` still supervises her. As
 `dr-p`, sign five one-part notes, and one note that `nurse-a` then adds to (*Add to this note*, `agree`, *Sign note*).
 
-- [ ] With `dr-c` named in who's here, no note offers *Co-sign as reviewed*. With `dr-b` named, each of Dr P's notes
-      offers it beside no *Sign off this note* (the five) and beside *Sign off this note* on the shared note.
+- [ ] With `dr-c` named in who's here, none of these notes offers *Co-sign as reviewed*. With `dr-b` named, each of
+      these notes offers it beside no *Sign off this note* (the five) and beside *Sign off this note* on the shared note.
 - [ ] As `dr-b`, press it on the five, timing each from the first keystroke in the strip's Staff ID until
       "Co-signed as reviewed — the note now carries your co-signature." shows and the byline is re-read (budget
       ≤ 3 s); then `ui_gesture_timing`'s `note-sign-off` rows. Each reads "signed by Dr P · co-signed by Dr B", the

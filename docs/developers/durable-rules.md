@@ -26,8 +26,9 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   signing counts as in effect. **Tempting wrong fixes:** drop the floor "because chrono compares fine" (a requirement
   recorded at .000700 and a part signed at .000 would read as signed before it); use `<`. Pins:
   `supervision.rs`'s `a_row_in_the_same_millisecond_as_the_part_is_in_effect`, `the_requirement_is_read_as_it_stood_at_t`.
-- **The fallback accepts what the floor admits: a `co-signed` vouch, or an attested `sign-off` on a part whose
-  envelope key is not a human's.** With no supervisor at the vouch's time, `clears_cosign` accepts a non-student's
+- **The fallback accepts the strongest countersignature the floor allows ON THAT PART: a `co-signed` vouch, or,
+  only where the part's envelope key is not a human's, an attested `sign-off`.** (The floor also admits an attested
+  sign-off on a human-signed part; that one clears nothing.) With no supervisor at the vouch's time, `clears_cosign` accepts a non-student's
   vouch whose role is `co-signed`, or whose act is `sign-off` when `signer_human_actor` is `None`. **Tempting wrong
   fixes:** demand `CoSigned` "because the old rule did" (db/071 refuses `co-signed` on a part that went in under the
   node's key, so such a student's part would wait for ever); accept any attested sign-off (it would clear a
@@ -39,7 +40,8 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   rules countersign. **Tempting wrong fix:** fall back to `drafted_actor` when `signed_by`'s actor is empty "to find
   the writer anyway" (the record would be judged for someone this node cannot show signed it). Pins:
   `supervision.rs::an_unplaceable_signer_is_no_writer`, `cosign_tests.rs::an_unplaceable_signer_owes_no_co_sign`.
-- **Only a supervisor, as of the co-sign, clears a mandatory co-sign, and the offer stays until one does.** While the
+- **While the writer had a supervisor at the co-sign's time, only a supervisor as of then clears a mandatory
+  co-sign, and the offer stays until one does.** While the
   writer had a supervisor at the vouch's time, a non-supervisor's `co-signed` vouch is read and clears nothing.
   `needs_sign_off` is `signed_off_by(..).is_none() || any(awaits_cosign)`. **Tempting wrong fixes:** let any
   non-student's co-sign clear it, as before this slice; drop the `awaits_cosign` half "because `signed_off_by` already
@@ -80,8 +82,9 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   `notes_sign_off_webview_tests.rs::a_switch_during_a_review_says_what_the_review_did`,
   `supervision_panel_tests.rs::the_lift_sentence_claims_no_waiting_notes`.
 - **`related_actor` is skipped when absent in the export.** `ActorRegistryRow.related_actor` keeps
-  `skip_serializing_if = "Option::is_none"`, so an export with no link rows keeps today's shape; one with a link row
-  is a deliberate one-way door (ADR-0094 decision 7). **Tempting wrong fix:** drop the attribute "for symmetry" (every
+  `skip_serializing_if = "Option::is_none"`, so a row with no `related_actor` keeps today's shape. An export carrying any of
+  the six ops is a deliberate one-way door (ADR-0094 decision 7): a link row does not decode on an older build, and
+  an older restore door refuses every new op word. **Tempting wrong fix:** drop the attribute "for symmetry" (every
   export changes shape). Pins: `localstate_wire_pins.rs` (unchanged by the slice);
   `restore_actor_registry_supervision.rs::the_supervision_ops_survive_a_restore`.
 

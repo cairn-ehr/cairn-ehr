@@ -31,8 +31,9 @@
 --     door and the console door both run, so their refusals cannot drift apart.
 -- Nobody acts on their own supervision as the supervisee — not even holding the assigner right:
 -- otherwise they could unlink their supervisors and fall into the no-supervisor fallback, where any
--- clinician's co-sign clears theirs. A supervisor stepping away is the one act a link's own party
--- may make. Every refusal names its check and never echoes a token.
+-- clinician's co-sign clears theirs. Without the assigner right, stepping away is the one act a
+-- link's own party may make; an assigner may also link themselves as someone ELSE's supervisor.
+-- Every refusal names its check and never echoes a token.
 
 BEGIN;
 

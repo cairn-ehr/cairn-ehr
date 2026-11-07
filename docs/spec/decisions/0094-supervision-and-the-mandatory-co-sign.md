@@ -10,7 +10,8 @@
 - **Issues:** draft PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013) (GUI sign-in slice 3c-3a). Design:
   `docs/superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md` (§3.1–§3.3);
   plan: `docs/superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md`. Touches
-  [#1010](https://github.com/cairn-ehr/cairn-ehr/issues/1010) (not guaranteed (b)).
+  [#1010](https://github.com/cairn-ehr/cairn-ehr/issues/1010) (not guaranteed (b)) and settles the later-vouch mark
+  ADR-0092's Consequences left to [#1003](https://github.com/cairn-ehr/cairn-ehr/issues/1003).
 - **Builds on:** [ADR-0092](0092-the-vouch-and-the-sign-off.md) (the vouch, the sign-off, the pure rules and the
   words) · [ADR-0093](0093-a-repudiated-signature-counts-as-unsigned.md) (a repudiated signature counts as unsigned) ·
   [ADR-0085](0085-in-person-enrolment-and-re-key.md) (the enroller grant, *unconfirmed*, `rotate-key` keeps the actor) ·
@@ -26,9 +27,9 @@ file. A supervisor may also initial a registrar's entry as reviewed, though noth
 Until this slice only a student's part waited for a co-signature, because the `student` role is pinned on the actor
 (ADR-0092 decision 10). A co-sign by any non-student other than the writer cleared it, and nothing said who
 supervised whom. This slice, **3c-3a**, records supervision, makes "— not co-signed" follow that record as it stood
-when the part was signed, lets only a supervisor clear a mandatory co-sign, and adds "Co-sign as reviewed". No
-event type, twin, floor rule or projection changes. The record lives in the actor registry (db/004, db/052 in place), the doors in db/072
-(`SCHEMA_GENERATION` 72), and the rules in pure Rust over `NoteRow`.
+when the part was signed, lets only a supervisor clear a mandatory co-sign while the writer has one, and adds
+"Co-sign as reviewed". No event type, twin, floor rule or projection changes. The record lives in the actor registry
+(db/004, db/052 in place), the doors in db/072 (`SCHEMA_GENERATION` 72), and the rules in pure Rust over `NoteRow`.
 
 ## Decision
 
@@ -39,8 +40,9 @@ event type, twin, floor rule or projection changes. The record lives in the acto
    duplicate both: `vault_*` tables are in no backup (ADR-0083).
 2. **Nobody acts on their own supervision as the supervisee** (2026-11-07). This is wider than design §3.1's "no
    self-dealing". Otherwise a supervisee holding the assigner right could unlink their supervisors and fall into the
-   no-supervisor fallback (decision 13), where any clinician's co-sign clears theirs. A supervisor stepping away is
-   the one act on a link that its own party may make.
+   no-supervisor fallback (decision 13), where any clinician's co-sign clears theirs. Without the assigner right, stepping
+   away is the one act a link's own party may make; an assigner may also link themselves as someone else's
+   supervisor (decision 9).
 3. **A re-sign under an UNCONFIRMED key counts** (2026-11-07; this closes the question 3c-3b left open). It reads
    "(signer unconfirmed)", as built. `vouch::re_signs` asks only that the vouch's key is not repudiated and is of the
    same actor, never whether it is confirmed. ADR-0085: unconfirmed never blocks signing by itself.
@@ -92,10 +94,11 @@ event type, twin, floor rule or projection changes. The record lives in the acto
    `outside`, as an enroller does (ADR-0085 decision 3). The token must be the approver's own attestation over the
    act's address. The address is `'\x1220' || sha256('cairn-supervision' \n op \n staff(subject) \n
    COALESCE(staff(supervisor), '') \n prior)`, where `staff()` is `cairn_vault_staff_id` and `prior` is the `seq` of
-   the family's latest row (0 for none). A token is therefore good for one change of one state. Every refusal of the
-   window's door starts `cairn_supervision_act: ` (the console door's, `cairn_supervision_console_act: `), names its
-   check, and never echoes the token. An **assigner** is a member whose latest
-   assigner row is a grant. Pins: `supervision_doors.rs::an_unconfirmed_member_cannot_approve`;
+   the family's latest row (0 for none). A token is therefore good for one change of one state. The door's own refusals
+   start `cairn_supervision_act: ` (the console door's, `cairn_supervision_console_act: `), name their check, and
+   never echo the token; the final `cairn_actor_append` can still refuse in its own words (`cairn_actor_append: this
+   machine's clock reads …`). Nothing parses the prefix: the window classifies a refusal by its SQLSTATE. An
+   **assigner** is a member whose latest assigner row is a grant. Pins: `supervision_doors.rs::an_unconfirmed_member_cannot_approve`;
    `supervision_doors_approver.rs`'s `a_stale_token_is_refused`,
    `a_token_by_another_key_than_the_approvers_is_refused`, `an_approver_whose_key_is_not_current_is_refused`,
    `a_non_member_cannot_approve`; `db/tests/072_supervision_test.sql` (the address preimage).
@@ -148,7 +151,9 @@ event type, twin, floor rule or projection changes. The record lives in the acto
 ### The read (`note::read`, `note::supervision`)
 
 12. **The note read loads the record once and annotates each part.** `list_patient_notes` reads
-    `cairn_supervision_record()` on the caller's client, so in the caller's snapshot. `NOTES_SQL` gains `e.hlc_wall`
+    `cairn_supervision_record()` once, on the caller's client. It shares the notes' snapshot only when the caller
+    gives one: the window's read runs in `in_snapshot` (REPEATABLE READ), while the re-read inside
+    `vouch::vouch_as_shown` runs under READ COMMITTED, so there the record and the notes are two statements. `NOTES_SQL` gains `e.hlc_wall`
     as its last column (`NoteRow.recorded_at`), and `parse_vouches` keeps each vouch's `hlc_wall` as `PartVouch.at`.
     `supervision::annotate` then stamps four plain facts for the part's writer:
     - `NoteRow.needs_cosigning`: the record required the writer to be co-signed at the part's time;
@@ -158,7 +163,10 @@ event type, twin, floor rule or projection changes. The record lives in the acto
 
     The writer is `supervision::writer_actor`: `signed_by`'s actor, else `drafted_actor`. It is `None` for a signer
     this node cannot place (an empty actor), and a part with no writer keeps every default. With every fact at its
-    default, the rules below are the pre-slice rule exactly. An op word the build does not know fails the read rather
+    default, the rules below are the pre-slice rule with two differences: a part its student writer signed only by
+    a later vouch now carries the mark (decision 15), and a non-student's attested sign-off on a part whose envelope
+    key is not a human's clears it, where the old rule needed `co-signed`, which the floor refuses there (decision
+    13). An op word the build does not know fails the read rather
     than being ignored. Actors are compared through `vouch::same_actor`, so an empty actor is nobody's supervisor.
     Pins: `note/supervision.rs`'s `annotate_judges_the_requirement_at_the_parts_time`,
     `annotate_judges_each_vouchs_supervisor_at_its_own_time`, `an_unplaceable_signer_is_no_writer`,
@@ -176,9 +184,11 @@ event type, twin, floor rule or projection changes. The record lives in the acto
       `hlc_wall`, the commit, not at the writer's later signature.
     - `clears_cosign(p, v)`: the vouch is by a key that is not repudiated, of a known actor other than the writer's,
       AND either its signer supervised the writer at the vouch's time (any role, attested or co-signed: design §3.2
-      Q4), or, **the fallback**, the writer had no supervisor at the vouch's time and a non-student made a vouch the
-      floor admits. That is a `co-signed` one, or an attested `sign-off` on a part whose envelope key is not a
-      human's (`signer_human_actor` is `None`), where db/071 refuses `co-signed` (controller ruling).
+      Q4), or, **the fallback**, the writer had no supervisor at the vouch's time and a non-student's vouch is the
+      strongest countersignature the floor allows ON THAT PART: a `co-signed` one, or, only where the part's envelope
+      key is not a human's (`signer_human_actor` is `None`, where db/071 refuses `co-signed`), an attested
+      `sign-off` (controller ruling). The floor also admits an attested sign-off on a human-signed part; it does not
+      clear the mark (not guaranteed (b)).
     - A vouch made BEFORE the writer's own later signature still counts (controller ruling): it named the same bytes.
     - `awaits_cosign(p)`: required, and no vouch clears it. Supervisors share the load: whichever co-signs first
       clears it for all of them.
@@ -195,9 +205,10 @@ event type, twin, floor rule or projection changes. The record lives in the acto
 
 14. **"Sign off this note" stays offered while a part awaits its co-sign.** `needs_sign_off(parts)` is
     `signed_off_by(parts).is_none() || parts.iter().any(awaits_cosign)` (design §3.2 Q2). A probationer who signed
-    every part is named by `signed_off_by`, yet the note still waits for a supervisor. The offer still never depends
-    on the presser. A non-supervisor's sign-off is recorded and read, but the part keeps its mark and the offer
-    stays. **This supersedes ADR-0092 decision 1's offer rule and decision 11's `needs_sign_off`.** Pins:
+    every part is named by `signed_off_by`, yet the note still waits for a supervisor (or, where she had none at
+    the vouch's time, the fallback's countersignature). The offer still never depends
+    on the presser. While the writer has a supervisor, a non-supervisor's sign-off is recorded and read, but the part keeps its
+    mark and the offer stays. **This supersedes ADR-0092 decision 1's offer rule and decision 11's `needs_sign_off`.** Pins:
     `cosign_tests.rs::the_offer_stays_while_a_mandatory_co_sign_is_missing`;
     `note_supervision.rs::only_a_supervisor_clears_a_mandatory_co_sign`.
 
@@ -229,15 +240,16 @@ event type, twin, floor rule or projection changes. The record lives in the acto
     off's planner already used, extracted unchanged: `co-signed` exactly where db/071 admits it, `attested`
     otherwise. `review_note` runs `vouch::vouch_as_shown`, the transaction `sign_off_note` now also runs: the presser
     is the signing KEY's actor, never the who's-here claim (ADR-0092 decision 16); the note is re-read; `Changed`
-    unless it holds exactly the parts shown; `NothingToSign` for an empty plan. The vouch IS a `sign-off` vouch, so
-    it reads " · co-signed by …". Pins: `review.rs`'s `review_vouches_only_the_pressers_supervisees_parts`,
+    unless it holds exactly the parts shown; `NothingToSign` for an empty plan. The vouch IS a `sign-off` vouch, so,
+    where `planned_role` picks `co-signed`, it reads " · co-signed by …" (the attested case is (l)). Pins: `review.rs`'s `review_vouches_only_the_pressers_supervisees_parts`,
     `review_skips_a_part_that_needs_a_co_sign`, `once_any_supervisor_reviewed_it_no_one_is_offered_it`;
     `note_review_cosign.rs`'s `a_supervisor_co_signs_a_reviewed_note`, `review_never_vouches_another_writers_part`,
     `the_key_not_the_claim_decides`, `a_part_added_after_it_was_shown_refuses_changed`.
 
 17. **The window command `note_review_cosign` keeps `note_sign_off_impl`'s order** (ADR-0092 decision 14): the
-    chart on screen, fixture mode, the ids, the key, one node call, an unknown outcome (#814), then, unless the
-    outcome is unknown, a timing sample under `note-sign-off`. `CompoundView.can_review` is `can_review` for the
+    chart on screen, fixture mode, the ids, the key, one node call, an unknown outcome (#814), then a timing sample
+    under `note-sign-off` for a success only (a refusal or a failure returns first, and an unknown outcome is not
+    timed). `CompoundView.can_review` is `can_review` for the
     who's-here claim's actor, false with no claim; it only decides the offer. A review settles with its OWN words,
     not Sign off's (controller ruling: Sign
     off's "every part of the note now carries your signature" is false of a review). They are "Co-signed as reviewed
@@ -342,7 +354,7 @@ event type, twin, floor rule or projection changes. The record lives in the acto
 - **Easier.** A probationary doctor's part reads "— not co-signed" until one of their supervisors co-signs it, and
   lifting the probation leaves the earlier parts waiting, as on paper. A supervisor can initial a supervisee's note as
   reviewed. A student's part signed only by their own later vouch now carries the mark too, which ADR-0092's
-  Consequences left open. Steps (paper *N* → built *M* → target *K*):
+  Consequences left open ([#1003](https://github.com/cairn-ehr/cairn-ehr/issues/1003)). Steps (paper *N* → built *M* → target *K*):
   - record "B supervises C": 1 → 1 (one act, the strip's passphrase counted with it as slice 1 counts it) → 1;
   - set or lift `needs_cosigning`: 1 → 1 → 1;
   - co-sign a reviewed note from the opened chart: 2 (open the folder, sign) → 2 ("Co-sign as reviewed", the

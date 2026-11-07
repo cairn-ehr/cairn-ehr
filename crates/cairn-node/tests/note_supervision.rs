@@ -189,8 +189,9 @@ db_test!(a_pre_slice_students_part_is_cleared_by_any_clinician, |c| {
     assert!(!needs_sign_off(note(&c, chart, p).await.parts()));
 });
 
-// The fallback accepts what the floor admits. A part the quarantine timer committed went in under
-// the NODE's key, so the floor admits only an ATTESTED sign-off on it (db/071). A student's such
+// The fallback accepts the strongest countersignature the floor allows on the part. A part the
+// quarantine timer committed went in under the NODE's key, so the floor admits only an ATTESTED
+// sign-off on it (db/071). A student's such
 // part, signed later by the student (their addendum's vouch), is cleared by a clinician's "Sign
 // off this note" when no supervisor is recorded; otherwise it would wait forever.
 db_test!(

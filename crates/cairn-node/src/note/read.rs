@@ -257,8 +257,10 @@ pub async fn list_patient_notes(
     let charts = crate::patient::person::person_charts(client, patient).await?;
     let doubted = crate::medication::read::set_has_doubted_link(client, &charts).await?;
     let members: Vec<String> = charts.members().iter().map(Uuid::to_string).collect();
-    // The supervision record is read ONCE, on this client (the caller's snapshot), then every
-    // part is judged against it in pure code (`supervision::annotate`).
+    // The supervision record is read ONCE, on this client, then every part is judged against it
+    // in pure code (`supervision::annotate`). It shares the notes' snapshot only when the caller
+    // gives one (the window's `in_snapshot`, REPEATABLE READ); under READ COMMITTED (as in
+    // `vouch::vouch_as_shown`) the record and the notes are two statements.
     let record = super::supervision::load(client).await?;
     let mut notes = Vec::new();
     let mut withheld_on_linked = 0;
