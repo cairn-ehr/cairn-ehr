@@ -74,6 +74,9 @@
 >   history and serialise with pick/save/Sign — measure at scale) · **#1022** (test hygiene) · **#1023** (residuals,
 >   incl. `funnel.js` at 499 lines). Owed by a human: **RUNBOOK §26** (also WebKit + real Tauri IPC, walked in Chromium
 >   only).
+>   **⚠️ One wording fix owed BEFORE merge** (ADR-0095 is immutable once merged): Not-guaranteed (j) and its README row
+>   say two rows share a staff id "only while the supervision record still names the old actor", but the record is
+>   append-only, so once named, always named; it should read "once any supervision row names it, from then on".
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
