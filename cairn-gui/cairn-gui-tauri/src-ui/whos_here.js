@@ -161,14 +161,18 @@ async function openPicker(then, signed) {
   el("whos-here-picker").hidden = false;
   document.querySelector("main").inert = true;
   el("whos-here-search").focus();
+  let listed = true;
   try {
     pickerEntries = await invoke("whos_here_directory");
   } catch (failure) {
     pickerEntries = [];
+    listed = false;
     setMessage(el("whos-here-status"), "Could not read the staff list: " + failureText(failure));
   }
   drawPicker();
-  void loadPickerCounts(); // person_menu.js: the suffixes join the list once they land
+  // person_menu.js: the suffixes join the list once they land. Not after a failed list: the
+  // counts' own failure line would overwrite the staff-list one, and nobody is listed to count.
+  if (listed) void loadPickerCounts();
 }
 
 /**

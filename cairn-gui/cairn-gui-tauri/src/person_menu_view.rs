@@ -44,6 +44,9 @@ pub struct MenuRowView {
     pub what: String,
     pub when: String,
     pub state: String,
+    /// The button's visible words, "Open note".
+    pub open_words: String,
+    /// The button's accessible name, "Open note: {patient}, {when}".
     pub open_label: String,
     pub patient_id: String,
     /// `"part:<id>"` or `"draft:<id>"`: what the opened chart should scroll to.
@@ -187,6 +190,7 @@ where
         ),
     };
     MenuRowView {
+        open_words: OPEN_NOTE.into(),
         open_label: format!("{OPEN_NOTE}: {patient}, {when}"),
         patient,
         what: what.into(),

@@ -37,6 +37,7 @@ async function refreshMenuCount() {
 function drawMenu(view) {
   const menu = el("person-menu");
   if (view.kind === "Nobody") {
+    setMessage(el("person-menu-status"), "");
     menu.hidden = true;
     menu.open = false;
     return;
@@ -80,8 +81,9 @@ function reviewGroup(view) {
 /** One row: who and what, when, the state, and the button that opens the note. */
 function menuRow(row) {
   const li = document.createElement("li");
-  // Rust's open_label (the note, who and when) is both the visible words and the accessible name.
-  const open = cell("button", row.open_label, { type: "button" });
+  // Visible words are Rust's short ones; the accessible name adds which note (a list of identical
+  // buttons would otherwise be unusable by ear), so the visible words stay inside the name.
+  const open = cell("button", row.open_words, { type: "button", "aria-label": row.open_label });
   li.append(cell("p", row.patient), cell("p", row.what + " · " + row.when), cell("p", row.state), open);
   open.addEventListener("click", () => void openMenuRow(row));
   return li;
@@ -92,6 +94,7 @@ function menuRow(row) {
  * saves), THEN the node re-reads the menu and opens the chart only if a row still names it.
  */
 async function openMenuRow(row) {
+  if (registering) return; // as funnel.js's openChart: registration's own enterChart must not be replaced
   setMessage(el("person-menu-status"), "");
   if (signInFlight()) await signsSettled();
   if (displayedPatient) await closeChart();
@@ -105,6 +108,9 @@ async function openMenuRow(row) {
     // the status line, so saying the refusal before the re-read lands would erase it.
     await refreshMenuCount();
     setMessage(el("person-menu-status"), String(refusal));
+    // The clicked button is gone with the redraw: focus the line that says why, not <body>.
+    el("person-menu-status").tabIndex = -1;
+    el("person-menu-status").focus();
   }
 }
 
@@ -161,7 +167,8 @@ el("person-menu").addEventListener("toggle", () => {
   if (el("person-menu").open) void refreshMenuCount();
 });
 // The quarantine commit moves drafts into the list by itself, so the count is re-read while
-// nobody acts. Skipped while the menu is open, or the redraw would pull focus from a button.
+// nobody acts. Only THIS tick is skipped while the menu is open (a redraw would pull focus from a
+// button); readNotes and closeChart still re-read, and so redraw, an open menu.
 setInterval(() => {
   if (!el("person-menu").open) void refreshMenuCount();
 }, 60_000);

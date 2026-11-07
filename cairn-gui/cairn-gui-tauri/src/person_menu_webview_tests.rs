@@ -26,9 +26,48 @@ fn open_menu_row_settles_signs_and_closes_the_chart_before_opening() {
         position(open, "pendingMenuFocus = row.focus") < enter,
         "{open}"
     );
-    // A refusal is said in the menu's own line, then the list is read again.
+    // A refusal is said in the menu's own line AFTER the re-read lands (a drawn menu clears the
+    // status), then focus moves to it: the clicked button is gone.
+    let reread = position(open, "await refreshMenuCount()");
+    let said = position(open, "String(refusal)");
+    assert!(reread < said, "{open}");
     assert!(
-        open.contains("person-menu-status") && open.contains("refreshMenuCount()"),
+        said < position(open, "el(\"person-menu-status\").focus()"),
+        "{open}"
+    );
+    // Mid-registration the menu opens nothing (funnel.js's openChart has the same first line).
+    assert!(
+        position(open, "if (registering) return;") < position(open, "if (signInFlight())"),
+        "{open}"
+    );
+}
+
+/// The button's visible words and its accessible name are both Rust's, and are two fields.
+#[test]
+fn the_open_button_shows_short_words_and_is_named_in_full() {
+    let row = js_fn(MENU_JS, "menuRow");
+    assert!(
+        row.contains("row.open_words") && row.contains("\"aria-label\": row.open_label"),
+        "{row}"
+    );
+}
+
+/// A failed read must be heard while the menu is closed or never drawn: the status line sits
+/// beside the `<details>`, in the bar, not inside it.
+#[test]
+fn the_menu_status_is_outside_the_details() {
+    let status = position(INDEX_HTML, "id=\"person-menu-status\"");
+    assert!(status < position(INDEX_HTML, "<details id=\"person-menu\""));
+    assert!(position(INDEX_HTML, "id=\"whos-here-bar\"") < status);
+    assert!(js_fn(MENU_JS, "drawMenu").contains("setMessage(el(\"person-menu-status\"), \"\")"));
+}
+
+/// A failed staff list says so, and the counts' failure line never overwrites it.
+#[test]
+fn counts_are_not_read_after_a_failed_staff_list() {
+    let open = js_fn(WHOS_HERE_JS, "openPicker");
+    assert!(
+        position(open, "listed = false;") < position(open, "if (listed) void loadPickerCounts();"),
         "{open}"
     );
 }
@@ -44,6 +83,8 @@ fn the_review_group_is_a_closed_details() {
         !group.contains(".open = true") && !group.contains("setAttribute(\"open\""),
         "{group}"
     );
+    // Nothing anywhere in the script opens anything; only `.open = false` is ever written.
+    assert!(!MENU_JS.contains(".open = true"));
 }
 
 #[test]

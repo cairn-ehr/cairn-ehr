@@ -191,6 +191,7 @@ fn rows_say_what_state_and_how_to_open() {
     assert_eq!(draft.focus, format!("draft:{d}"));
     assert_eq!(draft.patient, "Ann Jones");
     assert_eq!(draft.patient_id, c.to_string());
+    assert_eq!(draft.open_words, "Open note");
     assert_eq!(draft.open_label, format!("Open note: Ann Jones, {when}"));
     assert_eq!(
         draft.state,
