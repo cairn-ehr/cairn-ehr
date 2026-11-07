@@ -43,6 +43,7 @@ fn note(n: u128, chart: u128, to: Option<u128>, min: i64, grade: NoteGrade) -> N
                 name: by.clone(),
                 student: false,
                 unconfirmed: false,
+                repudiated: false,
             }),
             _ => None,
         },

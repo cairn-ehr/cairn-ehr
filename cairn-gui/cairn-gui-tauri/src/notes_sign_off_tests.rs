@@ -31,6 +31,7 @@ fn who(actor: &str, name: &str) -> Signer {
         name: name.into(),
         student: false,
         unconfirmed: false,
+        repudiated: false,
     }
 }
 
@@ -114,6 +115,16 @@ fn can_sign_off_follows_needs_sign_off() {
         !v.can_add && v.can_sign_off,
         "a linked chart's note may be signed off"
     );
+}
+
+/// A part signed by a since-repudiated key counts as unsigned (ADR-0093), so the note offers the
+/// press even though a signer is named.
+#[test]
+fn a_repudiated_part_offers_sign_off() {
+    let mut rex = who("act-rex", "Dr Rex");
+    rex.repudiated = true;
+    let c = one(vec![part(1, OPENED, None, 0, Some(rex), None)]);
+    assert!(view(&c, None).can_sign_off);
 }
 
 /// The window sends back the ids it showed; the node refuses if the note holds any other.

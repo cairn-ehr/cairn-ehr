@@ -10,6 +10,44 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3c-3b — A REPUDIATED SIGNATURE COUNTS AS UNSIGNED (ADR-0093, no SQL change) — do not undo**
+(pins: `crates/cairn-node/src/note/{vouch_tests,view_tests,compound,vouch_read}.rs`'s tests,
+`crates/cairn-node/tests/note_repudiated_signer.rs`, `cairn-gui/cairn-gui-tauri/src/notes_sign_off_tests.rs`):
+- **`vouch::re_signs(signer, v)` is THE one test of "the real person signed it again".** A part whose `signed_by` is
+  repudiated counts only when a vouch on it is by a key that is NOT repudiated, of the SAME actor. `re_signed(p)` asks
+  it of each vouch; `part_is_signed` and the byline's " — counts as unsigned" ask `re_signed`, and the byline's
+  " · re-signed by …" asks `re_signs` of each vouch. **Tempting wrong fixes:** copy the conditions inline into a new
+  reader (the words and the rules could then disagree about which vouch re-signs); let any later vouch clear the part
+  "because someone vouched for it" (a colleague cannot say the words were the real person's: maintainer ruling);
+  compare keys instead of actors (the re-keyed person never matches their own part); drop the `!v.by.repudiated` check (a re-sign by a key later
+  repudiated would keep counting). Pins: `vouch_tests.rs`'s `a_colleagues_sign_off_does_not_clear_a_repudiated_part`,
+  `only_the_real_persons_re_sign_clears_it`; `view_tests.rs::a_re_sign_by_a_key_since_repudiated_counts_nothing`.
+- **Never count a repudiated signer in `signed_for`.** The repudiated key shares the re-keyed person's actor
+  (`cairn_note_key_actor` does not filter repudiation), so `has_signed` would say they have signed, and
+  `sign_off_vouches` would answer the real person `NothingToSign`. **Tempting wrong fix:** "simplify" `signed_for`
+  back to `signed_by` plus every vouch's `by`. Pins: `vouch_tests.rs::the_re_keyed_writer_is_offered_their_repudiated_part`;
+  `note_repudiated_signer.rs::a_repudiated_signers_part_reads_unsigned_until_they_re_sign`.
+- **Ask `part_is_signed`, never `signed_by.is_some()`.** A repudiated `signed_by` is present and counts for nothing;
+  `full_signers` yields nobody unless every part `part_is_signed`, so while a repudiated part is not re-signed, a
+  colleague who vouched it never reads "signed off by" (once the real person re-signs, that earlier vouch counts as an
+  ordinary sign-off of the same bytes: ADR-0093 decision 5). **Tempting wrong fix:** test `signed_by` in a new reader "because the grade is `Signed`".
+  Pins: `vouch_tests.rs::a_repudiated_signature_counts_as_unsigned`,
+  `a_colleagues_earlier_sign_off_counts_once_re_signed`; `compound.rs::a_repudiated_part_makes_the_note_include_an_unsigned_part`.
+- **A repudiated, not re-signed `signed_by` is planned `Attested`, never `CoSigned`; only that one.** A co-sign would
+  read "co-signed by" over a possibly forged signature. Once re-signed, the signature stands and is co-signed as any
+  other (#1009). **Tempting wrong fixes:** refuse `CoSigned` whenever `signed_by` is not a standing `Some` (a part gone
+  in unsigned under a human envelope key is co-signed by the floor's own rule); drop the `!re_signed(p)` half "to be
+  safe" (a supervisor could then never clear a re-signed student part's "— not co-signed"). Pins: `vouch_tests.rs`'s
+  `a_repudiated_part_is_never_planned_as_a_co_sign`, `a_re_signed_part_is_co_signed_again`,
+  `sign_off_co_signs_only_what_the_floor_admits`; `note_repudiated_signer.rs`'s
+  `a_colleagues_vouch_on_a_repudiated_part_is_attested`, `a_re_signed_students_part_is_co_signed_by_a_supervisor`.
+  Known gaps: #1007 (a repudiated envelope key), #1010 (a sign-off made before a student's re-sign), #1011
+  (re-signing one's own part also signs off the other writers' parts).
+- **A vouch by a repudiated key counts nothing**: not as a signature of an unsigned part, not as the co-sign that
+  clears a student's "— not co-signed", not as the sign-off that makes the note read "signed off by". Pins:
+  `vouch_tests.rs::a_repudiated_keys_vouch_counts_nothing`, `view_tests.rs::a_repudiated_co_signer_does_not_clear_not_co_signed`,
+  `compound.rs::a_repudiated_keys_sign_off_does_not_sign_the_note_off`.
+
 **⇒ GUI SIGN-IN SLICE 3c-2 — THE VOUCH AND THE SIGN-OFF (ADR-0092, db/071, db/037 + db/044 in place) — do not undo**
 (pins: `db/tests/071_clinical_note_attestation_test.sql`, `crates/cairn-event/src/note_attestation.rs`'s tests,
 `crates/cairn-node/src/note/{vouch_tests,vouch_read,view_tests,compound,sign_vouch}.rs`'s tests,

@@ -1888,3 +1888,94 @@ tests (CI never runs those, #905). The button, the gate, the in-flight guards, t
 Sign were walked headlessly in Chromium only (Playwright, against a stubbed `invoke`; sign-in slice 3c-2, Task 6).
 WebKit, the real Tauri window, its argument casing (`shownParts`, `alsoVouches`) and VoiceOver were not seen.
 `TEMPLATE.md` carries a matching block (*Sign off a note*).
+
+## 24. A repudiated signature counts as unsigned, until its writer re-signs (GUI sign-in slice 3c-3b, ADR-0093)
+
+The slice's gesture: the real person's **Sign off this note** on their own part, signed under a key a superuser has
+since repudiated, with section 16's strip. The chart's new words are: " (key had been repudiated)" after a signer's
+name; " — counts as unsigned" on such a part until it is re-signed; " · re-signed by …" on the vouch that re-signs
+it; and the state line "includes an unsigned part" on a note of two or more parts that holds one. Paper counterpart:
+an entry signed by an impostor is annotated, never torn out, and the real clinician reads it and signs it again.
+**Live only**, like section 16.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Re-sign one's own repudiated part, credential included | the first keystroke in the strip's Staff ID | "Signed off — …" on screen and the byline re-read | **≤ 3 s** (Sign's, section 16) |
+| See that a part's signature no longer counts | — | — | **0 acts** (the byline) |
+
+Steps: seeing that a part's signature no longer counts paper *N* = 1 (find and read the annotation) → forced *M* =
+0 → target *K* = 0; the real person re-signing 2 (read, sign) → 2 (*Sign off this note*, the strip's passphrase) →
+2. Finding the parts to re-sign is chart by chart until slice 3c-3c's person menu (ADR-0093 (e)). The write half is
+timed by the node (`gesture_kind = 'note-sign-off'`, section 5). **A figure outside its budget, or an `M > N`, is
+the finding — file an issue; never adjust the budget.**
+
+**Setup.** Section 23's setup (`nurse-a`, `dr-b`, the student `sam`, the section 2 chart, its `vouches` helper),
+and section 16's superuser `boss`. Launch as section 3. Add:
+
+```bash
+conf() { psql "$CONN" -c "SELECT staff_id, cairn_key_confirmation(signing_key_id) FROM vault_member ORDER BY staff_id"; }
+```
+
+**Measurement 1 — the mark, and a colleague clears nothing.** As `nurse-a`: *New note*, `obs stable`, *Sign note*;
+then *Add to this note*, `reviewed`, *Sign note* again, so the note has two parts. Then sign five more one-part notes
+of hers, a second two-part note of hers alone (`fluids`, then `reviewed`), and a note two people write: she signs
+`bp 120/80`, then `dr-b` presses *Add to this note*, types `agree`, *Sign note* — all for Measurement 2. As `boss`,
+in *Superuser: enrollers and keys*, press *Repudiate key* on `nurse-a`'s row ("The key is repudiated. Give the member
+a new key from the re-key form."). `conf` says `repudiated` for her. Re-key her from *Forgotten passphrase* with
+`boss` in the strip (section 17): the same person, a new key; `conf` now says `confirmed` for her (a superuser's re-key is confirmed at once).
+
+- [ ] Reopen the chart. Each of Nurse A's parts reads "signed by Nurse A (key had been repudiated) — counts as
+      unsigned", then its time. Each of her two-part notes' state line reads "includes an unsigned part", and so
+      does the note she and Dr B wrote. The old signature is still named: nothing is struck from the chart. *Sign
+      off this note* is offered.
+- [ ] As `dr-b`, press *Sign off this note* on the first two-part note (`obs stable`): "Signed off — every part of
+      this note now carries your signature." Each part now reads "… — counts as unsigned · signed off by Dr B", the
+      state line still reads "includes an unsigned part", and NOT "signed off by Dr B". `vouches` shows Dr B's rows
+      as `sign-off`, **`attested`** (never `co-signed`).
+- [ ] Dr B's button is still offered. Pressing it again answers "You have already signed every part of this note.
+      Nothing more was signed." (ADR-0093 (c), #1008: record it, it is known).
+
+**Measurement 2 — the real person re-signs (≤ 3 s).** As `nurse-a` on her NEW key.
+
+- [ ] On the first two-part note she is offered *Sign off this note* and is NOT told "You have already signed every
+      part …". After her press each part reads "signed by Nurse A (key had been repudiated) · signed off by Dr B ·
+      re-signed by Nurse A", with no "— counts as unsigned", and the state line reads "signed off by Dr B". No
+      dialog.
+- [ ] On her second two-part note, which no colleague touched, her one press re-signs both parts: each reads
+      "signed by Nurse A (key had been repudiated) · re-signed by Nurse A", and the state line reads "signed off by
+      Nurse A" (ADR-0093 decision 10). `vouches` shows her rows as `sign-off`, `attested`.
+- [ ] The known gap (ADR-0093 (h), #1011): on the note she and Dr B wrote, her press to re-sign her own part also
+      vouches Dr B's. His part reads "signed by Dr B · co-signed by Nurse A", the state line reads "signed off by
+      Nurse A", and `vouches` shows her row on Dr B's part as `co-signed`. On paper she would initial only her own
+      entry. Record it.
+- [ ] Time her press on the five one-part notes: from the first keystroke in the strip's Staff ID until "Signed off
+      — …" shows and the note is re-read (budget ≤ 3 s), and `ui_gesture_timing`'s `note-sign-off` row. Each then
+      reads "signed by Nurse A (key had been repudiated) · re-signed by Nurse A".
+- [ ] A student: as `sam`, sign a note; repudiate and re-key `sam`. The part reads "signed by Sam (student) (key had
+      been repudiated) — counts as unsigned", with no "— not co-signed" beside it. Note how the two parentheses read
+      to a clinician. After Sam re-signs, it reads "… — not co-signed · re-signed by Sam (student)". Then `dr-b`
+      presses *Sign off this note*: it reads "signed by Sam (student) (key had been repudiated) · re-signed by Sam
+      (student) · co-signed by Dr B", the mark cleared, and `vouches` shows Dr B's row as `co-signed`.
+- [ ] The known gap (ADR-0093 (d), #1010): on another of Sam's notes, `dr-b` signs off BEFORE Sam re-signs. After
+      Sam's re-sign the part reads "— not co-signed · signed off by Dr B · re-signed by Sam (student)" and no button
+      is offered. Record it.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The byline's "(key had been repudiated) — counts as unsigned" is read with the note's heading, and so is each
+      " · re-signed by …". The spoken form is the shown one (a claimed name still reads "unverified …").
+- [ ] The state line "includes an unsigned part" is read before the text.
+- [ ] *Sign off this note* is reached by Tab and read as "Sign off this note: {the note's time}".
+- [ ] No dialog appears at any point.
+
+**Chromium and WebKit.** The window is WebKit (Tauri on macOS). The slice changes no webview code, so compare the
+words above with section 23's walk and note any difference in wrapping of the longer bylines.
+
+**What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. The rules and the
+words were run as pure tests (`vouch_tests.rs`, `view_tests.rs`, `compound.rs`), and the flow through a throwaway
+database by `note_repudiated_signer.rs` (repudiate and re-key, a colleague's sign-off attested and clearing nothing,
+the real person's re-sign). The window's offer follows `needs_sign_off` (`notes_sign_off_tests.rs`). The real
+window, the superuser panel's repudiate followed by a re-key, WebKit and VoiceOver were not seen. `TEMPLATE.md`
+carries a matching block (*A repudiated signature*).

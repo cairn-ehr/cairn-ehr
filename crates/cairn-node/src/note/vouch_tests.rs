@@ -179,3 +179,175 @@ fn sign_off_co_signs_only_what_the_floor_admits() {
         ]
     );
 }
+
+// ---- sign-in slice 3c-3b (ADR-0093): a since-repudiated key's signature counts for nothing ----
+
+#[test]
+fn a_repudiated_signature_counts_as_unsigned() {
+    let p = part(1, Some(repudiated("a", "Dr A")));
+    assert!(!part_is_signed(&p));
+    assert!(signed_for(&p).is_empty());
+    assert!(needs_sign_off(&[p]));
+}
+
+/// Review Focus 1: a colleague's sign-off of a repudiated part clears nothing.
+#[test]
+fn a_colleagues_sign_off_does_not_clear_a_repudiated_part() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z", "Dr Zed"),
+    ));
+    assert!(!part_is_signed(&p));
+    let parts = [p];
+    assert!(needs_sign_off(&parts));
+    assert!(signed_off_by(&parts).is_none());
+}
+
+#[test]
+fn only_the_real_persons_re_sign_clears_it() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("a", "Dr A"),
+    ));
+    assert!(re_signed(&p));
+    assert!(part_is_signed(&p));
+    assert!(!needs_sign_off(&[p]));
+}
+
+/// Review Focus 2: the re-keyed writer must not be answered "nothing to sign".
+#[test]
+fn the_re_keyed_writer_is_offered_their_repudiated_part() {
+    let p = part(1, Some(repudiated("a", "Dr A")));
+    let id = p.event_id;
+    assert_eq!(sign_off_vouches(&[p], "a"), vec![(id, VouchRole::Attested)]);
+}
+
+/// Review Focus 3: never plan a co-sign over a repudiated signature.
+#[test]
+fn a_repudiated_part_is_never_planned_as_a_co_sign() {
+    let p = part(1, Some(repudiated("a", "Dr A")));
+    assert_eq!(p.signer_human_actor.as_deref(), Some("a"));
+    let id = p.event_id;
+    assert_eq!(sign_off_vouches(&[p], "z"), vec![(id, VouchRole::Attested)]);
+}
+
+/// Review Focus 5: a repudiated key's vouch counts nothing.
+#[test]
+fn a_repudiated_keys_vouch_counts_nothing() {
+    let mut p = part(2, None);
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        repudiated("z", "Dr Zed"),
+    ));
+    assert!(!part_is_signed(&p));
+}
+
+#[test]
+fn an_addendum_does_not_cover_a_repudiated_part() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.drafted_actor = Some("a".into());
+    assert!(addendum_covers(&[p], "a").is_empty());
+}
+
+/// #1009: once the real person has re-signed, their signature stands again, so a supervisor's
+/// sign-off of it is a co-sign like any other (the floor admits it: a human's envelope key, another
+/// actor) and can clear a student's "— not co-signed".
+#[test]
+fn a_re_signed_part_is_co_signed_again() {
+    let mut sam = student("s", "Sam");
+    sam.repudiated = true;
+    let mut p = part(1, Some(sam));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        student("s", "Sam"),
+    ));
+    assert!(re_signed(&p));
+    let id = p.event_id;
+    assert_eq!(sign_off_vouches(&[p], "z"), vec![(id, VouchRole::CoSigned)]);
+}
+
+/// ADR-0093 decision 5: a colleague's sign-off made BEFORE the re-sign starts counting after it.
+/// It named the part's exact bytes, and the real person has since said the words were theirs.
+#[test]
+fn a_colleagues_earlier_sign_off_counts_once_re_signed() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z", "Dr Zed"),
+    ));
+    assert!(signed_off_by(std::slice::from_ref(&p)).is_none());
+    p.vouches.push(vouch(
+        11,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("a", "Dr A"),
+    ));
+    let parts = [p];
+    assert_eq!(signed_off_by(&parts).map(|s| s.actor.as_str()), Some("z"));
+}
+
+/// A co-sign under a key since repudiated (a stolen-key co-sign) counts for nothing in the
+/// note-level rules too, not only in the byline: the student's note still needs signing off, and
+/// the real Dr Zed, re-keyed, is offered the part again as a co-sign.
+#[test]
+fn a_repudiated_co_signers_vouch_signs_nothing_off() {
+    let mut p = part(1, Some(student("s", "Sam")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::CoSigned,
+        repudiated("z", "Dr Zed"),
+    ));
+    let id = p.event_id;
+    let parts = [p];
+    assert!(needs_sign_off(&parts));
+    assert!(signed_off_by(&parts).is_none());
+    assert_eq!(
+        sign_off_vouches(&parts, "z"),
+        vec![(id, VouchRole::CoSigned)]
+    );
+}
+
+/// ADR-0093 (c): a colleague who already signed off a repudiated, not re-signed part stays in
+/// `signed_for`, so a second press plans nothing: it never files a second immutable vouch.
+#[test]
+fn a_colleague_who_vouched_a_repudiated_part_is_not_offered_it_again() {
+    let mut p = part(1, Some(repudiated("a", "Dr A")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z", "Dr Zed"),
+    ));
+    assert!(signed_for(&p).iter().any(|s| s.actor == "z"));
+    assert!(sign_off_vouches(&[p], "z").is_empty());
+}
+
+/// The dead-key rule is decided PER PART: a repudiated part beside a standing student part is
+/// attested while the student's part is still co-signed, by a colleague and (ADR-0093 (h), #1011)
+/// by the re-keyed writer alike.
+#[test]
+fn a_repudiated_part_beside_a_standing_one_is_attested_alone() {
+    let parts = [
+        part(1, Some(repudiated("a", "Dr A"))),
+        part(2, Some(student("s", "Sam"))),
+    ];
+    let plan = vec![
+        (Uuid::from_u128(1), VouchRole::Attested),
+        (Uuid::from_u128(2), VouchRole::CoSigned),
+    ];
+    assert_eq!(sign_off_vouches(&parts, "z"), plan);
+    assert_eq!(sign_off_vouches(&parts, "a"), plan);
+}

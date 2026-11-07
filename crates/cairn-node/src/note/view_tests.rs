@@ -1,6 +1,6 @@
 //! Tests for `view.rs`: every word a note is shown with, pinned without a database.
 use super::*;
-use crate::note::vouch::fixture::{part, student, vouch, who};
+use crate::note::vouch::fixture::{part, repudiated, student, vouch, who};
 use chrono::FixedOffset;
 
 fn utc(s: &str) -> DateTime<Utc> {
@@ -330,5 +330,105 @@ fn another_day_or_year_carries_its_date() {
     assert_eq!(
         time_words("stated", last_year, last_year, &bne(), nov(3)),
         "3 Nov 2025 03:00 (stated)"
+    );
+}
+
+#[test]
+fn a_repudiated_signers_byline_says_it_counts_as_unsigned() {
+    let mut p = part(1, Some(repudiated("a", "Dr Ada Notewriter")));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Dr Ada Notewriter (key had been repudiated) — counts as unsigned"
+    );
+    // A colleague's sign-off clears nothing.
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z", "Dr Zed"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Dr Ada Notewriter (key had been repudiated) — counts as unsigned · signed off by Dr Zed"
+    );
+    // The real person, re-keyed, re-signs: the mark goes.
+    p.vouches.push(vouch(
+        11,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("a", "Dr Ada Notewriter"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Dr Ada Notewriter (key had been repudiated) · signed off by Dr Zed · re-signed by Dr Ada Notewriter"
+    );
+}
+
+#[test]
+fn a_repudiated_students_part_counts_as_unsigned_not_uncosigned() {
+    let mut s = student("s", "Sam");
+    s.repudiated = true;
+    assert_eq!(
+        part_byline(&part(1, Some(s))).shown,
+        "signed by Sam (student) (key had been repudiated) — counts as unsigned"
+    );
+}
+
+#[test]
+fn a_re_sign_by_a_key_since_repudiated_counts_nothing() {
+    let mut p = part(1, Some(repudiated("a", "Dr Ada Notewriter")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        repudiated("a", "Dr Ada Notewriter"),
+    ));
+    assert!(part_byline(&p).shown.ends_with(
+        " — counts as unsigned · signed off by Dr Ada Notewriter (key had been repudiated)"
+    ));
+    assert!(!crate::note::vouch::part_is_signed(&p));
+}
+
+#[test]
+fn a_repudiated_co_signer_does_not_clear_not_co_signed() {
+    let mut p = part(1, Some(student("s", "Sam")));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::CoSigned,
+        repudiated("z", "Dr Zed"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Sam (student) — not co-signed · co-signed by Dr Zed (key had been repudiated)"
+    );
+}
+
+/// #1009: a re-signed repudiated student part reads "— not co-signed", as any student part, until a
+/// supervisor co-signs it; then the mark clears.
+#[test]
+fn a_re_signed_students_part_reads_not_co_signed_until_a_supervisor_co_signs() {
+    let mut sam = student("s", "Sam");
+    sam.repudiated = true;
+    let mut p = part(1, Some(sam));
+    p.vouches.push(vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        student("s", "Sam"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Sam (student) (key had been repudiated) — not co-signed · re-signed by Sam (student)"
+    );
+    p.vouches.push(vouch(
+        11,
+        VouchAct::SignOff,
+        VouchRole::CoSigned,
+        who("z", "Dr Zed"),
+    ));
+    assert_eq!(
+        part_byline(&p).shown,
+        "signed by Sam (student) (key had been repudiated) · re-signed by Sam (student) · co-signed by Dr Zed"
     );
 }

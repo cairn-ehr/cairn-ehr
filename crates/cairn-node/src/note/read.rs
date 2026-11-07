@@ -270,14 +270,16 @@ pub async fn list_patient_notes(
             &humans,
         );
         let grade = note_grade(confidence, r.get(9));
-        let signed_by = matches!(grade, NoteGrade::Signed { .. }).then(|| {
-            signer_of(
-                r.get(15),
-                r.get(9),
-                r.get::<_, Option<String>>(16).as_deref(),
-                r.get::<_, Option<String>>(17).as_deref(),
-            )
-        });
+        let signed_by = matches!(grade, NoteGrade::Signed { .. })
+            .then(|| {
+                signer_of(
+                    r.get(15),
+                    r.get(9),
+                    r.get::<_, Option<String>>(16).as_deref(),
+                    r.get::<_, Option<String>>(17).as_deref(),
+                )
+            })
+            .transpose()?;
         notes.push(NoteRow {
             event_id: r.get::<_, String>(0).parse()?,
             chart,

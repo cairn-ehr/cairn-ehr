@@ -508,6 +508,35 @@ observed \_\_ · seeing a student's part not yet countersigned 0 → 0 → obser
 | The outcome lines read when they appear | | |
 | No dialog | | |
 
+## A repudiated signature counts as unsigned (GUI sign-in slice 3c-3b, runbook §24)
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| Re-sign one's own repudiated part: Staff ID keystroke → "Signed off — …" and the byline re-read | | | | ≤ 3 s | |
+| `ui_gesture_timing` `note-sign-off` (the write half) | | | | — | |
+
+Steps: seeing that a signature no longer counts paper *N* = 1 → forced *M* = 0 → observed \_\_ · re-signing 2 → 2 →
+observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| After *Repudiate key* and a re-key, each part reads "(key had been repudiated) — counts as unsigned"; the state line "includes an unsigned part"; *Sign off this note* offered | | |
+| A colleague's sign-off: "· signed off by Dr B", `attested` (never `co-signed`), the part still "counts as unsigned", no "signed off by" state | | |
+| The colleague's second press: "already signed every part" (#1008, known) | | |
+| The real person is offered the press, not "already signed"; "· re-signed by Nurse A"; the mark and "includes an unsigned part" gone | | |
+| Her own two-part note, nobody else's vouch on it: one press, each part "· re-signed by Nurse A", the state "signed off by Nurse A" | | |
+| A note she and Dr B wrote: her press also vouches Dr B's part, "· co-signed by Nurse A", the state "signed off by Nurse A" (#1011, known) | | |
+| A repudiated student part: "(student) (key had been repudiated) — counts as unsigned", no "— not co-signed"; after re-sign "— not co-signed · re-signed by Sam (student)"; a doctor's sign-off then "· co-signed by Dr B", the mark cleared | | |
+| A doctor's sign-off BEFORE the student's re-sign: "— not co-signed" stays, no button (#1010, known) | | |
+| WebKit (the real window): wrapping of the longer bylines | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| "(key had been repudiated) — counts as unsigned" and "· re-signed by …" read with the heading | | |
+| "includes an unsigned part" read before the text | | |
+| *Sign off this note* by keyboard, read as "Sign off this note: {time}" | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

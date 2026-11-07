@@ -2,7 +2,10 @@
 //!
 //! A part of a note is SIGNED when its own event carries a verified human signature
 //! (`NoteRow::signed_by`) or when someone later vouched for it (`NoteRow::vouches`, a
-//! `clinical.note-attestation.asserted` event — see `vouch_read`). The pure rules below answer
+//! `clinical.note-attestation.asserted` event — see `vouch_read`), in either case under a key
+//! that still stands. A since-REPUDIATED key's signature or vouch counts for nothing, and a part
+//! it signed is signed again only once the real person re-signs it (ADR-0093, [`part_is_signed`]):
+//! never read `signed_by.is_some()` as "signed". The pure rules below answer
 //! the questions the window asks of a compound note: does it still need a supervisor's
 //! sign-off, who signed it off, and — when a clinician presses "Sign off this note" — which
 //! parts must they vouch for, and how.
@@ -27,7 +30,7 @@ use uuid::Uuid;
 
 use super::compound::compounds;
 use super::read::{list_patient_notes, NoteRow};
-use super::vouch_read::Signer;
+use super::vouch_read::{PartVouch, Signer};
 use crate::medication::sealed_submit::{prepare_sealed_as, Prepared};
 use crate::medication::AuthorParams;
 
@@ -36,12 +39,42 @@ pub fn same_actor(a: &str, b: &str) -> bool {
     !a.is_empty() && a == b
 }
 
-/// Everyone who has signed part `p`: its own signer first, then each vouch's signer in order.
+/// Every signer of part `p` whose key still stands: its own signer first, then each vouch's
+/// signer in order. Whether the part itself is signed is [`part_is_signed`]'s answer, not this
+/// list's (a colleague's vouch of a repudiated part is listed here but does not sign it). A
+/// since-repudiated key is skipped (ADR-0093): the words it signed may be an
+/// impostor's, so neither its own signature nor a vouch it filed vouches for anything.
 pub fn signed_for(p: &NoteRow) -> Vec<&Signer> {
     p.signed_by
         .iter()
         .chain(p.vouches.iter().map(|v| &v.by))
+        .filter(|s| !s.repudiated)
         .collect()
+}
+
+/// Vouch `v` RE-SIGNS a part whose own signer is `signer`: the signer's key was repudiated, and
+/// `v` was filed by a key that is not itself repudiated, of the same actor (the real person,
+/// re-keyed). Only that person can say the words were theirs; a colleague's vouch cannot
+/// (ADR-0093). This is THE one predicate the rules ([`re_signed`], and through it
+/// [`part_is_signed`]) and the words (`view::part_byline`'s " · re-signed by …") share, so the
+/// byline can never call a vouch a re-sign that the rules do not count as one, or the reverse.
+pub fn re_signs(signer: &Signer, v: &PartVouch) -> bool {
+    signer.repudiated && !v.by.repudiated && same_actor(&v.by.actor, &signer.actor)
+}
+
+/// A part whose own signer's key was repudiated has been RE-SIGNED: some vouch on it
+/// [`re_signs`] it. False for any part whose signer is absent or not repudiated.
+pub fn re_signed(p: &NoteRow) -> bool {
+    p.signed_by
+        .as_ref()
+        .is_some_and(|s| p.vouches.iter().any(|v| re_signs(s, v)))
+}
+
+/// Part `p` COUNTS AS UNSIGNED for want of a re-sign: its own signer's key was repudiated and the
+/// real person has not [`re_signed`] it (ADR-0093). The one predicate the byline's
+/// " — counts as unsigned" and [`sign_off_vouches`]' attested-not-co-signed rule share.
+pub fn counts_as_unsigned(p: &NoteRow) -> bool {
+    p.signed_by.as_ref().is_some_and(|s| s.repudiated) && !re_signed(p)
 }
 
 /// Whether `actor` is among the people who signed `p`.
@@ -49,25 +82,36 @@ fn has_signed(p: &NoteRow, actor: &str) -> bool {
     signed_for(p).iter().any(|s| same_actor(&s.actor, actor))
 }
 
-/// A part is signed when its own event is, or anyone vouched for it since.
+/// A part is signed when its own event is (by a key still standing), or anyone with a standing
+/// key vouched for it since. A repudiated signer's part is signed only once the real person
+/// [`re_signed`] it: a colleague's vouch cannot vouch for words that may be forged (ADR-0093).
 pub fn part_is_signed(p: &NoteRow) -> bool {
-    p.signed_by.is_some() || !p.vouches.is_empty()
+    match &p.signed_by {
+        Some(s) if s.repudiated => re_signed(p),
+        Some(_) => true,
+        None => p.vouches.iter().any(|v| !v.by.repudiated),
+    }
 }
 
 /// Every non-student who has signed EVERY part, in the root's [`signed_for`] order (empty for no
 /// parts). [`signed_off_by`] takes the first; `compound::compound_state` takes the first who also
 /// pressed sign-off, so a full signer who never pressed cannot hide one who did.
+///
+/// Nobody, unless every part [`part_is_signed`]: a colleague who vouched a repudiated part must
+/// never read as having signed the note off (ADR-0093).
 pub fn full_signers(parts: &[NoteRow]) -> impl Iterator<Item = &Signer> {
+    let all_signed = parts.iter().all(part_is_signed);
     parts
         .first()
         .map(signed_for)
         .unwrap_or_default()
         .into_iter()
-        .filter(move |s| !s.student && parts.iter().all(|p| has_signed(p, &s.actor)))
+        .filter(move |s| all_signed && !s.student && parts.iter().all(|p| has_signed(p, &s.actor)))
 }
 
 /// Who signed the whole note off: the first non-student, in the root's [`signed_for`] order, who
-/// has signed EVERY part. `None` when no one has (the note still needs a sign-off).
+/// has signed EVERY part ([`full_signers`]). `None` when no one has, or while any part is not
+/// [`part_is_signed`] (a repudiated part not yet re-signed): the note still needs a sign-off.
 pub fn signed_off_by(parts: &[NoteRow]) -> Option<&Signer> {
     full_signers(parts).next()
 }
@@ -86,14 +130,22 @@ pub fn needs_sign_off(parts: &[NoteRow]) -> bool {
 /// key the registry enrolled for a human ([`NoteRow::signer_human_actor`]) of an actor other than
 /// the presser's. Not the key the part's grade names, which may be an attester. So a part signed
 /// by a device, by a key this node cannot place, or by the presser's own envelope key is
-/// `Attested`: admitted, and read honestly as "signed off by V".
+/// `Attested`: admitted, and read honestly as "signed off by V". A part signed by a REPUDIATED
+/// key is `Attested` too until the real person [`re_signed`] it, even though the registry knows
+/// its human: a `co-signed` over a possibly forged signature would read as a real co-sign
+/// (ADR-0093). Once re-signed, the signature stands again and is co-signed as any other (#1009).
+/// It is offered to anyone who has not vouched it under a standing key, its own re-keyed writer
+/// included, since [`signed_for`] no longer counts the dead key; a colleague who already vouched
+/// it is not offered it again (ADR-0093 (c)).
 pub fn sign_off_vouches(parts: &[NoteRow], presser_actor: &str) -> Vec<(Uuid, VouchRole)> {
     parts
         .iter()
         .filter(|p| !has_signed(p, presser_actor))
         .map(|p| {
+            // (A part gone in unsigned has no `signed_by`; its human envelope still co-signs.)
+            let dead_key = counts_as_unsigned(p);
             let role = match &p.signer_human_actor {
-                Some(a) if !same_actor(a, presser_actor) => VouchRole::CoSigned,
+                Some(a) if !dead_key && !same_actor(a, presser_actor) => VouchRole::CoSigned,
                 _ => VouchRole::Attested,
             };
             (p.event_id, role)
@@ -102,11 +154,13 @@ pub fn sign_off_vouches(parts: &[NoteRow], presser_actor: &str) -> Vec<(Uuid, Vo
 }
 
 /// The parts `actor` drafted that nobody has signed yet: what their next addendum's signature
-/// also covers (Task 4 of the slice).
+/// also covers (Task 4 of the slice). Never a part with a repudiated signer: "Sign off this
+/// note" re-signs it, and an addendum's floor rule (own *drafted* part) need not hold for it
+/// (ADR-0093).
 pub fn addendum_covers(parts: &[NoteRow], actor: &str) -> Vec<Uuid> {
     parts
         .iter()
-        .filter(|p| !part_is_signed(p))
+        .filter(|p| p.signed_by.is_none() && !part_is_signed(p))
         .filter(|p| {
             p.drafted_actor
                 .as_deref()
@@ -293,7 +347,6 @@ pub async fn sign_off_note(
 pub(crate) mod fixture {
     use super::*;
     use crate::note::view::{NoteGrade, PartWriter};
-    use crate::note::vouch_read::PartVouch;
     use chrono::{TimeZone, Utc};
 
     /// A known, confirmed, non-student signer with actor `actor` and name `name`.
@@ -303,6 +356,15 @@ pub(crate) mod fixture {
             name: name.into(),
             student: false,
             unconfirmed: false,
+            repudiated: false,
+        }
+    }
+
+    /// A signer whose key was repudiated since (ADR-0093).
+    pub fn repudiated(actor: &str, name: &str) -> Signer {
+        Signer {
+            repudiated: true,
+            ..who(actor, name)
         }
     }
 
