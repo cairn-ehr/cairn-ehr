@@ -86,7 +86,7 @@
 >   **#1011** (re-signing one's own part via Sign off vouches the other writers' parts — needs a gesture design) ·
 >   **#1012** (a colleague's sign-off over a repudiated part reads "Signed off — every part…" though it clears nothing).
 >   #918's link half stays open. Owed by a human: **RUNBOOK §24**.
-> - **Slice 3c-3a BUILT 2026-11-07 on DRAFT PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013) — NOT merged**
+> - **Slice 3c-3a BUILT 2026-11-07, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013) READY FOR REVIEW — NOT merged**
 >   ([ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), spec **v0.96**, `db/072` with db/004 +
 >   db/052 in place, `SCHEMA_GENERATION` **72**; plan
 >   [`superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md`](superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md),
@@ -152,7 +152,7 @@
 >    `db/070`, `SCHEMA_GENERATION` 70); **3c-2 MERGED in PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)**
 >    (ADR-0092, spec v0.94, `db/071`, `SCHEMA_GENERATION` 71; the slice bullet above has its issues). **3c-3b MERGED in PR
 >    [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95); the maintainer ruled 2026-11-07 that a re-sign under an UNCONFIRMED key counts, read
->    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a BUILT on DRAFT PR #1013** (the slice bullet above):
+>    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a BUILT, PR #1013 ready for review** (the slice bullet above):
 >    it needs the maintainer's review + merge. **Next: 3c-3c** (the person menu, design §3.4; it reads 3c-3a's record and
 >    3c-3b's repudiated rows), or **#1014** first if a multi-node pilot nears. Design §10's findings 1–2 are
 >    decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
@@ -296,15 +296,15 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, draft PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
-**Spec:** **v0.96** (newest ADR-0094, draft PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
+**Session date:** 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
+**Spec:** **v0.96** (newest ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
-wording only) · **`SCHEMA_GENERATION`:** **72** (`db/072`, draft PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
+wording only) · **`SCHEMA_GENERATION`:** **72** (`db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a
 doubted link can be confirmed from the window; clinicians sign in per act and write, autosave and sign a progress note,
-several writers to a draft, an untouched draft goes in unsigned by itself, a clinician can discard their own draft, leaving a signed record of it, and can add to a signed note, which then reads as one note with its parts; a part can be signed later, by its writer or by a supervisor's sign-off (PR #1000), and a part signed by a since-repudiated key counts as unsigned until its real writer re-signs (PR #1006); supervision is recorded, a supervisee's part needing a co-sign waits for a supervisor, and a supervisor can co-sign a supervisee's note as reviewed (draft PR #1013).
+several writers to a draft, an untouched draft goes in unsigned by itself, a clinician can discard their own draft, leaving a signed record of it, and can add to a signed note, which then reads as one note with its parts; a part can be signed later, by its writer or by a supervisor's sign-off (PR #1000), and a part signed by a since-repudiated key counts as unsigned until its real writer re-signs (PR #1006); supervision is recorded, a supervisee's part needing a co-sign waits for a supervisor, and a supervisor can co-sign a supervisee's note as reviewed (PR #1013, ready for review).
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waited on a clinical-note surface, which 3a now gives it) · §5.4 John-Doe (§5.12
@@ -329,7 +329,7 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
-### 2026-11-07 — slice 3c-3a (draft PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)): plan → SDD, 9 tasks
+### 2026-11-07 — slice 3c-3a (PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)): plan → SDD, 9 tasks
 
 Plan maintainer-reviewed (record as `actor_event` ops; the wider self-dealing rule; an unconfirmed re-sign counts).
 Every task reviewed + re-reviewed, an independent ADR fact-check (3 false sentences in round 1, 1 new one in round 2),
