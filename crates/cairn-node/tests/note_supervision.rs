@@ -110,6 +110,12 @@ macro_rules! db_test {
             let _guard = db::test_serial_guard(&base).await.unwrap();
             #[allow(unused_mut)]
             let mut $c = db::connect_and_load_schema(&base).await.unwrap();
+            // A part's time is its HLC wall, a registry row's the DB clock: a clock a previous
+            // suite left ahead (hlc_drift parks it near the drift ceiling) would time this
+            // suite's parts after acts recorded later. Every write below ticks it back to now.
+            $c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
+                .await
+                .unwrap();
             $body
         }
     };

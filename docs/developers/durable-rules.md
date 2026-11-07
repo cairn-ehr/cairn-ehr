@@ -21,6 +21,9 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   supervisor" now (a supervisor linked after a colleague's co-sign would clear it retroactively, and one who has since
   stepped away would stop counting). Pins: `supervision.rs`'s `annotate_judges_the_requirement_at_the_parts_time`,
   `annotate_judges_each_vouchs_supervisor_at_its_own_time`; `note_supervision.rs::a_lifted_requirement_leaves_the_earlier_part_waiting`.
+  **Caveat:** registry rows are on the DB clock and parts on the HLC, which a peer can ratchet up to 24 h ahead, so
+  "as of t" can be judged wrong (ADR-0094 (d), [#1014](https://github.com/cairn-ehr/cairn-ehr/issues/1014)); the DB
+  suites reset `hlc_state` in their setup for the same reason.
 - **Registry times are FLOORED to the millisecond before they are compared.** `recorded_at` has microseconds, an HLC
   wall milliseconds; `Supervision::from_rows` floors, and the compare is `<=`, so a row in the same millisecond as a
   signing counts as in effect. **Tempting wrong fixes:** drop the floor "because chrono compares fine" (a requirement
@@ -49,13 +52,17 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   `cosign_tests.rs`'s `a_non_supervisors_co_sign_does_not_clear_it`, `the_offer_stays_while_a_mandatory_co_sign_is_missing`;
   `note_supervision.rs::only_a_supervisor_clears_a_mandatory_co_sign`.
 - **"Co-sign as reviewed" never vouches another writer's part, and the KEY decides who reviews.** `review::reviewable`
-  takes only a signed part that owes no co-sign, whose writer is not the presser and has the presser among their
-  supervisors now, that no supervisor has vouched, and that the presser has not signed. The presser is the signing
-  key's actor (`vouch_as_shown`). **Tempting wrong fixes:** make it `sign_off_note` under a second label (it would
-  vouch every part, other writers' and unsigned ones included); take the presser from the who's-here claim; drop
+  takes only a signed part that owes no co-sign, that its WRITER signed (`cosign::writer_signature`), whose writer is
+  not the presser and has the presser among their supervisors now, that no supervisor has vouched, and that the
+  presser has not signed. The presser is the signing key's actor (`vouch_as_shown`). **Tempting wrong fixes:** make
+  it `sign_off_note` under a second label (it would vouch every part, other writers' and unsigned ones included);
+  find the writer with `writer_actor` (it falls back to `drafted_actor`, so a part gone in unsigned that a colleague
+  signed off, and its writer never signed, would be offered); take the presser from the who's-here claim; drop
   `!cosign_required` (an owed co-sign is Sign off's to clear). Pins: `review.rs`'s
-  `review_vouches_only_the_pressers_supervisees_parts`, `review_skips_a_part_that_needs_a_co_sign`;
-  `note_review_cosign.rs`'s `review_never_vouches_another_writers_part`, `the_key_not_the_claim_decides`;
+  `review_vouches_only_the_pressers_supervisees_parts`, `review_skips_a_part_that_needs_a_co_sign`,
+  `a_colleagues_sign_off_of_a_timer_part_is_not_the_writers_signature`;
+  `note_review_cosign.rs`'s `review_never_vouches_another_writers_part`, `the_key_not_the_claim_decides`,
+  `a_colleagues_sign_off_of_a_timer_part_is_not_reviewable`;
   `notes_review_db_tests.rs::the_key_not_the_claim_decides_in_the_window`.
 - **Nobody acts on their own supervision as the supervisee — enforced in the door.** `cairn_supervision_apply`
   refuses every op but the assigner pair when the approver's actor is the subject's. **Tempting wrong fixes:** narrow

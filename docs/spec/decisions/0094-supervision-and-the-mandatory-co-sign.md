@@ -11,7 +11,10 @@
   `docs/superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md` (§3.1–§3.3);
   plan: `docs/superpowers/plans/2026-11-07-sign-in-slice-3c-3a-supervision.md`. Touches
   [#1010](https://github.com/cairn-ehr/cairn-ehr/issues/1010) (not guaranteed (b)) and settles the later-vouch mark
-  ADR-0092's Consequences left to [#1003](https://github.com/cairn-ehr/cairn-ehr/issues/1003).
+  ADR-0092's Consequences left to [#1003](https://github.com/cairn-ehr/cairn-ehr/issues/1003). Residuals:
+  [#1014](https://github.com/cairn-ehr/cairn-ehr/issues/1014) (not guaranteed (d)),
+  [#1015](https://github.com/cairn-ehr/cairn-ehr/issues/1015) ((p)) and
+  [#1016](https://github.com/cairn-ehr/cairn-ehr/issues/1016) (the slice's other residuals).
 - **Builds on:** [ADR-0092](0092-the-vouch-and-the-sign-off.md) (the vouch, the sign-off, the pure rules and the
   words) · [ADR-0093](0093-a-repudiated-signature-counts-as-unsigned.md) (a repudiated signature counts as unsigned) ·
   [ADR-0085](0085-in-person-enrolment-and-re-key.md) (the enroller grant, *unconfirmed*, `rotate-key` keeps the actor) ·
@@ -234,7 +237,10 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign when 
     part that:
     - `part_is_signed`, does not `counts_as_unsigned`, and is not `cosign_required` (clearing an owed co-sign is
       Sign off's job);
-    - has a writer (`writer_actor`) other than the presser, with the presser among the writer's supervisors NOW;
+    - was signed by its WRITER (`cosign::writer_signature`: its own signature, or the drafted writer's later vouch),
+      that writer not the presser and having the presser among their supervisors NOW. Not `writer_actor`, which
+      falls back to `drafted_actor`: a part gone in unsigned that a colleague signed off and its writer never signed
+      would be offered, and design §3.3 covers only the parts the supervisees signed;
     - has no vouch by a supervisor of the writer (at that vouch's time) under a key that is not repudiated, and has
       not been signed by the presser.
 
@@ -244,9 +250,11 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign when 
     is the signing KEY's actor, never the who's-here claim (ADR-0092 decision 16); the note is re-read; `Changed`
     unless it holds exactly the parts shown; `NothingToSign` for an empty plan. The vouch IS a `sign-off` vouch, so,
     where `planned_role` picks `co-signed`, it reads " · co-signed by …" (the attested case is (l)). Pins: `review.rs`'s `review_vouches_only_the_pressers_supervisees_parts`,
-    `review_skips_a_part_that_needs_a_co_sign`, `once_any_supervisor_reviewed_it_no_one_is_offered_it`;
+    `review_skips_a_part_that_needs_a_co_sign`, `once_any_supervisor_reviewed_it_no_one_is_offered_it`,
+    `a_colleagues_sign_off_of_a_timer_part_is_not_the_writers_signature`;
     `note_review_cosign.rs`'s `a_supervisor_co_signs_a_reviewed_note`, `review_never_vouches_another_writers_part`,
-    `the_key_not_the_claim_decides`, `a_part_added_after_it_was_shown_refuses_changed`.
+    `the_key_not_the_claim_decides`, `a_part_added_after_it_was_shown_refuses_changed`,
+    `a_colleagues_sign_off_of_a_timer_part_is_not_reviewable`.
 
 17. **The window command `note_review_cosign` keeps `note_sign_off_impl`'s order** (ADR-0092 decision 14): the
     chart on screen, fixture mode, the ids, the key, one node call, an unknown outcome (#814), then a timing sample
@@ -254,8 +262,9 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign when 
     timed). `CompoundView.can_review` is `can_review` for the
     who's-here claim's actor, false with no claim; it only decides the offer. A review settles with its OWN words,
     not Sign off's (controller ruling: Sign
-    off's "every part of the note now carries your signature" is false of a review). They are "Co-signed as reviewed
-    — the note now carries your co-signature.", "This note changed since it was shown — read the chart again, then
+    off's "every part of the note now carries your signature" is false of a review). They are "Your review signature
+    was recorded — the chart shows which parts it covers." (role-neutral, a later controller ruling: an attested review
+    reads " · signed off by", (l)), "This note changed since it was shown — read the chart again, then
     co-sign it. Nothing was signed." and "There is nothing here for you to co-sign as reviewed. Nothing was
     signed.". Pins: `notes_review_tests.rs`'s `can_review_follows_the_claims_supervision`, `review_words_are_exact`,
     `review_follows_sign_offs_order`; `notes_review_db_tests.rs`'s `a_supervisor_reviews_from_the_window`,
@@ -319,11 +328,15 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign when 
   key is another human's; no floor rule reads the record. While the writer had a supervisor at that vouch's time, it
   is read (" · co-signed by Dr Zed") and clears nothing. Where the writer had none, the fallback counts it, as before
   this slice.
-- **(d) The clocks are not one clock.** A registry row's `recorded_at` is this database's arrival clock
-  (`clock_timestamp()`); a part's and a vouch's `hlc_wall` is the signer's HLC, a peer's included. They are compared
-  at millisecond granularity, flooring the registry time. A row in the same millisecond as a signing counts as in
-  effect, and a peer's HLC running ahead of this database's clock shifts which side of a row its parts fall. A
-  restore keeps the original `recorded_at`.
+- **(d) The clocks are not one clock, and "as of t" can be judged wrong.** A registry row is timed by this
+  database's clock (`recorded_at`, `clock_timestamp()`); a part and a vouch by the node's HLC wall (`hlc_wall`), a
+  peer's included. One peer event up to 24 h ahead (db/001's drift ceiling) ratchets the LOCAL HLC forward, so LOCAL
+  parts and vouches signed afterwards carry a future wall too. A `lift-cosign` recorded later in real time can then
+  judge those earlier parts as signed after it and clear their " — not co-signed". Symmetrically, a `require-cosign`
+  can mark parts signed before it, and an `unlink-supervisor` can revoke co-signs given before it. The times are
+  compared at millisecond granularity, flooring the registry time, so a row in the same millisecond as a signing
+  counts as in effect. A restore keeps the original `recorded_at`. The proper fix is to HLC-stamp the six ops, so
+  both sides of the compare are one clock ([#1014](https://github.com/cairn-ehr/cairn-ehr/issues/1014)).
 - **(e) A part that went in unsigned is judged at its commit**, its own `hlc_wall`, not at the time its writer later
   signed it. A requirement recorded between the commit and that signature does not apply to the part.
 - **(f) Review timings share the `note-sign-off` timing kind**, so the timing aggregates (RUNBOOK §5) cannot tell a
@@ -350,6 +363,9 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign when 
   `supervision_panel_tests.rs`'s `an_assigner_links_and_a_supervisor_lifts_from_the_window` and
   `a_superuser_key_is_released_for_enrol_after_a_refused_clinical`), which CI does not run
   ([#905](https://github.com/cairn-ehr/cairn-ehr/issues/905)).
+- **(p) When "Sign off this note" and "Co-sign as reviewed" both show, neither says what it covers.** Design §3.3's
+  "each says what it covers" is not built: the clinician must know that Sign off vouches every part and a review only
+  their supervisees' ([#1015](https://github.com/cairn-ehr/cairn-ehr/issues/1015)).
 
 ## Consequences
 

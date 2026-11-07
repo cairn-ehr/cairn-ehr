@@ -22,9 +22,9 @@ use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::review::{can_review, review_note};
 use cairn_node::note::sign::{sign_note, SignNoteInput};
 use cairn_node::note::view::part_byline;
-use cairn_node::note::vouch::{SignOffInput, SignOffRefusal};
+use cairn_node::note::vouch::{sign_off_note, SignOffInput, SignOffRefusal};
 use common::note_setup;
-use note_vouch_kit::{member, projected, Member, ORIGIN};
+use note_vouch_kit::{member, projected, timer_part_by, Member, ORIGIN};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -118,6 +118,12 @@ macro_rules! db_test {
             let _guard = db::test_serial_guard(&base).await.unwrap();
             #[allow(unused_mut)]
             let mut $c = db::connect_and_load_schema(&base).await.unwrap();
+            // A part's time is its HLC wall, a registry row's the DB clock: a clock a previous
+            // suite left ahead (hlc_drift parks it near the drift ceiling) would time this
+            // suite's parts after acts recorded later. Every write below ticks it back to now.
+            $c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
+                .await
+                .unwrap();
             $body
         }
     };
@@ -213,3 +219,38 @@ db_test!(a_part_added_after_it_was_shown_refuses_changed, |c| {
     );
     assert_eq!(vouch_count(&c).await, 0, "nothing was signed");
 });
+
+// Design §3.3, "never ... an unsigned part": Bea's part went in unsigned on the quarantine timer
+// and colleague Cal signed it off (an attested vouch, the only one the floor admits on a
+// node-keyed part). Bea never signed it herself, so there is no supervisee's signature for Sue to
+// review: nothing is offered, and nothing is written.
+db_test!(
+    a_colleagues_sign_off_of_a_timer_part_is_not_reviewable,
+    |c| {
+        let (node_sk, _, _, _, chart) = note_setup(&c).await;
+        let _bea = member(&c, "bea", "Dr Bea", "clinician").await;
+        let cal = member(&c, "cal", "Dr Cal", "clinician").await;
+        let sue = member(&c, "sue", "Dr Sue", "registrar").await;
+        console(&c, "link-supervisor", "bea", Some("sue")).await;
+        let p = timer_part_by(&mut c, &node_sk, chart, "bea", None).await;
+        let input = SignOffInput {
+            patient: chart,
+            root: p,
+            shown_parts: &[p],
+            node_origin: ORIGIN,
+        };
+        sign_off_note(&mut c, &input, &cal.author())
+            .await
+            .unwrap()
+            .expect("Cal signs the part off");
+        assert_eq!(vouch_count(&c).await, 1);
+
+        let sue_actor = actor_of(&c, &sue).await;
+        assert!(!can_review(note(&c, chart, p).await.parts(), &sue_actor));
+        assert_eq!(
+            review(&mut c, &sue, chart, p, &[p]).await,
+            Err(SignOffRefusal::NothingToSign)
+        );
+        assert_eq!(vouch_count(&c).await, 1, "nothing was signed");
+    }
+);

@@ -35,9 +35,11 @@ fn can_review_follows_the_claims_supervision() {
 /// says "signed off": a review is a co-signature, not a sign-off.
 #[test]
 fn review_words_are_exact() {
+    // Role-neutral (controller ruling, ADR-0094 decision 17): an attested review reads
+    // " · signed off by" (ADR-0094 (l)), so the line claims no co-signature.
     assert_eq!(
         REVIEWED,
-        "Co-signed as reviewed — the note now carries your co-signature."
+        "Your review signature was recorded — the chart shows which parts it covers."
     );
     let changed = review_refusal_view(SignOffRefusal::Changed);
     assert_eq!(

@@ -240,8 +240,10 @@ WHERE ae.op IN ('enroll','rotate-key')
 -- `IS DISTINCT FROM` intentionally matches TWO kinds of row: (a) a row bound to a
 -- DIFFERENT key (the #152 silent-merge — and, since slice 2, a rotate-key row: re-enrolling
 -- the rotated-AWAY key would outrank the rotation and make the retired key current again),
--- and (b) a row with a NULL key — revoke, supersede, grant-enroller and withdraw-enroller rows
--- carry no signing_key_id (the per-op shape CHECK, #666). Case (b) is deliberate, not
+-- and (b) a row with a NULL key — every keyless op (revoke, supersede, grant-/withdraw-enroller,
+-- and the six supervision ops: link-/unlink-supervisor, require-/lift-cosign,
+-- grant-/withdraw-assigner) carries no signing_key_id (the per-op shape CHECK above, #666).
+-- Case (b) is deliberate, not
 -- incidental: it means a fresh enroll onto an actor_id that was ever revoked/superseded is
 -- refused even with the ORIGINAL key. That prevents RESURRECTION — a post-revoke enroll would outrank
 -- the revoke in actor_current's (recorded_at, seq) order and silently re-authorise a

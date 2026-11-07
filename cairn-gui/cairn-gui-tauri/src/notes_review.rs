@@ -26,8 +26,10 @@ use cairn_node::note::vouch::{SignOffInput, SignOffRefusal};
 use std::time::Instant;
 use uuid::Uuid;
 
-/// What the clinician reads when the review was recorded.
-pub(crate) const REVIEWED: &str = "Co-signed as reviewed — the note now carries your co-signature.";
+/// What the clinician reads when the review was recorded. Role-neutral: where the floor admits
+/// only an attested vouch the part reads " · signed off by", not " · co-signed by" (ADR-0094 (l)).
+pub(crate) const REVIEWED: &str =
+    "Your review signature was recorded — the chart shows which parts it covers.";
 /// … when the note holds other parts than the window showed: nothing was signed.
 const CHANGED: &str = "This note changed since it was shown — read the chart again, then co-sign \
      it. Nothing was signed.";

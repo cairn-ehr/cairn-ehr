@@ -542,7 +542,7 @@ observed \_\_.
 | Gesture | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|
 | A supervision act: Staff ID keystroke → the act's sentence and the list re-read | | | | ≤ 3 s | |
-| Co-sign as reviewed: Staff ID keystroke → "Co-signed as reviewed — …" and the byline re-read | | | | ≤ 3 s | |
+| Co-sign as reviewed: Staff ID keystroke → "Your review signature was recorded — …" and the byline re-read | | | | ≤ 3 s | |
 | `ui_gesture_timing` `note-sign-off` (the review's write half; shares the sign-off kind) | | | | — | |
 
 Steps: record "B supervises C" paper *N* = 1 → forced *M* = 1 → observed \_\_ · set or lift co-signing 1 → 1 →

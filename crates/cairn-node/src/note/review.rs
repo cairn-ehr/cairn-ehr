@@ -6,8 +6,9 @@
 //! admits it (`vouch::planned_role`), so it reads as any co-sign does (" · co-signed by …").
 //!
 //! It is its own gesture, not "Sign off this note" under a second label: it never vouches
-//! another writer's part, an unsigned part, a part the presser does not supervise, or a part that
-//! owes a co-sign (clearing a mandatory co-sign is Sign off's job, `cosign::awaits_cosign`).
+//! another writer's part, a part its writer never signed (even one a colleague signed off since),
+//! a part the presser does not supervise, or a part that owes a co-sign (clearing a mandatory
+//! co-sign is Sign off's job, `cosign::awaits_cosign`).
 //!
 //! WHO the presser is comes from the signing KEY (`vouch::vouch_as_shown` reads its actor), never
 //! from the who's-here claim, which is not even an input here (ADR-0092 decision 16): a clinician
@@ -15,9 +16,8 @@
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::cosign::cosign_required;
+use super::cosign::{cosign_required, writer_signature};
 use super::read::NoteRow;
-use super::supervision::writer_actor;
 use super::vouch::{
     counts_as_unsigned, has_signed, part_is_signed, planned_role, same_actor, vouch_as_shown,
     SignOffInput, SignOffRefusal,
@@ -27,12 +27,16 @@ use cairn_event::note_attestation::VouchRole;
 
 /// Part `p` is one `presser` may co-sign as reviewed. All of:
 /// * it is signed, does not count as unsigned (a repudiated key), and owes no co-sign;
-/// * its writer is known, is not the presser, and has the presser among their supervisors NOW;
+/// * its WRITER signed it (`cosign::writer_signature`: its own signature, or the drafted
+///   writer's later vouch — a colleague's sign-off of a part gone in unsigned is not the
+///   writer's signature, so there is nothing of a supervisee's to review), that writer is not
+///   the presser, and has the presser among their supervisors NOW;
 /// * no supervisor of the writer has vouched it yet under a standing key (one review is enough,
 ///   whoever gave it), and the presser has not signed it in any way.
 fn reviewable(p: &NoteRow, presser: &str) -> bool {
-    let supervises = writer_actor(p).is_some_and(|w| {
-        !same_actor(w, presser) && p.writer_supervisors.iter().any(|s| same_actor(s, presser))
+    let supervises = writer_signature(p).is_some_and(|w| {
+        !same_actor(&w.actor, presser)
+            && p.writer_supervisors.iter().any(|s| same_actor(s, presser))
     });
     let reviewed = p
         .vouches
@@ -119,6 +123,31 @@ mod tests {
         // The control: the same part, owing nothing, is offered.
         required.needs_cosigning = false;
         assert_eq!(review_vouches(&[required], "sue").len(), 1);
+    }
+
+    /// A part gone in unsigned on the quarantine timer, written by Bea (Sue's supervisee), that
+    /// colleague Cal signed off: Bea never signed it, so it is not Sue's to review (design §3.3,
+    /// "never ... an unsigned part"). Once Bea signs it herself, it is.
+    #[test]
+    fn a_colleagues_sign_off_of_a_timer_part_is_not_the_writers_signature() {
+        let mut p = part(1, None);
+        p.drafted_actor = Some("bea".into());
+        p.writer_supervisors = vec!["sue".into()];
+        p.vouches.push(vouch(
+            10,
+            VouchAct::SignOff,
+            VouchRole::Attested,
+            who("cal", "Cal"),
+        ));
+        assert!(review_vouches(&[p.clone()], "sue").is_empty());
+
+        p.vouches.push(vouch(
+            11,
+            VouchAct::SignOff,
+            VouchRole::Attested,
+            who("bea", "Bea"),
+        ));
+        assert_eq!(review_vouches(&[p], "sue").len(), 1);
     }
 
     #[test]

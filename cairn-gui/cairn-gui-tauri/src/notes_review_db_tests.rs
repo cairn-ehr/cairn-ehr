@@ -57,12 +57,15 @@ async fn supervised_note() -> Option<(
     let cs = std::env::var("CAIRN_TEST_PG").ok()?;
     let guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
     let mut owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
+    // The HLC is reset too: a part is timed by it, a supervision row by the DB clock, and a
+    // clock a previous suite left ahead would time parts after acts recorded later.
     owner
         .batch_execute(
             "TRUNCATE clinical_note, clinical_note_attestation, note_draft, note_draft_spent, \
              note_policy, vault_attempt, vault_member, vault_terminal, vault_policy, \
              patient_link, person_member, link_veto_flag, event_log, actor_event, patient_chart, \
-             node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+             node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE; \
+             UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0",
         )
         .await
         .unwrap();

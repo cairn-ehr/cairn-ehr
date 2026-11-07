@@ -194,10 +194,13 @@ async fn world() -> Option<(impl Sized, AppState, String, String)> {
     };
     let guard = cairn_node::db::test_serial_guard(&cs).await.unwrap();
     let owner = cairn_node::db::connect_and_load_schema(&cs).await.unwrap();
+    // The HLC is reset too: a part is timed by it, a supervision row by the DB clock, and a
+    // clock a previous suite left ahead would time parts after acts recorded later.
     owner
         .batch_execute(
             "TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy, event_log, actor_event, \
-             patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+             patient_chart, node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE; \
+             UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0",
         )
         .await
         .unwrap();

@@ -1999,7 +1999,7 @@ a supervisor initialling a registrar's entry as read. **Live only**, like sectio
 | Gesture | Start | Stop | Budget |
 |---|---|---|---|
 | A supervision act, credential included | the first keystroke in the strip's Staff ID | the act's sentence on screen and the list re-read | **≤ 3 s** (Sign's, section 16) |
-| Co-sign as reviewed, credential included | the first keystroke in the strip's Staff ID | "Co-signed as reviewed — …" on screen and the byline re-read | **≤ 3 s** (Sign's, section 16) |
+| Co-sign as reviewed, credential included | the first keystroke in the strip's Staff ID | "Your review signature was recorded — …" on screen and the byline re-read | **≤ 3 s** (Sign's, section 16) |
 | See that a part still needs its supervisor | — | — | **0 acts** (the byline) |
 
 Steps: record "B supervises C" paper *N* = 1 (write it on the list) → forced *M* = 1 (one act, the strip's
@@ -2067,7 +2067,7 @@ re-read.
 - [ ] With `dr-c` named in who's here, none of these notes offers *Co-sign as reviewed*. With `dr-b` named, each of
       these notes offers it beside no *Sign off this note* (the five) and beside *Sign off this note* on the shared note.
 - [ ] As `dr-b`, press it on the five, timing each from the first keystroke in the strip's Staff ID until
-      "Co-signed as reviewed — the note now carries your co-signature." shows and the byline is re-read (budget
+      "Your review signature was recorded — the chart shows which parts it covers." shows and the byline is re-read (budget
       ≤ 3 s); then `ui_gesture_timing`'s `note-sign-off` rows. Each reads "signed by Dr P · co-signed by Dr B", the
       button is gone, and `vouches` shows Dr B's row as `sign-off`, `co-signed`.
 - [ ] On the shared note it co-signs Dr P's part only: Nurse A's part carries no "co-signed by Dr B", and `vouches`

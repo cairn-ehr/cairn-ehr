@@ -73,7 +73,8 @@ subagent-driven development.
   - The pending mark stays `" — not co-signed"`. When the writer has NO supervisor now, it reads
     `" — not co-signed (no supervisor recorded)"`.
   - The button: `"Co-sign as reviewed"`; accessible name `"Co-sign as reviewed: " + when`.
-  - Review outcome: `"Co-signed as reviewed — the note now carries your co-signature."`; refusals
+  - Review outcome: `"Your review signature was recorded — the chart shows which parts it covers."` (role-neutral: an attested review reads " · signed off by",
+    controller ruling after the final review); refusals
     `"This note changed since it was shown — read the chart again, then co-sign it. Nothing was signed."`
     and `"There is nothing here for you to co-sign as reviewed. Nothing was signed."`.
   - The vouch it files reads as any co-sign does (`" · co-signed by …"`): it IS a `sign-off`/`co-signed` vouch
