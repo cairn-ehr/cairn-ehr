@@ -76,7 +76,7 @@ pub async fn unconfirmed_expires_at(db: &Client, staff_id: &str) -> anyhow::Resu
 }
 
 /// Sign `addr` as `signer`: the approval token every approver-gated door takes.
-fn approve(addr: &[u8], signer: &dyn EventSigner) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn approve(addr: &[u8], signer: &dyn EventSigner) -> anyhow::Result<Vec<u8>> {
     let kid = hex::encode(signer.verifying_key().to_bytes());
     sign_attestation(addr, &kid, ATTEST_ROLE, signer)
         .map_err(|e| anyhow!("signing the approval failed: {e}"))
