@@ -9,6 +9,7 @@ const WHOS_HERE_JS: &str = include_str!("../src-ui/whos_here.js");
 const NOTES_JS: &str = include_str!("../src-ui/notes.js");
 const COMPOUND_JS: &str = include_str!("../src-ui/notes_compound.js");
 const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
+const SUPERVISION_JS: &str = include_str!("../src-ui/supervision.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
 /// Review Focus 5: from an open chart the queued saves land first (a sign in flight settles, then
@@ -94,7 +95,7 @@ fn the_menu_is_hidden_for_nobody() {
         position(draw, "view.kind === \"Nobody\"") < position(draw, "view.count_words"),
         "{draw}"
     );
-    assert!(draw.contains("menu.hidden = true"), "{draw}");
+    assert!(draw.contains("hideMenu()"), "{draw}"); // hideMenu sets `hidden = true`
     assert!(INDEX_HTML.contains("<details id=\"person-menu\" hidden>"));
 }
 
@@ -168,4 +169,67 @@ fn the_script_loads_before_whos_here() {
             < position(INDEX_HTML, "<script src=\"whos_here.js\">")
     );
     assert!(!MENU_JS.contains("typeof "));
+}
+
+/// F1 (final review): a different person named means the bar's menu is no longer theirs, so it
+/// leaves the screen BEFORE the new person's read is sent; a failed read leaves it hidden too.
+/// Either way nothing of the last person's list is ever drawn under the next person's name.
+#[test]
+fn the_last_persons_menu_leaves_before_the_next_read() {
+    let hide = js_fn(MENU_JS, "hideMenu");
+    for step in [
+        "hidden = true",
+        "open = false",
+        "el(\"person-menu-body\").replaceChildren()",
+    ] {
+        assert!(hide.contains(step), "{step}: {hide}");
+    }
+    let show = js_fn(WHOS_HERE_JS, "showClaim");
+    assert!(
+        position(show, "hideMenu()") < position(show, "refreshMenuCount()"),
+        "{show}"
+    );
+    // The catch path hides the menu; the failure sentence lives in the bar, outside the <details>.
+    let read = js_fn(MENU_JS, "refreshMenuCount");
+    let catch = &read[position(read, "catch (failure)")..];
+    assert!(
+        position(catch, "hideMenu()") < position(catch, "return;\n  }"),
+        "{read}"
+    );
+    assert!(js_fn(MENU_JS, "drawMenu").contains("hideMenu()"));
+}
+
+/// F3 (final review): a second press while the first is still closing one chart and opening
+/// another returns at once, and the flag is cleared in a `finally`, so a refusal or a throw can
+/// never leave the buttons dead.
+#[test]
+fn open_menu_row_refuses_a_second_press_while_one_runs() {
+    let open = js_fn(MENU_JS, "openMenuRow");
+    let registering = position(open, "if (registering) return;");
+    let guard = position(open, "if (menuOpening) return;");
+    assert!(registering < guard, "{open}");
+    // Nothing runs between the two guards: the flag check is the next statement.
+    let between = &open[registering..guard];
+    assert_eq!(between.matches(';').count(), 1, "{open}");
+    assert!(
+        guard < position(open, "menuOpening = true;")
+            && position(open, "menuOpening = true;") < position(open, "if (signInFlight())"),
+        "{open}"
+    );
+    let finally = &open[position(open, "} finally {")..];
+    assert!(finally.contains("menuOpening = false;"), "{open}");
+    assert!(MENU_JS.contains("let menuOpening = false;"));
+}
+
+/// F4 (final review): a supervision act changes who co-signs what, so it re-reads the bar's count
+/// once it went through (ADR-0095: every place that can change what waits re-reads it).
+#[test]
+fn a_supervision_act_re_reads_the_bar() {
+    let act = js_fn(SUPERVISION_JS, "supervisionAct");
+    let sent = position(act, "await invoke(\"supervision_act\"");
+    let reread = position(act, "void refreshMenuCount();");
+    assert!(
+        sent < reread && reread < position(act, "catch (failure)"),
+        "{act}"
+    );
 }

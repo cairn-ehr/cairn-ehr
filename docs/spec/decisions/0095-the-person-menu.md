@@ -11,7 +11,8 @@
   plan: `docs/superpowers/plans/2026-11-07-sign-in-slice-3c-3c-person-menu.md`. Touches
   [#963](https://github.com/cairn-ehr/cairn-ehr/issues/963) (not guaranteed (b)) and
   [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905) ((i)). Residual:
-  [#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020) ((j)).
+  [#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020) ((j)) and
+  [#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021) ((h)).
 - **Builds on:** [ADR-0094](0094-supervision-and-the-mandatory-co-sign.md) (the supervision record, `awaits_cosign`,
   `reviewable`) · [ADR-0093](0093-a-repudiated-signature-counts-as-unsigned.md) (`counts_as_unsigned`) ·
   [ADR-0092](0092-the-vouch-and-the-sign-off.md) (`part_is_signed`, the vouch read) ·
@@ -35,8 +36,9 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
 ### The maintainer's rulings (2026-11-07, plan review: Q1–Q3 as their defaults)
 
 1. **The picker shows each person's count (Q1)**, from one read of every person's parts on each opening of the
-   picker. The list draws first and the counts fill in when they land. The query carries a `shortcut:` comment, and
-   RUNBOOK §26 measures it; if it misses ≤ 1 s, an issue is filed for a projection of open obligations. The
+   picker. The list draws first and the counts fill in when they land. The query carries a `shortcut:` comment: it
+   grows with all-time history, not with what is open (not guaranteed (h)), and the projection of open obligations
+   that would end that is [#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021). RUNBOOK §26 measures it. The
    alternative, moving the counts to a later slice, was not taken.
 2. **The menu shares the chart list's query, only its `WHERE` changed (Q2).** That query reads
    `clinical_note.narrative`, the clear projection the chart list already reads; it opens no sealed body, and the
@@ -115,21 +117,25 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
     picker's suffix and the counts-failure sentence "Waiting counts could not be read." (sent as the error's text);
     `person_menu.js` writes no sentence a clinician reads. Each row's button shows "Open note" and is named "Open
     note: {patient}, {when}". A draft row reuses `notes::commit::due_words` verbatim. The menu's status line sits
-    in the bar, outside the `<details>`, so a failed read is visible with the menu closed. The review group is a
+    in the bar, outside the `<details>`, so a failed read is visible with the menu closed; a failed read also hides
+    and closes the menu, so a list no longer known to be true is not left on the bar. The review group is a
     nested `<details>`, closed on every draw and never opened by the script.
 14. **"Open note" re-reads, and keeps the wrong-chart rule.** A menu read admits its rows' charts to
     `AppState::shown`, as the duplicate tray does, and a chart opens only through `open_chart_impl`.
     `person_menu_open` re-reads the menu for the person named NOW and opens the chart only while a row of that read
     names it; otherwise it answers "That note no longer waits in your list — the list was read again." and opens
     nothing; a re-read that fails answers the read-failure text instead, and opens nothing either. The script first
-    returns at once while a registration is under way, as `openChart` does; then lets a sign in flight settle; then
-    closes an open chart (decision 3). On a refusal it redraws the list, then says the sentence and moves focus to
-    it. The opened note pane scrolls to and focuses the part (found through the compound's
-    `shown_parts`) or the draft (or the editor, if this terminal holds it).
-15. **When the menu is read again:** on a change of the named person, on opening the menu, after each drawn note pane
-    and each chart closed (only once the node's `close_chart` has succeeded: a failed close returns before the
-    re-read), after a refused "Open note", and every 60 s while the menu is closed. An older answer never draws over
-    a newer one (a revision counter per kind of read). The picker's counts are not read after a failed staff list.
+    returns at once while a registration is under way, as `openChart` does, or while an earlier press of a row's
+    button is still under way (a double-click); then lets a sign in flight settle; then closes an open chart
+    (decision 3). On a refusal it reads the list again, then says the sentence and moves focus to it. The opened
+    note pane scrolls to and focuses the part (found through the compound's `shown_parts`) or the draft (or the
+    editor, if this terminal holds it).
+15. **When the menu is read again:** on a change of the named person (the last person's menu is first hidden, closed
+    and emptied, so none of it shows under the next person's name while the read is on its way), on opening the
+    menu, after each drawn note pane and each chart closed (only once the node's `close_chart` has succeeded: a
+    failed close returns before the re-read), after a refused "Open note", after each supervision act that went
+    through, and every 60 s while the menu is closed. An older answer never draws over a newer one (a revision
+    counter per kind of read). The picker's counts are not read after a failed staff list.
 
 ### What this ends
 
@@ -157,22 +163,32 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
   (ADR-0094 (d)), so a note can stay in group 3 that long past its 7 days.
 - **(f) "Open note" checks the chart, not the row.** It opens a chart while any row of the re-read menu names it,
   even when the pressed row itself has left the list.
-- **(g) With nobody named, "Open note" says "the list was read again" though nothing was read.** Reachable only in
-  the moment between a who's-here change and the redraw that hides the menu.
-- **(h) The ≤ 1 s budgets are unmeasured.** `NOTES_BY_KEYS_SQL` scans every `clinical_note` row, and the picker
-  reads every person's parts on each opening (decision 1). RUNBOOK §26 owes the figures.
+- **(g) With nobody named, "Open note" says "the list was read again" though nothing was read.** A who's-here change
+  hides the menu at once, so this is reachable only when the change lands while an earlier press of "Open note" is
+  still under way.
+- **(h) The ≤ 1 s budgets are unmeasured, and the reads grow with all-time history.** `NOTES_BY_KEYS_SQL` scans
+  every `clinical_note` row's contributors and returns every part the keys ever wrote: groups 1 and 2 are all-time
+  obligations, and only group 3 is cut to 7 days, in Rust. The picker reads every person's parts on each opening
+  (decision 1). Both reads run on the window's one database connection, so a who's-here pick, a save or a Sign waits
+  behind a long read; and "Open note" from an open chart reads the menu three times (after the chart closes, in
+  `person_menu_open`, and after the note pane draws). RUNBOOK §26 owes the figures, and its fixture (about 60 notes)
+  cannot show a cost that grows with history. The upgrade, a projection of open obligations, is
+  [#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021).
 - **(i) The window's commands against a database are pinned only by DB-gated tests**
   (`person_menu_db_tests.rs`), which CI does not run ([#905](https://github.com/cairn-ehr/cairn-ehr/issues/905)).
   The webview was walked in Chromium with a stubbed `invoke`; WebKit and the real Tauri IPC are owed to RUNBOOK §26.
 - **(j) Two people rows can share a staff id, and then the bar and the picker can disagree.** After a restore loses
   the member rows and the person is enrolled again under another role (a new actor), both actors go by the same
-  staff id. The bar's read takes the first match in actor-hex order (`keys_for_bar`, `MenuRead::person`), while
-  `counts()` emits one count per actor and the picker keeps the last one it is given
-  ([#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020)).
+  staff id, but only while the supervision record still names the old actor: `cairn_note_people()` lists an actor
+  with no member row only when the record names it (db/073). The bar's read takes the first match in actor-hex
+  order (`keys_for_bar`, `MenuRead::person`), while `counts()` emits one count per actor and the picker keeps the
+  last one it is given ([#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020)).
 - **(k) An awaited co-sign with no supervisor now is in nobody's menu.** A part that `awaits_cosign` while its writer
   has no supervisor recorded now (a student's "(no supervisor recorded)" part, or a required writer's whose
-  supervisors all stepped away) is in nobody's group 2 (decision 7) and so in no count. It is found chart by chart,
-  and while its writer still needs co-signing the assigner's panel shows them as a gap row (ADR-0094).
+  supervisors all stepped away) is in nobody's group 2 (decision 7) and so in no count. It is found chart by chart.
+  While its writer still needs co-signing and still has a member row, the assigner's panel shows them as a gap row
+  (ADR-0094); a writer whose member row is gone is not on that panel at all, which lists members only
+  (`cairn_supervision_staff()`, db/072).
 
 ## Consequences
 
@@ -186,7 +202,8 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
   - audit a supervisee's recent work: pull files at random (unbounded) → 2 (open the menu, open the review group) → 2.
 
   Time budgets, owed by a human in RUNBOOK §26: the menu opens ≤ 1 s with 20 supervisees and a week of notes; the
-  picker's counts land ≤ 1 s after its list draws; co-sign from the opened note ≤ 3 s (Sign's, RUNBOOK §16/§23).
+  picker's counts land ≤ 1 s after its list draws; a pick made while they load puts the new name on the bar ≤ 1 s
+  after the press; co-sign from the opened note ≤ 3 s (Sign's, RUNBOOK §16/§23).
   The menu is a read and db/044's timing kinds are writes, so the ≤ 1 s figures are stopwatch only. No decision is
   forced: the count names only obligations, and the review list is opt-in and collapsed.
 - **Harder.** A new "is this owed?" rule must change the chart's predicate (`part_is_signed`, `counts_as_unsigned`,
@@ -195,7 +212,7 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
 - **The bet.** That one list on the bar, counting only what must be signed, is enough for people to clear their own
   and their supervisees' notes without being nagged. We would know it is wrong if counts sit above zero for days with
   the person on shift, or if supervisors never open the review group.
-- **Pinned by** `db/tests/073_person_menu_test.sql`; `crates/cairn-node/src/note/{menu_tests,supervision,read}.rs`'s
+- **Pinned by** `db/tests/073_person_menu_test.sql`; `crates/cairn-node/src/note/{menu_tests,menu_read,supervision,read}.rs`'s
   tests; `crates/cairn-node/tests/{note_menu_doors,note_parts_by_keys,note_person_menu,window_role_grants_notes,floor_execute_grants}.rs`;
   `cairn-gui/cairn-gui-tauri/src/{person_menu,person_menu_db,person_menu_webview}_tests.rs`. RUNBOOK §26 carries the
   human measurements.

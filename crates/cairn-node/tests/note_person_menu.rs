@@ -333,3 +333,54 @@ db_test!(counts_equal_each_persons_menu_count, |c| {
     assert_eq!(all.name_of(&sue_actor), Some("Dr Sue"));
     assert_eq!(all.name_of("no-such-actor"), None);
 });
+
+/// `staff`'s menu read both ways (the bar's narrowed keys, and every person's), asserted equal.
+async fn bar_equals_all(c: &Client, staff: &str) -> PersonMenu {
+    let now = Utc::now();
+    let bar = read_menus(c, Some(staff))
+        .await
+        .unwrap()
+        .menu_for(staff, now);
+    let all = read_menus(c, None).await.unwrap().menu_for(staff, now);
+    assert_eq!(bar, all, "{staff}: the bar's read and the picker's read");
+    bar.unwrap_or_else(|| panic!("{staff} is a person"))
+}
+
+// Final review F6: the bar narrows the keys it reads (`keys_for_bar`); these are the cases where a
+// narrowed read is likeliest to miss a row the all-people read finds.
+db_test!(
+    the_bar_read_and_the_all_read_agree_where_they_are_likeliest_to_differ,
+    |c| {
+        let (node_sk, _, _, _, chart) = note_setup(&c).await;
+        // A repudiated key's part, in the REAL person's group 1 (its key is no longer theirs).
+        let zed = member(&c, "zed", "Dr Zed", "registrar").await;
+        let zp = sign_as(&mut c, &node_sk, chart, &zed).await;
+        let _zed2 = repudiate_and_rekey(&c, &zed).await;
+        let z = bar_equals_all(&c, "zed").await;
+        assert_eq!(parts_of(&z.own), vec![Some(zp)]);
+        assert_eq!(z.own[0].why, Why::KeyRepudiated);
+
+        // A review-group row: a supervisee's signed part that owes no co-sign.
+        let bea = member(&c, "bea", "Dr Bea", "clinician").await;
+        let _sue = member(&c, "sue", "Dr Sue", "registrar").await;
+        console(&c, "link-supervisor", "bea", Some("sue")).await;
+        let bp = sign_as(&mut c, &node_sk, chart, &bea).await;
+
+        // A supervisor who stepped away: Tom sees nothing of Sam's; Sue still owes the co-sign.
+        let sam = member(&c, "sam", "Sam", "student").await;
+        let _tom = member(&c, "tom", "Dr Tom", "registrar").await;
+        console(&c, "link-supervisor", "sam", Some("sue")).await;
+        console(&c, "link-supervisor", "sam", Some("tom")).await;
+        let sp = sign_as(&mut c, &node_sk, chart, &sam).await;
+        next_millisecond().await;
+        console(&c, "unlink-supervisor", "sam", Some("tom")).await;
+
+        let s = bar_equals_all(&c, "sue").await;
+        assert_eq!(parts_of(&s.review), vec![Some(bp)]);
+        assert_eq!(parts_of(&s.cosign), vec![Some(sp)]);
+        let t = bar_equals_all(&c, "tom").await;
+        for group in [&t.own, &t.cosign, &t.review] {
+            assert!(!parts_of(group).contains(&Some(sp)), "{t:?}");
+        }
+    }
+);

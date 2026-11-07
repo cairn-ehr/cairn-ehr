@@ -2119,6 +2119,7 @@ audit them. **Live only**: a `--mock` window draws an empty menu and no counts.
 |---|---|---|---|
 | The menu read, 20 supervisees and a week of notes | the press on a name in the picker | "Waiting for you: N" on the bar | **≤ 1 s** |
 | The picker's counts, same fixture | the picker's list on screen | the last " · N waiting" on screen | **≤ 1 s** |
+| A pick while the picker's counts are still loading, same fixture | the press on a name in the picker, before the last " · N waiting" is on screen | the new name on the bar | **≤ 1 s** |
 | Co-sign from the menu, credential included | the first keystroke in the strip's Staff ID, on the note "Open note" opened | "Signed off — …" or "Your review signature was recorded — …" and the byline re-read | **≤ 3 s** (Sign's, section 16) |
 
 Steps: find what waits for my signature paper *N* = one walk per folder → forced *M* = 2 (open the menu, read it) →
@@ -2128,10 +2129,11 @@ target *K* = 1 (the bar's count); countersign one note from the menu 2 (open the
 work: pull files at random → 2 (open the menu, open the review group) → 2. Opening the menu shows the last read at
 once and runs the same read again, so a pick, which runs it with a visible stop, is the stopwatch's view of "the menu
 opens". The menu is a read, and the node times
-only writes (section 5), so the stopwatch is the only figure for the first two rows; the co-sign's write half is
+only writes (section 5), so the stopwatch is the only figure for the first three rows; the co-sign's write half is
 timed as **`note-sign-off`**. **A figure outside its budget, or an `M > N`, is the finding — file an issue; never
-adjust the budget.** A miss on the first two rows is the case the query's `shortcut:` comment names: file it as
-the projection of open obligations ADR-0095 decision 1 owes.
+adjust the budget.** A miss on the first three rows is the case the query's `shortcut:` comment names: record it
+on [#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021), the projection of open obligations ADR-0095
+decision 1 names.
 
 **Setup.** A FRESH node with section 25's Setup only, not its measurements: section 25's Measurement 2 leaves a
 note of Dr P's without her supervisor's co-sign, which comes back into the lists below once `dr-b` and `dr-c` are
@@ -2173,8 +2175,9 @@ Dr P needs co-signing and has two supervisors; Nurse A is Dr B's supervisee and 
 - [ ] Open "Who's here?": the list draws at once and the suffixes join it. Dr B's entry ends " · N waiting" with the
       N her bar shows once she is picked; an entry whose count is 0 has no suffix.
 
-**Measurement 2 — Open note, and co-sign from it (≤ 3 s).** After Measurement 1, Dr B's list holds one row, her
-part that went in unsigned on chart B. Re-require co-signing for Dr P (the first console line above) and have her
+**Measurement 2 — Open note, and co-sign from it (≤ 3 s).** After Measurement 1, Dr B's list holds one COUNTED row,
+her part that went in unsigned on chart B (her review group also holds Nurse A's note, which this measurement's
+review row uses). Re-require co-signing for Dr P (the first console line above) and have her
 sign **six** one-part notes on chart A, P1 to P6 in order. Name `dr-b`: "Waiting for you: 7".
 
 - [ ] From the front door: *Open note* on P1's row. Chart A opens, scrolled to that note, which has the focus
@@ -2207,6 +2210,13 @@ A fixture smaller than the budget's is a figure for that size only: say so in th
       "Don't know" between runs: it hides the menu, so the bar's "Waiting for you: N" coming back is the stop (a pick
       of the person already named does not read the menu again, and another person's bar may show the same N).
 - [ ] Time five openings of the picker, from its list on screen to the last " · N waiting".
+- [ ] Time five picks made while the picker's counts are still loading: open the picker and press `dr-b`'s name
+      before the last " · N waiting" shows, from the press to her name on the bar. Both reads use the window's one
+      database connection, so the pick waits behind the counts' read (ADR-0095 (h)).
+
+A fixture this size (about 60 notes) cannot show a cliff that grows with history: the menu's read returns every part
+its keys ever wrote, and the counts' read every person's, so a node with years of notes is slower than any figure
+here ([#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021)).
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 

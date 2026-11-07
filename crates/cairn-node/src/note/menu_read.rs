@@ -66,7 +66,7 @@ pub async fn read_menus(
 /// (group 3 reads their notes). Empty when `staff` names no one. Names are NOT narrowed:
 /// `people` stays whole so a row can name its writer and the other supervisors.
 fn keys_for_bar(people: &[Person], staff: &str, sup: &Supervision) -> Vec<String> {
-    let Some(me) = people.iter().find(|p| p.staff_id == staff) else {
+    let Some(me) = find_person(people, staff) else {
         return Vec::new();
     };
     let supervisees = sup.supervisees_now(&me.actor);
@@ -75,6 +75,15 @@ fn keys_for_bar(people: &[Person], staff: &str, sup: &Supervision) -> Vec<String
         .filter(|p| p.actor == me.actor || supervisees.iter().any(|s| same_actor(s, &p.actor)))
         .flat_map(|p| p.keys.clone())
         .collect()
+}
+
+/// The person with this staff id; `""` names nobody (a person read without a staff id has it).
+/// The bar's keys and [`MenuRead::person`] both ask here, so the two cannot pick differently.
+fn find_person<'a>(people: &'a [Person], staff: &str) -> Option<&'a Person> {
+    if staff.is_empty() {
+        return None;
+    }
+    people.iter().find(|p| p.staff_id == staff)
 }
 
 async fn read_people(client: &(impl GenericClient + Sync)) -> anyhow::Result<Vec<Person>> {
@@ -89,7 +98,9 @@ async fn read_people(client: &(impl GenericClient + Sync)) -> anyhow::Result<Vec
         .iter()
         .map(|r| Person {
             actor: r.get(0),
-            staff_id: r.get(1),
+            // NULL when an actor the supervision record names has no handle to answer with;
+            // "" is nobody's staff id (`MenuRead::person`, `counts`).
+            staff_id: r.get::<_, Option<String>>(1).unwrap_or_default(),
             display_name: r.get(2),
             keys: r.get(3),
         })
@@ -119,9 +130,9 @@ async fn read_drafts(client: &(impl GenericClient + Sync)) -> anyhow::Result<Vec
 }
 
 impl MenuRead {
-    /// The person with this (already normalised) staff id.
+    /// The person with this (already normalised) staff id, or `None` for `""`.
     pub fn person(&self, staff_id: &str) -> Option<&Person> {
-        self.people.iter().find(|p| p.staff_id == staff_id)
+        find_person(&self.people, staff_id)
     }
 
     /// That person's three groups, or `None` when no such person was read.
@@ -150,5 +161,30 @@ impl MenuRead {
             .iter()
             .find(|p| p.actor == actor)
             .and_then(|p| p.display_name.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F5 (final review): an actor the supervision record names but no staff id can be found for
+    /// reads as staff id "" (`cairn_note_people()` answers NULL). "" is nobody's name, so it has
+    /// no menu, just as `counts()` gives it no count.
+    #[test]
+    fn a_person_without_a_staff_id_has_no_menu() {
+        let read = MenuRead {
+            people: vec![Person {
+                actor: "aa".into(),
+                staff_id: String::new(),
+                display_name: None,
+                keys: vec!["k".into()],
+            }],
+            drafts: Vec::new(),
+            parts: Vec::new(),
+        };
+        assert!(read.person("").is_none());
+        assert!(read.menu_for("", Utc::now()).is_none());
+        assert!(read.counts(Utc::now()).is_empty());
     }
 }

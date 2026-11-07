@@ -11,7 +11,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 ## Per-slice rules (the repair path, the funnel)
 
 **⇒ GUI SIGN-IN SLICE 3c-3c — THE PERSON MENU, "WAITING FOR YOU" (ADR-0095, db/073) — do not undo**
-(pins: `db/tests/073_person_menu_test.sql`, `crates/cairn-node/src/note/{menu_tests,read}.rs`'s tests,
+(pins: `db/tests/073_person_menu_test.sql`, `crates/cairn-node/src/note/{menu_tests,menu_read,read}.rs`'s tests,
 `crates/cairn-node/tests/{note_menu_doors,note_parts_by_keys,note_person_menu}.rs`,
 `cairn-gui/cairn-gui-tauri/src/{person_menu,person_menu_db,person_menu_webview}_tests.rs`):
 - **The menu's groups ask the chart's own predicates and must never grow their own.** `note::menu::classify` lists
@@ -45,6 +45,10 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   be sure to land while the node still shows it). Pins: `person_menu_db_tests.rs`'s `a_row_that_vanished_is_refused_and_opens_no_chart`,
   `a_repicked_person_cannot_open_the_previous_persons_row`;
   `person_menu_webview_tests.rs::open_menu_row_settles_signs_and_closes_the_chart_before_opening`.
+- **The last person's menu leaves the bar before the next person's read.** `showClaim` calls `hideMenu()` (hidden,
+  closed, emptied) before `refreshMenuCount()`, and a failed read hides it too. **Tempting wrong fix:** drop the hide
+  "to avoid the flicker" (Dr A's rows would sit under Dr B's name until B's read lands, or for good if it fails).
+  Pin: `person_menu_webview_tests.rs::the_last_persons_menu_leaves_before_the_next_read`.
 - **The drafts door's `due` and `stuck` are db/067's expressions, copied.** **Tempting wrong fix:** compute the due
   time in Rust from the quarantine (a second copy of the formula, free to drift from the chart's draft row).
   Pin: `note_menu_doors.rs::drafts_by_writer_due_agrees_with_the_per_chart_door`.

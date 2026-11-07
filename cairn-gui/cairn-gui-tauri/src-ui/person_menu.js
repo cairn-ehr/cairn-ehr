@@ -17,6 +17,8 @@ let pickerRevision = 0;
 let pendingMenuFocus = null;
 /** The picker's " · N waiting" words by staff id; kept so a search redraw keeps them. */
 let pickerSuffix = {};
+/** True while one row's open press is still closing a chart and opening another (a double-click). */
+let menuOpening = false;
 
 /** Re-read the menu and redraw the bar: on a new claim, a drawn note pane, a closed chart, a tick. */
 async function refreshMenuCount() {
@@ -26,6 +28,8 @@ async function refreshMenuCount() {
     view = await invoke("person_menu");
   } catch (failure) {
     if (revision !== menuRevision) return;
+    // The list drawn last is no longer known to be true: it leaves; the bar's line says why.
+    hideMenu();
     setMessage(el("person-menu-status"), failureText(failure));
     return;
   }
@@ -38,8 +42,7 @@ function drawMenu(view) {
   const menu = el("person-menu");
   if (view.kind === "Nobody") {
     setMessage(el("person-menu-status"), "");
-    menu.hidden = true;
-    menu.open = false;
+    hideMenu();
     return;
   }
   setMessage(el("person-menu-status"), "");
@@ -52,6 +55,18 @@ function drawMenu(view) {
     reviewGroup(view.review),
   );
   menu.hidden = false;
+}
+
+/**
+ * Take the menu off the bar, closed and emptied: for nobody named, a failed read, and the moment
+ * another person is named (whos_here.js's `showClaim`), so the last person's list is never seen
+ * under the next person's name while their read is on its way. The status line is not touched.
+ */
+function hideMenu() {
+  const menu = el("person-menu");
+  menu.hidden = true;
+  menu.open = false;
+  el("person-menu-body").replaceChildren();
 }
 
 /** A group's rows (or Rust's "nothing here" line) as a list. */
@@ -95,22 +110,28 @@ function menuRow(row) {
  */
 async function openMenuRow(row) {
   if (registering) return; // as funnel.js's openChart: registration's own enterChart must not be replaced
-  setMessage(el("person-menu-status"), "");
-  if (signInFlight()) await signsSettled();
-  if (displayedPatient) await closeChart();
+  if (menuOpening) return; // a second press would interleave two opens with one close
+  menuOpening = true;
   try {
-    const header = await invoke("person_menu_open", { patientId: row.patient_id });
-    pendingMenuFocus = row.focus;
-    el("person-menu").open = false;
-    enterChart(header);
-  } catch (refusal) {
-    // Rust's sentence (a refusal is a string). The list is read again FIRST: a drawn menu clears
-    // the status line, so saying the refusal before the re-read lands would erase it.
-    await refreshMenuCount();
-    setMessage(el("person-menu-status"), String(refusal));
-    // The clicked button is gone with the redraw: focus the line that says why, not <body>.
-    el("person-menu-status").tabIndex = -1;
-    el("person-menu-status").focus();
+    setMessage(el("person-menu-status"), "");
+    if (signInFlight()) await signsSettled();
+    if (displayedPatient) await closeChart();
+    try {
+      const header = await invoke("person_menu_open", { patientId: row.patient_id });
+      pendingMenuFocus = row.focus;
+      el("person-menu").open = false;
+      enterChart(header);
+    } catch (refusal) {
+      // Rust's sentence (a refusal is a string). The list is read again FIRST: a drawn menu clears
+      // the status line, so saying the refusal before the re-read lands would erase it.
+      await refreshMenuCount();
+      setMessage(el("person-menu-status"), String(refusal));
+      // The clicked button is gone with the redraw: focus the line that says why, not <body>.
+      el("person-menu-status").tabIndex = -1;
+      el("person-menu-status").focus();
+    }
+  } finally {
+    menuOpening = false; // a refusal or a throw must never leave every button dead
   }
 }
 

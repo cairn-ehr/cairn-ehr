@@ -181,8 +181,10 @@ const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])");
 /// The same columns and joins, for the parts the given KEYS (`$1`, text) wrote: signed with one
 /// of them, or carrying one as a contributor (a part that went in unsigned names its drafter only
 /// there). Only the WHERE differs, so the menu's rows cannot drift from the chart's.
-// shortcut: scans every clinical_note row; upgrade to a projection of open obligations if
-// RUNBOOK §26 misses its 1 s budget
+// shortcut: the read grows with ALL-TIME history, not with what is open. It scans every
+// clinical_note row's contributors, and returns every part the keys ever wrote: groups 1-2 are
+// all-time obligations, and only group 3 is cut to 7 days, in Rust (`note::menu`). Upgrade to a
+// projection of open obligations, see #1021; RUNBOOK §26's small fixture cannot show the cliff.
 const NOTES_BY_KEYS_SQL: &str = notes_sql!(
     "e.signer_key_id = ANY($1::text[]) OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
       WHERE c ->> 'actor_id' = ANY($1::text[]))"

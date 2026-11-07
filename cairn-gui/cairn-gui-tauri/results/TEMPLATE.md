@@ -577,12 +577,14 @@ observed \_\_.
 ## The person menu: "Waiting for you" (GUI sign-in slice 3c-3c, runbook §26)
 
 Fixture: supervisees of `dr-b` \_\_ · `clinical_note` rows \_\_ · rows in `dr-b`'s menu \_\_ (smaller than 20
-supervisees and a week of notes? say so: the figure is for this size only).
+supervisees and a week of notes? say so: the figure is for this size only). A fixture this size cannot show a cliff that grows
+with history (#1021).
 
 | Gesture | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|
 | The menu read: a pick of `dr-b` → "Waiting for you: N" on the bar | | | | ≤ 1 s | |
 | The picker's counts: its list on screen → the last " · N waiting" | | | | ≤ 1 s | |
+| A pick while the counts load: the press on `dr-b` → her name on the bar | | | | ≤ 1 s | |
 | Co-sign from the menu: Staff ID keystroke on the opened note → "Signed off — …" and the byline re-read | | | | ≤ 3 s | |
 | `ui_gesture_timing` `note-sign-off` (the co-sign's write half) | | | | — | |
 

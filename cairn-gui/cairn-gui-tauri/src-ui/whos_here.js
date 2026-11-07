@@ -16,7 +16,8 @@
 // Recent people and bookmarks live in the window's Rust memory only, never browser storage.
 // Classic script, loaded after notes.js, sharing main.js's globals (`el`, `cell`, `setMessage`,
 // `invoke`, `pollLock`), signer.js's `onStaffIdChange`, funnel.js's `closeChart`/`openChart` and
-// funnel.js's `failureText` — all read only at a press, long after every script has loaded.
+// funnel.js's `failureText` and person_menu.js's `hideMenu`/`refreshMenuCount` — all read only at
+// a press, long after every script has loaded.
 "use strict";
 
 /** Said in the picker for a Sign that settled while a switch waited (no patient identifier:
@@ -74,7 +75,10 @@ function showClaim(claim) {
   // A different person (or nobody) is named: the bar's menu is theirs, so it is read afresh.
   const changed = claimedStaffId() !== (claim.staff_id || "");
   currentClaim = claim;
-  if (changed) void refreshMenuCount(); // person_menu.js
+  if (changed) {
+    hideMenu(); // person_menu.js: the last person's list leaves before the next person's read
+    void refreshMenuCount();
+  }
   const bar = el("whos-here-name");
   if (bar.textContent !== claim.words) bar.textContent = claim.words;
 }
