@@ -168,7 +168,11 @@ fn a_supervisees_part_awaiting_cosign_is_in_my_cosign_group_naming_the_others() 
         }
     );
     // The writer is never their own co-signer.
-    let own = owing(3, required_and_linked());
+    // p1 supervises themself here, so only the writer != me guard keeps it out of p1's group.
+    let mut rows = required_and_linked();
+    rows.push(link("p1", "p1", -10));
+    let own = owing(3, rows);
+    assert!(own.writer_supervisors.iter().any(|s| s == "p1"));
     assert_eq!(classify(&person("p1"), &[own], &[], now()).count(), 0);
 }
 
@@ -312,8 +316,8 @@ fn rows_are_ordered_drafts_by_due_then_parts_newest_first() {
             (None, ms(40)),
             (None, ms(50)),
             (id(2), ms(3)),
-            (id(3), ms(2)),
             (id(4), ms(2)),
+            (id(3), ms(2)),
             (id(1), ms(1))
         ]
     );
@@ -330,6 +334,14 @@ fn a_person_with_no_actor_gets_an_empty_menu() {
         due: ms(1),
         stuck: false,
     };
+    // An actor with no staff id matches no draft, not even one whose writer is "".
+    let no_staff = Person {
+        staff_id: String::new(),
+        ..person("me")
+    };
+    assert!(classify(&no_staff, &[], std::slice::from_ref(&d), now())
+        .own
+        .is_empty());
     let nobody = Person {
         actor: String::new(),
         staff_id: String::new(),

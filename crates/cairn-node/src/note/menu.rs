@@ -144,7 +144,10 @@ pub fn classify(
     if me.actor.is_empty() {
         return menu;
     }
-    let mut mine: Vec<&MenuDraft> = drafts.iter().filter(|d| d.writer == me.staff_id).collect();
+    let mut mine: Vec<&MenuDraft> = drafts
+        .iter()
+        .filter(|d| !me.staff_id.is_empty() && d.writer == me.staff_id)
+        .collect();
     mine.sort_by_key(|d| d.due);
     menu.own = mine
         .into_iter()
@@ -163,7 +166,7 @@ pub fn classify(
 
     let window_start = now - Duration::days(REVIEW_DAYS);
     let mut sorted: Vec<&NoteRow> = parts.iter().collect();
-    sorted.sort_by_key(|p| (Reverse(p.recorded_at), p.event_id));
+    sorted.sort_by_key(|p| Reverse((p.recorded_at, p.event_id)));
     for p in sorted {
         let item = |why, writer| MenuItem {
             chart: p.chart,
