@@ -68,7 +68,10 @@ async function readNotes(patient) {
   const revision = ++notesRevision;
   try {
     const pane = await invoke("note_list", { patientId: patient });
-    if (patient === displayedPatient && revision === notesRevision) renderNotes(pane);
+    if (patient === displayedPatient && revision === notesRevision) {
+      renderNotes(pane);
+      void refreshMenuCount(); // person_menu.js: this read may have moved a draft or a part
+    }
   } catch (failure) {
     // The medication list is read on its own: a note read that failed never takes it down.
     if (patient === displayedPatient && revision === notesRevision) {
@@ -98,6 +101,7 @@ function renderNotes(pane) {
   const listed = pane.drafts.filter((draft) => !(noteDraft && noteDraft.draftId === draft.draft_id));
   el("note-drafts").replaceChildren(...listed.map(draftItem));
   renderDiscards(pane); // notes_discard.js: their own list, never among the notes
+  focusMenuTarget(takeMenuFocus()); // person_menu.js: the note a menu row opened this chart for
 }
 
 /**
@@ -140,6 +144,7 @@ function bylineOf(note) {
  */
 function draftItem(draft) {
   const li = document.createElement("li");
+  li.dataset.draft = draft.draft_id; // person_menu.js finds the draft a menu row named
   const parts = document.createElement("ol");
   parts.append(...draft.parts.map(partBlock));
   // An addendum draft says what it adds to on its own line, above its words (Rust's wording).

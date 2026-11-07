@@ -2103,3 +2103,133 @@ against throwaway databases by `supervision_doors.rs`, `supervision_doors_approv
 `supervision_panel_tests.rs`; CI never runs those, #905). The webview was checked by source guards only. The real
 window, WebKit, Chromium and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*Supervision and the
 mandatory co-sign*).
+
+## 26. The person menu: "Waiting for you" (GUI sign-in slice 3c-3c, ADR-0095)
+
+The slice's gestures: **"Waiting for you: N"** on the who's-here bar, a `<details>` that opens on three groups ("Your
+signature", "Needs your co-signature", and the closed "Your supervisees' recent notes (last 7 days)"); **Open note**
+on each row; and the picker's **" · N waiting"** after each person's entry. N counts the first two groups only.
+Reading the menu signs nothing and asks for no passphrase. Paper counterpart: walking the ward or a stack of folders
+to find the entries that wait for your signature or countersignature, and pulling a supervisee's files at random to
+audit them. **Live only**: a `--mock` window draws an empty menu and no counts.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| The menu read, 20 supervisees and a week of notes | the press on a name in the picker | "Waiting for you: N" on the bar | **≤ 1 s** |
+| The picker's counts, same fixture | the picker's list on screen | the last " · N waiting" on screen | **≤ 1 s** |
+| Co-sign from the menu, credential included | the first keystroke in the strip's Staff ID, on the note "Open note" opened | "Signed off — …" or "Your review signature was recorded — …" and the byline re-read | **≤ 3 s** (Sign's, section 16) |
+
+Steps: find what waits for my signature paper *N* = one walk per folder → forced *M* = 2 (open the menu, read it) →
+target *K* = 1 (the bar's count); countersign one note from the menu 2 (open the folder, sign) → 3 (*Open note*,
+*Sign off this note* or *Co-sign as reviewed*, the strip's passphrase) → 3, **ruled not an `M > N` defect**
+(ADR-0095 decision 4: paper's "open the folder" includes finding it and walking to it); audit a supervisee's recent
+work: pull files at random → 2 (open the menu, open the review group) → 2. Opening the menu shows the last read at
+once and runs the same read again, so a pick, which runs it with a visible stop, is the stopwatch's view of "the menu
+opens". The menu is a read, and the node times
+only writes (section 5), so the stopwatch is the only figure for the first two rows; the co-sign's write half is
+timed as **`note-sign-off`**. **A figure outside its budget, or an `M > N`, is the finding — file an issue; never
+adjust the budget.** A miss on the first two rows is the case the query's `shortcut:` comment names: file it as
+the projection of open obligations ADR-0095 decision 1 owes.
+
+**Setup.** A FRESH node with section 25's Setup only, not its measurements: section 25's Measurement 2 leaves a
+note of Dr P's without her supervisor's co-sign, which comes back into the lists below once `dr-b` and `dr-c` are
+linked again, and every count below would then be one too many. From that Setup: the people (`nurse-a`, `dr-b`, the
+student `sam`, `dr-p`, `dr-c`, `boss`), the section 2 chart (**chart A** below), `vouches`, `conf` and `sup`; also
+section 20's `due` and `went` helpers, and one more chart, **chart B**. Launch as section 3. Put the supervision
+record in this state at the console, then check it with `sup`:
+
+```bash
+cairn-node --conn "$CONN" supervision-set --op require-cosign --staff-id dr-p
+cairn-node --conn "$CONN" supervision-set --op link-supervisor --staff-id dr-p --supervisor dr-b
+cairn-node --conn "$CONN" supervision-set --op link-supervisor --staff-id dr-p --supervisor dr-c
+cairn-node --conn "$CONN" supervision-set --op link-supervisor --staff-id nurse-a --supervisor dr-b
+```
+
+Dr P needs co-signing and has two supervisors; Nurse A is Dr B's supervisee and needs none.
+
+**Measurement 1 — whose menu, what it counts, the three groups.**
+
+- [ ] With nobody named ("Don't know" in the picker), the bar shows no "Waiting for you". Name `dr-c`: the bar reads
+      "Waiting for you: 0". Opened, each of the first two groups reads "Nothing here.", and the third is a closed
+      summary with no count.
+- [ ] As `dr-p` on chart A: *New note*, `obs stable`, *Sign note*. Name `dr-b`: "Waiting for you: 1". Opened, under
+      "Needs your co-signature": the patient, "Progress note · {its time}", "By Dr P — needs your co-signature (you or
+      Dr C)", and *Open note*. Name `dr-c`: the same row reads "(you or Dr B)".
+- [ ] As `nurse-a` on chart B: sign a one-part note. Name `dr-b`: still "Waiting for you: 1" (the review group is never
+      counted). Open "Your supervisees' recent notes (last 7 days)": "By Nurse A — not yet reviewed". Name `dr-c`: no
+      such row (Nurse A is not Dr C's supervisee).
+- [ ] As `dr-b` on chart B: *New note*, type `plan`, and close the chart without signing. "Waiting for you: 2"; under
+      "Your signature", first: "Draft note", and "goes into the record unsigned at {time} if nobody types in it".
+- [ ] `cnode note-set-quarantine --minutes 2` (section 20) and leave the terminal alone with the menu CLOSED: once
+      `went` lists the note, the bar is re-read within 60 s, and the row reads "Progress note" and "Went in unsigned —
+      sign it", still counted. With the menu open the 60 s re-read is skipped (ADR-0095 (a)): reopen it to see the
+      change. Put the quarantine back with `cnode note-set-quarantine --default`.
+- [ ] With `dr-b` named, open *My supervisees* and press *Lift co-signing* on Dr P's row. Dr P's part from the second
+      box is still under "Needs your co-signature" and still counted (a requirement lifted after the signing leaves
+      the part waiting). As `dr-c`, *Sign off this note* on it: once the menu is read again (open it), the row has
+      left Dr B's list too.
+- [ ] Open "Who's here?": the list draws at once and the suffixes join it. Dr B's entry ends " · N waiting" with the
+      N her bar shows once she is picked; an entry whose count is 0 has no suffix.
+
+**Measurement 2 — Open note, and co-sign from it (≤ 3 s).** After Measurement 1, Dr B's list holds one row, her
+part that went in unsigned on chart B. Re-require co-signing for Dr P (the first console line above) and have her
+sign **six** one-part notes on chart A, P1 to P6 in order. Name `dr-b`: "Waiting for you: 7".
+
+- [ ] From the front door: *Open note* on P1's row. Chart A opens, scrolled to that note, which has the focus
+      (VoiceOver reads it). The menu is closed.
+- [ ] As `dr-b` on chart B: *New note*, type `later`. With the draft still being typed into, *Open note* on P2's row.
+      The typing is saved (section 19's `parts`), the front door shows for a moment, then chart A opens on P2. Once
+      the note pane draws, "Waiting for you: 8" (the new draft is hers).
+- [ ] P1 to P5, one at a time: *Open note* on its row, press *Sign off this note* and time it, from the first
+      keystroke in the strip's Staff ID until "Signed off — …" shows and the byline is re-read; then
+      `ui_gesture_timing`'s `note-sign-off` rows. The bar's count drops by one each time once the note pane is
+      re-read: 8 → 3 (the part gone in unsigned, the `later` draft, P6).
+- [ ] The same from a review row: *Open note* on Nurse A's note from the review group, then *Co-sign as reviewed*
+      (section 25 Measurement 3); the row leaves the review group, and the count stays 3.
+- [ ] A row that vanished: open Dr B's menu on P6's row (her only row on chart A now), then at the console
+      `cairn-node --conn "$CONN" supervision-set --op unlink-supervisor --staff-id dr-p --supervisor dr-b` and press
+      *Open note* on that row. "That note no longer waits in your list — the list was read again." shows on the bar,
+      with the focus on it; the list is redrawn without P6, "Waiting for you: 2"; no chart opens. Link her again
+      afterwards (the second console line above): once the menu is read again, P6 is back and the count is 3.
+- [ ] A drawn row of the previous person: with `dr-b`'s menu drawn, pick `dr-c` in who's here; the bar is re-read for
+      Dr C at once, and no row of Dr B's stays on screen.
+
+**Measurement 3 — the ≤ 1 s budgets, with 20 supervisees and a week of notes.** There is no seeding tool for this
+fixture: enrol 20 clinicians from *Enrol staff* (section 17), link each to `dr-b` with the console line above, and
+have each sign at least three notes across charts A and B, some under a requirement (so `dr-b`'s groups 2 and 3 both
+hold rows). Record the fixture's real size in the template: the supervisees, `psql "$CONN" -Atc "SELECT count(*)
+FROM clinical_note"` (the menu's query scans every row of it, ADR-0095 (h)), and how many rows `dr-b`'s menu shows.
+A fixture smaller than the budget's is a figure for that size only: say so in the template.
+
+- [ ] Time five picks of `dr-b`, from the press on her name in the picker to "Waiting for you: N" on the bar. Pick
+      "Don't know" between runs: it hides the menu, so the bar's "Waiting for you: N" coming back is the stop (a pick
+      of the person already named does not read the menu again, and another person's bar may show the same N).
+- [ ] Time five openings of the picker, from its list on screen to the last " · N waiting".
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] "Waiting for you: N" is reached by Tab, opens with Space or Enter, and is read "Waiting for you: N — open the
+      list".
+- [ ] Each row's button is reached by Tab and read "Open note: {patient}, {when}"; its visible words are "Open note".
+- [ ] The review group's summary is reached by Tab, read with its heading only (no count), and opens with Space or
+      Enter.
+- [ ] After *Open note*, the focus is on the note (or the draft) it named, and VoiceOver reads it.
+- [ ] The refusal sentence is read when it appears, and has the focus.
+- [ ] The counts failing: as the owner, `psql "$CONN" -c "REVOKE EXECUTE ON FUNCTION cairn_note_people() FROM
+      cairn_window"`, open the picker: the list draws, its entries carry no suffix, and "Waiting counts could not be
+      read." is read in the picker's status line. Undo it with `GRANT EXECUTE ON FUNCTION cairn_note_people() TO
+      cairn_window`.
+- [ ] No dialog, and no passphrase asked, at any point but the co-sign's strip.
+
+**Chromium and WebKit.** The window is WebKit (Tauri on macOS). The webview was walked headlessly in Chromium only,
+with a stubbed `invoke`: note anything in WebKit that differs from the words above, and whether the 60 s re-read ever
+pulls the focus out of an open menu (it should not: that tick skips an open menu).
+
+**What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. The doors were run
+against throwaway databases by `note_menu_doors.rs`; the cross-chart read by `note_parts_by_keys.rs`; the groups and
+counts by `note_person_menu.rs`. The window's commands were run by `cairn-gui-tauri`'s DB-gated
+`person_menu_db_tests.rs` (CI never runs those, #905). The webview was checked by source guards
+(`person_menu_webview_tests.rs`) and a Chromium walk with a stubbed `invoke`. The real window, WebKit, the real Tauri
+IPC and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*The person menu*).

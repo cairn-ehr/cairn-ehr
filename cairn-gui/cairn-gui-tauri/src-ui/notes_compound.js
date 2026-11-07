@@ -77,6 +77,7 @@ function seamLine(segment) {
  * "Co-sign as reviewed" when Rust says the person named in who's here may review it.
  */
 function withButtons(li, compound) {
+  li.dataset.parts = compound.shown_parts.join(" "); // person_menu.js finds the part a menu row named
   if (compound.can_add && noteDraft === null) {
     // The accessible name says WHICH note: a list of notes is otherwise a list of identical buttons.
     const add = cell("button", "Add to this note", { type: "button", "aria-label": "Add to this note: " + compound.when });

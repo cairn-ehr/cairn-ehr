@@ -17,10 +17,11 @@ use cairn_event::contributor::{classify_authorship_with_humans, VerifiedKid};
 use cairn_event::note::unescape_note_markup;
 use cairn_event::note_discard::DiscardedWriter;
 use chrono::{DateTime, Utc};
-use tokio_postgres::GenericClient;
+use tokio_postgres::{GenericClient, Row};
 use uuid::Uuid;
 
 use super::draft::{open_drafts, NoteDraft};
+use super::supervision::Supervision;
 use super::view::{note_grade, part_writer, NoteGrade, PartWriter};
 use super::vouch_read::{parse_vouches, signer_of, vouches_column, PartVouch, Signer};
 
@@ -145,7 +146,9 @@ pub struct PatientNoteList {
 /// last column is the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule
 /// reads (`NoteRow::signer_human_actor`). The very last column is the part's `e.hlc_wall`
 /// (ms since the epoch), what `NoteRow::recorded_at` and the supervision record are judged at.
-const NOTES_SQL: &str = concat!(
+macro_rules! notes_sql {
+    ($where:literal) => {
+        concat!(
     "SELECT n.event_id::text, n.patient_id::text, n.narrative, n.t_effective, n.effective_basis, \
            n.recording_started, e.signer_key_id, e.contributors::text, \
            cairn_note_vouched_attester(e.event_id), \
@@ -168,7 +171,21 @@ const NOTES_SQL: &str = concat!(
      e.hlc_wall \
      FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      CROSS JOIN LATERAL (SELECT COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id) AS k) g \
-     WHERE n.patient_id = ANY($1::text[]::uuid[])"
+     WHERE ", $where)
+    };
+}
+
+/// The chart list's query: the parts on the given charts (`$1`, text uuids).
+const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])");
+
+/// The same columns and joins, for the parts the given KEYS (`$1`, text) wrote: signed with one
+/// of them, or carrying one as a contributor (a part that went in unsigned names its drafter only
+/// there). Only the WHERE differs, so the menu's rows cannot drift from the chart's.
+// shortcut: scans every clinical_note row; upgrade to a projection of open obligations if
+// RUNBOOK §26 misses its 1 s budget
+const NOTES_BY_KEYS_SQL: &str = notes_sql!(
+    "e.signer_key_id = ANY($1::text[]) OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
+      WHERE c ->> 'actor_id' = ANY($1::text[]))"
 );
 
 /// One row per PART of each discard on the given charts, with its 1-based position (`ord`).
@@ -248,6 +265,81 @@ async fn discard_markers(
     Ok((markers, withheld))
 }
 
+/// One `NOTES_SQL` / `NOTES_BY_KEYS_SQL` row as a `NoteRow`, annotated against the supervision
+/// record. The single parser of that column list: the chart list and the key read both call it.
+fn note_row(r: &Row, sup: &Supervision) -> anyhow::Result<NoteRow> {
+    let chart: Uuid = r.get::<_, String>(1).parse()?;
+    let signer: String = r.get(6);
+    let contributors: serde_json::Value = serde_json::from_str(&r.get::<_, String>(7))?;
+    let attester: Option<String> = r.get(8);
+    let drafted_by: Option<String> = r.get(11);
+    // The drafted key, present only when the registry knows it as a human's (see NOTES_SQL).
+    let human_drafted_kid: Option<String> = r.get(14);
+    let humans: Vec<&str> = human_drafted_kid.as_deref().into_iter().collect();
+    // Both kids come from event_log columns whose existence is a verification: the signer
+    // always, the attester only through the vouch door in NOTES_SQL.
+    let confidence = classify_authorship_with_humans(
+        &contributors,
+        VerifiedKid::from_event_log_column(&signer),
+        attester.as_deref().map(VerifiedKid::from_event_log_column),
+        &humans,
+    );
+    let grade = note_grade(confidence, r.get(9));
+    let signed_by = matches!(grade, NoteGrade::Signed { .. })
+        .then(|| {
+            signer_of(
+                r.get(15),
+                r.get(9),
+                r.get::<_, Option<String>>(16).as_deref(),
+                r.get::<_, Option<String>>(17).as_deref(),
+            )
+        })
+        .transpose()?;
+    let recorded_at = DateTime::from_timestamp_millis(r.get::<_, i64>(21))
+        .context("a note part's hlc_wall is out of range")?;
+    let mut part = NoteRow {
+        event_id: r.get::<_, String>(0).parse()?,
+        chart,
+        text: unescape_note_markup(&r.get::<_, String>(2)),
+        t_effective: r.get(3),
+        effective_basis: r.get(4),
+        recording_started: r.get(5),
+        recorded_at,
+        needs_cosigning: false,
+        writer_supervisors: vec![],
+        grade,
+        addendum_to: r
+            .get::<_, Option<String>>(10)
+            .map(|s| s.parse())
+            .transpose()?,
+        writer: part_writer(r.get(12), drafted_by, r.get(13)),
+        signed_by,
+        drafted_actor: r.get(18),
+        signer_human_actor: r.get(20),
+        vouches: parse_vouches(&r.get::<_, String>(19))?,
+    };
+    super::supervision::annotate(&mut part, sup);
+    Ok(part)
+}
+
+/// Every note part the given keys wrote (see `NOTES_BY_KEYS_SQL`), each annotated against `sup`.
+/// Unordered: the caller orders.
+///
+/// The doubted-link withholding of `list_patient_notes` is NOT applied: that rule guards the
+/// combining of linked charts on one opened chart, and the menu opens each part's own chart.
+pub async fn parts_by_keys(
+    client: &(impl GenericClient + Sync),
+    keys: &[String],
+    sup: &Supervision,
+) -> anyhow::Result<Vec<NoteRow>> {
+    client
+        .query(NOTES_BY_KEYS_SQL, &[&keys])
+        .await?
+        .iter()
+        .map(|r| note_row(r, sup))
+        .collect()
+}
+
 /// Read the notes of the person `patient` is a chart of, plus `patient`'s open drafts and the
 /// set's discard markers.
 pub async fn list_patient_notes(
@@ -265,62 +357,12 @@ pub async fn list_patient_notes(
     let mut notes = Vec::new();
     let mut withheld_on_linked = 0;
     for r in client.query(NOTES_SQL, &[&members]).await? {
-        let chart: Uuid = r.get::<_, String>(1).parse()?;
-        if doubted && chart != patient {
+        // The chart is read before the row is parsed: a withheld note is only counted.
+        if doubted && r.get::<_, String>(1).parse::<Uuid>()? != patient {
             withheld_on_linked += 1;
             continue;
         }
-        let signer: String = r.get(6);
-        let contributors: serde_json::Value = serde_json::from_str(&r.get::<_, String>(7))?;
-        let attester: Option<String> = r.get(8);
-        let drafted_by: Option<String> = r.get(11);
-        // The drafted key, present only when the registry knows it as a human's (see NOTES_SQL).
-        let human_drafted_kid: Option<String> = r.get(14);
-        let humans: Vec<&str> = human_drafted_kid.as_deref().into_iter().collect();
-        // Both kids come from event_log columns whose existence is a verification: the signer
-        // always, the attester only through the vouch door in NOTES_SQL.
-        let confidence = classify_authorship_with_humans(
-            &contributors,
-            VerifiedKid::from_event_log_column(&signer),
-            attester.as_deref().map(VerifiedKid::from_event_log_column),
-            &humans,
-        );
-        let grade = note_grade(confidence, r.get(9));
-        let signed_by = matches!(grade, NoteGrade::Signed { .. })
-            .then(|| {
-                signer_of(
-                    r.get(15),
-                    r.get(9),
-                    r.get::<_, Option<String>>(16).as_deref(),
-                    r.get::<_, Option<String>>(17).as_deref(),
-                )
-            })
-            .transpose()?;
-        let recorded_at = DateTime::from_timestamp_millis(r.get::<_, i64>(21))
-            .context("a note part's hlc_wall is out of range")?;
-        let mut part = NoteRow {
-            event_id: r.get::<_, String>(0).parse()?,
-            chart,
-            text: unescape_note_markup(&r.get::<_, String>(2)),
-            t_effective: r.get(3),
-            effective_basis: r.get(4),
-            recording_started: r.get(5),
-            recorded_at,
-            needs_cosigning: false,
-            writer_supervisors: vec![],
-            grade,
-            addendum_to: r
-                .get::<_, Option<String>>(10)
-                .map(|s| s.parse())
-                .transpose()?,
-            writer: part_writer(r.get(12), drafted_by, r.get(13)),
-            signed_by,
-            drafted_actor: r.get(18),
-            signer_human_actor: r.get(20),
-            vouches: parse_vouches(&r.get::<_, String>(19))?,
-        };
-        super::supervision::annotate(&mut part, &record);
-        notes.push(part);
+        notes.push(note_row(&r, &record)?);
     }
     // Ordered here rather than by SQL ORDER BY (ADR-0045); the id breaks a tie stably.
     notes.sort_by_key(|n| std::cmp::Reverse((n.t_effective, n.event_id)));
@@ -337,7 +379,7 @@ pub async fn list_patient_notes(
 
 #[cfg(test)]
 mod tests {
-    use super::{by_discarder, NOTES_SQL};
+    use super::{by_discarder, NOTES_BY_KEYS_SQL, NOTES_SQL};
 
     /// PR #984 review: the marker reads the writer word back, never defaults it.
     #[test]
@@ -356,10 +398,13 @@ mod tests {
     /// by the signature itself, so they carry no separate attester.)
     #[test]
     fn the_attester_is_read_only_through_the_vouch_door() {
-        assert!(NOTES_SQL.contains("cairn_note_vouched_attester(e.event_id)"));
-        assert!(
-            !NOTES_SQL.contains("attester_key"),
-            "the raw attester column must never reach the classifier: {NOTES_SQL}"
-        );
+        // Both expansions of `notes_sql!` (by chart, by keys) share the guard.
+        for sql in [NOTES_SQL, NOTES_BY_KEYS_SQL] {
+            assert!(sql.contains("cairn_note_vouched_attester(e.event_id)"));
+            assert!(
+                !sql.contains("attester_key"),
+                "the raw attester column must never reach the classifier: {sql}"
+            );
+        }
     }
 }

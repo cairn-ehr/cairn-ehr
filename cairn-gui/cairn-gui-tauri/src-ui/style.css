@@ -84,6 +84,26 @@ h2 {
   border-bottom: 2px solid var(--line);
 }
 
+/* The person menu opens in place under the bar; words carry it, not colour. */
+#person-menu summary {
+  cursor: pointer;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+#person-menu-body ul {
+  list-style: none;
+  padding: 0;
+}
+
+#person-menu-body li {
+  margin: 0.4rem 0;
+}
+
+#person-menu-body p {
+  margin: 0.1rem 0;
+}
+
 #whos-here-name {
   margin: 0;
   font-size: 1.6rem;
