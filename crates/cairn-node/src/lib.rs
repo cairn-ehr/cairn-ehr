@@ -28,6 +28,7 @@ pub mod restore;
 pub mod safety;
 pub mod sensitivity;
 pub mod shred;
+pub mod supervision_admin;
 pub mod sync;
 pub mod transport;
 pub mod ui_timing;

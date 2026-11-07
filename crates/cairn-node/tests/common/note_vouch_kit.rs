@@ -180,13 +180,24 @@ pub async fn timer_part_to(
     chart: Uuid,
     to: Option<Uuid>,
 ) -> Uuid {
+    timer_part_by(c, node_sk, chart, "notewriter", to).await
+}
+
+/// [`timer_part_to`], drafted by the vault member `writer` rather than `notewriter`.
+pub async fn timer_part_by(
+    c: &mut Client,
+    node_sk: &SigningKey,
+    chart: Uuid,
+    writer: &str,
+    to: Option<Uuid>,
+) -> Uuid {
     let draft = Uuid::now_v7();
     let saved = save_part(
         c,
         draft,
         chart,
         TERMINAL,
-        Some("notewriter"),
+        Some(writer),
         "obs stable",
         None,
         to,

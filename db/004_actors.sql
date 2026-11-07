@@ -5,7 +5,9 @@
 -- bumping any determinant (incl. skill_epoch) mints a new actor via a fresh
 -- enroll/supersede row — never an edit (principle 2). The closed actor-event
 -- algebra is enroll | supersede | revoke | rotate-key | confirm | repudiate |
--- grant-enroller | withdraw-enroller (the last five: GUI sign-in slice 2).
+-- grant-enroller | withdraw-enroller (the last five: GUI sign-in slice 2) |
+-- link-supervisor | unlink-supervisor | require-cosign | lift-cosign | grant-assigner |
+-- withdraw-assigner (the last six: sign-in slice 3c-3a, staff supervision).
 --
 -- WHICH ROW CARRIES WHAT (#666, settled by sign-in slice 2; enforced by the
 -- actor_event_op_shape CHECK below, so the schema now says what the comments say):
@@ -18,6 +20,12 @@
 --   confirm, repudiate      the key being judged + approved_by (who judged it).
 --   grant-enroller,         NO key + approved_by: a capability on the actor, not a key.
 --   withdraw-enroller
+--   link-supervisor,        NO key + approved_by, like the grants. link/unlink sit on the
+--   unlink-supervisor       SUPERVISEE's actor_id and name the supervisor in related_actor.
+--   require-cosign,         NO key + approved_by; related_actor stays NULL. They record who must
+--   lift-cosign,            have every signed note co-signed, and who may assign supervisors.
+--   grant-assigner,         Every OTHER op carries related_actor NULL (the shape CHECK says so).
+--   withdraw-assigner
 -- approved_by is the approver's hex key, or 'console' for an owner-console act; approval is
 -- the approver's attestation token (NULL for 'console'). Rows written before slice 2 carry
 -- NULL in both: they are outside the confirmation mechanism (cairn_key_confirmation).
@@ -107,6 +115,55 @@ BEGIN
     END IF;
 END $$;
 
+-- Sign-in slice 3c-3a: the second actor, for the two ops that name one (link/unlink-supervisor:
+-- the row sits on the supervisee, related_actor is the supervisor). Additive column (ADR-0012).
+ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS related_actor BYTEA;
+
+-- Widen the op CHECK and the shape CHECK for the six supervision ops. The block above is NEVER
+-- edited (its own comment says a later change needs a new guard); this is that guard, keyed on the
+-- text of the CURRENT op CHECK so a second replay is a true no-op (no lock, no re-validation).
+-- Same pattern as above: the rows that would break the new shape are found first with the SAME
+-- expression (held once, in v_shape) and named, rather than failing with a bare "violated by some row".
+DO $$
+DECLARE
+    v_shape TEXT := $shape$CASE
+            WHEN op IN ('enroll','rotate-key')
+                THEN signing_key_id IS NOT NULL AND superseded_by IS NULL AND related_actor IS NULL
+            WHEN op = 'supersede'
+                THEN signing_key_id IS NULL AND superseded_by IS NOT NULL AND related_actor IS NULL
+            WHEN op = 'revoke'
+                THEN signing_key_id IS NULL AND related_actor IS NULL
+            WHEN op IN ('confirm','repudiate')
+                THEN signing_key_id IS NOT NULL AND approved_by IS NOT NULL AND related_actor IS NULL
+            WHEN op IN ('grant-enroller','withdraw-enroller',
+                        'require-cosign','lift-cosign','grant-assigner','withdraw-assigner')
+                THEN signing_key_id IS NULL AND approved_by IS NOT NULL AND related_actor IS NULL
+            WHEN op IN ('link-supervisor','unlink-supervisor')
+                THEN signing_key_id IS NULL AND approved_by IS NOT NULL AND related_actor IS NOT NULL
+            ELSE false
+        END$shape$;
+    v_bad TEXT;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid = 'actor_event'::regclass
+                     AND conname = 'actor_event_op_check'
+                     AND pg_get_constraintdef(oid) LIKE '%link-supervisor%') THEN
+        EXECUTE format('SELECT string_agg(actor_event_id::text || '' ('' || op || '')'', '', '' ORDER BY seq)
+                          FROM actor_event WHERE NOT (%s)', v_shape) INTO v_bad;
+        IF v_bad IS NOT NULL THEN
+            RAISE EXCEPTION 'actor_event: these registry rows break the per-op shape rule (sign-in slice 3c-3a) and must be corrected by the node''s owner before the schema can load: %. Only a link/unlink-supervisor row carries related_actor; actor_event is append-only, so the owner disables actor_event_no_update, clears the stray column on exactly these rows, and re-enables it', v_bad;
+        END IF;
+        ALTER TABLE actor_event DROP CONSTRAINT IF EXISTS actor_event_op_shape;
+        ALTER TABLE actor_event DROP CONSTRAINT IF EXISTS actor_event_op_check;
+        ALTER TABLE actor_event ADD CONSTRAINT actor_event_op_check CHECK (op IN (
+            'enroll','supersede','revoke','rotate-key','confirm','repudiate',
+            'grant-enroller','withdraw-enroller',
+            'link-supervisor','unlink-supervisor','require-cosign','lift-cosign',
+            'grant-assigner','withdraw-assigner'));
+        EXECUTE format('ALTER TABLE actor_event ADD CONSTRAINT actor_event_op_shape CHECK (%s)', v_shape);
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS actor_event_actor_idx ON actor_event (actor_id);
 CREATE INDEX IF NOT EXISTS actor_event_key_idx ON actor_event (signing_key_id);
 
@@ -183,8 +240,10 @@ WHERE ae.op IN ('enroll','rotate-key')
 -- `IS DISTINCT FROM` intentionally matches TWO kinds of row: (a) a row bound to a
 -- DIFFERENT key (the #152 silent-merge — and, since slice 2, a rotate-key row: re-enrolling
 -- the rotated-AWAY key would outrank the rotation and make the retired key current again),
--- and (b) a row with a NULL key — revoke, supersede, grant-enroller and withdraw-enroller rows
--- carry no signing_key_id (the per-op shape CHECK, #666). Case (b) is deliberate, not
+-- and (b) a row with a NULL key — every keyless op (revoke, supersede, grant-/withdraw-enroller,
+-- and the six supervision ops: link-/unlink-supervisor, require-/lift-cosign,
+-- grant-/withdraw-assigner) carries no signing_key_id (the per-op shape CHECK above, #666).
+-- Case (b) is deliberate, not
 -- incidental: it means a fresh enroll onto an actor_id that was ever revoked/superseded is
 -- refused even with the ORIGINAL key. That prevents RESURRECTION — a post-revoke enroll would outrank
 -- the revoke in actor_current's (recorded_at, seq) order and silently re-authorise a
@@ -307,7 +366,11 @@ END;
 $$;
 
 -- The ONE other writer of actor_event (sign-in slice 2): appends a rotate-key, confirm,
--- repudiate, grant-enroller or withdraw-enroller row for an already-enrolled actor. enroll
+-- repudiate, grant-enroller or withdraw-enroller row for an already-enrolled actor — and, since
+-- slice 3c-3a, the six supervision rows (link-supervisor, unlink-supervisor, require-cosign,
+-- lift-cosign, grant-assigner, withdraw-assigner). Those carry NO key and an approver; only
+-- link/unlink take p_related (the supervisor, which must be an enrolled human other than the
+-- actor), every other op refuses one. Who may ACT is db/072's job, not this primitive's. enroll
 -- keeps enroll_actor (it derives the actor_id); supersede and revoke keep their own paths
 -- (db/006's recall, the restore door) — so those three are refused here, and so is anything
 -- outside the algebra.
@@ -331,15 +394,36 @@ $$;
 --     backup, a new row would sort BEFORE the restored ones: a rotate-key would leave the old key
 --     current, a withdrawal would change nothing, each while "succeeding". Refused, naming the
 --     clock. An EQUAL timestamp is fine: the seq tiebreak puts the new row last (issue #99).
+-- The 5-argument form is dropped first so a 5-argument call resolves to the DEFAULT NULL below
+-- (two overloads would make db/061 and db/063's calls ambiguous).
+DROP FUNCTION IF EXISTS cairn_actor_append(bytea, text, text, text, bytea);
 CREATE OR REPLACE FUNCTION cairn_actor_append(p_actor_id BYTEA, p_op TEXT, p_key TEXT,
-                                              p_approved_by TEXT, p_approval BYTEA)
+                                              p_approved_by TEXT, p_approval BYTEA,
+                                              p_related BYTEA DEFAULT NULL)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE v_kind TEXT; v_pinned JSONB; v_latest TIMESTAMPTZ; v_now TIMESTAMPTZ;
 BEGIN
     IF p_op IS NULL OR p_op NOT IN
-       ('rotate-key','confirm','repudiate','grant-enroller','withdraw-enroller') THEN
+       ('rotate-key','confirm','repudiate','grant-enroller','withdraw-enroller',
+        'link-supervisor','unlink-supervisor','require-cosign','lift-cosign',
+        'grant-assigner','withdraw-assigner') THEN
         RAISE EXCEPTION 'cairn_actor_append: op % is not appended here — enroll goes through enroll_actor, supersede and revoke through their own paths, and nothing else is in the actor-event algebra',
             COALESCE(p_op, 'NULL');
+    END IF;
+    IF p_op IN ('link-supervisor','unlink-supervisor') THEN
+        IF p_related IS NULL THEN
+            RAISE EXCEPTION 'cairn_actor_append: % needs p_related, the supervisor (the row sits on the supervisee)', p_op;
+        END IF;
+        IF p_related = p_actor_id THEN
+            RAISE EXCEPTION 'cairn_actor_append: % names the actor as its own supervisor', p_op;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM actor_event WHERE actor_id = p_related
+                       AND op = 'enroll' AND kind = 'human') THEN
+            RAISE EXCEPTION 'cairn_actor_append: % names supervisor % who is not an enrolled human actor',
+                p_op, encode(p_related, 'hex');
+        END IF;
+    ELSIF p_related IS NOT NULL THEN
+        RAISE EXCEPTION 'cairn_actor_append: % does not take a related actor — only link-supervisor and unlink-supervisor do', p_op;
     END IF;
     IF p_op = 'rotate-key' THEN
         -- Same locks, same order as enroll_actor (key first, then actor_id).
@@ -380,11 +464,12 @@ BEGIN
                 p_op, COALESCE(p_key, 'NULL'), encode(p_actor_id, 'hex');
         END IF;
     END IF;
-    INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id, approved_by, approval)
+    INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id, approved_by, approval,
+                             related_actor)
     VALUES (p_actor_id, p_op,
             CASE WHEN p_op = 'rotate-key' THEN v_kind END,
             CASE WHEN p_op = 'rotate-key' THEN v_pinned END,
-            p_key, p_approved_by, p_approval);
+            p_key, p_approved_by, p_approval, p_related);
 END;
 $$;
 
@@ -450,7 +535,7 @@ END $$;
 -- cairn_agent cannot enroll — mirrors the C5.4 raw-INSERT floor tests.)
 REVOKE INSERT, UPDATE, DELETE ON actor_event FROM PUBLIC, cairn_agent;
 REVOKE EXECUTE ON FUNCTION enroll_actor(text, jsonb, text, text, bytea) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_actor_append(bytea, text, text, text, bytea) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_actor_append(bytea, text, text, text, bytea, bytea) FROM PUBLIC;
 -- The two read-side answers the window needs (slice 2): which keys vouch for an actor, and a
 -- key's confirmation status. Reads only; neither reveals more than the status of a public key.
 REVOKE EXECUTE ON FUNCTION cairn_key_confirmation(text) FROM PUBLIC;

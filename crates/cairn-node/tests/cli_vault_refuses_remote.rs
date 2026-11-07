@@ -82,3 +82,74 @@ fn set_unconfirmed_expiry_parses_strictly() {
         assert!(started.elapsed() < Duration::from_secs(5), "{args:?}");
     }
 }
+
+/// The supervision console verbs are the owner's, at the node's own console: refused before any
+/// connection when the database is on another machine.
+#[test]
+fn supervision_set_refuses_a_remote_database() {
+    refuses(
+        &[
+            "supervision-set",
+            "--op",
+            "require-cosign",
+            "--staff-id",
+            "s1",
+        ],
+        "CAIRN_VAULT_PASSPHRASE",
+    );
+    refuses(&["supervision-list"], "CAIRN_VAULT_PASSPHRASE");
+}
+
+/// `--op` takes only the six words, and `--supervisor` is required for exactly the two link ops;
+/// each misuse is refused before any connection (unroutable `--conn` again).
+#[test]
+fn supervision_set_parses_strictly() {
+    for args in [
+        &["supervision-set", "--op", "bless", "--staff-id", "s1"][..],
+        &[
+            "supervision-set",
+            "--op",
+            "link-supervisor",
+            "--staff-id",
+            "s1",
+        ],
+        &[
+            "supervision-set",
+            "--op",
+            "unlink-supervisor",
+            "--staff-id",
+            "s1",
+        ],
+        &[
+            "supervision-set",
+            "--op",
+            "require-cosign",
+            "--staff-id",
+            "s1",
+            "--supervisor",
+            "s2",
+        ],
+        &[
+            "supervision-set",
+            "--op",
+            "grant-assigner",
+            "--staff-id",
+            "s1",
+            "--supervisor",
+            "s2",
+        ],
+    ] {
+        let started = Instant::now();
+        let out = Command::new(env!("CARGO_BIN_EXE_cairn-node"))
+            .args(["--conn", "host=192.0.2.1 dbname=x"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{args:?}");
+        assert!(
+            !String::from_utf8_lossy(&out.stderr).contains("another machine"),
+            "refused for the wrong reason: {args:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5), "{args:?}");
+    }
+}

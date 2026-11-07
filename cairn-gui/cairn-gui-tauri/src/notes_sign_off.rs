@@ -161,7 +161,8 @@ pub async fn note_sign_off_impl(
 
 #[cfg(test)]
 #[path = "notes_sign_off_tests.rs"]
-mod tests;
+// Its note fixture is shared with `notes_review_tests.rs`.
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "notes_sign_off_db_tests.rs"]

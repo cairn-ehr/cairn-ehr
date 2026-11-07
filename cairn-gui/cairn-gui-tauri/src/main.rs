@@ -60,6 +60,7 @@ mod signer_webview_tests;
 mod source_guard;
 mod state;
 mod superuser_panel;
+mod supervision_panel;
 mod terminal_id;
 #[cfg(test)]
 mod waiting_webview_tests;
@@ -172,6 +173,7 @@ fn main() -> anyhow::Result<()> {
             notes::note_draft_save,
             notes::note_sign,
             notes::sign_off::note_sign_off,
+            notes::review::note_review_cosign,
             notes::discard::note_discard,
             notes::note_draft_take,
             whos_here::whos_here_directory,
@@ -183,6 +185,9 @@ fn main() -> anyhow::Result<()> {
             superuser_panel::list_enrollers,
             superuser_panel::set_enroller,
             superuser_panel::judge_key,
+            supervision_panel::list_supervision,
+            supervision_panel::list_my_supervisees,
+            supervision_panel::supervision_act,
             reseal::change_passphrase,
             hold::withhold,
             hold::release,

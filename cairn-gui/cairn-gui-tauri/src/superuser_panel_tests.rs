@@ -453,3 +453,16 @@ async fn repudiate_on_a_stale_row_is_refused_and_says_so() {
         "the new key is still waiting: {work:?}"
     );
 }
+
+/// A good re-read clears an earlier failure's sentence (READ_FAILED), which would otherwise stay
+/// beside the fresh lists and be false; an act's own outcome is kept.
+#[test]
+fn a_good_read_clears_a_stale_status() {
+    let body =
+        crate::source_guard::js_fn(include_str!("../src-ui/superuser.js"), "superuserRefresh");
+    let ok = &body[body.find("try {").expect("a try")..body.find("} catch").expect("a catch")];
+    assert!(
+        ok.contains("if (!outcome) setMessage(el(\"superuser-status\"), \"\");"),
+        "{ok}"
+    );
+}

@@ -4,8 +4,9 @@ use cairn_event::contributor::AuthorshipConfidence;
 use cairn_event::note_attestation::{VouchAct, VouchRole};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
+use super::cosign::{awaits_cosign, writer_signature};
 use super::read::NoteRow;
-use super::vouch::{counts_as_unsigned, re_signs, same_actor};
+use super::vouch::{counts_as_unsigned, re_signs};
 use super::vouch_read::{PartVouch, Signer};
 
 /// What a signing key reads as when this node cannot name its holder.
@@ -123,7 +124,13 @@ fn byline_marked(grade: &NoteGrade, writer: &PartWriter, unverified: &str) -> St
 /// `" (signer unconfirmed)"` while their key's enrolment is unconfirmed or doubtful, or
 /// `" (key had been repudiated)"` once the key was repudiated (ADR-0093: the reader must see
 /// WHY the name carries no weight). `(signer unconfirmed)` and `(key had been repudiated)` are
-/// exclusive, the key's state being one word; `(student)` stacks with either. Pure.
+/// exclusive, the key's state being one word; `(student)` stacks with either.
+///
+/// These words describe the KEY and the person only. Whether the part still waits for a co-sign
+/// is not theirs to say: `part_byline` adds " — not co-signed" after them by
+/// [`awaits_cosign`]'s rule (a student's or a required writer's part, as of its commit, until a
+/// supervisor of theirs as of the co-sign, or with none recorded then any non-student, co-signs
+/// it). Pure.
 pub fn signer_words(s: &Signer) -> String {
     let student = if s.student { " (student)" } else { "" };
     let unconfirmed = if s.unconfirmed {
@@ -154,16 +161,29 @@ fn vouch_words(v: &PartVouch, is_re_sign: bool) -> String {
 }
 
 /// A part's byline with who signed it and who vouched for it since (slice 3c-2):
-/// [`byline_words`] with the signer's name as [`signer_words`] gives it, `" — not co-signed"`
-/// straight after a student's name until a non-student this node can place, other than them,
-/// co-signs the part, then each vouch in order.
-/// "signed by Sam (student) — not co-signed"; "signed by Sam (student) · co-signed by Dr Zed".
+/// [`byline_words`] with the signer's name as [`signer_words`] gives it, the co-sign mark, then
+/// each vouch in order.
+///
+/// The mark `" — not co-signed"` stands while the part [`awaits_cosign`] (slice 3c-3a): its
+/// writer signed it as a student, or while the supervision record required them to be co-signed
+/// AS OF THE PART'S TIME (a requirement lifted later leaves it standing). Only one of the
+/// writer's supervisors, judged at the co-sign's own time, clears it; where the writer had no
+/// supervisor then, any non-student this node can place, other than the writer, clears it with a
+/// sign-off of the strongest kind the floor allows on the part (a co-sign, or, only where the
+/// part's envelope key is not a human's, as for a part that went in unsigned, an attested
+/// sign-off: the fallback, `cosign::clears_cosign`). When the writer has no supervisor recorded
+/// NOW, the mark reads `" — not co-signed (no supervisor recorded)"`: nobody in particular is waited for. It
+/// sits straight after the signer's name or, for a part that went in unsigned and was signed
+/// later by its own writer, straight after that vouch's words (the signature a co-sign
+/// countersigns, [`writer_signature`]).
+/// "signed by Sam (student) — not co-signed (no supervisor recorded)";
+/// "signed by Sam (student) · co-signed by Dr Zed".
 ///
 /// A signer whose key was since repudiated (ADR-0093) reads `" (key had been repudiated)"` after
-/// the name and, until they re-sign, `" — counts as unsigned"` in place of `" — not co-signed"`
+/// the name and, until they re-sign, `" — counts as unsigned"` in place of the co-sign mark
 /// (the stronger statement; never both, a student's included). The vouch that re-signs it
-/// ([`re_signs`]) reads `" · re-signed by …"`; once re-signed, the part reads as any other, so a
-/// student's is `" — not co-signed"` again until a supervisor co-signs it:
+/// ([`re_signs`]) reads `" · re-signed by …"`; once re-signed, the part reads as any other, so it
+/// carries the co-sign mark again until its co-sign is cleared:
 /// "signed by Dr Ada (key had been repudiated) — counts as unsigned";
 /// "signed by Dr Ada (key had been repudiated) · re-signed by Dr Ada".
 /// The spoken form marks a drafted name "unverified", as [`byline_words`] does. Pure.
@@ -174,31 +194,26 @@ pub fn part_byline(p: &NoteRow) -> Byline {
     }
 }
 
+/// The co-sign mark for `p`, empty when it does not [`awaits_cosign`].
+fn cosign_mark(p: &NoteRow) -> &'static str {
+    match (awaits_cosign(p), p.writer_supervisors.is_empty()) {
+        (false, _) => "",
+        (true, false) => " — not co-signed",
+        (true, true) => " — not co-signed (no supervisor recorded)",
+    }
+}
+
 /// [`part_byline`] with `unverified` as the mark before a drafted name.
 fn part_byline_marked(p: &NoteRow, unverified: &str) -> String {
     let grade = match &p.signed_by {
         Some(s) => {
-            // Only a supervisor's co-sign clears the mark (design §3.4): not the student's own (a
-            // peer's remote door may admit one), nor another student's (either door admits it, as
-            // the floor never checks the student role, and this node plans one for a student
-            // presser), nor a key this node cannot place (empty actor: it might be anyone, the
-            // student included).
-            let co_signed = p.vouches.iter().any(|v| {
-                v.role == VouchRole::CoSigned
-                    && !v.by.actor.is_empty()
-                    && !v.by.student
-                    // A repudiated key's co-sign counts for nothing (ADR-0093).
-                    && !v.by.repudiated
-                    && !same_actor(&v.by.actor, &s.actor)
-            });
             // A repudiated, not re-signed signature counts as unsigned (ADR-0093); that is the
-            // stronger statement, so it takes the place of "not co-signed" (never both).
+            // stronger statement, so it takes the place of "not co-signed" (never both:
+            // `cosign_required` is false for such a part).
             let pending = if counts_as_unsigned(p) {
                 " — counts as unsigned"
-            } else if s.student && !co_signed {
-                " — not co-signed"
             } else {
-                ""
+                cosign_mark(p)
             };
             NoteGrade::Signed {
                 by: format!("{}{pending}", signer_words(s)),
@@ -208,10 +223,15 @@ fn part_byline_marked(p: &NoteRow, unverified: &str) -> String {
         None => p.grade.clone(),
     };
     let mut words = byline_marked(&grade, &p.writer, unverified);
+    // A part with no `signed_by` carries its mark after the writer's own later vouch, if any.
+    let later_signature = p.signed_by.is_none().then(|| writer_signature(p)).flatten();
     for v in &p.vouches {
         // The same predicate the rules count a re-sign by, so the words never disagree with them.
         let is_re_sign = p.signed_by.as_ref().is_some_and(|s| re_signs(s, v));
         words.push_str(&vouch_words(v, is_re_sign));
+        if later_signature.is_some_and(|w| std::ptr::eq(w, &v.by)) {
+            words.push_str(cosign_mark(p));
+        }
     }
     words
 }

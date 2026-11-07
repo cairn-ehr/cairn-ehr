@@ -37,9 +37,11 @@ use serde::{Deserialize, Serialize};
 /// The sentence for "this credential belongs to someone who is not a superuser".
 pub const ONLY_SUPERUSER: &str =
     "Only a superuser can do this. Enter a superuser's staff ID and passphrase above.";
-const NOT_RECORDED: &str = "That could not be done. Nothing was recorded. Try again, and if it \
+pub(crate) const NOT_RECORDED: &str =
+    "That could not be done. Nothing was recorded. Try again, and if it \
      fails again, ask your IT support.";
-const OUTCOME_UNKNOWN: &str = "The node did not confirm the change, so it may have been made. \
+pub(crate) const OUTCOME_UNKNOWN: &str =
+    "The node did not confirm the change, so it may have been made. \
      Look at the lists again before trying twice.";
 /// The floor refused on purpose (a `RAISE`): the row was out of date (a re-key since the lists
 /// were read, a grant already given) or the act no longer applies. The page re-reads the lists.
@@ -47,9 +49,10 @@ const REFUSED: &str = "The node refused this, so nothing was recorded. The lists
      out of date: they are read again below. Check the row before trying again.";
 /// A list read failed. It runs AFTER every write, so it must never say "nothing was recorded":
 /// the write before it may have landed.
-const READ_FAILED: &str = "The lists could not be read again. Close and reopen this panel to see \
+pub(crate) const READ_FAILED: &str =
+    "The lists could not be read again. Close and reopen this panel to see \
      where things stand.";
-const FIXTURE: &str = "This window is showing sample data. Nothing can be changed here.";
+pub(crate) const FIXTURE: &str = "This window is showing sample data. Nothing can be changed here.";
 const NEED_SUPERUSER: &str = "Enter a superuser's staff ID and passphrase to do this.";
 
 /// What a superuser decides about one key. Named on the wire ("confirm" / "repudiate"), never a
@@ -154,7 +157,7 @@ pub fn superuser_refusal(rows: &[EnrollerRow], staff_id: &str) -> Option<String>
 }
 
 /// A failure BEFORE any write (the connection, the courtesy read): nothing was recorded.
-fn fault(what: &str, e: anyhow::Error) -> String {
+pub(crate) fn fault(what: &str, e: anyhow::Error) -> String {
     eprintln!(
         "{what} could not be completed: {}",
         cairn_node::db_diagnosis::operator_chain(&e)
@@ -163,7 +166,7 @@ fn fault(what: &str, e: anyhow::Error) -> String {
 }
 
 /// A failed list read. Its own sentence, because it follows every write (see [`READ_FAILED`]).
-fn read_fault(what: &str, e: anyhow::Error) -> String {
+pub(crate) fn read_fault(what: &str, e: anyhow::Error) -> String {
     eprintln!(
         "{what} could not be read: {}",
         cairn_node::db_diagnosis::operator_chain(&e)

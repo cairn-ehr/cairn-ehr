@@ -488,7 +488,7 @@ observed \_\_ · seeing a student's part not yet countersigned 0 → 0 → obser
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
-| A student's part reads "(student) — not co-signed" and offers *Sign off this note*; a note one doctor signed alone offers none | | |
+| A student's part reads "(student) — not co-signed (no supervisor recorded)" and offers *Sign off this note*; a note one doctor signed alone offers none | | |
 | A doctor's sign-off: "· co-signed by Dr B", the mark cleared, the button gone; one `sign-off`/`co-signed` vouch row on the part's chart | | |
 | Another student's co-sign leaves "— not co-signed"; a student on their own note is told "already signed every part" | | |
 | A colleague's addendum lands after the note was shown: "This note changed since it was shown …"; nothing written | | |
@@ -526,8 +526,8 @@ observed \_\_.
 | The real person is offered the press, not "already signed"; "· re-signed by Nurse A"; the mark and "includes an unsigned part" gone | | |
 | Her own two-part note, nobody else's vouch on it: one press, each part "· re-signed by Nurse A", the state "signed off by Nurse A" | | |
 | A note she and Dr B wrote: her press also vouches Dr B's part, "· co-signed by Nurse A", the state "signed off by Nurse A" (#1011, known) | | |
-| A repudiated student part: "(student) (key had been repudiated) — counts as unsigned", no "— not co-signed"; after re-sign "— not co-signed · re-signed by Sam (student)"; a doctor's sign-off then "· co-signed by Dr B", the mark cleared | | |
-| A doctor's sign-off BEFORE the student's re-sign: "— not co-signed" stays, no button (#1010, known) | | |
+| A repudiated student part: "(student) (key had been repudiated) — counts as unsigned", no "— not co-signed"; after re-sign "— not co-signed (no supervisor recorded) · re-signed by Sam (student)"; a doctor's sign-off then "· co-signed by Dr B", the mark cleared | | |
+| A doctor's sign-off BEFORE the student's re-sign: "— not co-signed (no supervisor recorded)" stays; the button stays offered, his press answers "already signed every part", another clinician's clears it (#1010, ADR-0094 (b), known) | | |
 | WebKit (the real window): wrapping of the longer bylines | | |
 
 | Accessibility check | Verdict | Notes |
@@ -535,6 +535,43 @@ observed \_\_.
 | "(key had been repudiated) — counts as unsigned" and "· re-signed by …" read with the heading | | |
 | "includes an unsigned part" read before the text | | |
 | *Sign off this note* by keyboard, read as "Sign off this note: {time}" | | |
+| No dialog | | |
+
+## Supervision and the mandatory co-sign (GUI sign-in slice 3c-3a, runbook §25)
+
+| Gesture | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|
+| A supervision act: Staff ID keystroke → the act's sentence and the list re-read | | | | ≤ 3 s | |
+| Co-sign as reviewed: Staff ID keystroke → "Your review signature was recorded — …" and the byline re-read | | | | ≤ 3 s | |
+| `ui_gesture_timing` `note-sign-off` (the review's write half; shares the sign-off kind) | | | | — | |
+
+Steps: record "B supervises C" paper *N* = 1 → forced *M* = 1 → observed \_\_ · set or lift co-signing 1 → 1 →
+observed \_\_ · co-sign a reviewed note 2 → 2 → observed \_\_ · see that a part still needs its supervisor 1 → 0 →
+observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| The gap row: "needs co-signing (student) · no supervisor recorded" for Sam; "needs co-signing · no supervisor recorded" for Dr P before a link | | |
+| Require, link, grant: each act's sentence, the row re-read; every press clears the strip | | |
+| The supervisee holding the right cannot unlink her own supervisor: refused, nothing recorded | | |
+| A member without the right cannot link: refused, nothing recorded | | |
+| `cairn-node supervision-list` agrees with the panel | | |
+| Dr P's part "— not co-signed"; Dr C's co-sign leaves it and the button stays; Dr B's (her supervisor) clears it | | |
+| Dr P's own press: "already signed every part" | | |
+| After *Lift co-signing*: the earlier part still "— not co-signed"; a later part has no mark | | |
+| Sam's new part "— not co-signed (no supervisor recorded)"; any clinician's co-sign clears it | | |
+| *Co-sign as reviewed* offered only with her supervisor named in who's here; "· co-signed by Dr B" on Dr P's part only, never Nurse A's | | |
+| Key and claim differ: "There is nothing here for you to co-sign as reviewed." Nothing written | | |
+| A switch mid-review: "Your review co-signature went through — open the chart …" | | |
+| *Step away*: "You supervise nobody here."; the assigner's panel agrees once reopened | | |
+| WebKit (the real window): any difference from the runbook's words; *My supervisees* after a who's-here switch | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Both panels by keyboard; every button read with its whose-row name; the link field named | | |
+| Each act's sentence read when it appears | | |
+| *Co-sign as reviewed* by keyboard, read as "Co-sign as reviewed: {time}" | | |
+| "— not co-signed (no supervisor recorded)" read with the heading | | |
 | No dialog | | |
 
 ## Verdict

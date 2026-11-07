@@ -293,3 +293,77 @@ async fn the_windows_slice_2_vault_doors_run_under_its_own_login() {
     )
     .await;
 }
+
+/// Sign-in slice 3c-3a's supervision doors (db/072), DRIVEN under the window's login: the prior,
+/// the address it signs, the act door, and the two readers (the staff list and the record).
+#[tokio::test]
+async fn the_windows_supervision_doors_run_under_its_own_login() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, window) = owner_and_window(&base).await;
+    setup(&owner, &[]).await;
+    owner
+        .batch_execute("TRUNCATE vault_attempt, vault_member, vault_terminal, vault_policy CASCADE")
+        .await
+        .unwrap();
+    let pass = |who: &str| format!("{who}-{}", Uuid::now_v7());
+    let su_pass = pass("su");
+    let member = |staff_id, role, passphrase| NewMember {
+        staff_id,
+        display_name: "Test Person",
+        role,
+        phone: None,
+        email: Some("t@example.org"),
+        passphrase,
+        hint: None,
+    };
+    vault::bootstrap_superuser(&owner, &member("boss", "superuser", &su_pass))
+        .await
+        .unwrap();
+    let su = released(&window, "boss", &su_pass, Purpose::Enrol).await;
+    let (j_pass, b_pass) = (pass("j"), pass("b"));
+    for (s, p) in [("sv-jsmith", &j_pass), ("sv-bwong", &b_pass)] {
+        vault::enrol_member(&window, &member(s, "clinician", p), "boss", &su)
+            .await
+            .unwrap();
+    }
+
+    let prior: i64 = door(
+        &window,
+        "SELECT cairn_supervision_prior('link-supervisor', 'sv-bwong', 'sv-jsmith')",
+        &[],
+    )
+    .await[0]
+        .get(0);
+    let t = signed(
+        &window,
+        "SELECT cairn_supervision_address('link-supervisor', 'sv-bwong', 'sv-jsmith', $1)",
+        &[&prior],
+        &su,
+    )
+    .await;
+    door(
+        &window,
+        "SELECT cairn_supervision_act('link-supervisor', 'sv-bwong', 'sv-jsmith', 'boss', $1)",
+        &[&t],
+    )
+    .await;
+    let sup: Vec<String> = door(
+        &window,
+        "SELECT supervisors FROM cairn_supervision_staff() WHERE staff_id = 'sv-bwong'",
+        &[],
+    )
+    .await[0]
+        .get(0);
+    assert_eq!(sup, ["sv-jsmith"]);
+    let rows = door(
+        &window,
+        "SELECT op FROM cairn_supervision_record() WHERE op = 'link-supervisor'",
+        &[],
+    )
+    .await;
+    assert!(!rows.is_empty(), "the link is on the record");
+}

@@ -18,14 +18,14 @@ use cairn_node::note::vouch_read::{PartVouch, Signer};
 use chrono::NaiveDate;
 
 /// The chart on screen, and one linked to it.
-const OPENED: u128 = 7;
+pub(crate) const OPENED: u128 = 7;
 const LINKED: u128 = 8;
 
-fn id(n: u128) -> Uuid {
+pub(crate) fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
 
-fn who(actor: &str, name: &str) -> Signer {
+pub(crate) fn who(actor: &str, name: &str) -> Signer {
     Signer {
         actor: actor.into(),
         name: name.into(),
@@ -38,7 +38,7 @@ fn who(actor: &str, name: &str) -> Signer {
 /// Part `n` on `chart`, adding to `to`, stated `min` minutes after 2025-11-02 17:00Z (so its
 /// words carry the date), signed by `signer` or — `None` — gone in unsigned, drafted by
 /// `drafted` (an actor id) when given.
-fn part(
+pub(crate) fn part(
     n: u128,
     chart: u128,
     to: Option<u128>,
@@ -54,6 +54,9 @@ fn part(
         t_effective: t,
         effective_basis: "stated".into(),
         recording_started: t,
+        recorded_at: t,
+        needs_cosigning: false,
+        writer_supervisors: vec![],
         grade: match &signer {
             Some(s) => NoteGrade::Signed { by: s.name.clone() },
             None => NoteGrade::WentInUnsigned,
@@ -71,7 +74,7 @@ fn part(
     }
 }
 
-fn one(notes: Vec<NoteRow>) -> CompoundNote {
+pub(crate) fn one(notes: Vec<NoteRow>) -> CompoundNote {
     let mut all = compounds(notes);
     assert_eq!(all.len(), 1, "{all:?}");
     all.remove(0)
@@ -81,7 +84,7 @@ fn nov3() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 11, 3).unwrap()
 }
 
-fn view(c: &CompoundNote, actor: Option<&str>) -> CompoundView {
+pub(crate) fn view(c: &CompoundNote, actor: Option<&str>) -> CompoundView {
     compound_view(c, id(OPENED), actor, &bne(), nov3())
 }
 
@@ -106,6 +109,9 @@ fn can_sign_off_follows_needs_sign_off() {
         act: VouchAct::SignOff,
         role: VouchRole::Attested,
         by: who("act-ada", "Dr Ada"),
+        at: utc("2025-11-02T17:00:00Z"),
+        by_supervisor: false,
+        writer_supervised: false,
     });
     let signed_off = one(vec![part(1, OPENED, None, 0, ada(), None), by_ada]);
     assert!(!view(&signed_off, None).can_sign_off);
@@ -255,6 +261,9 @@ fn no_covers_line_without_a_claim_or_without_parts() {
         act: VouchAct::Addendum,
         role: VouchRole::Attested,
         by: who("act-a", "Nurse A"),
+        at: utc("2025-11-02T17:00:00Z"),
+        by_supervisor: false,
+        writer_supervised: false,
     });
     let notes = || {
         vec![

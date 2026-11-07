@@ -131,7 +131,7 @@ pub async fn read_local_state(
     let registry_rows = db
         .query(
             "SELECT actor_event_id::text AS actor_event_id, actor_id, op, kind, \
-                    pinned::text AS pinned, signing_key_id, superseded_by, approved_by, approval, seq, \
+                    pinned::text AS pinned, signing_key_id, superseded_by, approved_by, approval, related_actor, seq, \
                     recorded_at::text AS recorded_at \
              FROM actor_event ORDER BY seq",
             &[],
@@ -152,6 +152,7 @@ pub async fn read_local_state(
                 superseded_by: r.get::<_, Option<Vec<u8>>>("superseded_by"),
                 approved_by: r.get::<_, Option<String>>("approved_by"),
                 approval: r.get::<_, Option<Vec<u8>>>("approval"),
+                related_actor: r.get::<_, Option<Vec<u8>>>("related_actor"),
                 seq: r.get::<_, i64>("seq"),
                 recorded_at: r.get::<_, String>("recorded_at"),
             })

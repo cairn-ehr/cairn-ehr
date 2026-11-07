@@ -1,5 +1,5 @@
 //! The text progress note (`clinical.note.asserted`, ADR-0041, sign-in slice 3a) — the node side
-//! the window calls. Eleven small parts, each a file:
+//! the window calls. Small parts, each a file:
 //!
 //! * `draft` — the text being typed, one part per writer (db/066). It lives in the one
 //!   deliberately MUTABLE store (db/065/066), reachable only through definer doors, and is never
@@ -23,15 +23,20 @@
 //!   read with the notes, only when verified and naming the part's own bytes.
 //! * `vouch` — who has signed what (does the note still need a sign-off, who signed it off),
 //!   and "Sign off this note": one vouch per part the presser has not signed (slice 3c-2).
+//! * `review` — "Co-sign as reviewed": a supervisor vouches their supervisees' signed parts on a
+//!   note that owed no co-sign (slice 3c-3a), through Sign off's same transaction.
 //!
 //! The pure wire builders (payload, twin, markup escaping) are `cairn_event::note`'s.
 pub mod commit;
 pub mod compound;
+pub mod cosign;
 pub mod discard;
 pub mod draft;
 pub mod read;
+pub mod review;
 pub mod sign;
 mod sign_vouch;
+pub mod supervision;
 pub mod view;
 pub mod vouch;
 pub mod vouch_read;

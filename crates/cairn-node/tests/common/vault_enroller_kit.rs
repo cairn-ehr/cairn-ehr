@@ -30,6 +30,9 @@ pub const JSMITH3: u8 = 8;
 pub const BOSS2: u8 = 9;
 pub const SU2: u8 = 10;
 pub const ANURSE2: u8 = 11;
+pub const STUDENT: u8 = 12;
+pub const ASSIGNER: u8 = 13;
+pub const PLAIN: u8 = 14;
 
 pub fn kid_of(v: u8) -> String {
     hex::encode(
@@ -279,6 +282,52 @@ pub async fn staff(c: &Client) {
         enrol(c, s, "clinician", v, "boss", BOSS).await.unwrap();
         set_enroller(c, s, true, "boss", BOSS).await.unwrap();
     }
+}
+
+/// One supervision act (db/072) through the window's door: ask the prior, sign the address with
+/// key `by`, and act as `approver`. `supervisor` is `Some` only for a link op.
+pub async fn supervise(
+    c: &Client,
+    op: &str,
+    subject: &str,
+    supervisor: Option<&str>,
+    approver: &str,
+    by: u8,
+) -> Result<(), Error> {
+    let prior: i64 = c
+        .query_one(
+            "SELECT cairn_supervision_prior($1, $2, $3)",
+            &[&op, &subject, &supervisor],
+        )
+        .await?
+        .get(0);
+    let a = bytes(
+        c,
+        "SELECT cairn_supervision_address($1, $2, $3, $4)",
+        &[&op, &subject, &supervisor, &prior],
+    )
+    .await;
+    c.execute(
+        "SELECT cairn_supervision_act($1, $2, $3, $4, $5)",
+        &[&op, &subject, &supervisor, &approver, &sign(&a, by)],
+    )
+    .await
+    .map(drop)
+}
+
+/// One supervision act that must succeed.
+pub async fn acted(c: &Client, op: &str, s: &str, p: Option<&str>, a: &str, by: u8) {
+    supervise(c, op, s, p, a, by)
+        .await
+        .unwrap_or_else(|e| panic!("{op} on {s} by {a}: {}", msg(&e)));
+}
+
+/// A supervision act's refusal: its text starts with the window door's name and contains `words`.
+pub fn refused(r: Result<(), Error>, words: &str) {
+    let e = r.expect_err(words);
+    let m = msg(&e);
+    assert!(m.starts_with("cairn_supervision_act: "), "{m}");
+    assert!(m.contains(words), "want {words:?} in {m:?}");
 }
 
 macro_rules! db_gated {

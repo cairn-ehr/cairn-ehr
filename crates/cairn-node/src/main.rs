@@ -2071,6 +2071,26 @@ enum Cmd {
         default: bool,
     },
 
+    /// Console-only: record a supervision act with nobody to approve it (`--op` is one of
+    /// link-supervisor, unlink-supervisor, require-cosign, lift-cosign, grant-assigner,
+    /// withdraw-assigner). `--supervisor` is required for the two link ops and refused otherwise.
+    SupervisionSet {
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new([
+            "link-supervisor", "unlink-supervisor", "require-cosign", "lift-cosign",
+            "grant-assigner", "withdraw-assigner",
+        ]))]
+        op: String,
+        /// The person acted on (the supervisee, for a link).
+        #[arg(long)]
+        staff_id: String,
+        /// The supervisor, for link-supervisor / unlink-supervisor only.
+        #[arg(long)]
+        supervisor: Option<String>,
+    },
+
+    /// Console-only: list every non-superuser member with their supervision state, one line each.
+    SupervisionList,
+
     /// Record clinician-observed identity evidence on an existing chart (§5.4): an
     /// estimated age (-> a year-range dob) and/or an observed sex (-> administrative-sex),
     /// both provenance `clinician-observed`. Supply at least one of --age / --sex.
@@ -4969,6 +4989,40 @@ async fn run() -> anyhow::Result<()> {
             println!(
                 "a draft left untouched for {n} minutes{default} goes into the record unsigned"
             );
+        }
+        Cmd::SupervisionSet {
+            op,
+            staff_id,
+            supervisor,
+        } => {
+            use cairn_node::supervision_admin::{check_supervisor_arg, console_act, SupervisionOp};
+            // Argument rules are checked before any connection, like the verbs around it.
+            let op = SupervisionOp::from_cli(&op).expect("clap admits only the six words");
+            check_supervisor_arg(op, supervisor.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            console_act(&db, op, &staff_id, supervisor.as_deref()).await?;
+            println!("{} recorded for {staff_id}", op.as_sql());
+        }
+        Cmd::SupervisionList => {
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            for m in cairn_node::supervision_admin::staff(&db).await? {
+                let mut line = format!("{}  {}  {}", m.staff_id, m.display_name, m.role);
+                if m.needs_cosigning {
+                    line.push_str("  needs co-signing");
+                }
+                if m.assigner {
+                    line.push_str("  assigner");
+                }
+                // "No supervisor" only matters for someone whose notes need co-signing.
+                if !m.supervisors.is_empty() {
+                    line.push_str(&format!("  supervised by {}", m.supervisors.join(", ")));
+                } else if m.needs_cosigning {
+                    line.push_str("  no supervisor recorded");
+                }
+                println!("{line}");
+            }
         }
         Cmd::AssertObservedEvidence {
             patient,

@@ -21,6 +21,7 @@
 //! (the window role may not).
 use anyhow::Context;
 use cairn_event::note_attestation::{VouchAct, VouchRole};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -52,6 +53,12 @@ pub struct PartVouch {
     pub act: VouchAct,
     pub role: VouchRole,
     pub by: Signer,
+    /// The vouch's own `hlc_wall`: the instant "was the signer the writer's supervisor" is judged.
+    pub at: DateTime<Utc>,
+    /// Its signer supervised the part's writer at `at` (`supervision::annotate`). Default false.
+    pub by_supervisor: bool,
+    /// The part's writer had any supervisor at `at`. Default false.
+    pub writer_supervised: bool,
 }
 
 /// Build a [`Signer`] from what the doors say about one key. Pure. `None` from a door means the
@@ -153,6 +160,9 @@ pub fn parse_vouches(column: &str) -> anyhow::Result<Vec<PartVouch>> {
     let mut keyed = Vec::with_capacity(raw.len());
     for v in raw {
         let event_id: Uuid = v.event_id.parse()?;
+        let wall = v.hlc_wall.context("a vouch has no hlc_wall")?;
+        let at =
+            DateTime::from_timestamp_millis(wall).context("a vouch's hlc_wall is out of range")?;
         keyed.push((
             (v.hlc_wall, v.hlc_counter, event_id),
             PartVouch {
@@ -165,6 +175,9 @@ pub fn parse_vouches(column: &str) -> anyhow::Result<Vec<PartVouch>> {
                     v.pinned_role.as_deref(),
                     v.confirmation.as_deref(),
                 )?,
+                at,
+                by_supervisor: false,
+                writer_supervised: false,
             },
         ));
     }

@@ -58,6 +58,10 @@ pub(crate) mod discard;
 #[path = "notes_sign_off.rs"]
 pub(crate) mod sign_off;
 
+/// "Co-sign as reviewed" (`notes_review.rs`).
+#[path = "notes_review.rs"]
+pub(crate) mod review;
+
 /// What a save, a take and a sign answered, in the clinician's words (`notes_words.rs`).
 #[path = "notes_words.rs"]
 pub(crate) mod words;

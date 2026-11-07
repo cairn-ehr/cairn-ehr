@@ -36,6 +36,9 @@ fn note(n: u128, chart: u128, to: Option<u128>, min: i64, grade: NoteGrade) -> N
         t_effective: t,
         effective_basis: "stated".into(),
         recording_started: t,
+        recorded_at: t,
+        needs_cosigning: false,
+        writer_supervisors: vec![],
         // `Some` exactly when the grade is `Signed`, as the node's read builds it.
         signed_by: match &grade {
             NoteGrade::Signed { by } => Some(Signer {
