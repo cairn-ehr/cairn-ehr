@@ -1825,15 +1825,17 @@ vouches() { psql "$CONN" -c "SELECT a.target, a.act, a.role, m.staff_id AS by, a
 **Measurement 1 — sign off a student's note (≤ 3 s).** As `sam`: *New note*, `obs stable, BP 120/80`, a stated time,
 *Sign note*. Five runs, each on a new note of Sam's.
 
-- [ ] Sam's note reads "signed by Sam (student) — not co-signed · {its time}" and offers *Sign off this note*. A note
-      `dr-b` signed alone offers none.
+- [ ] Sam's note reads "signed by Sam (student) — not co-signed (no supervisor recorded) · {its time}" (the suffix since
+      slice 3c-3a: nobody supervises Sam, section 25) and offers *Sign off this note*. A note `dr-b` signed alone offers
+      none.
 - [ ] As `dr-b` (who's here and the strip): record the time from the first keystroke in the strip's Staff ID, through
       the press of *Sign off this note*, until "Signed off — every part of this note now carries your signature."
       shows and the note is re-read (budget ≤ 3 s), and `ui_gesture_timing`'s `note-sign-off` row.
 - [ ] No dialog. The byline now reads "signed by Sam (student) · co-signed by Dr B", with no "— not co-signed", and
       the button is gone. `vouches` shows one row: Sam's note, `sign-off`, `co-signed`, by `dr-b`, on Sam's chart.
 - [ ] Sue presses *Sign off this note* on another of Sam's notes: it reads "… · co-signed by Sue (student)" and STILL
-      "— not co-signed", and the button stays. Only a non-student's co-sign clears the mark.
+      "— not co-signed", and the button stays. With no supervisor recorded, only a non-student's co-sign clears the mark
+      (ADR-0094 decision 13).
 - [ ] Sam presses *Sign off this note* on his own note: "You have already signed every part of this note. Nothing
       more was signed." Nothing is written.
 - [ ] Two terminals, both showing one of Sam's notes. On one, `nurse-a` adds to it and signs. On the other, `dr-b`,
@@ -1955,12 +1957,14 @@ a new key from the re-key form."). `conf` says `repudiated` for her. Re-key her 
       reads "signed by Nurse A (key had been repudiated) · re-signed by Nurse A".
 - [ ] A student: as `sam`, sign a note; repudiate and re-key `sam`. The part reads "signed by Sam (student) (key had
       been repudiated) — counts as unsigned", with no "— not co-signed" beside it. Note how the two parentheses read
-      to a clinician. After Sam re-signs, it reads "… — not co-signed · re-signed by Sam (student)". Then `dr-b`
+      to a clinician. After Sam re-signs, it reads "… — not co-signed (no supervisor recorded) · re-signed by Sam (student)". Then `dr-b`
       presses *Sign off this note*: it reads "signed by Sam (student) (key had been repudiated) · re-signed by Sam
       (student) · co-signed by Dr B", the mark cleared, and `vouches` shows Dr B's row as `co-signed`.
 - [ ] The known gap (ADR-0093 (d), #1010): on another of Sam's notes, `dr-b` signs off BEFORE Sam re-signs. After
-      Sam's re-sign the part reads "— not co-signed · signed off by Dr B · re-signed by Sam (student)" and no button
-      is offered. Record it.
+      Sam's re-sign the part reads "— not co-signed (no supervisor recorded) · signed off by Dr B · re-signed by Sam
+      (student)". Since slice 3c-3a *Sign off this note* stays offered: Dr B's press answers "You have already signed
+      every part of this note. Nothing more was signed.", and another clinician's press co-signs the part and clears
+      the mark (ADR-0094 (b)). Record it.
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
@@ -1979,3 +1983,123 @@ database by `note_repudiated_signer.rs` (repudiate and re-key, a colleague's sig
 the real person's re-sign). The window's offer follows `needs_sign_off` (`notes_sign_off_tests.rs`). The real
 window, the superuser panel's repudiate followed by a re-key, WebKit and VoiceOver were not seen. `TEMPLATE.md`
 carries a matching block (*A repudiated signature*).
+
+## 25. Supervision and the mandatory co-sign (GUI sign-in slice 3c-3a, ADR-0094)
+
+The slice's gestures: a **supervision act** in the assigner's panel (*Supervision: who supervises whom*) or in *My
+supervisees*, each with section 16's strip; and **Co-sign as reviewed** on a supervisee's note that owed no
+co-signature. The chart's new words are: " — not co-signed" on the part of a writer the record requires to be
+co-signed; " — not co-signed (no supervisor recorded)" when that writer, or a student, has no supervisor now; and,
+in the assigner's panel, the gap row "needs co-signing · no supervisor recorded". Paper counterpart: a list of who
+supervises whom in a staff file, a probationer's entries countersigned until the supervisors end the probation, and
+a supervisor initialling a registrar's entry as read. **Live only**, like section 16.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| A supervision act, credential included | the first keystroke in the strip's Staff ID | the act's sentence on screen and the list re-read | **≤ 3 s** (Sign's, section 16) |
+| Co-sign as reviewed, credential included | the first keystroke in the strip's Staff ID | "Co-signed as reviewed — …" on screen and the byline re-read | **≤ 3 s** (Sign's, section 16) |
+| See that a part still needs its supervisor | — | — | **0 acts** (the byline) |
+
+Steps: record "B supervises C" paper *N* = 1 (write it on the list) → forced *M* = 1 (one act, the strip's
+passphrase counted with it) → target *K* = 1; set or lift co-signing 1 → 1 → 1; co-sign a reviewed note from the
+opened chart 2 (open the folder, sign) → 2 (*Co-sign as reviewed*, the passphrase) → 2; see that a part still needs
+its supervisor 1 (look for the countersignature) → 0 → 0. Finding what to co-sign is chart by chart until slice
+3c-3c's person menu. The node times a review's write half under **`note-sign-off`**, the same kind as a sign-off
+(ADR-0094 (f)), so take the review runs in a stretch with no sign-offs, or tell them apart by time. A supervision act
+has no node timing: the stopwatch is its only figure. **A figure outside its budget, or an `M > N`, is the finding —
+file an issue; never adjust the budget.**
+
+**Setup.** Section 23's setup (`nurse-a`, `dr-b`, the student `sam`, the section 2 chart, its `vouches` helper),
+section 16's superuser `boss` and section 24's `conf`. Enrol from *Enrol staff*, approved by `boss`, two clinicians:
+`dr-p` ("Dr P", the probationer) and `dr-c` ("Dr C", nobody's supervisor). A superuser's approval confirms a key at
+once; `conf` must say `confirmed` for everyone who presses a supervision button other than `boss` (a supervision act
+needs a confirmed key, unless a superuser's). Launch as section 3. Add:
+
+```bash
+sup() { cairn-node --conn "$CONN" supervision-list; }   # one line per member, as the assigner's panel reads
+```
+
+**Measurement 1 — record supervision (≤ 3 s).** As `boss` in the strip, open *Supervision: who supervises whom*.
+Time five acts, each from the first keystroke in the strip's Staff ID until the act's sentence shows and the list is
+re-read.
+
+- [ ] The panel lists every member but `boss`. Dr P's row reads "Dr P (dr-p): co-signing not required.". Sam's reads
+      "Sam (sam): needs co-signing (student) · no supervisor recorded." (the gap row) and offers no *Require
+      co-signing*: a student needs it by role.
+- [ ] *Require co-signing* on Dr P's row: "dr-p now needs every signed note co-signed." Her row now reads "… needs
+      co-signing · no supervisor recorded."
+- [ ] Type `dr-b` in "Supervisor's staff ID for Dr P", press *Link a supervisor*: "dr-b now supervises dr-p." Her row
+      reads "… needs co-signing · supervised by dr-b."
+- [ ] *Grant assign-supervision right* on Dr P's row: "dr-p may now assign supervision while their own key is
+      confirmed." Then, with `dr-p` in the strip, press *Unlink dr-b* on her own row: "The node refused this, so
+      nothing was recorded. …" and the list is re-read; she still reads "supervised by dr-b". Nobody acts on their own
+      supervision as the supervisee, even holding the right (ADR-0094 decision 2). As `boss`, *Withdraw
+      assign-supervision right* on her row.
+- [ ] With `dr-c` in the strip, *Link a supervisor* on Sam's row with `dr-c`: refused in the same sentence (`dr-c`
+      holds no right). Then, with `boss`, link `dr-c` as Sam's supervisor and unlink again: Sam's row reads "… ·
+      supervised by dr-c." then the gap row again.
+- [ ] Every press clears the strip, refusals included. `sup` prints the same state as the panel. No dialog.
+
+**Measurement 2 — the mark, and only a supervisor clears it.** Dr P needs co-signing and `dr-b` supervises her.
+
+- [ ] As `dr-p`: *New note*, `obs stable`, *Sign note*. It reads "signed by Dr P — not co-signed · {its time}" and
+      offers *Sign off this note*. Pressed by `dr-p` herself: "You have already signed every part of this note.
+      Nothing more was signed." (ADR-0094 (i)).
+- [ ] As `dr-c`: *Sign off this note*. The byline reads "signed by Dr P — not co-signed · co-signed by Dr C" and the
+      button stays: Dr C is not her supervisor. `vouches` shows Dr C's row as `sign-off`, `co-signed`. Note how the
+      success line "Signed off — every part of this note now carries your signature." reads beside a mark that
+      stayed (the reading #1012 records for a repudiated part).
+- [ ] As `dr-b`: *Sign off this note*. It reads "signed by Dr P · co-signed by Dr C · co-signed by Dr B", and the
+      button is gone.
+- [ ] As `dr-p`, sign a second note. Then, with `dr-b` named in who's here and in the strip, open *My supervisees*:
+      Dr P's row offers *Lift co-signing* and *Step away*. Press *Lift co-signing*: "dr-p no longer needs notes
+      co-signed. Notes signed while it was required still need a co-signature if they have none." The second note
+      still reads "— not co-signed"; a note Dr P signs now reads "signed by Dr P" with no mark.
+- [ ] The byline "(no supervisor recorded)": as `sam`, sign a new note. It reads "signed by Sam (student) — not
+      co-signed (no supervisor recorded)". With nobody recorded, any non-student's sign-off clears it: `dr-c`'s press makes it
+      "signed by Sam (student) · co-signed by Dr C".
+
+**Measurement 3 — Co-sign as reviewed (≤ 3 s).** Dr P no longer needs co-signing; `dr-b` still supervises her. As
+`dr-p`, sign five one-part notes, and one note that `nurse-a` then adds to (*Add to this note*, `agree`, *Sign note*).
+
+- [ ] With `dr-c` named in who's here, no note offers *Co-sign as reviewed*. With `dr-b` named, each of Dr P's notes
+      offers it beside no *Sign off this note* (the five) and beside *Sign off this note* on the shared note.
+- [ ] As `dr-b`, press it on the five, timing each from the first keystroke in the strip's Staff ID until
+      "Co-signed as reviewed — the note now carries your co-signature." shows and the byline is re-read (budget
+      ≤ 3 s); then `ui_gesture_timing`'s `note-sign-off` rows. Each reads "signed by Dr P · co-signed by Dr B", the
+      button is gone, and `vouches` shows Dr B's row as `sign-off`, `co-signed`.
+- [ ] On the shared note it co-signs Dr P's part only: Nurse A's part carries no "co-signed by Dr B", and `vouches`
+      shows one new row.
+- [ ] Key and claim differ: `dr-b` named in who's here, `dr-c` in the strip, on a fresh note of Dr P's: "There is
+      nothing here for you to co-sign as reviewed. Nothing was signed." Nothing is written.
+- [ ] A who's-here switch while a review is in flight: the picker says "Your review co-signature went through — open
+      the chart to see which parts it covers."
+- [ ] *Step away* in *My supervisees*: "dr-b no longer supervises dr-p."; the list reads "You supervise nobody
+      here."; once the chart is read again, a fresh note of Dr P's no longer offers *Co-sign as reviewed* to `dr-b`. Close and reopen the assigner's panel (the
+      panels do not refresh each other, ADR-0094 (g)): her row reads "Dr P (dr-p): co-signing not required."
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] Both panels' summaries are reached by Tab and open with Space or Enter. Each button is read with its whose-row
+      name: "Require co-signing for Dr P", "Grant assign-supervision right for Dr P", "Unlink dr-b from Dr P", "Link a
+      supervisor for Dr P", the field "Supervisor's staff ID for Dr P", "Lift co-signing for Dr P", "Step away from
+      supervising Dr P". Enter in the link field does nothing (ADR-0094 (h)): press the button.
+- [ ] Each act's sentence is read when it appears (the panels' status lines are live regions).
+- [ ] *Co-sign as reviewed* is reached by Tab and read as "Co-sign as reviewed: {the note's time}".
+- [ ] "— not co-signed (no supervisor recorded)" is read with the note's heading.
+- [ ] No dialog appears at any point.
+
+**Chromium and WebKit.** The window is WebKit (Tauri on macOS). This slice adds webview code (`supervision.js`, the
+review button) that no headless walk has seen, in either engine. Note anything that differs from the words above,
+and whether *My supervisees* still lists the previous person's supervisees after a who's-here switch (it is not
+re-read until reopened, ADR-0094 (g)).
+
+**What could not be run here.** Every stopwatch figure and the VoiceOver pass need the real window. The doors were run
+against throwaway databases by `supervision_doors.rs`, `supervision_doors_approver.rs`, `supervision_admin_lib.rs` and
+`restore_actor_registry_supervision.rs`; the record's effect on the chart by `note_supervision.rs`; the review by
+`note_review_cosign.rs`. The window's commands were run by `cairn-gui-tauri`'s DB-gated tests (`notes_review_db_tests.rs`,
+`supervision_panel_tests.rs`; CI never runs those, #905). The webview was checked by source guards only. The real
+window, WebKit, Chromium and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*Supervision and the
+mandatory co-sign*).

@@ -222,6 +222,7 @@ nav:
       - ADR-0091 · The compound note and the addendum: spec/decisions/0091-the-compound-note-and-the-addendum.md
       - ADR-0092 · The vouch and the sign-off: spec/decisions/0092-the-vouch-and-the-sign-off.md
       - ADR-0093 · A repudiated signature counts as unsigned: spec/decisions/0093-a-repudiated-signature-counts-as-unsigned.md
+      - ADR-0094 · Supervision and the mandatory co-sign: spec/decisions/0094-supervision-and-the-mandatory-co-sign.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

@@ -10,6 +10,81 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ GUI SIGN-IN SLICE 3c-3a — SUPERVISION AND THE MANDATORY CO-SIGN (ADR-0094, db/072, db/004 + db/052 in place) — do not undo**
+(pins: `db/tests/{004_actors,072_supervision}_test.sql`, `crates/cairn-node/src/note/{supervision,cosign_tests,review}.rs`'s
+tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,note_supervision,note_review_cosign,restore_actor_registry_supervision}.rs`,
+`cairn-gui/cairn-gui-tauri/src/{notes_review,notes_review_db,supervision_panel,notes_sign_off_webview}_tests.rs`):
+- **"As of t" is the part's or the vouch's OWN `hlc_wall`.** `annotate` judges `needs_cosigning` at the part's
+  `recorded_at` (its `event_log.hlc_wall`) and each vouch's `by_supervisor` / `writer_supervised` at that vouch's
+  `at`. **Tempting wrong fixes:** judge the requirement as it stands now (lifting a probation would silently clear
+  every part signed under it: the slice's anti-goal); judge it at `t_effective` (freely backdatable); judge "is a
+  supervisor" now (a supervisor linked after a colleague's co-sign would clear it retroactively, and one who has since
+  stepped away would stop counting). Pins: `supervision.rs`'s `annotate_judges_the_requirement_at_the_parts_time`,
+  `annotate_judges_each_vouchs_supervisor_at_its_own_time`; `note_supervision.rs::a_lifted_requirement_leaves_the_earlier_part_waiting`.
+- **Registry times are FLOORED to the millisecond before they are compared.** `recorded_at` has microseconds, an HLC
+  wall milliseconds; `Supervision::from_rows` floors, and the compare is `<=`, so a row in the same millisecond as a
+  signing counts as in effect. **Tempting wrong fixes:** drop the floor "because chrono compares fine" (a requirement
+  recorded at .000700 and a part signed at .000 would read as signed before it); use `<`. Pins:
+  `supervision.rs`'s `a_row_in_the_same_millisecond_as_the_part_is_in_effect`, `the_requirement_is_read_as_it_stood_at_t`.
+- **The fallback accepts what the floor admits: a `co-signed` vouch, or an attested `sign-off` on a part whose
+  envelope key is not a human's.** With no supervisor at the vouch's time, `clears_cosign` accepts a non-student's
+  vouch whose role is `co-signed`, or whose act is `sign-off` when `signer_human_actor` is `None`. **Tempting wrong
+  fixes:** demand `CoSigned` "because the old rule did" (db/071 refuses `co-signed` on a part that went in under the
+  node's key, so such a student's part would wait for ever); accept any attested sign-off (it would clear a
+  human-signed part that could have been co-signed). Pins: `cosign_tests.rs`'s
+  `a_part_signed_later_by_its_writer_still_needs_its_co_sign`, `with_no_supervisor_any_clinicians_co_sign_clears_it`
+  (an attested sign-off on a human-signed part does not clear); `note_supervision.rs::a_part_gone_in_unsigned_is_cleared_by_a_clinicians_sign_off`.
+- **An unplaceable signer judges nothing.** `supervision::writer_actor` and `cosign::writer_signature` both answer
+  `None` for a `signed_by` with an empty actor, and must keep agreeing: annotation judges the record for the writer the
+  rules countersign. **Tempting wrong fix:** fall back to `drafted_actor` when `signed_by`'s actor is empty "to find
+  the writer anyway" (the record would be judged for someone this node cannot show signed it). Pins:
+  `supervision.rs::an_unplaceable_signer_is_no_writer`, `cosign_tests.rs::an_unplaceable_signer_owes_no_co_sign`.
+- **Only a supervisor, as of the co-sign, clears a mandatory co-sign, and the offer stays until one does.** While the
+  writer had a supervisor at the vouch's time, a non-supervisor's `co-signed` vouch is read and clears nothing.
+  `needs_sign_off` is `signed_off_by(..).is_none() || any(awaits_cosign)`. **Tempting wrong fixes:** let any
+  non-student's co-sign clear it, as before this slice; drop the `awaits_cosign` half "because `signed_off_by` already
+  skips students" (a probationer signs every part herself, so her note would have no button). Pins:
+  `cosign_tests.rs`'s `a_non_supervisors_co_sign_does_not_clear_it`, `the_offer_stays_while_a_mandatory_co_sign_is_missing`;
+  `note_supervision.rs::only_a_supervisor_clears_a_mandatory_co_sign`.
+- **"Co-sign as reviewed" never vouches another writer's part, and the KEY decides who reviews.** `review::reviewable`
+  takes only a signed part that owes no co-sign, whose writer is not the presser and has the presser among their
+  supervisors now, that no supervisor has vouched, and that the presser has not signed. The presser is the signing
+  key's actor (`vouch_as_shown`). **Tempting wrong fixes:** make it `sign_off_note` under a second label (it would
+  vouch every part, other writers' and unsigned ones included); take the presser from the who's-here claim; drop
+  `!cosign_required` (an owed co-sign is Sign off's to clear). Pins: `review.rs`'s
+  `review_vouches_only_the_pressers_supervisees_parts`, `review_skips_a_part_that_needs_a_co_sign`;
+  `note_review_cosign.rs`'s `review_never_vouches_another_writers_part`, `the_key_not_the_claim_decides`;
+  `notes_review_db_tests.rs::the_key_not_the_claim_decides_in_the_window`.
+- **Nobody acts on their own supervision as the supervisee — enforced in the door.** `cairn_supervision_apply`
+  refuses every op but the assigner pair when the approver's actor is the subject's. **Tempting wrong fixes:** narrow
+  it to the design's "no self-link, no self-lift" (a supervisee holding the right could unlink every supervisor and
+  fall into the fallback, where any clinician clears her co-sign); move it to the window (a raw `cairn_agent` client
+  goes straight to the door). Pin: `supervision_doors.rs::a_supervisee_cannot_act_on_their_own_supervision_even_as_assigner`.
+- **The panel releases the key for ONE act and never holds it.** `supervision_key`: refuse a blank passphrase,
+  `forget_held_key`, lock, release `Clinical`, and only on `Release::RefusedPurpose` once more with `Enrol`, then
+  `from_release_noting`. **Tempting wrong fixes:** call `signer_for_act` "like the note acts" (a superuser's key would
+  enter the held session); drop `forget_held_key` (the last person's held key would outlive a new presser); retry
+  `Enrol` on any refusal (a wrong passphrase would be counted twice). Pins: `supervision_panel_tests.rs`'s
+  `a_supervision_act_wipes_then_releases_and_holds_nothing`, `a_superuser_key_is_released_for_enrol_after_a_refused_clinical`.
+- **A good re-read clears a stale status sentence, and only when no act's outcome is being said.** Each refresh's
+  success branch holds `if (!outcome) setMessage(el("…-status"), "");` (both supervision panels and the superuser
+  panel). **Tempting wrong fixes:** clear unconditionally (the act's own outcome vanishes with the re-read); never
+  clear (a "Nobody is named …" or read-failure sentence stays beside a full list, false). Pins:
+  `supervision_panel_tests.rs::a_good_read_clears_a_stale_status`, `superuser_panel_tests.rs::a_good_read_clears_a_stale_status`.
+- **A review's words are its own, never Sign off's.** `notes_review.rs`'s `REVIEWED` / refusal sentences and
+  `whos_here.js`'s `REVIEWED_LINE` / `NOT_REVIEWED_LINE` / `REVIEW_UNKNOWN_LINE` for the outcomes "reviewed" /
+  "not-reviewed" / "review-unknown". **Tempting wrong fix:** reuse Sign off's outcomes and lines "since it is the same
+  transaction" (`SIGNED_OFF_LINE` says every part of the note now carries your signature, false of a review; the
+  review's line names no parts because a review may skip some). The same every-sentence-true rule holds the lift's
+  "… still need a co-signature if they have none." Pins: `notes_review_tests.rs::review_words_are_exact`,
+  `notes_sign_off_webview_tests.rs::a_switch_during_a_review_says_what_the_review_did`,
+  `supervision_panel_tests.rs::the_lift_sentence_claims_no_waiting_notes`.
+- **`related_actor` is skipped when absent in the export.** `ActorRegistryRow.related_actor` keeps
+  `skip_serializing_if = "Option::is_none"`, so an export with no link rows keeps today's shape; one with a link row
+  is a deliberate one-way door (ADR-0094 decision 7). **Tempting wrong fix:** drop the attribute "for symmetry" (every
+  export changes shape). Pins: `localstate_wire_pins.rs` (unchanged by the slice);
+  `restore_actor_registry_supervision.rs::the_supervision_ops_survive_a_restore`.
+
 **⇒ GUI SIGN-IN SLICE 3c-3b — A REPUDIATED SIGNATURE COUNTS AS UNSIGNED (ADR-0093, no SQL change) — do not undo**
 (pins: `crates/cairn-node/src/note/{vouch_tests,view_tests,compound,vouch_read}.rs`'s tests,
 `crates/cairn-node/tests/note_repudiated_signer.rs`, `cairn-gui/cairn-gui-tauri/src/notes_sign_off_tests.rs`):
@@ -102,9 +177,11 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `sign_and_discard_refuse_to_start_while_a_press_is_in_flight`. The medication pane is not yet guarded (#1002).
 - **A sign-off press settles with its outcome**, as Sign and Discard do: "signed-off", "not-signed-off" or
   "sign-off-unknown", which a who's-here switch's picker words (`whos_here.js`'s `SIGNED_OFF_LINE` and siblings).
-  **Tempting wrong fix:** settle it as `null` "because the re-read chart shows the result" (the switch closes the
-  chart, so the clinician never sees it). Pin:
-  `notes_sign_off_webview_tests.rs::a_switch_during_a_sign_off_says_what_the_sign_off_did`.
+  Since 3c-3a a "Co-sign as reviewed" press settles the same way with its own three, "reviewed", "not-reviewed" or
+  "review-unknown" (`REVIEWED_LINE` and siblings; the 3c-3a block above). **Tempting wrong fix:** settle it as `null`
+  "because the re-read chart shows the result" (the switch closes the chart, so the clinician never sees it). Pins:
+  `notes_sign_off_webview_tests.rs`'s `a_switch_during_a_sign_off_says_what_the_sign_off_did`,
+  `a_switch_during_a_review_says_what_the_review_did`.
 - **`view::part_byline` is the one producer of a part's byline** (the root's heading, each part, each seam), with the
   "(student)", "— not co-signed", "(signer unconfirmed)" and vouch words. `byline_words` has no production caller
   left (its own tests and `note_read.rs` use it). **Tempting wrong fixes:** call `byline_words(grade, writer)` in a

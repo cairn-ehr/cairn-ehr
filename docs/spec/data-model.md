@@ -546,3 +546,12 @@ incremental writing lives pre-commit in the durable draft store
 > unsigned and reads "(key had been repudiated) — counts as unsigned". Only the real person's own re-signature, a
 > vouch by the same actor under a key that is not repudiated, makes it count again; a colleague's sign-off is
 > recorded and clears nothing. A vouch by a repudiated key counts for nothing either.
+>
+> **Since sign-in slice 3c-3a** ([ADR-0094](decisions/0094-supervision-and-the-mandatory-co-sign.md), `db/072`,
+> db/004 + db/052 in place, no wire change), the node records who supervises whom and who must have every signed
+> note co-signed, as signed, append-only rows in its actor registry, which stays node-local. A part reads "— not
+> co-signed" when its writer is a student, or when the record required them to be co-signed as of the part's own
+> `hlc_wall`, so a requirement lifted later leaves it waiting. Only one of the writer's supervisors, as of the
+> co-sign, clears it. Where the writer had no supervisor then, any non-student's sign-off the floor admits clears it,
+> and the mark reads "(no supervisor recorded)" while the writer has none. A supervisor may also "Co-sign as
+> reviewed" a supervisee's note that owed no co-sign.
