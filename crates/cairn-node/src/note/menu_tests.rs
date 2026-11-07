@@ -135,7 +135,7 @@ fn a_repudiated_part_is_in_nobodys_cosign_group() {
         required_and_linked(),
     );
     assert!(p.needs_cosigning);
-    let sv = classify(&person("sv"), &[p.clone()], &[], now());
+    let sv = classify(&person("sv"), std::slice::from_ref(&p), &[], now());
     assert_eq!((sv.cosign.len(), sv.review.len()), (0, 0));
     assert_eq!(classify(&person("p1"), &[p], &[], now()).own.len(), 1);
 }
@@ -152,7 +152,7 @@ fn a_supervisees_part_awaiting_cosign_is_in_my_cosign_group_naming_the_others() 
     rows.push(link("p1", "p", -5));
     let shared = owing(2, rows);
     let both = [
-        classify(&person("sv"), &[shared.clone()], &[], now()),
+        classify(&person("sv"), std::slice::from_ref(&shared), &[], now()),
         classify(&person("p"), &[shared], &[], now()),
     ];
     assert_eq!(
@@ -216,7 +216,10 @@ fn a_cosign_by_a_since_unlinked_supervisor_still_clears_it_for_the_other() {
 fn a_writer_with_no_supervisor_now_is_in_nobodys_cosign_group() {
     let p = owing(1, vec![row("require-cosign", "p1", None, -10)]);
     for who in ["sv", "p1", "zz"] {
-        assert_eq!(classify(&person(who), &[p.clone()], &[], now()).count(), 0);
+        assert_eq!(
+            classify(&person(who), std::slice::from_ref(&p), &[], now()).count(),
+            0
+        );
     }
 }
 
