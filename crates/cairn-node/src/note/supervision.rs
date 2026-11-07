@@ -139,13 +139,15 @@ pub async fn load(client: &(impl GenericClient + Sync)) -> anyhow::Result<Superv
     )
 }
 
-/// Who wrote the part: its signer's actor when known (non-empty), else its drafted actor.
+/// Who wrote the part: its signer's actor, else (it went in unsigned) its drafted actor. `None`
+/// for a signer this node cannot place (empty actor): who wrote it cannot be told, so no record is
+/// judged, as `cosign::writer_signature` judges no co-sign rule for it.
 pub fn writer_actor(p: &NoteRow) -> Option<&str> {
-    p.signed_by
-        .as_ref()
-        .map(|s| s.actor.as_str())
-        .filter(|a| !a.is_empty())
-        .or(p.drafted_actor.as_deref().filter(|a| !a.is_empty()))
+    match &p.signed_by {
+        Some(s) => Some(s.actor.as_str()),
+        None => p.drafted_actor.as_deref(),
+    }
+    .filter(|a| !a.is_empty())
 }
 
 /// Stamp the part and each of its vouches with the record's facts for the part's writer. The
@@ -327,6 +329,19 @@ mod tests {
         assert!(!early.writer_supervisors.is_empty());
         assert!(!early.vouches[0].writer_supervised);
         assert!(!early.vouches[0].by_supervisor);
+    }
+
+    /// A signer this node cannot place (empty actor) leaves the writer unknown: the drafted actor's
+    /// record is NOT judged, as `cosign::writer_signature` judges no co-sign rule for it.
+    #[test]
+    fn an_unplaceable_signer_is_no_writer() {
+        let mut p = part(1, Some(who("", "a key this node does not know")));
+        p.drafted_actor = Some("aa".into());
+        assert_eq!(writer_actor(&p), None);
+        let s = sup(vec![row("require-cosign", "aa", None, -1)]);
+        let before = p.clone();
+        annotate(&mut p, &s);
+        assert_eq!(p, before);
     }
 
     #[test]

@@ -53,8 +53,10 @@ pub struct CompoundView {
     /// note" opens the editor with, the very words the draft's `DraftView::adding_to` says once
     /// the pane is read again.
     pub adds_line: String,
-    /// Whether "Sign off this note" is offered: no one but a student has yet signed every part
-    /// (`vouch::needs_sign_off`). A linked chart's note too: each vouch files under its part's
+    /// Whether "Sign off this note" is offered (`vouch::needs_sign_off`): no one but a student has
+    /// yet signed every part, OR a part still awaits its mandatory co-sign (`cosign::awaits_cosign`:
+    /// a student's or a required writer's part, until a supervisor of theirs, or with none recorded
+    /// any clinician, signs it off). A linked chart's note too: each vouch files under its part's
     /// own chart, and no draft is involved.
     pub can_sign_off: bool,
     /// Every part's event id, in part order: what "Sign off this note" sends back, so the node

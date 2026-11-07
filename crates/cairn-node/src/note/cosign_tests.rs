@@ -85,8 +85,8 @@ fn a_supervisors_attested_sign_off_clears_it() {
 }
 
 /// The fallback (Review Focus 3): with no supervisor at the co-sign, any non-student clinician
-/// this node can place, other than the writer, clears it with a co-sign; an attested sign-off
-/// does not, nor a student's, nor an unplaceable key's.
+/// this node can place, other than the writer, clears it with a co-sign; an attested sign-off on a
+/// human-signed part does not, nor a student's, nor an unplaceable key's.
 #[test]
 fn with_no_supervisor_any_clinicians_co_sign_clears_it() {
     let mut p = probationer();
@@ -134,16 +134,19 @@ fn with_no_supervisor_any_clinicians_co_sign_clears_it() {
 
 /// A part that went in unsigned and was signed later by its own writer still owes its co-sign:
 /// the mark sits straight after the writer's own vouch, the signature a co-sign countersigns.
+/// The part went in under the NODE's key (`signer_human_actor` is `None`), so the floor admits
+/// only an ATTESTED sign-off on it (db/071), and with no supervisor recorded that clears it.
 #[test]
 fn a_part_signed_later_by_its_writer_still_needs_its_co_sign() {
     let mut p = part(1, None);
     p.drafted_actor = Some("s1".into());
-    // A colleague's earlier attested vouch is not the writer's signature.
+    assert!(p.signer_human_actor.is_none(), "a node-signed part");
+    // A fellow student's earlier sign-off is neither the writer's signature nor a clearing one.
     p.vouches.push(vouch(
         8,
         VouchAct::SignOff,
         VouchRole::Attested,
-        who("n1", "Nurse Bo"),
+        student("t1", "Tess"),
     ));
     p.vouches.push(vouch(
         9,
@@ -155,20 +158,29 @@ fn a_part_signed_later_by_its_writer_still_needs_its_co_sign() {
     assert!(awaits_cosign(&p));
     assert_eq!(
         part_byline(&p).shown,
-        "went in unsigned · signed off by Nurse Bo · signed later by Sam (student) \
+        "went in unsigned · signed off by Tess (student) · signed later by Sam (student) \
          — not co-signed (no supervisor recorded)"
     );
+    // While the writer had a supervisor, a non-supervisor's attested sign-off clears nothing.
+    let mut supervised = vouch(
+        10,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z1", "Dr Zed"),
+    );
+    supervised.writer_supervised = true;
+    assert!(!clears_cosign(&p, &supervised));
     p.vouches.push(vouch(
         10,
         VouchAct::SignOff,
-        VouchRole::CoSigned,
+        VouchRole::Attested,
         who("z1", "Dr Zed"),
     ));
     assert!(!awaits_cosign(&p));
     assert_eq!(
         part_byline(&p).shown,
-        "went in unsigned · signed off by Nurse Bo · signed later by Sam (student) \
-         · co-signed by Dr Zed"
+        "went in unsigned · signed off by Tess (student) · signed later by Sam (student) \
+         · signed off by Dr Zed"
     );
     // A writer's own vouch under a repudiated key is no signature of theirs.
     let mut dead = part(2, None);
@@ -181,6 +193,44 @@ fn a_part_signed_later_by_its_writer_still_needs_its_co_sign() {
     ));
     assert!(writer_signature(&dead).is_none());
     assert!(!cosign_required(&dead));
+}
+
+/// A colleague's sign-off made BEFORE the writer's own later signature still clears it: it named
+/// the same bytes the writer then signed (as a supervisor's earlier vouch would).
+#[test]
+fn a_sign_off_before_the_writers_own_signature_still_counts() {
+    let mut p = part(1, None);
+    p.drafted_actor = Some("s1".into());
+    p.vouches.push(vouch(
+        8,
+        VouchAct::SignOff,
+        VouchRole::Attested,
+        who("z1", "Dr Zed"),
+    ));
+    p.vouches.push(vouch(
+        9,
+        VouchAct::Addendum,
+        VouchRole::Attested,
+        student("s1", "Sam"),
+    ));
+    assert!(cosign_required(&p));
+    assert!(!awaits_cosign(&p));
+    assert_eq!(
+        part_byline(&p).shown,
+        "went in unsigned · signed off by Dr Zed · signed later by Sam (student)"
+    );
+}
+
+/// A part signed by a key this node cannot place (empty actor): who wrote it cannot be told, so
+/// no co-sign rule is judged (as `supervision::writer_actor` judges no record for it).
+#[test]
+fn an_unplaceable_signer_owes_no_co_sign() {
+    let mut p = part(1, Some(who("", crate::note::view::UNKNOWN_SIGNER)));
+    p.drafted_actor = Some("s1".into());
+    p.needs_cosigning = true;
+    assert!(writer_signature(&p).is_none());
+    assert!(!cosign_required(&p));
+    assert!(!part_byline(&p).shown.contains("not co-signed"));
 }
 
 /// Design §3.2 Q2: "Sign off this note" stays offered while a mandatory co-sign is missing, even

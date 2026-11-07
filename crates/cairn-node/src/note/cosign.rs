@@ -11,7 +11,8 @@
 //! * It is CLEARED ([`clears_cosign`]) by a vouch under a standing key, of a known actor other
 //!   than the writer's, by someone who supervised the writer when they vouched
 //!   (`PartVouch::by_supervisor`, any role). Where the writer had NO supervisor at that time, the
-//!   rule before this slice applies (the fallback): any non-student's `co-signed` vouch clears it.
+//!   rule before this slice applies (the fallback): any non-student's sign-off of the kind the
+//!   floor admits clears it (`co-signed`, or `attested` on a part that went in unsigned).
 //!
 //! With every annotation at its default (no supervision rows at all) these rules are exactly
 //! the pre-slice rule, a student's part waiting until a non-student co-signs it.
@@ -20,21 +21,26 @@
 use super::read::NoteRow;
 use super::vouch::{counts_as_unsigned, part_is_signed, same_actor};
 use super::vouch_read::{PartVouch, Signer};
-use cairn_event::note_attestation::VouchRole;
+use cairn_event::note_attestation::{VouchAct, VouchRole};
 
 /// The signature a co-sign countersigns: the part's own `signed_by` when it has one, else the
 /// first vouch by the part's drafted writer (`drafted_actor`, by actor) under a key that still
 /// stands — a part that went in unsigned and was signed later by its writer (design §3.2 Q4).
-/// `None` when the writer never signed it (a colleague's sign-off is not the writer's signature).
+/// `None` when the writer never signed it (a colleague's sign-off is not the writer's signature),
+/// and `None` for a `signed_by` this node cannot place (empty actor): who wrote it cannot be told,
+/// so no co-sign rule is judged (an unknown key is never a student, so it never had a mark).
 /// Agrees with `supervision::writer_actor`, which annotation judged the record for.
 pub fn writer_signature(p: &NoteRow) -> Option<&Signer> {
-    p.signed_by.as_ref().or_else(|| {
-        let drafted = p.drafted_actor.as_deref()?;
-        p.vouches
-            .iter()
-            .map(|v| &v.by)
-            .find(|s| !s.repudiated && same_actor(&s.actor, drafted))
-    })
+    match &p.signed_by {
+        Some(s) => Some(s).filter(|s| !s.actor.is_empty()),
+        None => {
+            let drafted = p.drafted_actor.as_deref()?;
+            p.vouches
+                .iter()
+                .map(|v| &v.by)
+                .find(|s| !s.repudiated && same_actor(&s.actor, drafted))
+        }
+    }
 }
 
 /// Part `p` owes a co-sign: it is signed (and does not count as unsigned for a repudiated key,
@@ -49,13 +55,23 @@ pub fn cosign_required(p: &NoteRow) -> bool {
 /// Vouch `v` clears `p`'s co-sign. It must be under a standing key (a repudiated one counts
 /// nothing, ADR-0093), of a known actor (an empty one might be anyone, the writer included) that
 /// is not the writer's own; then either its signer supervised the writer at the vouch's time
-/// (any role), or, where the writer had no supervisor then, it is a non-student's `co-signed`
-/// (the floor never checks the student role, so a student's co-sign may be stored; it clears
-/// nothing, durable rule 3c-2).
+/// (any role), or, where the writer had no supervisor then, the fallback: a non-student's
+/// sign-off of the kind the floor admits — a `co-signed` one, or, on a part whose envelope is not
+/// a human's (it went in unsigned under the node's key, where db/071 refuses `co-signed`), an
+/// attested `sign-off`. A student's vouch never clears it: the floor never checks the student
+/// role, so one may be stored.
+///
+/// Order does not matter: a vouch made BEFORE the writer's own later signature still counts, as
+/// it named the very bytes the writer then signed.
 pub fn clears_cosign(p: &NoteRow, v: &PartVouch) -> bool {
-    let writer = writer_signature(p).map_or("", |s| s.actor.as_str());
-    let placeable = !v.by.repudiated && !v.by.actor.is_empty() && !same_actor(&v.by.actor, writer);
-    let fallback = !v.writer_supervised && v.role == VouchRole::CoSigned && !v.by.student;
+    let Some(writer) = writer_signature(p) else {
+        return false;
+    };
+    let placeable =
+        !v.by.repudiated && !v.by.actor.is_empty() && !same_actor(&v.by.actor, &writer.actor);
+    let admitted = v.role == VouchRole::CoSigned
+        || (v.act == VouchAct::SignOff && p.signer_human_actor.is_none());
+    let fallback = !v.writer_supervised && admitted && !v.by.student;
     placeable && (v.by_supervisor || fallback)
 }
 

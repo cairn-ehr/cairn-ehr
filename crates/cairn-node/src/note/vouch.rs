@@ -122,7 +122,7 @@ pub fn signed_off_by(parts: &[NoteRow]) -> Option<&Signer> {
 /// ([`cosign::awaits_cosign`], slice 3c-3a, design §3.2 Q2). The second half matters for a writer
 /// who must be co-signed: they signed every part themself, so [`signed_off_by`] names them, yet
 /// the note waits for one of their supervisors (judged at the co-sign's time) or, with none
-/// recorded then, any non-student's co-sign.
+/// recorded then, any non-student's sign-off the floor admits.
 pub fn needs_sign_off(parts: &[NoteRow]) -> bool {
     signed_off_by(parts).is_none() || parts.iter().any(cosign::awaits_cosign)
 }

@@ -24,7 +24,7 @@ use cairn_node::note::sign::{sign_note, SignNoteInput};
 use cairn_node::note::view::part_byline;
 use cairn_node::note::vouch::{needs_sign_off, sign_off_note, SignOffInput};
 use common::note_setup;
-use note_vouch_kit::{member, Member, ORIGIN};
+use note_vouch_kit::{member, timer_part_by, Member, ORIGIN};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -188,3 +188,71 @@ db_test!(a_pre_slice_students_part_is_cleared_by_any_clinician, |c| {
     );
     assert!(!needs_sign_off(note(&c, chart, p).await.parts()));
 });
+
+// The fallback accepts what the floor admits. A part the quarantine timer committed went in under
+// the NODE's key, so the floor admits only an ATTESTED sign-off on it (db/071). A student's such
+// part, signed later by the student (their addendum's vouch), is cleared by a clinician's "Sign
+// off this note" when no supervisor is recorded; otherwise it would wait forever.
+db_test!(
+    a_part_gone_in_unsigned_is_cleared_by_a_clinicians_sign_off,
+    |c| {
+        let (node_sk, chart) = ward(&c).await;
+        let sam = member(&c, "sam", "Sam", "student").await;
+        let zed = member(&c, "zed", "Dr Zed", "registrar").await;
+        let p = timer_part_by(&mut c, &node_sk, chart, "sam", None).await;
+        let input = SignNoteInput {
+            draft: Uuid::now_v7(),
+            patient: chart,
+            terminal: "ward-3-pc",
+            writer: Some(sam.staff),
+            narrative: "reviewed, obs stable",
+            stated: None,
+            node_origin: ORIGIN,
+            addendum_to: Some(p),
+            also_vouches: &[p],
+        };
+        sign_note(&mut c, &node_sk, &input, &sam.author())
+            .await
+            .unwrap()
+            .expect("Sam's addendum signs and vouches the earlier part");
+        let before = byline(&c, chart, p).await;
+        assert!(
+            before.ends_with(
+                " · signed later by Sam (student) — not co-signed (no supervisor recorded)"
+            ),
+            "{before}"
+        );
+        let shown: Vec<Uuid> = note(&c, chart, p)
+            .await
+            .parts()
+            .iter()
+            .map(|q| q.event_id)
+            .collect();
+        assert_eq!(shown.len(), 2, "the part and Sam's addendum");
+        assert!(needs_sign_off(note(&c, chart, p).await.parts()));
+
+        let input = SignOffInput {
+            patient: chart,
+            root: p,
+            shown_parts: &shown,
+            node_origin: ORIGIN,
+        };
+        sign_off_note(&mut c, &input, &zed.author())
+            .await
+            .unwrap()
+            .expect("Zed signs the note off");
+        let after = byline(&c, chart, p).await;
+        assert!(
+            after.ends_with(" · signed later by Sam (student) · signed off by Dr Zed"),
+            "{after}"
+        );
+        let n = note(&c, chart, p).await;
+        assert!(
+            !n.parts()[1..]
+                .iter()
+                .any(|q| part_byline(q).shown.contains("not co-signed")),
+            "Sam's addendum is co-signed too"
+        );
+        assert!(!needs_sign_off(n.parts()));
+    }
+);
