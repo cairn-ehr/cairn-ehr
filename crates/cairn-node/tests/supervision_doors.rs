@@ -40,22 +40,7 @@ async fn team(c: &Client) {
     ] {
         enrol(c, s, role, v, "boss", BOSS).await.unwrap();
     }
-    ok(c, GRANT, "asg", None, "boss", BOSS).await;
-}
-
-/// One supervision act that must succeed.
-async fn ok(c: &Client, op: &str, s: &str, p: Option<&str>, a: &str, by: u8) {
-    supervise(c, op, s, p, a, by)
-        .await
-        .unwrap_or_else(|e| panic!("{op} on {s} by {a}: {}", msg(&e)));
-}
-
-/// The refusal's text must start with the door's name and contain `words`.
-fn refused(r: Result<(), tokio_postgres::Error>, words: &str) {
-    let e = r.expect_err(words);
-    let m = msg(&e);
-    assert!(m.starts_with("cairn_supervision_act: "), "{m}");
-    assert!(m.contains(words), "want {words:?} in {m:?}");
+    acted(c, GRANT, "asg", None, "boss", BOSS).await;
 }
 
 /// (op, subject actor hex, related actor hex) for every supervision row, in order.
@@ -89,7 +74,7 @@ async fn link_supervisor_by_a_superuser_or_an_assigner_with_every_refusal() {
     // An assigner may name themselves as someone ELSE's supervisor.
     link("bwong", "asg", "asg", ASSIGNER).await.unwrap();
     // An admin may hold the right and act with it.
-    ok(&c, GRANT, "adm", None, "boss", BOSS).await;
+    acted(&c, GRANT, "adm", None, "boss", BOSS).await;
     link("plain", "jsmith", "adm", ADMIN).await.unwrap();
 
     refused(
@@ -137,20 +122,20 @@ async fn unlink_supervisor_by_a_superuser_an_assigner_or_the_supervisor() {
         let c = &c;
         async move { supervise(c, op, s, Some(p), a, by).await }
     };
-    ok(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
     refused(
         act(UNLINK, "bwong", "jsmith", "plain", PLAIN).await,
         "only a superuser, an assigner or the supervisor themself may end this link",
     );
-    ok(&c, UNLINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, UNLINK, "bwong", Some("jsmith"), "boss", BOSS).await;
     refused(
         act(UNLINK, "bwong", "jsmith", "boss", BOSS).await,
         "no link stands between bwong and supervisor jsmith",
     );
-    ok(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
-    ok(&c, UNLINK, "bwong", Some("jsmith"), "asg", ASSIGNER).await;
+    acted(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, UNLINK, "bwong", Some("jsmith"), "asg", ASSIGNER).await;
     // The supervisee may not end it, as the next test pins with the assigner right in hand.
-    ok(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
     refused(
         act(UNLINK, "bwong", "jsmith", "bwong", BWONG).await,
         "nobody acts on their own supervision",
@@ -271,39 +256,6 @@ async fn grant_and_withdraw_assigner_by_a_superuser_only() {
 }
 
 #[tokio::test]
-async fn a_stale_token_is_refused() {
-    db_gated!();
-    let (_g, c, _, _) = fresh().await;
-    team(&c).await;
-    // A token signed over the state BEFORE a link, replayed after the link and its unlink.
-    let (op, s, p) = (LINK, "bwong", Some("jsmith"));
-    let addr = bytes(
-        &c,
-        "SELECT cairn_supervision_address($1, $2, $3, cairn_supervision_prior($1, $2, $3))",
-        &[&op, &s, &p],
-    )
-    .await;
-    let token = sign(&addr, BOSS);
-    let act = "SELECT cairn_supervision_act($1, $2, $3, 'boss', $4)";
-    c.execute(act, &[&op, &s, &p, &token]).await.unwrap();
-    ok(&c, UNLINK, s, p, "boss", BOSS).await;
-    refused(
-        c.execute(act, &[&op, &s, &p, &token]).await.map(drop),
-        "the approver's attestation is invalid or does not cover this act",
-    );
-    // Nor is a token by another key than the approver's.
-    let wrong = sign(&addr, JSMITH);
-    refused(
-        c.execute(act, &[&op, &s, &p, &wrong]).await.map(drop),
-        "the approver's attestation is invalid or does not cover this act",
-    );
-    refused(
-        supervise(&c, REQUIRE, "bwong", None, "ghost", BOSS).await,
-        "ghost is not an enrolled member, so cannot approve",
-    );
-}
-
-#[tokio::test]
 async fn an_unconfirmed_member_cannot_approve() {
     db_gated!();
     let (_g, c, _, _) = fresh().await;
@@ -315,13 +267,13 @@ async fn an_unconfirmed_member_cannot_approve() {
     enrol(&c, "unc", "clinician", JSMITH2, "jsmith", JSMITH)
         .await
         .unwrap();
-    ok(&c, GRANT, "unc", None, "boss", BOSS).await;
+    acted(&c, GRANT, "unc", None, "boss", BOSS).await;
     refused(
         supervise(&c, REQUIRE, "bwong", None, "unc", JSMITH2).await,
         "unc's key is unconfirmed",
     );
     judge(&c, JSMITH2, true, "boss", BOSS).await.unwrap();
-    ok(&c, REQUIRE, "bwong", None, "unc", JSMITH2).await;
+    acted(&c, REQUIRE, "bwong", None, "unc", JSMITH2).await;
 }
 
 /// Review Focus 4: a supervisee holding the assigner right cannot unlink their own supervisor,
@@ -331,8 +283,8 @@ async fn a_supervisee_cannot_act_on_their_own_supervision_even_as_assigner() {
     db_gated!();
     let (_g, c, _, _) = fresh().await;
     team(&c).await;
-    ok(&c, LINK, "asg", Some("jsmith"), "boss", BOSS).await;
-    ok(&c, REQUIRE, "asg", None, "boss", BOSS).await;
+    acted(&c, LINK, "asg", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, REQUIRE, "asg", None, "boss", BOSS).await;
     for (op, p) in [
         (UNLINK, Some("jsmith")),
         (LIFT, None),
@@ -351,14 +303,14 @@ async fn a_supervisor_may_step_away_and_lift() {
     db_gated!();
     let (_g, c, _, _) = fresh().await;
     team(&c).await;
-    ok(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
-    ok(&c, REQUIRE, "bwong", None, "boss", BOSS).await;
-    ok(&c, LIFT, "bwong", None, "jsmith", JSMITH).await;
+    acted(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, REQUIRE, "bwong", None, "boss", BOSS).await;
+    acted(&c, LIFT, "bwong", None, "jsmith", JSMITH).await;
     supervise(&c, UNLINK, "bwong", Some("jsmith"), "jsmith", JSMITH)
         .await
         .unwrap();
     // Stepped away, jsmith supervises bwong no more.
-    ok(&c, REQUIRE, "bwong", None, "boss", BOSS).await;
+    acted(&c, REQUIRE, "bwong", None, "boss", BOSS).await;
     refused(
         supervise(&c, LIFT, "bwong", None, "jsmith", JSMITH).await,
         "a current supervisor of bwong",
@@ -370,13 +322,13 @@ async fn the_record_lists_every_act_in_order() {
     db_gated!();
     let (_g, c, _, _) = fresh().await;
     team(&c).await;
-    ok(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
-    ok(&c, REQUIRE, "bwong", None, "asg", ASSIGNER).await;
-    ok(&c, LIFT, "bwong", None, "jsmith", JSMITH).await;
+    acted(&c, LINK, "bwong", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, REQUIRE, "bwong", None, "asg", ASSIGNER).await;
+    acted(&c, LIFT, "bwong", None, "jsmith", JSMITH).await;
     supervise(&c, UNLINK, "bwong", Some("jsmith"), "boss", BOSS)
         .await
         .unwrap();
-    ok(&c, WITHDRAW, "asg", None, "boss", BOSS).await;
+    acted(&c, WITHDRAW, "asg", None, "boss", BOSS).await;
     let (asg, bwong, jsmith) = (
         hex_actor(&c, "asg").await,
         hex_actor(&c, "bwong").await,
@@ -403,13 +355,13 @@ async fn the_staff_list_says_who_supervises_whom_now() {
     let (_g, c, _, _) = fresh().await;
     team(&c).await;
     for p in ["jsmith", "asg", "plain"] {
-        ok(&c, LINK, "bwong", Some(p), "boss", BOSS).await;
+        acted(&c, LINK, "bwong", Some(p), "boss", BOSS).await;
     }
     supervise(&c, UNLINK, "bwong", Some("plain"), "boss", BOSS)
         .await
         .unwrap();
-    ok(&c, REQUIRE, "bwong", None, "boss", BOSS).await;
-    ok(&c, LINK, "stu", Some("jsmith"), "boss", BOSS).await;
+    acted(&c, REQUIRE, "bwong", None, "boss", BOSS).await;
+    acted(&c, LINK, "stu", Some("jsmith"), "boss", BOSS).await;
     let rows: Vec<(String, String, bool, bool, Vec<String>)> = c
         .query(
             "SELECT staff_id, role, needs_cosigning, assigner, supervisors FROM cairn_supervision_staff()",

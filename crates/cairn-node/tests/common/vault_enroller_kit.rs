@@ -315,6 +315,21 @@ pub async fn supervise(
     .map(drop)
 }
 
+/// One supervision act that must succeed.
+pub async fn acted(c: &Client, op: &str, s: &str, p: Option<&str>, a: &str, by: u8) {
+    supervise(c, op, s, p, a, by)
+        .await
+        .unwrap_or_else(|e| panic!("{op} on {s} by {a}: {}", msg(&e)));
+}
+
+/// A supervision act's refusal: its text starts with the window door's name and contains `words`.
+pub fn refused(r: Result<(), Error>, words: &str) {
+    let e = r.expect_err(words);
+    let m = msg(&e);
+    assert!(m.starts_with("cairn_supervision_act: "), "{m}");
+    assert!(m.contains(words), "want {words:?} in {m:?}");
+}
+
 macro_rules! db_gated {
     () => {
         if cs().is_none() {
