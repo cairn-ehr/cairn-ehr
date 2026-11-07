@@ -349,3 +349,33 @@ async fn an_assigner_links_and_a_supervisor_lifts_from_the_window() {
         .expect("a supervisor steps away");
     assert!(list_my_supervisees_impl(&state).await.unwrap().is_empty());
 }
+
+/// The lift's success line claims no waiting notes exist (there may be none, or all co-signed).
+#[test]
+fn the_lift_sentence_claims_no_waiting_notes() {
+    assert_eq!(
+        done_sentence(SupervisionOp::LiftCosign, "trainee1", None),
+        "trainee1 no longer needs notes co-signed. Notes signed while it was required still need \
+         a co-signature if they have none."
+    );
+}
+
+/// The success branch of a JS refresh: from its `try {` to its `} catch`.
+fn success_branch<'a>(js: &'a str, f: &str) -> &'a str {
+    let body = crate::source_guard::js_fn(js, f);
+    &body[body.find("try {").expect("a try")..body.find("} catch").expect("a catch")]
+}
+
+/// A good re-read clears an earlier failure's sentence (NOBODY_NAMED, READ_FAILED), which would
+/// otherwise stay on screen beside a full list and be false; an act's own outcome is kept.
+#[test]
+fn a_good_read_clears_a_stale_status() {
+    for (f, id) in [
+        ("supervisionRefresh", "supervision-status"),
+        ("superviseesRefresh", "my-supervisees-status"),
+    ] {
+        let ok = success_branch(JS, f);
+        let clear = format!("if (!outcome) setMessage(el(\"{id}\"), \"\");");
+        assert!(ok.contains(&clear), "{f}: {ok}");
+    }
+}

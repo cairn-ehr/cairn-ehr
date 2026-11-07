@@ -117,10 +117,11 @@ pub fn done_sentence(op: SupervisionOp, staff_id: &str, supervisor: Option<&str>
         SupervisionOp::RequireCosign => {
             format!("{staff_id} now needs every signed note co-signed.")
         }
-        // Design §3.2: a part is judged as of its own signing, so earlier parts still wait.
+        // Design §3.2: a part is judged as of its own signing, so earlier parts still need one.
+        // Worded conditionally: there may be no such notes, or all may be co-signed already.
         SupervisionOp::LiftCosign => format!(
             "{staff_id} no longer needs notes co-signed. Notes signed while it was required \
-             still wait for a co-signature."
+             still need a co-signature if they have none."
         ),
         SupervisionOp::GrantAssigner => {
             format!("{staff_id} may now assign supervision while their own key is confirmed.")

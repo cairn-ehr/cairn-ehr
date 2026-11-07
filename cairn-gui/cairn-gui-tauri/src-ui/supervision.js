@@ -71,6 +71,9 @@ async function supervisionRefresh(outcome) {
   try {
     const members = await invoke("list_supervision");
     list.replaceChildren(...members.map(assignerRow));
+    // A later good read clears an earlier failure's sentence (it would now be false); an act's
+    // outcome stays.
+    if (!outcome) setMessage(el("supervision-status"), "");
   } catch (failure) {
     // Rows that could not be re-read are dropped: a stale row must not be pressed.
     list.replaceChildren();
@@ -104,6 +107,9 @@ async function superviseesRefresh(outcome) {
     const mine = await invoke("list_my_supervisees");
     list.replaceChildren(...mine.map(superviseeRow));
     empty.hidden = mine.length > 0;
+    // A later good read clears an earlier failure's sentence (it would now be false); an act's
+    // outcome stays.
+    if (!outcome) setMessage(el("my-supervisees-status"), "");
   } catch (failure) {
     // Dropped, as above; nobody named in who's here also lands here, with its own sentence.
     list.replaceChildren();

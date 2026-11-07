@@ -76,6 +76,9 @@ async function superuserRefresh(outcome) {
       ),
     );
     el("superuser-keys-empty").hidden = waiting.length > 0;
+    // A later good read clears an earlier failure's sentence (it would now be false); an act's
+    // outcome stays.
+    if (!outcome) setMessage(el("superuser-status"), "");
   } catch (failure) {
     // Rows that could not be re-read are dropped: a stale row's key must not be pressed.
     grants.replaceChildren();
