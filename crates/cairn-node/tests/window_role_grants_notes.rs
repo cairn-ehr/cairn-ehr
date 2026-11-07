@@ -397,4 +397,14 @@ async fn the_windows_vouch_and_its_doors_run_under_its_own_login() {
             .map_err(anyhow::Error::from);
         assert!(expect_as_window(door, r).is_some(), "{door} answers");
     }
+
+    // The person menu's two readers (sign-in slice 3c-3c, db/073): the window has no grant on
+    // vault_member, so it names people and finds drafts by writer only through these.
+    for door in ["cairn_note_people", "cairn_note_drafts_by_writer"] {
+        let r = window
+            .query(&format!("SELECT * FROM {door}()"), &[])
+            .await
+            .map_err(anyhow::Error::from);
+        expect_as_window(door, r);
+    }
 }
