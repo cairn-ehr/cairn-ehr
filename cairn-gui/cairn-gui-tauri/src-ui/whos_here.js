@@ -71,7 +71,10 @@ function claimAsked() {
  * live region, and rewriting the same words every poll would re-announce them.
  */
 function showClaim(claim) {
+  // A different person (or nobody) is named: the bar's menu is theirs, so it is read afresh.
+  const changed = claimedStaffId() !== (claim.staff_id || "");
   currentClaim = claim;
+  if (changed) void refreshMenuCount(); // person_menu.js
   const bar = el("whos-here-name");
   if (bar.textContent !== claim.words) bar.textContent = claim.words;
 }
@@ -154,6 +157,7 @@ async function openPicker(then, signed) {
   el("whos-here-search").value = "";
   setMessage(el("whos-here-status"), "");
   el("whos-here-list").replaceChildren();
+  resetPickerCounts(); // person_menu.js
   el("whos-here-picker").hidden = false;
   document.querySelector("main").inert = true;
   el("whos-here-search").focus();
@@ -164,6 +168,7 @@ async function openPicker(then, signed) {
     setMessage(el("whos-here-status"), "Could not read the staff list: " + failureText(failure));
   }
   drawPicker();
+  void loadPickerCounts(); // person_menu.js: the suffixes join the list once they land
 }
 
 /**
@@ -195,7 +200,14 @@ function drawPicker() {
       const li = document.createElement("li");
       const b = cell(
         "button",
-        entry.display_name + " — " + entry.role + " (" + entry.staff_id + ")" + (entry.recent ? " · recent here" : ""),
+        entry.display_name +
+          " — " +
+          entry.role +
+          " (" +
+          entry.staff_id +
+          ")" +
+          (entry.recent ? " · recent here" : "") +
+          (pickerSuffix[entry.staff_id] || ""), // person_menu.js: Rust's " · N waiting"
         { type: "button" },
       );
       b.addEventListener("click", () => void pick(entry.staff_id));

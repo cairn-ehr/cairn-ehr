@@ -39,6 +39,11 @@
            closes, its typing saved, before a name is picked (whos_here.js). -->
       <section id="whos-here-bar" aria-label="Who's here">
         <p id="whos-here-name" role="status" aria-live="polite">Checking who's here…</p>
+        <details id="person-menu" hidden>
+          <summary id="person-menu-count"></summary>
+          <p id="person-menu-status" role="status" aria-live="polite" hidden></p>
+          <div id="person-menu-body"></div>
+        </details>
         <button id="whos-here-switch" type="button" aria-keyshortcuts="Control+Shift+H Meta+Shift+H">Who's here?</button>
       </section>
 
@@ -462,6 +467,7 @@
     <script src="notes_compound.js"></script>
     <script src="notes.js"></script>
     <script src="notes_discard.js"></script>
+    <script src="person_menu.js"></script>
     <script src="whos_here.js"></script>
     <script src="idle.js"></script>
     <script src="enrol.js"></script>

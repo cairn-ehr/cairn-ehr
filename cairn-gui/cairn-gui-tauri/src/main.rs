@@ -50,6 +50,8 @@ mod notes_webview_tests;
 mod person_menu;
 mod person_menu_view;
 #[cfg(test)]
+mod person_menu_webview_tests;
+#[cfg(test)]
 mod read_again_webview_tests;
 mod rekey;
 #[cfg(test)]

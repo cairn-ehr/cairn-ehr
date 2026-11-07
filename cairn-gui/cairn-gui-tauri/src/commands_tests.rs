@@ -380,6 +380,7 @@ fn every_command_the_webview_calls_is_registered() {
             "notes_discard.js",
             include_str!("../src-ui/notes_discard.js"),
         ),
+        ("person_menu.js", include_str!("../src-ui/person_menu.js")),
         ("whos_here.js", include_str!("../src-ui/whos_here.js")),
         ("idle.js", include_str!("../src-ui/idle.js")),
         ("enrol.js", include_str!("../src-ui/enrol.js")),

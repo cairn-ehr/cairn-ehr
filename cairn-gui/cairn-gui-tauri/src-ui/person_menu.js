@@ -1,0 +1,167 @@
+// The waiting list (sign-in slice 3c-3c): the person menu in the who's-here bar, its open-note
+// buttons, and the picker's per-person counts.
+//
+// The words are all Rust's (`person_menu_view.rs`): this file draws what `person_menu` answers and
+// writes no sentence a clinician reads. Reading the menu signs nothing and asks for no passphrase.
+// Classic script, loaded BEFORE whos_here.js (whose `showClaim` calls `refreshMenuCount`), sharing
+// main.js's globals (`el`, `cell`, `setMessage`, `invoke`), funnel.js's `enterChart`, `closeChart`,
+// `displayedPatient`, `failureText`, and notes.js's `signInFlight`, `signsSettled`, `noteDraft`.
+// Those are used only inside functions, at a press or an answer, long after every script loaded.
+"use strict";
+
+// One counter per kind of read (the worklist.js pattern, #752): an older answer must never draw
+// over a newer one, whichever order the node replies in.
+let menuRevision = 0;
+let pickerRevision = 0;
+/** What the next note pane should scroll to ("part:<id>" or "draft:<id>"), or null. */
+let pendingMenuFocus = null;
+/** The picker's " · N waiting" words by staff id; kept so a search redraw keeps them. */
+let pickerSuffix = {};
+
+/** Re-read the menu and redraw the bar: on a new claim, a drawn note pane, a closed chart, a tick. */
+async function refreshMenuCount() {
+  const revision = ++menuRevision;
+  let view;
+  try {
+    view = await invoke("person_menu");
+  } catch (failure) {
+    if (revision !== menuRevision) return;
+    setMessage(el("person-menu-status"), failureText(failure));
+    return;
+  }
+  if (revision !== menuRevision) return; // a newer read is on its way
+  drawMenu(view);
+}
+
+/** Draw Rust's `PersonMenuView`: nothing for "Nobody", else the count and the three groups. */
+function drawMenu(view) {
+  const menu = el("person-menu");
+  if (view.kind === "Nobody") {
+    menu.hidden = true;
+    menu.open = false;
+    return;
+  }
+  setMessage(el("person-menu-status"), "");
+  const summary = el("person-menu-count");
+  summary.textContent = view.count_words;
+  summary.setAttribute("aria-label", view.count_label);
+  el("person-menu-body").replaceChildren(
+    group(view.own),
+    group(view.cosign),
+    reviewGroup(view.review),
+  );
+  menu.hidden = false;
+}
+
+/** A group's rows (or Rust's "nothing here" line) as a list. */
+function groupRows(group) {
+  if (group.rows.length === 0) return [cell("p", group.empty || "")];
+  const list = document.createElement("ul");
+  list.append(...group.rows.map(menuRow));
+  return [list];
+}
+
+function group(view) {
+  const section = document.createElement("section");
+  section.append(cell("h3", view.heading), ...groupRows(view));
+  return section;
+}
+
+/**
+ * The review group: a nested `<details>`, closed on every draw and never opened by this file —
+ * it is not the clinician's to-do list, so it must not nag.
+ */
+function reviewGroup(view) {
+  const details = document.createElement("details");
+  details.append(cell("summary", view.heading), ...groupRows(view));
+  return details;
+}
+
+/** One row: who and what, when, the state, and the button that opens the note. */
+function menuRow(row) {
+  const li = document.createElement("li");
+  // Rust's open_label (the note, who and when) is both the visible words and the accessible name.
+  const open = cell("button", row.open_label, { type: "button" });
+  li.append(cell("p", row.patient), cell("p", row.what + " · " + row.when), cell("p", row.state), open);
+  open.addEventListener("click", () => void openMenuRow(row));
+  return li;
+}
+
+/**
+ * Open a menu row's note: the queued saves land first (a sign in flight settles, then `closeChart` awaits the
+ * saves), THEN the node re-reads the menu and opens the chart only if a row still names it.
+ */
+async function openMenuRow(row) {
+  setMessage(el("person-menu-status"), "");
+  if (signInFlight()) await signsSettled();
+  if (displayedPatient) await closeChart();
+  try {
+    const header = await invoke("person_menu_open", { patientId: row.patient_id });
+    pendingMenuFocus = row.focus;
+    el("person-menu").open = false;
+    enterChart(header);
+  } catch (refusal) {
+    // Rust's sentence (a refusal is a string). The list is read again FIRST: a drawn menu clears
+    // the status line, so saying the refusal before the re-read lands would erase it.
+    await refreshMenuCount();
+    setMessage(el("person-menu-status"), String(refusal));
+  }
+}
+
+/** Return and clear the pending focus target (notes.js's `renderNotes` consumes it once). */
+function takeMenuFocus() {
+  const focus = pendingMenuFocus;
+  pendingMenuFocus = null;
+  return focus;
+}
+
+/** Scroll to and focus the note a menu row named, once the note pane has drawn. */
+function focusMenuTarget(focus) {
+  if (!focus) return;
+  const [kind, id] = focus.split(/:(.*)/s);
+  let target = document.querySelector(
+    kind === "part" ? `#note-list [data-parts~="${id}"]` : `#note-drafts [data-draft="${id}"]`,
+  );
+  // A draft this terminal holds is open in the editor, not listed.
+  if (!target && kind === "draft" && noteDraft && noteDraft.draftId === id) target = el("note-text");
+  if (!target) return;
+  target.tabIndex = -1;
+  target.scrollIntoView();
+  target.focus();
+}
+
+/** Remember the picker's counts and redraw it (Rust worded each suffix; "" for none). */
+function fillPickerCounts(entries) {
+  pickerSuffix = Object.fromEntries(entries.map((entry) => [entry.staff_id, entry.suffix]));
+  drawPicker();
+}
+
+/** Forget the last opening's counts, as the picker opens. */
+function resetPickerCounts() {
+  pickerRevision += 1; // an answer still on its way belongs to the last opening
+  pickerSuffix = {};
+}
+
+/** Read everybody's counts for the picker; the list is already drawn, the suffixes join it. */
+async function loadPickerCounts() {
+  const revision = ++pickerRevision;
+  try {
+    const entries = await invoke("whos_here_counts");
+    if (revision !== pickerRevision) return;
+    fillPickerCounts(entries);
+  } catch (failure) {
+    // Entries stay without a suffix; Rust's sentence says why.
+    if (revision !== pickerRevision) return;
+    setMessage(el("whos-here-status"), failureText(failure));
+  }
+}
+
+// Opening the menu re-reads it: what it showed may be minutes old.
+el("person-menu").addEventListener("toggle", () => {
+  if (el("person-menu").open) void refreshMenuCount();
+});
+// The quarantine commit moves drafts into the list by itself, so the count is re-read while
+// nobody acts. Skipped while the menu is open, or the redraw would pull focus from a button.
+setInterval(() => {
+  if (!el("person-menu").open) void refreshMenuCount();
+}, 60_000);
