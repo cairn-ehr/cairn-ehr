@@ -191,6 +191,9 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             t_effective: t,
             effective_basis: "stated".into(),
             recording_started: t,
+            recorded_at: t,
+            needs_cosigning: false,
+            writer_supervisors: vec![],
             grade: NoteGrade::Signed {
                 by: "Dr Ada".into(),
             },

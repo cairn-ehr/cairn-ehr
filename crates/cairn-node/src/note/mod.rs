@@ -32,6 +32,7 @@ pub mod draft;
 pub mod read;
 pub mod sign;
 mod sign_vouch;
+pub mod supervision;
 pub mod view;
 pub mod vouch;
 pub mod vouch_read;

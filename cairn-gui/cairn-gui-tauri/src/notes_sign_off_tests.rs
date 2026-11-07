@@ -54,6 +54,9 @@ fn part(
         t_effective: t,
         effective_basis: "stated".into(),
         recording_started: t,
+        recorded_at: t,
+        needs_cosigning: false,
+        writer_supervisors: vec![],
         grade: match &signer {
             Some(s) => NoteGrade::Signed { by: s.name.clone() },
             None => NoteGrade::WentInUnsigned,
@@ -106,6 +109,9 @@ fn can_sign_off_follows_needs_sign_off() {
         act: VouchAct::SignOff,
         role: VouchRole::Attested,
         by: who("act-ada", "Dr Ada"),
+        at: utc("2025-11-02T17:00:00Z"),
+        by_supervisor: false,
+        writer_supervised: false,
     });
     let signed_off = one(vec![part(1, OPENED, None, 0, ada(), None), by_ada]);
     assert!(!view(&signed_off, None).can_sign_off);
@@ -255,6 +261,9 @@ fn no_covers_line_without_a_claim_or_without_parts() {
         act: VouchAct::Addendum,
         role: VouchRole::Attested,
         by: who("act-a", "Nurse A"),
+        at: utc("2025-11-02T17:00:00Z"),
+        by_supervisor: false,
+        writer_supervised: false,
     });
     let notes = || {
         vec![

@@ -383,6 +383,9 @@ pub(crate) mod fixture {
             act,
             role,
             by,
+            at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            by_supervisor: false,
+            writer_supervised: false,
         }
     }
 
@@ -397,6 +400,9 @@ pub(crate) mod fixture {
             t_effective: t,
             effective_basis: "stated".into(),
             recording_started: t,
+            recorded_at: t,
+            needs_cosigning: false,
+            writer_supervisors: vec![],
             grade: match &signer {
                 Some(s) => NoteGrade::Signed { by: s.name.clone() },
                 None => NoteGrade::WentInUnsigned,

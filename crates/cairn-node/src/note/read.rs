@@ -12,6 +12,7 @@
 //! Discarded drafts (slice 3b-2b) are listed BESIDE the notes, as markers, read only from the
 //! `clinical_note_discard` projection and under the same doubted-link rule. They are never
 //! joined into the notes, never counted as one, and `NOTES_SQL` does not know they exist.
+use anyhow::Context;
 use cairn_event::contributor::{classify_authorship_with_humans, VerifiedKid};
 use cairn_event::note::unescape_note_markup;
 use cairn_event::note_discard::DiscardedWriter;
@@ -35,6 +36,14 @@ pub struct NoteRow {
     /// `"stated"` or `"recording-started"`.
     pub effective_basis: String,
     pub recording_started: DateTime<Utc>,
+    /// When the part entered the record: its `event_log.hlc_wall`, never `t_effective`. The
+    /// instant the supervision record is judged "as of" (`supervision`).
+    pub recorded_at: DateTime<Utc>,
+    /// The supervision RECORD said the writer needed co-signing at `recorded_at` (a student's
+    /// role is not folded in here; `cosign` combines them). Default false.
+    pub needs_cosigning: bool,
+    /// The writer's supervisors NOW (actors, lower hex). Default empty.
+    pub writer_supervisors: Vec<String>,
     pub grade: NoteGrade,
     /// The note this one continues (its `addendum-to` ref): a later writer's part of one draft,
     /// or an addendum to a note already in the record (slice 3c-1, ADR-0091).
@@ -154,7 +163,8 @@ const NOTES_SQL: &str = concat!(
            cairn_note_key_actor((SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
                                   WHERE c ->> 'role' = 'drafted' LIMIT 1)), ",
     vouches_column!(),
-    ", CASE WHEN cairn_note_key_is_human(e.signer_key_id) THEN cairn_note_key_actor(e.signer_key_id) END \
+    ", CASE WHEN cairn_note_key_is_human(e.signer_key_id) THEN cairn_note_key_actor(e.signer_key_id) END, \
+     e.hlc_wall \
      FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
      CROSS JOIN LATERAL (SELECT COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id) AS k) g \
      WHERE n.patient_id = ANY($1::text[]::uuid[])"
@@ -246,6 +256,9 @@ pub async fn list_patient_notes(
     let charts = crate::patient::person::person_charts(client, patient).await?;
     let doubted = crate::medication::read::set_has_doubted_link(client, &charts).await?;
     let members: Vec<String> = charts.members().iter().map(Uuid::to_string).collect();
+    // The supervision record is read ONCE, on this client (the caller's snapshot), then every
+    // part is judged against it in pure code (`supervision::annotate`).
+    let record = super::supervision::load(client).await?;
     let mut notes = Vec::new();
     let mut withheld_on_linked = 0;
     for r in client.query(NOTES_SQL, &[&members]).await? {
@@ -280,13 +293,18 @@ pub async fn list_patient_notes(
                 )
             })
             .transpose()?;
-        notes.push(NoteRow {
+        let recorded_at = DateTime::from_timestamp_millis(r.get::<_, i64>(21))
+            .context("a note part's hlc_wall is out of range")?;
+        let mut part = NoteRow {
             event_id: r.get::<_, String>(0).parse()?,
             chart,
             text: unescape_note_markup(&r.get::<_, String>(2)),
             t_effective: r.get(3),
             effective_basis: r.get(4),
             recording_started: r.get(5),
+            recorded_at,
+            needs_cosigning: false,
+            writer_supervisors: vec![],
             grade,
             addendum_to: r
                 .get::<_, Option<String>>(10)
@@ -297,7 +315,9 @@ pub async fn list_patient_notes(
             drafted_actor: r.get(18),
             signer_human_actor: r.get(20),
             vouches: parse_vouches(&r.get::<_, String>(19))?,
-        });
+        };
+        super::supervision::annotate(&mut part, &record);
+        notes.push(part);
     }
     // Ordered here rather than by SQL ORDER BY (ADR-0045); the id breaks a tie stably.
     notes.sort_by_key(|n| std::cmp::Reverse((n.t_effective, n.event_id)));

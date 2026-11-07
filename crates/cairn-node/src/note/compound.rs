@@ -192,6 +192,9 @@ mod tests {
             t_effective: origin + Duration::minutes(eff),
             effective_basis: "stated".into(),
             recording_started: origin + Duration::minutes(rec),
+            recorded_at: origin + Duration::minutes(rec),
+            needs_cosigning: false,
+            writer_supervisors: vec![],
             addendum_to: to.map(id),
             writer: PartWriter::TheSigner,
             // `Some` exactly when the grade is `Signed`, as the read builds it.
