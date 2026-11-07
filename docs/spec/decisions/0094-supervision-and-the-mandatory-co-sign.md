@@ -27,7 +27,7 @@ file. A supervisor may also initial a registrar's entry as reviewed, though noth
 Until this slice only a student's part waited for a co-signature, because the `student` role is pinned on the actor
 (ADR-0092 decision 10). A co-sign by any non-student other than the writer cleared it, and nothing said who
 supervised whom. This slice, **3c-3a**, records supervision, makes "— not co-signed" follow that record as it stood
-when the part was signed, lets only a supervisor clear a mandatory co-sign while the writer has one, and adds
+when the part was signed, lets only a supervisor clear a mandatory co-sign when the writer had one at the co-sign's time, and adds
 "Co-sign as reviewed". No event type, twin, floor rule or projection changes. The record lives in the actor registry
 (db/004, db/052 in place), the doors in db/072 (`SCHEMA_GENERATION` 72), and the rules in pure Rust over `NoteRow`.
 
@@ -40,9 +40,9 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign while
    duplicate both: `vault_*` tables are in no backup (ADR-0083).
 2. **Nobody acts on their own supervision as the supervisee** (2026-11-07). This is wider than design §3.1's "no
    self-dealing". Otherwise a supervisee holding the assigner right could unlink their supervisors and fall into the
-   no-supervisor fallback (decision 13), where any clinician's co-sign clears theirs. Without the assigner right, stepping
-   away is the one act a link's own party may make; an assigner may also link themselves as someone else's
-   supervisor (decision 9).
+   no-supervisor fallback (decision 13), where any clinician's co-sign clears theirs. Without the assigner right, a
+   supervisor may step away from the link or lift their supervisee's co-signing, and nothing else; an assigner may
+   also link themselves as someone else's supervisor (decision 9).
 3. **A re-sign under an UNCONFIRMED key counts** (2026-11-07; this closes the question 3c-3b left open). It reads
    "(signer unconfirmed)", as built. `vouch::re_signs` asks only that the vouch's key is not repudiated and is of the
    same actor, never whether it is confirmed. ADR-0085: unconfirmed never blocks signing by itself.
@@ -163,10 +163,12 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign while
 
     The writer is `supervision::writer_actor`: `signed_by`'s actor, else `drafted_actor`. It is `None` for a signer
     this node cannot place (an empty actor), and a part with no writer keeps every default. With every fact at its
-    default, the rules below are the pre-slice rule with two differences: a part its student writer signed only by
-    a later vouch now carries the mark (decision 15), and a non-student's attested sign-off on a part whose envelope
-    key is not a human's clears it, where the old rule needed `co-signed`, which the floor refuses there (decision
-    13). An op word the build does not know fails the read rather
+    default, the co-sign rules of decision 13 are the pre-slice rule with two differences: a part its student writer
+    signed only by a later vouch now owes its co-sign, and a non-student's attested sign-off on a part whose envelope
+    key is not a human's clears it, where the old rule needed `co-signed`, which the floor refuses there. The offer
+    and the words differ too: `needs_sign_off` also asks `awaits_cosign`, so in the #1010 / ADR-0093 (d) case "Sign
+    off this note" stays offered (decision 14), and every waiting student part reads "— not co-signed (no supervisor
+    recorded)" (decision 15). An op word the build does not know fails the read rather
     than being ignored. Actors are compared through `vouch::same_actor`, so an empty actor is nobody's supervisor.
     Pins: `note/supervision.rs`'s `annotate_judges_the_requirement_at_the_parts_time`,
     `annotate_judges_each_vouchs_supervisor_at_its_own_time`, `an_unplaceable_signer_is_no_writer`,
@@ -207,8 +209,8 @@ when the part was signed, lets only a supervisor clear a mandatory co-sign while
     `signed_off_by(parts).is_none() || parts.iter().any(awaits_cosign)` (design §3.2 Q2). A probationer who signed
     every part is named by `signed_off_by`, yet the note still waits for a supervisor (or, where she had none at
     the vouch's time, the fallback's countersignature). The offer still never depends
-    on the presser. While the writer has a supervisor, a non-supervisor's sign-off is recorded and read, but the part keeps its
-    mark and the offer stays. **This supersedes ADR-0092 decision 1's offer rule and decision 11's `needs_sign_off`.** Pins:
+    on the presser. If the writer had a supervisor when the co-sign was made, a non-supervisor's sign-off is recorded and read,
+    but the part keeps its mark and the offer stays. **This supersedes ADR-0092 decision 1's offer rule and decision 11's `needs_sign_off`.** Pins:
     `cosign_tests.rs::the_offer_stays_while_a_mandatory_co_sign_is_missing`;
     `note_supervision.rs::only_a_supervisor_clears_a_mandatory_co_sign`.
 

@@ -553,6 +553,6 @@ incremental writing lives pre-commit in the durable draft store
 > by a member's signed token, or recorded at the owner's console. A part reads "— not co-signed" when its writer is a
 > student, or when the record required them to be co-signed as of the part's own `hlc_wall`, so a requirement lifted
 > later leaves it waiting. While the writer had a supervisor at the co-sign's time, only one of those supervisors
-> clears it. Where the writer had none then, a non-student's `co-signed` vouch clears it, or, only on a part whose
-> envelope key is not a human's, their attested sign-off. The mark reads "(no supervisor recorded)" while the writer
+> clears it. Where the writer had none then, a `co-signed` vouch by a non-student other than the writer, under a key
+> that still stands, clears it, or, only on a part whose envelope key is not a human's, their attested sign-off. The mark reads "(no supervisor recorded)" while the writer
 > has none. A supervisor may also "Co-sign as reviewed" a supervisee's note that owed no co-sign.

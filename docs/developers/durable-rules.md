@@ -28,7 +28,7 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   `supervision.rs`'s `a_row_in_the_same_millisecond_as_the_part_is_in_effect`, `the_requirement_is_read_as_it_stood_at_t`.
 - **The fallback accepts the strongest countersignature the floor allows ON THAT PART: a `co-signed` vouch, or,
   only where the part's envelope key is not a human's, an attested `sign-off`.** (The floor also admits an attested
-  sign-off on a human-signed part; that one clears nothing.) With no supervisor at the vouch's time, `clears_cosign` accepts a non-student's
+  sign-off on a human-signed part; under the fallback that one clears nothing.) With no supervisor at the vouch's time, `clears_cosign` accepts a non-student's
   vouch whose role is `co-signed`, or whose act is `sign-off` when `signer_human_actor` is `None`. **Tempting wrong
   fixes:** demand `CoSigned` "because the old rule did" (db/071 refuses `co-signed` on a part that went in under the
   node's key, so such a student's part would wait for ever); accept any attested sign-off (it would clear a

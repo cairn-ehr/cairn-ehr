@@ -63,9 +63,9 @@ pub fn cosign_required(p: &NoteRow) -> bool {
 /// (any role), or, where the writer had no supervisor then, the fallback: a non-student's
 /// strongest countersignature the floor allows on this part — a `co-signed` one, or, only on a
 /// part whose envelope key is not a human's (as one that went in unsigned under the node's key,
-/// where db/071 refuses `co-signed`), an attested `sign-off`. An attested sign-off on a
-/// human-signed part is admitted by the floor but does not clear it. A student's vouch never clears it: the floor never checks the student
-/// role, so one may be stored.
+/// where db/071 refuses `co-signed`), an attested `sign-off`. Under the fallback, an attested
+/// sign-off on a human-signed part is admitted by the floor but does not clear it. A student's
+/// vouch never clears it: the floor never checks the student role, so one may be stored.
 ///
 /// Order does not matter: a vouch made BEFORE the writer's own later signature still counts, as
 /// it named the very bytes the writer then signed.
