@@ -39,6 +39,11 @@ const DISCARD_UNKNOWN_LINE = "Whether your draft was discarded is not known — 
 const SIGNED_OFF_LINE = "Your sign-off went through: every part of the note now carries your signature.";
 const NOT_SIGNED_OFF_LINE = "Your sign-off signed nothing — open the chart to see where the note stands.";
 const SIGN_OFF_UNKNOWN_LINE = "Whether your sign-off went through is not known — check the chart.";
+/** … and for "Co-sign as reviewed" (slice 3c-3a), in its own words: a review co-signs only the
+ * parts the presser's supervisees signed, so Sign off's "every part" would be false. */
+const REVIEWED_LINE = "Your co-signature went through: the parts your supervisees signed now carry it.";
+const NOT_REVIEWED_LINE = "Your co-signature signed nothing — open the chart to see where the note stands.";
+const REVIEW_UNKNOWN_LINE = "Whether your co-signature went through is not known — check the chart.";
 /** The bar's words when a refused pick's claim could not be read back: nobody is named. */
 const CLAIM_UNREAD = "Nobody is named at this terminal — say who's here";
 
@@ -106,7 +111,7 @@ async function switchWhosHere() {
 }
 
 /**
- * The picker's line for a Sign's, a Discard's or a sign-off's outcome (notes.js's `noteSigning`);
+ * The picker's line for a Sign's, a Discard's, a sign-off's or a review's outcome (notes.js's `noteSigning`);
  * "" for none.
  * Pure.
  */
@@ -120,6 +125,9 @@ function signOutcomeLine(outcome) {
   if (outcome === "signed-off") return SIGNED_OFF_LINE;
   if (outcome === "not-signed-off") return NOT_SIGNED_OFF_LINE;
   if (outcome === "sign-off-unknown") return SIGN_OFF_UNKNOWN_LINE;
+  if (outcome === "reviewed") return REVIEWED_LINE;
+  if (outcome === "not-reviewed") return NOT_REVIEWED_LINE;
+  if (outcome === "review-unknown") return REVIEW_UNKNOWN_LINE;
   return "";
 }
 

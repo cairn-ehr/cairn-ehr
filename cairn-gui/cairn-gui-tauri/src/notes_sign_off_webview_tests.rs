@@ -178,8 +178,9 @@ fn the_covers_line_is_text_and_sign_sends_its_ids() {
     }
 }
 
-/// Principle 3: a confirmation dialog is not a safety mechanism. A sign-off is one press; the node
-/// refusing a note that changed since it was shown is the safety.
+/// Principle 3: a confirmation dialog is not a safety mechanism. A sign-off — or a "Co-sign as
+/// reviewed" (slice 3c-3a) — is one press; the node refusing a note that changed since it was
+/// shown is the safety.
 #[test]
 fn no_dialog() {
     for dialog in ["confirm(", "alert(", "prompt("] {
@@ -309,6 +310,145 @@ fn a_switch_during_a_sign_off_says_what_the_sign_off_did() {
         "if (outcome === \"signed-off\") return SIGNED_OFF_LINE;",
         "if (outcome === \"not-signed-off\") return NOT_SIGNED_OFF_LINE;",
         "if (outcome === \"sign-off-unknown\") return SIGN_OFF_UNKNOWN_LINE;",
+    ] {
+        assert!(line.contains(arm), "{line}");
+    }
+}
+
+/// Sign-in slice 3c-3a: "Co-sign as reviewed" is drawn only on a compound Rust offers it on
+/// (`can_review`: the who's-here claim supervises a writer whose signed part awaits a review),
+/// and only while the editor is free, beside Sign off. The press checks again before anything
+/// else, as Sign off's does (one strip credential serves one act at a time).
+#[test]
+fn review_is_offered_only_when_the_view_says_so() {
+    let buttons = js_fn(COMPOUND_JS, "withButtons");
+    assert!(
+        buttons.contains(
+            "if (compound.can_review && noteDraft === null) li.append(reviewButton(compound));"
+        ),
+        "{buttons}"
+    );
+    assert!(
+        position(buttons, "signOffButton(compound)") < position(buttons, "reviewButton(compound)"),
+        "{buttons}"
+    );
+}
+
+/// The review's press mirrors Sign off's: refused while the editor holds a draft or another press
+/// is in flight (`signInFlight()`, ADR-0092 decision 17), behind the who's-here gate, then the
+/// button down and the press tracked on the note pane's flags until it SETTLES. It sends the part
+/// ids the pane showed and the strip's credential, clears the strip both ways out, says Rust's
+/// words and reads the chart again on every path.
+#[test]
+fn review_sits_behind_the_whos_here_gate_and_refuses_in_flight() {
+    let press = js_fn(COMPOUND_JS, "pressReview");
+    assert!(
+        press.starts_with(
+            "function pressReview(compound, button) {\n  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;"
+        ),
+        "{press}"
+    );
+    let asked = position(press, "if (!claimAsked()) {");
+    let ask = position(press, "askWhosHere(() => pressReview(compound, button));");
+    let down = position(press, "button.disabled = true;");
+    let flagged = position(press, "noteSignInFlight = true;");
+    let tracked = position(press, "noteSigning = reviewNote(compound)");
+    assert!(
+        asked < ask && ask < down && down < flagged && flagged < tracked,
+        "{press}"
+    );
+    assert!(press[ask..down].contains("return;"), "{press}");
+    let settled = position(press, ".finally(");
+    assert!(tracked < settled, "{press}");
+    for line in ["noteSignInFlight = false;", "button.disabled = false;"] {
+        assert!(settled < position(press, line), "{line} in {press}");
+    }
+
+    let review = js_fn(COMPOUND_JS, "reviewNote");
+    let sent = position(review, "invoke(\"note_review_cosign\", {");
+    for line in [
+        "patientId: patient,",
+        "rootEventId: compound.root_event_id,",
+        "shownParts: compound.shown_parts,",
+        "credential: signerCredential(),",
+    ] {
+        assert!(sent < position(review, line), "{line} in {review}");
+    }
+    let caught = position(review, "} catch (failure) {");
+    let cleared = position(review, "clearSigner(true);");
+    assert!(sent < cleared && cleared < caught, "{review}");
+    assert!(review[caught..].contains("clearSigner();"), "{review}");
+    let said = position(review, "noteStatus(said);");
+    let reread = position(review, "await refresh(said, behind);");
+    assert!(caught < said && said < reread, "{review}");
+    assert!(
+        review[caught..said].contains("said = failureText(failure);"),
+        "{review}"
+    );
+}
+
+/// A list of notes is otherwise a list of identical buttons: the accessible name says WHICH note.
+#[test]
+fn its_accessible_name_is_co_sign_as_reviewed_plus_the_time() {
+    let button = js_fn(COMPOUND_JS, "reviewButton");
+    assert!(
+        button.contains(
+            "cell(\"button\", \"Co-sign as reviewed\", { type: \"button\", \"aria-label\": \"Co-sign as reviewed: \" + compound.when })"
+        ),
+        "{button}"
+    );
+    assert!(button.contains("pressReview(compound, button)"), "{button}");
+}
+
+/// A who's-here switch waits for a review as for a Sign (they share `noteSigning`), then closes
+/// the chart, so the press settles with its OWN outcome, worded by the picker in a review's own
+/// words: Sign off's "every part of the note now carries your signature" would be false for a
+/// review, which countersigns only the parts the presser's supervisees signed. No line names a
+/// patient (the next person may read it).
+#[test]
+fn a_switch_during_a_review_says_what_the_review_did() {
+    use crate::source_guard::js_const;
+    const WHOS_HERE_JS: &str = include_str!("../src-ui/whos_here.js");
+    let press = js_fn(COMPOUND_JS, "pressReview");
+    assert!(
+        press.contains(
+            "noteSigning = reviewNote(compound)\n    .catch((failure) => {\n      console.error(failure);\n      return \"review-unknown\";"
+        ),
+        "{press}"
+    );
+    assert!(!press.contains("=> null"), "{press}");
+    let review = js_fn(COMPOUND_JS, "reviewNote");
+    let caught = position(review, "} catch (failure) {");
+    assert!(
+        review[..caught].contains("outcome = behind ? \"review-unknown\" : \"reviewed\";"),
+        "{review}"
+    );
+    assert!(
+        review[caught..]
+            .contains("outcome = behind === \"unknown\" ? \"review-unknown\" : \"not-reviewed\";"),
+        "{review}"
+    );
+    assert!(
+        position(review, "await refresh(said, behind);") < position(review, "return outcome;"),
+        "{review}"
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "REVIEWED_LINE"),
+        "Your co-signature went through: the parts your supervisees signed now carry it."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "NOT_REVIEWED_LINE"),
+        "Your co-signature signed nothing \u{2014} open the chart to see where the note stands."
+    );
+    assert_eq!(
+        js_const(WHOS_HERE_JS, "REVIEW_UNKNOWN_LINE"),
+        "Whether your co-signature went through is not known \u{2014} check the chart."
+    );
+    let line = js_fn(WHOS_HERE_JS, "signOutcomeLine");
+    for arm in [
+        "if (outcome === \"reviewed\") return REVIEWED_LINE;",
+        "if (outcome === \"not-reviewed\") return NOT_REVIEWED_LINE;",
+        "if (outcome === \"review-unknown\") return REVIEW_UNKNOWN_LINE;",
     ] {
         assert!(line.contains(arm), "{line}");
     }

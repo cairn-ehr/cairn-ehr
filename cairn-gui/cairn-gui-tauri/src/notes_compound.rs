@@ -10,6 +10,7 @@
 use super::parts::{note_row_view, NoteRowView};
 use cairn_node::note::compound::{compound_state, state_words, CompoundNote};
 use cairn_node::note::read::NoteRow;
+use cairn_node::note::review::can_review;
 use cairn_node::note::view::instant;
 use cairn_node::note::vouch::{addendum_covers, needs_sign_off};
 use chrono::{NaiveDate, TimeZone};
@@ -68,6 +69,11 @@ pub struct CompoundView {
     pub covers_line: Option<String>,
     /// Those parts' event ids: what Sign sends as `also_vouches`. Empty with no line.
     pub covers: Vec<String>,
+    /// Whether "Co-sign as reviewed" is offered (`review::can_review`, slice 3c-3a): the who's-here
+    /// claim's actor supervises a writer whose signed part here owes no co-sign and awaits a
+    /// review. False with no claim. It only decides the OFFER: the key the strip releases decides
+    /// what is signed (ADR-0092 decision 16).
+    pub can_review: bool,
 }
 
 /// One part's place in a compound's continuous text.
@@ -194,6 +200,7 @@ where
         shown_parts: c.parts().iter().map(|p| p.event_id.to_string()).collect(),
         covers_line,
         covers,
+        can_review: claim_actor.is_some_and(|a| can_review(c.parts(), a)),
     }
 }
 

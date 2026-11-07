@@ -823,6 +823,12 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
          timer note on a scratch database",
     ),
     (
+        "cairn-gui/cairn-gui-tauri/src/notes_review_db_tests.rs",
+        "a test fixture, not a production commit: `notes_review.rs`'s `#[cfg(test)]` module \
+         (kept beside it by `#[path]`), whose DB-gated tests enrol the node and register its \
+         unwrap key on a scratch database",
+    ),
+    (
         "crates/cairn-sync/src/main.rs",
         "the sync harness's `write`/`gen` load generator and its content-addressed blob store",
     ),

@@ -6,8 +6,8 @@
 // state line when the parts went in differently, the parts' texts run together as one text with
 // a seam line before each later part (who added it, when it applies), and a "{n} parts"
 // disclosure holding each part's own heading. Every word of the compound is Rust's, set as text;
-// only the "Add to this note" and "Sign off this note" buttons' labels and their accessible-name
-// prefixes are this file's.
+// only the "Add to this note", "Sign off this note" and "Co-sign as reviewed" buttons' labels and
+// their accessible-name prefixes are this file's.
 //
 // "Add to this note" opens the editor on a fresh draft that names the compound's ROOT as the note
 // it adds to (`noteDraft.addendumTo`); every save, Sign and Discard sends that target back, so a
@@ -18,6 +18,11 @@
 // signs every part of the note the presser has not yet signed. It sends back the part ids the
 // pane SHOWED (`shown_parts`), so the node refuses a note that changed since it was read, rather
 // than sign a part nobody saw. Pinned in notes_sign_off_webview_tests.rs.
+//
+// "Co-sign as reviewed" (slice 3c-3a) is a supervisor initialling a supervisee's entry as read,
+// though no co-signature was owed. Its press is Sign off's, line for line (the same gate, flags,
+// ids and re-read), but it settles with its OWN outcomes: it co-signs only the parts the presser's
+// supervisees signed, never "every part". Pinned in notes_sign_off_webview_tests.rs.
 //
 // Classic script, loaded right before notes.js, sharing main.js's global scope (`cell`,
 // `displayedPatient`, `invoke`, `refresh`), notes.js's `noteItem`, `bylineOf`, `noteDraft`,
@@ -68,7 +73,8 @@ function seamLine(segment) {
 
 /**
  * `li`, with its buttons appended while the editor is free: "Add to this note" when this chart's
- * note may be added to, "Sign off this note" when Rust says it still needs a sign-off.
+ * note may be added to, "Sign off this note" when Rust says it still needs a sign-off, and
+ * "Co-sign as reviewed" when Rust says the person named in who's here may review it.
  */
 function withButtons(li, compound) {
   if (compound.can_add && noteDraft === null) {
@@ -78,6 +84,7 @@ function withButtons(li, compound) {
     li.append(add);
   }
   if (compound.can_sign_off && noteDraft === null) li.append(signOffButton(compound));
+  if (compound.can_review && noteDraft === null) li.append(reviewButton(compound));
   return li;
 }
 
@@ -163,6 +170,72 @@ async function signOffNote(compound) {
     said = failureText(failure); // already a whole sentence in Rust's words
     behind = behindTheRecord(failure);
     outcome = behind === "unknown" ? "sign-off-unknown" : "not-signed-off";
+  }
+  noteStatus(said);
+  await refresh(said, behind);
+  return outcome;
+}
+
+/** The "Co-sign as reviewed" button; its accessible name says WHICH note, as Sign off's does. */
+function reviewButton(compound) {
+  const button = cell("button", "Co-sign as reviewed", { type: "button", "aria-label": "Co-sign as reviewed: " + compound.when });
+  button.addEventListener("click", () => pressReview(compound, button));
+  return button;
+}
+
+/**
+ * A press of "Co-sign as reviewed": `pressSignOff`, step for step (the who's-here gate, nothing
+ * while the editor holds a draft or another press is in flight, the button down and the note
+ * pane's in-flight flags held until it settles), settling with a review's own outcome
+ * ("reviewed", "not-reviewed" or "review-unknown") for the switch's picker (`signOutcomeLine`).
+ * Who's here only offered the button: the key the strip releases decides what is co-signed.
+ */
+function pressReview(compound, button) {
+  if (displayedPatient === null || noteDraft !== null || signInFlight()) return;
+  if (!claimAsked()) {
+    askWhosHere(() => pressReview(compound, button));
+    return;
+  }
+  button.disabled = true;
+  noteSignInFlight = true;
+  noteSigning = reviewNote(compound)
+    .catch((failure) => {
+      console.error(failure);
+      return "review-unknown"; // a fault in this window mid-press: whether it co-signed is not known
+    })
+    .finally(() => {
+      noteSignInFlight = false;
+      button.disabled = false;
+    });
+}
+
+/**
+ * Co-sign `compound` as reviewed, as `signOffNote` signs off: the shown part ids and the strip's
+ * credential go to the node, the strip is cleared both ways out, Rust's words are said, and the
+ * chart is read again on every path. Answers "reviewed", "not-reviewed" (nothing was written) or
+ * "review-unknown" (an interrupted commit MAY have co-signed).
+ */
+async function reviewNote(compound) {
+  const patient = displayedPatient;
+  let said;
+  let behind;
+  let outcome;
+  try {
+    const report = await invoke("note_review_cosign", {
+      patientId: patient,
+      rootEventId: compound.root_event_id,
+      shownParts: compound.shown_parts,
+      credential: signerCredential(),
+    });
+    clearSigner(true);
+    said = report.text; // worded in Rust: `notes::review::note_review_cosign_impl`
+    behind = report.behind_the_record;
+    outcome = behind ? "review-unknown" : "reviewed";
+  } catch (failure) {
+    clearSigner();
+    said = failureText(failure); // already a whole sentence in Rust's words
+    behind = behindTheRecord(failure);
+    outcome = behind === "unknown" ? "review-unknown" : "not-reviewed";
   }
   noteStatus(said);
   await refresh(said, behind);

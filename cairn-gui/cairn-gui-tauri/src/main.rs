@@ -172,6 +172,7 @@ fn main() -> anyhow::Result<()> {
             notes::note_draft_save,
             notes::note_sign,
             notes::sign_off::note_sign_off,
+            notes::review::note_review_cosign,
             notes::discard::note_discard,
             notes::note_draft_take,
             whos_here::whos_here_directory,
