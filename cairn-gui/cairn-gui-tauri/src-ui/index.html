@@ -149,6 +149,25 @@
         <p id="superuser-status" role="status" aria-live="polite" hidden></p>
       </details>
 
+      <!-- Supervision (sign-in slice 3c-3a). The assigner's panel: a superuser, or a member holding
+           the right to assign supervision, links supervisors and requires co-signing. "My
+           supervisees": the person named in who's here lifts a supervisee's co-signing or steps
+           away. Lists are read with no credential; every act goes through the signer strip, and
+           the node decides whether it is allowed (supervision.js). -->
+      <details id="supervision-panel">
+        <summary>Supervision: who supervises whom</summary>
+        <p>A superuser, or a member with the right to assign supervision, enters their own staff ID and passphrase in the signer strip above, then presses a button.</p>
+        <ul id="supervision-staff"></ul>
+        <p id="supervision-status" role="status" aria-live="polite" hidden></p>
+      </details>
+      <details id="my-supervisees">
+        <summary>My supervisees</summary>
+        <p>The people supervised by the person named in who's here. Enter your own staff ID and passphrase in the signer strip above, then press a button.</p>
+        <ul id="my-supervisees-list"></ul>
+        <p id="my-supervisees-empty" hidden>You supervise nobody here.</p>
+        <p id="my-supervisees-status" role="status" aria-live="polite" hidden></p>
+      </details>
+
       <!-- Change my passphrase (sign-in slice 2). The member's own current passphrase goes through
            the counted door; all three passphrases are emptied after every attempt (reseal.js). -->
       <details id="change-passphrase">
@@ -448,6 +467,7 @@
     <script src="enrol.js"></script>
     <script src="rekey.js"></script>
     <script src="superuser.js"></script>
+    <script src="supervision.js"></script>
     <script src="reseal.js"></script>
     <script src="stop_reasons.js"></script>
     <script src="holds.js"></script>

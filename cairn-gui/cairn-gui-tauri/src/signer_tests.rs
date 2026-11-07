@@ -451,6 +451,7 @@ fn a_vault_answer_reaches_the_person_through_from_release_noting() {
         (include_str!("state.rs"), "signer_for_act"),
         (include_str!("reseal.rs"), "change_passphrase_impl"),
         (include_str!("enrol.rs"), "release_enrol_key"),
+        (include_str!("supervision_panel.rs"), "supervision_key<'a>"),
     ] {
         let body = rust_fn(src, name);
         assert!(body.contains("from_release_noting("), "{name}: {body}");
