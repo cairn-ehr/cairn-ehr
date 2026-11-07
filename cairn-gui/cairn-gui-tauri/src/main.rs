@@ -47,6 +47,8 @@ mod notes_fork_webview_tests;
 mod notes_sign_off_webview_tests;
 #[cfg(test)]
 mod notes_webview_tests;
+mod person_menu;
+mod person_menu_view;
 #[cfg(test)]
 mod read_again_webview_tests;
 mod rekey;
@@ -179,6 +181,9 @@ fn main() -> anyhow::Result<()> {
             whos_here::whos_here_directory,
             whos_here::whos_here_pick,
             whos_here::relock,
+            person_menu::person_menu,
+            person_menu::person_menu_open,
+            person_menu::whos_here_counts,
             enrol::enrol_member,
             rekey::rekey_member,
             superuser_panel::list_unconfirmed,

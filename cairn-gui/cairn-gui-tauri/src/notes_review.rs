@@ -159,4 +159,4 @@ mod tests;
 
 #[cfg(test)]
 #[path = "notes_review_db_tests.rs"]
-mod db_tests;
+pub(crate) mod db_tests;

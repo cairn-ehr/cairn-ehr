@@ -121,6 +121,18 @@ fn a_three_part_note_reads_as_one_text() {
     assert_eq!(both.parts_label.as_deref(), Some("2 parts"));
 }
 
+/// The person menu focuses a part by id: every part's event id, in part order (root first).
+#[test]
+fn part_ids_lists_every_part_in_order() {
+    let v = view_of(&one(vec![
+        note(3, OPENED, Some(1), 30, NoteGrade::WentInUnsigned),
+        note(1, OPENED, None, 0, signed("Dr Ada")),
+        note(2, OPENED, Some(1), 10, signed("Dr Bo")),
+    ]));
+    let want: Vec<String> = [1, 2, 3].iter().map(|n| id(*n).to_string()).collect();
+    assert_eq!(v.part_ids, want);
+}
+
 /// Final review, Important 2: in the continuous text, each later part is preceded by a SEAM line
 /// saying who added it and when it applies, in the very words its own heading uses in the
 /// disclosure — paper shows each addition's writer and date inline, so the time must not hide
