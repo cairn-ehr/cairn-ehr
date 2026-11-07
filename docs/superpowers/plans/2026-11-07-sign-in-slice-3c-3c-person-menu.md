@@ -28,7 +28,10 @@ reads), [ADR-0093](../../spec/decisions/0093-a-repudiated-signature-counts-as-un
 [ADR-0088](../../spec/decisions/0088-whos-here-and-a-drafts-parts.md) (who's here is a claim). Before Task 1 read the
 sign-in 3c-3a, 3c-3b, 3c-2, 3b-2a and 3b-1 blocks of `docs/developers/durable-rules.md`.
 
-**Open for the maintainer's plan review** (each has a default the plan builds if you say nothing):
+**Maintainer, 2026-11-07 (plan review):** Q1–Q3 below ruled **as their defaults**. Executed by subagent-driven
+development.
+
+**Put to the maintainer's plan review** (each with the default the plan builds):
 - **Q1, the picker's counts.** One count per person means reading the parts of EVERY member: every note part on the
   node, on every picker opening. Default: build it, draw the list first and fill in the counts when they land, carry a
   `shortcut:` comment, and measure it in RUNBOOK §26. If it misses ≤ 1 s, file an issue for a projection of open
