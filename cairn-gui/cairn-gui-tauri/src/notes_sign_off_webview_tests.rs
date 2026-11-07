@@ -403,8 +403,9 @@ fn its_accessible_name_is_co_sign_as_reviewed_plus_the_time() {
 /// A who's-here switch waits for a review as for a Sign (they share `noteSigning`), then closes
 /// the chart, so the press settles with its OWN outcome, worded by the picker in a review's own
 /// words: Sign off's "every part of the note now carries your signature" would be false for a
-/// review, which countersigns only the parts the presser's supervisees signed. No line names a
-/// patient (the next person may read it).
+/// review. So would naming the supervisees' parts: a review skips one owing a mandatory co-sign
+/// (a student's still reads "— not co-signed") and one another supervisor reviewed, so the
+/// success line names no parts (fix round 1). No line names a patient (the next person may read it).
 #[test]
 fn a_switch_during_a_review_says_what_the_review_did() {
     use crate::source_guard::js_const;
@@ -434,7 +435,7 @@ fn a_switch_during_a_review_says_what_the_review_did() {
     );
     assert_eq!(
         js_const(WHOS_HERE_JS, "REVIEWED_LINE"),
-        "Your co-signature went through: the parts your supervisees signed now carry it."
+        "Your review co-signature went through \u{2014} open the chart to see which parts it covers."
     );
     assert_eq!(
         js_const(WHOS_HERE_JS, "NOT_REVIEWED_LINE"),

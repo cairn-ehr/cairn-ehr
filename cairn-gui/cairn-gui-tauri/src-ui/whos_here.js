@@ -39,9 +39,11 @@ const DISCARD_UNKNOWN_LINE = "Whether your draft was discarded is not known — 
 const SIGNED_OFF_LINE = "Your sign-off went through: every part of the note now carries your signature.";
 const NOT_SIGNED_OFF_LINE = "Your sign-off signed nothing — open the chart to see where the note stands.";
 const SIGN_OFF_UNKNOWN_LINE = "Whether your sign-off went through is not known — check the chart.";
-/** … and for "Co-sign as reviewed" (slice 3c-3a), in its own words: a review co-signs only the
- * parts the presser's supervisees signed, so Sign off's "every part" would be false. */
-const REVIEWED_LINE = "Your co-signature went through: the parts your supervisees signed now carry it.";
+/** … and for "Co-sign as reviewed" (slice 3c-3a), in its own words. A review skips some of the
+ * presser's supervisees' parts (one owing a mandatory co-sign, one another supervisor reviewed),
+ * so its line names no parts: Sign off's "every part", or "the parts your supervisees signed",
+ * would be false. */
+const REVIEWED_LINE = "Your review co-signature went through — open the chart to see which parts it covers.";
 const NOT_REVIEWED_LINE = "Your co-signature signed nothing — open the chart to see where the note stands.";
 const REVIEW_UNKNOWN_LINE = "Whether your co-signature went through is not known — check the chart.";
 /** The bar's words when a refused pick's claim could not be read back: nobody is named. */
