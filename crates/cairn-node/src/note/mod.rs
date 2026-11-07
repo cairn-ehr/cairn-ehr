@@ -28,6 +28,8 @@
 //! * `menu` — the person menu's three groups (what waits for a named clinician's signature, their
 //!   co-signature, and their review), sorted from the same predicates the byline uses (slice
 //!   3c-3c). Pure.
+//! * `menu_read` — the one read behind the menu: the people, the supervision record, the drafts and
+//!   the parts of the people's keys, in the caller's snapshot (slice 3c-3c).
 //!
 //! The pure wire builders (payload, twin, markup escaping) are `cairn_event::note`'s.
 pub mod commit;
@@ -36,6 +38,7 @@ pub mod cosign;
 pub mod discard;
 pub mod draft;
 pub mod menu;
+pub mod menu_read;
 pub mod read;
 pub mod review;
 pub mod sign;
