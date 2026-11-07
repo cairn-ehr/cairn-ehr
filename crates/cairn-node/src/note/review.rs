@@ -33,7 +33,7 @@ use cairn_event::note_attestation::VouchRole;
 ///   the presser, and has the presser among their supervisors NOW;
 /// * no supervisor of the writer has vouched it yet under a standing key (one review is enough,
 ///   whoever gave it), and the presser has not signed it in any way.
-fn reviewable(p: &NoteRow, presser: &str) -> bool {
+pub fn reviewable(p: &NoteRow, presser: &str) -> bool {
     let supervises = writer_signature(p).is_some_and(|w| {
         !same_actor(&w.actor, presser)
             && p.writer_supervisors.iter().any(|s| same_actor(s, presser))

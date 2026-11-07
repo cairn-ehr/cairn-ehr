@@ -25,6 +25,9 @@
 //!   and "Sign off this note": one vouch per part the presser has not signed (slice 3c-2).
 //! * `review` — "Co-sign as reviewed": a supervisor vouches their supervisees' signed parts on a
 //!   note that owed no co-sign (slice 3c-3a), through Sign off's same transaction.
+//! * `menu` — the person menu's three groups (what waits for a named clinician's signature, their
+//!   co-signature, and their review), sorted from the same predicates the byline uses (slice
+//!   3c-3c). Pure.
 //!
 //! The pure wire builders (payload, twin, markup escaping) are `cairn_event::note`'s.
 pub mod commit;
@@ -32,6 +35,7 @@ pub mod compound;
 pub mod cosign;
 pub mod discard;
 pub mod draft;
+pub mod menu;
 pub mod read;
 pub mod review;
 pub mod sign;
