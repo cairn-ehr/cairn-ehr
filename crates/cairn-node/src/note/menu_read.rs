@@ -1,6 +1,7 @@
 //! The one read behind the person menu (sign-in slice 3c-3c): the bar asks for ONE person's
-//! menu, the picker for everyone's counts, and both come from the same [`MenuRead`] through
-//! [`classify`], so a count and a list can never disagree.
+//! menu, the picker for everyone's counts. Each is its own [`MenuRead`] (its own snapshot), and
+//! both go through the same [`classify`], so within one read a count and its list can never
+//! disagree; the bar's read and the picker's are two reads (ADR-0095 decision 6).
 //!
 //! The reads run in this order, all on the CALLER's client: people, then the supervision record,
 //! then the drafts, then the parts. The caller supplies a REPEATABLE READ snapshot (as `note_list`

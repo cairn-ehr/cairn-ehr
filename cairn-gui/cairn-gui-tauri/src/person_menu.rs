@@ -8,11 +8,13 @@
 //!   and no database read;
 //! * a menu is a list on screen, so its rows' charts are admitted to `AppState::shown` and a chart
 //!   opens only through `open_chart_impl` (the wrong-chart rule is unchanged);
-//! * everything is read in ONE snapshot, so the bar and the picker agree.
+//! * each command reads in ONE snapshot, so a count agrees with its own list; the bar and the
+//!   picker are two reads, and agree only while nothing changes between them (ADR-0095 decision 6).
 use crate::funnel::commands::open_chart_impl;
 use crate::funnel::view::{ChartHeaderView, ErrorView};
 use crate::person_menu_view::{
-    counts_failed_view, counts_view, menu_view, PersonMenuView, StaffCountView, NO_LONGER_WAITS,
+    counts_failed_view, counts_view, menu_failed_view, menu_view, PersonMenuView, StaffCountView,
+    NO_LONGER_WAITS,
 };
 use crate::state::AppState;
 use crate::whos_here::Claim;
@@ -54,20 +56,17 @@ async fn fresh(
     let (read, menu, found) = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
         let read = read_menus(tx, Some(staff)).await?;
         let menu = read.menu_for(staff, now).unwrap_or_default();
-        let mut ids: Vec<Uuid> = menu
-            .own
-            .iter()
-            .chain(&menu.cosign)
-            .chain(&menu.review)
-            .map(|i| i.chart)
-            .collect();
-        ids.sort();
-        ids.dedup();
-        let found = cairn_node::patient::candidate_read::candidates_by_id(tx, &ids, &today).await?;
+        let found =
+            cairn_node::patient::candidate_read::candidates_by_id(tx, &menu.charts(), &today)
+                .await?;
         Ok((read, menu, found))
     })
     .await
-    .map_err(|e| chart_read_failed(db.explain(e)))?;
+    .map_err(|e| {
+        let cause = db.explain(e);
+        eprintln!("waiting list: {cause:#}");
+        menu_failed_view(chart_read_failed(cause))
+    })?;
     drop(db);
     let patients: HashMap<Uuid, Candidate> = found.into_iter().map(|c| (c.patient_id, c)).collect();
     state.shown.lock().await.extend(patients.clone());
@@ -112,14 +111,7 @@ pub async fn person_menu_open_impl(
         return Err(NO_LONGER_WAITS.into());
     };
     let f = fresh(state, db, &staff).await.map_err(|e| e.text)?;
-    let listed = f
-        .menu
-        .own
-        .iter()
-        .chain(&f.menu.cosign)
-        .chain(&f.menu.review)
-        .any(|i| i.chart.to_string() == patient_id);
-    if !listed {
+    if !f.menu.charts().iter().any(|c| c.to_string() == patient_id) {
         return Err(NO_LONGER_WAITS.into());
     }
     open_chart_impl(state, patient_id).await

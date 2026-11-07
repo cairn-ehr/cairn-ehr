@@ -17,7 +17,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **The menu's groups ask the chart's own predicates and must never grow their own.** `note::menu::classify` lists
   group 1 by `part_is_signed` (went in unsigned, `drafted_actor` the person) and `counts_as_unsigned` (`signed_by`
   the person), group 2 by `cosign::awaits_cosign` with the person among `writer_supervisors`, group 3 by
-  `review::reviewable` within `REVIEW_DAYS`. **Tempting wrong fixes:** test `signed_by.is_none()` for group 1 (a
+  `review::reviewable` within `REVIEW_DAYS`. **Tempting wrong fixes:** test only `signed_by.is_none()` for group 1 (a
   repudiated part would be missed, and a colleague's sign-off would not take a gone-in-unsigned part off); test
   `signed_by.student` or `needs_cosigning` for group 2 (a supervisor's co-sign would not clear it); write a SQL
   "what is owed" query for speed (a second reading of the facts that drifts from the byline; the fix the `shortcut:`

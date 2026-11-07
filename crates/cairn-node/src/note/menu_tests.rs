@@ -349,3 +349,22 @@ fn a_person_with_no_actor_gets_an_empty_menu() {
     };
     assert_eq!(classify(&nobody, &[p], &[d], now()), PersonMenu::default());
 }
+
+#[test]
+fn charts_are_every_groups_charts_once_each_sorted() {
+    let item = |chart: u128| MenuItem {
+        chart: Uuid::from_u128(chart),
+        part: None,
+        when: now(),
+        writer: None,
+        why: Why::Review,
+    };
+    let m = PersonMenu {
+        own: vec![item(3), item(1)],
+        cosign: vec![item(1)],
+        review: vec![item(2)],
+    };
+    let want: Vec<Uuid> = [1, 2, 3].map(Uuid::from_u128).into();
+    assert_eq!(m.charts(), want);
+    assert!(PersonMenu::default().charts().is_empty());
+}

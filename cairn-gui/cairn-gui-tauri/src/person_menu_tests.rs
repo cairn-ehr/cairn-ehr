@@ -271,3 +271,17 @@ async fn nobody_named_reads_no_database() {
     }
     assert!(whos_here_counts_impl(&state).await.unwrap().is_empty());
 }
+
+#[test]
+fn a_failed_bar_read_says_notes_may_be_waiting_and_keeps_the_cause() {
+    let failed = menu_failed_view(crate::funnel::view::ErrorView {
+        text: "connection refused".into(),
+        retry: crate::funnel::view::Retry::Now,
+    });
+    assert_eq!(
+        failed.text,
+        "Your waiting list could not be read, so notes may be waiting for your signature: \
+         connection refused"
+    );
+    assert_eq!(failed.retry, crate::funnel::view::Retry::Now);
+}

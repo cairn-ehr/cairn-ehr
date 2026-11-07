@@ -33,7 +33,8 @@ use super::vouch::{counts_as_unsigned, part_is_signed, same_actor};
 pub const REVIEW_DAYS: i64 = 7;
 
 /// The named clinician: their actor (how notes name people), their vault staff id (how drafts
-/// name their writer), and the keys they hold.
+/// name their writer), and every signing key they ever enrolled or rotated to, repudiated ones
+/// included (so a part signed with a since-repudiated key is still found as theirs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Person {
     pub actor: String,
@@ -42,7 +43,8 @@ pub struct Person {
     pub keys: Vec<String>,
 }
 
-/// An open draft part, as read from the drafts door.
+/// One (open draft, writer) row from the drafts door: a writer with several non-blank parts in
+/// one draft gives one `MenuDraft`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuDraft {
     /// Normalised vault staff id of the part's writer.
@@ -93,6 +95,21 @@ impl PersonMenu {
     /// What the bar and picker show: owed signatures and co-signatures. Never the review group.
     pub fn count(&self) -> usize {
         self.own.len() + self.cosign.len()
+    }
+
+    /// Every chart a row in any group names, once each, sorted: the charts the window may name
+    /// (and so open) from this menu — "Open note" opens a chart only if it is one of these.
+    pub fn charts(&self) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = self
+            .own
+            .iter()
+            .chain(&self.cosign)
+            .chain(&self.review)
+            .map(|i| i.chart)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
     }
 }
 

@@ -97,6 +97,19 @@ pub fn counts_failed_view(cause: crate::funnel::view::ErrorView) -> crate::funne
     }
 }
 
+/// The bar's read failed: what waits for the person is now unknown, so say so before the read's
+/// own cause (the bar's line is the only place the failure is said). `retry` is kept. Pure.
+pub fn menu_failed_view(cause: crate::funnel::view::ErrorView) -> crate::funnel::view::ErrorView {
+    crate::funnel::view::ErrorView {
+        text: format!("{MENU_FAILED}: {}", cause.text),
+        retry: cause.retry,
+    }
+}
+
+/// [`menu_failed_view`]'s opening words.
+pub const MENU_FAILED: &str =
+    "Your waiting list could not be read, so notes may be waiting for your signature";
+
 /// The picker's counts, worded: `" · 3 waiting"` for a positive count, nothing for zero.
 pub fn counts_view(counts: Vec<(String, usize)>) -> Vec<StaffCountView> {
     counts
@@ -145,7 +158,7 @@ where
     match &item.why {
         Why::Draft { due, stuck, .. } => {
             let today = now.with_timezone(tz).date_naive();
-            // The menu has no node-clock `overdue` or window-side `failed` (see the brief).
+            // The menu has no node-clock `overdue` or window-side `failed` (ADR-0095 Not-guaranteed (d)).
             due_words(*due, *due <= now, *stuck, false, tz, today)
         }
         Why::WentInUnsigned => UNSIGNED.into(),

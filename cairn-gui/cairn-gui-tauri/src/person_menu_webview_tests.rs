@@ -17,7 +17,10 @@ const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 #[test]
 fn open_menu_row_settles_signs_and_closes_the_chart_before_opening() {
     let open = js_fn(MENU_JS, "openMenuRow");
-    let settle = position(open, "if (signInFlight()) await signsSettled();");
+    let settle = position(
+        open,
+        "const outcome = signInFlight() ? await signsSettled() : null;",
+    );
     let close = position(open, "if (displayedPatient) await closeChart();");
     let ask = position(open, "invoke(\"person_menu_open\"");
     let enter = position(open, "enterChart(");
@@ -38,7 +41,8 @@ fn open_menu_row_settles_signs_and_closes_the_chart_before_opening() {
     );
     // Mid-registration the menu opens nothing (funnel.js's openChart has the same first line).
     assert!(
-        position(open, "if (registering) return;") < position(open, "if (signInFlight())"),
+        position(open, "if (registering) return;")
+            < position(open, "const outcome = signInFlight()"),
         "{open}"
     );
 }
@@ -193,7 +197,7 @@ fn the_last_persons_menu_leaves_before_the_next_read() {
     let read = js_fn(MENU_JS, "refreshMenuCount");
     let catch = &read[position(read, "catch (failure)")..];
     assert!(
-        position(catch, "hideMenu()") < position(catch, "return;\n  }"),
+        position(catch, "hideMenu()") < position(catch, "return false;\n  }"),
         "{read}"
     );
     assert!(js_fn(MENU_JS, "drawMenu").contains("hideMenu()"));
@@ -213,7 +217,8 @@ fn open_menu_row_refuses_a_second_press_while_one_runs() {
     assert_eq!(between.matches(';').count(), 1, "{open}");
     assert!(
         guard < position(open, "menuOpening = true;")
-            && position(open, "menuOpening = true;") < position(open, "if (signInFlight())"),
+            && position(open, "menuOpening = true;")
+                < position(open, "const outcome = signInFlight()"),
         "{open}"
     );
     let finally = &open[position(open, "} finally {")..];
@@ -231,5 +236,46 @@ fn a_supervision_act_re_reads_the_bar() {
     assert!(
         sent < reread && reread < position(act, "catch (failure)"),
         "{act}"
+    );
+}
+
+/// Finalcheck (silent-failure review): a Sign, Discard, sign-off or review still in flight that
+/// did NOT go through (or is not known to have) keeps its chart open, so the note pane that says
+/// how it went is not cleared by `closeChart`, and the bar's line says it in whos_here.js's words.
+/// Only an act that went through lets the row's chart open.
+#[test]
+fn open_menu_row_stays_on_a_chart_whose_act_did_not_go_through() {
+    let open = js_fn(MENU_JS, "openMenuRow");
+    let settle = position(
+        open,
+        "const outcome = signInFlight() ? await signsSettled() : null;",
+    );
+    let stay = position(open, "if (outcome && !SETTLED_WELL.has(outcome)) {");
+    let said = position(open, "signOutcomeLine(outcome)");
+    let close = position(open, "if (displayedPatient) await closeChart();");
+    assert!(settle < stay && stay < said && said < close, "{open}");
+    assert!(open[stay..close].contains("return;"), "{open}");
+    assert!(
+        MENU_JS.contains(
+            r#"const SETTLED_WELL = new Set(["signed", "discarded", "signed-off", "reviewed"]);"#
+        ),
+        "{MENU_JS}"
+    );
+}
+
+/// Finalcheck (silent-failure review): when the re-read after a refusal itself fails, its line
+/// (the list could not be read) stays; the refusal, which says the list WAS read again, does not
+/// overwrite it.
+#[test]
+fn a_refusal_never_overwrites_a_failed_re_read() {
+    let refresh = js_fn(MENU_JS, "refreshMenuCount");
+    let caught = &refresh[position(refresh, "} catch (failure) {")..];
+    assert!(caught.contains("return false;"), "{refresh}");
+    let open = js_fn(MENU_JS, "openMenuRow");
+    assert!(
+        open.contains(
+            "if (await refreshMenuCount()) setMessage(el(\"person-menu-status\"), String(refusal));"
+        ),
+        "{open}"
     );
 }

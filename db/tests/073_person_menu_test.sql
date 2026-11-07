@@ -13,8 +13,9 @@ DECLARE f text;
 BEGIN
     FOREACH f IN ARRAY ARRAY['cairn_note_people()', 'cairn_note_drafts_by_writer()'] LOOP
         ASSERT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = f::regprocedure), f || ' is a definer';
-        ASSERT (SELECT p.proconfig::text LIKE '%pg_temp%' FROM pg_proc p WHERE p.oid = f::regprocedure),
-            f || ' pins pg_temp';
+        -- Exactly public then pg_temp: a pg_temp-FIRST path (the hijack this guards) must fail here.
+        ASSERT (SELECT p.proconfig = ARRAY['search_path=public, pg_temp'] FROM pg_proc p
+                 WHERE p.oid = f::regprocedure), f || ' pins search_path = public, pg_temp';
         ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), f || ' is not PUBLIC';
         ASSERT has_function_privilege('cairn_window', f, 'EXECUTE'), 'the window runs ' || f;
     END LOOP;

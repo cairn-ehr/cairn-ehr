@@ -5,8 +5,9 @@
 // writes no sentence a clinician reads. Reading the menu signs nothing and asks for no passphrase.
 // Classic script, loaded BEFORE whos_here.js (whose `showClaim` calls `refreshMenuCount`), sharing
 // main.js's globals (`el`, `cell`, `setMessage`, `invoke`), funnel.js's `enterChart`, `closeChart`,
-// `displayedPatient`, `failureText`, and notes.js's `signInFlight`, `signsSettled`, `noteDraft`.
-// Those are used only inside functions, at a press or an answer, long after every script loaded.
+// `displayedPatient`, `registering`, `failureText`, and notes.js's `signInFlight`, `signsSettled`,
+// `noteDraft`, and whos_here.js's `signOutcomeLine`. Only main.js's `el` is used at load (the listeners at the bottom; main.js loads
+// first); the rest are used inside functions, at a press or an answer, after every script loaded.
 "use strict";
 
 // One counter per kind of read (the worklist.js pattern, #752): an older answer must never draw
@@ -17,24 +18,30 @@ let pickerRevision = 0;
 let pendingMenuFocus = null;
 /** The picker's " · N waiting" words by staff id; kept so a search redraw keeps them. */
 let pickerSuffix = {};
+/** A Sign's, Discard's, sign-off's or review's outcomes (notes.js's `noteSigning`) that went through. */
+const SETTLED_WELL = new Set(["signed", "discarded", "signed-off", "reviewed"]);
 /** True while one row's open press is still closing a chart and opening another (a double-click). */
 let menuOpening = false;
 
-/** Re-read the menu and redraw the bar: on a new claim, a drawn note pane, a closed chart, a tick. */
+/**
+ * Re-read the menu and redraw the bar: on a new claim, a drawn note pane, a closed chart, a tick.
+ * False only when THIS read failed (its line then says why); a superseded read answers true.
+ */
 async function refreshMenuCount() {
   const revision = ++menuRevision;
   let view;
   try {
     view = await invoke("person_menu");
   } catch (failure) {
-    if (revision !== menuRevision) return;
+    if (revision !== menuRevision) return true; // a newer read is on its way, and will say
     // The list drawn last is no longer known to be true: it leaves; the bar's line says why.
     hideMenu();
     setMessage(el("person-menu-status"), failureText(failure));
-    return;
+    return false;
   }
-  if (revision !== menuRevision) return; // a newer read is on its way
+  if (revision !== menuRevision) return true; // a newer read is on its way
   drawMenu(view);
+  return true;
 }
 
 /** Draw Rust's `PersonMenuView`: nothing for "Nobody", else the count and the three groups. */
@@ -106,7 +113,8 @@ function menuRow(row) {
 
 /**
  * Open a menu row's note: the queued saves land first (a sign in flight settles, then `closeChart` awaits the
- * saves), THEN the node re-reads the menu and opens the chart only if a row still names it.
+ * saves), THEN the node re-reads the menu and opens the chart only if a row still names it. A sign in
+ * flight that did not go through keeps its chart open instead.
  */
 async function openMenuRow(row) {
   if (registering) return; // as funnel.js's openChart: registration's own enterChart must not be replaced
@@ -114,7 +122,14 @@ async function openMenuRow(row) {
   menuOpening = true;
   try {
     setMessage(el("person-menu-status"), "");
-    if (signInFlight()) await signsSettled();
+    const outcome = signInFlight() ? await signsSettled() : null;
+    if (outcome && !SETTLED_WELL.has(outcome)) {
+      // It did not go through (or is not known to have): stay on its chart. `closeChart` would
+      // clear the note pane, the one place that says how it went (whos_here.js's switch keeps it
+      // too); the bar's line says it in the switch's words.
+      setMessage(el("person-menu-status"), signOutcomeLine(outcome));
+      return;
+    }
     if (displayedPatient) await closeChart();
     try {
       const header = await invoke("person_menu_open", { patientId: row.patient_id });
@@ -123,9 +138,9 @@ async function openMenuRow(row) {
       enterChart(header);
     } catch (refusal) {
       // Rust's sentence (a refusal is a string). The list is read again FIRST: a drawn menu clears
-      // the status line, so saying the refusal before the re-read lands would erase it.
-      await refreshMenuCount();
-      setMessage(el("person-menu-status"), String(refusal));
+      // the status line, so saying the refusal before the re-read lands would erase it. A failed
+      // re-read keeps its own line: the refusal would say the list WAS read again.
+      if (await refreshMenuCount()) setMessage(el("person-menu-status"), String(refusal));
       // The clicked button is gone with the redraw: focus the line that says why, not <body>.
       el("person-menu-status").tabIndex = -1;
       el("person-menu-status").focus();

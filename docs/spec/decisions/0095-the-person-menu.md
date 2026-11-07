@@ -124,10 +124,14 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
     `AppState::shown`, as the duplicate tray does, and a chart opens only through `open_chart_impl`.
     `person_menu_open` re-reads the menu for the person named NOW and opens the chart only while a row of that read
     names it; otherwise it answers "That note no longer waits in your list — the list was read again." and opens
-    nothing; a re-read that fails answers the read-failure text instead, and opens nothing either. The script first
+    nothing; a re-read that fails answers the read-failure text ("Your waiting list could not be read, so notes may
+    be waiting for your signature: " and the cause) instead, and opens nothing either. The script first
     returns at once while a registration is under way, as `openChart` does, or while an earlier press of a row's
-    button is still under way (a double-click); then lets a sign in flight settle; then closes an open chart
-    (decision 3). On a refusal it reads the list again, then says the sentence and moves focus to it. The opened
+    button is still under way (a double-click); then lets a sign in flight settle, and if that Sign, Discard,
+    sign-off or review did not go through (or is not known to have), stays on its chart, whose note pane says how it
+    went, and says it on the bar's line in the who's-here switch's words; then closes an open chart (decision 3). On
+    a refusal it reads the list again, then says the sentence (only if that re-read succeeded, so a failed re-read's
+    line is not overwritten) and moves focus to it. The opened
     note pane scrolls to and focuses the part (found through the compound's `shown_parts`) or the draft (or the
     editor, if this terminal holds it).
 15. **When the menu is read again:** on a change of the named person (the last person's menu is first hidden, closed
@@ -179,10 +183,10 @@ who's here names. No event type, wire, floor rule or projection changes. db/073 
   The webview was walked in Chromium with a stubbed `invoke`; WebKit and the real Tauri IPC are owed to RUNBOOK §26.
 - **(j) Two people rows can share a staff id, and then the bar and the picker can disagree.** After a restore loses
   the member rows and the person is enrolled again under another role (a new actor), both actors go by the same
-  staff id, but only while the supervision record still names the old actor: `cairn_note_people()` lists an actor
-  with no member row only when the record names it (db/073). The bar's read takes the first match in actor-hex
-  order (`keys_for_bar`, `MenuRead::person`), while `counts()` emits one count per actor and the picker keeps the
-  last one it is given ([#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020)).
+  staff id once any supervision row names the old actor, and from then on (the record is append-only):
+  `cairn_note_people()` lists an actor with no member row only when the record names it (db/073). The bar's read
+  takes the first match in actor-hex order (`keys_for_bar`, `MenuRead::person`), while `counts()` emits one count
+  per actor and the picker keeps the last one it is given ([#1020](https://github.com/cairn-ehr/cairn-ehr/issues/1020)).
 - **(k) An awaited co-sign with no supervisor now is in nobody's menu.** A part that `awaits_cosign` while its writer
   has no supervisor recorded now (a student's "(no supervisor recorded)" part, or a required writer's whose
   supervisors all stepped away) is in nobody's group 2 (decision 7) and so in no count. It is found chart by chart.
