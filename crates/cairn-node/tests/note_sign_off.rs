@@ -134,7 +134,7 @@ db_test!(signing_off_a_students_note_co_signs_it, |_base, c| {
     let before = note(&c, w.chart, p).await;
     assert_eq!(
         part_byline(&before.parts()[0]).shown,
-        "signed by Sam (student) — not co-signed"
+        "signed by Sam (student) — not co-signed (no supervisor recorded)"
     );
     assert!(needs_sign_off(before.parts()));
 
@@ -304,7 +304,7 @@ db_test!(a_forged_vouch_is_not_read, |_base, c| {
     assert!(read.parts()[0].vouches.is_empty());
     assert_eq!(
         part_byline(&read.parts()[0]).shown,
-        "signed by Sam (student) — not co-signed"
+        "signed by Sam (student) — not co-signed (no supervisor recorded)"
     );
 
     // Positive control: the same peer's honest vouch is read.
@@ -312,7 +312,7 @@ db_test!(a_forged_vouch_is_not_read, |_base, c| {
     apply(body).await.unwrap();
     assert_eq!(
         part_byline(&note(&c, w.chart, p).await.parts()[0]).shown,
-        "signed by Sam (student) — not co-signed · signed off by Dr Peer"
+        "signed by Sam (student) — not co-signed (no supervisor recorded) · signed off by Dr Peer"
     );
 });
 
@@ -438,7 +438,7 @@ db_test!(
         let after = note(&c, w.chart, p).await;
         assert_eq!(
             part_byline(&after.parts()[0]).shown,
-            "signed by Sam (student) — not co-signed · co-signed by Pat (student)"
+            "signed by Sam (student) — not co-signed (no supervisor recorded) · co-signed by Pat (student)"
         );
         assert!(needs_sign_off(after.parts()), "a supervisor is still owed");
     }

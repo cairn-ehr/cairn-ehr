@@ -172,7 +172,7 @@ fn a_student_part_reads_not_co_signed() {
     let p = part(1, Some(student("s1", "Sam")));
     assert_eq!(
         part_byline(&p).shown,
-        "signed by Sam (student) — not co-signed"
+        "signed by Sam (student) — not co-signed (no supervisor recorded)"
     );
     // A sign-off that only ATTESTS (never the node's plan for a signed part) is no co-signature.
     let mut attested = p.clone();
@@ -184,7 +184,7 @@ fn a_student_part_reads_not_co_signed() {
     ));
     assert_eq!(
         part_byline(&attested).shown,
-        "signed by Sam (student) — not co-signed · signed off by Dr Zed"
+        "signed by Sam (student) — not co-signed (no supervisor recorded) · signed off by Dr Zed"
     );
 }
 
@@ -213,7 +213,7 @@ fn a_students_own_co_sign_does_not_clear_not_co_signed() {
         .push(vouch(9, VouchAct::SignOff, VouchRole::CoSigned, sam));
     assert_eq!(
         part_byline(&p).shown,
-        "signed by Sam (student) — not co-signed · co-signed by Sam (student)"
+        "signed by Sam (student) — not co-signed (no supervisor recorded) · co-signed by Sam (student)"
     );
 }
 
@@ -228,7 +228,7 @@ fn another_students_co_sign_does_not_clear_not_co_signed() {
     ));
     assert_eq!(
         part_byline(&p).shown,
-        "signed by Sam (student) — not co-signed · co-signed by Tess (student)"
+        "signed by Sam (student) — not co-signed (no supervisor recorded) · co-signed by Tess (student)"
     );
 }
 
@@ -246,7 +246,7 @@ fn an_unplaceable_co_signer_does_not_clear_not_co_signed() {
     ));
     assert_eq!(
         part_byline(&p).shown,
-        format!("signed by Sam (student) — not co-signed · co-signed by {UNKNOWN_SIGNER}")
+        format!("signed by Sam (student) — not co-signed (no supervisor recorded) · co-signed by {UNKNOWN_SIGNER}")
     );
 }
 
@@ -400,7 +400,7 @@ fn a_repudiated_co_signer_does_not_clear_not_co_signed() {
     ));
     assert_eq!(
         part_byline(&p).shown,
-        "signed by Sam (student) — not co-signed · co-signed by Dr Zed (key had been repudiated)"
+        "signed by Sam (student) — not co-signed (no supervisor recorded) · co-signed by Dr Zed (key had been repudiated)"
     );
 }
 
@@ -419,7 +419,7 @@ fn a_re_signed_students_part_reads_not_co_signed_until_a_supervisor_co_signs() {
     ));
     assert_eq!(
         part_byline(&p).shown,
-        "signed by Sam (student) (key had been repudiated) — not co-signed · re-signed by Sam (student)"
+        "signed by Sam (student) (key had been repudiated) — not co-signed (no supervisor recorded) · re-signed by Sam (student)"
     );
     p.vouches.push(vouch(
         11,

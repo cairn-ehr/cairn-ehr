@@ -27,6 +27,7 @@
 //! The pure wire builders (payload, twin, markup escaping) are `cairn_event::note`'s.
 pub mod commit;
 pub mod compound;
+pub mod cosign;
 pub mod discard;
 pub mod draft;
 pub mod read;

@@ -211,7 +211,7 @@ db_test!(
         let n = note(&c, &w, p).await;
         assert_eq!(
             part_byline(&n.parts()[0]).shown,
-            "signed by Sam (student) (key had been repudiated) — not co-signed · \
+            "signed by Sam (student) (key had been repudiated) — not co-signed (no supervisor recorded) · \
          re-signed by Sam (student)"
         );
 

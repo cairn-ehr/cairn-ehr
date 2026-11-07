@@ -29,6 +29,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::compound::compounds;
+use super::cosign;
 use super::read::{list_patient_notes, NoteRow};
 use super::vouch_read::{PartVouch, Signer};
 use crate::medication::sealed_submit::{prepare_sealed_as, Prepared};
@@ -116,9 +117,14 @@ pub fn signed_off_by(parts: &[NoteRow]) -> Option<&Signer> {
     full_signers(parts).next()
 }
 
-/// The note still needs someone to sign it off as a whole.
+/// The note still needs someone to sign it off ("Sign off this note" stays offered): nobody has
+/// signed it off as a whole ([`signed_off_by`]), OR some part still waits for a co-sign
+/// ([`cosign::awaits_cosign`], slice 3c-3a, design §3.2 Q2). The second half matters for a writer
+/// who must be co-signed: they signed every part themself, so [`signed_off_by`] names them, yet
+/// the note waits for one of their supervisors (judged at the co-sign's time) or, with none
+/// recorded then, any non-student's co-sign.
 pub fn needs_sign_off(parts: &[NoteRow]) -> bool {
-    signed_off_by(parts).is_none()
+    signed_off_by(parts).is_none() || parts.iter().any(cosign::awaits_cosign)
 }
 
 /// What "Sign off this note" vouches, part by part, for the presser `presser_actor`: nothing for
