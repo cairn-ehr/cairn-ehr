@@ -343,6 +343,7 @@ pub(crate) fn entry_before_the_key(
             .filter(|t| !t.is_empty()),
         onset,
         source: word(Source::parse, &e.source)?,
+        corrects: None,
     })
 }
 
