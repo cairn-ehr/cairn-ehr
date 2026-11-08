@@ -187,10 +187,7 @@ pub fn entry_words_dated(
 /// `2019-03-04`) and nothing when not known (ruling R17: what the twin omits on the first real
 /// entry it omits for good, principle 11).
 pub fn render_allergy_twin(e: &AllergyEntry) -> String {
-    let onset = match &e.onset {
-        Onset::Day(v) | Onset::Month(v) | Onset::Year(v) => Some(v.as_str()),
-        Onset::NotKnown => None,
-    };
+    let onset = onset_wire(&e.onset).1;
     let words = entry_words_dated(
         e.kind.as_str(),
         e.source.as_str(),
@@ -244,8 +241,10 @@ mod tests {
     fn correction_twin_says_it_corrects() {
         let mut e = entry();
         e.corrects = Some("E1");
-        assert!(render_allergy_twin(&e)
-            .starts_with("Corrects an earlier entry: Allergy: penicillin → rash"));
+        assert_eq!(
+            render_allergy_twin(&e),
+            "Corrects an earlier entry: Allergy: penicillin → rash"
+        );
     }
 
     #[test]

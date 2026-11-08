@@ -3,8 +3,9 @@
 //! are WIRE, frozen once merged (principle 11). A correction is not here: it is an ordinary
 //! `clinical.allergy/1` entry carrying a `correction-of` ref (see `allergy::AllergyEntry`).
 //!
-//! A blank (whitespace-only) `text` yields no tail in the twin, as a blank reaction text does
-//! in `entry_words_dated`; the payload still carries exactly what the caller gave.
+//! A blank (whitespace-only) `text` is no text at all: it is written as JSON null in the
+//! payload AND yields no tail in the twin, so a sealed body never carries a value its own twin
+//! calls absent (one rule, [`present`]). Non-blank text is kept verbatim in the payload.
 use crate::allergy::{onset_wire, Onset};
 use serde_json::{json, Value};
 
@@ -31,11 +32,15 @@ pub struct AllergyRetraction<'a> {
     pub text: Option<&'a str>,
 }
 
-/// Free text with blanks treated as absent (twin only).
+/// The one blank test: free text that is empty or whitespace-only is absent.
+fn present(text: Option<&str>) -> Option<&str> {
+    text.filter(|t| !t.trim().is_empty())
+}
+
+/// The twin's `" — {text}"` tail, empty when the text is absent.
 fn tail(text: Option<&str>) -> String {
-    text.map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(|t| format!(" — {t}"))
+    present(text)
+        .map(|t| format!(" — {}", t.trim()))
         .unwrap_or_default()
 }
 
@@ -46,7 +51,7 @@ pub fn allergy_challenge_payload(c: &AllergyChallenge) -> Value {
         "target": c.target,
         "tolerated": {"term": c.tolerated, "coding": null},
         "date": {"precision": precision, "value": value},
-        "text": c.text,
+        "text": present(c.text),
     })
 }
 
@@ -66,7 +71,7 @@ pub fn render_allergy_challenge_twin(c: &AllergyChallenge) -> String {
 
 /// Build the `clinical.allergy-retraction/1` payload.
 pub fn allergy_retraction_payload(r: &AllergyRetraction) -> Value {
-    json!({"target": r.target, "text": r.text})
+    json!({"target": r.target, "text": present(r.text)})
 }
 
 /// The signed twin of a withdrawal.
@@ -120,10 +125,45 @@ mod tests {
             render_allergy_challenge_twin(&challenge(Onset::NotKnown, None)),
             "De-labelled by challenge: allergy record E1 — tolerated amoxicillin"
         );
-        assert!(
-            !render_allergy_challenge_twin(&challenge(Onset::NotKnown, Some("  ")))
-                .ends_with(" — ")
+        assert_eq!(
+            render_allergy_challenge_twin(&challenge(Onset::NotKnown, Some("  "))),
+            "De-labelled by challenge: allergy record E1 — tolerated amoxicillin"
         );
+        let blank = AllergyRetraction {
+            target: "E1",
+            text: Some("  "),
+        };
+        assert_eq!(
+            render_allergy_retraction_twin(&blank),
+            "Entered in error: withdraws allergy record E1"
+        );
+    }
+
+    #[test]
+    fn blank_text_is_null_in_payload() {
+        let c = allergy_challenge_payload(&challenge(Onset::NotKnown, Some("  ")));
+        assert_eq!(c["text"], Value::Null);
+        let r = allergy_retraction_payload(&AllergyRetraction {
+            target: "E1",
+            text: Some(" \t"),
+        });
+        assert_eq!(r["text"], Value::Null);
+    }
+
+    #[test]
+    fn day_and_year_dates_and_absent_retraction_text() {
+        let d = allergy_challenge_payload(&challenge(Onset::Day("2022-03-04".into()), None));
+        assert_eq!(
+            d["date"],
+            json!({"precision": "day", "value": "2022-03-04"})
+        );
+        let y = allergy_challenge_payload(&challenge(Onset::Year("2022".into()), None));
+        assert_eq!(y["date"], json!({"precision": "year", "value": "2022"}));
+        let r = allergy_retraction_payload(&AllergyRetraction {
+            target: "E1",
+            text: None,
+        });
+        assert_eq!(r, json!({"target": "E1", "text": null}));
     }
 
     #[test]
