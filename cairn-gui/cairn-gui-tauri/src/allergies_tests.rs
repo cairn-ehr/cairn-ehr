@@ -206,42 +206,141 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
         .await
         .unwrap_err();
     assert_eq!(err.text, "Choose Allergy or Adverse effect.");
-    // The timing table outlives the fixture's truncation: count from here.
-    let timed = async || -> i64 {
+    // The timing table outlives the fixture's truncation and aggregates (one row per kind and
+    // bucket, `n` samples): count samples from here.
+    let timed = async |kind: &str| -> i64 {
         owner
             .query_one(
-                "SELECT count(*) FROM ui_gesture_timing WHERE gesture_kind = 'allergy-record'",
-                &[],
+                "SELECT coalesce(sum(n), 0)::bigint FROM ui_gesture_timing \
+                 WHERE gesture_kind = $1",
+                &[&kind],
             )
             .await
             .unwrap()
             .get(0)
     };
-    let before = timed().await;
+    let (records, nones) = (timed("allergy-record").await, timed("allergy-none").await);
 
-    let pane = allergy_record_impl(&state, &patient, charts.clone(), entry(), credential("bea"))
+    let done = allergy_record_impl(&state, &patient, charts.clone(), entry(), credential("bea"))
         .await
         .unwrap();
+    assert_eq!(done.outcome, "Recorded.");
+    let pane = done.pane.expect("the list is read again");
     assert_eq!(pane.strip, "Allergy: penicillin → anaphylaxis · 2014");
     assert_eq!(pane.drug, "entries");
     let line = &pane.drug_allergies[0];
     assert!(line.prominent);
     assert_eq!(line.signer.as_deref(), Some("Dr Bea"));
-    assert_eq!(timed().await, before + 1, "the act is timed once");
+    assert_eq!(timed("allergy-record").await, records + 1, "timed once");
 
     // Bea's key is held now: "none known" signs with no credential typed.
     let pane = allergy_none_impl(&state, &patient, charts.clone(), "all", None)
         .await
-        .unwrap();
+        .unwrap()
+        .pane
+        .expect("the list is read again");
     assert_eq!(pane.strip, "Allergy: penicillin → anaphylaxis · 2014");
     assert_eq!(pane.previously_none.len(), 1, "{:?}", pane.previously_none);
     assert!(pane.previously_none[0].starts_with("Previously recorded: no known allergies"));
-    let err = allergy_none_impl(&state, &patient, charts, "everything", None)
+    assert_eq!(timed("allergy-none").await, nones + 1, "timed once");
+    let err = allergy_none_impl(&state, &patient, charts.clone(), "everything", None)
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(
         err.text.starts_with("this window sent a word"),
         "{}",
         err.text
+    );
+
+    // The sign lands but the re-read cannot (the window's role loses one read grant — the
+    // SET ROLE seam's sibling; the loader re-grants it on the next connect if this panics): still
+    // an Ok, saying it was signed, with no pane — never an error inviting a second press.
+    owner
+        .batch_execute("REVOKE SELECT ON clinical_allergy_none FROM cairn_agent")
+        .await
+        .unwrap();
+    let done = allergy_none_impl(&state, &patient, charts, "drug", None).await;
+    owner
+        .batch_execute("GRANT SELECT ON clinical_allergy_none TO cairn_agent")
+        .await
+        .unwrap();
+    let done = done.unwrap();
+    assert!(done.pane.is_none());
+    assert!(
+        done.outcome
+            .starts_with("Signed — but the allergy list could not be read again ("),
+        "{}",
+        done.outcome
+    );
+    assert!(done.outcome.ends_with("). Use “Read this chart again”."));
+    let recorded: i64 = owner
+        .query_one(
+            "SELECT count(*) FROM clinical_allergy_none \
+             WHERE scope = 'drug' AND patient_id::text = $1",
+            &[&patient],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(recorded, 1, "the statement was recorded");
+}
+
+/// A failure marked outcome-unknown by the node (#713, #814), as `write_failure_tests` makes one.
+fn interrupted(event: Uuid) -> anyhow::Error {
+    cairn_node::db_diagnosis::commit_outcome_unknown(event, anyhow::anyhow!("connection closed"))
+        .context("signing the allergy")
+}
+
+/// #814: a sign whose commit got no ordinary answer is NOT known — said so, naming the event, and
+/// re-read, never offered again live. Any other failure is the node's own sentence.
+#[test]
+fn an_interrupted_sign_is_not_known_and_never_retried() {
+    let event = Uuid::from_u128(814);
+    let view = sign_failure(&interrupted(event));
+    assert!(
+        view.text
+            .starts_with("Whether this allergy was recorded is NOT known — "),
+        "{}",
+        view.text
+    );
+    assert!(
+        view.text.contains(&format!("(event {event}: ")),
+        "{}",
+        view.text
+    );
+    assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
+    let plain = anyhow::anyhow!("the floor refused it");
+    assert_eq!(
+        sign_failure(&plain),
+        crate::write_failure::node_failure(&plain)
+    );
+}
+
+/// Ruling R11: a sign that landed is an Ok whatever the re-read did.
+#[test]
+fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
+    let pane = || AllergyPane {
+        strip: "Allergies not yet asked".into(),
+        drug: "not-yet-asked",
+        other: "not-yet-asked",
+        drug_allergies: vec![],
+        other_allergies: vec![],
+        adverse_effects: vec![],
+        previously_none: vec![],
+        charts: vec![],
+    };
+    let ok = written(Ok(pane()));
+    assert_eq!(ok.outcome, "Recorded.");
+    assert!(ok.pane.is_some());
+    let failed = written(Err(ErrorView {
+        text: "connection closed".into(),
+        retry: Retry::Now,
+    }));
+    assert!(failed.pane.is_none());
+    assert_eq!(
+        failed.outcome,
+        "Signed — but the allergy list could not be read again (connection closed). \
+         Use “Read this chart again”."
     );
 }

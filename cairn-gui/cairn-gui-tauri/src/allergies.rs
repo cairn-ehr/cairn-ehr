@@ -12,7 +12,8 @@
 //! read. The two writes run the same steps as `commands::cease_impl`, in the same order: the chart
 //! on screen, the set, fixture mode, then every verdict on what was typed ([`entry_before_the_key`]
 //! — a passphrase that writes nothing is a step paper never has), and only then the key; then one
-//! signed event, its timing sample, and a fresh read for the pane ([`sign_then_reread`]).
+//! signed event, its timing sample, and a fresh read for the pane ([`sign_then_reread`]), answered
+//! as an [`AllergyWrite`].
 //!
 //! No markup handling anywhere: the text the clinician typed is signed verbatim and the webview
 //! draws it with `textContent` only.
@@ -66,6 +67,14 @@ pub struct AllergyPane {
     pub charts: Vec<String>,
 }
 
+/// What a write answers once its event is signed: what happened, and the list read again when
+/// that read worked. A write that signed nothing answers an `ErrorView` instead.
+#[derive(Debug, serde::Serialize)]
+pub struct AllergyWrite {
+    pub outcome: String,
+    pub pane: Option<AllergyPane>,
+}
+
 /// One line of an expanded list.
 #[derive(Debug, serde::Serialize)]
 pub struct AllergyLine {
@@ -98,7 +107,7 @@ pub async fn allergy_record(
     charts: Vec<String>,
     entry: EntryInput,
     credential: Option<Credential>,
-) -> Result<AllergyPane, ErrorView> {
+) -> Result<AllergyWrite, ErrorView> {
     allergy_record_impl(&state, &patient_id, charts, entry, credential).await
 }
 
@@ -110,7 +119,7 @@ pub async fn allergy_none(
     charts: Vec<String>,
     scope: String,
     credential: Option<Credential>,
-) -> Result<AllergyPane, ErrorView> {
+) -> Result<AllergyWrite, ErrorView> {
     allergy_none_impl(&state, &patient_id, charts, &scope, credential).await
 }
 
@@ -148,7 +157,7 @@ pub async fn allergy_record_impl(
     charts: Vec<String>,
     entry: EntryInput,
     credential: Option<Credential>,
-) -> Result<AllergyPane, ErrorView> {
+) -> Result<AllergyWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
     let entry = entry_before_the_key(&entry, local_today())?;
     sign_then_reread(state, patient, Act::Entry(entry), credential).await
@@ -161,7 +170,7 @@ pub async fn allergy_none_impl(
     charts: Vec<String>,
     scope: &str,
     credential: Option<Credential>,
-) -> Result<AllergyPane, ErrorView> {
+) -> Result<AllergyWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
     let scope = word(NoneScope::parse, scope)?;
     sign_then_reread(state, patient, Act::None(scope), credential).await
@@ -204,16 +213,14 @@ enum Act<'a> {
 
 /// Ask for the key, sign `act` on `patient`'s chart, time it, and read the list again.
 ///
-/// A failed sign wrote nothing (or, a commit lost mid-flight, MAY have: `node_failure` classes
-/// that as "re-read", never a live retry). A sign that landed and a re-read that then failed is
-/// NOT a failure of the act: it says it was signed, and asks the window to re-read rather than
-/// offer the button again — a second press would record the allergy twice.
+/// A failed sign is an `ErrorView` ([`sign_failure`]: nothing written, or NOT known). A sign
+/// that landed is an Ok whatever the re-read did ([`written`]).
 async fn sign_then_reread(
     state: &AppState,
     patient: Uuid,
     act: Act<'_>,
     credential: Option<Credential>,
-) -> Result<AllergyPane, ErrorView> {
+) -> Result<AllergyWrite, ErrorView> {
     let (human_sk, human_kid) = state
         .signer_for_act(credential, Now::read())
         .await
@@ -249,19 +256,51 @@ async fn sign_then_reread(
         };
         (result.map_err(|e| db.explain(e)), kind)
     };
-    signed.map_err(|e| node_failure(&e))?;
+    signed.map_err(|e| sign_failure(&e))?;
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
     record_timing(state, kind, 1, elapsed_ms).await;
-    allergy_list_impl(state, &patient.to_string())
-        .await
-        .map_err(|e| ErrorView {
+    Ok(written(
+        allergy_list_impl(state, &patient.to_string()).await,
+    ))
+}
+
+/// Why a sign failed, as the clinician reads it. A commit that got no ordinary answer (#814) MAY
+/// have landed: it says the outcome is NOT known and re-reads, never a live retry that could
+/// record the allergy twice (worded as `notes::note_sign_impl` words a note's). Any other
+/// failure wrote nothing and is the node's own sentence. Pure.
+pub(crate) fn sign_failure(e: &anyhow::Error) -> ErrorView {
+    match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
+        Some(event) => ErrorView {
             text: format!(
-                "Signed — but the list could not be read again ({}). The chart is being read \
-                 again to show it.",
+                "Whether this allergy was recorded is NOT known — no ordinary answer came back \
+                 while saving it (event {event}: {}). Once the window can reach the node again, \
+                 the chart shows whether it is there.",
+                cairn_gui_live::cause_of(e)
+            ),
+            retry: Retry::AfterReread(Recorded::Unknown),
+        },
+        None => node_failure(e),
+    }
+}
+
+/// What a sign that LANDED answers (ruling R11): always an Ok. With the list read again, the
+/// pane; without it, a sentence saying it was signed and how to see it — never an error, which
+/// the window would offer to retry and so record the allergy twice. Pure.
+pub(crate) fn written(reread: Result<AllergyPane, ErrorView>) -> AllergyWrite {
+    match reread {
+        Ok(pane) => AllergyWrite {
+            outcome: "Recorded.".into(),
+            pane: Some(pane),
+        },
+        Err(e) => AllergyWrite {
+            outcome: format!(
+                "Signed — but the allergy list could not be read again ({}). \
+                 Use “Read this chart again”.",
                 e.text
             ),
-            retry: Retry::AfterReread(Recorded::No),
-        })
+            pane: None,
+        },
+    }
 }
 
 /// The form's verdicts, said before the key, in order: no substance, no kind, no category, an
