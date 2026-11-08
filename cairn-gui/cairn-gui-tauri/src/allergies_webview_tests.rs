@@ -157,6 +157,73 @@ fn a_signed_write_never_leaves_a_live_sign_for_the_same_entry() {
     );
 }
 
+/// Fix round 1, item 1: a write on chart A answered after the clinician opened chart B must not
+/// outdate B's allergy read. The revision is bumped only once the answer is known to be for the
+/// chart on screen — bumped first, B's in-flight read was dropped and B's sticker stayed
+/// "Reading the allergy list…" with every write disabled.
+#[test]
+fn an_answer_for_a_chart_left_never_outdates_the_chart_on_screen() {
+    let after = js_fn(ALLERGIES_JS, "afterSigned");
+    assert!(
+        position(after, "if (patient !== displayedPatient) return;")
+            < position(after, "allergyRevision += 1;"),
+        "{after}"
+    );
+}
+
+/// Fix round 1, item 2: a fault mid-press drops the set; a list read already in flight must not
+/// then draw and re-enable Sign before the clinician re-reads. So the drop outdates it too.
+#[test]
+fn a_fault_mid_press_outdates_every_read_in_flight() {
+    let press = js_fn(ALLERGIES_JS, "pressOnce");
+    let caught = &press[position(press, "catch (fault) {")..];
+    let caught = &caught[..position(caught, "} finally {")];
+    for step in ["allergyCharts = null;", "allergyRevision += 1;"] {
+        assert!(caught.contains(step), "{step}: {press}");
+    }
+}
+
+/// Fix round 1, item 3: a refusal under a field is announced (it appears where the clinician is
+/// not necessarily looking — at the Sign button) and is tied to its control, so a screen reader
+/// hears it with the field it is about.
+#[test]
+fn every_field_refusal_is_announced_and_describes_its_control() {
+    for (error, control) in [
+        ("allergy-term-error", "id=\"allergy-term\""),
+        ("allergy-kind-error", "data-field=\"kind\""),
+        ("allergy-category-error", "data-field=\"category\""),
+        ("allergy-onset-error", "id=\"allergy-onset\""),
+    ] {
+        assert!(
+            INDEX_HTML.contains(&format!(
+                "<p id=\"{error}\" class=\"allergy-field-error\" role=\"alert\" hidden></p>"
+            )),
+            "{error} is announced"
+        );
+        let at = position(INDEX_HTML, control);
+        let tag_end = at + position(&INDEX_HTML[at..], ">");
+        let tag_start = INDEX_HTML[..at]
+            .rfind('<')
+            .expect("the control's tag opens");
+        assert!(
+            INDEX_HTML[tag_start..tag_end].contains(&format!("aria-describedby=\"{error}\"")),
+            "{control} is described by {error}"
+        );
+    }
+}
+
+/// Fix round 1, item 4: a behind-the-record refusal is said ONCE — as the chart re-read's lead on
+/// `#outcome` (chart_stale.js keeps it there: a failed re-read is said after it, and an
+/// overtaking read still says an interrupted act's sentence), never also on `#allergy-status`.
+#[test]
+fn a_behind_the_record_refusal_is_said_once_as_the_rereads_lead() {
+    let refused = js_fn(ALLERGIES_JS, "afterRefused");
+    let behind = &refused[position(refused, "if (behind) {")..];
+    let behind = &behind[..position(behind, "return;")];
+    assert!(behind.contains("await refresh(text, behind);"), "{refused}");
+    assert!(!behind.contains("sayAllergy("), "{refused}");
+}
+
 /// Every field allergies.js reads off a payload is one Rust sends. A misspelt field reads as
 /// `undefined` and the window would show nothing where an allergy is — silently.
 #[test]

@@ -297,15 +297,15 @@
                 <button type="button" data-value="other" aria-pressed="false">Other substance</button>
               </div>
               <label for="allergy-term">Substance</label>
-              <input id="allergy-term" type="text" />
-              <p id="allergy-term-error" class="allergy-field-error" hidden></p>
-              <div class="allergy-choice" data-field="kind" role="group" aria-labelledby="allergy-kind-label">
+              <input id="allergy-term" type="text" aria-describedby="allergy-term-error" />
+              <p id="allergy-term-error" class="allergy-field-error" role="alert" hidden></p>
+              <div class="allergy-choice" data-field="kind" role="group" aria-labelledby="allergy-kind-label" aria-describedby="allergy-kind-error">
                 <span id="allergy-kind-label">What kind:</span>
                 <button type="button" data-value="allergy" aria-pressed="false">Allergy</button>
                 <button type="button" data-value="adverse-effect" aria-pressed="false">Adverse effect</button>
               </div>
-              <p id="allergy-kind-error" class="allergy-field-error" hidden></p>
-              <div class="allergy-choice" data-field="category" role="group" aria-labelledby="allergy-category-label">
+              <p id="allergy-kind-error" class="allergy-field-error" role="alert" hidden></p>
+              <div class="allergy-choice" data-field="category" role="group" aria-labelledby="allergy-category-label" aria-describedby="allergy-category-error">
                 <span id="allergy-category-label">What happened:</span>
                 <button type="button" data-value="anaphylaxis" aria-pressed="false">Anaphylaxis</button>
                 <button type="button" data-value="angioedema" aria-pressed="false">Angioedema</button>
@@ -315,12 +315,12 @@
                 <button type="button" data-value="other" aria-pressed="false">Other</button>
                 <button type="button" data-value="not-known" aria-pressed="false">Not known</button>
               </div>
-              <p id="allergy-category-error" class="allergy-field-error" hidden></p>
+              <p id="allergy-category-error" class="allergy-field-error" role="alert" hidden></p>
               <label for="allergy-reaction-text">What happened, in words (optional)</label>
               <input id="allergy-reaction-text" type="text" />
               <label for="allergy-onset">When — leave empty if not known</label>
-              <input id="allergy-onset" type="text" size="30" placeholder="2019 · 03/2019 · 14/03/2019" />
-              <p id="allergy-onset-error" class="allergy-field-error" hidden></p>
+              <input id="allergy-onset" type="text" size="30" aria-describedby="allergy-onset-error" placeholder="2019 · 03/2019 · 14/03/2019" />
+              <p id="allergy-onset-error" class="allergy-field-error" role="alert" hidden></p>
               <div class="allergy-choice" data-field="source" role="group" aria-labelledby="allergy-source-label">
                 <span id="allergy-source-label">Source:</span>
                 <button type="button" data-value="patient-stated" aria-pressed="false">Patient stated</button>

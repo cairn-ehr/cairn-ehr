@@ -229,8 +229,10 @@ async function recordNoneKnown(scope) {
  * write can be pressed until a list draws. Nothing is drawn for a chart the clinician has left.
  */
 function afterSigned(answer, patient, wasEntry) {
-  allergyRevision += 1; // a read sent before this act cannot draw over its answer
+  // A chart the clinician has left: its next read says the truth, and the chart on screen's
+  // own read in flight must not be outdated by an answer that is not about it.
   if (patient !== displayedPatient) return;
+  allergyRevision += 1; // a read sent before this act cannot draw over its answer
   if (wasEntry) resetAllergyForm();
   if (answer.pane === null) {
     allergyCharts = null;
@@ -246,8 +248,9 @@ function afterSigned(answer, patient, wasEntry) {
 
 /**
  * A write that answered an `ErrorView` (`failure`). Behind the record (`behindTheRecord`): the
- * chart is read again and no write is live until it draws; an outcome NOT known (#814) may have
- * recorded the entry, so the form is emptied too — a live Sign over it could record it twice.
+ * chart is read again (its sentence is that re-read's lead, on `#outcome`) and no write is live
+ * until it draws; an outcome NOT known (#814) may have recorded the entry, so the form is
+ * emptied too — a live Sign over it could record it twice.
  * Any other refusal recorded nothing: shown under its field (`FIELD_REFUSALS`) or on the status
  * line, with what was typed left as it is.
  */
@@ -261,7 +264,8 @@ async function afterRefused(failure, patient, wasEntry) {
   if (behind) {
     allergyCharts = null;
     syncAllergyButtons();
-    sayAllergy(text);
+    // Said once, as the re-read's lead on `#outcome`: chart_stale.js keeps it there (a failed
+    // re-read is said after it; a read that overtakes this one still says it).
     await refresh(text, behind);
     return;
   }
@@ -304,6 +308,7 @@ async function pressOnce(act) {
   } catch (fault) {
     console.error(fault);
     allergyCharts = null;
+    allergyRevision += 1; // a read already in flight must not draw and re-enable Sign
     resetAllergyForm();
     sayAllergy('This window failed while recording (' + String(fault) + '). Press "Read this chart again" to see what was recorded.');
   } finally {
