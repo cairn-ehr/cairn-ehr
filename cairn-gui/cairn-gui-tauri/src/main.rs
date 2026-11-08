@@ -21,6 +21,7 @@
 //! runbook use on a laptop.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod allergies;
 mod chart_set;
 #[cfg(test)]
 mod chart_view_webview_tests;
@@ -173,6 +174,9 @@ fn main() -> anyhow::Result<()> {
             commands::forget_held_key,
             commands::sign_off,
             commands::cease,
+            allergies::allergy_list,
+            allergies::allergy_record,
+            allergies::allergy_none,
             notes::note_list,
             notes::note_draft_save,
             notes::note_sign,
