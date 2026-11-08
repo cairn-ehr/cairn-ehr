@@ -227,3 +227,71 @@ async fn an_allergy_event_this_node_cannot_read_is_counted() {
     let readable: Vec<Uuid> = got.none.iter().map(|n| n.event_id).collect();
     assert_eq!(readable, vec![kept]);
 }
+
+/// Final review: the unreadable count reaches every LINKED chart, not just the one opened — a
+/// linked chart's unreadable allergy must not vanish under this chart's readable strip.
+#[tokio::test]
+async fn an_unreadable_event_on_a_linked_chart_is_counted() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, human_sk, human_kid, a) = common::note_setup(&c).await;
+    let x = Uuid::now_v7();
+    common::submit_registration(&c, &node_sk, &node_kid, x, 0).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let ex = sign_allergy(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        "n",
+        x,
+        &entry("sulfa"),
+        &author,
+    )
+    .await
+    .unwrap();
+    common::submit_link_event(&c, &node_sk, &node_kid, a, x, 10, true).await;
+    assert_eq!(list_patient_allergies(&c, a).await.unwrap().unreadable, 0);
+    shred_event(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        &node_kid,
+        ex,
+        "retention ceiling",
+        None,
+    )
+    .await
+    .expect("the shred is admitted");
+    let got = list_patient_allergies(&c, a).await.unwrap();
+    assert_eq!(
+        got.unreadable, 1,
+        "the linked chart's shredded entry, read from a"
+    );
+    assert!(got.entries.is_empty());
+}
+
+/// Final review: a NULL in a nullable projection column fails the read as an error (the window
+/// says "Could not read the allergy list"), never a panic in the command.
+#[tokio::test]
+async fn a_null_projected_column_is_an_error_not_a_panic() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (c, a, _, ea, _) = two_linked(&base).await;
+    c.execute(
+        "UPDATE clinical_allergy SET term = NULL WHERE event_id = $1::text::uuid",
+        &[&ea.to_string()],
+    )
+    .await
+    .unwrap();
+    assert!(list_patient_allergies(&c, a).await.is_err());
+}

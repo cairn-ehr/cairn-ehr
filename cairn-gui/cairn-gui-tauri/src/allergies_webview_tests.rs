@@ -6,7 +6,7 @@
 //! `invoke` in a browser) when it was written — see the PR that added this file.
 use crate::allergies::{AllergyLine, AllergyPane, AllergyWrite};
 use crate::commands::tests::fields_read_in;
-use crate::source_guard::{js_fn, position};
+use crate::source_guard::{js_fn, position, rust_fn};
 use std::collections::BTreeSet;
 
 const ALLERGIES_JS: &str = include_str!("../src-ui/allergies.js");
@@ -33,7 +33,7 @@ fn allergies_js_never_assigns_inner_html() {
     );
 }
 
-/// The design's anti-goal (§3.2): "Allergy or Adverse effect" is a choice the clinician MAKES —
+/// The design's anti-goal (§2): "Allergy or Adverse effect" is a choice the clinician MAKES —
 /// a default would let an intolerance be signed as an allergy (or the reverse) by a press that
 /// chose nothing. The same holds for what happened. So no allergy toggle is pressed in the page as
 /// written, and the defaults the script presses (on load and after every signed entry) leave both
@@ -138,7 +138,8 @@ fn a_signed_write_never_leaves_a_live_sign_for_the_same_entry() {
     let unread = &after[position(after, "if (answer.pane === null) {")..];
     for step in [
         "allergyCharts = null;",
-        "stripSays(answer.outcome, false);",
+        // prominent: the list is not known, and what is not known may be the allergy
+        "stripSays(answer.outcome, true);",
         "clearAllergyLists();",
     ] {
         assert!(unread.contains(step), "{step}: {after}");
@@ -208,6 +209,75 @@ fn a_fault_for_a_chart_left_never_touches_the_chart_on_screen() {
             guard < position(caught, step),
             "{step} after the guard: {press}"
         );
+    }
+}
+
+/// Final review: a fault mid-press on the chart on screen may follow a sign that LANDED, so the
+/// pre-press strip ("Allergies not yet asked") must not stay up under it — the same rule as
+/// `afterSigned`'s pane-null branch. The lists come down and the strip says the fault, prominent.
+#[test]
+fn a_fault_mid_press_takes_the_old_strip_down() {
+    let press = js_fn(ALLERGIES_JS, "pressOnce");
+    let caught = &press[position(press, "catch (fault) {")..];
+    let caught = &caught[..position(caught, "} finally {")];
+    for step in ["clearAllergyLists();", "stripSays(said, true);"] {
+        assert!(caught.contains(step), "{step}: {press}");
+    }
+}
+
+/// Final review (decision 19): a read for a chart left, or outdated by a later act, never draws —
+/// in BOTH branches. Without the patient check A's strip draws under B's header; without the
+/// revision check every `allergyRevision += 1` elsewhere is dead and a read sent before a sign
+/// draws over it (Sign live again over the entry just signed). A failed read takes the lists
+/// down and is prominent: an unknown list may hold the allergy.
+#[test]
+fn a_read_draws_only_for_the_chart_on_screen_and_its_newest_revision() {
+    let draw = js_fn(ALLERGIES_JS, "drawAllergies");
+    let check = "patient === displayedPatient && revision === allergyRevision";
+    let caught = &draw[position(draw, "} catch (failure) {")..];
+    assert!(
+        draw[..position(draw, "} catch (failure) {")].contains(check),
+        "{draw}"
+    );
+    assert!(caught.contains(check), "{draw}");
+    for step in [
+        "allergyCharts = null;",
+        "clearAllergyLists();",
+        "failureText(failure), true);",
+    ] {
+        assert!(caught.contains(step), "{step}: {draw}");
+    }
+}
+
+/// Final review (decision 19, the refusal leg): a refusal for chart A answered after B opened
+/// returns before it touches B's set, form or re-read.
+#[test]
+fn a_refusal_for_a_chart_left_never_touches_the_chart_on_screen() {
+    let refused = js_fn(ALLERGIES_JS, "afterRefused");
+    let guard = position(refused, "if (patient !== displayedPatient) return;");
+    for step in [
+        "resetAllergyForm();",
+        "allergyCharts = null;",
+        "await refresh(",
+        "setMessage(",
+        "sayAllergy(",
+    ] {
+        assert!(guard < position(refused, step), "{step}: {refused}");
+    }
+}
+
+/// Final review: a chart change empties the form (an entry typed for A is never signed on B: Rust
+/// only checks "the chart on screen", which is B by then), outdates every read, and drops the set.
+#[test]
+fn a_chart_change_empties_the_form_and_outdates_every_read() {
+    let clear = js_fn(ALLERGIES_JS, "clearAllergies");
+    for step in [
+        "resetAllergyForm();",
+        "allergyRevision += 1;",
+        "allergyCharts = null;",
+        "clearAllergyLists();",
+    ] {
+        assert!(clear.contains(step), "{step}: {clear}");
     }
 }
 
@@ -336,4 +406,19 @@ fn the_standing_statement_is_drawn_and_cleared() {
 #[test]
 fn allergies_js_stays_small() {
     assert!(ALLERGIES_JS.lines().count() < 500);
+}
+
+/// Ruling R11 at its call site (`a_landed_sign_is_an_ok_with_or_without_its_pane` pins `written`
+/// itself): once the sign has landed, nothing after it may turn the answer into an error — a
+/// `?` on the re-read would hand the window an `ErrorView` it offers to retry, recording twice.
+#[test]
+fn a_landed_sign_hands_its_reread_to_written_never_to_a_question_mark() {
+    let f = rust_fn(ALLERGIES_RS, "sign_then_reread");
+    let landed = &f[position(f, "signed.map_err(|e| sign_failure(&e))?;")..];
+    let after = &landed[landed.find(';').unwrap() + 1..];
+    assert!(
+        !after.contains('?'),
+        "nothing after the landed sign may fail: {f}"
+    );
+    assert!(after.contains("Ok(written("), "{f}");
 }

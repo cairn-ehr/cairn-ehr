@@ -32,6 +32,17 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   (the plan's original rule): the strip then says "Drug allergies not yet asked" over a recorded "no known
   allergies" — false. Pins: `view_tests.rs::no_known_allergies_plus_a_latex_entry_still_stands_for_drugs`,
   `an_allergy_overrides_no_known_allergies_in_either_order`, `an_all_none_overridden_in_both_lists_is_only_history`.
+- **A doubted chart's entries are shown and marked; its "none known" statements stand for nothing.** Over-warning is
+  the safe error (decision 11), so a possible stranger's allergy is shown with "(on a chart whose link to this one is
+  in doubt)" — but a stranger's NKDA would UNDER-warn, so `build_view` lets no doubted chart's statement set a list's
+  status or outrank this chart's own; it is history only, marked. **Tempting wrong fix:** treat every member chart's
+  statement alike "for symmetry" — the strip then reads "No known allergies (asked …)" for a patient nobody asked,
+  and hides the one-press buttons. Pins: `view_tests.rs::a_doubted_charts_none_statement_does_not_stand`,
+  `a_doubted_charts_newer_none_never_outranks_this_charts_own`.
+- **A list the window does not know is prominent and takes the old list down** — a failed read, a signed write
+  whose re-read failed, a fault mid-press (it may follow a landed sign). Pins:
+  `allergies_webview_tests.rs::a_read_draws_only_for_the_chart_on_screen_and_its_newest_revision`,
+  `a_fault_mid_press_takes_the_old_strip_down`.
 - **The standing "none known" statement names who signed it** (paper's initialled NKDA): "No known allergies — asked
   8 Nov 2026 by Dr Bea" opens the expanded list, and "Previously recorded" lines carry " by …" too. Pins:
   `view_tests.rs::the_standing_statement_and_history_name_who_signed`,
@@ -97,7 +108,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **"After the recording day" is judged against UTC+14.** `cairn_allergy_onset_problem` cuts today from `now() AT TIME
   ZONE 'UTC' + 14 hours`. **Tempting wrong fix:** `now()::date` (a clinician east of the database's zone typing
   today's date is refused). Pin: `074_clinical_allergy_test.sql`'s section 1 (today accepted) and section 3 (next year
-  past UTC+14 refused); the window's own stricter check is `allergies_tests.rs::parse_onset_accepts_the_five_shapes`.
+  past UTC+14 refused); the window's own stricter check is `allergies_tests.rs::parse_onset_accepts_the_five_shapes` (today accepted)
+  and `parse_onset_refuses_2019_13_and_31_02_2019_and_next_year` (the future refused).
   Neither admits the year `0000` (section 3's `year 0000` lines; `parse_onset_refuses_year_0000_at_every_precision`).
 - **Both types stay off db/048's no-thread list.** Pin: `074_clinical_allergy_test.sql`'s section 0.
 - **Never mutate a shared role's grants in a test** (R12). The re-read-failure test first `REVOKE`d `SELECT` on

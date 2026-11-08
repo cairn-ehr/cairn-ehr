@@ -21,7 +21,7 @@ pub enum ListStatus {
     NotYetAsked,
 }
 
-/// One line of an expanded list (Task 5 serialises this to the window).
+/// One line of an expanded list (`cairn-gui-tauri`'s `allergies::pane` serialises it to the window).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryLine {
     pub event_id: Uuid,
@@ -31,7 +31,7 @@ pub struct EntryLine {
     pub chart: Uuid,
     pub doubted_chart: bool,
     pub signer: Option<String>,
-    /// Node-local day it was recorded.
+    /// The terminal's local day it was recorded (the caller's offset, R3).
     pub recorded: NaiveDate,
 }
 
@@ -45,7 +45,8 @@ pub struct AllergyView {
     /// Other allergies (sorted), then other/unknown-allergen rows of an unknown kind.
     pub other_allergies: Vec<EntryLine>,
     pub adverse_effects: Vec<EntryLine>,
-    /// "Previously recorded: …": statements overridden in every list they cover, or superseded.
+    /// "Previously recorded: …": statements overridden in every list they cover, superseded, or
+    /// on a doubted chart (those end with the doubt mark and never stand for this patient).
     pub previously_none: Vec<String>,
     /// The statement(s) a "none known" list rests on, with who signed (paper's initialled NKDA):
     /// "No known allergies — asked 8 Nov 2026 by Dr Bea". Drug first when two stand.
@@ -88,7 +89,8 @@ fn onset_text(precision: &str, value: Option<&str>) -> Option<String> {
     Some(shaped.unwrap_or_else(|| v.to_string()))
 }
 
-/// The row's wording plus its onset (the twin has no dates; this layer adds them).
+/// The row's wording plus its onset as a clinician reads it (`Mar 2019`; the signed twin carries
+/// the ISO onset, R17).
 pub fn entry_line_text(row: &AllergyRow) -> String {
     let onset = onset_text(&row.onset_precision, row.onset_value.as_deref());
     let words = entry_words_dated(
@@ -163,12 +165,19 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
     // Validity is PER LIST (design §3.4: an allergy overrides "none known" "in its list"; ruling
     // R16): an "all" statement stands for drugs while no drug allergy exists, and for the other
     // list while no other allergy exists. An unknown scope stands for nothing (history only).
+    // A doubted chart's statement stands for nothing either: a stranger's NKDA would under-warn
+    // (decision 11 shows a doubted chart's entries because over-warning is the safe error).
+    let doubted = |n: &NoneRow| a.doubted_charts.contains(&n.chart);
     let drug_none = newest(
         a.none
             .iter()
-            .filter(|n| !drug_has && (n.scope == "drug" || n.scope == "all")),
+            .filter(|n| !doubted(n) && !drug_has && (n.scope == "drug" || n.scope == "all")),
     );
-    let other_none = newest(a.none.iter().filter(|n| !other_has && n.scope == "all"));
+    let other_none = newest(
+        a.none
+            .iter()
+            .filter(|n| !doubted(n) && !other_has && n.scope == "all"),
+    );
     // Both lists rest on one "all" statement: it reads as "No known allergies".
     let one_all_row = drug_none
         .zip(other_none)
@@ -203,9 +212,10 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
                 s => format!("none known ({s})"),
             };
             format!(
-                "Previously recorded: {what} (asked {}{})",
+                "Previously recorded: {what} (asked {}{}){}",
                 day_text(local_day(n.recorded_at, offset)),
-                by(n)
+                by(n),
+                if doubted(n) { DOUBT } else { "" }
             )
         })
         .collect();

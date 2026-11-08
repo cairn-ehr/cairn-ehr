@@ -145,6 +145,12 @@ SELECT pg_temp.accepts(pg_temp.entry(pg_temp.onset('day', '2019-02-28')));
 SELECT pg_temp.accepts(pg_temp.entry(pg_temp.onset('month', '2019-02')));
 SELECT pg_temp.accepts(pg_temp.entry(pg_temp.onset('year', '2019')));
 SELECT pg_temp.accepts(pg_temp.entry(pg_temp.onset('day', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD'))));
+-- Decision 7: "today" is today ANYWHERE on earth (UTC+14), so at 06:00 in Brisbane the local day
+-- the window accepts is never refused as the future; the day after that is.
+SELECT pg_temp.accepts(pg_temp.entry(pg_temp.onset('day',
+    to_char(now() AT TIME ZONE 'UTC' + interval '14 hours', 'YYYY-MM-DD'))));
+SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day',
+    to_char(now() AT TIME ZONE 'UTC' + interval '14 hours' + interval '1 day', 'YYYY-MM-DD'))), 'future');
 SELECT pg_temp.accepts(pg_temp.entry(
     '{"kind":"adverse-effect","allergen_kind":"other","source":"patient-stated",
       "reaction":{"category":"other","text":"felt dizzy"}}'));
@@ -222,6 +228,8 @@ INSERT INTO ui_gesture_timing (gesture_kind, size_bucket) VALUES ('allergy-none'
 ON CONFLICT DO NOTHING;
 
 -- 4. A peer's newer word is admitted AND projects: the vocabulary columns carry no CHECK.
+--    The rows are a NEWER schema_version (/2): the appliers project every version they can read
+--    (decision 8, unlike db/064's /1-only filter), so a newer peer's allergy is never withheld.
 --    Unsealed rows inserted as the owner (cairn_clear_payload reads an unsealed row's body as
 --    its clear payload); the dispatcher runs the appliers.
 INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall,
@@ -230,9 +238,9 @@ INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wal
 SELECT id::uuid, gen_random_uuid(), t, v, 3, n, 'n1', sb,
        '\x1220'::bytea || digest(sb, 'sha256'), body, '[]'::jsonb, 'deadbeef', 'mirror fixture'
 FROM (VALUES
-    ('74747474-0001-7474-8474-747474747474', 'clinical.allergy.asserted', 'clinical.allergy/1', 1,
+    ('74747474-0001-7474-8474-747474747474', 'clinical.allergy.asserted', 'clinical.allergy/2', 1,
      '\x7401'::bytea, pg_temp.entry('{"allergen_kind":"food","kind":"intolerance"}') -> 'payload'),
-    ('74747474-0002-7474-8474-747474747474', 'clinical.allergy-none.asserted', 'clinical.allergy-none/1', 2,
+    ('74747474-0002-7474-8474-747474747474', 'clinical.allergy-none.asserted', 'clinical.allergy-none/2', 2,
      '\x7402'::bytea, '{"scope":"food"}'::jsonb)) AS r(id, t, v, n, sb, body);
 DO $$
 BEGIN

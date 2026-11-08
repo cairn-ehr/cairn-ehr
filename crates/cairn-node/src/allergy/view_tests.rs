@@ -363,6 +363,56 @@ fn a_doubted_charts_entry_is_shown_and_marked() {
     assert!(v.strip.contains("link to this one is in doubt"));
 }
 
+/// Another chart's NKDA would UNDER-warn (decision 11's "over-warning is the safe error" cuts the
+/// other way): a doubted chart's "none known" statement never stands for this patient. It is
+/// shown as history, marked, and the list still says "not yet asked" (so the one-press buttons
+/// stay up).
+#[test]
+fn a_doubted_charts_none_statement_does_not_stand() {
+    let mut n = none(1, "all", 8);
+    n.chart = id(2000);
+    let mut p = pa(vec![], vec![n]);
+    p.doubted_charts = vec![id(2000)];
+    let v = view(&p);
+    assert_eq!(v.strip, "Allergies not yet asked");
+    assert_eq!(v.drug, ListStatus::NotYetAsked);
+    assert!(v.standing_none.is_empty());
+    assert_eq!(
+        v.previously_none,
+        vec![
+            "Previously recorded: no known allergies (asked 8 Nov 2026) \
+             (on a chart whose link to this one is in doubt)"
+        ]
+    );
+}
+
+/// Decision 13: a statement of a scope this node does not know (a peer's newer "food") covers no
+/// list — read as "no known other allergies" it would be a false reassurance. History only.
+#[test]
+fn a_none_of_an_unknown_scope_stands_for_no_list() {
+    let v = view(&pa(vec![], vec![none(1, "food", 8)]));
+    assert_eq!(v.strip, "Allergies not yet asked");
+    assert!(v.standing_none.is_empty());
+    assert_eq!(
+        v.previously_none,
+        vec!["Previously recorded: none known (food) (asked 8 Nov 2026)"]
+    );
+}
+
+/// This chart's own older statement still stands under a doubted chart's newer one.
+#[test]
+fn a_doubted_charts_newer_none_never_outranks_this_charts_own() {
+    let mut theirs = none(2, "all", 9);
+    theirs.chart = id(2000);
+    let mut p = pa(vec![], vec![none(1, "drug", 8), theirs]);
+    p.doubted_charts = vec![id(2000)];
+    let v = view(&p);
+    assert_eq!(
+        v.strip,
+        "NKDA (asked 8 Nov 2026) · other allergies: not yet asked"
+    );
+}
+
 #[test]
 fn unknown_kind_is_listed_not_prominent_and_off_the_strip() {
     let p = pa(

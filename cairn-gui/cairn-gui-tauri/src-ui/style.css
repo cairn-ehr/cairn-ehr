@@ -488,7 +488,7 @@ h1:focus-visible {
   margin: 0.3rem 0;
 }
 
-/* A pressed toggle reads as pressed without colour: its border and weight change too. */
+/* A pressed toggle reads as pressed without colour: its outline and weight change too. */
 .allergy-choice button[aria-pressed="true"] {
   font-weight: 600;
   outline: 2px solid var(--accent);

@@ -58,20 +58,20 @@ pub struct PatientAllergies {
     pub unreadable: usize,
 }
 
-/// `$1` = the member charts (text uuids). Shared WHERE/JOIN shape: projection joined to its event
-/// for the signer key; the name door is asked once per row (small lists, see note::read for the
+/// `$1` = the member charts (text uuids, compared as uuid so the patient index is used). Shared
+/// WHERE/JOIN shape: projection joined to its event for the signer key; the name door is asked once per row (small lists, see note::read for the
 /// measured big-list case).
 const ENTRIES_SQL: &str =
     "SELECT a.event_id::text, a.patient_id::text, a.allergen_kind, a.term, a.kind, \
         a.reaction_category, a.reaction_text, a.onset_precision, a.onset_value, a.source, \
         a.hlc_wall, a.hlc_counter, cairn_note_signer_name(e.signer_key_id) \
      FROM clinical_allergy a JOIN event_log e ON e.event_id = a.event_id \
-     WHERE a.patient_id::text = ANY($1) ORDER BY a.hlc_wall, a.hlc_counter, a.event_id";
+     WHERE a.patient_id = ANY($1::text[]::uuid[]) ORDER BY a.hlc_wall, a.hlc_counter, a.event_id";
 const NONE_SQL: &str =
     "SELECT a.event_id::text, a.patient_id::text, a.scope, a.hlc_wall, a.hlc_counter, \
         cairn_note_signer_name(e.signer_key_id) \
      FROM clinical_allergy_none a JOIN event_log e ON e.event_id = a.event_id \
-     WHERE a.patient_id::text = ANY($1) ORDER BY a.hlc_wall, a.hlc_counter, a.event_id";
+     WHERE a.patient_id = ANY($1::text[]::uuid[]) ORDER BY a.hlc_wall, a.hlc_counter, a.event_id";
 
 /// The events of both allergy types on the member charts with no row in their projection. An
 /// applier projects every body it can read (db/074 step 7), so a missing row is a body this node
@@ -107,35 +107,38 @@ pub async fn list_patient_allergies(
         Vec::new()
     };
 
+    // `try_get`, not `get`: the projection's columns are nullable (a peer's newer version projects
+    // under /1's keys), and a NULL must fail this read honestly ("Could not read the allergy
+    // list") rather than panic the command.
     let mut entries = Vec::new();
     for r in client.query(ENTRIES_SQL, &[&members]).await? {
-        let hlc = (r.get::<_, i64>(10), r.get::<_, i32>(11));
+        let hlc = (r.try_get::<_, i64>(10)?, r.try_get::<_, i32>(11)?);
         entries.push(AllergyRow {
-            event_id: r.get::<_, String>(0).parse()?,
-            chart: r.get::<_, String>(1).parse()?,
-            allergen_kind: r.get(2),
-            term: r.get(3),
-            kind: r.get(4),
-            category: r.get(5),
-            reaction_text: r.get(6),
-            onset_precision: r.get(7),
-            onset_value: r.get(8),
-            source: r.get(9),
+            event_id: r.try_get::<_, String>(0)?.parse()?,
+            chart: r.try_get::<_, String>(1)?.parse()?,
+            allergen_kind: r.try_get(2)?,
+            term: r.try_get(3)?,
+            kind: r.try_get(4)?,
+            category: r.try_get(5)?,
+            reaction_text: r.try_get(6)?,
+            onset_precision: r.try_get(7)?,
+            onset_value: r.try_get(8)?,
+            source: r.try_get(9)?,
             recorded_at: wall_time(hlc.0)?,
             hlc,
-            signer: r.get(12),
+            signer: r.try_get(12)?,
         });
     }
     let mut none = Vec::new();
     for r in client.query(NONE_SQL, &[&members]).await? {
-        let hlc = (r.get::<_, i64>(3), r.get::<_, i32>(4));
+        let hlc = (r.try_get::<_, i64>(3)?, r.try_get::<_, i32>(4)?);
         none.push(NoneRow {
-            event_id: r.get::<_, String>(0).parse()?,
-            chart: r.get::<_, String>(1).parse()?,
-            scope: r.get(2),
+            event_id: r.try_get::<_, String>(0)?.parse()?,
+            chart: r.try_get::<_, String>(1)?.parse()?,
+            scope: r.try_get(2)?,
             recorded_at: wall_time(hlc.0)?,
             hlc,
-            signer: r.get(5),
+            signer: r.try_get(5)?,
         });
     }
     let unreadable: i64 = client.query_one(UNREADABLE_SQL, &[&members]).await?.get(0);

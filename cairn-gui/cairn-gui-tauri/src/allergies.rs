@@ -15,7 +15,8 @@
 //! signed event, its timing sample, and a fresh read for the pane ([`sign_then_reread`]), answered
 //! as an [`AllergyWrite`].
 //!
-//! No markup handling anywhere: the text the clinician typed is signed verbatim and the webview
+//! No markup handling anywhere: the text the clinician typed is signed as typed (only surrounding
+//! whitespace trimmed, no escaping) and the webview
 //! draws it with `textContent` only.
 use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::commands::record_timing;
@@ -61,7 +62,8 @@ pub struct AllergyPane {
     pub drug_allergies: Vec<AllergyLine>,
     pub other_allergies: Vec<AllergyLine>,
     pub adverse_effects: Vec<AllergyLine>,
-    /// "Previously recorded: …" lines for the "none known" statements an entry overrides.
+    /// "Previously recorded: …" lines: "none known" statements standing for no list (overridden,
+    /// superseded, of an unknown scope, or on a chart whose link is in doubt).
     pub previously_none: Vec<String>,
     /// The standing "none known" statement(s), each naming when and by whom it was signed.
     pub standing_none: Vec<String>,
@@ -310,7 +312,7 @@ pub(crate) fn written(reread: Result<AllergyPane, ErrorView>) -> AllergyWrite {
 }
 
 /// The form's verdicts, said before the key, in order: no substance, no kind, no category, an
-/// onset that cannot be read; then any word the window should never send. The term is trimmed and
+/// onset that cannot be read, is after today or is in year 0000; then any word the window should never send. The term is trimmed and
 /// a blank free text is none. Pure.
 pub(crate) fn entry_before_the_key(
     e: &EntryInput,

@@ -2292,7 +2292,7 @@ Launch as section 3 on `$A1`, first with `--key-hold-seconds 900`, and unlock th
 1). Open the other charts with *Find another patient* and a search by name (section 8), never by relaunching
 between runs of one gesture.
 
-**Measurement 1 — the four strip states, read with no click.** Today's date reads in the form "9 Nov 2026".
+**Measurement 1 — the five strip states, read with no click.** Today's date reads in the form "9 Nov 2026".
 
 - [ ] `$A1` opened: the strip reads **"Allergies not yet asked"**, not prominent, with *No known allergies* and *No
       known drug allergies (NKDA)* beside it. While the chart is read it says "Reading the allergy list…", never a
@@ -2364,7 +2364,9 @@ and nothing of `$A1`'s outcome shows on `$A2` (ADR-0096 decision 19). Reopen `$A
 
 **A chart whose link is in doubt (optional, section 13 Setup A).** If you have that pair, record an allergy on one
 chart and open the other: the line is shown, on the strip and in the list, ending "(on a chart whose link to this
-one is in doubt)", with a dashed rule beside it in the list. It is never withheld.
+one is in doubt)", with a dashed rule beside it in the list. It is never withheld. A "none known" statement on
+the doubted chart is the opposite: on the other chart the strip still reads "Allergies not yet asked" (with its
+two buttons), and the statement shows only under "Previously recorded", ending with the same mark.
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 

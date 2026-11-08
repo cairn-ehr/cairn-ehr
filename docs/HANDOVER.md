@@ -83,9 +83,12 @@
 >   `clinical.allergy.asserted` + `clinical.allergy-none.asserted`, born-sealed, a two-tier floor, **no clear `safety`
 >   signal** (#406/#401); one terse strip in the patient header (allergy vs adverse effect chosen every time, no
 >   default; "No known allergies" / NKDA as statements overriding per list; "N allergy records cannot be read on this
->   terminal" for a custody-less reader, never "not yet asked"); a doubted link's entries shown and marked; no
->   co-sign. Open: **#1027** (byline marker) · **#1028** (a refusal clears the passphrase) · **#1029** (no length
->   limit) · **#1030** · **#1031** (`vault_floor.rs` grants on a shared role). Owed by a human: **RUNBOOK §27**.
+>   terminal" for a custody-less reader, never "not yet asked"); a doubted link's entries shown and marked, its "none
+>   known" statements standing for nothing (the final check's fix: a stranger's NKDA under-warns); a list the window
+>   does not know is prominent; no co-sign. Open: **#1027** (byline marker) · **#1028** (a refusal clears the
+>   passphrase) · **#1029** (no length limit) · **#1030** · **#1031** (`vault_floor.rs` grants on a shared role); from
+>   the final check **#1032** (an unrecognised kind still reads "not yet asked" — a decision) · **#1033** (drug
+>   allergies, other list never asked — a decision) · **#1034** · **#1035** · **#1036** · **#1037**. Owed by a human: **RUNBOOK §27**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,

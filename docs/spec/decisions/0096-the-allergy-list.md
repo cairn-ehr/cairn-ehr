@@ -37,8 +37,8 @@ legible at 3 a.m.: what is dangerous, and what is not.
 This slice builds the first of the design's three slices: two event types, their floor, projections and shred hook
 (db/074); signing and reading in `cairn_node::allergy`; a pure view; and the strip and its form in the window's
 patient header. The first signed `clinical.allergy.asserted` freezes its shape forever (principle 11), so what went
-on the wire, and what was left out, is written down here. The build took seventeen rulings (R1–R17), which the window's
-code cites by number where it relies on one; each that bears on the architecture is stated below under its number.
+on the wire, and what was left out, is written down here. The build took seventeen rulings (R1–R17), cited by number in
+the code, tests and durable rules that rely on one; each that bears on the architecture is stated below under its number.
 
 ## Decision
 
@@ -115,7 +115,10 @@ code cites by number where it relies on one; each that bears on the architecture
     medications withhold a doubted link's other charts; an allergy that might be a stranger's is still shown, because
     over-warning is the safe error here. While the set holds a doubted link, every member chart but the opened one is
     named in `doubted_charts`, and each of its lines, on the strip and in the expanded list, ends "(on a chart whose
-    link to this one is in doubt)".
+    link to this one is in doubt)". The same reasoning cuts the other way for a **"none known" statement**: a
+    stranger's NKDA would under-warn, so a doubted chart's statement never stands for this patient. It sets no list's
+    status, outranks none of this chart's own statements, and is listed only under "Previously recorded", with the
+    same doubt mark (final review of PR #1026).
 12. **The lists.** The drug list holds rows whose `allergen_kind` is `drug`; the other list holds every other row,
     including a newer peer's allergen kind (a `food` allergy files under Other and its line ends " (food)"). An
     adverse effect goes to its own list. A row of a `kind` this node does not know is listed after the allergies of
@@ -133,7 +136,8 @@ code cites by number where it relies on one; each that bears on the architecture
     with who signed it (paper's initialled NKDA): "No known allergies — asked 8 Nov 2026 by Dr Bea" when one statement
     stands for both lists, else "No known drug allergies — …" and "No known other allergies — …" for the list each
     stands for; " by …" is left out when this node cannot name the key. A statement standing for neither list
-    (overridden in every list it covers, or superseded by a newer one) stays readable as "Previously recorded: no
+    (overridden in every list it covers, superseded by a newer one, of a scope this node does not know, or on a
+    chart whose link is in doubt — decision 11) stays readable as "Previously recorded: no
     known allergies (asked 8 Nov 2026 by Dr Bea)".
 14. **The strip is never blank.** Its states:
 
@@ -159,7 +163,9 @@ code cites by number where it relies on one; each that bears on the architecture
     entries" (R8): never prominent, and never overriding a statement. A drug list with nothing asked beside an other
     list with entries reads "Drug allergies not yet asked · Other: …". Until a chart's first read lands the strip
     says "Reading the allergy list…", and a failed read says "Could not read the allergy list: " and why, never an
-    older list.
+    older list. A list this window does not know — a failed read, a signed write whose list could not be read again,
+    a fault in the window mid-press — is shown prominent, like an unreadable record, since it may hold the allergy,
+    and none of the old list stays up under it (final review of PR #1026).
 15. **Dates are the terminal's calendar day** (R3): `build_view` takes the UTC offset the window passes
     (`chrono::Local::now()`'s), never the database's. A day reads "8 Nov 2026" and an onset "14 Mar 2019", "Mar 2019"
     or "2019", so day and month cannot be confused.
@@ -167,7 +173,7 @@ code cites by number where it relies on one; each that bears on the architecture
 ### Writing (`cairn-gui-tauri`'s `allergies.rs` and `allergies.js`)
 
 16. **One form, one Sign; one press for "none known".** The form starts with nothing pressed for "What kind" and
-    "What happened" (design §3.2's anti-goal: a default would sign an intolerance as an allergy by a press that chose
+    "What happened" (design §2's anti-goal: a default would sign an intolerance as an allergy by a press that chose
     nothing); the allergen defaults to Drug, the source to Patient stated, and an empty "When" is not known. The two
     "none known" buttons are on the strip only while both lists are "not yet asked" and no record is unreadable, and
     always in the expanded list.
@@ -221,7 +227,7 @@ code cites by number where it relies on one; each that bears on the architecture
   and the line's ISO day differs in form from the strip's "8 Nov 2026".
 - **(d) The terminal's offset is today's.** `build_view` gets the terminal's current UTC offset, so a record made
   near midnight under the other side of a daylight-saving change can read one day off.
-- **(e) Typed text has no length limit at the window.**
+- **(e) Typed text has no length limit at the window or the floor.**
 - **(f) The "+N unrecognised" count spans both lists and ignores doubt**, and the " ({allergen kind})" suffix is also
   added to a newer allergen kind's adverse-effect and unrecognised rows.
 - **(g) A refused form clears the typed passphrase**, as every window writer does, so a slip on a shared terminal

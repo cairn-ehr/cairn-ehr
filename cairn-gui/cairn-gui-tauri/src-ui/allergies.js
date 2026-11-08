@@ -24,7 +24,7 @@
 
 /**
  * What the form presses on load and after every signed entry. `kind` and `category` are null —
- * nothing pressed — on purpose (design §3.2's anti-goal): a default would sign an intolerance as
+ * nothing pressed — on purpose (design §2's anti-goal): a default would sign an intolerance as
  * an allergy, or "not known" as a reaction, by a press that chose nothing.
  */
 const ALLERGY_DEFAULTS = {
@@ -75,7 +75,7 @@ async function drawAllergies(patient) {
     if (patient === displayedPatient && revision === allergyRevision) {
       allergyCharts = null;
       clearAllergyLists();
-      stripSays("Could not read the allergy list: " + failureText(failure), false);
+      stripSays("Could not read the allergy list: " + failureText(failure), true); // unknown: may be the allergy
       syncAllergyButtons();
     }
   }
@@ -239,7 +239,7 @@ function afterSigned(answer, patient, wasEntry) {
   if (answer.pane === null) {
     allergyCharts = null;
     clearAllergyLists();
-    stripSays(answer.outcome, false); // said once, where the list was
+    stripSays(answer.outcome, true); // said once, where the list was; prominent: the list is unknown
     sayAllergy("");
     syncAllergyButtons();
     return;
@@ -316,7 +316,12 @@ async function pressOnce(act) {
     allergyCharts = null;
     allergyRevision += 1; // a read already in flight must not draw and re-enable Sign
     resetAllergyForm();
-    sayAllergy('This window failed while recording (' + String(fault) + '). Press "Read this chart again" to see what was recorded.');
+    // The write may have landed: nothing of the old list stays up (as afterSigned's pane-null
+    // branch), and the fault is said once, where the list was.
+    const said = 'This window failed while recording (' + String(fault) + '). Press "Read this chart again" to see what was recorded.';
+    clearAllergyLists();
+    stripSays(said, true);
+    sayAllergy("");
   } finally {
     allergyBusy = false;
     syncAllergyButtons();
