@@ -295,10 +295,13 @@ function syncAllergyButtons() {
 /**
  * Run one write press: refused at once if another is in flight or none may be pressed, every
  * button down until it is answered. A fault in this window mid-press means whether it recorded is
- * not known: said so, and handled as an unknown outcome is (no live write until a list draws).
+ * not known: said so, and handled as an unknown outcome is (no live write until a list draws) —
+ * but only on the chart the press started on. A fault answered after the clinician opened another
+ * chart touches nothing (ruling R13): that chart's own read, form and status line are its own.
  */
 async function pressOnce(act) {
   if (!allergyMayWrite()) return;
+  const patient = allergyPatient; // the chart this press acts on
   allergyBusy = true;
   clearAllergyErrors();
   sayAllergy("");
@@ -307,6 +310,7 @@ async function pressOnce(act) {
     await act();
   } catch (fault) {
     console.error(fault);
+    if (patient !== displayedPatient) return; // a chart left: its next read says the truth
     allergyCharts = null;
     allergyRevision += 1; // a read already in flight must not draw and re-enable Sign
     resetAllergyForm();

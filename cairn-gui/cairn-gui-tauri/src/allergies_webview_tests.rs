@@ -183,6 +183,34 @@ fn a_fault_mid_press_outdates_every_read_in_flight() {
     }
 }
 
+/// Fix round 2: a fault in a press on chart A, after the clinician opened chart B, must leave B
+/// alone (ruling R13: an outcome for a left chart is never shown on another). The press captures
+/// its chart before it acts, and the catch returns for a chart left BEFORE it touches any state —
+/// else B's first read was outdated (its sticker stuck at "Reading…"), B's form wiped, and A's
+/// fault said on B.
+#[test]
+fn a_fault_for_a_chart_left_never_touches_the_chart_on_screen() {
+    let press = js_fn(ALLERGIES_JS, "pressOnce");
+    assert!(
+        position(press, "const patient = allergyPatient;") < position(press, "await act();"),
+        "{press}"
+    );
+    let caught = &press[position(press, "catch (fault) {")..];
+    let caught = &caught[..position(caught, "} finally {")];
+    let guard = position(caught, "if (patient !== displayedPatient) return;");
+    for step in [
+        "allergyCharts = null;",
+        "allergyRevision += 1;",
+        "resetAllergyForm();",
+        "sayAllergy(",
+    ] {
+        assert!(
+            guard < position(caught, step),
+            "{step} after the guard: {press}"
+        );
+    }
+}
+
 /// Fix round 1, item 3: a refusal under a field is announced (it appears where the clinician is
 /// not necessarily looking — at the Sign button) and is tied to its control, so a screen reader
 /// hears it with the field it is about.
