@@ -1,7 +1,7 @@
 # GUI milestone — the allergy list (design)
 
 - **Date:** 2026-11-08
-- **Status:** brainstormed with the maintainer 2026-11-08; builder-checked; awaiting approval
+- **Status:** brainstormed with the maintainer 2026-11-08; builder-checked; approved by the maintainer 2026-11-08
 - **Milestone step:** "record an allergy" (HANDOVER ⇒ NEXT, the 2026-10-31 GUI milestone)
 - **Builds on:** [data-model §3.3](../../spec/data-model.md#33-mutable-non-demographic-state) (allergies: *union,
   never auto-delete; removal requires an explicit reconciliation event*), [ADR-0052](../../spec/decisions/0052-born-sealed-clinical-bodies.md)
