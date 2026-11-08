@@ -5,7 +5,7 @@
 //!
 //! A blank (whitespace-only) `text` is no text at all: it is written as JSON null in the
 //! payload AND yields no tail in the twin, so a sealed body never carries a value its own twin
-//! calls absent (one rule, [`present`]). Non-blank text is kept verbatim in the payload.
+//! calls absent (one rule, `present`). Non-blank text is kept verbatim in the payload.
 use crate::allergy::{onset_wire, Onset};
 use serde_json::{json, Value};
 
