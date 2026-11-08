@@ -22,6 +22,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod allergies;
+#[cfg(test)]
+mod allergies_webview_tests;
 mod chart_set;
 #[cfg(test)]
 mod chart_view_webview_tests;

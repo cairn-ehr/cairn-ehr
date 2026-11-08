@@ -450,3 +450,51 @@ h1:focus-visible {
   max-width: 48rem;
   box-sizing: border-box;
 }
+
+/* ---- The allergy strip (allergy slice 1) ---- */
+
+/* The paper folder's red sticker. The strip's TEXT says everything (an allergy is named, "not
+   yet asked" is said); the colour and weight are a second channel only, per this file's rule. */
+.allergy-prominent {
+  color: var(--warn-fg);
+  font-weight: 600;
+}
+
+#allergy-strip.allergy-prominent {
+  background: var(--warn-bg);
+  border-left: 4px solid var(--warn-line);
+  padding: 0.2rem 0.5rem;
+}
+
+/* Adverse effects, earlier statements, who recorded a line: present, but not the sticker. */
+.allergy-quiet {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+/* A line from a chart whose link to this one is in doubt: shown (over-warning is the safe
+   error), its text says so, and it is set apart by a dashed rule as well. */
+.allergy-doubted {
+  border-left: 2px dashed var(--warn-line);
+  padding-left: 0.4rem;
+}
+
+#allergy-form label,
+#allergy-form input[type="text"] {
+  display: block;
+}
+
+.allergy-choice {
+  margin: 0.3rem 0;
+}
+
+/* A pressed toggle reads as pressed without colour: its border and weight change too. */
+.allergy-choice button[aria-pressed="true"] {
+  font-weight: 600;
+  outline: 2px solid var(--accent);
+}
+
+.allergy-field-error {
+  color: var(--warn-fg);
+  margin: 0.1rem 0 0.4rem;
+}

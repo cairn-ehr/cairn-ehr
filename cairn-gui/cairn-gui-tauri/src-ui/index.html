@@ -262,6 +262,77 @@
           <p id="identity-born"></p>
           <p id="identity-trust"></p>
           <p id="identity-id"></p>
+          <!-- The allergy list (allergy slice 1): the paper folder's red sticker. One terse line,
+               always on screen with the name it belongs to, worded in Rust — never blank, so "not
+               yet asked" is never mistaken for "none". "Show all" opens the full lists and the
+               form in place, never a dialog. allergies.js draws and wires all of it. -->
+          <div id="allergy-strip" role="status">
+            <span id="allergy-strip-text">Reading the allergy list…</span>
+            <span id="allergy-strip-none" hidden>
+              <button type="button" class="allergy-none" data-scope="all">No known allergies</button>
+              <button type="button" class="allergy-none" data-scope="drug">No known drug allergies (NKDA)</button>
+            </span>
+          </div>
+          <details id="allergy-details">
+            <summary>Show all allergies</summary>
+            <p id="allergy-drug-label" hidden>Drug allergies:</p>
+            <ul id="allergy-drug" aria-labelledby="allergy-drug-label" hidden></ul>
+            <p id="allergy-other-label" hidden>Other allergies:</p>
+            <ul id="allergy-other" aria-labelledby="allergy-other-label" hidden></ul>
+            <p id="allergy-adverse-label" hidden>Adverse effects:</p>
+            <ul id="allergy-adverse" aria-labelledby="allergy-adverse-label" hidden></ul>
+            <ul id="allergy-previously" aria-label="Earlier statements" hidden></ul>
+            <p>
+              <button type="button" class="allergy-none" data-scope="all">No known allergies</button>
+              <button type="button" class="allergy-none" data-scope="drug">No known drug allergies (NKDA)</button>
+            </p>
+            <!-- One entry, as the clinician would write it on the sticker. Every choice is a row of
+                 toggle buttons (aria-pressed); "Allergy or Adverse effect" and "What happened" start
+                 with NOTHING pressed — the clinician chooses (design §3.2's anti-goal). A refusal
+                 lands as text under its own field. -->
+            <form id="allergy-form" autocomplete="off">
+              <div class="allergy-choice" data-field="allergen_kind" role="group" aria-labelledby="allergy-allergen-kind-label">
+                <span id="allergy-allergen-kind-label">Allergen:</span>
+                <button type="button" data-value="drug" aria-pressed="false">Drug</button>
+                <button type="button" data-value="other" aria-pressed="false">Other substance</button>
+              </div>
+              <label for="allergy-term">Substance</label>
+              <input id="allergy-term" type="text" />
+              <p id="allergy-term-error" class="allergy-field-error" hidden></p>
+              <div class="allergy-choice" data-field="kind" role="group" aria-labelledby="allergy-kind-label">
+                <span id="allergy-kind-label">What kind:</span>
+                <button type="button" data-value="allergy" aria-pressed="false">Allergy</button>
+                <button type="button" data-value="adverse-effect" aria-pressed="false">Adverse effect</button>
+              </div>
+              <p id="allergy-kind-error" class="allergy-field-error" hidden></p>
+              <div class="allergy-choice" data-field="category" role="group" aria-labelledby="allergy-category-label">
+                <span id="allergy-category-label">What happened:</span>
+                <button type="button" data-value="anaphylaxis" aria-pressed="false">Anaphylaxis</button>
+                <button type="button" data-value="angioedema" aria-pressed="false">Angioedema</button>
+                <button type="button" data-value="urticaria" aria-pressed="false">Urticaria (hives)</button>
+                <button type="button" data-value="rash" aria-pressed="false">Rash</button>
+                <button type="button" data-value="gi-upset" aria-pressed="false">Stomach upset</button>
+                <button type="button" data-value="other" aria-pressed="false">Other</button>
+                <button type="button" data-value="not-known" aria-pressed="false">Not known</button>
+              </div>
+              <p id="allergy-category-error" class="allergy-field-error" hidden></p>
+              <label for="allergy-reaction-text">What happened, in words (optional)</label>
+              <input id="allergy-reaction-text" type="text" />
+              <label for="allergy-onset">When — leave empty if not known</label>
+              <input id="allergy-onset" type="text" size="30" placeholder="2019 · 03/2019 · 14/03/2019" />
+              <p id="allergy-onset-error" class="allergy-field-error" hidden></p>
+              <div class="allergy-choice" data-field="source" role="group" aria-labelledby="allergy-source-label">
+                <span id="allergy-source-label">Source:</span>
+                <button type="button" data-value="patient-stated" aria-pressed="false">Patient stated</button>
+                <button type="button" data-value="seen-documented" aria-pressed="false">Seen documented</button>
+                <button type="button" data-value="another-record" aria-pressed="false">From another record</button>
+              </div>
+              <button id="allergy-sign" type="button">Sign</button>
+            </form>
+          </details>
+          <!-- Outside the <details>: a press on the strip's own buttons says its outcome here even
+               while the lists are closed. -->
+          <p id="allergy-status" role="status" aria-live="polite"></p>
           <!-- A chart linked to others (ADR-0076) opens as ONE combined record: two paper folders
                clipped together. Each member chart's OWN identity line is listed — no winner is
                chosen, because the disagreement is often the typo that made the duplicate — and
@@ -467,6 +538,7 @@
     <script src="notes_compound.js"></script>
     <script src="notes.js"></script>
     <script src="notes_discard.js"></script>
+    <script src="allergies.js"></script>
     <script src="person_menu.js"></script>
     <script src="whos_here.js"></script>
     <script src="idle.js"></script>
