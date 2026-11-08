@@ -76,7 +76,7 @@
 >   check fixed ADR-0095 (j)'s wording, made "Open note" stay on the chart when the Sign in flight did not go
 >   through (closing the chart erased that outcome), worded a failed bar read, and made the open check's charts a CI-tested
 >   `PersonMenu::charts()`.
-> - **Allergy slice 1 on PR [#1026](https://github.com/cairn-ehr/cairn-ehr/pull/1026)** (2026-11-08/09; design
+> - **Allergy slice 1 MERGED 2026-11-09 in PR [#1026](https://github.com/cairn-ehr/cairn-ehr/pull/1026)** (design
 >   [`superpowers/specs/2026-11-08-allergy-stream-design.md`](superpowers/specs/2026-11-08-allergy-stream-design.md), plan
 >   [`superpowers/plans/2026-11-08-allergy-slice-1-stream-and-strip.md`](superpowers/plans/2026-11-08-allergy-slice-1-stream-and-strip.md),
 >   [ADR-0096](spec/decisions/0096-the-allergy-list.md), spec **v0.98**, `db/074`, `SCHEMA_GENERATION` **74**):
@@ -132,8 +132,9 @@
 > 1. **Slice 3 is complete** (3a → 3c-3c, the bullets above). **#1021 measured, MERGED 2026-11-08 in PR #1025**
 >    (figures `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: per-key fact lookups 5–6× faster,
 >    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
->    projection and the Pi figures. **Allergy slice 1 is on PR #1026** (the bullet above). **Next, in order:** merge
->    #1026 after CI + the maintainer's read → **allergy slice 2** (correct / de-label / entered in error; differing
+>    projection and the Pi figures. **Allergy slice 1 MERGED** (the bullet above). **Next, in order:** **allergy slice 2**,
+>    planned 2026-11-09 in [`superpowers/plans/2026-11-09-allergy-slice-2-overlays-and-differing-accounts.md`](superpowers/plans/2026-11-09-allergy-slice-2-overlays-and-differing-accounts.md)
+>    (maintainer: two overlay types, `correction-of` names the line replaced, a de-label is withdrawable; scope + #1027) (correct / de-label / entered in error; differing
 >    accounts; #1027's byline marker) → **allergy slice 3** (drugref pick + the medication check on MED-RT classes, an
 >    honest "not fully checked" line per group; write down the narrow drugref contract) → **charting a medication in
 >    the window** (it cannot yet; its ADR also records the milestone's "prescribe means charted"). Later picks: slice 4
