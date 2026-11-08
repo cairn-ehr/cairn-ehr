@@ -100,6 +100,21 @@ impl Supervision {
         out
     }
 
+    /// Every actor the record EVER required co-signing for, sorted and without repeats. A superset
+    /// of the writers whose parts can owe a co-sign under the record (`needs_cosigning_at` is true
+    /// only after such a row), so the menu read may skip everyone else's settled parts (#1021).
+    pub fn ever_required_cosign(&self) -> Vec<String> {
+        let mut actors: Vec<String> = self
+            .rows
+            .iter()
+            .filter(|r| r.op == "require-cosign")
+            .map(|r| r.actor.clone())
+            .collect();
+        actors.sort();
+        actors.dedup();
+        actors
+    }
+
     /// `supervisor` supervised `supervisee` as of `t`.
     pub fn supervises_at(&self, supervisor: &str, supervisee: &str, t: DateTime<Utc>) -> bool {
         self.standing(supervisee, Some(t))
@@ -226,6 +241,22 @@ mod tests {
         assert!(!s.needs_cosigning_at("aa", at(25)));
         assert!(!s.needs_cosigning_at("aa", at(5)));
         assert!(!s.needs_cosigning_at("bb", at(15)));
+    }
+
+    /// The menu read's filter keeps every part of these writers (#1021): a lifted requirement
+    /// still leaves the parts signed under it owed, so "ever", not "now".
+    #[test]
+    fn ever_required_cosign_names_each_actor_with_any_requirement_once() {
+        let s = sup(vec![
+            row("require-cosign", "bb", None, 10),
+            row("lift-cosign", "bb", None, 20),
+            row("require-cosign", "aa", None, 30),
+            row("require-cosign", "aa", None, 40),
+            row("link-supervisor", "cc", Some("dd"), 50),
+            row("lift-cosign", "ee", None, 60),
+        ]);
+        assert_eq!(s.ever_required_cosign(), ["aa", "bb"]);
+        assert!(Supervision::default().ever_required_cosign().is_empty());
     }
 
     #[test]

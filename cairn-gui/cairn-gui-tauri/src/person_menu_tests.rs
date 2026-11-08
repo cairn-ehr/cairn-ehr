@@ -33,6 +33,7 @@ fn read(people: Vec<Person>) -> MenuRead {
         people,
         drafts: vec![],
         parts: vec![],
+        read_at: Utc::now(),
     }
 }
 

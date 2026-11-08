@@ -61,6 +61,17 @@ pub struct PartVouch {
     pub writer_supervised: bool,
 }
 
+/// The six words db/004's `cairn_key_confirmation` can answer. One list, so the menu read's keep
+/// rule (`read::NOTES_BY_KEYS_SQL`) can be checked against how [`signer_of`] reads each word.
+pub const CONFIRMATION_WORDS: [&str; 6] = [
+    "unknown",
+    "repudiated",
+    "outside",
+    "confirmed",
+    "doubtful",
+    "unconfirmed",
+];
+
 /// Build a [`Signer`] from what the doors say about one key. Pure. `None` from a door means the
 /// node does not know: no actor (matches no one), the unknown-signer words, not a student, and
 /// not marked unconfirmed (`cairn_key_confirmation` says `unknown`, not `unconfirmed`).
@@ -75,16 +86,8 @@ pub fn signer_of(
     confirmation: Option<&str>,
 ) -> anyhow::Result<Signer> {
     if let Some(w) = confirmation {
-        let known = [
-            "unknown",
-            "repudiated",
-            "outside",
-            "confirmed",
-            "doubtful",
-            "unconfirmed",
-        ];
         anyhow::ensure!(
-            known.contains(&w),
+            CONFIRMATION_WORDS.contains(&w),
             "a key's confirmation is {w:?}, which this build does not know"
         );
     }

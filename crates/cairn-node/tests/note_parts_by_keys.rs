@@ -42,7 +42,8 @@ async fn sign_as(c: &mut Client, node_sk: &SigningKey, chart: Uuid, m: &Member) 
 async fn by_keys(c: &Client, keys: &[&str]) -> Vec<cairn_node::note::read::NoteRow> {
     let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
     let sup = supervision::load(c).await.unwrap();
-    parts_by_keys(c, &keys, &sup).await.unwrap()
+    let review_from = cairn_node::note::menu::review_window_start(chrono::Utc::now());
+    parts_by_keys(c, &keys, &sup, review_from).await.unwrap()
 }
 
 macro_rules! db_test {

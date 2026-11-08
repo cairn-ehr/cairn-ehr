@@ -19,7 +19,7 @@ use cairn_node::note::menu::{PersonMenu, Why};
 use cairn_node::note::menu_read::read_menus;
 use cairn_node::note::sign::{sign_note, SignNoteInput};
 use cairn_node::note::vouch::{sign_off_note, SignOffInput};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use common::note_setup;
 use note_vouch_kit::{member, timer_part_by, Member, ORIGIN};
 use tokio_postgres::Client;
@@ -102,13 +102,35 @@ async fn next_millisecond() {
     tokio::time::sleep(std::time::Duration::from_millis(3)).await;
 }
 
-/// `staff`'s menu from the all-people read.
+/// `staff`'s menu from the all-people read, checked against the same read 30 days on.
 async fn menu(c: &Client, staff: &str) -> PersonMenu {
-    read_menus(c, None)
+    let now = Utc::now();
+    let m = read_menus(c, None, now)
         .await
         .unwrap()
-        .menu_for(staff, Utc::now())
-        .unwrap_or_else(|| panic!("{staff} is a person"))
+        .menu_for(staff)
+        .unwrap_or_else(|| panic!("{staff} is a person"));
+    owed_the_same_later(c, None, staff, &m).await;
+    m
+}
+
+/// #1021: past the review window the read skips every part that cannot be owed, so 30 days on
+/// what `staff` OWES (groups 1 and 2) must read exactly as it does now, and nothing is left to
+/// review. Every scenario below runs through here (through `menu`, `bar_equals_all`, or directly),
+/// so each pins one term of the read's filter.
+async fn owed_the_same_later(c: &Client, scope: Option<&str>, staff: &str, now: &PersonMenu) {
+    let later = Utc::now() + Duration::days(30);
+    let l = read_menus(c, scope, later)
+        .await
+        .unwrap()
+        .menu_for(staff)
+        .unwrap_or_else(|| panic!("{staff} is a person"));
+    assert_eq!(
+        (&l.own, &l.cosign),
+        (&now.own, &now.cosign),
+        "{staff}: what is owed, 30 days on"
+    );
+    assert!(l.review.is_empty(), "{staff}: the review window has passed");
 }
 
 fn parts_of(items: &[cairn_node::note::menu::MenuItem]) -> Vec<Option<Uuid>> {
@@ -184,6 +206,25 @@ db_test!(require_sign_lift_keeps_the_part_waiting_and_counted, |c| {
     assert_eq!(parts_of(&m.cosign), vec![Some(p)]);
     assert_eq!(m.count(), 1);
 });
+
+// #1021 review: a student's part that went in unsigned and that the student then signed is
+// signed only by a vouch, never by its envelope (the node's key). Only the read's "names a drafted
+// writer" term keeps it, so this pins that term's co-sign half (the timer test below pins group 1's).
+db_test!(
+    a_students_part_signed_after_going_in_unsigned_still_waits_for_a_cosign,
+    |c| {
+        let (node_sk, _, _, _, chart) = note_setup(&c).await;
+        let sam = member(&c, "sam", "Sam", "student").await;
+        let _sue = member(&c, "sue", "Dr Sue", "registrar").await;
+        console(&c, "link-supervisor", "sam", Some("sue")).await;
+        let p = timer_part_by(&mut c, &node_sk, chart, "sam", None).await;
+        sign_off(&mut c, &sam, chart, p).await;
+
+        let m = menu(&c, "sue").await;
+        assert_eq!(parts_of(&m.cosign), vec![Some(p)]);
+        assert_eq!(m.count(), 1);
+    }
+);
 
 db_test!(
     a_part_gone_in_unsigned_is_in_its_writers_group_until_signed,
@@ -301,15 +342,17 @@ db_test!(
         .unwrap();
 
         let now = Utc::now();
-        let bar = read_menus(&c, Some("sue")).await.unwrap();
-        let all = read_menus(&c, None).await.unwrap();
-        let a = bar.menu_for("sue", now).unwrap();
-        assert_eq!(a, all.menu_for("sue", now).unwrap());
+        let bar = read_menus(&c, Some("sue"), now).await.unwrap();
+        let all = read_menus(&c, None, now).await.unwrap();
+        let a = bar.menu_for("sue").unwrap();
+        assert_eq!(a, all.menu_for("sue").unwrap());
         assert_eq!(a.count(), 3, "a draft, an unsigned part, a co-sign");
         assert!(bar.person("sam").is_some() || bar.person("sue").is_some());
         // Unknown staff id: no menu, no parts read.
-        let none = read_menus(&c, Some("nobody")).await.unwrap();
-        assert!(none.menu_for("nobody", now).is_none());
+        owed_the_same_later(&c, Some("sue"), "sue", &a).await;
+        owed_the_same_later(&c, None, "sue", &a).await;
+        let none = read_menus(&c, Some("nobody"), now).await.unwrap();
+        assert!(none.menu_for("nobody").is_none());
         assert!(none.parts.is_empty());
     }
 );
@@ -322,11 +365,13 @@ db_test!(counts_equal_each_persons_menu_count, |c| {
     sign_as(&mut c, &node_sk, chart, &sam).await;
 
     let now = Utc::now();
-    let all = read_menus(&c, None).await.unwrap();
-    let counts = all.counts(now);
+    let all = read_menus(&c, None, now).await.unwrap();
+    let counts = all.counts();
     assert!(counts.len() >= 3, "every person with a staff id");
     for (staff, n) in &counts {
-        assert_eq!(*n, all.menu_for(staff, now).unwrap().count(), "{staff}");
+        let m = all.menu_for(staff).unwrap();
+        assert_eq!(*n, m.count(), "{staff}");
+        owed_the_same_later(&c, None, staff, &m).await;
     }
     assert_eq!(counts.iter().find(|(s, _)| s == "sue").unwrap().1, 1);
     let sue_actor = all.person("sue").unwrap().actor.clone();
@@ -337,13 +382,16 @@ db_test!(counts_equal_each_persons_menu_count, |c| {
 /// `staff`'s menu read both ways (the bar's narrowed keys, and every person's), asserted equal.
 async fn bar_equals_all(c: &Client, staff: &str) -> PersonMenu {
     let now = Utc::now();
-    let bar = read_menus(c, Some(staff))
+    let bar = read_menus(c, Some(staff), now)
         .await
         .unwrap()
-        .menu_for(staff, now);
-    let all = read_menus(c, None).await.unwrap().menu_for(staff, now);
+        .menu_for(staff);
+    let all = read_menus(c, None, now).await.unwrap().menu_for(staff);
     assert_eq!(bar, all, "{staff}: the bar's read and the picker's read");
-    bar.unwrap_or_else(|| panic!("{staff} is a person"))
+    let bar = bar.unwrap_or_else(|| panic!("{staff} is a person"));
+    owed_the_same_later(c, Some(staff), staff, &bar).await;
+    owed_the_same_later(c, None, staff, &bar).await;
+    bar
 }
 
 // Final review F6: the bar narrows the keys it reads (`keys_for_bar`); these are the cases where a
@@ -382,5 +430,25 @@ db_test!(
         for group in [&t.own, &t.cosign, &t.review] {
             assert!(!parts_of(group).contains(&Some(sp)), "{t:?}");
         }
+    }
+);
+
+// #1021: the read's filter really filters. A part its writer signed, owing no co-sign, is read
+// while it is within the review window (a supervisor may want to review it) and not after it.
+db_test!(
+    a_settled_part_is_not_read_once_the_review_window_has_passed,
+    |c| {
+        let (node_sk, _, _, _, chart) = note_setup(&c).await;
+        let bea = member(&c, "bea", "Dr Bea", "clinician").await;
+        let p = sign_as(&mut c, &node_sk, chart, &bea).await;
+        let read_at = async |at: DateTime<Utc>| {
+            let r = read_menus(&c, None, at).await.unwrap();
+            r.parts.iter().any(|x| x.event_id == p)
+        };
+        assert!(read_at(Utc::now()).await, "within the window");
+        assert!(
+            !read_at(Utc::now() + Duration::days(8)).await,
+            "signed, owing nothing, past the window"
+        );
     }
 );
