@@ -8,7 +8,12 @@
   `docs/superpowers/plans/2026-11-08-allergy-slice-1-stream-and-strip.md`. Touches
   [#406](https://github.com/cairn-ehr/cairn-ehr/issues/406) and [#401](https://github.com/cairn-ehr/cairn-ehr/issues/401)
   (decision 21), [#814](https://github.com/cairn-ehr/cairn-ehr/issues/814) (decision 18) and
-  [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905) (not guaranteed (h)).
+  [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905) (not guaranteed (h)). Filed by its review:
+  [#1027](https://github.com/cairn-ehr/cairn-ehr/issues/1027) (no unconfirmed / repudiated-key marker on a byline),
+  [#1028](https://github.com/cairn-ehr/cairn-ehr/issues/1028) (a refusal before the key clears the passphrase),
+  [#1029](https://github.com/cairn-ehr/cairn-ehr/issues/1029) (no length limit, not guaranteed (e)),
+  [#1030](https://github.com/cairn-ehr/cairn-ehr/issues/1030) (the unrecognised-word suffix and count, (f)),
+  [#1031](https://github.com/cairn-ehr/cairn-ehr/issues/1031) (a test grants a power to a shared role).
 - **Builds on:** [ADR-0052](0052-born-sealed-clinical-bodies.md) (born sealed) ·
   [ADR-0053](0053-per-write-human-authorship.md) (the human signs, the node seals) ·
   [ADR-0051](0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) (strict submit, lenient apply) ·

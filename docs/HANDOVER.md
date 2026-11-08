@@ -76,6 +76,16 @@
 >   check fixed ADR-0095 (j)'s wording, made "Open note" stay on the chart when the Sign in flight did not go
 >   through (closing the chart erased that outcome), worded a failed bar read, and made the open check's charts a CI-tested
 >   `PersonMenu::charts()`.
+> - **Allergy slice 1 on PR [#1026](https://github.com/cairn-ehr/cairn-ehr/pull/1026)** (2026-11-08/09; design
+>   [`superpowers/specs/2026-11-08-allergy-stream-design.md`](superpowers/specs/2026-11-08-allergy-stream-design.md), plan
+>   [`superpowers/plans/2026-11-08-allergy-slice-1-stream-and-strip.md`](superpowers/plans/2026-11-08-allergy-slice-1-stream-and-strip.md),
+>   [ADR-0096](spec/decisions/0096-the-allergy-list.md), spec **v0.98**, `db/074`, `SCHEMA_GENERATION` **74**):
+>   `clinical.allergy.asserted` + `clinical.allergy-none.asserted`, born-sealed, a two-tier floor, **no clear `safety`
+>   signal** (#406/#401); one terse strip in the patient header (allergy vs adverse effect chosen every time, no
+>   default; "No known allergies" / NKDA as statements overriding per list; "N allergy records cannot be read on this
+>   terminal" for a custody-less reader, never "not yet asked"); a doubted link's entries shown and marked; no
+>   co-sign. Open: **#1027** (byline marker) · **#1028** (a refusal clears the passphrase) · **#1029** (no length
+>   limit) · **#1030** · **#1031** (`vault_floor.rs` grants on a shared role). Owed by a human: **RUNBOOK §27**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -104,18 +114,10 @@
 > > PREVIOUS person a counted try (never a wrong author) — revisit with slice 3's "who's here" (its design: switching forgets the held key).
 
 > [!NOTE]
-> **Merged 2026-10-18 → 10-31 (ROADMAP has each; durable-rules has their blocks):** PR #895 (#893: a cut-off
-> command says the window cut it off, `ConnectionGuard::explain`, pinned by `node_lock_explains_tests.rs`) · #892
-> (#875 option 2, the 15 s cut + waiting bar; its brainstorm filed **#891**, its review **#894**) · #890 (#810) · #889
-> (#884 + #888) · #887 (#882 + #885) · #886 (#878) · #883 (#880 + #881) · #879 (#876) · #877 (#875 option 1) · #874
-> (#807; RUNBOOK §14 (c) human-owed) · #873 (#855 + #837 item 1, ADR-0082 E1) · #872 (#869) · #868 (#861; filed
-> **#870**, **#871**) · #865 (#863 + #864; filed **#866**, **#867**) · #860 · #856 · #853
-> ([ADR-0082](spec/decisions/0082-a-release-of-an-ended-hold-is-refused-at-the-local-door.md), spec v0.84) · #851 ·
-> #847 · #845 · #842 · #838 (the window's **W**; **owed by a human: RUNBOOK §15** — W ≤ 10 s, Release ≤ 5 s,
-> VoiceOver/keyboard) · #831 ([ADR-0081](spec/decisions/0081-medication-withhold-is-a-time-bounded-hold.md), `db/059`)
-> · #830 · #829 · #827 · #824 · #821 · #819 · #816 · #813 · #805 (#797, "Read this chart again"; RUNBOOK §14 is its
-> owed timing) · #802. Still open from them: **#858** · **#850** · **#837** · **#825**
-> · **#185** · **#862** (`run-db-gated-tests.sh` with `CAIRN_TEST_PG*` but no `PGPORT` runs its SQL step against
+> **Merged 2026-10-18 → 10-31** (PRs #802 → #895; ROADMAP has each, durable-rules their blocks; ADR-0081, ADR-0082).
+> Still open from them: **#858** · **#850** · **#837** · **#825** · **#185** · **#870** · **#871** · **#866** ·
+> **#867** · **#891** (brainstorm first) · **#894** (satellite rig) · **#862** (`run-db-gated-tests.sh` with
+> `CAIRN_TEST_PG*` but no `PGPORT` runs its SQL step against
 > :5432 — pass `PGHOST=127.0.0.1 PGPORT=5532`). The repair path (#679 · #680 · #681)
 > is built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's
 > runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.84** (newest
@@ -124,33 +126,21 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **3c-1 MERGED in PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)** (ADR-0091, spec v0.93,
->    `db/070`, `SCHEMA_GENERATION` 70); **3c-2 MERGED in PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)**
->    (ADR-0092, spec v0.94, `db/071`, `SCHEMA_GENERATION` 71; the slice bullet above has its issues). **3c-3b MERGED in PR
->    [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95); the maintainer ruled 2026-11-07 that a re-sign under an UNCONFIRMED key counts, read
->    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a MERGED in PR #1013** (the slice bullet above).
->    **3c-3c MERGED in PR #1019**: slice 3 (notes, drafts, who's here, sign-off, supervision, the menu) is complete.
->    **#1021 measured, MERGED 2026-11-08 in PR #1025** (`examples/measure_person_menu.rs`, figures in
->    `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`): the budget was missed from 5 000 notes;
->    88% was per-row key-fact lookups, now once per distinct key (`notes_sql!`'s `facts` CTE, output identical) — 5–6×
->    faster. Then a **keep rule** (the maintainer's time-limit idea, made lossless): the read builds only parts some menu
->    could list — a drafted writer, the 7-day review window, a repudiated key, a student's or ever-co-sign-required
->    writer's. Steady state, a pick behind the picker's counts read: **386 ms at a ward-year, 1.13 s at 100 000**. The
->    scan, and those writers' parts (cleared or not), stay linear in history: #1021 stays open for the obligations
->    projection, the cheap levers it lists, and the Pi figures. **The maintainer picked the allergy stream
->    (2026-11-08):** design [`superpowers/specs/2026-11-08-allergy-stream-design.md`](superpowers/specs/2026-11-08-allergy-stream-design.md)
->    (branch `design/allergy-stream`), brainstormed + builder-checked, **awaiting the maintainer's approval**, then a
->    plan for its slice 1. Decided: allergies first, then charting a medication in the window (it cannot yet); the
->    medication check builds now on drugref's MED-RT classes with an honest "not fully checked" line per group; no
->    co-sign for students' entries; no clear safety signal until #406/#401. Later picks: slice 4 (the emergency key);
->    **#1014** (first if a multi-node pilot nears); #1021's projection.
->    Design §10's findings 1–2 are
->    decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
+> 1. **Slice 3 is complete** (3a → 3c-3c, the bullets above). **#1021 measured, MERGED 2026-11-08 in PR #1025**
+>    (figures `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: per-key fact lookups 5–6× faster,
+>    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
+>    projection and the Pi figures. **Allergy slice 1 is on PR #1026** (the bullet above). **Next, in order:** merge
+>    #1026 after CI + the maintainer's read → **allergy slice 2** (correct / de-label / entered in error; differing
+>    accounts; #1027's byline marker) → **allergy slice 3** (drugref pick + the medication check on MED-RT classes, an
+>    honest "not fully checked" line per group; write down the narrow drugref contract) → **charting a medication in
+>    the window** (it cannot yet; its ADR also records the milestone's "prescribe means charted"). Later picks: slice 4
+>    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
+>    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930, merged; it also carries the per-note "unconfirmed" marker and #918's display half). The maintainer picks
 >    the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
->    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**; #838's
+>    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27** (allergies); #838's
 >    **§15** (incl. #861's current-line check); **§14** (c) (the cause on screen; a refused reopen offers no retry; the
 >    front door's top line clears) and (d) (no waiting bar on an ordinary press; a locked `medication_statement` →
 >    "Waiting…", cut off by 15 s, and since #893 the outcome says the window cut it off). **#894** needs the satellite
