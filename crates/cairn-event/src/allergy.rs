@@ -111,7 +111,18 @@ fn reaction_phrase(category: &str, text: Option<&str>) -> String {
     }
 }
 
-/// The clinician wording of one entry, without dates (a later layer adds onset). Takes WIRE
+/// How the source reads at the end of a line. Seen-documented carries no mark; an unknown peer
+/// word reads as itself (never silently dropped).
+fn source_tail(source: &str) -> String {
+    match source {
+        "seen-documented" => String::new(),
+        "patient-stated" => " (patient stated)".to_string(),
+        "another-record" => " (from another record)".to_string(),
+        unknown => format!(" ({unknown})"),
+    }
+}
+
+/// The clinician wording of one entry, without dates (the signed twin has none). Takes WIRE
 /// WORDS, not enums, so the strip can call it with database strings.
 pub fn entry_words(
     kind: &str,
@@ -120,26 +131,51 @@ pub fn entry_words(
     category: &str,
     reaction_text: Option<&str>,
 ) -> String {
-    if kind == "adverse-effect" {
-        let tail = match source {
-            "patient-stated" => " (patient stated)",
-            "another-record" => " (from another record)",
-            _ => "",
+    entry_words_dated(kind, source, term, category, reaction_text, None)
+}
+
+/// [`entry_words`] plus the onset the strip shows: `" · {onset}"` after an allergy, and
+/// `" ({onset})"` after "effect" on an adverse effect. `onset` is already clinician text.
+pub fn entry_words_dated(
+    kind: &str,
+    source: &str,
+    term: &str,
+    category: &str,
+    reaction_text: Option<&str>,
+    onset: Option<&str>,
+) -> String {
+    // A blank free text is no text at all.
+    let text = reaction_text.map(str::trim).filter(|t| !t.is_empty());
+    let reaction = reaction_phrase(category, text);
+    if kind == "allergy" {
+        let onset = onset.map(|o| format!(" · {o}")).unwrap_or_default();
+        return match source {
+            "patient-stated" if category == "not-known" => {
+                format!("Patient stated allergy: {term}. Effect not known.{onset}")
+            }
+            "patient-stated" => format!("Patient stated allergy: {term} → {reaction}{onset}"),
+            "another-record" => {
+                format!("Allergy (from another record): {term} → {reaction}{onset}")
+            }
+            // seen-documented, or an unknown word, which is marked rather than assumed.
+            _ => format!(
+                "Allergy: {term} → {reaction}{onset}{}",
+                if source == "seen-documented" {
+                    String::new()
+                } else {
+                    source_tail(source)
+                }
+            ),
         };
-        return format!(
-            "Previous adverse effect: {term} → {}{tail}",
-            reaction_phrase(category, reaction_text)
-        );
     }
-    let reaction = reaction_phrase(category, reaction_text);
-    match source {
-        "patient-stated" if category == "not-known" => {
-            format!("Patient stated allergy: {term}. Effect not known.")
-        }
-        "patient-stated" => format!("Patient stated allergy: {term} → {reaction}"),
-        "another-record" => format!("Allergy (from another record): {term} → {reaction}"),
-        _ => format!("Allergy: {term} → {reaction}"),
-    }
+    // Adverse effect, or a kind from a newer peer: that one must never read as "Allergy:".
+    let head = if kind == "adverse-effect" {
+        "Previous adverse effect"
+    } else {
+        kind
+    };
+    let onset = onset.map(|o| format!(" ({o})")).unwrap_or_default();
+    format!("{head}{onset}: {term} → {reaction}{}", source_tail(source))
 }
 
 /// The signed plaintext twin of an entry.
@@ -321,6 +357,58 @@ mod tests {
         assert_eq!(
             w("allergy", "patient-stated", "angioedema", None),
             "Patient stated allergy: X → angioedema"
+        );
+    }
+
+    #[test]
+    fn unknown_words_never_read_as_an_allergy() {
+        let w = |k, s, c, t| entry_words(k, s, "X", c, t);
+        assert_eq!(
+            w("intolerance", "seen-documented", "rash", None),
+            "intolerance: X → rash"
+        );
+        assert_eq!(
+            w("allergy", "hearsay", "rash", None),
+            "Allergy: X → rash (hearsay)"
+        );
+        assert_eq!(
+            w("adverse-effect", "hearsay", "rash", None),
+            "Previous adverse effect: X → rash (hearsay)"
+        );
+        // A blank free text is no text.
+        assert_eq!(
+            w("allergy", "seen-documented", "rash", Some("  ")),
+            "Allergy: X → rash"
+        );
+        assert_eq!(
+            w("adverse-effect", "patient-stated", "not-known", None),
+            "Previous adverse effect: X → effect not known (patient stated)"
+        );
+    }
+
+    #[test]
+    fn dated_wording_places_the_onset() {
+        assert_eq!(
+            entry_words_dated(
+                "allergy",
+                "seen-documented",
+                "X",
+                "rash",
+                None,
+                Some("2014")
+            ),
+            "Allergy: X → rash · 2014"
+        );
+        assert_eq!(
+            entry_words_dated(
+                "adverse-effect",
+                "patient-stated",
+                "X",
+                "rash",
+                None,
+                Some("2019")
+            ),
+            "Previous adverse effect (2019): X → rash (patient stated)"
         );
     }
 

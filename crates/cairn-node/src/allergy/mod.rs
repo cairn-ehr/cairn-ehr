@@ -3,3 +3,4 @@
 //! pure wire builders are `cairn_event::allergy`'s; the floor is db/074.
 pub mod read;
 pub mod sign;
+pub mod view;
