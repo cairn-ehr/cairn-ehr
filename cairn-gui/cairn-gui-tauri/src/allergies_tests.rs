@@ -243,7 +243,7 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
     assert_eq!(pane.previously_none.len(), 1, "{:?}", pane.previously_none);
     assert!(pane.previously_none[0].starts_with("Previously recorded: no known allergies"));
     assert_eq!(timed("allergy-none").await, nones + 1, "timed once");
-    let err = allergy_none_impl(&state, &patient, charts.clone(), "everything", None)
+    let err = allergy_none_impl(&state, &patient, charts, "everything", None)
         .await
         .err()
         .unwrap();
@@ -252,38 +252,6 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
         "{}",
         err.text
     );
-
-    // The sign lands but the re-read cannot (the window's role loses one read grant — the
-    // SET ROLE seam's sibling; the loader re-grants it on the next connect if this panics): still
-    // an Ok, saying it was signed, with no pane — never an error inviting a second press.
-    owner
-        .batch_execute("REVOKE SELECT ON clinical_allergy_none FROM cairn_agent")
-        .await
-        .unwrap();
-    let done = allergy_none_impl(&state, &patient, charts, "drug", None).await;
-    owner
-        .batch_execute("GRANT SELECT ON clinical_allergy_none TO cairn_agent")
-        .await
-        .unwrap();
-    let done = done.unwrap();
-    assert!(done.pane.is_none());
-    assert!(
-        done.outcome
-            .starts_with("Signed — but the allergy list could not be read again ("),
-        "{}",
-        done.outcome
-    );
-    assert!(done.outcome.ends_with("). Use “Read this chart again”."));
-    let recorded: i64 = owner
-        .query_one(
-            "SELECT count(*) FROM clinical_allergy_none \
-             WHERE scope = 'drug' AND patient_id::text = $1",
-            &[&patient],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(recorded, 1, "the statement was recorded");
 }
 
 /// A failure marked outcome-unknown by the node (#713, #814), as `write_failure_tests` makes one.
@@ -317,7 +285,11 @@ fn an_interrupted_sign_is_not_known_and_never_retried() {
     );
 }
 
-/// Ruling R11: a sign that landed is an Ok whatever the re-read did.
+/// Ruling R11: a sign that landed is an Ok whatever the re-read did. The failure branch is
+/// tested here, at `written`, not by failing a real re-read: no seam fails ONLY the re-read on the
+/// window's connection without mutating a role other suites share (privileges cannot be
+/// subtracted from a role that inherits `cairn_window`), and `sign_then_reread` hands its re-read
+/// straight to `written`.
 #[test]
 fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
     let pane = || AllergyPane {
