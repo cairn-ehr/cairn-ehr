@@ -6,6 +6,7 @@ use cairn_node::allergy::read::list_patient_allergies;
 use cairn_node::allergy::sign::{sign_allergy, sign_allergy_none};
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::shred::shred_event;
 use uuid::Uuid;
 
 mod common;
@@ -161,4 +162,68 @@ async fn rows_carry_chart_scope_and_a_recorded_time_near_now() {
     let e = &got.entries[0];
     assert_eq!(e.event_id, ea);
     assert!(near_now(e.recorded_at), "{}", e.recorded_at);
+}
+
+/// An allergy event this node holds but has no projected row for — no custody of its sealed
+/// body, or (as here) shredded — is COUNTED, never silently absent: without the count the strip
+/// would say "not yet asked", or a readable NKDA, over a recorded allergy. Readable rows are not
+/// counted, and the "none known" stream is counted too.
+#[tokio::test]
+async fn an_allergy_event_this_node_cannot_read_is_counted() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, human_sk, human_kid, a) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let ea = sign_allergy(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        "n",
+        a,
+        &entry("penicillin"),
+        &author,
+    )
+    .await
+    .unwrap();
+    let en = sign_allergy_none(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        "n",
+        a,
+        NoneScope::Drug,
+        &author,
+    )
+    .await
+    .unwrap();
+    let kept = sign_allergy_none(&mut c, &node_sk, &node_kid, "n", a, NoneScope::All, &author)
+        .await
+        .unwrap();
+    assert_eq!(list_patient_allergies(&c, a).await.unwrap().unreadable, 0);
+
+    for id in [ea, en] {
+        shred_event(
+            &mut c,
+            &node_sk,
+            &node_kid,
+            &node_kid,
+            id,
+            "retention ceiling",
+            None,
+        )
+        .await
+        .expect("the shred is admitted");
+    }
+    let got = list_patient_allergies(&c, a).await.unwrap();
+    assert_eq!(got.unreadable, 2, "the shredded entry and statement");
+    assert!(got.entries.is_empty());
+    let readable: Vec<Uuid> = got.none.iter().map(|n| n.event_id).collect();
+    assert_eq!(readable, vec![kept]);
 }

@@ -12,8 +12,33 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 **⇒ ALLERGY SLICE 1 — THE STREAM AND THE STRIP (ADR-0096, db/074, db/037 + db/044 in place) — do not undo**
 (pins: `db/tests/074_clinical_allergy_test.sql`, `crates/cairn-event/src/allergy.rs`'s tests,
-`crates/cairn-node/src/allergy/view_tests.rs`, `crates/cairn-node/tests/{allergy_floor,allergy_sign,allergy_read}.rs`,
+`crates/cairn-node/src/allergy/view_tests.rs`, `crates/cairn-node/tests/{allergy_floor,allergy_sign,allergy_read,window_role_grants}.rs`,
 `cairn-gui/cairn-gui-tauri/src/{allergies,allergies_webview}_tests.rs`):
+- **An allergy event this terminal cannot read LEADS the strip; nothing then says "not yet asked".**
+  `list_patient_allergies` counts the allergy-stream events `event_log` holds on the member charts with no projected
+  row (`unreadable`: no custody, or shredded), and `strip_text` leads with "N allergy record(s) cannot be read on this
+  terminal", drops every "not yet asked" phrase, and keeps a readable "none known" claim only after it; the window
+  marks it prominent and hides the strip's one-press "none known" buttons. **Tempting wrong fixes:** read only the
+  projections (a custody-less node says "Allergies not yet asked", or a lone "NKDA", over a recorded anaphylaxis — the
+  final review's finding 1); stop counting a shredded entry "because it is gone" (the record still exists and cannot
+  be read). Pins: `view_tests.rs::an_unreadable_record_leads_the_strip_and_silences_not_yet_asked`,
+  `allergy_read.rs::an_allergy_event_this_node_cannot_read_is_counted`,
+  `allergies_webview_tests.rs::an_unreadable_record_marks_the_strip_and_hides_its_none_buttons`; the window's login
+  runs the count in `window_role_grants.rs::the_windows_allergy_calls_run_under_its_own_login`.
+- **The override is PER LIST** (design §3.4 "in its list", R16). An `all` statement stands for drugs while no drug
+  allergy exists and for the other list while no other allergy exists: "No known allergies" + latex reads "No known
+  drug allergies (asked …) · Other: latex → urticaria". It goes to "Previously recorded" only when overridden in both
+  lists (or superseded). **Tempting wrong fix:** treat `all` as one statement overridden everywhere by any allergy
+  (the plan's original rule): the strip then says "Drug allergies not yet asked" over a recorded "no known
+  allergies" — false. Pins: `view_tests.rs::no_known_allergies_plus_a_latex_entry_still_stands_for_drugs`,
+  `an_allergy_overrides_no_known_allergies_in_either_order`, `an_all_none_overridden_in_both_lists_is_only_history`.
+- **The standing "none known" statement names who signed it** (paper's initialled NKDA): "No known allergies — asked
+  8 Nov 2026 by Dr Bea" opens the expanded list, and "Previously recorded" lines carry " by …" too. Pins:
+  `view_tests.rs::the_standing_statement_and_history_name_who_signed`,
+  `allergies_webview_tests.rs::the_standing_statement_is_drawn_and_cleared`.
+- **The signed twin carries the onset in ISO form** (R17): `render_allergy_twin` goes through `entry_words_dated`.
+  **Tempting wrong fix:** "the twin has no dates" (once the first real entry is signed without its onset, it is
+  without it for good, principle 11). Pin: `allergy.rs::tests::twin_carries_the_onset`.
 - **No default on "What kind" or "What happened".** `ALLERGY_DEFAULTS` presses only the allergen (drug) and the source
   (patient stated); `kind` and `category` are `null`, in the page and after every signed entry, and Rust refuses a
   missing one before the key. **Tempting wrong fixes:** press *Allergy* by default "to save a click" (the design's
@@ -24,10 +49,11 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   (`textContent`). **Tempting wrong fixes:** `innerHTML` to bold the allergen or draw the "→"; an escape helper "to be
   safe" (its existence invites the next writer to render markup, and the twin is signed verbatim). Pin:
   `allergies_webview_tests.rs::allergies_js_never_assigns_inner_html`.
-- **An allergy of an unrecognised `allergen_kind` is an OTHER allergy, and it overrides a "none known".** `build_view`
+- **An allergy of an unrecognised `allergen_kind` is an OTHER allergy, and it overrides a "none known" in that list.** `build_view`
   files every row whose `allergen_kind` is not `drug` under Other (its line ends " (food)"). **Tempting wrong fix:**
   filter `allergen_kind == "other"` — a newer peer's food allergy then vanishes while "No known allergies" stands (the
-  slice's Critical review finding). Pin: `view_tests.rs::a_peers_newer_allergen_kind_counts_as_other`.
+  slice's Critical review finding); the strip reads "No known drug allergies (asked …) · Other: peanut → anaphylaxis
+  (food)". Pin: `view_tests.rs::a_peers_newer_allergen_kind_counts_as_other`.
 - **A row of an unrecognised `kind` is listed and counted, never prominent, and never overrides.** It sits after its
   list's allergies and the strip says "+N unrecognised entr(y|ies)" (R8). **Tempting wrong fixes:** drop it (a newer
   peer's kind could be a suspected allergy, and the strip would show no trace of it); treat it as an allergy (it would
@@ -58,8 +84,10 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **No `safety` is emitted.** `allergy::sign`'s `body` writes `safety: None` on both types. **Tempting wrong fix:** emit
   an allergy-class signal "so a reader without custody is warned" (ADR-0096 (a)): db/049's signal has no supersession
   (#406, #401), so it would keep warning after slice 2's "entered in error" and "challenged: tolerated" — the metformin
-  problem made permanent on the wire — and `safety_class_map` ships empty. Settle supersession first. **Pin: none yet**
-  (ADR-0096 (i)): no test asserts `event_log.safety IS NULL` for a signed allergy event.
+  problem made permanent on the wire — and `safety_class_map` ships empty. Settle supersession first. (A reader
+  without custody is warned by the "cannot be read" count above instead.) Pin:
+  `allergy_sign.rs::signing_an_entry_records_human_authorship` and `signing_none_known_records_its_scope` assert
+  `event_log.safety IS NULL` (ADR-0096 (i)).
 - **`schema_version` is checked at the authoring door only, and the applier projects every version.** This departs on
   purpose from db/064 (a note projects `/1` only, because its narrative renders as markdown; allergy text is plaintext,
   and withholding a newer version's allergy under-warns). **Tempting wrong fixes:** copy db/064's "project `/1` only"
@@ -70,6 +98,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   ZONE 'UTC' + 14 hours`. **Tempting wrong fix:** `now()::date` (a clinician east of the database's zone typing
   today's date is refused). Pin: `074_clinical_allergy_test.sql`'s section 1 (today accepted) and section 3 (next year
   past UTC+14 refused); the window's own stricter check is `allergies_tests.rs::parse_onset_accepts_the_five_shapes`.
+  Neither admits the year `0000` (section 3's `year 0000` lines; `parse_onset_refuses_year_0000_at_every_precision`).
 - **Both types stay off db/048's no-thread list.** Pin: `074_clinical_allergy_test.sql`'s section 0.
 - **Never mutate a shared role's grants in a test** (R12). The re-read-failure test first `REVOKE`d `SELECT` on
   `cairn_agent` with a best-effort restore, which races every other DB binary on the shared cluster (and a crash

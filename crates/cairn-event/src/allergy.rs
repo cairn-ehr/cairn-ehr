@@ -2,7 +2,7 @@
 //! (allergy slice 1). Pure: no clock, no randomness, no I/O.
 //!
 //! Each event is signed with a plaintext legibility twin (principle 11); the twin wording
-//! lives here ONCE ([`entry_words`]) so the signed twin and the strip's line cannot drift.
+//! lives here ONCE ([`entry_words_dated`]) so the signed twin and the strip's line cannot drift.
 use serde_json::{json, Value};
 
 /// Event type of one allergy / adverse-effect entry.
@@ -122,8 +122,8 @@ fn source_tail(source: &str) -> String {
     }
 }
 
-/// The clinician wording of one entry, without dates (the signed twin has none). Takes WIRE
-/// WORDS, not enums, so the strip can call it with database strings.
+/// The clinician wording of one entry, without its onset. Takes WIRE WORDS, not enums, so the
+/// strip can call it with database strings.
 pub fn entry_words(
     kind: &str,
     source: &str,
@@ -134,8 +134,9 @@ pub fn entry_words(
     entry_words_dated(kind, source, term, category, reaction_text, None)
 }
 
-/// [`entry_words`] plus the onset the strip shows: `" · {onset}"` after an allergy, and
-/// `" ({onset})"` after "effect" on an adverse effect. `onset` is already clinician text.
+/// [`entry_words`] plus the onset: `" · {onset}"` after an allergy, and `" ({onset})"` after
+/// "effect" on an adverse effect. `onset` is already the text to show (the strip's `Mar 2019`,
+/// the signed twin's ISO `2019-03`).
 pub fn entry_words_dated(
     kind: &str,
     source: &str,
@@ -157,15 +158,8 @@ pub fn entry_words_dated(
             "another-record" => {
                 format!("Allergy (from another record): {term} → {reaction}{onset}")
             }
-            // seen-documented, or an unknown word, which is marked rather than assumed.
-            _ => format!(
-                "Allergy: {term} → {reaction}{onset}{}",
-                if source == "seen-documented" {
-                    String::new()
-                } else {
-                    source_tail(source)
-                }
-            ),
+            // seen-documented (no tail), or an unknown word, marked rather than assumed.
+            _ => format!("Allergy: {term} → {reaction}{onset}{}", source_tail(source)),
         };
     }
     // Adverse effect, or a kind from a newer peer: that one must never read as "Allergy:".
@@ -178,14 +172,21 @@ pub fn entry_words_dated(
     format!("{head}{onset}: {term} → {reaction}{}", source_tail(source))
 }
 
-/// The signed plaintext twin of an entry.
+/// The signed plaintext twin of an entry, its onset in ISO form (`2014`, `2019-03`,
+/// `2019-03-04`) and nothing when not known (ruling R17: what the twin omits on the first real
+/// entry it omits for good, principle 11).
 pub fn render_allergy_twin(e: &AllergyEntry) -> String {
-    entry_words(
+    let onset = match &e.onset {
+        Onset::Day(v) | Onset::Month(v) | Onset::Year(v) => Some(v.as_str()),
+        Onset::NotKnown => None,
+    };
+    entry_words_dated(
         e.kind.as_str(),
         e.source.as_str(),
         e.term,
         e.category.as_str(),
         e.reaction_text,
+        onset,
     )
 }
 
@@ -409,6 +410,30 @@ mod tests {
                 Some("2019")
             ),
             "Previous adverse effect (2019): X → rash (patient stated)"
+        );
+    }
+
+    /// Ruling R17: the signed twin carries the onset, in its ISO form, placed as the strip places
+    /// it; a not-known onset adds nothing.
+    #[test]
+    fn twin_carries_the_onset() {
+        let mut e = entry();
+        e.onset = Onset::Year("2014".into());
+        assert_eq!(render_allergy_twin(&e), "Allergy: penicillin → rash · 2014");
+        e.kind = EntryKind::AdverseEffect;
+        e.term = "metformin";
+        e.category = ReactionCategory::GiUpset;
+        e.onset = Onset::Month("2019-03".into());
+        assert_eq!(
+            render_allergy_twin(&e),
+            "Previous adverse effect (2019-03): metformin → GI upset"
+        );
+        e.onset = Onset::Day("2019-03-04".into());
+        assert!(render_allergy_twin(&e).starts_with("Previous adverse effect (2019-03-04): "));
+        e.onset = Onset::NotKnown;
+        assert_eq!(
+            render_allergy_twin(&e),
+            "Previous adverse effect: metformin → GI upset"
         );
     }
 

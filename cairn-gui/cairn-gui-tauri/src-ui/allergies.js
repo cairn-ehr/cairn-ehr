@@ -83,15 +83,17 @@ async function drawAllergies(patient) {
 
 /**
  * Draw an `allergy_list` answer (Rust's `AllergyPane`) for `patient`: the strip (prominent when it
- * names an allergy), the strip's own two "none known" buttons when nothing has been asked at all
- * (design §3.4), and the expanded lists.
+ * names an allergy, or when a record cannot be read here — it may be the allergy), the strip's own
+ * two "none known" buttons when nothing has been asked at all and nothing is unreadable (design
+ * §3.4), and the expanded lists, the standing "none known" statement with who signed it included.
  */
 function renderAllergies(pane, patient) {
   allergyPatient = patient;
   allergyCharts = pane.charts;
-  const named = pane.drug_allergies.concat(pane.other_allergies).some((line) => line.prominent);
+  const named = pane.unreadable > 0 || pane.drug_allergies.concat(pane.other_allergies).some((line) => line.prominent);
   stripSays(pane.strip, named);
-  el("allergy-strip-none").hidden = !(pane.drug === "not-yet-asked" && pane.other === "not-yet-asked");
+  el("allergy-strip-none").hidden = !(pane.drug === "not-yet-asked" && pane.other === "not-yet-asked" && pane.unreadable === 0);
+  fillAllergyList("allergy-standing", pane.standing_none.map((text) => cell("li", text)));
   fillAllergyList("allergy-drug", pane.drug_allergies.map(lineItem));
   fillAllergyList("allergy-other", pane.other_allergies.map(lineItem));
   fillAllergyList("allergy-adverse", pane.adverse_effects.map(lineItem));
@@ -128,7 +130,7 @@ function fillAllergyList(id, items) {
 
 /** Take every list down (the strip's text is the caller's). */
 function clearAllergyLists() {
-  for (const id of ["allergy-drug", "allergy-other", "allergy-adverse", "allergy-previously"]) {
+  for (const id of ["allergy-standing", "allergy-drug", "allergy-other", "allergy-adverse", "allergy-previously"]) {
     fillAllergyList(id, []);
   }
   el("allergy-strip-none").hidden = true;

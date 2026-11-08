@@ -53,6 +53,11 @@ BEGIN
     IF v_shape_ok IS NOT TRUE THEN
         RETURN format('onset.value "%s" is not a valid %s (YYYY-MM-DD, YYYY-MM or YYYY)', p_value, p_precision);
     END IF;
+    -- The shape admits 0000 at year and month precision; no calendar has that year (a day is
+    -- already refused above: pg_input_is_valid knows no year 0). The window refuses it too.
+    IF left(p_value, 4) = '0000' THEN
+        RETURN format('onset.value "%s" has year 0000, which no calendar has', p_value);
+    END IF;
     -- ISO forms compare as text; cut today to the value's own length (year, month or day).
     IF p_value > left(v_latest, length(p_value)) THEN
         RETURN format('onset.value "%s" is in the future (after the recording day)', p_value);
@@ -128,6 +133,13 @@ BEGIN
     IF NOT v_authoring THEN
         RETURN;
     END IF;
+    -- The schema tag is checked at the authoring door ONLY, and the appliers project a peer's /2
+    -- under /1's structure — a deliberate departure from db/064's "project /1 only" (ADR-0096
+    -- decision 8): allergy text is never rendered as markup, so there is no unknown-format risk
+    -- to fence; an additive /2 keeps /1's keys and types (principle 11), which the structural
+    -- tier above still enforces at both doors; and a projected row errs toward over-warning,
+    -- where an unprojected /2 allergy would vanish from the strip. (A /2 that CHANGED a /1 key's
+    -- type would be refused structurally and stall sync — additive-only evolution forbids it.)
     IF b ->> 'schema_version' IS DISTINCT FROM 'clinical.allergy/1' THEN
         RAISE EXCEPTION 'allergy assertion: schema_version must be clinical.allergy/1, got %', b ->> 'schema_version';
     END IF;
@@ -244,6 +256,8 @@ CREATE INDEX IF NOT EXISTS clinical_allergy_none_content_address_idx ON clinical
 -- 7. The appliers. Each reads the CLEAR payload (ADR-0052): NULL means this node holds no custody
 --    for the sealed body — nothing to project, honest degradation; the late-custody path re-runs
 --    it when a key lands (heal_safe below). An uncoded substance stores SQL NULL, not JSON null.
+--    No schema_version filter here, unlike db/064's notes: a peer's /2 projects under /1's keys
+--    (why: the comment at step 3's schema_version check; ADR-0096 decision 8).
 CREATE OR REPLACE FUNCTION clinical_allergy_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE

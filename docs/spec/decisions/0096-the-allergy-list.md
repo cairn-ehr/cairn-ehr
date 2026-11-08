@@ -32,7 +32,7 @@ legible at 3 a.m.: what is dangerous, and what is not.
 This slice builds the first of the design's three slices: two event types, their floor, projections and shred hook
 (db/074); signing and reading in `cairn_node::allergy`; a pure view; and the strip and its form in the window's
 patient header. The first signed `clinical.allergy.asserted` freezes its shape forever (principle 11), so what went
-on the wire, and what was left out, is written down here. The build took fourteen rulings (R1–R14), which the window's
+on the wire, and what was left out, is written down here. The build took seventeen rulings (R1–R17), which the window's
 code cites by number where it relies on one; each that bears on the architecture is stated below under its number.
 
 ## Decision
@@ -55,9 +55,11 @@ code cites by number where it relies on one; each that bears on the architecture
 3. **Authorship.** Both go through `seal_sign_submit` (the medication stream's sealed submit path) under the human's
    key, with the contributor set `{human, authored}` + `{node, recorded}` (ADR-0053). `cairn_node::allergy::sign`
    commits nothing itself.
-4. **The twin is the strip's wording without dates.** `entry_words_dated` is the one wording of an entry: the signed
-   twin is it without an onset (`entry_words`), the window's line is it with one, so they cannot drift (R1: it takes
-   wire words, not enums, so a peer's newer word reads as itself). The "none known" twins are "No known allergies" and "No known drug allergies".
+4. **The twin is the strip's wording, its onset in ISO form** (R17). `entry_words_dated` is the one wording of an
+   entry: the signed twin (`render_allergy_twin`) is it with the onset's ISO value — "Allergy: penicillin →
+   anaphylaxis · 2014", "Previous adverse effect (2019-03): metformin → GI upset", nothing when the onset is not
+   known — and the window's line is it with the onset as a clinician reads it ("Mar 2019"), so they cannot drift (R1:
+   it takes wire words, not enums, so a peer's newer word reads as itself). The "none known" twins are "No known allergies" and "No known drug allergies".
 5. **Two reserved slots are written empty:** `substance.coding` is `null` (drugref coding is slice 3) and `refs` is
    `[]` (corrections are slice 2), so filling them later is additive.
 
@@ -71,15 +73,16 @@ code cites by number where it relies on one; each that bears on the architecture
      exactly when `onset.precision` is `not-known`, else a string; `refs` is an array; `scope` is a string. No node
      can read a body that fails these.
    - **Closed vocabularies, at the authoring door only** (`cairn.remote_apply` is not `'on'`): the `schema_version`;
-     every enumerated word above; the shape of `onset.value` for its precision (a `day` must be a real date); an onset
-     after the recording day; `substance.coding` must be null and `refs` empty. At the remote door a newer peer's
+     every enumerated word above; the shape of `onset.value` for its precision (a `day` must be a real date, and no
+     precision admits the year `0000`); an onset after the recording day; `substance.coding` must be null and `refs` empty. At the remote door a newer peer's
      word is admitted and projected as itself: refusing it would wedge sync on every node older than its author
      (ADR-0056). That is why the projection's vocabulary columns carry no `CHECK`.
 7. **"After the recording day" is judged against UTC+14** (`cairn_allergy_onset_problem`, R5). The database does not
    know the terminal's time zone, and UTC+14 is the furthest-ahead zone, so a date after that day is in the future
    everywhere; a clinician who types today's date before the database's own day has begun is never refused. The
    window makes the stricter check before the key, against the terminal's own calendar day at the precision typed
-   (`allergies::parse_onset`: "11/2026" in November 2026 is not the future).
+   (`allergies::parse_onset`: "11/2026" in November 2026 is not the future), and refuses the year `0000` at every
+   precision, naming what was typed.
 8. **`schema_version` is checked at the authoring door only, and the applier projects every version.** This departs
    from db/064, where a note's remote door skips its checks for a newer profile and `clinical_note_apply` projects
    `clinical.note/1` alone. A note's narrative is rendered as markdown, so a relabelled `/2` body could put
@@ -98,7 +101,10 @@ code cites by number where it relies on one; each that bears on the architecture
 ### Reading (`cairn_node::allergy::{read, view}`)
 
 10. **The union of every linked chart's rows, read from the projections in the window's one snapshot**, with the
-    chart set (`person_charts`) the pane is sent back with on every write.
+    chart set (`person_charts`) the pane is sent back with on every write, and `unreadable`: the count of
+    allergy-stream events on those charts that `event_log` holds with no row in their projection. An applier projects
+    every body it can read, so such an event is one this node cannot read: no custody of its sealed body, or shredded
+    (the shred deletes the row, and the honest statement then is still "cannot be read").
 11. **A chart whose link is in doubt: shown, marked** (the designer's call, put to the plan review and built as
     planned). Notes and
     medications withhold a doubted link's other charts; an allergy that might be a stranger's is still shown, because
@@ -111,13 +117,20 @@ code cites by number where it relies on one; each that bears on the architecture
     its list, never prominent. Only an entry of kind `allergy` is prominent (the red sticker). Within a list:
     anaphylaxis, not known, angioedema, urticaria, rash, other, GI upset, then an unknown category; then newest by HLC;
     then event id.
-13. **The override rule.** A recorded allergy overrides a "none known" statement it covers, with no flag (maintainer):
-    a `drug` statement is overridden by a drug allergy, and an `all` statement by an allergy in either list, in both
-    lists at once (it is one statement). An adverse effect never overrides; a row of an unknown kind never overrides;
-    an allergy of an unknown allergen kind is an other allergy, so it overrides an `all` statement. A statement of a scope
-    this node does not know covers no list. The newest statement that still stands sets a list's status; every other
-    one stays readable in the expanded list as "Previously recorded: no known allergies (asked 8 Nov 2026)".
-14. **The strip is never blank.** Its four states:
+13. **The override rule is per list** (design §3.4: an allergy overrides "none known" "in its list"; R16 reversed the
+    plan's "an `all` statement is one statement" rule, which made "No known allergies" plus a latex allergy read
+    "Drug allergies not yet asked"). A recorded allergy overrides a "none known" statement in its own list, with no
+    flag (maintainer): a `drug` statement is overridden by a drug allergy; an `all` statement stands for the drug list
+    while no drug allergy exists, and for the other list while no other allergy exists. An adverse effect never
+    overrides; a row of an unknown kind never overrides; an allergy of an unknown allergen kind is an other allergy, so
+    it overrides an `all` statement's other half. A statement of a scope this node does not know covers no list. For
+    each list the newest statement standing for it sets its status, and the expanded list opens on that statement
+    with who signed it (paper's initialled NKDA): "No known allergies — asked 8 Nov 2026 by Dr Bea" when one statement
+    stands for both lists, else "No known drug allergies — …" and "No known other allergies — …" for the list each
+    stands for; " by …" is left out when this node cannot name the key. A statement standing for neither list
+    (overridden in every list it covers, or superseded by a newer one) stays readable as "Previously recorded: no
+    known allergies (asked 8 Nov 2026 by Dr Bea)".
+14. **The strip is never blank.** Its states:
 
     | Recorded | The strip reads |
     |---|---|
@@ -125,6 +138,14 @@ code cites by number where it relies on one; each that bears on the architecture
     | `all` | **No known allergies (asked 8 Nov 2026)** |
     | `drug`, nothing on others | **NKDA (asked 8 Nov 2026) · other allergies: not yet asked** |
     | `drug` + a latex allergy | **NKDA (asked 8 Nov 2026) · Other: latex → urticaria** |
+    | `all` + a latex allergy | **No known drug allergies (asked 8 Nov 2026) · Other: latex → urticaria** |
+    | `all` + a penicillin allergy | **Allergy: penicillin → rash · no known other allergies (asked 8 Nov 2026)** |
+    | `drug`, and one record this terminal cannot read | **1 allergy record cannot be read on this terminal · NKDA (asked 8 Nov 2026)** |
+
+    A record this terminal cannot read (decision 10's `unreadable`) LEADS the strip — "1 allergy record cannot be read
+    on this terminal", "3 allergy records …" — and then no "not yet asked" phrase is shown, since that record may be
+    the answer; a readable "none known" statement still shows, after the warning. The window shows such a strip
+    prominent and hides the strip's one-press "none known" buttons.
 
     Entries within a list join with "; " and sections (the drug part, "Other:", the counts) with " · " (R7), because
     an allergy's onset already reads " · 2014" and two dated allergies would otherwise read ambiguously. In the Other
@@ -143,7 +164,8 @@ code cites by number where it relies on one; each that bears on the architecture
 16. **One form, one Sign; one press for "none known".** The form starts with nothing pressed for "What kind" and
     "What happened" (design §3.2's anti-goal: a default would sign an intolerance as an allergy by a press that chose
     nothing); the allergen defaults to Drug, the source to Patient stated, and an empty "When" is not known. The two
-    "none known" buttons are on the strip only while both lists are "not yet asked", and always in the expanded list.
+    "none known" buttons are on the strip only while both lists are "not yet asked" and no record is unreadable, and
+    always in the expanded list.
     A write is refused, in this order: not the chart on screen; not the chart set the list was read over; fixture
     mode; then, before the key is asked for, "Name the substance.", "Choose Allergy or Adverse effect.", "Choose what
     happened, or Not known.", an onset the window cannot read or that is after today; and a wire word the window should
@@ -180,10 +202,12 @@ code cites by number where it relies on one; each that bears on the architecture
 
 ## What is not guaranteed
 
-- **(a) A reader without custody sees no allergies** (design §7 risk 1). With no clear signal (decision 21), a node
-  or role that cannot decrypt an allergy body projects no row for it, so its strip reads "Allergies not yet asked"
-  for a patient with a recorded anaphylaxis. Custody is normally held; the gap stays open until #406/#401 give the
-  signal supersession.
+- **(a) A reader without custody is told a record cannot be read, not what it says** (design §7 risk 1). With no
+  clear signal (decision 21), a node or role that cannot decrypt an allergy body projects no row for it; its strip
+  leads with "1 allergy record cannot be read on this terminal" (decisions 10 and 14), never a false "not yet asked",
+  but it cannot say whether that record is an anaphylaxis, an adverse effect or a "none known" statement. An event
+  not yet synced to this node is not counted, and a shredded one stays counted for good. Custody is normally held;
+  the gap stays open until #406/#401 give the signal supersession.
 - **(b) Nothing recorded can be withdrawn in this slice.** An entry signed on the wrong chart, or an adverse effect
   signed as an allergy, stays on the strip until slice 2's overlays; a "none known" statement can be overridden by an
   entry but not withdrawn.
@@ -192,7 +216,7 @@ code cites by number where it relies on one; each that bears on the architecture
   and the line's ISO day differs in form from the strip's "8 Nov 2026".
 - **(d) The terminal's offset is today's.** `build_view` gets the terminal's current UTC offset, so a record made
   near midnight under the other side of a daylight-saving change can read one day off.
-- **(e) The floor and the window accept a year `0000`**, and typed text has no length limit at the window.
+- **(e) Typed text has no length limit at the window.**
 - **(f) The "+N unrecognised" count spans both lists and ignores doubt**, and the " ({allergen kind})" suffix is also
   added to a newer allergen kind's adverse-effect and unrecognised rows.
 - **(g) A refused form clears the typed passphrase**, as every window writer does, so a slip on a shared terminal
@@ -201,8 +225,9 @@ code cites by number where it relies on one; each that bears on the architecture
   does not run (#905). The webview was checked by source guards (`allergies_webview_tests.rs`) and walked in Chromium
   and Playwright's WebKit with a stubbed `invoke`: the real Tauri argument casing, the real window's WebKit,
   VoiceOver and the time budgets are owed to RUNBOOK §27.
-- **(i) No test pins decision 21.** `safety: None` is in `sign.rs`; no test asserts that a signed allergy event's
-  `event_log.safety` is null.
+- **(i) Decision 21 is pinned for what this node signs, not for what its floor admits.**
+  `crates/cairn-node/tests/allergy_sign.rs` asserts `event_log.safety IS NULL` on a signed entry and a signed
+  statement (`safety_is_null`); db/074 adds no rule of its own about a body's `safety`.
 
 ## Consequences
 

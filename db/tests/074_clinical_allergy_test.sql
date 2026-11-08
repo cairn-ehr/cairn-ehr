@@ -198,6 +198,10 @@ SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('month', '2019-13')), 
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day', '2019-02-31')), 'onset.value');
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day', '2019-02')), 'onset.value');
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('year', '19')), 'onset.value');
+-- No calendar has a year 0000 (day precision is already no real date to pg_input_is_valid).
+SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('year', '0000')), 'year 0000');
+SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('month', '0000-03')), 'year 0000');
+SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day', '0000-03-14')), 'onset.value');
 -- An onset after the recording day: the year after the latest calendar year anywhere on earth.
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('year',
     (extract(year FROM now() AT TIME ZONE 'UTC' + interval '14 hours')::int + 1)::text)), 'future');
@@ -210,6 +214,12 @@ SELECT pg_temp.authoring_only(pg_temp.entry(
 SELECT pg_temp.authoring_only(pg_temp.none_body('{"scope":"food"}'), 'scope');
 SELECT pg_temp.authoring_only(pg_temp.none_body() || '{"schema_version":"clinical.allergy-none/2"}',
                               'schema_version');
+
+-- the_gesture_timing_kinds_allergy_record_and_allergy_none_are_accepted (db/044's widened CHECK)
+INSERT INTO ui_gesture_timing (gesture_kind, size_bucket) VALUES ('allergy-record', '1-3')
+ON CONFLICT DO NOTHING;
+INSERT INTO ui_gesture_timing (gesture_kind, size_bucket) VALUES ('allergy-none', '1-3')
+ON CONFLICT DO NOTHING;
 
 -- 4. A peer's newer word is admitted AND projects: the vocabulary columns carry no CHECK.
 --    Unsealed rows inserted as the owner (cairn_clear_payload reads an unsealed row's body as

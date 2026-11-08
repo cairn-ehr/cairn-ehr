@@ -276,6 +276,8 @@ fn every_field_allergies_js_reads_is_one_rust_sends() {
         other_allergies: vec![],
         adverse_effects: vec![],
         previously_none: vec![],
+        standing_none: vec![],
+        unreadable: 0,
         charts: vec![],
     };
     let pane_keys = keys(serde_json::to_value(&pane).unwrap());
@@ -300,6 +302,34 @@ fn every_field_allergies_js_reads_is_one_rust_sends() {
             );
         }
     }
+}
+
+/// An allergy record this terminal cannot read (`pane.unreadable`) makes the strip prominent even
+/// when nothing readable names an allergy — the record may be the anaphylaxis — and keeps the
+/// strip's one-press "none known" buttons hidden: they would invite a statement over it.
+#[test]
+fn an_unreadable_record_marks_the_strip_and_hides_its_none_buttons() {
+    let render = js_fn(ALLERGIES_JS, "renderAllergies");
+    let prominent = &render[position(render, "const named")..];
+    let prominent = &prominent[..position(prominent, ";")];
+    assert!(prominent.contains("pane.unreadable > 0"), "{render}");
+    let buttons = &render[position(render, "el(\"allergy-strip-none\").hidden")..];
+    let buttons = &buttons[..position(buttons, ";")];
+    assert!(buttons.contains("pane.unreadable === 0"), "{render}");
+}
+
+/// The standing "none known" statement is drawn in the expanded list (with who signed it, in
+/// Rust's text), through `cell` like every other line, and taken down with the rest.
+#[test]
+fn the_standing_statement_is_drawn_and_cleared() {
+    let render = js_fn(ALLERGIES_JS, "renderAllergies");
+    assert!(
+        render.contains("fillAllergyList(\"allergy-standing\", pane.standing_none.map("),
+        "{render}"
+    );
+    let clear = js_fn(ALLERGIES_JS, "clearAllergyLists");
+    assert!(clear.contains("\"allergy-standing\""), "{clear}");
+    assert!(INDEX_HTML.contains("<ul id=\"allergy-standing\""));
 }
 
 /// Files under 500 lines (house rule).

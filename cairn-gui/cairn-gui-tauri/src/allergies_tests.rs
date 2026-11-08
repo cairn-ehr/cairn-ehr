@@ -80,6 +80,18 @@ fn parse_onset_refuses_2019_13_and_31_02_2019_and_next_year() {
     );
 }
 
+/// No calendar has a year 0000 (chrono would accept it as 1 BC): refused at every precision, naming
+/// what was typed, and under the onset field (the fragment allergies.js routes by).
+#[test]
+fn parse_onset_refuses_year_0000_at_every_precision() {
+    for typed in ["0000", "03/0000", "14/03/0000", "0000-03", "0000-03-14"] {
+        let err = parse_onset(Some(typed), today()).unwrap_err();
+        assert!(err.starts_with(&format!("\"{typed}\" ")), "{typed}: {err}");
+        assert!(err.contains("is not a date this window can read"), "{err}");
+        assert!(err.contains("year 0000"), "{err}");
+    }
+}
+
 /// The form's refusals, in the brief's order, each before the key.
 #[test]
 fn record_refuses_a_missing_kind_before_the_key() {
@@ -239,9 +251,28 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
         .unwrap()
         .pane
         .expect("the list is read again");
-    assert_eq!(pane.strip, "Allergy: penicillin → anaphylaxis · 2014");
-    assert_eq!(pane.previously_none.len(), 1, "{:?}", pane.previously_none);
-    assert!(pane.previously_none[0].starts_with("Previously recorded: no known allergies"));
+    // Ruling R16: the drug allergy overrides "No known allergies" for drugs only; for other
+    // allergies it stands, and its line names who signed it.
+    assert!(
+        pane.strip.starts_with(
+            "Allergy: penicillin → anaphylaxis · 2014 · no known other allergies (asked "
+        ),
+        "{}",
+        pane.strip
+    );
+    assert!(
+        pane.previously_none.is_empty(),
+        "{:?}",
+        pane.previously_none
+    );
+    assert_eq!(pane.standing_none.len(), 1, "{:?}", pane.standing_none);
+    assert!(
+        pane.standing_none[0].starts_with("No known other allergies — asked ")
+            && pane.standing_none[0].ends_with(" by Dr Bea"),
+        "{:?}",
+        pane.standing_none
+    );
+    assert_eq!(pane.unreadable, 0);
     assert_eq!(timed("allergy-none").await, nones + 1, "timed once");
     let err = allergy_none_impl(&state, &patient, charts, "everything", None)
         .await
@@ -300,6 +331,8 @@ fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
         other_allergies: vec![],
         adverse_effects: vec![],
         previously_none: vec![],
+        standing_none: vec![],
+        unreadable: 0,
         charts: vec![],
     };
     let ok = written(Ok(pane()));
@@ -315,4 +348,41 @@ fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
         "Signed — but the allergy list could not be read again (connection closed). \
          Use “Read this chart again”."
     );
+}
+
+/// The pane carries what the node's view says about records this terminal cannot read, and the
+/// standing "none known" statement with its signer, for allergies.js to draw.
+#[test]
+fn the_pane_carries_unreadable_records_and_the_standing_statement() {
+    use cairn_node::allergy::read::NoneRow;
+    let chart = Uuid::from_u128(7);
+    let at = chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap();
+    let a = PatientAllergies {
+        entries: vec![],
+        none: vec![NoneRow {
+            event_id: Uuid::from_u128(8),
+            chart,
+            scope: "drug".into(),
+            recorded_at: at,
+            hlc: (at.timestamp_millis(), 0),
+            signer: Some("Dr Bea".into()),
+        }],
+        doubted_charts: vec![],
+        unreadable: 1,
+    };
+    let p = pane(&a, &ChartSet::single(chart));
+    assert_eq!(p.unreadable, 1);
+    assert!(
+        p.strip
+            .starts_with("1 allergy record cannot be read on this terminal · NKDA (asked "),
+        "{}",
+        p.strip
+    );
+    assert_eq!(p.standing_none.len(), 1);
+    assert!(
+        p.standing_none[0].starts_with("No known drug allergies — asked "),
+        "{:?}",
+        p.standing_none
+    );
+    assert!(p.standing_none[0].ends_with(" by Dr Bea"));
 }

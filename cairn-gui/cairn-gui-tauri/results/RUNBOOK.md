@@ -2302,15 +2302,17 @@ between runs of one gesture.
 - [ ] *Show all allergies*, then the form: *Other substance*, *Substance* `latex`, *Allergy*, *Urticaria (hives)*,
       *Seen documented*, *Sign*. The strip reads **"NKDA (asked {today}) · Other: latex → urticaria"** (the "Allergy: "
       prefix dropped under "Other:"), now prominent: the warning colour, the bold weight and a bar at its left edge.
-- [ ] `$A2`: press *No known allergies* on the strip. It reads **"No known allergies (asked {today})"**.
+- [ ] `$A2`: press *No known allergies* on the strip. It reads **"No known allergies (asked {today})"**; *Show all
+      allergies* opens on "No known allergies — asked {today} by {nurse-a's display name}".
 - [ ] On `$A2`, the timed entry below (penicillin) and then an adverse effect: *Drug*, `metformin`, *Adverse
-      effect*, *Stomach upset*, "What happened, in words" `loose bowel motions`, *When* `2019`, *Patient stated*,
-      *Sign*. The strip reads **"Allergy: penicillin → anaphylaxis · 2014 · +1 adverse effect"**: the allergy
-      overrides "no known allergies" with no flag, and the adverse effect is counted, never named, on the strip.
-      Opened, the lists read "Drug allergies:" with the penicillin line (prominent), "Adverse effects:" with
-      "Previous adverse effect (2019): metformin → GI upset: loose bowel motions (patient stated)" (quiet), and
-      "Previously recorded: no known allergies (asked {today})"; each entry line ends " · recorded {YYYY-MM-DD} by
-      {nurse-a's display name}".
+      effect*, *GI upset*, "What happened, in words" `loose bowel motions`, *When* `2019`, *Patient stated*,
+      *Sign*. The strip reads **"Allergy: penicillin → anaphylaxis · 2014 · no known other allergies (asked {today})
+      · +1 adverse effect"**: the drug allergy overrides "no known allergies" in its own list only, with no flag
+      (ADR-0096 decision 13), and the adverse effect is counted, never named, on the strip. Opened, the lists read
+      "No known other allergies — asked {today} by {nurse-a's display name}", "Drug allergies:" with the penicillin
+      line (prominent), and "Adverse effects:" with "Previous adverse effect (2019): metformin → GI upset: loose bowel
+      motions (patient stated)" (quiet); no "Previously recorded" line (the statement still stands for other
+      allergies); each entry line ends " · recorded {YYYY-MM-DD} by {nurse-a's display name}".
 - [ ] The wire words as signed, at the console: `psql "$CONN" -c "SELECT term, allergen_kind, kind,
       reaction_category, reaction_text, onset_precision, onset_value, source FROM clinical_allergy WHERE patient_id IN
       ('$A1', '$A2') ORDER BY hlc_wall"` shows latex / other / allergy / urticaria / (empty) / not-known / (empty) /

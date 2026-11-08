@@ -459,6 +459,8 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
     let r = list_patient_allergies(&window, patient).await;
     let read = expect_as_window("allergy::read::list_patient_allergies", r);
     assert_eq!((read.entries.len(), read.none.len()), (1, 1));
+    // The unreadable count's own read (event_log against both projections) ran under this login.
+    assert_eq!(read.unreadable, 0);
     // The set the pane is read over and each write is checked against.
     let r = cairn_node::patient::person::person_charts(&window, patient).await;
     let set = expect_as_window("patient::person::person_charts (allergies)", r);

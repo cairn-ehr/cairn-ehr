@@ -1,7 +1,9 @@
 //! Every allergy row of a patient's linked charts, for the strip view (allergy slice 1).
 //!
-//! Read ONLY from the `clinical_allergy` / `clinical_allergy_none` projections (as notes are), one
-//! statement per table over the whole member set, in the caller's snapshot. Unlike notes and
+//! Read from the `clinical_allergy` / `clinical_allergy_none` projections (as notes are), one
+//! statement per table over the whole member set, in the caller's snapshot — plus one count of the
+//! allergy events `event_log` holds that have NO projected row (`unreadable`), so a body this node
+//! cannot read is said, never mistaken for "not yet asked". Unlike notes and
 //! medications, a doubted link does NOT withhold the other charts' rows: an allergy that might be a
 //! stranger's is still shown (over-warning is the safe error), and `doubted_charts` names those
 //! charts so the view can mark them. Vocabulary columns stay `String`: a peer's newer word must
@@ -50,6 +52,10 @@ pub struct PatientAllergies {
     pub none: Vec<NoneRow>,
     /// The member charts other than the opened one, when the set holds a doubted link; else empty.
     pub doubted_charts: Vec<Uuid>,
+    /// Allergy-stream events on the member charts that have NO projected row: this node holds
+    /// the event but cannot read its sealed body (no custody yet), or it was shredded. Either way
+    /// the honest statement is "cannot be read" — never "not yet asked" (UNREADABLE_SQL).
+    pub unreadable: usize,
 }
 
 /// `$1` = the member charts (text uuids). Shared WHERE/JOIN shape: projection joined to its event
@@ -66,6 +72,18 @@ const NONE_SQL: &str =
         cairn_note_signer_name(e.signer_key_id) \
      FROM clinical_allergy_none a JOIN event_log e ON e.event_id = a.event_id \
      WHERE a.patient_id::text = ANY($1) ORDER BY a.hlc_wall, a.hlc_counter, a.event_id";
+
+/// The events of both allergy types on the member charts with no row in their projection. An
+/// applier projects every body it can read (db/074 step 7), so a missing row is a body this node
+/// cannot read: no custody, or shredded (the shred scrubs the row, db/037). Read off `event_log`,
+/// which the window's role already reads for the signer key above; compared as uuid so the
+/// lookup rides `event_log_patient_idx`.
+const UNREADABLE_SQL: &str = "SELECT count(*) FROM event_log e \
+     WHERE e.patient_id = ANY($1::text[]::uuid[]) AND ( \
+        (e.event_type = 'clinical.allergy.asserted' \
+         AND NOT EXISTS (SELECT 1 FROM clinical_allergy a WHERE a.event_id = e.event_id)) \
+     OR (e.event_type = 'clinical.allergy-none.asserted' \
+         AND NOT EXISTS (SELECT 1 FROM clinical_allergy_none a WHERE a.event_id = e.event_id)))";
 
 fn wall_time(ms: i64) -> anyhow::Result<DateTime<Utc>> {
     DateTime::from_timestamp_millis(ms).context("an allergy row's hlc_wall is out of range")
@@ -120,9 +138,11 @@ pub async fn list_patient_allergies(
             signer: r.get(5),
         });
     }
+    let unreadable: i64 = client.query_one(UNREADABLE_SQL, &[&members]).await?.get(0);
     Ok(PatientAllergies {
         entries,
         none,
         doubted_charts,
+        unreadable: usize::try_from(unreadable).context("a negative count of unreadable rows")?,
     })
 }

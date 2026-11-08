@@ -2,7 +2,7 @@
 //! slice 1). No database, no clock: the caller passes the local UTC offset.
 //!
 //! Reading order for a junior: [`build_view`] splits the rows into lists, decides each list's
-//! status ([`ListStatus`]), turns every row into an [`EntryLine`], and finally [`strip_text`]
+//! status ([`ListStatus`]), turns every row into an [`EntryLine`], and finally `strip_text` (private)
 //! composes the one-line strip from those. Vocabulary stays strings (a peer's newer word must
 //! still read), so every `match` here has an "unknown" arm.
 use super::read::{AllergyRow, NoneRow, PatientAllergies};
@@ -45,7 +45,13 @@ pub struct AllergyView {
     /// Other allergies (sorted), then other/unknown-allergen rows of an unknown kind.
     pub other_allergies: Vec<EntryLine>,
     pub adverse_effects: Vec<EntryLine>,
+    /// "Previously recorded: …": statements overridden in every list they cover, or superseded.
     pub previously_none: Vec<String>,
+    /// The statement(s) a "none known" list rests on, with who signed (paper's initialled NKDA):
+    /// "No known allergies — asked 8 Nov 2026 by Dr Bea". Drug first when two stand.
+    pub standing_none: Vec<String>,
+    /// Allergy events this terminal holds but cannot read (`PatientAllergies::unreadable`).
+    pub unreadable: usize,
 }
 
 const MONTHS: [&str; 12] = [
@@ -154,19 +160,19 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
     let drug_has = drug_rows.iter().any(|r| r.kind == "allergy");
     let other_has = other_rows.iter().any(|r| r.kind == "allergy");
 
-    // A none row is ONE statement: an entry in any list it covers overrides it everywhere.
-    let valid = |n: &&NoneRow| match n.scope.as_str() {
-        "drug" => !drug_has,
-        "all" => !drug_has && !other_has,
-        _ => false,
-    };
+    // Validity is PER LIST (design §3.4: an allergy overrides "none known" "in its list"; ruling
+    // R16): an "all" statement stands for drugs while no drug allergy exists, and for the other
+    // list while no other allergy exists. An unknown scope stands for nothing (history only).
     let drug_none = newest(
         a.none
             .iter()
-            .filter(valid)
-            .filter(|n| n.scope == "drug" || n.scope == "all"),
+            .filter(|n| !drug_has && (n.scope == "drug" || n.scope == "all")),
     );
-    let other_none = newest(a.none.iter().filter(valid).filter(|n| n.scope == "all"));
+    let other_none = newest(a.none.iter().filter(|n| !other_has && n.scope == "all"));
+    // Both lists rest on one "all" statement: it reads as "No known allergies".
+    let one_all_row = drug_none
+        .zip(other_none)
+        .is_some_and(|(d, o)| d.event_id == o.event_id);
 
     let status = |has: bool, n: Option<&NoneRow>| {
         if has {
@@ -197,11 +203,27 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
                 s => format!("none known ({s})"),
             };
             format!(
-                "Previously recorded: {what} (asked {})",
-                day_text(local_day(n.recorded_at, offset))
+                "Previously recorded: {what} (asked {}{})",
+                day_text(local_day(n.recorded_at, offset)),
+                by(n)
             )
         })
         .collect();
+    let standing = |what: &str, n: &NoneRow| {
+        format!(
+            "{what} — asked {}{}",
+            day_text(local_day(n.recorded_at, offset)),
+            by(n)
+        )
+    };
+    let standing_none: Vec<String> = match (drug_none, other_none) {
+        (Some(d), _) if one_all_row => vec![standing("No known allergies", d)],
+        (d, o) => d
+            .map(|d| standing("No known drug allergies", d))
+            .into_iter()
+            .chain(o.map(|o| standing("No known other allergies", o)))
+            .collect(),
+    };
 
     let line = |r: &AllergyRow| EntryLine {
         event_id: r.event_id,
@@ -245,20 +267,21 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
     .map(line)
     .collect();
 
-    let strip = strip_text(
-        &drug,
-        &other,
-        drug_none
-            .zip(other_none)
-            .is_some_and(|(d, o)| d.event_id == o.event_id),
-        &prominent_texts(&drug_allergies),
-        &prominent_texts(&other_allergies),
-        adverse_effects.len(),
-        a.entries
+    let strip = strip_text(&Strip {
+        drug: &drug,
+        other: &other,
+        one_all_row,
+        drug_from_all: drug_none.is_some_and(|n| n.scope == "all"),
+        drug_lines: &prominent_texts(&drug_allergies),
+        other_lines: &prominent_texts(&other_allergies),
+        adverse: adverse_effects.len(),
+        unrecognised: a
+            .entries
             .iter()
             .filter(|r| r.kind != "allergy" && r.kind != "adverse-effect")
             .count(),
-    );
+        unreadable: a.unreadable,
+    });
     AllergyView {
         strip,
         drug,
@@ -267,7 +290,17 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
         other_allergies,
         adverse_effects,
         previously_none,
+        standing_none,
+        unreadable: a.unreadable,
     }
+}
+
+/// " by Dr Bea", or nothing when this node cannot name the key.
+fn by(n: &NoneRow) -> String {
+    n.signer
+        .as_deref()
+        .map(|s| format!(" by {s}"))
+        .unwrap_or_default()
 }
 
 /// Texts of the lines that may reach the strip (allergies only; unknown kinds never do).
@@ -279,26 +312,49 @@ fn prominent_texts(lines: &[EntryLine]) -> Vec<&str> {
         .collect()
 }
 
-/// Compose the one-line strip: entries within a list join with "; ", sections with " · ".
-/// `one_all_row`: both lists are covered by the same "all" statement.
-fn strip_text(
-    drug: &ListStatus,
-    other: &ListStatus,
+/// What the strip is composed from (one struct: the pieces are many and easily swapped).
+struct Strip<'a> {
+    drug: &'a ListStatus,
+    other: &'a ListStatus,
+    /// Both lists rest on the same "all" statement.
     one_all_row: bool,
-    drug_lines: &[&str],
-    other_lines: &[&str],
+    /// The drug list rests on an "all" statement (its other half overridden, when not `one_all_row`).
+    drug_from_all: bool,
+    drug_lines: &'a [&'a str],
+    other_lines: &'a [&'a str],
     adverse: usize,
     unrecognised: usize,
-) -> String {
+    unreadable: usize,
+}
+
+/// Compose the one-line strip: entries within a list join with "; ", sections with " · ".
+///
+/// An allergy record this terminal cannot read LEADS the strip, and then nothing says "not yet
+/// asked": that record may be the very answer. A "none known" claim still shows, after it.
+fn strip_text(s: &Strip) -> String {
+    let (drug, other, one_all_row) = (s.drug, s.other, s.one_all_row);
+    let readable = s.unreadable == 0;
     let mut parts: Vec<String> = Vec::new();
+    if !readable {
+        parts.push(format!(
+            "{} allergy record{} cannot be read on this terminal",
+            s.unreadable,
+            if s.unreadable == 1 { "" } else { "s" }
+        ));
+    }
     match (drug, other) {
-        (ListStatus::Entries, _) => parts.push(drug_lines.join("; ")),
-        (ListStatus::NoneKnown { asked }, ListStatus::NoneKnown { .. }) if one_all_row => {
+        (ListStatus::Entries, _) => parts.push(s.drug_lines.join("; ")),
+        (ListStatus::NoneKnown { asked }, _) if one_all_row => {
             parts.push(format!("No known allergies (asked {})", day_text(*asked)))
         }
+        (ListStatus::NoneKnown { asked }, _) if s.drug_from_all => parts.push(format!(
+            "No known drug allergies (asked {})",
+            day_text(*asked)
+        )),
         (ListStatus::NoneKnown { asked }, _) => {
             parts.push(format!("NKDA (asked {})", day_text(*asked)))
         }
+        (ListStatus::NotYetAsked, _) if !readable => {}
         (ListStatus::NotYetAsked, ListStatus::NotYetAsked) => {
             parts.push("Allergies not yet asked".into())
         }
@@ -307,23 +363,25 @@ fn strip_text(
     match (drug, other) {
         (_, ListStatus::Entries) => {
             // On the strip "Other:" already says it is an allergy; other wordings stay in full.
-            let lines: Vec<&str> = other_lines
+            let lines: Vec<&str> = s
+                .other_lines
                 .iter()
                 .map(|l| l.strip_prefix("Allergy: ").unwrap_or(l))
                 .collect();
             parts.push(format!("Other: {}", lines.join("; ")))
         }
-        // Drug and other were each asked, by different statements.
-        (ListStatus::NoneKnown { .. }, ListStatus::NoneKnown { asked }) if !one_all_row => parts
-            .push(format!(
-                "no known other allergies (asked {})",
-                day_text(*asked)
-            )),
-        (ListStatus::NoneKnown { .. }, ListStatus::NotYetAsked) => {
+        // Other allergies rest on a statement of their own: a different one from the drug list's,
+        // or an "all" statement whose drug half a drug allergy overrides.
+        (_, ListStatus::NoneKnown { asked }) if !one_all_row => parts.push(format!(
+            "no known other allergies (asked {})",
+            day_text(*asked)
+        )),
+        (ListStatus::NoneKnown { .. }, ListStatus::NotYetAsked) if readable => {
             parts.push("other allergies: not yet asked".into())
         }
         _ => {}
     }
+    let (adverse, unrecognised) = (s.adverse, s.unrecognised);
     if adverse > 0 {
         parts.push(format!(
             "+{adverse} adverse effect{}",

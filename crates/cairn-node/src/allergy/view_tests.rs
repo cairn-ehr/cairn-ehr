@@ -48,6 +48,7 @@ fn pa(entries: Vec<AllergyRow>, none: Vec<NoneRow>) -> PatientAllergies {
         entries,
         none,
         doubted_charts: vec![],
+        unreadable: 0,
     }
 }
 fn view(p: &PatientAllergies) -> AllergyView {
@@ -136,17 +137,118 @@ fn an_allergy_overrides_no_known_allergies_in_either_order() {
     // The none row is older, then newer than the entry: same view.
     let older = view(&pa(vec![a.clone()], vec![none(1, "all", 8)]));
     let newer = view(&pa(vec![a], vec![none(1, "all", 10)]));
-    assert_eq!(older.strip, "Allergy: penicillin → rash");
-    assert_eq!(newer.strip, older.strip);
-    assert_eq!(older.drug, ListStatus::Entries);
-    assert_eq!(older.other, ListStatus::NotYetAsked);
+    // Ruling R16 (design §3.4 "in its list"): the drug allergy overrides the statement for drugs
+    // only; for other allergies it still stands.
     assert_eq!(
-        older.previously_none,
-        vec!["Previously recorded: no known allergies (asked 8 Nov 2026)"]
+        older.strip,
+        "Allergy: penicillin → rash · no known other allergies (asked 8 Nov 2026)"
     );
     assert_eq!(
-        newer.previously_none,
-        vec!["Previously recorded: no known allergies (asked 10 Nov 2026)"]
+        newer.strip,
+        "Allergy: penicillin → rash · no known other allergies (asked 10 Nov 2026)"
+    );
+    assert!(older.previously_none.is_empty());
+    assert_eq!(
+        older.standing_none,
+        vec!["No known other allergies — asked 8 Nov 2026"]
+    );
+}
+
+#[test]
+fn no_known_allergies_plus_a_latex_entry_still_stands_for_drugs() {
+    let p = pa(
+        vec![entry(2, "other", "latex", "allergy", "urticaria", 9)],
+        vec![none(1, "all", 8)],
+    );
+    let v = view(&p);
+    assert_eq!(
+        v.strip,
+        "No known drug allergies (asked 8 Nov 2026) · Other: latex → urticaria"
+    );
+    assert!(v.previously_none.is_empty());
+    assert_eq!(
+        v.standing_none,
+        vec!["No known drug allergies — asked 8 Nov 2026"]
+    );
+}
+
+#[test]
+fn an_all_none_overridden_in_both_lists_is_only_history() {
+    let p = pa(
+        vec![
+            entry(2, "drug", "penicillin", "allergy", "rash", 9),
+            entry(3, "other", "latex", "allergy", "urticaria", 9),
+        ],
+        vec![none(1, "all", 8)],
+    );
+    let v = view(&p);
+    assert_eq!(
+        v.strip,
+        "Allergy: penicillin → rash · Other: latex → urticaria"
+    );
+    assert!(v.standing_none.is_empty());
+    assert_eq!(
+        v.previously_none,
+        vec!["Previously recorded: no known allergies (asked 8 Nov 2026)"]
+    );
+}
+
+#[test]
+fn the_standing_statement_and_history_name_who_signed() {
+    let mut n = none(1, "all", 8);
+    n.signer = Some("Dr Bea".into());
+    let v = view(&pa(vec![], vec![n.clone()]));
+    assert_eq!(
+        v.standing_none,
+        vec!["No known allergies — asked 8 Nov 2026 by Dr Bea"]
+    );
+    let mut d = none(2, "drug", 9);
+    d.signer = Some("Dr Cy".into());
+    let a = entry(3, "drug", "penicillin", "allergy", "rash", 10);
+    // An overridden drug-scope statement is history, its signer named.
+    let v = view(&pa(vec![a], vec![d]));
+    assert!(v.standing_none.is_empty());
+    assert_eq!(
+        v.previously_none,
+        vec!["Previously recorded: no known drug allergies (asked 9 Nov 2026 by Dr Cy)"]
+    );
+    // Two statements standing, one per list, newest drug first.
+    let v = view(&pa(vec![], vec![n, none(4, "drug", 9)]));
+    assert_eq!(
+        v.standing_none,
+        vec![
+            "No known drug allergies — asked 9 Nov 2026",
+            "No known other allergies — asked 8 Nov 2026 by Dr Bea"
+        ]
+    );
+}
+
+/// An allergy event this terminal cannot read (no custody, or shredded) has no projected row:
+/// the strip leads with it and never says "not yet asked" over it.
+#[test]
+fn an_unreadable_record_leads_the_strip_and_silences_not_yet_asked() {
+    let mut p = pa(vec![], vec![]);
+    p.unreadable = 1;
+    let v = view(&p);
+    assert_eq!(v.strip, "1 allergy record cannot be read on this terminal");
+    assert_eq!(v.unreadable, 1);
+    let mut p = pa(vec![], vec![none(1, "drug", 8)]);
+    p.unreadable = 1;
+    assert_eq!(
+        strip(&p),
+        "1 allergy record cannot be read on this terminal · NKDA (asked 8 Nov 2026)"
+    );
+    let mut p = pa(
+        vec![
+            entry(2, "other", "latex", "allergy", "rash", 8),
+            entry(3, "drug", "metformin", "adverse-effect", "rash", 8),
+        ],
+        vec![],
+    );
+    p.unreadable = 3;
+    assert_eq!(
+        strip(&p),
+        "3 allergy records cannot be read on this terminal · Other: latex → rash · +1 adverse effect"
     );
 }
 
@@ -303,9 +405,9 @@ fn a_peers_newer_allergen_kind_counts_as_other() {
     assert!(v.other_allergies[0].prominent);
     assert_eq!(
         v.strip,
-        "Drug allergies not yet asked · Other: peanut → anaphylaxis (food)"
+        "No known drug allergies (asked 8 Nov 2026) · Other: peanut → anaphylaxis (food)"
     );
-    assert_eq!(v.previously_none.len(), 1);
+    assert!(v.previously_none.is_empty());
 }
 
 #[test]
@@ -393,15 +495,5 @@ fn drug_not_asked_while_other_has_entries() {
     assert_eq!(
         v.strip,
         "Drug allergies not yet asked · Other: latex → rash"
-    );
-}
-
-#[test]
-fn a_drug_scope_none_reads_in_previously_recorded() {
-    let a = entry(2, "drug", "penicillin", "allergy", "rash", 9);
-    let v = view(&pa(vec![a], vec![none(1, "drug", 8)]));
-    assert_eq!(
-        v.previously_none,
-        vec!["Previously recorded: no known drug allergies (asked 8 Nov 2026)"]
     );
 }

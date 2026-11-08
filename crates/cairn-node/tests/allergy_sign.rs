@@ -61,6 +61,19 @@ async fn signing_an_entry_records_human_authorship() {
         roles.contains(&(node_kid.clone(), "recorded".into())),
         "{roles:?}"
     );
+    assert!(safety_is_null(&c, id).await, "no safety signal on an entry");
+}
+
+/// Design §4: neither allergy type emits a safety signal yet (no supersession for a clear signal
+/// until #406/#401), so `event_log.safety` is NULL on both.
+async fn safety_is_null(c: &tokio_postgres::Client, id: Uuid) -> bool {
+    c.query_one(
+        "SELECT safety IS NULL FROM event_log WHERE event_id = $1::text::uuid",
+        &[&id.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
 
 #[tokio::test]
@@ -98,4 +111,8 @@ async fn signing_none_known_records_its_scope() {
         .unwrap()
         .get(0);
     assert_eq!(scope, "all");
+    assert!(
+        safety_is_null(&c, id).await,
+        "no safety signal on a statement"
+    );
 }

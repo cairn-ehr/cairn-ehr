@@ -63,6 +63,11 @@ pub struct AllergyPane {
     pub adverse_effects: Vec<AllergyLine>,
     /// "Previously recorded: …" lines for the "none known" statements an entry overrides.
     pub previously_none: Vec<String>,
+    /// The standing "none known" statement(s), each naming when and by whom it was signed.
+    pub standing_none: Vec<String>,
+    /// Allergy records on this chart set this terminal cannot read (no custody, or shredded):
+    /// the strip leads with them, and the window shows it prominent.
+    pub unreadable: usize,
     /// The chart set these rows were read over: the webview sends it back with every write.
     pub charts: Vec<String>,
 }
@@ -136,6 +141,7 @@ pub async fn allergy_list_impl(
             entries: vec![],
             none: vec![],
             doubted_charts: vec![],
+            unreadable: 0,
         };
         return Ok(pane(&empty, &ChartSet::single(patient)));
     };
@@ -381,6 +387,13 @@ pub fn parse_onset(s: Option<&str>, today: NaiveDate) -> Result<Onset, String> {
         _ => return Err(bad()),
     };
     let year = digits(y, 4..=4)?;
+    // chrono reads year 0 as 1 BC; no clinician means that, and the floor refuses it too.
+    if year == 0 {
+        return Err(format!(
+            "\"{typed}\" is not a date this window can read — there is no year 0000; type the \
+             year it happened, or leave it empty if it is not known."
+        ));
+    }
     let month = m.map(|m| digits(m, 1..=2)).transpose()?;
     let day = d.map(|d| digits(d, 1..=2)).transpose()?;
     let date = NaiveDate::from_ymd_opt(year as i32, month.unwrap_or(1), day.unwrap_or(1))
@@ -437,6 +450,8 @@ fn pane(a: &PatientAllergies, set: &ChartSet) -> AllergyPane {
         other_allergies: lines(v.other_allergies),
         adverse_effects: lines(v.adverse_effects),
         previously_none: v.previously_none,
+        standing_none: v.standing_none,
+        unreadable: v.unreadable,
         charts: set.members().iter().map(Uuid::to_string).collect(),
     }
 }
