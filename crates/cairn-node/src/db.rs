@@ -466,6 +466,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "073_person_menu",
         include_str!("../../../db/073_person_menu.sql"),
     ),
+    // db/074 (allergy slice 1): the allergy list's two streams — floor, projections and shred
+    // hook (the hook itself lives in db/037's cairn_execute_shred).
+    (
+        "074_clinical_allergy",
+        include_str!("../../../db/074_clinical_allergy.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

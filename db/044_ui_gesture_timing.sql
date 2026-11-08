@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS ui_gesture_timing (
     PRIMARY KEY (gesture_kind, size_bucket),
     -- Closed vocabularies: an unrecognised kind or bucket is a bug in the caller, and a
     -- free-text column here would be an invitation to smuggle an identifier in.
-    CONSTRAINT ui_gesture_timing_kind_ck   CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release', 'note-sign', 'note-discard', 'note-sign-off')),
+    CONSTRAINT ui_gesture_timing_kind_ck   CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release', 'note-sign', 'note-discard', 'note-sign-off', 'allergy-record', 'allergy-none')),
     CONSTRAINT ui_gesture_timing_bucket_ck CHECK (size_bucket IN ('1-3', '4-8', '9+')),
     CONSTRAINT ui_gesture_timing_n_ck      CHECK (n >= 0),
     CONSTRAINT ui_gesture_timing_p50_ck    CHECK (p50_ms IS NULL OR p50_ms >= 0),
@@ -37,12 +37,13 @@ CREATE TABLE IF NOT EXISTS ui_gesture_timing (
 -- Sign-in slice 3a adds 'note-sign' (a progress note's sign gesture) by the same route.
 -- Sign-in slice 3b-2b adds 'note-discard' (the audited discard of a draft note, db/069).
 -- Sign-in slice 3c-2 adds 'note-sign-off' (signing a whole note off, db/071).
+-- Allergy slice 1 adds 'allergy-record' and 'allergy-none' (the two allergy acts, db/074).
 -- #832: the medication withhold/release gestures are timed too. CREATE TABLE IF NOT EXISTS
 -- skips an existing table, so the widened kind list needs this paired convergence (the
 -- db/007 node_event_role_check idiom; #207): drop and re-add the same-named CHECK.
 ALTER TABLE ui_gesture_timing DROP CONSTRAINT IF EXISTS ui_gesture_timing_kind_ck;
 ALTER TABLE ui_gesture_timing ADD CONSTRAINT ui_gesture_timing_kind_ck
-    CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release', 'note-sign', 'note-discard', 'note-sign-off'));
+    CHECK (gesture_kind IN ('signoff', 'cease', 'withhold', 'release', 'note-sign', 'note-discard', 'note-sign-off', 'allergy-record', 'allergy-none'));
 
 -- NO GRANT TO cairn_agent, deliberately. The window writes here as its own login, which holds
 -- cairn_window (db/062, #898: the one writer this table names); no
