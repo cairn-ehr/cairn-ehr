@@ -1,5 +1,5 @@
 //! The allergy header strip and the expanded lists, as a PURE function of the record (allergy
-//! slice 1). No database, no clock: the caller passes the opened chart and the local UTC offset.
+//! slice 1). No database, no clock: the caller passes the local UTC offset.
 //!
 //! Reading order for a junior: [`build_view`] splits the rows into lists, decides each list's
 //! status ([`ListStatus`]), turns every row into an [`EntryLine`], and finally [`strip_text`]
@@ -85,14 +85,19 @@ fn onset_text(precision: &str, value: Option<&str>) -> Option<String> {
 /// The row's wording plus its onset (the twin has no dates; this layer adds them).
 pub fn entry_line_text(row: &AllergyRow) -> String {
     let onset = onset_text(&row.onset_precision, row.onset_value.as_deref());
-    entry_words_dated(
+    let words = entry_words_dated(
         &row.kind,
         &row.source,
         &row.term,
         &row.category,
         row.reaction_text.as_deref(),
         onset.as_deref(),
-    )
+    );
+    // A peer's newer allergen kind (e.g. "food") files under Other but says what it is.
+    match row.allergen_kind.as_str() {
+        "drug" | "other" => words,
+        k => format!("{words} ({k})"),
+    }
 }
 
 /// Sort rank of a reaction: anaphylaxis, not-known, angioedema, urticaria, rash, other, GI upset,
@@ -133,24 +138,21 @@ fn local_day(t: chrono::DateTime<chrono::Utc>, offset: FixedOffset) -> NaiveDate
     t.with_timezone(&offset).date_naive()
 }
 
-/// Build the whole view. `opened` is the chart the clinician opened (the rows may span its links).
-pub fn build_view(a: &PatientAllergies, opened: Uuid, offset: FixedOffset) -> AllergyView {
-    let _ = opened; // doubt is carried by `a.doubted_charts` (the read already excludes `opened`)
+/// Build the whole view over every linked chart's rows (doubt is carried by `a.doubted_charts`).
+pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
     let drug_rows: Vec<&AllergyRow> = a
         .entries
         .iter()
         .filter(|r| r.allergen_kind == "drug")
         .collect();
-    // Anything that is not "drug" (including a peer's newer allergen kind) lists with "other".
+    // Anything that is not "drug" (including a peer's newer allergen kind, e.g. "food") is an OTHER allergy.
     let other_rows: Vec<&AllergyRow> = a
         .entries
         .iter()
         .filter(|r| r.allergen_kind != "drug")
         .collect();
     let drug_has = drug_rows.iter().any(|r| r.kind == "allergy");
-    let other_has = other_rows
-        .iter()
-        .any(|r| r.kind == "allergy" && r.allergen_kind == "other");
+    let other_has = other_rows.iter().any(|r| r.kind == "allergy");
 
     // A none row is ONE statement: an entry in any list it covers overrides it everywhere.
     let valid = |n: &&NoneRow| match n.scope.as_str() {
@@ -212,7 +214,7 @@ pub fn build_view(a: &PatientAllergies, opened: Uuid, offset: FixedOffset) -> Al
                 ""
             }
         ),
-        prominent: r.kind == "allergy" && (r.allergen_kind == "drug" || r.allergen_kind == "other"),
+        prominent: r.kind == "allergy",
         chart: r.chart,
         doubted_chart: a.doubted_charts.contains(&r.chart),
         signer: r.signer.clone(),
@@ -224,9 +226,7 @@ pub fn build_view(a: &PatientAllergies, opened: Uuid, offset: FixedOffset) -> Al
             .iter()
             .copied()
             .filter(|r| r.kind != "adverse-effect")
-            .partition(|r| {
-                r.kind == "allergy" && (r.allergen_kind == "drug" || r.allergen_kind == "other")
-            });
+            .partition(|r| r.kind == "allergy");
         sorted(known)
             .into_iter()
             .chain(sorted(unknown))
@@ -254,6 +254,10 @@ pub fn build_view(a: &PatientAllergies, opened: Uuid, offset: FixedOffset) -> Al
         &prominent_texts(&drug_allergies),
         &prominent_texts(&other_allergies),
         adverse_effects.len(),
+        a.entries
+            .iter()
+            .filter(|r| r.kind != "allergy" && r.kind != "adverse-effect")
+            .count(),
     );
     AllergyView {
         strip,
@@ -275,7 +279,8 @@ fn prominent_texts(lines: &[EntryLine]) -> Vec<&str> {
         .collect()
 }
 
-/// Compose the one-line strip. `one_all_row`: both lists are covered by the same "all" statement.
+/// Compose the one-line strip: entries within a list join with "; ", sections with " · ".
+/// `one_all_row`: both lists are covered by the same "all" statement.
 fn strip_text(
     drug: &ListStatus,
     other: &ListStatus,
@@ -283,10 +288,11 @@ fn strip_text(
     drug_lines: &[&str],
     other_lines: &[&str],
     adverse: usize,
+    unrecognised: usize,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     match (drug, other) {
-        (ListStatus::Entries, _) => parts.push(drug_lines.join(" · ")),
+        (ListStatus::Entries, _) => parts.push(drug_lines.join("; ")),
         (ListStatus::NoneKnown { asked }, ListStatus::NoneKnown { .. }) if one_all_row => {
             parts.push(format!("No known allergies (asked {})", day_text(*asked)))
         }
@@ -299,7 +305,20 @@ fn strip_text(
         (ListStatus::NotYetAsked, _) => parts.push("Drug allergies not yet asked".into()),
     }
     match (drug, other) {
-        (_, ListStatus::Entries) => parts.push(format!("Other: {}", other_lines.join(" · "))),
+        (_, ListStatus::Entries) => {
+            // On the strip "Other:" already says it is an allergy; other wordings stay in full.
+            let lines: Vec<&str> = other_lines
+                .iter()
+                .map(|l| l.strip_prefix("Allergy: ").unwrap_or(l))
+                .collect();
+            parts.push(format!("Other: {}", lines.join("; ")))
+        }
+        // Drug and other were each asked, by different statements.
+        (ListStatus::NoneKnown { .. }, ListStatus::NoneKnown { asked }) if !one_all_row => parts
+            .push(format!(
+                "no known other allergies (asked {})",
+                day_text(*asked)
+            )),
         (ListStatus::NoneKnown { .. }, ListStatus::NotYetAsked) => {
             parts.push("other allergies: not yet asked".into())
         }
@@ -309,6 +328,12 @@ fn strip_text(
         parts.push(format!(
             "+{adverse} adverse effect{}",
             if adverse == 1 { "" } else { "s" }
+        ));
+    }
+    if unrecognised > 0 {
+        parts.push(format!(
+            "+{unrecognised} unrecognised entr{}",
+            if unrecognised == 1 { "y" } else { "ies" }
         ));
     }
     parts.join(" · ")

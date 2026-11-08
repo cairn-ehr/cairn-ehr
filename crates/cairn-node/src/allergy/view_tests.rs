@@ -51,7 +51,7 @@ fn pa(entries: Vec<AllergyRow>, none: Vec<NoneRow>) -> PatientAllergies {
     }
 }
 fn view(p: &PatientAllergies) -> AllergyView {
-    build_view(p, id(1000), bne())
+    build_view(p, bne())
 }
 fn strip(p: &PatientAllergies) -> String {
     view(p).strip
@@ -88,7 +88,7 @@ fn nkda_plus_a_latex_entry() {
     );
     assert_eq!(
         strip(&p),
-        "NKDA (asked 8 Nov 2026) · Other: Allergy: latex → urticaria"
+        "NKDA (asked 8 Nov 2026) · Other: latex → urticaria"
     );
 }
 
@@ -193,6 +193,7 @@ fn an_adverse_effect_does_not_override_nkda() {
     );
     assert_eq!(
         strip(&p),
+        // Follows the other-part rule (drug NoneKnown + other NotYetAsked), not the brief's literal.
         "NKDA (asked 8 Nov 2026) · other allergies: not yet asked · +1 adverse effect"
     );
 }
@@ -271,7 +272,7 @@ fn unknown_kind_is_listed_not_prominent_and_off_the_strip() {
     assert!(!v.drug_allergies[0].prominent);
     assert_eq!(v.drug_allergies[0].text, "intolerance: foo → rash");
     assert_eq!(v.drug, ListStatus::NotYetAsked);
-    assert_eq!(v.strip, "Allergies not yet asked");
+    assert_eq!(v.strip, "Allergies not yet asked · +1 unrecognised entry");
 }
 
 #[test]
@@ -288,5 +289,119 @@ fn dates_use_the_node_local_day() {
     assert_eq!(
         view(&pa(vec![e], vec![])).drug_allergies[0].recorded,
         chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap()
+    );
+}
+
+#[test]
+fn a_peers_newer_allergen_kind_counts_as_other() {
+    let p = pa(
+        vec![entry(1, "food", "peanut", "allergy", "anaphylaxis", 9)],
+        vec![none(2, "all", 8)],
+    );
+    let v = view(&p);
+    assert_eq!(v.other, ListStatus::Entries);
+    assert!(v.other_allergies[0].prominent);
+    assert_eq!(
+        v.strip,
+        "Drug allergies not yet asked · Other: peanut → anaphylaxis (food)"
+    );
+    assert_eq!(v.previously_none.len(), 1);
+}
+
+#[test]
+fn unrecognised_kinds_are_counted_on_the_strip() {
+    let one = pa(
+        vec![entry(1, "drug", "foo", "intolerance", "rash", 8)],
+        vec![],
+    );
+    assert_eq!(
+        strip(&one),
+        "Allergies not yet asked · +1 unrecognised entry"
+    );
+    let two = pa(
+        vec![
+            entry(1, "drug", "foo", "intolerance", "rash", 8),
+            entry(2, "other", "bar", "sensitivity", "rash", 8),
+            entry(3, "drug", "m", "adverse-effect", "rash", 8),
+        ],
+        vec![none(4, "all", 7)],
+    );
+    // An unrecognised kind never overrides a none.
+    assert_eq!(
+        strip(&two),
+        "No known allergies (asked 7 Nov 2026) · +1 adverse effect · +2 unrecognised entries"
+    );
+}
+
+#[test]
+fn entries_join_with_semicolons_and_sections_with_dots() {
+    let mut a = entry(1, "drug", "penicillin", "allergy", "anaphylaxis", 8);
+    a.onset_precision = "year".into();
+    a.onset_value = Some("2014".into());
+    let p = pa(
+        vec![
+            a,
+            entry(2, "drug", "cefalexin", "allergy", "rash", 8),
+            entry(3, "other", "latex", "allergy", "urticaria", 8),
+            entry(4, "drug", "metformin", "adverse-effect", "rash", 8),
+        ],
+        vec![],
+    );
+    assert_eq!(
+        strip(&p),
+        "Allergy: penicillin → anaphylaxis · 2014; Allergy: cefalexin → rash · Other: latex → urticaria · +1 adverse effect"
+    );
+}
+
+#[test]
+fn other_part_drops_only_the_plain_allergy_prefix() {
+    let mut e = entry(1, "other", "latex", "allergy", "urticaria", 8);
+    e.source = "patient-stated".into();
+    let v = view(&pa(vec![e], vec![]));
+    assert!(
+        v.strip
+            .contains("Other: Patient stated allergy: latex → urticaria"),
+        "{}",
+        v.strip
+    );
+    assert!(v.other_allergies[0]
+        .text
+        .starts_with("Patient stated allergy: "));
+    let v = view(&pa(
+        vec![entry(2, "other", "latex", "allergy", "rash", 8)],
+        vec![],
+    ));
+    assert_eq!(v.other_allergies[0].text, "Allergy: latex → rash");
+}
+
+#[test]
+fn a_newer_drug_none_over_an_older_all_none_still_says_others_were_asked() {
+    let v = view(&pa(vec![], vec![none(1, "all", 5), none(2, "drug", 8)]));
+    assert_eq!(
+        v.strip,
+        "NKDA (asked 8 Nov 2026) · no known other allergies (asked 5 Nov 2026)"
+    );
+    assert!(v.previously_none.is_empty());
+}
+
+#[test]
+fn drug_not_asked_while_other_has_entries() {
+    let v = view(&pa(
+        vec![entry(1, "other", "latex", "allergy", "rash", 8)],
+        vec![],
+    ));
+    assert_eq!(
+        v.strip,
+        "Drug allergies not yet asked · Other: latex → rash"
+    );
+}
+
+#[test]
+fn a_drug_scope_none_reads_in_previously_recorded() {
+    let a = entry(2, "drug", "penicillin", "allergy", "rash", 9);
+    let v = view(&pa(vec![a], vec![none(1, "drug", 8)]));
+    assert_eq!(
+        v.previously_none,
+        vec!["Previously recorded: no known drug allergies (asked 8 Nov 2026)"]
     );
 }
