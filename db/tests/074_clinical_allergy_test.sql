@@ -200,7 +200,8 @@ SELECT pg_temp.authoring_only(pg_temp.entry('{"reaction":{"category":"hives","te
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('season', '2019-winter')), 'onset.precision');
 SELECT pg_temp.authoring_only(pg_temp.entry('{"source":"hearsay"}'), 'source');
 -- An onset value that does not read as its precision's ISO form, or is no real date.
-SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('month', '2019-13')), 'onset.value');
+SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('month', '2019-13')),
+    'onset.value "2019-13" is not a valid month');
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day', '2019-02-31')), 'onset.value');
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day', '2019-02')), 'onset.value');
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('year', '19')), 'onset.value');
@@ -211,12 +212,14 @@ SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day', '0000-03-14')),
 -- An onset after the recording day: the year after the latest calendar year anywhere on earth.
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('year',
     (extract(year FROM now() AT TIME ZONE 'UTC' + interval '14 hours')::int + 1)::text)), 'future');
--- The reserved slots, opened by later slices: a coding (slice 3) and a correction ref (slice 2).
+-- The reserved slot, opened by slice 3: a coding. A correction ref (slice 2) is open, but must
+-- name an entry held on this chart — this one names none (db/tests/075 pins the rest).
 SELECT pg_temp.authoring_only(pg_temp.entry(
     '{"substance":{"term":"amoxicillin","coding":{"system":"drugref-moiety",
       "code":"01900000-0000-7000-8000-000000000001","display":"amoxicillin"}}}'), 'coding must be null');
 SELECT pg_temp.authoring_only(pg_temp.entry(
-    '{"refs":[{"rel":"correction-of","event":"01900000-0000-7000-8000-000000000002"}]}'), 'refs must be empty');
+    '{"refs":[{"rel":"correction-of","event":"01900000-0000-7000-8000-000000000002"}]}'),
+    'is not an allergy entry on this chart');
 SELECT pg_temp.authoring_only(pg_temp.none_body('{"scope":"food"}'), 'scope');
 SELECT pg_temp.authoring_only(pg_temp.none_body() || '{"schema_version":"clinical.allergy-none/2"}',
                               'schema_version');

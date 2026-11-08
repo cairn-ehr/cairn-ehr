@@ -14,7 +14,8 @@
 -- type, a blank term, onset.value present when the precision says it is not known — refuses at
 -- BOTH doors: no node can read such a body. A CLOSED-VOCABULARY rule — an enumerated word, the
 -- shape of onset.value for its precision, an onset in the future, a filled reserved slot
--- (`coding`, `refs`) — refuses at the AUTHORING door only (`cairn.remote_apply` <> 'on'). At the
+-- (`coding`), a correction ref that is not exactly one `correction-of` naming an entry on this
+-- chart (allergy slice 2) — refuses at the AUTHORING door only (`cairn.remote_apply` <> 'on'). At the
 -- remote door a newer peer's word is ADMITTED and projected as itself: refusing it would wedge
 -- sync on every node older than its author (ADR-0056). That is why the projection's vocabulary
 -- columns carry no CHECK.
@@ -27,9 +28,11 @@ INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
     ('clinical.allergy-none.asserted', 'additive', FALSE)
 ON CONFLICT (event_type) DO NOTHING;
 
--- 2. The shape of onset.value for its precision, and "not after the recording day". Authoring
---    door only (the caller decides). Returns the refusal reason, or NULL when the onset is fine,
---    so the floor keeps one RAISE per rule. Pure apart from now().
+-- 2. The shape of a dated value for its precision, and "not after the recording day". Authoring
+--    door only (the caller decides). Returns the refusal reason WITHOUT the field name, or NULL
+--    when the date is fine, so each caller keeps one RAISE per rule and names its own field: the
+--    entry's `onset.value`, and a de-label's `date.value` (db/075, the same shape — ADR-0096's
+--    onset). Pure apart from now().
 --
 --    WHY "+14 hours": the recording day is the clinician's calendar day, and this database does
 --    not know the terminal's time zone. UTC+14 is the furthest-ahead zone on earth, so a date
@@ -51,16 +54,16 @@ BEGIN
         WHEN 'year'  THEN p_value ~ '^\d{4}$'
     END;
     IF v_shape_ok IS NOT TRUE THEN
-        RETURN format('onset.value "%s" is not a valid %s (YYYY-MM-DD, YYYY-MM or YYYY)', p_value, p_precision);
+        RETURN format('"%s" is not a valid %s (YYYY-MM-DD, YYYY-MM or YYYY)', p_value, p_precision);
     END IF;
     -- The shape admits 0000 at year and month precision; no calendar has that year (a day is
     -- already refused above: pg_input_is_valid knows no year 0). The window refuses it too.
     IF left(p_value, 4) = '0000' THEN
-        RETURN format('onset.value "%s" has year 0000, which no calendar has', p_value);
+        RETURN format('"%s" has year 0000, which no calendar has', p_value);
     END IF;
     -- ISO forms compare as text; cut today to the value's own length (year, month or day).
     IF p_value > left(v_latest, length(p_value)) THEN
-        RETURN format('onset.value "%s" is in the future (after the recording day)', p_value);
+        RETURN format('"%s" is in the future (after the recording day)', p_value);
     END IF;
     RETURN NULL;
 END;
@@ -75,6 +78,8 @@ DECLARE
     p           jsonb   := b -> 'payload';
     v_authoring boolean := current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on';
     v_onset_why text;
+    v_ref       jsonb;    -- a correction's one ref (authoring door)
+    v_ref_ok    boolean;
 BEGIN
     -- ---- Structural: both doors ----
     IF jsonb_typeof(p) IS DISTINCT FROM 'object' THEN
@@ -158,17 +163,40 @@ BEGIN
     END IF;
     v_onset_why := cairn_allergy_onset_problem(p #>> '{onset,precision}', p #>> '{onset,value}');
     IF v_onset_why IS NOT NULL THEN
-        RAISE EXCEPTION 'allergy assertion: %', v_onset_why;
+        RAISE EXCEPTION 'allergy assertion: onset.value %', v_onset_why;
     END IF;
     IF p ->> 'source' NOT IN ('patient-stated', 'seen-documented', 'another-record') THEN
         RAISE EXCEPTION 'allergy assertion: source must be patient-stated, seen-documented or another-record, got %', p ->> 'source';
     END IF;
-    -- The reserved slots: coding opens in slice 3 (drugref), refs in slice 2 (corrections).
+    -- The reserved slot: coding opens in slice 3 (drugref).
     IF jsonb_typeof(p #> '{substance,coding}') IS DISTINCT FROM 'null' THEN
         RAISE EXCEPTION 'allergy assertion: substance.coding must be null at the authoring door (coding is not built yet)';
     END IF;
-    IF jsonb_array_length(p -> 'refs') > 0 THEN
-        RAISE EXCEPTION 'allergy assertion: refs must be empty at the authoring door (corrections are not built yet)';
+    -- A CORRECTION (allergy slice 2): refs is [] or exactly one {rel: correction-of, event}
+    -- naming the line it replaces (plan M2: a chain, not the root). The target must be an entry
+    -- already held here, on THIS chart (D2, the vouch precedent: a correction filed under the
+    -- wrong patient is the #689 failure). Authoring door only (D6): a peer may correct a line
+    -- this node has not received yet, and a ref the reader cannot parse is ignored (over-warns).
+    IF p -> 'refs' <> '[]'::jsonb THEN
+        v_ref := p #> '{refs,0}';
+        -- A CASE, not one long OR: `-` on a non-object raises, and SQL never promises the order
+        -- an OR is evaluated in; a CASE's branch runs only when its test held.
+        v_ref_ok := CASE WHEN jsonb_array_length(p -> 'refs') = 1 AND jsonb_typeof(v_ref) = 'object'
+            THEN v_ref - 'rel' - 'event' = '{}'::jsonb          -- exactly those two keys
+                 AND v_ref ->> 'rel' = 'correction-of'
+                 AND jsonb_typeof(v_ref -> 'event') = 'string'
+                 AND pg_input_is_valid(v_ref ->> 'event', 'uuid')
+            ELSE false END;
+        IF v_ref_ok IS NOT TRUE THEN
+            RAISE EXCEPTION 'allergy assertion: refs must be [] or one {rel: correction-of, event}';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM event_log
+                        WHERE event_id = (v_ref ->> 'event')::uuid
+                          AND event_type = 'clinical.allergy.asserted'
+                          AND patient_id = (b ->> 'patient_id')::uuid) THEN
+            RAISE EXCEPTION 'allergy assertion: correction-of target % is not an allergy entry on this chart',
+                v_ref ->> 'event';
+        END IF;
     END IF;
 END;
 $$;
