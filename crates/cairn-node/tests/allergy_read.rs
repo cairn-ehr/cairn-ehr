@@ -1,9 +1,9 @@
 //! Allergy slice 1, Task 3 — `allergy::read::list_patient_allergies`. DB-gated on `$CAIRN_TEST_PG`.
 use cairn_event::allergy::{
-    AllergenKind, AllergyEntry, EntryKind, Onset, ReactionCategory, Source,
+    AllergenKind, AllergyEntry, EntryKind, NoneScope, Onset, ReactionCategory, Source,
 };
 use cairn_node::allergy::read::list_patient_allergies;
-use cairn_node::allergy::sign::sign_allergy;
+use cairn_node::allergy::sign::{sign_allergy, sign_allergy_none};
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
 use uuid::Uuid;
@@ -25,9 +25,9 @@ fn entry(term: &str) -> AllergyEntry<'_> {
 /// Two registered charts a and x, linked, an entry on each; returns what the tests need.
 async fn two_linked(base: &str) -> (tokio_postgres::Client, Uuid, Uuid, Uuid, Uuid) {
     let mut c = db::connect_and_load_schema(base).await.unwrap();
-    let (node_sk, node_kid, human_sk, human_kid) = common::medication_setup(&c).await;
-    let (a, x) = (Uuid::now_v7(), Uuid::now_v7());
-    common::submit_registration(&c, &node_sk, &node_kid, a, 0).await;
+    // note_setup also enrols the human as a named vault member, so the signer name is populated.
+    let (node_sk, node_kid, human_sk, human_kid, a) = common::note_setup(&c).await;
+    let x = Uuid::now_v7();
     common::submit_registration(&c, &node_sk, &node_kid, x, 0).await;
     let author = AuthorParams {
         human_sk: &human_sk,
@@ -77,7 +77,7 @@ async fn a_linked_chart_entries_are_read_with_their_chart() {
     assert!(got
         .entries
         .iter()
-        .all(|r| r.signer.is_some() || r.signer.is_none()));
+        .all(|r| r.signer.as_deref() == Some(common::NOTE_AUTHOR)));
 }
 
 #[tokio::test]
@@ -120,4 +120,45 @@ async fn an_unknown_word_from_a_peer_still_reads() {
     let got = list_patient_allergies(&c, a).await.unwrap();
     let row = got.entries.iter().find(|r| r.event_id == ea).unwrap();
     assert_eq!(row.category, "bronchospasm");
+}
+
+fn near_now(t: chrono::DateTime<chrono::Utc>) -> bool {
+    (chrono::Utc::now() - t).num_seconds().abs() < 300
+}
+
+#[tokio::test]
+async fn rows_carry_chart_scope_and_a_recorded_time_near_now() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (node_sk, node_kid, human_sk, human_kid, a) = common::note_setup(&c).await;
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let ea = sign_allergy(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        "n",
+        a,
+        &entry("penicillin"),
+        &author,
+    )
+    .await
+    .unwrap();
+    let en = sign_allergy_none(&mut c, &node_sk, &node_kid, "n", a, NoneScope::All, &author)
+        .await
+        .unwrap();
+    let got = list_patient_allergies(&c, a).await.unwrap();
+    let n = &got.none[0];
+    assert_eq!((n.event_id, n.chart, n.scope.as_str()), (en, a, "all"));
+    assert!(near_now(n.recorded_at), "{}", n.recorded_at);
+    assert_eq!(n.signer.as_deref(), Some(common::NOTE_AUTHOR));
+    let e = &got.entries[0];
+    assert_eq!(e.event_id, ea);
+    assert!(near_now(e.recorded_at), "{}", e.recorded_at);
 }
