@@ -1,13 +1,17 @@
 //! **Measurement scaffolding for [#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021) —
 //! not a product surface.**
 //!
-//! The person menu ("Waiting for you", ADR-0095) has two reads, and both grow with ALL-TIME
-//! history, not with what is open (ADR-0095 (h)):
+//! The person menu ("Waiting for you", ADR-0095) has two reads, and both SCAN all-time history,
+//! not what is open (ADR-0095 (h)). Since #1021 each keeps only the parts some menu could list
+//! (the last week's, and those that could still be owed; `read::NOTES_BY_KEYS_SQL`):
 //!
-//! - **the bar's read** — one person's menu: every part their keys, and their current
-//!   supervisees' keys, ever wrote (`read_menus(Some(staff))`);
-//! - **the picker's counts read** — everybody's count: essentially every note part on the node
-//!   (`read_menus(None)`).
+//! - **the bar's read** — one person's menu: the parts their keys, and their current
+//!   supervisees' keys, wrote (`read_menus(Some(staff), now)`);
+//! - **the picker's counts read** — everybody's count: the parts of every key on the node
+//!   (`read_menus(None, now)`).
+//!
+//! Every note this rig seeds is written today, so all of them are inside the review week unless
+//! the reads are timed as of a later day: `--later-days 8` gives a ward's steady state.
 //!
 //! Both run on the window's ONE database connection, so a pick of who's here waits behind a
 //! counts read already in flight. RUNBOOK §26's hand-built fixture (about 60 notes) cannot show a
@@ -19,9 +23,9 @@
 //! Each read is timed as the window composes it (`cairn-gui-tauri/src/person_menu.rs`,
 //! `whos_here.rs`), so the figure is the one a clinician waits for, Rust classification included:
 //!
-//! - **bar** = one REPEATABLE READ snapshot holding `read_menus(Some(staff))`, `menu_for` and
+//! - **bar** = one REPEATABLE READ snapshot holding `read_menus(Some(staff), now)`, `menu_for` and
 //!   `candidates_by_id` for the rows' charts (the window's `fresh`);
-//! - **counts** = one snapshot holding `read_menus(None)`, then `counts` (`whos_here_counts_impl`);
+//! - **counts** = one snapshot holding `read_menus(None, now)`, then `counts` (`whos_here_counts_impl`);
 //! - **directory** = `whos_here::directory` (the picker's list, read before the counts);
 //! - **pick behind counts** = counts + directory + bar, end to end — the worst case RUNBOOK §26's
 //!   third timing describes, since the one connection serialises them.
@@ -112,6 +116,11 @@ struct Args {
     /// the read). `--stages` and the ward shape are then ignored.
     #[arg(long)]
     measure_only: bool,
+    /// Read as of this many days after now. Every seeded note is written today, so with the
+    /// default 0 all of them are inside group 3's 7-day window and the read's filter (#1021)
+    /// keeps them all; 8 or more shows a ward's steady state, its history outside the window.
+    #[arg(long, default_value_t = 0)]
+    later_days: i64,
 }
 
 /// The supervisor whose bar is timed (the RUNBOOK's name for her).
@@ -176,12 +185,12 @@ async fn supervision(
 }
 
 /// The bar's read, as the window's `person_menu::fresh` composes it. Returns the menu's count.
-async fn time_bar(db: &mut Client) -> anyhow::Result<(Duration, usize)> {
+async fn time_bar(db: &mut Client, later: chrono::Duration) -> anyhow::Result<(Duration, usize)> {
     let started = Instant::now();
-    let now = Utc::now();
+    let now = Utc::now() + later;
     let today = now.date_naive().to_string();
     let count = in_snapshot(db, async |tx| {
-        let read = read_menus(tx, Some(SUPERVISOR)).await?;
+        let read = read_menus(tx, Some(SUPERVISOR), now).await?;
         let menu = read.menu_for(SUPERVISOR, now).unwrap_or_default();
         cairn_node::patient::candidate_read::candidates_by_id(tx, &menu.charts(), &today).await?;
         Ok(menu.count())
@@ -191,10 +200,14 @@ async fn time_bar(db: &mut Client) -> anyhow::Result<(Duration, usize)> {
 }
 
 /// The picker's counts read, as `whos_here_counts_impl` composes it. Returns the parts read.
-async fn time_counts(db: &mut Client) -> anyhow::Result<(Duration, usize)> {
+async fn time_counts(
+    db: &mut Client,
+    later: chrono::Duration,
+) -> anyhow::Result<(Duration, usize)> {
     let started = Instant::now();
-    let read = in_snapshot(db, async |tx| read_menus(tx, None).await).await?;
-    let _ = read.counts(Utc::now());
+    let now = Utc::now() + later;
+    let read = in_snapshot(db, async |tx| read_menus(tx, None, now).await).await?;
+    let _ = read.counts(now);
     Ok((started.elapsed(), read.parts.len()))
 }
 
@@ -206,14 +219,15 @@ async fn time_directory(db: &Client) -> anyhow::Result<Duration> {
 }
 
 /// Time every read `repeats` times and print one row of the curve.
-async fn measure(db: &mut Client, repeats: usize) -> anyhow::Result<()> {
+async fn measure(db: &mut Client, repeats: usize, later_days: i64) -> anyhow::Result<()> {
+    let later = chrono::Duration::days(later_days);
     let (mut bar, mut counts, mut dir) = (vec![], vec![], vec![]);
     let (mut bar_n, mut parts_n) = (0, 0);
     for _ in 0..repeats {
-        let (t, n) = time_bar(db).await?;
+        let (t, n) = time_bar(db, later).await?;
         bar.push(t);
         bar_n = n;
-        let (t, n) = time_counts(db).await?;
+        let (t, n) = time_counts(db, later).await?;
         counts.push(t);
         parts_n = n;
         dir.push(time_directory(db).await?);
@@ -261,7 +275,7 @@ async fn main() -> anyhow::Result<()> {
     let origin = cairn_node::identity::load_local(&db).await?.node_id_hex;
     if args.measure_only {
         print_header();
-        return measure(&mut db, args.repeats).await;
+        return measure(&mut db, args.repeats, args.later_days).await;
     }
 
     // The ward: staff, dr-b's supervisees (1..=supervisees), the first few needing a co-sign.
@@ -330,7 +344,7 @@ async fn main() -> anyhow::Result<()> {
             "  seeded {signed} notes in {:.0} s",
             started.elapsed().as_secs_f64()
         );
-        measure(&mut db, args.repeats).await?;
+        measure(&mut db, args.repeats, args.later_days).await?;
     }
     Ok(())
 }

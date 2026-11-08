@@ -2214,9 +2214,10 @@ A fixture smaller than the budget's is a figure for that size only: say so in th
       before the last " · N waiting" shows, from the press to her name on the bar. Both reads use the window's one
       database connection, so the pick waits behind the counts' read (ADR-0095 (h)).
 
-A fixture this size (about 60 notes) cannot show a cliff that grows with history: the menu's read returns every part
-its keys ever wrote, and the counts' read every person's, so a node with years of notes is slower than any figure
-here ([#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021)). The reads at scale (no window, no human) are
+A fixture this size (about 60 notes) cannot show a cliff that grows with history: the menu's read still scans every
+part its keys ever wrote (and the counts' read every person's), keeping only the last week's and those that could still
+be owed, so a node with years of notes is slower than any figure here
+([#1021](https://github.com/cairn-ehr/cairn-ehr/issues/1021)). The reads at scale (no window, no human) are
 measured by `cargo run --release --example measure_person_menu` in `crates/cairn-node`; its figures are in
 [`crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`](../../../crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md).
 

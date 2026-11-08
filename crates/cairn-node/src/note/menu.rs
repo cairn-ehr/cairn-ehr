@@ -32,6 +32,12 @@ use super::vouch::{counts_as_unsigned, part_is_signed, same_actor};
 /// How long a supervisee's note stays in group 3.
 pub const REVIEW_DAYS: i64 = 7;
 
+/// The first instant group 3 lists at `now`. The menu read cuts at the same instant, so the two
+/// can never disagree about the window (#1021).
+pub fn review_window_start(now: DateTime<Utc>) -> DateTime<Utc> {
+    now - Duration::days(REVIEW_DAYS)
+}
+
 /// The named clinician: their actor (how notes name people), their vault staff id (how drafts
 /// name their writer), and every signing key they ever enrolled or rotated to, repudiated ones
 /// included (so a part signed with a since-repudiated key is still found as theirs).
@@ -181,7 +187,7 @@ pub fn classify(
         })
         .collect();
 
-    let window_start = now - Duration::days(REVIEW_DAYS);
+    let window_start = review_window_start(now);
     let mut sorted: Vec<&NoteRow> = parts.iter().collect();
     sorted.sort_by_key(|p| Reverse((p.recorded_at, p.event_id)));
     for p in sorted {

@@ -70,7 +70,7 @@
 >   own predicate over the chart's own query read by keys (`notes_sql!`, `parts_by_keys`, pure `note::menu`); db/073's
 >   two read doors (people + keys; drafts by writer); "Open note" re-reads and keeps the wrong-chart rule; the picker
 >   shows each person's count. Open: **#1020** (two actors sharing a staff id) · **#1021** (the reads grow with all-time
->   history and serialise with pick/save/Sign — measured and 5× cut 2026-11-08, see ⇒ NEXT) · **#1022** (test hygiene) · **#1023** (residuals,
+>   history and serialise with pick/save/Sign — measured, 5× cut, then kept to what a menu could list, 2026-11-08, see ⇒ NEXT) · **#1022** (test hygiene) · **#1023** (residuals,
 >   incl. `funnel.js` at 499 lines) · **#1024** (`note::menu` types: an `Option` staff id, a `MenuItem` target enum).
 >   Owed by a human: **RUNBOOK §26** (also WebKit + real Tauri IPC, walked in Chromium only). The 2026-11-08 final
 >   check fixed ADR-0095 (j)'s wording, made "Open note" stay on the chart when the Sign in flight did not go
@@ -133,8 +133,10 @@
 >    **#1021 measured 2026-11-08** (this session's PR; `examples/measure_person_menu.rs`, figures in
 >    `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`): the budget was missed from 5 000 notes;
 >    88% was per-row key-fact lookups, now once per distinct key (`notes_sql!`'s `facts` CTE, output identical) — 5–6×
->    faster. A plain pick fits ≤ 1 s to 100 000 notes; **a pick behind the picker's counts read still misses from a
->    ward-year (1.05 s at 33 000)**, and the reads stay linear in history: #1021 stays open for the obligations
+>    faster. Then a **keep rule** (the maintainer's time-limit idea, made lossless): the read builds only parts some menu
+>    could list — a drafted writer, the 7-day review window, a repudiated key, a student's or ever-co-sign-required
+>    writer's. Steady state, a pick behind the picker's counts read: **386 ms at a ward-year, 1.13 s at 100 000**. The
+>    scan, and those writers' parts (cleared or not), stay linear in history: #1021 stays open for the obligations
 >    projection, the cheap levers it lists, and the Pi figures. **Next — the maintainer picks:** the milestone's missing
 >    **allergy** stream (no allergy stream exists; the milestone needs "record an allergy"); slice 4 (the emergency
 >    key); **#1014** (first if a multi-node pilot nears); or #1021's projection.
@@ -280,7 +282,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-11-08 (#1021 measured; key facts once per key) · 2026-11-07 (3c-3c plan → SDD, 7 tasks + final fix wave, PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)) · 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
+**Session date:** 2026-11-08 (#1021 measured; key facts once per key; keep rule) · 2026-11-07 (3c-3c plan → SDD, 7 tasks + final fix wave, PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)) · 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
 **Spec:** **v0.97** (newest ADR-0095, PR #1019, `db/073`; v0.96 ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
 wording only) · **`SCHEMA_GENERATION`:** **73** (`db/073`, PR #1019; `db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
@@ -313,14 +315,22 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
-### 2026-11-08 — #1021: the person menu measured at scale, and 5–6× cut
+### 2026-11-08 — #1021: the person menu measured at scale, 5–6× cut, then a keep rule
 
-Rig `examples/measure_person_menu.rs` (seeds a ward through `sign_note` in stages; `--measure-only` re-times a node);
-figures and profile in `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`. 27 note DB suites (180
-tests) + the GUI tree's DB-gated `--bins` green on the rewrite.
+Rig `examples/measure_person_menu.rs` (seeds a ward through `sign_note` in stages; `--measure-only` re-times a node,
+`--later-days 8` reads it as a ward's steady state); figures in
+`crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`. Final state: the lib + 30 note/supervision DB
+suites (756 tests, none skipped) and the GUI tree's DB-gated `--bins` (787) green.
 - **⇒ Profile before choosing the big fix.** The issue's proposed fix was a new projection. `track_functions` showed
   88% of the cost was ~1.4 M calls of `SECURITY DEFINER` key doors (never inlined) for **40** distinct keys: a CTE fixed
   that without touching meaning. Prove "identical" with `EXCEPT ALL` both ways on the big fixture before the rewrite.
+- **⇒ A time limit on what is OWED hides it; a time limit on what is SHOWN is free.** The maintainer proposed
+  cutoffs (1 month mandatory, 1 week optional). Group 3 already had the week (Rust-side, now pushed into SQL); a cutoff
+  on groups 1–2 would drop an unsigned or un-co-signed note from "Waiting for you" at day 31, and a monthly-synced
+  clinic's notes would arrive already expired. The lossless form is a SUPERSET keep rule, each term traced to a group.
+- **⇒ Mutation-check a superset filter, and check the mutation tool too.** The 30-days-on re-read pins each term
+  (removing any one fails a test). The first mutation run replaced terms with `FALSE`, orphaning `$2`/`$3`, so every
+  test failed on a parameter-type error, not the filter: use `(FALSE AND term)`.
 - **⇒ Fact-check your own figures** before they land: a nested function's *total* double-counts (94% → 88% self time),
   and a ratio projected from one statement under-shot the composed read (0.9 s projected, 1.05 s measured).
 

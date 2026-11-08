@@ -12,10 +12,14 @@ looked up again for every row: about 1.4 million calls for 40 distinct keys. Wit
 (`notes_sql!`'s `facts` CTE), output identical row for row, the reads are **5–6× faster**:
 
 - a plain pick now fits the budget **up to 100 000 notes** (878 ms);
-- a pick made while the picker's counts are still loading still misses it **from about a ward-year** (1 051 ms at
-  33 000 notes) — that is the finding; the budget is not adjusted;
-- the reads still grow linearly with all-time history. #1021's projection of open obligations is the fix for a
-  facility-sized node.
+- a pick made while the picker's counts are still loading still missed it **from about a ward-year** (1 051 ms at
+  33 000 notes).
+
+A second change then stopped the read from building parts no menu could list (the **keep rule**, below). In a ward's
+steady state, where only the last week is inside the review window, a pick made while the counts load takes **386 ms
+at a ward-year** and **1 132 ms at 100 000 notes**. The scan still grows linearly with all-time history, and so do a
+co-sign-required writer's parts, which are kept cleared or not. #1021's projection of open obligations remains the
+fix for a facility-sized node.
 
 ## Rig
 
@@ -88,10 +92,45 @@ A second fresh node was seeded the same way. Timing the first node again with `-
 checked against the old statement on the 100 000-note node, and `EXCEPT ALL` found no row differing in either
 direction. The 27 DB-gated note suites (180 tests) pass on the rewrite.
 
+## After the keep rule — only parts some menu could list are built
+
+`NOTES_BY_KEYS_SQL` now reads each part's keys and time first (`base`), looks the keys up once (`facts`), and builds
+the costly columns (text, contributors, vouches) only for the parts a menu could list (`kept`): those naming a drafted
+writer, those within the 7-day review window, those whose signing key is repudiated, and those signed by a student or
+by a writer the supervision record ever required co-signing. The DB tests re-read every menu scenario 30 days on and
+assert the same owed groups. Removing any one term fails a test.
+
+Every seeded note is written today, so the rig's `--later-days 8` reads as of eight days on: a ward's steady state,
+with its history outside the review window. A fresh node, seeded the same way, timed that way:
+
+| `clinical_note` rows | parts kept in counts read | dr-b's count | bar | counts | directory | pick behind counts |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 000 | 125 | 125 | 11 ms | 10 ms | 0 ms | 21 ms |
+| 5 000 | 625 | 625 | 25 ms | 32 ms | 0 ms | 57 ms |
+| 10 000 | 1 250 | 1 250 | 52 ms | 68 ms | 0 ms | 121 ms |
+| 20 000 | 2 500 | 2 500 | 102 ms | 134 ms | 0 ms | 236 ms |
+| 33 000 | 4 125 | 4 125 | 148 ms | 238 ms | 0 ms | **386 ms** |
+| 100 000 (the earlier node) | 12 500 | 12 500 | 446 ms | 685 ms | 0 ms | 1 132 ms |
+
+The parts kept are the 5 co-sign-required writers' (5 of 40 staff, so 12.5%). The rig co-signs nothing, so dr-b's
+count holds all of them; on a ward where co-signs get done they are still read, since the rule cannot tell a cleared
+co-sign from an owed one. A ward with more students or probationers keeps proportionally more.
+
+Read as of today instead (`--later-days 0`), every part is inside the window and nothing is dropped. That is the
+rule's worst case, and it costs a little:
+
+| `clinical_note` rows | bar | counts | pick behind counts | before the keep rule |
+|---:|---:|---:|---:|---:|
+| 33 000 | 367 ms | 782 ms | 1 150 ms | 1 051 ms |
+| 100 000 | 997 ms | 2 624 ms | 3 622 ms | 3 028 ms |
+
+That case needs a node's whole history to fall within one week: 33 000 notes is a ward-year, not a ward-week.
+
 ## What is left, in #1021
 
 - The **projection of open obligations** (one row per part that waits for someone, kept by the appliers), so the
-  menu reads O(obligations), not O(history). Needed before a node of a ward-year or more uses the picker's counts.
+  menu reads O(obligations), not O(history). With the keep rule a ward-year fits the budget; the projection is
+  needed for a facility-sized node, or a ward whose co-sign-required writers write most of its notes.
 - Cheaper levers, not taken here:
   - drop `closeChart`'s menu refresh when `person_menu_open` follows ("Open note" from an open chart reads the menu
     three times);

@@ -147,40 +147,52 @@ pub struct PatientNoteList {
 /// reads (`NoteRow::signer_human_actor`). The very last column is the part's `e.hlc_wall`
 /// (ms since the epoch), what `NoteRow::recorded_at` and the supervision record are judged at.
 ///
-/// **Two CTEs, for cost, not meaning (#1021).** `rows` reads each part once and keeps what is a
-/// fact of the PART; `facts` asks the key doors about each DISTINCT key those rows name (`k`, the
-/// drafted key, the envelope signer) exactly once. The final SELECT joins them back, so the
-/// columns above are unchanged. Measured: per-row key lookups were 88% of a 100 000-note read
-/// over 40 keys; resolved once per key the same read was 5–6× faster with identical output. A NULL
-/// key (no drafted contributor) is left out of `facts`, so its columns read NULL, exactly what
-/// the doors answer for NULL; `k` and the signer are never NULL. One statement, one snapshot: a
-/// key's facts cannot differ between two rows that name it.
+/// **Four CTEs, for cost, not meaning (#1021).** `base` reads each part's KEYS and time once (the
+/// WHERE runs here, and the attester door once per part); `facts` asks the key doors about each
+/// DISTINCT key those parts name (`k`, the drafted key, the envelope signer) exactly once; `kept`
+/// is the parts the second argument KEEPS; `rows` builds everything else that is a fact of the part
+/// (text, contributors, vouches) for those parts only. The final SELECT joins `rows` and `facts`, so the columns
+/// above are unchanged. Measured: per-row key lookups were 88% of a 100 000-note read over 40
+/// keys; resolved once per key the same read was 5–6× faster with identical output. A NULL key (no
+/// drafted contributor) is left out of `facts`, so its columns read NULL, exactly what the doors
+/// answer for NULL; `k` and the signer are never NULL. One statement, one snapshot: a key's facts
+/// cannot differ between two rows that name it.
+///
+/// The keep rule sees `b` (the part's `base` row) and `fk` (the facts of its `k`, LEFT-joined). The
+/// chart list keeps everything (`TRUE`); the menu keeps only what it could list (`NOTES_BY_KEYS_SQL`).
 macro_rules! notes_sql {
-    ($where:literal) => {
+    ($where:literal, $keep:literal) => {
         concat!(
-    // `rows`: one row per part, everything that is a fact of the PART (the WHERE runs here).
-    "WITH rows AS MATERIALIZED (SELECT n.event_id::text AS event_id, n.patient_id::text AS patient_id, \
-            n.narrative, n.t_effective, n.effective_basis, n.recording_started, e.signer_key_id, \
-            e.contributors::text AS contributors, g.attester, \
-            COALESCE(g.attester, e.signer_key_id) AS k, \
-            (SELECT (r ->> 'event')::uuid::text FROM jsonb_array_elements(n.refs) r \
-              WHERE r ->> 'rel' = 'addendum-to' LIMIT 1) AS addendum_to, \
-            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c WHERE c ->> 'role' = 'drafted') \
-              AS has_drafted, \
-            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
-                     WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id) AS signer_attested, \
+    // `base`: one row per part, its keys and time only (the WHERE runs here).
+    "WITH base AS MATERIALIZED (SELECT n.event_id, e.signer_key_id, g.attester, \
             (SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
-              WHERE c ->> 'role' = 'drafted' LIMIT 1) AS drafted, ",
-    vouches_column!(),
-    " AS vouches, e.hlc_wall \
+              WHERE c ->> 'role' = 'drafted' LIMIT 1) AS drafted, e.hlc_wall \
        FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
       CROSS JOIN LATERAL (SELECT cairn_note_vouched_attester(e.event_id) AS attester) g \
       WHERE ", $where, "), \
      facts AS MATERIALIZED (SELECT key, cairn_note_signer_name(key) AS name, cairn_note_key_actor(key) AS actor, \
             cairn_note_key_role(key) AS role, cairn_key_confirmation(key) AS confirmation, \
             cairn_note_key_is_human(key) AS human \
-       FROM (SELECT k FROM rows UNION SELECT drafted FROM rows UNION SELECT signer_key_id FROM rows) u(key) \
-      WHERE key IS NOT NULL) \
+       FROM (SELECT COALESCE(attester, signer_key_id) FROM base UNION SELECT drafted FROM base \
+             UNION SELECT signer_key_id FROM base) u(key) \
+      WHERE key IS NOT NULL), \
+     kept AS MATERIALIZED (SELECT b.* FROM base b \
+       LEFT JOIN facts fk ON fk.key = COALESCE(b.attester, b.signer_key_id) \
+      WHERE ", $keep, "), \
+     rows AS MATERIALIZED (SELECT n.event_id::text AS event_id, n.patient_id::text AS patient_id, \
+            n.narrative, n.t_effective, n.effective_basis, n.recording_started, b.signer_key_id, \
+            e.contributors::text AS contributors, b.attester, \
+            COALESCE(b.attester, b.signer_key_id) AS k, \
+            (SELECT (r ->> 'event')::uuid::text FROM jsonb_array_elements(n.refs) r \
+              WHERE r ->> 'rel' = 'addendum-to' LIMIT 1) AS addendum_to, \
+            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c WHERE c ->> 'role' = 'drafted') \
+              AS has_drafted, \
+            EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
+                     WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id) AS signer_attested, \
+            b.drafted, ",
+    vouches_column!(),
+    " AS vouches, b.hlc_wall \
+       FROM kept b JOIN clinical_note n ON n.event_id = b.event_id JOIN event_log e ON e.event_id = b.event_id) \
     SELECT r.event_id, r.patient_id, r.narrative, r.t_effective, r.effective_basis, r.recording_started, \
            r.signer_key_id, r.contributors, r.attester, fk.name, r.addendum_to, fd.name, r.has_drafted, \
            r.signer_attested, CASE WHEN fd.human THEN r.drafted END, \
@@ -194,21 +206,41 @@ macro_rules! notes_sql {
 }
 
 /// The chart list's query: the parts on the given charts (`$1`, text uuids).
-const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])");
+const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])", "TRUE");
 
 /// The same columns and joins, for the parts the given KEYS (`$1`, text) wrote: signed with one
 /// of them, or carrying one as a contributor (a part that went in unsigned names its drafter only
-/// there). Only the WHERE differs, so the menu's rows cannot drift from the chart's.
-// shortcut: the read grows with ALL-TIME history, not with what is open. It scans every
-// clinical_note row's contributors, and returns every part the keys ever wrote: groups 1-2 are
-// all-time obligations, and only group 3 is cut to 7 days, in Rust (`note::menu`). Measured by
-// `examples/measure_person_menu.rs` (results/2026-11-08-person-menu-reads-macos-m3max.md): with the
-// key facts read once per key, a plain pick fits the 1 s budget to 100 000 notes, but a pick made
-// while the picker's counts load misses it from about a ward-year (33 000 notes: 1.05 s).
-// Upgrade to a projection of open obligations, see #1021.
+/// there). Only the WHERE and the keep rule differ, so the menu's rows cannot drift from the chart's.
+///
+/// **The keep rule (#1021)** drops, before the costly columns are built, every part that no
+/// person's menu could list (`note::menu::classify`). It must stay a SUPERSET: a part it drops
+/// silently leaves someone's "Waiting for you". `$2` is the review window's start (ms, the menu's
+/// own `now` minus `REVIEW_DAYS`), `$3` every actor the record ever required co-signing for
+/// (`Supervision::ever_required_cosign`). A part is kept when ANY of these holds:
+///
+/// - `b.drafted IS NOT NULL`: it names a drafted writer. Group 1's "went in unsigned" needs one,
+///   and so does every co-sign rule for a part not signed with its own envelope
+///   (`cosign::writer_signature` falls back to the drafted writer's vouch).
+/// - `b.hlc_wall >= $2`: within the review window, so group 3 may list it.
+/// - `fk.confirmation = 'repudiated'`: its signature's key is repudiated (group 1's "key
+///   repudiated", `vouch::counts_as_unsigned`; `signer_of` reads the same word).
+/// - `fk.role = 'student'` or `fk.actor = ANY($3)`: its signer signed as a student, or was ever
+///   required to be co-signed (group 2, `cosign::cosign_required`). The record is judged at the
+///   part's time in Rust; "ever" is the superset.
+///
+/// Anything else names no drafted writer, is signed under a key not repudiated by a non-student
+/// the record never required co-signing for, and is outside the window: owed to no one, listed by
+/// no one. `tests/note_person_menu.rs` re-reads every scenario 30 days on, when only the other
+/// terms can keep a part, and asserts the same groups 1 and 2; removing any one term fails a test.
+// shortcut: `base` still scans every part the keys ever wrote, one attester-door call each, and
+// every part by a student or a writer ever required co-signing is kept, cleared or not. Measured
+// by `examples/measure_person_menu.rs` (results/2026-11-08-person-menu-reads-macos-m3max.md).
+// Upgrade to a projection of open obligations when a node outgrows it, see #1021.
 const NOTES_BY_KEYS_SQL: &str = notes_sql!(
     "e.signer_key_id = ANY($1::text[]) OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
-      WHERE c ->> 'actor_id' = ANY($1::text[]))"
+      WHERE c ->> 'actor_id' = ANY($1::text[]))",
+    "b.drafted IS NOT NULL OR b.hlc_wall >= $2::bigint OR fk.confirmation = 'repudiated' \
+      OR fk.role = 'student' OR fk.actor = ANY($3::text[])"
 );
 
 /// One row per PART of each discard on the given charts, with its 1-based position (`ord`).
@@ -345,8 +377,9 @@ fn note_row(r: &Row, sup: &Supervision) -> anyhow::Result<NoteRow> {
     Ok(part)
 }
 
-/// Every note part the given keys wrote (see `NOTES_BY_KEYS_SQL`), each annotated against `sup`.
-/// Unordered: the caller orders.
+/// Every note part the given keys wrote that some menu could list (see `NOTES_BY_KEYS_SQL`'s keep
+/// rule; `review_from` is the review window's start), each annotated against `sup`. Unordered: the
+/// caller orders.
 ///
 /// The doubted-link withholding of `list_patient_notes` is NOT applied: that rule guards the
 /// combining of linked charts on one opened chart, and the menu opens each part's own chart.
@@ -354,9 +387,15 @@ pub async fn parts_by_keys(
     client: &(impl GenericClient + Sync),
     keys: &[String],
     sup: &Supervision,
+    review_from: DateTime<Utc>,
 ) -> anyhow::Result<Vec<NoteRow>> {
+    let review_from_ms = review_from.timestamp_millis();
+    let cosign_writers = sup.ever_required_cosign();
     client
-        .query(NOTES_BY_KEYS_SQL, &[&keys])
+        .query(
+            NOTES_BY_KEYS_SQL,
+            &[&keys, &review_from_ms, &cosign_writers],
+        )
         .await?
         .iter()
         .map(|r| note_row(r, sup))

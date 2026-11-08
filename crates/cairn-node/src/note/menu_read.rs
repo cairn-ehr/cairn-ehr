@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::menu::{classify, MenuDraft, Person, PersonMenu};
+use super::menu::{classify, review_window_start, MenuDraft, Person, PersonMenu};
 use super::read::{parts_by_keys, NoteRow};
 use super::supervision::{self, Supervision};
 use super::vouch::same_actor;
@@ -26,12 +26,17 @@ pub struct MenuRead {
 /// `Some(staff)`: that person's keys and their current supervisees' keys only (the bar).
 /// `None`: every person's keys (the picker's counts).
 ///
+/// `now` must be the instant the caller then hands [`MenuRead::menu_for`] / [`MenuRead::counts`]:
+/// parts that no menu could list at `now` are not read (`read::NOTES_BY_KEYS_SQL`, #1021), so a
+/// later `now` lists nothing missed, but an EARLIER one could miss a part of the review group.
+///
 /// `staff` is normalised by the database (`cairn_vault_staff_id`), never by a copy of its rule
 /// here. A staff id that names no person yields a `MenuRead` without that person and with no
 /// parts read, so [`MenuRead::menu_for`] answers `None`.
 pub async fn read_menus(
     client: &(impl GenericClient + Sync),
     scope: Option<&str>,
+    now: DateTime<Utc>,
 ) -> anyhow::Result<MenuRead> {
     let people = read_people(client).await?;
     let sup = supervision::load(client).await?;
@@ -54,7 +59,7 @@ pub async fn read_menus(
     let parts = if keys.is_empty() {
         Vec::new()
     } else {
-        parts_by_keys(client, &keys, &sup).await?
+        parts_by_keys(client, &keys, &sup, review_window_start(now)).await?
     };
     Ok(MenuRead {
         people,

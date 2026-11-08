@@ -54,7 +54,7 @@ async fn fresh(
     let today = now.with_timezone(&chrono::Local).date_naive().to_string();
     let mut db = db.lock().await?;
     let (read, menu, found) = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
-        let read = read_menus(tx, Some(staff)).await?;
+        let read = read_menus(tx, Some(staff), now).await?;
         let menu = read.menu_for(staff, now).unwrap_or_default();
         let found =
             cairn_node::patient::candidate_read::candidates_by_id(tx, &menu.charts(), &today)
@@ -125,7 +125,7 @@ pub async fn whos_here_counts_impl(state: &AppState) -> Result<Vec<StaffCountVie
     let now = Utc::now();
     let mut db = db.lock().await?;
     let read = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
-        read_menus(tx, None).await
+        read_menus(tx, None, now).await
     })
     .await
     .map_err(|e| {
