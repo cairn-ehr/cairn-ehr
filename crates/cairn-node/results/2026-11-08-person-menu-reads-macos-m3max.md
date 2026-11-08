@@ -8,7 +8,8 @@
 **Headline.** Before the fix the budget was missed at **5 000 notes**, about two months of one ward: a pick made while
 the picker's counts load took 1.3 s, and a ward-year (33 000 notes) took 5.4 s. About 88% of that (the functions' own time) was the
 same handful of facts about a signing key (whose it is, their name, role, confirmation, whether it is a human's),
-looked up again for every row: about 1.4 million calls for 40 distinct keys. With each key looked up once
+looked up again for every row: about 0.9 million key-fact calls (1.4 million with the per-part attester door) for 40
+distinct keys. With each key looked up once
 (`notes_sql!`'s `facts` CTE), output identical row for row, the reads are **5–6× faster**:
 
 - a plain pick now fits the budget **up to 100 000 notes** (878 ms);
@@ -37,15 +38,17 @@ fix for a facility-sized node.
 one part, signed by its writer through the production `sign_note`, with the writer and the chart taken in turn.
 Each stage is cumulative and is timed with 5 repeats (the figure is the median):
 
-- **bar** = the window's `person_menu::fresh`: `read_menus(Some("dr-b"))` + `menu_for` + `candidates_by_id`, in one
+- **bar** = the window's `person_menu::fresh`: `read_menus(Some("dr-b"), now)` + `menu_for` + `candidates_by_id`, in one
   REPEATABLE READ snapshot;
 - **counts** = `whos_here_counts_impl`;
 - **directory** = the picker's list;
 - **pick behind counts** = the sum of all three, since the window's one connection serialises them.
 
 **Distortion, stated.** Every note is seeded at the same moment, so `dr-b`'s group 3 (the last 7 days by HLC
-wall) holds every supervisee note, where a real ward would show one week's. The SQL cost is the same either way
-(it returns all-time rows); the Rust classification and the row count are over-stated. The rig files no vouches,
+wall) holds every supervisee note, where a real ward would show one week's. Before the keep rule the SQL cost
+was the same either way (it returned all-time rows); since it, a same-day read keeps every part, so its tables are the
+keep rule's worst case and the `--later-days 8` tables the steady state. The Rust classification and the row count are
+over-stated either way. The rig files no vouches,
 so the vouch subquery finds nothing. Its key lookups run once per vouch, not once per row.
 
 ## Before — key facts looked up per row (commit `5429c38a`)
@@ -72,6 +75,9 @@ Linear at about 110 µs per part read. The profile behind the counts read at 100
 | `cairn_note_vouched_attester` | 500 000 | 1.1 s |
 | `cairn_note_key_is_human` | 100 000 | 0.4 s |
 
+"total" includes nested calls (`cairn_note_key_role` calls `cairn_note_key_actor`), so the column sums past 10.4 s;
+the 88% is the functions' self time, which this table does not tabulate.
+
 The scan and join themselves took 0.2 s. The doors are `SECURITY DEFINER` with a pinned `search_path`, so the
 planner cannot inline them, and each call is a full function invocation.
 
@@ -97,7 +103,7 @@ direction. The 27 DB-gated note suites (180 tests) pass on the rewrite.
 `NOTES_BY_KEYS_SQL` now reads each part's keys and time first (`base`), looks the keys up once (`facts`), and builds
 the costly columns (text, contributors, vouches) only for the parts a menu could list (`kept`): those naming a drafted
 writer, those within the 7-day review window, those whose signing key is repudiated, and those signed by a student or
-by a writer the supervision record ever required co-signing. The DB tests re-read every menu scenario 30 days on and
+by a writer the supervision record ever required co-signing. The DB tests re-read every menu scenario (`tests/note_person_menu.rs`) 30 days on and
 assert the same owed groups. Removing any one term fails a test.
 
 Every seeded note is written today, so the rig's `--later-days 8` reads as of eight days on: a ward's steady state,

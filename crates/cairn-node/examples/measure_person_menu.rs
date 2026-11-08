@@ -44,8 +44,10 @@
 //!
 //! **Known distortion, stated rather than hidden:** every note is seeded NOW, so the bar's group 3
 //! ("your supervisees' notes of the last 7 days", cut by `recorded_at`, the HLC wall) holds every
-//! supervisee note rather than one week's. The SQL cost is unaffected (it returns all-time rows
-//! either way); the Rust classification and the menu's row count are over-stated.
+//! supervisee note rather than one week's, and the read's keep rule (#1021) drops nothing, since every
+//! part is inside the review window: the default `--later-days 0` measures that rule's WORST case.
+//! `--later-days 8` reads past the window, the steady state. The Rust classification and the
+//! menu's row count are over-stated either way.
 //!
 //! # Vault rows
 //!
@@ -191,7 +193,7 @@ async fn time_bar(db: &mut Client, later: chrono::Duration) -> anyhow::Result<(D
     let today = now.date_naive().to_string();
     let count = in_snapshot(db, async |tx| {
         let read = read_menus(tx, Some(SUPERVISOR), now).await?;
-        let menu = read.menu_for(SUPERVISOR, now).unwrap_or_default();
+        let menu = read.menu_for(SUPERVISOR).unwrap_or_default();
         cairn_node::patient::candidate_read::candidates_by_id(tx, &menu.charts(), &today).await?;
         Ok(menu.count())
     })
@@ -207,7 +209,7 @@ async fn time_counts(
     let started = Instant::now();
     let now = Utc::now() + later;
     let read = in_snapshot(db, async |tx| read_menus(tx, None, now).await).await?;
-    let _ = read.counts(now);
+    std::hint::black_box(read.counts());
     Ok((started.elapsed(), read.parts.len()))
 }
 

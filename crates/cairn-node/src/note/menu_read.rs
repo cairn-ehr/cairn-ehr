@@ -21,14 +21,17 @@ pub struct MenuRead {
     pub people: Vec<Person>,
     pub drafts: Vec<MenuDraft>,
     pub parts: Vec<NoteRow>,
+    /// The instant the parts were read for. [`MenuRead::menu_for`] and [`MenuRead::counts`] judge
+    /// at this instant and no other: the read skipped every part no menu could list at it (#1021),
+    /// so judging at an earlier instant could silently miss a part of the review group.
+    pub read_at: DateTime<Utc>,
 }
 
 /// `Some(staff)`: that person's keys and their current supervisees' keys only (the bar).
 /// `None`: every person's keys (the picker's counts).
 ///
-/// `now` must be the instant the caller then hands [`MenuRead::menu_for`] / [`MenuRead::counts`]:
-/// parts that no menu could list at `now` are not read (`read::NOTES_BY_KEYS_SQL`, #1021), so a
-/// later `now` lists nothing missed, but an EARLIER one could miss a part of the review group.
+/// `now` is the instant the menus are judged at, kept as [`MenuRead::read_at`]: parts that no menu
+/// could list at `now` are not returned (they are still scanned, `read::NOTES_BY_KEYS_SQL`, #1021).
 ///
 /// `staff` is normalised by the database (`cairn_vault_staff_id`), never by a copy of its rule
 /// here. A staff id that names no person yields a `MenuRead` without that person and with no
@@ -65,6 +68,7 @@ pub async fn read_menus(
         people,
         drafts,
         parts,
+        read_at: now,
     })
 }
 
@@ -141,21 +145,21 @@ impl MenuRead {
         find_person(&self.people, staff_id)
     }
 
-    /// That person's three groups, or `None` when no such person was read.
-    pub fn menu_for(&self, staff_id: &str, now: DateTime<Utc>) -> Option<PersonMenu> {
+    /// That person's three groups at [`MenuRead::read_at`], or `None` when no such person was read.
+    pub fn menu_for(&self, staff_id: &str) -> Option<PersonMenu> {
         let me = self.person(staff_id)?;
-        Some(classify(me, &self.parts, &self.drafts, now))
+        Some(classify(me, &self.parts, &self.drafts, self.read_at))
     }
 
-    /// One `(staff id, count)` per person with a staff id, in people order.
-    pub fn counts(&self, now: DateTime<Utc>) -> Vec<(String, usize)> {
+    /// One `(staff id, count)` per person with a staff id, in people order, at [`MenuRead::read_at`].
+    pub fn counts(&self) -> Vec<(String, usize)> {
         self.people
             .iter()
             .filter(|p| !p.staff_id.is_empty())
             .map(|p| {
                 (
                     p.staff_id.clone(),
-                    classify(p, &self.parts, &self.drafts, now).count(),
+                    classify(p, &self.parts, &self.drafts, self.read_at).count(),
                 )
             })
             .collect()
@@ -188,9 +192,10 @@ mod tests {
             }],
             drafts: Vec::new(),
             parts: Vec::new(),
+            read_at: Utc::now(),
         };
         assert!(read.person("").is_none());
-        assert!(read.menu_for("", Utc::now()).is_none());
-        assert!(read.counts(Utc::now()).is_empty());
+        assert!(read.menu_for("").is_none());
+        assert!(read.counts().is_empty());
     }
 }

@@ -70,7 +70,7 @@
 >   own predicate over the chart's own query read by keys (`notes_sql!`, `parts_by_keys`, pure `note::menu`); db/073's
 >   two read doors (people + keys; drafts by writer); "Open note" re-reads and keeps the wrong-chart rule; the picker
 >   shows each person's count. Open: **#1020** (two actors sharing a staff id) · **#1021** (the reads grow with all-time
->   history and serialise with pick/save/Sign — measured, 5× cut, then kept to what a menu could list, 2026-11-08, see ⇒ NEXT) · **#1022** (test hygiene) · **#1023** (residuals,
+>   history and serialise with pick/save/Sign — measured, 5–6× cut, then kept to what a menu could list, 2026-11-08, see ⇒ NEXT) · **#1022** (test hygiene) · **#1023** (residuals,
 >   incl. `funnel.js` at 499 lines) · **#1024** (`note::menu` types: an `Option` staff id, a `MenuItem` target enum).
 >   Owed by a human: **RUNBOOK §26** (also WebKit + real Tauri IPC, walked in Chromium only). The 2026-11-08 final
 >   check fixed ADR-0095 (j)'s wording, made "Open note" stay on the chart when the Sign in flight did not go
@@ -320,10 +320,13 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 Rig `examples/measure_person_menu.rs` (seeds a ward through `sign_note` in stages; `--measure-only` re-times a node,
 `--later-days 8` reads it as a ward's steady state); figures in
 `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`. Final state: the lib + 30 note/supervision DB
-suites (756 tests, none skipped) and the GUI tree's DB-gated `--bins` (787) green.
+suites (756 tests, none skipped) and the GUI tree's DB-gated `--bins` (787) green. Finalcheck review then made the
+keep rule's two hand-kept contracts structural: `MenuRead` carries `read_at` (`menu_for`/`counts` take no `now`, so
+they cannot judge at an instant the read did not cut at), and a unit test pins its `'repudiated'` to
+`vouch_read::CONFIRMATION_WORDS` as `signer_of` reads them; plus a test for the co-sign half of the drafted term.
 - **⇒ Profile before choosing the big fix.** The issue's proposed fix was a new projection. `track_functions` showed
-  88% of the cost was ~1.4 M calls of `SECURITY DEFINER` key doors (never inlined) for **40** distinct keys: a CTE fixed
-  that without touching meaning. Prove "identical" with `EXCEPT ALL` both ways on the big fixture before the rewrite.
+  88% of the cost was ~0.9 M calls of `SECURITY DEFINER` key doors (never inlined; 1.4 M with the per-part attester
+  door) for **40** distinct keys: a CTE fixed that without touching meaning. Prove "identical" with `EXCEPT ALL` both ways on the big fixture before the rewrite.
 - **⇒ A time limit on what is OWED hides it; a time limit on what is SHOWN is free.** The maintainer proposed
   cutoffs (1 month mandatory, 1 week optional). Group 3 already had the week (Rust-side, now pushed into SQL); a cutoff
   on groups 1–2 would drop an unsigned or un-co-signed note from "Waiting for you" at day 31, and a monthly-synced

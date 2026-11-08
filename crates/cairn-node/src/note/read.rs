@@ -136,11 +136,12 @@ pub struct PatientNoteList {
 /// agent keys by their pinned handle (final review M6). It is never an attester: the #412 guard
 /// below still holds.
 ///
-/// `g.k` is the key the `Signed` grade authenticates: the verified attester when there is one,
+/// `k` (`COALESCE(attester, signer_key_id)`, built in `rows`, its facts joined as `fk`) is the key
+/// the `Signed` grade authenticates: the verified attester when there is one,
 /// else the signer (db/005 stores a token only for the contributor that bears responsibility, so
 /// the attester, when present, is whom the grade names); the signer name column is read for it
 /// too, so `signed_by` and the grade name the same person. The three columns after the human
-/// drafted key say who `g.k` is (`vouch_read::signer_of`); the next is the drafted key's actor
+/// drafted key say who `k` is (`vouch_read::signer_of`); the next is the drafted key's actor
 /// (for `vouch::addendum_covers`). Then come the part's verified vouches
 /// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot. The
 /// last column is the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule
@@ -151,11 +152,12 @@ pub struct PatientNoteList {
 /// WHERE runs here, and the attester door once per part); `facts` asks the key doors about each
 /// DISTINCT key those parts name (`k`, the drafted key, the envelope signer) exactly once; `kept`
 /// is the parts the second argument KEEPS; `rows` builds everything else that is a fact of the part
-/// (text, contributors, vouches) for those parts only. The final SELECT joins `rows` and `facts`, so the columns
-/// above are unchanged. Measured: per-row key lookups were 88% of a 100 000-note read over 40
+/// (text, contributors, vouches) for those parts only. The final SELECT joins `rows` and `facts`, so
+/// the columns above are unchanged. Measured: per-row key lookups were 88% of a 100 000-note read over 40
 /// keys; resolved once per key the same read was 5–6× faster with identical output. A NULL key (no
-/// drafted contributor) is left out of `facts`, so its columns read NULL, exactly what the doors
-/// answer for NULL; `k` and the signer are never NULL. One statement, one snapshot: a key's facts
+/// drafted contributor) is left out of `facts`, so its columns read NULL, as the old per-row calls
+/// did (`human` reads NULL where `cairn_note_key_is_human(NULL)` says false; the `CASE` treats both
+/// alike); `k` and the signer are never NULL. One statement, one snapshot: a key's facts
 /// cannot differ between two rows that name it.
 ///
 /// The keep rule sees `b` (the part's `base` row) and `fk` (the facts of its `k`, LEFT-joined). The
@@ -223,14 +225,14 @@ const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])", "TR
 ///   (`cosign::writer_signature` falls back to the drafted writer's vouch).
 /// - `b.hlc_wall >= $2`: within the review window, so group 3 may list it.
 /// - `fk.confirmation = 'repudiated'`: its signature's key is repudiated (group 1's "key
-///   repudiated", `vouch::counts_as_unsigned`; `signer_of` reads the same word).
+///   repudiated", `vouch::counts_as_unsigned`; `signer_of` reads the same word, a test pins it).
 /// - `fk.role = 'student'` or `fk.actor = ANY($3)`: its signer signed as a student, or was ever
 ///   required to be co-signed (group 2, `cosign::cosign_required`). The record is judged at the
 ///   part's time in Rust; "ever" is the superset.
 ///
 /// Anything else names no drafted writer, is signed under a key not repudiated by a non-student
 /// the record never required co-signing for, and is outside the window: owed to no one, listed by
-/// no one. `tests/note_person_menu.rs` re-reads every scenario 30 days on, when only the other
+/// no one. `tests/note_person_menu.rs` re-reads every menu scenario 30 days on, when only the other
 /// terms can keep a part, and asserts the same groups 1 and 2; removing any one term fails a test.
 // shortcut: `base` still scans every part the keys ever wrote, one attester-door call each, and
 // every part by a student or a writer ever required co-signing is kept, cleared or not. Measured
@@ -481,6 +483,20 @@ mod tests {
                 1,
                 "{sql}"
             );
+        }
+    }
+
+    /// #1021: the keep rule names the repudiated key by the word `signer_of` reads as repudiated,
+    /// and by no other. Were `signer_of` to count a second word as repudiated (or db/004 to rename
+    /// it), a part signed under such a key would silently drop out of its writer's group 1 once it
+    /// left the review window.
+    #[test]
+    fn the_keep_rule_keeps_exactly_the_words_signer_of_reads_as_repudiated() {
+        use crate::note::vouch_read::{signer_of, CONFIRMATION_WORDS};
+        for w in CONFIRMATION_WORDS {
+            let repudiated = signer_of(None, None, None, Some(w)).unwrap().repudiated;
+            let kept = NOTES_BY_KEYS_SQL.contains(&format!("fk.confirmation = '{w}'"));
+            assert_eq!(kept, repudiated, "{w}");
         }
     }
 

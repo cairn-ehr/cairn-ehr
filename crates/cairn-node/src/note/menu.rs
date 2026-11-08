@@ -32,8 +32,8 @@ use super::vouch::{counts_as_unsigned, part_is_signed, same_actor};
 /// How long a supervisee's note stays in group 3.
 pub const REVIEW_DAYS: i64 = 7;
 
-/// The first instant group 3 lists at `now`. The menu read cuts at the same instant, so the two
-/// can never disagree about the window (#1021).
+/// The first instant group 3 lists at `now`. The menu read cuts at the same instant (floored to
+/// the millisecond, so it reads a superset), so the two can never disagree about the window (#1021).
 pub fn review_window_start(now: DateTime<Utc>) -> DateTime<Utc> {
     now - Duration::days(REVIEW_DAYS)
 }

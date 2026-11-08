@@ -55,7 +55,7 @@ async fn fresh(
     let mut db = db.lock().await?;
     let (read, menu, found) = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
         let read = read_menus(tx, Some(staff), now).await?;
-        let menu = read.menu_for(staff, now).unwrap_or_default();
+        let menu = read.menu_for(staff).unwrap_or_default();
         let found =
             cairn_node::patient::candidate_read::candidates_by_id(tx, &menu.charts(), &today)
                 .await?;
@@ -89,6 +89,7 @@ pub async fn person_menu_impl(state: &AppState) -> Result<PersonMenuView, ErrorV
             people: vec![],
             drafts: vec![],
             parts: vec![],
+            read_at: Utc::now(),
         };
         return Ok(menu_view(
             &PersonMenu::default(),
@@ -133,7 +134,7 @@ pub async fn whos_here_counts_impl(state: &AppState) -> Result<Vec<StaffCountVie
         eprintln!("waiting counts: {cause:#}");
         counts_failed_view(chart_read_failed(cause))
     })?;
-    Ok(counts_view(read.counts(now)))
+    Ok(counts_view(read.counts()))
 }
 
 /// The bar's menu, for the webview: forwards to [`person_menu_impl`].
