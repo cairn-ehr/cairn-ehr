@@ -2246,3 +2246,149 @@ counts by `note_person_menu.rs`. The window's commands were run by `cairn-gui-ta
 `person_menu_db_tests.rs` (CI never runs those, #905). The webview was checked by source guards
 (`person_menu_webview_tests.rs`) and a Chromium walk with a stubbed `invoke`. The real window, WebKit, the real Tauri
 IPC and VoiceOver were not seen. `TEMPLATE.md` carries a matching block (*The person menu*).
+
+## 27. The allergy list: the strip and its form (allergy slice 1, ADR-0096)
+
+The slice's gestures: the **allergy strip**, one line in the patient identity header that is never blank; **Show all
+allergies**, a `<details>` that opens the full lists, the two "none known" buttons and the form in place; the form's
+**Sign**; and the strip's own **No known allergies** / **No known drug allergies (NKDA)** buttons, shown while nothing
+has been asked. Paper counterpart: the allergy box on the drug chart and the red sticker on the folder: write
+"Penicillin — anaphylaxis 2014", or "NKDA", and initial it. A `--mock` window reads "Allergies not yet asked" and
+refuses every write ("fixture mode: …"), which is enough for the labels and the Tab order; everything else is live
+only.
+
+**Budgets (the slice plan's §1.2, design §6).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| A free-text entry, the form already open | the first keystroke in *Substance* | "Recorded." on the allergy status line and the strip redrawn | **≤ 10 s** |
+| "None known", from the strip | the press on *No known drug allergies (NKDA)* | the strip reads "NKDA (asked …)" | **≤ 3 s** |
+| Reading whether a dangerous allergy is recorded | the chart on screen | the strip read | no click |
+
+The budgets are the plan's gesture, **with the key held** (`--key-hold-seconds 900`, one passphrase first). Time
+each gesture again on a shared terminal (no hold: the staff ID and passphrase typed in the signer strip before the
+press, the first keystroke there starting the clock) and record both. Steps: read the allergies paper *N* = 0 →
+forced *M* = 0 → target *K* = 0; record an entry 1 → 1 → 1 (the form and Sign); "none known" 1 → 1 → 1 press. The
+node times the write half of each as **`allergy-record`** and **`allergy-none`** (section 5). **A figure outside its
+budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
+
+**Setup.** Sections 0 and 2, then section 16's Setup and its Measurement 2 (the vault, the terminal passphrase, and
+`nurse-a` enrolled from *Enrol staff*: any clinician records an allergy, nurses included). Nothing in this slice can
+be withdrawn (ADR-0096 (b)), so every state below needs a fresh chart. Register them with the owner's connection,
+each with its own name and date of birth:
+
+```bash
+cnode() { cairn-node --conn "$CONN" --key "$NODE_KEY" "$@"; }   # a function: an unquoted $CONN would word-split
+achart() { cnode patient-register --name "$1" --birth-date "$2" --confirm-new | sed -n 's/^registered patient //p'; }
+A1=$(achart "Allergy Alpha" 1961-01-01)   # not yet asked → NKDA → NKDA + latex
+A2=$(achart "Allergy Bravo" 1962-02-02)   # no known allergies → penicillin + an adverse effect
+N1=$(achart "Nkda One" 1971-03-01); N2=$(achart "Nkda Two" 1972-03-02); N3=$(achart "Nkda Three" 1973-03-03)
+N4=$(achart "Nkda Four" 1974-03-04); N5=$(achart "Nkda Five" 1975-03-05)
+for c in "$A1" "$A2" "$N1" "$N2" "$N3" "$N4" "$N5"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+echo "A1=$A1 A2=$A2"
+```
+
+Launch as section 3 on `$A1`, first with `--key-hold-seconds 900`, and unlock the terminal (section 16 Measurement
+1). Open the other charts with *Find another patient* and a search by name (section 8), never by relaunching
+between runs of one gesture.
+
+**Measurement 1 — the four strip states, read with no click.** Today's date reads in the form "9 Nov 2026".
+
+- [ ] `$A1` opened: the strip reads **"Allergies not yet asked"**, not prominent, with *No known allergies* and *No
+      known drug allergies (NKDA)* beside it. While the chart is read it says "Reading the allergy list…", never a
+      blank line.
+- [ ] As `nurse-a`, press *No known drug allergies (NKDA)* on the strip. The strip reads **"NKDA (asked {today}) ·
+      other allergies: not yet asked"**, its two buttons are gone, and "Recorded." shows on the allergy status line, under *Show all allergies*.
+- [ ] *Show all allergies*, then the form: *Other substance*, *Substance* `latex`, *Allergy*, *Urticaria (hives)*,
+      *Seen documented*, *Sign*. The strip reads **"NKDA (asked {today}) · Other: latex → urticaria"** (the "Allergy: "
+      prefix dropped under "Other:"), now prominent: the warning colour, the bold weight and a bar at its left edge.
+- [ ] `$A2`: press *No known allergies* on the strip. It reads **"No known allergies (asked {today})"**.
+- [ ] On `$A2`, the timed entry below (penicillin) and then an adverse effect: *Drug*, `metformin`, *Adverse
+      effect*, *Stomach upset*, "What happened, in words" `loose bowel motions`, *When* `2019`, *Patient stated*,
+      *Sign*. The strip reads **"Allergy: penicillin → anaphylaxis · 2014 · +1 adverse effect"**: the allergy
+      overrides "no known allergies" with no flag, and the adverse effect is counted, never named, on the strip.
+      Opened, the lists read "Drug allergies:" with the penicillin line (prominent), "Adverse effects:" with
+      "Previous adverse effect (2019): metformin → GI upset: loose bowel motions (patient stated)" (quiet), and
+      "Previously recorded: no known allergies (asked {today})"; each entry line ends " · recorded {YYYY-MM-DD} by
+      {nurse-a's display name}".
+- [ ] The wire words as signed, at the console: `psql "$CONN" -c "SELECT term, allergen_kind, kind,
+      reaction_category, reaction_text, onset_precision, onset_value, source FROM clinical_allergy WHERE patient_id IN
+      ('$A1', '$A2') ORDER BY hlc_wall"` shows latex / other / allergy / urticaria / (empty) / not-known / (empty) /
+      seen-documented, penicillin / drug / allergy / anaphylaxis / (empty) / year / 2014 / seen-documented, and
+      metformin / drug / adverse-effect / gi-upset / loose bowel motions / year / 2019 / patient-stated.
+
+**Measurement 2 — the timings (five runs each, held key, then shared terminal).**
+
+- [ ] **A free-text entry (≤ 10 s).** On `$A2` (the first run is Measurement 1's penicillin), the form open: start at
+      the first keystroke in *Substance*; type `penicillin`, leave *Drug*, press *Allergy*, *Anaphylaxis*, type `2014`
+      in *When*, press *Seen documented*, then *Sign*; stop when "Recorded." shows and the strip is redrawn. Later
+      runs add `amoxicillin`, `cefalexin`, `trimethoprim`, `codeine` the same way, so the strip lists them newest first
+      (all are anaphylaxis), joined with "; ".
+- [ ] **"None known" (≤ 3 s).** On `$N1` to `$N5`, one each: from the press on the strip's *No known drug allergies
+      (NKDA)* to "NKDA (asked {today})" on the strip.
+- [ ] Then the write halves: `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind LIKE 'allergy-%'"`
+      has `allergy-record` and `allergy-none` rows in bucket `1-3`.
+- [ ] Relaunch with no `--key-hold-seconds` (a shared terminal) on fresh charts (register more with `achart`) and
+      repeat both, the clock starting at the first keystroke in the signer strip's *Staff ID*.
+
+**Measurement 3 — the refusals, before the key.** On any chart, the form open:
+
+- [ ] A *Substance* typed and nothing pressed for "What kind": *Sign* answers **"Choose Allergy or Adverse effect."**
+      under the "What kind:" row, and nothing is signed. The form never starts with *Allergy* or *Adverse effect* pressed, nor any
+      "What happened" button, on load or after a signed entry.
+- [ ] An empty *Substance*: "Name the substance." under it (said first, whatever else is missing). A kind pressed
+      and nothing for "What happened": "Choose what happened, or Not known." under that row.
+- [ ] *When* `31/02/2019`: "\"31/02/2019\" is not a date this window can read — type 2019, 03/2019 or 14/03/2019, or
+      leave it empty if it is not known." under *When*. Next year (e.g. `2027`): "\"2027\" is after today — when it
+      happened cannot be later than today." This month as `MM/YYYY` is accepted.
+- [ ] After each refusal, what was typed stays, and the passphrase field is empty (ADR-0096 (g)): record each
+      retype on a shared terminal as a paper-parity cost.
+- [ ] Enter in a text field signs nothing; the only act is *Sign*.
+
+**Measurement 4 — the real Tauri IPC** (the mock walk stubbed `invoke`, so it could not prove the argument names).
+The webview sends `patientId`, `charts`, `entry`, `scope` and `credential`, and Rust takes `patient_id`; the entry's
+own fields are snake_case (`allergen_kind`, `reaction_text`). A name Tauri cannot map fails the call with an
+"invalid args" error.
+
+- [ ] The strip reads a state of Measurement 1, never "Could not read the allergy list: invalid args …"
+      (`allergy_list`).
+- [ ] "Recorded." after an entry and after a "none known" press, and the console row of Measurement 1 shows every
+      field as typed (`allergy_record`'s `entry`, `allergy_none`'s `scope`, `credential`).
+
+**Measurement 5 — a chart left mid-act.** On a shared terminal, type the credential and an entry on `$A1`, press
+*Sign* and at once *Find another patient*, and open `$A2` before the answer lands (a slow node helps; skip the
+check if the answer always beats the click, and say so). `$A2`'s strip reads its own state, never "Reading…" stuck,
+and nothing of `$A1`'s outcome shows on `$A2` (ADR-0096 decision 19). Reopen `$A1`: the entry is there.
+
+**A chart whose link is in doubt (optional, section 13 Setup A).** If you have that pair, record an allergy on one
+chart and open the other: the line is shown, on the strip and in the list, ending "(on a chart whose link to this
+one is in doubt)", with a dashed rule beside it in the list. It is never withheld.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The strip is read with the identity header, as one line, and its new text is announced after a sign without
+      taking the focus.
+- [ ] *Show all allergies* is reached by Tab and opens with Space or Enter.
+- [ ] Each toggle row is read with its label ("Allergen:", "What kind:", "What happened:", "Source:"), and each
+      button with its pressed state ("selected" or not). A pressed toggle is visible without colour (its outline and
+      weight change).
+- [ ] *Substance*, "What happened, in words (optional)" and "When — leave empty if not known" are read by their
+      labels, and *When*'s placeholder "2019 · 03/2019 · 14/03/2019" is read or visible.
+- [ ] A field refusal is read when it appears, and again with its field when the focus reaches it (each error
+      describes its control).
+- [ ] An allergy line is distinguishable from an adverse effect without colour: its text says "Allergy" or "Patient
+      stated allergy", the other "Previous adverse effect".
+- [ ] No dialog at any point; the passphrase is asked only by the signer strip.
+
+**WebKit.** The window is WebKit (Tauri on macOS). The webview was walked headlessly in Chromium and in Playwright's
+WebKit with a stubbed `invoke`, never in the real window: note anything that differs from the words above, in
+particular the toggles' `aria-pressed` reading and the `<details>` opening by keyboard.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
+WebKit need the window and a human. The floor was run by `db/tests/074_clinical_allergy_test.sql` and
+`allergy_floor.rs`; the signing and the read by `allergy_sign.rs`, `allergy_read.rs` and `window_role_grants.rs`; the
+strip's wording by `allergy/view_tests.rs`. The window's commands were run by `cairn-gui-tauri`'s DB-gated
+`allergies_tests.rs` (CI never runs those, #905); the webview by source guards (`allergies_webview_tests.rs`) and
+the stubbed walk. An outcome that is not known (#814) and a re-read that fails after a sign cannot be produced by
+hand here; they are pinned by `allergies_tests.rs`'s `an_interrupted_sign_is_not_known_and_never_retried` and
+`a_landed_sign_is_an_ok_with_or_without_its_pane`. `TEMPLATE.md` carries a matching block (*The allergy list*).

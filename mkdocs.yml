@@ -224,6 +224,7 @@ nav:
       - ADR-0093 · A repudiated signature counts as unsigned: spec/decisions/0093-a-repudiated-signature-counts-as-unsigned.md
       - ADR-0094 · Supervision and the mandatory co-sign: spec/decisions/0094-supervision-and-the-mandatory-co-sign.md
       - ADR-0095 · The person menu: spec/decisions/0095-the-person-menu.md
+      - ADR-0096 · The allergy list: spec/decisions/0096-the-allergy-list.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

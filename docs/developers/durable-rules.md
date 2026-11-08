@@ -10,6 +10,75 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ ALLERGY SLICE 1 — THE STREAM AND THE STRIP (ADR-0096, db/074, db/037 + db/044 in place) — do not undo**
+(pins: `db/tests/074_clinical_allergy_test.sql`, `crates/cairn-event/src/allergy.rs`'s tests,
+`crates/cairn-node/src/allergy/view_tests.rs`, `crates/cairn-node/tests/{allergy_floor,allergy_sign,allergy_read}.rs`,
+`cairn-gui/cairn-gui-tauri/src/{allergies,allergies_webview}_tests.rs`):
+- **No default on "What kind" or "What happened".** `ALLERGY_DEFAULTS` presses only the allergen (drug) and the source
+  (patient stated); `kind` and `category` are `null`, in the page and after every signed entry, and Rust refuses a
+  missing one before the key. **Tempting wrong fixes:** press *Allergy* by default "to save a click" (the design's
+  anti-goal: it signs the metformin intolerance as an allergy by a press that chose nothing); default "What happened" to
+  *Not known*; check it in JS instead of Rust. Pins: `allergies_webview_tests.rs::no_kind_button_starts_pressed`,
+  `allergies_tests.rs::record_refuses_a_missing_kind_before_the_key`.
+- **No markup, and no escape function.** Allergy text is plaintext end to end: `allergies.js` draws through `cell`
+  (`textContent`). **Tempting wrong fixes:** `innerHTML` to bold the allergen or draw the "→"; an escape helper "to be
+  safe" (its existence invites the next writer to render markup, and the twin is signed verbatim). Pin:
+  `allergies_webview_tests.rs::allergies_js_never_assigns_inner_html`.
+- **An allergy of an unrecognised `allergen_kind` is an OTHER allergy, and it overrides a "none known".** `build_view`
+  files every row whose `allergen_kind` is not `drug` under Other (its line ends " (food)"). **Tempting wrong fix:**
+  filter `allergen_kind == "other"` — a newer peer's food allergy then vanishes while "No known allergies" stands (the
+  slice's Critical review finding). Pin: `view_tests.rs::a_peers_newer_allergen_kind_counts_as_other`.
+- **A row of an unrecognised `kind` is listed and counted, never prominent, and never overrides.** It sits after its
+  list's allergies and the strip says "+N unrecognised entr(y|ies)" (R8). **Tempting wrong fixes:** drop it (a newer
+  peer's kind could be a suspected allergy, and the strip would show no trace of it); treat it as an allergy (it would
+  override a "none known" it may not contradict); read it as "Allergy:". Pins:
+  `view_tests.rs::unrecognised_kinds_are_counted_on_the_strip`, `unknown_kind_is_listed_not_prominent_and_off_the_strip`.
+- **A doubted link's charts are shown, marked — never withheld.** Unlike notes and medications. **Tempting wrong fix:**
+  reuse the medication read's withholding "for consistency" (an allergy that might be a stranger's disappears; for
+  allergies the over-warning is the safe error). Pins: `view_tests.rs::a_doubted_charts_entry_is_shown_and_marked`,
+  `allergy_read.rs::a_doubted_link_names_the_other_charts`.
+- **The strip's separators and the one dropped prefix.** "; " within a list, " · " between sections (an onset already
+  reads " · 2014", R7); under "Other:" only a leading "Allergy: " is dropped (R9). **Tempting wrong fixes:** one
+  separator everywhere "for tidiness" (two dated allergies then read ambiguously); strip every prefix under "Other:"
+  ("Patient stated allergy" would lose who said it). Pins: `view_tests.rs::entries_join_with_semicolons_and_sections_with_dots`,
+  `other_part_drops_only_the_plain_allergy_prefix`.
+- **A late answer for a chart left touches nothing of the chart on screen** (R13). `afterSigned` returns for a left
+  chart BEFORE it bumps `allergyRevision`; `pressOnce` captures its chart before `act()`, and its `catch` returns for a
+  left chart before it drops the set, bumps the revision, resets the form or says anything. **Tempting wrong fixes:**
+  bump the revision first "so no stale read can draw" (chart B's own first read is dropped and its strip sticks at
+  "Reading the allergy list…" with every write disabled); say A's outcome on B "so the clinician knows" (an outcome
+  attributed to the wrong chart). Pins: `allergies_webview_tests.rs::an_answer_for_a_chart_left_never_outdates_the_chart_on_screen`,
+  `a_fault_for_a_chart_left_never_touches_the_chart_on_screen`, `a_fault_mid_press_outdates_every_read_in_flight`.
+- **A sign that landed is an `Ok`, never an `ErrorView`** (R11). `written` answers `AllergyWrite { outcome, pane }`,
+  `pane` `None` when the re-read failed. **Tempting wrong fixes:** pass the re-read's `ErrorView` through (the window
+  offers a retry, and the retry records the allergy twice); borrow `Recorded::No` (it blames another source for the
+  clinician's own act). An interrupted commit is NOT known (#814), never "failed". Pins:
+  `allergies_tests.rs::a_landed_sign_is_an_ok_with_or_without_its_pane`, `an_interrupted_sign_is_not_known_and_never_retried`;
+  `allergies_webview_tests.rs::a_signed_write_never_leaves_a_live_sign_for_the_same_entry`.
+- **No `safety` is emitted.** `allergy::sign`'s `body` writes `safety: None` on both types. **Tempting wrong fix:** emit
+  an allergy-class signal "so a reader without custody is warned" (ADR-0096 (a)): db/049's signal has no supersession
+  (#406, #401), so it would keep warning after slice 2's "entered in error" and "challenged: tolerated" — the metformin
+  problem made permanent on the wire — and `safety_class_map` ships empty. Settle supersession first. **Pin: none yet**
+  (ADR-0096 (i)): no test asserts `event_log.safety IS NULL` for a signed allergy event.
+- **`schema_version` is checked at the authoring door only, and the applier projects every version.** This departs on
+  purpose from db/064 (a note projects `/1` only, because its narrative renders as markdown; allergy text is plaintext,
+  and withholding a newer version's allergy under-warns). **Tempting wrong fixes:** copy db/064's "project `/1` only"
+  (a peer's `/2` allergy disappears); check `schema_version` at both doors (sync wedges on every older node, ADR-0056);
+  put a `CHECK` on a projection's vocabulary column (the same wedge, one layer down). Pins: `074_clinical_allergy_test.sql`'s
+  section 3 (`authoring_only(… "clinical.allergy/2" …, 'schema_version')`) and section 4 (a newer peer's words project).
+- **"After the recording day" is judged against UTC+14.** `cairn_allergy_onset_problem` cuts today from `now() AT TIME
+  ZONE 'UTC' + 14 hours`. **Tempting wrong fix:** `now()::date` (a clinician east of the database's zone typing
+  today's date is refused). Pin: `074_clinical_allergy_test.sql`'s section 1 (today accepted) and section 3 (next year
+  past UTC+14 refused); the window's own stricter check is `allergies_tests.rs::parse_onset_accepts_the_five_shapes`.
+- **Both types stay off db/048's no-thread list.** Pin: `074_clinical_allergy_test.sql`'s section 0.
+- **Never mutate a shared role's grants in a test** (R12). The re-read-failure test first `REVOKE`d `SELECT` on
+  `cairn_agent` with a best-effort restore, which races every other DB binary on the shared cluster (and a crash
+  leaves the grant gone). The failure branch is tested at the pure seam (`written(Err(…))`) instead. **Tempting wrong
+  fix:** restore the DB-level failure test "for coverage" by revoking and re-granting (an older suite,
+  `vault_floor.rs`, revokes on `cairn_agent` — not a precedent; and no `SET ROLE` seam fails only this re-read, because a role that inherits
+  `cairn_window` cannot have a privilege subtracted).
+  Pin: none mechanical; `allergies_tests.rs::a_landed_sign_is_an_ok_with_or_without_its_pane`'s comment says why.
+
 **⇒ GUI SIGN-IN SLICE 3c-3c — THE PERSON MENU, "WAITING FOR YOU" (ADR-0095, db/073) — do not undo**
 (pins: `db/tests/073_person_menu_test.sql`, `crates/cairn-node/src/note/{menu_tests,menu_read,read}.rs`'s tests,
 `crates/cairn-node/tests/{note_menu_doors,note_parts_by_keys,note_person_menu}.rs`,
