@@ -130,16 +130,20 @@
 >    [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)** (ADR-0093, v0.95); the maintainer ruled 2026-11-07 that a re-sign under an UNCONFIRMED key counts, read
 >    "(signer unconfirmed)" as built (ADR-0094 states it). **3c-3a MERGED in PR #1013** (the slice bullet above).
 >    **3c-3c MERGED in PR #1019**: slice 3 (notes, drafts, who's here, sign-off, supervision, the menu) is complete.
->    **#1021 measured 2026-11-08** (this session's PR; `examples/measure_person_menu.rs`, figures in
+>    **#1021 measured, MERGED 2026-11-08 in PR #1025** (`examples/measure_person_menu.rs`, figures in
 >    `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`): the budget was missed from 5 000 notes;
 >    88% was per-row key-fact lookups, now once per distinct key (`notes_sql!`'s `facts` CTE, output identical) — 5–6×
 >    faster. Then a **keep rule** (the maintainer's time-limit idea, made lossless): the read builds only parts some menu
 >    could list — a drafted writer, the 7-day review window, a repudiated key, a student's or ever-co-sign-required
 >    writer's. Steady state, a pick behind the picker's counts read: **386 ms at a ward-year, 1.13 s at 100 000**. The
 >    scan, and those writers' parts (cleared or not), stay linear in history: #1021 stays open for the obligations
->    projection, the cheap levers it lists, and the Pi figures. **Next — the maintainer picks:** the milestone's missing
->    **allergy** stream (no allergy stream exists; the milestone needs "record an allergy"); slice 4 (the emergency
->    key); **#1014** (first if a multi-node pilot nears); or #1021's projection.
+>    projection, the cheap levers it lists, and the Pi figures. **The maintainer picked the allergy stream
+>    (2026-11-08):** design [`superpowers/specs/2026-11-08-allergy-stream-design.md`](superpowers/specs/2026-11-08-allergy-stream-design.md)
+>    (branch `design/allergy-stream`), brainstormed + builder-checked, **awaiting the maintainer's approval**, then a
+>    plan for its slice 1. Decided: allergies first, then charting a medication in the window (it cannot yet); the
+>    medication check builds now on drugref's MED-RT classes with an honest "not fully checked" line per group; no
+>    co-sign for students' entries; no clear safety signal until #406/#401. Later picks: slice 4 (the emergency key);
+>    **#1014** (first if a multi-node pilot nears); #1021's projection.
 >    Design §10's findings 1–2 are
 >    decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
