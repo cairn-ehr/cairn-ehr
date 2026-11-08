@@ -618,6 +618,44 @@ recent work unbounded → 2 → observed \_\_.
 | The counts failing: no suffix, "Waiting counts could not be read." read in the picker | | |
 | No dialog; no passphrase but the co-sign's strip | | |
 
+## The allergy list: the strip and its form (allergy slice 1, runbook §27)
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| A free-text entry: first keystroke in *Substance* → "Recorded." and the strip redrawn | held | | | | ≤ 10 s | |
+| The same, credential typed (first keystroke in *Staff ID*) | shared | | | | — (record) | |
+| "None known": the strip's *NKDA* press → "NKDA (asked …)" | held | | | | ≤ 3 s | |
+| The same, credential typed | shared | | | | — (record) | |
+| `ui_gesture_timing` `allergy-record` / `allergy-none` (the write halves) | | | | | — | |
+
+Steps: read the allergies paper *N* = 0 → forced *M* = 0 → observed \_\_ · record an entry 1 → 1 → observed \_\_ ·
+"none known" 1 → 1 → observed \_\_. Passphrase retypes after a refusal on a shared terminal: \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Not yet asked: "Allergies not yet asked", never blank, the two buttons beside it | | |
+| NKDA: "NKDA (asked {today}) · other allergies: not yet asked", the buttons gone | | |
+| NKDA + latex: "NKDA (asked {today}) · Other: latex → urticaria", prominent | | |
+| No known allergies: "No known allergies (asked {today})" | | |
+| An allergy overrides "no known allergies"; the adverse effect counted ("+1 adverse effect"), named only in the list | | |
+| "Previously recorded: no known allergies (asked {today})" in the list | | |
+| The console row: every field as typed (the real Tauri IPC) | | |
+| No kind pressed on load or after a sign; "Choose Allergy or Adverse effect." under its row | | |
+| The onset refusals ("is not a date this window can read", "is after today") under *When* | | |
+| A chart left mid-act: the next chart's strip its own, nothing of the left chart's outcome on it | | |
+| A doubted link's line shown and marked (optional) | | |
+| WebKit (the real window): any difference from the runbook's words | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| The strip read with the header; its new text announced without taking focus | | |
+| *Show all allergies* by Tab, opens with Space or Enter | | |
+| Each toggle row read with its label, each button with its pressed state; pressed visible without colour | | |
+| Each text field read by its label | | |
+| A field refusal read when it appears and with its field | | |
+| An allergy distinguishable from an adverse effect without colour | | |
+| No dialog; no passphrase but the signer strip | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

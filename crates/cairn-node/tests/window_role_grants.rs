@@ -409,3 +409,60 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     assert_not_denied("medication::cease_medication", &r);
     r.expect("the cessation is recorded");
 }
+
+/// The allergy list's calls (allergy slice 1): sign an entry and a "none known" statement under
+/// a human author, then read the linked set's rows back — the projections, the signer-name door
+/// and the chart set behind them.
+#[tokio::test]
+async fn the_windows_allergy_calls_run_under_its_own_login() {
+    use cairn_event::allergy::{
+        AllergenKind, AllergyEntry, EntryKind, NoneScope, Onset, ReactionCategory, Source,
+    };
+    use cairn_node::allergy::{read::list_patient_allergies, sign};
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, mut window) = owner_and_window(&base).await;
+    let (sk, kid, sk_h, kid_h) = common::medication_setup(&owner).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&owner, &sk, &kid, patient, 0).await;
+    let author = AuthorParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let entry = AllergyEntry {
+        allergen_kind: AllergenKind::Drug,
+        term: "penicillin",
+        kind: EntryKind::Allergy,
+        category: ReactionCategory::Anaphylaxis,
+        reaction_text: None,
+        onset: Onset::Year("2014".into()),
+        source: Source::SeenDocumented,
+    };
+    let r = sign::sign_allergy(&mut window, &sk, &kid, ORIGIN, patient, &entry, &author).await;
+    assert_not_denied("allergy::sign::sign_allergy", &r);
+    r.expect("the entry is recorded");
+    let r = sign::sign_allergy_none(
+        &mut window,
+        &sk,
+        &kid,
+        ORIGIN,
+        patient,
+        NoneScope::All,
+        &author,
+    )
+    .await;
+    assert_not_denied("allergy::sign::sign_allergy_none", &r);
+    r.expect("the statement is recorded");
+    let r = list_patient_allergies(&window, patient).await;
+    let read = expect_as_window("allergy::read::list_patient_allergies", r);
+    assert_eq!((read.entries.len(), read.none.len()), (1, 1));
+    // The unreadable count's own read (event_log against both projections) ran under this login.
+    assert_eq!(read.unreadable, 0);
+    // The set the pane is read over and each write is checked against.
+    let r = cairn_node::patient::person::person_charts(&window, patient).await;
+    let set = expect_as_window("patient::person::person_charts (allergies)", r);
+    assert_eq!(set, ChartSet::single(patient));
+}

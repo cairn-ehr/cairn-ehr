@@ -45,6 +45,7 @@ pub use signer::EventSigner;
 // comment sitting above the dalek re-export on the line before, describing that instead.)
 pub use keys::{PublicKey32, Secret32};
 
+pub mod allergy;
 pub mod attachment;
 pub mod contributor;
 pub mod demographics;

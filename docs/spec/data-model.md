@@ -59,6 +59,21 @@ still ahead, and before the hold's own end, leaves the hold standing until then,
 release is coming and when, or that it cancels a hold not yet started (principle 4: a release that will take
 effect is never shown as nothing).
 
+The allergies row above is built as two born-sealed, additive event types: one entry
+(`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose
+"not known" is a recorded answer, and the source) and a "none known" **statement** (`clinical.allergy-none.asserted`,
+scope `drug` or `all`), so "no known allergies" is never confused with "not yet asked". Union holds: sync never
+removes an entry, a recorded allergy overrides a "none known" statement in its own list without removing it, and an
+entry of a kind a node does not know is still listed and counted (never prominent), and an allergy of an allergen
+kind it does not know is filed as an other allergy; an allergy event a node holds but cannot read (no custody,
+or shredded) is counted and said on the strip, never read as "not yet asked". The floor checks
+structure at both doors and vocabulary at the authoring door only (ADR-0056). A linked chart whose link is in doubt
+has its entries shown and marked, not withheld, because over-warning is the safe error; its "none known"
+statements, which would under-warn, never stand for the patient on screen. Allergy events emit no clear
+safety signal until supersession is settled (#406/#401), and the overlays this row's "explicit reconciliation event"
+names (correct, de-label, entered in error) are the next slice
+([ADR-0096](decisions/0096-the-allergy-list.md)).
+
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 
 ## 3.4 Interoperability

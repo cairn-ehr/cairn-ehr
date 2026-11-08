@@ -325,6 +325,7 @@ function clearChart() {
   holdCharts(null);
   clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   clearNotes(); // the note pane and its editor (notes.js)
+  clearAllergies(); // the allergy strip, its lists and its form (allergies.js)
   clearDrawnList();
   const button = el("sign-off");
   button.disabled = true;
@@ -344,6 +345,7 @@ async function refresh(lead, behind) {
   const patient = displayedPatient;
   if (patient === null) return;
   void readNotes(patient); // the note pane, read on its own: its failure never touches the list
+  void drawAllergies(patient); // the allergy strip (allergies.js), read on its own too
   if (behind) knowListBehind(behind, lead); // window state: whichever read fails last marks the list
   // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
   const revision = ++chartReadRevision;

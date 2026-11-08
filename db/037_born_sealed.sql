@@ -357,6 +357,15 @@ BEGIN
         IF to_regclass('public.clinical_note_attestation') IS NOT NULL THEN
             DELETE FROM clinical_note_attestation WHERE content_address = v_ca;
         END IF;
+        -- The allergy list (db/074, allergy slice 1): an entry's term and reaction, and a
+        -- "none known" statement, are clinical plaintext, one row per event, keyed by this CA.
+        -- Guarded like its siblings: the tables are created by a later file.
+        IF to_regclass('public.clinical_allergy') IS NOT NULL THEN
+            DELETE FROM clinical_allergy WHERE content_address = v_ca;
+        END IF;
+        IF to_regclass('public.clinical_allergy_none') IS NOT NULL THEN
+            DELETE FROM clinical_allergy_none WHERE content_address = v_ca;
+        END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;

@@ -1,4 +1,5 @@
 pub mod actor_enrolment;
+pub mod allergy;
 pub mod apply_proposal;
 pub mod auto_apply;
 pub mod backup;
