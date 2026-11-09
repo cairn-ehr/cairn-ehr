@@ -72,12 +72,12 @@ BEGIN
     ASSERT pg_temp.options('moxi') = '{}', 'the middle of a drug name does not';
     -- Groups are drugref's allergy groups only (M5), matched anywhere in the name; a MED-RT class
     -- is never offered. The code is the class_uuid, the display its name (M2).
-    ASSERT pg_temp.options('penicillin') = ARRAY['drugref-class:Penicillins'],
+    ASSERT pg_temp.options('penicillin') = ARRAY['drugref-class:Penicillins (allergy group)'],
         format('"penicillin" finds the allergy group, never the EPC class: %s', pg_temp.options('penicillin'));
-    ASSERT pg_temp.options('cillins') = ARRAY['drugref-class:Penicillins'], 'a group matches mid-name';
+    ASSERT pg_temp.options('cillins') = ARRAY['drugref-class:Penicillins (allergy group)'], 'a group matches mid-name';
     ASSERT pg_temp.options('antibacterial') = '{}', 'a MED-RT class is never offered (M5)';
     ASSERT (SELECT code FROM cairn_drug_search('penicillins', 20))
-           = (SELECT class_uuid::text FROM drugref.substance_class WHERE class_name = 'Penicillins'),
+           = (SELECT class_uuid::text FROM drugref.substance_class WHERE class_name = 'Penicillins (allergy group)'),
         'a group is coded by its class_uuid';
     -- Fewer than three characters: nothing, never the whole table.
     ASSERT pg_temp.options('am') = '{}', 'two letters find nothing';
@@ -91,19 +91,23 @@ BEGIN
     ASSERT pg_temp.options('amo\') = '{}', 'a trailing backslash is a literal and raises nothing';
     ASSERT pg_temp.options('pen_') = '{}', '_ is a literal in a group name too';
 END $$;
--- The limit is capped at 20, and the order is drugs first, then shorter names, then byte order:
--- a group named "zzlimit" is shorter than every drug, so it sorts first if the tiers were lost.
+-- The limit is capped at 20, and the order is GROUPS first (ruling F2, #1057), then shorter
+-- names, then byte order. The group is named longer than every drug, so it sorts first only by
+-- its tier; and 25 matching drugs outnumber the window's 12, so a group behind them would be cut
+-- off — as the real "Penicillins (allergy group)" was behind drugref's many penicillin moieties.
 INSERT INTO drugref.substance_moiety (moiety_uuid, display_name)
 SELECT md5('stub limit ' || i)::uuid, 'zzlimit ' || i FROM generate_series(1, 25) i;
-INSERT INTO drugref.substance_class VALUES (md5('stub limit group')::uuid, 'zzlimit', 'AG');
+INSERT INTO drugref.substance_class VALUES (md5('stub limit group')::uuid, 'zzlimit (allergy group)', 'AG');
 INSERT INTO drugref.allergy_group VALUES (md5('stub limit group')::uuid, 'structural-seed');
 DO $$
 BEGIN
     ASSERT cardinality(pg_temp.options('zzlimit', 100)) = 20, 'the limit is capped at 20';
-    ASSERT pg_temp.options('zzlimit', 5) = ARRAY['drugref-moiety:zzlimit 1', 'drugref-moiety:zzlimit 2',
-                                                 'drugref-moiety:zzlimit 3', 'drugref-moiety:zzlimit 4',
-                                                 'drugref-moiety:zzlimit 5'],
-        format('drugs first, then length, then byte order: %s', pg_temp.options('zzlimit', 5));
+    ASSERT pg_temp.options('zzlimit', 5) = ARRAY['drugref-class:zzlimit (allergy group)',
+                                                 'drugref-moiety:zzlimit 1', 'drugref-moiety:zzlimit 2',
+                                                 'drugref-moiety:zzlimit 3', 'drugref-moiety:zzlimit 4'],
+        format('groups first, then length, then byte order: %s', pg_temp.options('zzlimit', 5));
+    ASSERT (pg_temp.options('zzlimit', 12))[1] = 'drugref-class:zzlimit (allergy group)',
+        format('the window''s 12 still offer the group, first: %s', pg_temp.options('zzlimit', 12));
     ASSERT cardinality(pg_temp.options('zzlimit', NULL)) = 20, 'no limit means the cap';
     ASSERT cardinality(pg_temp.options('zzlimit', -1)) = 0, 'a negative limit asks for nothing, and raises nothing';
 END $$;
@@ -129,18 +133,18 @@ BEGIN
       FROM (SELECT concat_ws(' / ', pg_temp.name(f.allergen), pg_temp.name(f.med), f.outcome,
                              f.match_kind, f.group_name) AS l
               FROM cairn_drug_facts(
-          ARRAY[pg_temp.id('Penicillins'), pg_temp.id('flucloxacillin'), pg_temp.id('amoxicillin'),
+          ARRAY[pg_temp.id('Penicillins (allergy group)'), pg_temp.id('flucloxacillin'), pg_temp.id('amoxicillin'),
                 pg_temp.id('metformin')],
           ARRAY[pg_temp.id('amoxicillin'), pg_temp.id('perindopril')]) f) lines;
     -- The stub's nine rows for the eight pairs, exactly: two paths for amoxicillin against itself,
     -- and a no-match or unplaced row passed through as drugref gave it.
     ASSERT got = ARRAY[
-        'Penicillins / amoxicillin / match / same-group / Penicillins',
-        'Penicillins / perindopril / no-match',
+        'Penicillins (allergy group) / amoxicillin / match / same-group / Penicillins (allergy group)',
+        'Penicillins (allergy group) / perindopril / no-match',
         'amoxicillin / amoxicillin / match / same-drug',
-        'amoxicillin / amoxicillin / match / same-group / Penicillins',
+        'amoxicillin / amoxicillin / match / same-group / Penicillins (allergy group)',
         'amoxicillin / perindopril / no-match',
-        'flucloxacillin / amoxicillin / match / same-group / Penicillins',
+        'flucloxacillin / amoxicillin / match / same-group / Penicillins (allergy group)',
         'flucloxacillin / perindopril / no-match',
         'metformin / amoxicillin / unplaced',
         'metformin / perindopril / unplaced'], format('the facts: %s', got);
@@ -150,10 +154,10 @@ BEGIN
         'no allergens: no facts';
     -- Only allergy groups have a status; a MED-RT class or an unknown code has none.
     ASSERT (SELECT array_agg(pg_temp.name(s.group_code) || ': ' || s.review_status)
-              FROM cairn_drug_group_status(ARRAY[pg_temp.id('Penicillins'),
+              FROM cairn_drug_group_status(ARRAY[pg_temp.id('Penicillins (allergy group)'),
                                                  pg_temp.id('Penicillin-class Antibacterial [EPC]'),
                                                  gen_random_uuid()]) s)
-           = ARRAY['Penicillins: structural-seed'], 'the group status';
+           = ARRAY['Penicillins (allergy group): structural-seed'], 'the group status';
 END $$;
 ROLLBACK;
 
@@ -165,7 +169,7 @@ BEGIN;
 \ir ../../crates/cairn-node/tests/fixtures/drug_stub.sql
 CREATE FUNCTION pg_temp.answers_nothing(why text) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    pen uuid := (SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins');
+    pen uuid := (SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins (allergy group)');
     amox uuid := (SELECT moiety_uuid FROM drugref.substance_moiety WHERE display_name = 'amoxicillin');
 BEGIN
     ASSERT cairn_drug_available() IS FALSE, why || ': not available';
@@ -192,7 +196,7 @@ BEGIN
     ASSERT cairn_drug_available(), 'the probe owner can read all of it';
     ASSERT (SELECT count(*) FROM cairn_drug_search('amox', 20)) = 1, 'and the search answers';
     ASSERT (SELECT count(*) FROM cairn_drug_group_status(
-                ARRAY[(SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins')])) = 1,
+                ARRAY[(SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins (allergy group)')])) = 1,
         'and the group status answers';
 
     -- The check not executable: unavailable, and every door answers nothing, with no error.
@@ -248,7 +252,7 @@ CREATE FUNCTION drugref.allergy_check(p_prescribed uuid, p_allergen uuid)
 RETURNS TABLE (verdict text, group_name text) LANGUAGE sql STABLE AS $$ SELECT 'match', NULL::text $$;
 DO $$
 DECLARE
-    pen uuid := (SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins');
+    pen uuid := (SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins (allergy group)');
     amox uuid := (SELECT moiety_uuid FROM drugref.substance_moiety WHERE display_name = 'amoxicillin');
 BEGIN
     ASSERT cairn_drug_available() IS FALSE, 'a reshaped allergy_check: not available';

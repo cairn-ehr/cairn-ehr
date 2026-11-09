@@ -145,8 +145,8 @@ pub async fn read_group_status(
         .collect()
 }
 
-/// The drugs and groups matching `text` for the allergy pick (at most 12), or `None` when this
-/// node has no drug list at all (the pick then records the name as typed).
+/// The groups and drugs matching `text` for the allergy pick (at most 12, groups first), or
+/// `None` when this node has no drug list at all (the pick then records the name as typed).
 pub async fn search_drugs(
     c: &impl GenericClient,
     text: &str,

@@ -100,11 +100,13 @@ $$;
 --    * Only drugref's ALLERGY GROUPS are offered as groups (M5) — never a MED-RT class such as
 --      "Penicillin-class Antibacterial [EPC]": allergy_check answers `allergen-not-a-group` for
 --      one, so an allergen coded with it could never be checked.
---    * Drugs first, then groups; within each, shorter names first (the likeliest intent), then
---      byte order (COLLATE "C", so every node orders alike). At most 20.
+--    * GROUPS first, then drugs (ruling F2, #1057): there are few groups, a class allergy is the
+--      commonest intent, and "penicillin" matches far more drugs than the window shows, so a
+--      group listed after them was cut off. Within each, shorter names first (the likeliest
+--      intent), then byte order (COLLATE "C", so every node orders alike). At most 20.
 --    The answer's `system` is the coding system the entry will carry; `code` the drugref uuid
 --    (a moiety_uuid, or a group's class_uuid, M2); `display` the name to sign with it (the
---    window adds " (group)" to a group's option).
+--    window adds " (group)" to a group's option unless its name already says "group").
 CREATE OR REPLACE FUNCTION cairn_drug_search(p_text text, p_limit int)
 RETURNS TABLE(system text, code text, display text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -121,12 +123,12 @@ BEGIN
     RETURN QUERY
         SELECT o.system, o.code, o.display
           FROM (SELECT 'drugref-moiety'::text AS system, m.moiety_uuid::text AS code,
-                       m.display_name AS display, 0 AS tier
+                       m.display_name AS display, 1 AS tier
                   FROM drugref.substance_moiety m
                  -- A leading space makes "the start of the name" one more word start.
                  WHERE (' ' || m.display_name) ILIKE ('% ' || v_pat || '%') ESCAPE '\'
                 UNION ALL
-                SELECT 'drugref-class'::text, c.class_uuid::text, c.class_name, 1
+                SELECT 'drugref-class'::text, c.class_uuid::text, c.class_name, 0
                   FROM drugref.allergy_group g
                   JOIN drugref.substance_class c ON c.class_uuid = g.class_uuid
                  WHERE c.class_name ILIKE ('%' || v_pat || '%') ESCAPE '\') o

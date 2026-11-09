@@ -41,9 +41,11 @@ function holdPick(coding) {
   closePick();
 }
 
-/** The option's words in the list: a group says so. */
+/** The option's words in the list: a group says so, once — drugref's own group names already
+ *  say "group" ("Penicillins (allergy group)", #1057), and those are left as they are. */
 function pickLabel(option) {
-  return option.system === GROUP_SYSTEM ? option.display + " (group)" : option.display;
+  if (option.system !== GROUP_SYSTEM || /\bgroup\b/i.test(option.display)) return option.display;
+  return option.display + " (group)";
 }
 
 /** Close the list and the hint (the options are forgotten). */

@@ -185,7 +185,7 @@ async fn a_picked_group_is_signed_with_its_coding() {
         &state,
         chart,
         drug("penicillins"),
-        picked(GROUP_SYSTEM, code, "Penicillins"),
+        picked(GROUP_SYSTEM, code, "Penicillins (allergy group)"),
     )
     .await;
     let a = list_patient_allergies(&owner, chart).await.unwrap();
@@ -196,7 +196,11 @@ async fn a_picked_group_is_signed_with_its_coding() {
         .expect("signed with its coding");
     assert_eq!(
         (c.system.as_str(), c.code.as_str(), c.display.as_str()),
-        (GROUP_SYSTEM, group.to_string().as_str(), "Penicillins")
+        (
+            GROUP_SYSTEM,
+            group.to_string().as_str(),
+            "Penicillins (allergy group)"
+        )
     );
     assert_eq!(a.entries[0].term, "penicillins", "the term as typed");
 }
@@ -315,7 +319,7 @@ async fn med_list_flags_an_unplaced_line_not_checked() {
     assert_eq!(
         line("Amoxil").marks,
         [
-            "Amoxil is in the same group as flucloxacillin (Penicillins); allergy recorded: \
+            "Amoxil is in the same group as flucloxacillin (Penicillins (allergy group)); allergy recorded: \
           anaphylaxis"
         ]
     );
@@ -440,7 +444,7 @@ async fn allergy_list_marks_an_unreviewed_group() {
         return;
     };
     let (group, moiety) = (Uuid::from_u128(0x9E41_C112), Uuid::from_u128(0x3E7F_0004));
-    let pen = picked(GROUP_SYSTEM, group, "Penicillins");
+    let pen = picked(GROUP_SYSTEM, group, "Penicillins (allergy group)");
     record(&state, chart, drug("penicillins"), pen).await;
     let met = picked(MOIETY_SYSTEM, moiety, "metformin");
     record(&state, chart, drug("metformin"), met).await;

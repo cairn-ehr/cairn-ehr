@@ -21,10 +21,11 @@
 --
 -- The rows, and what each one is for:
 --   moieties   amoxicillin, flucloxacillin, perindopril, metformin.
---   classes    Penicillins (AG, an allergy group, `structural-seed` as every group is today) and
+--   classes    Penicillins (allergy group) — an AG, `structural-seed` as every group is today, named
+--              as the real drugref names it (#1057: the window must not label it "group" twice) — and
 --              Penicillin-class Antibacterial [EPC] — a MED-RT class with NO allergy_group row,
 --              which the pick must never offer (M5).
---   answers    for 4 allergens (Penicillins, flucloxacillin, amoxicillin, metformin) × 2 meds
+--   answers    for 4 allergens (Penicillins (allergy group), flucloxacillin, amoxicillin, metformin) × 2 meds
 --              (amoxicillin, perindopril), every outcome drugref gives: `match` same-group (a group
 --              allergen, and a moiety allergen sharing the group), `match` same-drug — which for
 --              amoxicillin/amoxicillin comes WITH a same-group row, as drugref gives one row per
@@ -84,10 +85,10 @@ SELECT md5('stub moiety ' || n)::uuid, n
 
 INSERT INTO drugref.substance_class (class_uuid, class_name, concept_type)
 SELECT md5('stub class ' || n)::uuid, n, t
-  FROM (VALUES ('Penicillins', 'AG'), ('Penicillin-class Antibacterial [EPC]', 'EPC')) AS r(n, t);
+  FROM (VALUES ('Penicillins (allergy group)', 'AG'), ('Penicillin-class Antibacterial [EPC]', 'EPC')) AS r(n, t);
 
 INSERT INTO drugref.allergy_group (class_uuid, review_status)
-VALUES (md5('stub class Penicillins')::uuid, 'structural-seed');
+VALUES (md5('stub class Penicillins (allergy group)')::uuid, 'structural-seed');
 
 -- `allergen` is a label: 'stub moiety <name>' or 'stub class <name>'. A match row names the
 -- components that met (the allergen's own only when it is a moiety: a group has no fold).
@@ -97,12 +98,12 @@ SELECT md5('stub moiety ' || r.med)::uuid, md5(r.allergen)::uuid, r.outcome, r.k
        CASE WHEN r.outcome = 'match' AND r.allergen LIKE 'stub moiety %' THEN md5(r.allergen)::uuid END,
        CASE WHEN r.outcome = 'match' THEN md5('stub moiety ' || r.med)::uuid END
   FROM (VALUES
-      ('amoxicillin', 'stub class Penicillins',     'match',    'same-group', NULL, 'Penicillins'),
-      ('perindopril', 'stub class Penicillins',     'no-match', NULL,         NULL, NULL),
-      ('amoxicillin', 'stub moiety flucloxacillin', 'match',    'same-group', NULL, 'Penicillins'),
+      ('amoxicillin', 'stub class Penicillins (allergy group)',     'match',    'same-group', NULL, 'Penicillins (allergy group)'),
+      ('perindopril', 'stub class Penicillins (allergy group)',     'no-match', NULL,         NULL, NULL),
+      ('amoxicillin', 'stub moiety flucloxacillin', 'match',    'same-group', NULL, 'Penicillins (allergy group)'),
       ('perindopril', 'stub moiety flucloxacillin', 'no-match', NULL,         NULL, NULL),
       ('amoxicillin', 'stub moiety amoxicillin',    'match',    'same-drug',  NULL, NULL),
-      ('amoxicillin', 'stub moiety amoxicillin',    'match',    'same-group', NULL, 'Penicillins'),
+      ('amoxicillin', 'stub moiety amoxicillin',    'match',    'same-group', NULL, 'Penicillins (allergy group)'),
       ('perindopril', 'stub moiety amoxicillin',    'no-match', NULL,         NULL, NULL),
       ('amoxicillin', 'stub moiety metformin',      'unplaced', NULL, 'allergen-in-no-group', NULL),
       ('perindopril', 'stub moiety metformin',      'unplaced', NULL, 'allergen-in-no-group', NULL)

@@ -34,6 +34,8 @@ mod common;
 
 /// The drugref stand-in (see its header). Never load it outside a transaction that rolls back.
 const STUB: &str = include_str!("fixtures/drug_stub.sql");
+/// The stub's allergy group, named as the real drugref names it (#1057).
+const PEN: &str = "Penicillins (allergy group)";
 
 /// The four doors, by their full signatures.
 const DOORS: [&str; 4] = [
@@ -155,15 +157,10 @@ async fn assert_answers_nothing(c: &impl GenericClient, why: &str) {
         "{why}: no options"
     );
     assert!(
-        facts(c, &["Penicillins"], &["amoxicillin"])
-            .await
-            .is_empty(),
+        facts(c, &[PEN], &["amoxicillin"]).await.is_empty(),
         "{why}: no facts"
     );
-    assert!(
-        group_status(c, &["Penicillins"]).await.is_empty(),
-        "{why}: no status"
-    );
+    assert!(group_status(c, &[PEN]).await.is_empty(), "{why}: no status");
 }
 
 #[tokio::test]
@@ -229,7 +226,7 @@ async fn search_text_is_literal_and_short_text_finds_nothing() {
     );
     assert_eq!(
         options(&tx, Some("penicillin"), 20).await,
-        ["drugref-class:Penicillins"],
+        ["drugref-class:Penicillins (allergy group)"],
         "the allergy group, never the EPC class (M5)"
     );
     assert!(
@@ -265,17 +262,17 @@ async fn the_facts_are_drugrefs_rows_for_every_pair() {
     assert_eq!(
         facts(
             &tx,
-            &["Penicillins", "flucloxacillin", "amoxicillin", "metformin"],
+            &[PEN, "flucloxacillin", "amoxicillin", "metformin"],
             &["amoxicillin", "perindopril"],
         )
         .await,
         [
-            "Penicillins / amoxicillin / match / same-group / Penicillins",
-            "Penicillins / perindopril / no-match",
+            "Penicillins (allergy group) / amoxicillin / match / same-group / Penicillins (allergy group)",
+            "Penicillins (allergy group) / perindopril / no-match",
             "amoxicillin / amoxicillin / match / same-drug",
-            "amoxicillin / amoxicillin / match / same-group / Penicillins",
+            "amoxicillin / amoxicillin / match / same-group / Penicillins (allergy group)",
             "amoxicillin / perindopril / no-match",
-            "flucloxacillin / amoxicillin / match / same-group / Penicillins",
+            "flucloxacillin / amoxicillin / match / same-group / Penicillins (allergy group)",
             "flucloxacillin / perindopril / no-match",
             "metformin / amoxicillin / unplaced",
             "metformin / perindopril / unplaced",
@@ -283,12 +280,8 @@ async fn the_facts_are_drugrefs_rows_for_every_pair() {
         "every row allergy_check gives for the 4 × 2 pairs, and nothing else (M4)"
     );
     assert_eq!(
-        group_status(
-            &tx,
-            &["Penicillins", "Penicillin-class Antibacterial [EPC]"]
-        )
-        .await,
-        ["Penicillins: structural-seed"],
+        group_status(&tx, &[PEN, "Penicillin-class Antibacterial [EPC]"]).await,
+        ["Penicillins (allergy group): structural-seed"],
         "only an allergy group has a status (M7)"
     );
     tx.rollback().await.unwrap();
@@ -324,7 +317,7 @@ async fn an_unreadable_drugref_is_unavailable_not_a_fault() {
         "control: the probe owner reads it all"
     );
     assert_eq!(
-        facts(&tx, &["Penicillins"], &["amoxicillin"]).await.len(),
+        facts(&tx, &[PEN], &["amoxicillin"]).await.len(),
         1,
         "control"
     );

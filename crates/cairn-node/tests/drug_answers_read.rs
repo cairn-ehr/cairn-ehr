@@ -69,7 +69,7 @@ async fn drug_facts_reads_the_stub() {
     };
     let tx = c.transaction().await.unwrap();
     tx.batch_execute(STUB).await.unwrap();
-    let pen = stub_id(&tx, "stub class Penicillins").await;
+    let pen = stub_id(&tx, "stub class Penicillins (allergy group)").await;
     let fluclox = stub_id(&tx, "stub moiety flucloxacillin").await;
     let amox = stub_id(&tx, "stub moiety amoxicillin").await;
     let metformin = stub_id(&tx, "stub moiety metformin").await;
@@ -85,7 +85,7 @@ async fn drug_facts_reads_the_stub() {
     .unwrap() else {
         panic!("the stub is a readable drugref");
     };
-    let group = Some("Penicillins".to_string());
+    let group = Some("Penicillins (allergy group)".to_string());
     assert_eq!(
         kinds(&f[&(pen, amox)]),
         [("same-group".to_string(), group.clone())]
@@ -142,7 +142,7 @@ async fn group_status_reads_the_stub() {
     };
     let tx = c.transaction().await.unwrap();
     tx.batch_execute(STUB).await.unwrap();
-    let pen = stub_id(&tx, "stub class Penicillins").await;
+    let pen = stub_id(&tx, "stub class Penicillins (allergy group)").await;
     let amox = stub_id(&tx, "stub moiety amoxicillin").await;
     let got = read_group_status(&tx, &[pen, amox]).await.unwrap();
     assert_eq!(got.len(), 1, "a moiety is no group");
@@ -153,8 +153,36 @@ async fn group_status_reads_the_stub() {
             .iter()
             .map(|o| (o.system.as_str(), o.display.as_str()))
             .collect::<Vec<_>>(),
-        [("drugref-class", "Penicillins")]
+        [("drugref-class", "Penicillins (allergy group)")]
     );
+    tx.rollback().await.unwrap();
+}
+
+/// Ruling F2 (#1057): the pick lists allergy GROUPS first. With the real drugref, "penicillin"
+/// matches far more moieties than the window's 12 options, and the group behind them was cut
+/// off. Fifteen moieties here, every one shorter than the group's name, so only its tier can put
+/// it first.
+#[tokio::test]
+async fn the_group_is_offered_first_however_many_drugs_match() {
+    let Some((_g, mut c, _)) = rig().await else {
+        return;
+    };
+    let tx = c.transaction().await.unwrap();
+    tx.batch_execute(STUB).await.unwrap();
+    tx.batch_execute(
+        "INSERT INTO drugref.substance_moiety (moiety_uuid, display_name) \
+         SELECT md5('stub crowd ' || i)::uuid, 'penicillin ' || i FROM generate_series(1, 15) i",
+    )
+    .await
+    .unwrap();
+    let found = search_drugs(&tx, "penicillin").await.unwrap().unwrap();
+    assert_eq!(found.len(), 12, "the window asks for 12");
+    assert_eq!(
+        (found[0].system.as_str(), found[0].display.as_str()),
+        ("drugref-class", "Penicillins (allergy group)"),
+        "the group comes first: {found:?}"
+    );
+    assert!(found[1..].iter().all(|o| o.system == "drugref-moiety"));
     tx.rollback().await.unwrap();
 }
 
@@ -168,7 +196,7 @@ async fn the_window_role_can_call_the_doors() {
     let role = login.rsplit("user=").next().unwrap().to_string();
     let tx = c.transaction().await.unwrap();
     tx.batch_execute(STUB).await.unwrap();
-    let pen = stub_id(&tx, "stub class Penicillins").await;
+    let pen = stub_id(&tx, "stub class Penicillins (allergy group)").await;
     let amox = stub_id(&tx, "stub moiety amoxicillin").await;
     tx.batch_execute(&format!("SET LOCAL ROLE {role}"))
         .await

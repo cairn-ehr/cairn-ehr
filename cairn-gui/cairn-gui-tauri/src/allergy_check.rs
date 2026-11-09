@@ -65,7 +65,7 @@ pub struct DrugSearch {
 }
 
 /// The pick: drugs and drug groups matching `text` (the drug list's rules: literal, at least 3
-/// characters, drugs first).
+/// characters, groups first).
 #[tauri::command]
 pub async fn drug_search(
     state: tauri::State<'_, AppState>,

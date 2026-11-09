@@ -49,7 +49,7 @@ async fn a_reshaped_allergy_check_is_unavailable() {
     let rows: i64 = tx
         .query_one(
             "WITH pen AS (SELECT class_uuid AS u FROM drugref.substance_class \
-                           WHERE class_name = 'Penicillins'), \
+                           WHERE class_name = 'Penicillins (allergy group)'), \
                   amox AS (SELECT moiety_uuid AS u FROM drugref.substance_moiety \
                            WHERE display_name = 'amoxicillin') \
              SELECT (SELECT count(*) FROM cairn_drug_search('amox', 20)) \

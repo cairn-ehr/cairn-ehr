@@ -158,3 +158,15 @@ fn a_correction_keeps_the_coding_and_the_pick_follows_the_pressed_kind() {
     let on_input = &DRUG_PICK_JS[at..at + position(&DRUG_PICK_JS[at..], "});")];
     assert!(on_input.contains("pickIsDrug()"), "{on_input}");
 }
+
+/// #1057: drugref's own group names say "group" ("Penicillins (allergy group)"), so a group's
+/// option adds " (group)" only when its name does not already say so (a whole word, any case).
+#[test]
+fn a_group_is_labelled_a_group_once() {
+    let label = js_fn(DRUG_PICK_JS, "pickLabel");
+    assert!(
+        label.contains("/\\bgroup\\b/i.test(option.display)"),
+        "{label}"
+    );
+    assert!(label.contains("option.display + \" (group)\""), "{label}");
+}
