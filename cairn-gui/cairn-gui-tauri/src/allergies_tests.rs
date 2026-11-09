@@ -24,13 +24,13 @@ fn another_chart() -> String {
 /// A complete entry, as the form sends it; each test spoils one field.
 fn entry() -> EntryInput {
     EntryInput {
-        allergen_kind: "drug".into(),
+        allergen_kind: Some("drug".into()),
         term: "penicillin".into(),
         kind: Some("allergy".into()),
         category: Some("anaphylaxis".into()),
         reaction_text: None,
         onset: Some("2014".into()),
-        source: "seen-documented".into(),
+        source: Some("seen-documented".into()),
         corrects: None,
     }
 }
@@ -94,6 +94,36 @@ fn parse_onset_refuses_year_0000_at_every_precision() {
 }
 
 /// The form's refusals, in the brief's order, each before the key.
+/// Task 6 fix round 1, ruling (a): the form presses Drug by default, but Correct on a newer
+/// peer's entry leaves an allergen word it has no button for UNPRESSED, so the window can send
+/// none. That is refused before the key, in words the clinician can act on and under its own
+/// field — never a deserialisation failure that reads as "could not reach its backend".
+#[test]
+fn record_refuses_a_missing_allergen_kind_before_the_key() {
+    let mut e = entry();
+    e.allergen_kind = None;
+    let err = entry_before_the_key(&e, today()).err().unwrap();
+    assert_eq!(err.text, "Choose Drug or Other.");
+    assert_eq!(err.retry, Retry::Never);
+    // An empty substance is still said first.
+    e.term = " ".into();
+    assert_eq!(
+        entry_before_the_key(&e, today()).err().unwrap().text,
+        "Name the substance."
+    );
+}
+
+/// As the allergen: a source word this window has no button for is left unpressed by Correct,
+/// and a missing source is refused before the key.
+#[test]
+fn record_refuses_a_missing_source_before_the_key() {
+    let mut e = entry();
+    e.source = None;
+    let err = entry_before_the_key(&e, today()).err().unwrap();
+    assert_eq!(err.text, "Choose where this came from.");
+    assert_eq!(err.retry, Retry::Never);
+}
+
 #[test]
 fn record_refuses_a_missing_kind_before_the_key() {
     let mut e = entry();
@@ -130,8 +160,8 @@ fn record_refuses_a_missing_kind_before_the_key() {
     for spoil in [
         |e: &mut EntryInput| e.kind = Some("Allergy".into()),
         |e: &mut EntryInput| e.category = Some("hives".into()),
-        |e: &mut EntryInput| e.allergen_kind = "food".into(),
-        |e: &mut EntryInput| e.source = "hearsay".into(),
+        |e: &mut EntryInput| e.allergen_kind = Some("food".into()),
+        |e: &mut EntryInput| e.source = Some("hearsay".into()),
     ] {
         let mut e = entry();
         spoil(&mut e);

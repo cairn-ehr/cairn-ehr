@@ -40,7 +40,10 @@ fn overlay_js_never_assigns_inner_html() {
         );
     }
     let button = js_fn(OVERLAYS_JS, "actionButton");
-    assert!(button.contains("cell(\"button\""), "{button}");
+    assert!(
+        button.contains("el(\"allergy-line-buttons\").content.querySelector("),
+        "{button}"
+    );
     let start = js_fn(OVERLAYS_JS, "startCorrection");
     assert!(
         start.contains("el(\"allergy-correcting-text\").textContent = line.text;"),
@@ -101,7 +104,7 @@ fn correct_prefills_and_sends_corrects() {
     // The label is the page's, above the form; the script writes only the line's own text.
     let label = position(
         INDEX_HTML,
-        "<p id=\"allergy-correcting\" hidden>Correcting: <span id=\"allergy-correcting-text\"></span>",
+        "<p id=\"allergy-correcting-line\">Correcting: <span id=\"allergy-correcting-text\"></span></p>",
     );
     assert!(label < position(INDEX_HTML, "<form id=\"allergy-form\""));
     // allergies.js calls `clearCorrection` at load (`resetAllergyForm()`), so this script is
@@ -225,8 +228,7 @@ fn overlay_presses_go_through_press_once() {
         sync.contains("document.querySelectorAll(\".allergy-none, .allergy-write\")"),
         "{sync}"
     );
-    let button = js_fn(OVERLAYS_JS, "actionButton");
-    assert!(button.contains("class: \"allergy-write\""), "{button}");
+    // The line buttons are `.allergy-write` in the page's template (every_button_label_is_the_pages).
     for template in ["allergy-delabel-template", "allergy-retract-template"] {
         let at = position(INDEX_HTML, &format!("<template id=\"{template}\">"));
         let body = &INDEX_HTML[at..at + position(&INDEX_HTML[at..], "</template>")];
@@ -295,11 +297,139 @@ fn historical_and_entered_in_error_lists_are_drawn() {
 fn every_line_button_names_its_line() {
     let button = js_fn(OVERLAYS_JS, "actionButton");
     assert!(
-        button.contains("\"aria-label\": label + \": \" + line.text"),
+        button.contains(
+            "button.setAttribute(\"aria-label\", button.textContent + \": \" + line.text);"
+        ),
         "{button}"
     );
+    // A row is named as the button that opened it ("De-label: <line>").
     let open = js_fn(OVERLAYS_JS, "openRow");
-    assert!(open.contains("setAttribute(\"aria-label\""), "{open}");
+    assert!(
+        open.contains("row.setAttribute(\"aria-label\", opener.getAttribute(\"aria-label\"));"),
+        "{open}"
+    );
+}
+
+/// Fix round 1, item 5: the four button labels are the page's (a `<template>` in
+/// `#allergy-details`), so the header's claim that every label is written in index.html is true
+/// and a wording change is one edit in one file.
+#[test]
+fn every_button_label_is_the_pages() {
+    let at = position(details(), "<template id=\"allergy-line-buttons\">");
+    let template = &details()[at..at + position(&details()[at..], "</template>")];
+    for (act, label) in [
+        ("correct", "Correct"),
+        ("delabel", "De-label"),
+        ("error", "Entered in error"),
+        ("withdraw", "Withdraw de-label"),
+    ] {
+        assert!(
+            template.contains(&format!(
+                "<button type=\"button\" class=\"allergy-write\" data-act=\"{act}\">{label}</button>"
+            )),
+            "{label}: {template}"
+        );
+        assert!(
+            !OVERLAYS_JS.contains(&format!("\"{label}\"")),
+            "allergy_overlays.js words {label} itself"
+        );
+    }
+}
+
+/// Fix round 1, item 4 (review Minor 1): Cancel and Escape wait for a press in flight. Closing
+/// the row mid-press does not stop the sign — it still lands, the clinician having "cancelled"
+/// it — and its refusal would be written into a detached paragraph, focus falling to <body>.
+#[test]
+fn cancel_and_escape_wait_for_a_press_in_flight() {
+    let open = js_fn(OVERLAYS_JS, "openRow");
+    assert!(
+        open.contains("if (!allergyBusy) closeOverlayRow(li);"),
+        "{open}"
+    );
+    let keys = &OVERLAYS_JS[position(OVERLAYS_JS, "addEventListener(\"keydown\"")..];
+    assert!(
+        position(keys, "if (event.key !== \"Escape\" || allergyBusy) return;")
+            < position(keys, "closeOverlayRow("),
+        "{keys}"
+    );
+}
+
+/// Fix round 1, item 1 (review, ruling R-6a): a correction whose line is no longer a live line
+/// of a NEW pane (corrected, de-labelled or withdrawn elsewhere) would livelock — Rust refuses
+/// "That allergy line is no longer on this chart", the window re-reads, the correction survives
+/// the redraw, and every Sign is refused again. So on any draw where `allergyCorrecting` is not a
+/// live line's `event_id`, the correction is SUSPENDED: the typed words stay, Sign is down, and
+/// the page's sentence replaces "Correcting: …". Correct on a line resumes (via
+/// `resetAllergyForm` → `clearCorrection`); Cancel correction clears as before.
+#[test]
+fn a_correction_whose_target_left_the_pane_is_suspended_not_resent() {
+    let render = js_fn(ALLERGIES_JS, "renderAllergies");
+    assert!(
+        position(render, "suspendLostCorrection(pane);")
+            < position(render, "syncAllergyButtons();"),
+        "{render}"
+    );
+    let suspend = js_fn(OVERLAYS_JS, "suspendLostCorrection");
+    for step in [
+        "if (allergyCorrecting === null) return;",
+        "pane.drug_allergies.concat(pane.other_allergies, pane.adverse_effects)",
+        "line.event_id === allergyCorrecting",
+        "correctionSuspended = true;",
+        "el(\"allergy-correcting-line\").hidden = true;",
+        "el(\"allergy-correcting-gone\").hidden = false;",
+    ] {
+        assert!(suspend.contains(step), "{step}: {suspend}");
+    }
+    let sync = js_fn(ALLERGIES_JS, "syncAllergyButtons");
+    assert!(
+        sync.contains("el(\"allergy-sign\").disabled = down || correctionSuspended;"),
+        "{sync}"
+    );
+    let clear = js_fn(OVERLAYS_JS, "clearCorrection");
+    for step in [
+        "correctionSuspended = false;",
+        "el(\"allergy-correcting-gone\").hidden = true;",
+        "syncAllergyButtons();",
+    ] {
+        assert!(clear.contains(step), "{step}: {clear}");
+    }
+    let start = js_fn(OVERLAYS_JS, "startCorrection");
+    assert!(
+        start.contains("el(\"allergy-correcting-line\").hidden = false;"),
+        "{start}"
+    );
+    let at = position(INDEX_HTML, "<div id=\"allergy-correcting\" hidden>");
+    let block = &INDEX_HTML[at..at + position(&INDEX_HTML[at..], "</div>")];
+    assert!(
+        block.contains(
+            "<p id=\"allergy-correcting-gone\" hidden>The line you were correcting has changed on \
+             the record — press Correct on its current line, or Cancel correction.</p>"
+        ),
+        "{block}"
+    );
+    assert!(!OVERLAYS_JS.contains("has changed on the record"));
+}
+
+/// Fix round 1, item 3 (ruling (b)): each history list has its own heading, hidden with its list
+/// (`fillAllergyList` hides `<id>-label`), so no struck or superseded line sits visually under
+/// "Other allergies:".
+#[test]
+fn every_history_list_has_its_own_heading() {
+    for (id, heading) in [
+        ("allergy-previously", "Previously recorded"),
+        ("allergy-historical", "Historically reported (de-labelled)"),
+        ("allergy-entered-in-error", "Entered in error"),
+        ("allergy-ignored", "Not counted"),
+    ] {
+        assert!(
+            details().contains(&format!(
+                "<p id=\"{id}-label\" hidden>{heading}:</p>\n            <ul id=\"{id}\" aria-labelledby=\"{id}-label\" hidden></ul>"
+            )),
+            "{id}"
+        );
+    }
+    let fill = js_fn(ALLERGIES_JS, "fillAllergyList");
+    assert!(fill.contains("el(id + \"-label\")"), "{fill}");
 }
 
 /// Every NESTED field the allergy scripts read off a payload is one Rust sends (Task 5's

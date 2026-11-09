@@ -41,17 +41,19 @@ use uuid::Uuid;
 
 /// One entry as the form sends it. Every word is a wire word (`cairn_event::allergy`'s
 /// vocabularies); `kind` and `category` are `None` until the clinician presses one — the form
-/// starts with neither pressed, so neither can be signed by default.
+/// starts with neither pressed, so neither can be signed by default. `allergen_kind` and `source`
+/// start pressed (Drug, Patient stated), but Correct on a newer peer's entry leaves a word this
+/// window has no button for unpressed, so they can be `None` too, and are refused like the others.
 #[derive(Debug, serde::Deserialize)]
 pub struct EntryInput {
-    pub allergen_kind: String,
+    pub allergen_kind: Option<String>,
     pub term: String,
     pub kind: Option<String>,
     pub category: Option<String>,
     pub reaction_text: Option<String>,
     /// As typed: `2019`, `03/2019`, `14/03/2019` (or ISO); empty or `None` = not known.
     pub onset: Option<String>,
-    pub source: String,
+    pub source: Option<String>,
     /// The line this entry corrects (its `event_id`, as the pane sent it); `None` for a new entry.
     pub corrects: Option<String>,
 }
@@ -327,8 +329,9 @@ pub(crate) fn written(reread: Result<AllergyPane, ErrorView>) -> AllergyWrite {
     }
 }
 
-/// The form's verdicts, said before the key, in order: no substance, no kind, no category, an
-/// onset that cannot be read, is after today or is in year 0000; then any word the window should never send. The term is trimmed and
+/// The form's verdicts, said before the key, in order: no substance, no allergen, no kind, no
+/// category, an onset that cannot be read, is after today or is in year 0000, no source; then any
+/// word the window should never send. The term is trimmed and
 /// a blank free text is none. Pure.
 pub(crate) fn entry_before_the_key(
     e: &EntryInput,
@@ -338,6 +341,10 @@ pub(crate) fn entry_before_the_key(
     if term.is_empty() {
         return Err(refused("Name the substance."));
     }
+    let allergen_kind = e
+        .allergen_kind
+        .as_deref()
+        .ok_or_else(|| refused("Choose Drug or Other."))?;
     let kind = e
         .kind
         .as_deref()
@@ -347,8 +354,12 @@ pub(crate) fn entry_before_the_key(
         .as_deref()
         .ok_or_else(|| refused("Choose what happened, or Not known."))?;
     let onset = parse_onset(e.onset.as_deref(), today).map_err(refused)?;
+    let source = e
+        .source
+        .as_deref()
+        .ok_or_else(|| refused("Choose where this came from."))?;
     Ok(AllergyEntry {
-        allergen_kind: word(AllergenKind::parse, &e.allergen_kind)?,
+        allergen_kind: word(AllergenKind::parse, allergen_kind)?,
         term,
         kind: word(EntryKind::parse, kind)?,
         category: word(ReactionCategory::parse, category)?,
@@ -358,7 +369,7 @@ pub(crate) fn entry_before_the_key(
             .map(str::trim)
             .filter(|t| !t.is_empty()),
         onset,
-        source: word(Source::parse, &e.source)?,
+        source: word(Source::parse, source)?,
         // Set by the caller once the line it names is found on a fresh read.
         corrects: None,
     })

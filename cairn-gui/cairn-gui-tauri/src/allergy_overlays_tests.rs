@@ -17,13 +17,13 @@ use cairn_event::allergy_overlay::{AllergyChallenge, AllergyRetraction};
 /// A complete entry, as the form sends it.
 fn entry(term: &str) -> EntryInput {
     EntryInput {
-        allergen_kind: "drug".into(),
+        allergen_kind: Some("drug".into()),
         term: term.into(),
         kind: Some("allergy".into()),
         category: Some("anaphylaxis".into()),
         reaction_text: None,
         onset: Some("2014".into()),
-        source: "seen-documented".into(),
+        source: Some("seen-documented".into()),
         corrects: None,
     }
 }

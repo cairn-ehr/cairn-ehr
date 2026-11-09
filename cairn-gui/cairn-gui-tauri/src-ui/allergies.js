@@ -48,10 +48,12 @@ const ALLERGY_READING = "Reading the allergy list…";
  */
 const FIELD_REFUSALS = [
   ["Name the substance.", "allergy-term-error"],
+  ["Choose Drug or Other.", "allergy-allergen-kind-error"],
   ["Choose Allergy or Adverse effect.", "allergy-kind-error"],
   ["Choose what happened, or Not known.", "allergy-category-error"],
   ["is not a date this window can read", "allergy-onset-error"],
   ["is after today", "allergy-onset-error"],
+  ["Choose where this came from.", "allergy-source-error"],
 ];
 
 /** The chart the drawn allergy list was read for; every write names it. Null while none is drawn. */
@@ -105,6 +107,7 @@ function renderAllergies(pane, patient) {
   fillAllergyList("allergy-historical", pane.historical.map(lineItem));
   fillAllergyList("allergy-entered-in-error", pane.entered_in_error.map(withdrawnItem));
   fillAllergyList("allergy-ignored", pane.ignored_overlays.map((text) => cell("li", text, { class: "allergy-quiet" })));
+  suspendLostCorrection(pane);
   syncAllergyButtons();
 }
 
@@ -343,11 +346,12 @@ function allergyMayWrite() {
 
 /**
  * Put every write button (Sign, the four "none known", every line's and inline row's
- * `.allergy-write`) and the text fields in step with the state.
+ * `.allergy-write`) and the text fields in step with the state. Sign is also down while a
+ * correction is suspended (allergy_overlays.js: its line has left the list).
  */
 function syncAllergyButtons() {
   const down = !allergyMayWrite();
-  el("allergy-sign").disabled = down;
+  el("allergy-sign").disabled = down || correctionSuspended;
   for (const button of document.querySelectorAll(".allergy-none, .allergy-write")) button.disabled = down;
   for (const id of ["allergy-term", "allergy-reaction-text", "allergy-onset"]) el(id).readOnly = allergyBusy;
   for (const input of document.querySelectorAll(".allergy-overlay-row input")) input.readOnly = allergyBusy;

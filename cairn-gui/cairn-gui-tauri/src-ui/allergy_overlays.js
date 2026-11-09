@@ -7,10 +7,13 @@
 //
 // Correct reuses the entry form (allergies.js): it fills it from the line's words as recorded,
 // says "Correcting: <the line>" above it (the label is the page's), and the form's Sign then sends
-// `corrects`. De-label and Entered in error open ONE inline row under their line, cloned from the
-// page's `<template>`s (so every label is written in index.html, not here), with its own Sign.
-// Never a dialog, never a "are you sure?" (principle 3, paper-parity): the row and one Sign are
-// the whole act, and Escape or Cancel closes it signing nothing.
+// `corrects`. A correction whose line has left the list on a re-read is SUSPENDED (its words
+// kept, Sign down, the page's sentence saying why) rather than re-sent into a refusal forever.
+// De-label and Entered in error open ONE inline row under their line, with its own Sign. The
+// buttons and the rows are cloned from the page's `<template>`s, so every label is written in
+// index.html, not here (an accessible name adds only ": " and the line's text). Never a dialog,
+// never a "are you sure?" (principle 3, paper-parity): the row and one Sign are the whole act,
+// and Escape or Cancel closes it signing nothing (once no press is in flight).
 //
 // What is NOT decided here: every sentence the clinician reads after a press is Rust's (the
 // outcome, every refusal); whether the line is still on the record is checked by Rust on a fresh
@@ -34,13 +37,22 @@
 let allergyCorrecting = null;
 
 /**
- * One of a line's buttons: `label`, with an accessible name that says which line it acts on
- * (a screen reader otherwise hears a list of identical "Correct" buttons). `.allergy-write`: it
- * is down whenever no write may be pressed (`syncAllergyButtons`, called after every draw).
+ * True while that correction is suspended: a list drawn since Correct no longer has its line
+ * live (corrected, de-labelled or withdrawn elsewhere). Sign is down until Correct is pressed on
+ * a line or the correction cancelled — re-sending it could only be refused, read again, refused.
  */
-function actionButton(label, line, onPress) {
-  const button = cell("button", label, { type: "button", class: "allergy-write", "aria-label": label + ": " + line.text });
-  button.addEventListener("click", (event) => onPress(event.currentTarget.closest("li")));
+let correctionSuspended = false;
+
+/**
+ * One of a line's buttons: the page's button for `act` (`#allergy-line-buttons`), with an
+ * accessible name that says which line it acts on (a screen reader otherwise hears a list of
+ * identical Correct buttons). `.allergy-write`: it is down whenever no write may be pressed
+ * (`syncAllergyButtons`, called after every draw). `onPress(li, button)` gets its line's <li>.
+ */
+function actionButton(act, line, onPress) {
+  const button = el("allergy-line-buttons").content.querySelector('[data-act="' + act + '"]').cloneNode(true);
+  button.setAttribute("aria-label", button.textContent + ": " + line.text);
+  button.addEventListener("click", () => onPress(button.closest("li"), button));
   return button;
 }
 
@@ -51,18 +63,18 @@ function actionButton(label, line, onPress) {
  */
 function lineActions(line) {
   if (line.challenge) {
-    return [actionButton("Withdraw de-label", line, (li) => openRetraction(line.challenge, li, line))];
+    return [actionButton("withdraw", line, (li, opener) => openRetraction(line.challenge, li, opener))];
   }
   const buttons = [];
-  if (line.words) buttons.push(actionButton("Correct", line, () => startCorrection(line)));
-  buttons.push(actionButton("De-label", line, (li) => openDelabel(line, li)));
-  buttons.push(actionButton("Entered in error", line, (li) => openRetraction(line.event_id, li, line)));
+  if (line.words) buttons.push(actionButton("correct", line, () => startCorrection(line)));
+  buttons.push(actionButton("delabel", line, (li, opener) => openDelabel(line, li, opener)));
+  buttons.push(actionButton("error", line, (li, opener) => openRetraction(line.event_id, li, opener)));
   return buttons;
 }
 
 /** The button on a standing or previous "none known" line (`{event_id, text}`). */
 function noneActions(none) {
-  return [actionButton("Entered in error", none, (li) => openRetraction(none.event_id, li, none))];
+  return [actionButton("error", none, (li, opener) => openRetraction(none.event_id, li, opener))];
 }
 
 /**
@@ -86,24 +98,45 @@ function startCorrection(line) {
   el("allergy-onset").value = words.onset_value || "";
   allergyCorrecting = line.event_id;
   el("allergy-correcting-text").textContent = line.text;
+  el("allergy-correcting-line").hidden = false;
   el("allergy-correcting").hidden = false;
   el("allergy-term").focus();
 }
 
-/** The form corrects nothing any more (allergies.js's `resetAllergyForm` calls this). */
+/**
+ * The form corrects nothing any more (allergies.js's `resetAllergyForm` calls this — so Correct on
+ * a line, Cancel correction and every emptying of the form resume a suspended correction).
+ */
 function clearCorrection() {
   allergyCorrecting = null;
+  correctionSuspended = false;
+  el("allergy-correcting-gone").hidden = true;
   el("allergy-correcting-text").textContent = "";
   el("allergy-correcting").hidden = true;
+  syncAllergyButtons(); // a suspended correction had Sign down
+}
+
+/**
+ * Suspend the correction when `pane` (a list just drawn, allergies.js's `renderAllergies`) no
+ * longer has its line among the live ones: the typed words stay, Sign goes down
+ * (`syncAllergyButtons`), and the page's sentence replaces "Correcting: …".
+ */
+function suspendLostCorrection(pane) {
+  if (allergyCorrecting === null) return;
+  const live = pane.drug_allergies.concat(pane.other_allergies, pane.adverse_effects);
+  if (live.some((line) => line.event_id === allergyCorrecting)) return;
+  correctionSuspended = true;
+  el("allergy-correcting-line").hidden = true;
+  el("allergy-correcting-gone").hidden = false;
 }
 
 /**
  * Open the De-label row under `li`: what was tolerated (starting as the line's own term), when
  * (typed as an onset is; empty = not known), an optional note, and Sign.
  */
-function openDelabel(line, li) {
+function openDelabel(line, li, opener) {
   const words = line.words;
-  const row = openRow("allergy-delabel-template", li, "De-label: " + line.text);
+  const row = openRow("allergy-delabel-template", li, opener);
   rowInput(row, "tolerated").value = words ? words.term : "";
   onSign(row, () => void pressOnce(() => signOverlay(row, (base) => invoke("allergy_challenge", Object.assign(base, {
     target: line.event_id,
@@ -118,8 +151,8 @@ function openDelabel(line, li) {
  * statement, or the de-label a historical line rests on): an optional reason, and Sign. Nothing
  * is struck until it is signed.
  */
-function openRetraction(target, li, shown) {
-  const row = openRow("allergy-retract-template", li, "Entered in error: " + shown.text);
+function openRetraction(target, li, opener) {
+  const row = openRow("allergy-retract-template", li, opener);
   onSign(row, () => void pressOnce(() => signOverlay(row, (base) => invoke("allergy_retract", Object.assign(base, {
     target: target,
     text: rowInput(row, "text").value,
@@ -127,14 +160,18 @@ function openRetraction(target, li, shown) {
 }
 
 /**
- * Clone `templateId`'s row under `li` — the only overlay row open (one at a time) — named for
- * the line, its Cancel wired, its first field focused. Answers the row.
+ * Clone `templateId`'s row under `li` — the only overlay row open (one at a time) — named as the
+ * button that opened it ("De-label: <line>"), its Cancel wired, its first field focused. Cancel
+ * waits for a press in flight: closing the row would not stop the sign, and its answer would
+ * land in a row no longer on screen. Answers the row.
  */
-function openRow(templateId, li, name) {
+function openRow(templateId, li, opener) {
   closeOverlayRow();
   const row = el(templateId).content.firstElementChild.cloneNode(true);
-  row.setAttribute("aria-label", name);
-  row.querySelector('[data-act="cancel"]').addEventListener("click", () => closeOverlayRow(li));
+  row.setAttribute("aria-label", opener.getAttribute("aria-label"));
+  row.querySelector('[data-act="cancel"]').addEventListener("click", () => {
+    if (!allergyBusy) closeOverlayRow(li);
+  });
   li.append(row);
   syncAllergyButtons();
   row.querySelector("input").focus();
@@ -192,9 +229,10 @@ async function signOverlay(row, send) {
 el("allergy-correct-cancel").addEventListener("click", () => {
   if (!allergyBusy) resetAllergyForm();
 });
-// Escape closes the open row (signing nothing), wherever focus is inside the allergy lists.
+// Escape closes the open row (signing nothing), wherever focus is inside the allergy lists —
+// once no press is in flight (as Cancel).
 el("allergy-details").addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
+  if (event.key !== "Escape" || allergyBusy) return;
   const row = event.target.closest(".allergy-overlay-row");
   if (row) closeOverlayRow(row.closest("li"));
 });

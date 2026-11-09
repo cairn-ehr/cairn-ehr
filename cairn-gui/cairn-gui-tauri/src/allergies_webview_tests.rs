@@ -288,6 +288,11 @@ fn a_chart_change_empties_the_form_and_outdates_every_read() {
 #[test]
 fn every_field_refusal_is_announced_and_describes_its_control() {
     for (error, control) in [
+        (
+            "allergy-allergen-kind-error",
+            "data-field=\"allergen_kind\"",
+        ),
+        ("allergy-source-error", "data-field=\"source\""),
         ("allergy-term-error", "id=\"allergy-term\""),
         ("allergy-kind-error", "data-field=\"kind\""),
         ("allergy-category-error", "data-field=\"category\""),
