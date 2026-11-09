@@ -1,4 +1,4 @@
-//! Folds a patient's allergy rows into THREADS and decides what each thread says now (allergy
+//! Folds a patient's allergy rows into THREADS and decides what each head says now (allergy
 //! slice 2). Pure: no database, no clock, no words a clinician reads except `ignored_overlays`.
 //!
 //! Nothing in the allergy record is ever edited. A correction is a NEW entry naming the line it
@@ -7,20 +7,23 @@
 //! over every row, and this module is that fold. Reading order for a junior, matching
 //! [`resolve`]'s steps:
 //!
-//! 1. **Which overlays count.** A de-label or withdrawal signed by a since-repudiated key counts
-//!    for nothing (plan D4: such a key never takes a warning away), and neither does one filed on
-//!    another chart than the record it names (D2; only a lenient remote door admits it). Each is
-//!    listed in `ignored_overlays`, with why.
+//! 1. **Which overlays count.** A SUSPECT overlay — signed by a since-repudiated key (plan D4),
+//!    or filed on another chart than the record it names (D2; only a lenient remote door admits
+//!    it) — counts only when it ADDS a warning (`overlay_counts`, ruling R-4b). The rest are listed
+//!    in `ignored_overlays`, with why.
 //! 2. **Which de-labels stand**: those no counted withdrawal names (M3: withdrawing a de-label
 //!    puts the allergy back).
 //! 3. **Threads.** An entry and every correction of it, transitively, are one thread. A
 //!    repudiated key's correction, or one naming another chart's entry, links to nothing: it is
 //!    an account of its own and supersedes nothing (D4, D2).
-//! 4. **Status, per thread** (D1: an overlay on any version covers them all): *withdrawn* if a
-//!    counted withdrawal names any member, else *historical* if a standing de-label does, else
-//!    *live*.
-//! 5. **Heads**: the members no other member corrects (two corrections of one line are two
+//! 4. **Heads**: the members no other member corrects (two corrections of one line are two
 //!    heads, M2). Each head's `earlier` is the line of versions it replaced.
+//! 5. **Status, per head** (ruling R-4a): an overlay covers the version it NAMES and the versions
+//!    that one replaced, never a later correction of it. So a head is *withdrawn* if a counted
+//!    withdrawal names it, else *historical* if a standing de-label names it, else *live*. An
+//!    overlay naming an older version only hides that version under a live head's `earlier`: a
+//!    correction signed concurrently with (or after) a withdrawal or de-label of its target is
+//!    never struck by it.
 //! 6. **Differing accounts**: two live heads of the same allergen ([`same_allergen`]) that
 //!    disagree ([`accounts_differ`]) are both marked.
 //!
@@ -35,7 +38,7 @@ pub const SIGNER_UNCONFIRMED: &str = " (signer unconfirmed)";
 /// The byline marker of a since-repudiated key, the note view's words.
 pub const KEY_REPUDIATED: &str = " (key had been repudiated)";
 
-/// One current account of an allergy: a live thread's head.
+/// One current account of an allergy: a thread's head.
 #[derive(Debug)]
 pub struct Head<'a> {
     pub row: &'a AllergyRow,
@@ -45,13 +48,13 @@ pub struct Head<'a> {
     pub differing: bool,
 }
 
-/// A de-labelled thread, read as its newest head.
+/// A de-labelled head.
 #[derive(Debug)]
 pub struct Historical<'a> {
     pub head: &'a AllergyRow,
-    /// Every other member of the thread (older versions and a fork's older heads), newest first.
+    /// The versions this head replaced, newest first.
     pub earlier: Vec<&'a AllergyRow>,
-    /// The newest standing de-label on any member.
+    /// The newest standing de-label naming the head.
     pub challenge: &'a ChallengeRow,
 }
 
@@ -68,7 +71,7 @@ pub struct Withdrawn<'a, T> {
 pub struct Resolved<'a> {
     pub live: Vec<Head<'a>>,
     pub historical: Vec<Historical<'a>>,
-    /// Withdrawn threads, each read as its newest head with the newest withdrawal naming it.
+    /// Withdrawn heads, each with the newest counted withdrawal naming it.
     pub withdrawn: Vec<Withdrawn<'a, AllergyRow>>,
     /// Withdrawn de-labels (their allergy is back in force unless another de-label stands).
     pub withdrawn_challenges: Vec<Withdrawn<'a, ChallengeRow>>,
@@ -125,22 +128,42 @@ pub fn accounts_differ(a: &AllergyRow, b: &AllergyRow) -> bool {
     ka != kb || (ca != cb && ca != not_known && cb != not_known)
 }
 
-/// Why an overlay counts for nothing, as the end of its "Not counted" line; `None` when it
-/// counts. `charts` maps every readable row's event id to its chart. A repudiated key's reason is
+/// What kind of row an overlay names, as far as this node can read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Named {
+    Entry,
+    NoneStatement,
+    Challenge,
+    /// Not a row this node holds readably (unreadable, or a peer's newer type).
+    Unknown,
+}
+
+/// Why an overlay is SUSPECT, as the end of its "Not counted" line; `None` when it is not.
+/// `rows` maps every readable row's event id to its chart and kind. A repudiated key's reason is
 /// its byline marker, already in the line, so it adds nothing here.
-fn not_counted_reason(
-    charts: &HashMap<Uuid, Uuid>,
+fn suspicion(
+    rows: &HashMap<Uuid, (Uuid, Named)>,
     key: KeyState,
     own_chart: Uuid,
     target: Uuid,
 ) -> Option<&'static str> {
     if key == KeyState::Repudiated {
         Some("")
-    } else if charts.get(&target).is_some_and(|c| *c != own_chart) {
+    } else if rows.get(&target).is_some_and(|(c, _)| *c != own_chart) {
         Some(" — names a record on another chart")
     } else {
         None
     }
+}
+
+/// Ruling R-4b: does an overlay count? A trusted one always does. A SUSPECT one (repudiated key,
+/// or naming another chart's record) counts only when it ADDS a warning: a withdrawal of a
+/// de-label (the allergy is back) or of a "none known" statement (the reassurance is gone). A
+/// suspect de-label, or a suspect withdrawal of an entry, would TAKE a warning away on the word of
+/// a key nobody can vouch for, so it counts for nothing. Over-warning is the safe error.
+fn overlay_counts(suspect: bool, is_withdrawal: bool, named: Named) -> bool {
+    let adds_a_warning = is_withdrawal && matches!(named, Named::Challenge | Named::NoneStatement);
+    !suspect || adds_a_warning
 }
 
 /// The (HLC, event id) sort key every "newest" in this module uses.
@@ -178,15 +201,9 @@ fn root(parent: &HashMap<Uuid, Uuid>, mut x: Uuid) -> Uuid {
     x
 }
 
-/// One thread: every version of one entry, and its current heads.
-struct Thread<'a> {
-    members: Vec<&'a AllergyRow>,
-    heads: Vec<Head<'a>>,
-}
-
-/// Steps 3 and 5 for every entry: the threads, in order of their smallest event id, each with
-/// its heads and every head's `earlier`.
-fn threads(entries: &[AllergyRow]) -> Vec<Thread<'_>> {
+/// Steps 3 and 4 for every entry: every thread's heads, threads in order of their smallest
+/// event id, each head with its `earlier`.
+fn heads(entries: &[AllergyRow]) -> Vec<Head<'_>> {
     let by_id: HashMap<Uuid, &AllergyRow> = entries.iter().map(|e| (e.event_id, e)).collect();
     // Union-find over the counted links; the smaller root wins, so a root is its set's smallest id.
     let mut parent: HashMap<Uuid, Uuid> = by_id.keys().map(|k| (*k, *k)).collect();
@@ -205,30 +222,26 @@ fn threads(entries: &[AllergyRow]) -> Vec<Thread<'_>> {
     for e in entries {
         sets.entry(root(&parent, e.event_id)).or_default().push(e);
     }
-    sets.into_values()
-        .map(|members| {
-            let mut heads: Vec<&AllergyRow> = members
-                .iter()
-                .copied()
-                .filter(|m| !replaced.contains(&m.event_id))
-                .collect();
-            // A forged cycle leaves no member that nothing corrects: show every member rather
-            // than lose the allergy (over-warning is the safe error).
-            if heads.is_empty() {
-                heads = members.clone();
-            }
-            let head_ids: HashSet<Uuid> = heads.iter().map(|h| h.event_id).collect();
-            let heads = heads
-                .into_iter()
-                .map(|row| Head {
-                    row,
-                    earlier: earlier_of(row, &by_id, &head_ids),
-                    differing: false,
-                })
-                .collect();
-            Thread { members, heads }
-        })
-        .collect()
+    let mut out = Vec::new();
+    for members in sets.into_values() {
+        let mut heads: Vec<&AllergyRow> = members
+            .iter()
+            .copied()
+            .filter(|m| !replaced.contains(&m.event_id))
+            .collect();
+        // A forged cycle leaves no member that nothing corrects: show every member rather than
+        // lose the allergy (over-warning is the safe error).
+        if heads.is_empty() {
+            heads = members;
+        }
+        let head_ids: HashSet<Uuid> = heads.iter().map(|h| h.event_id).collect();
+        out.extend(heads.into_iter().map(|row| Head {
+            row,
+            earlier: earlier_of(row, &by_id, &head_ids),
+            differing: false,
+        }));
+    }
+    out
 }
 
 /// The versions `head` replaced: walk back along its links, newest first, stopping at another
@@ -266,35 +279,51 @@ fn keep_newest<'a, T>(
 
 /// Fold the record (see the module doc for the six steps).
 pub fn resolve(a: &PatientAllergies) -> Resolved<'_> {
-    let charts: HashMap<Uuid, Uuid> = a
+    let rows: HashMap<Uuid, (Uuid, Named)> = a
         .entries
         .iter()
-        .map(|e| (e.event_id, e.chart))
-        .chain(a.none.iter().map(|n| (n.event_id, n.chart)))
-        .chain(a.challenges.iter().map(|c| (c.event_id, c.chart)))
+        .map(|e| (e.event_id, (e.chart, Named::Entry)))
+        .chain(
+            a.none
+                .iter()
+                .map(|n| (n.event_id, (n.chart, Named::NoneStatement))),
+        )
+        .chain(
+            a.challenges
+                .iter()
+                .map(|c| (c.event_id, (c.chart, Named::Challenge))),
+        )
         .collect();
+    let named = |t: Uuid| rows.get(&t).map_or(Named::Unknown, |(_, n)| *n);
 
-    // Step 1: which overlays count; the newest counted withdrawal naming each target.
+    // Step 1: which overlays count (a suspect one only to add a warning); the newest counted
+    // withdrawal naming each target.
     let mut ignored_overlays = Vec::new();
     let mut challenges = Vec::new();
     for c in &a.challenges {
-        match not_counted_reason(&charts, c.key, c.chart, c.target) {
-            Some(why) => ignored_overlays.push(format!(
-                "Not counted: de-label (tolerated {}){}{why}",
+        let why = suspicion(&rows, c.key, c.chart, c.target);
+        if overlay_counts(why.is_some(), false, named(c.target)) {
+            challenges.push(c);
+        } else {
+            ignored_overlays.push(format!(
+                "Not counted: de-label (tolerated {}){}{}",
                 c.tolerated,
-                by_words(c.signer.as_deref(), c.key)
-            )),
-            None => challenges.push(c),
+                by_words(c.signer.as_deref(), c.key),
+                why.unwrap_or_default()
+            ));
         }
     }
     let mut withdrawal: HashMap<Uuid, &RetractionRow> = HashMap::new();
     for w in &a.retractions {
-        match not_counted_reason(&charts, w.key, w.chart, w.target) {
-            Some(why) => ignored_overlays.push(format!(
-                "Not counted: entered in error{}{why}",
-                by_words(w.signer.as_deref(), w.key)
-            )),
-            None => keep_newest(&mut withdrawal, w.target, w, retraction_age),
+        let why = suspicion(&rows, w.key, w.chart, w.target);
+        if overlay_counts(why.is_some(), true, named(w.target)) {
+            keep_newest(&mut withdrawal, w.target, w, retraction_age);
+        } else {
+            ignored_overlays.push(format!(
+                "Not counted: entered in error{}{}",
+                by_words(w.signer.as_deref(), w.key),
+                why.unwrap_or_default()
+            ));
         }
     }
 
@@ -308,50 +337,22 @@ pub fn resolve(a: &PatientAllergies) -> Resolved<'_> {
         }
     }
 
-    // Steps 3–5: each thread's status; withdrawn outranks historical, which outranks live.
+    // Steps 3–5: each head's status; withdrawn outranks historical, which outranks live.
     let mut live = Vec::new();
     let mut historical = Vec::new();
     let mut withdrawn = Vec::new();
-    for t in threads(&a.entries) {
-        let newest_head = t
-            .heads
-            .iter()
-            .map(|h| h.row)
-            .max_by_key(|r| age(r.hlc, r.event_id))
-            .expect("every thread has a head");
-        let withdrawn_by = t
-            .members
-            .iter()
-            .filter_map(|r| withdrawal.get(&r.event_id).copied())
-            .max_by_key(|w| retraction_age(w));
-        if let Some(by) = withdrawn_by {
-            withdrawn.push(Withdrawn {
-                row: newest_head,
-                by,
-            });
-            continue;
-        }
-        let de_label = t
-            .members
-            .iter()
-            .filter_map(|r| standing.get(&r.event_id).copied())
-            .max_by_key(|c| challenge_age(c));
-        if let Some(challenge) = de_label {
-            let mut earlier: Vec<&AllergyRow> = t
-                .members
-                .iter()
-                .copied()
-                .filter(|r| r.event_id != newest_head.event_id)
-                .collect();
-            newest_first(&mut earlier);
+    for h in heads(&a.entries) {
+        if let Some(by) = withdrawal.get(&h.row.event_id) {
+            withdrawn.push(Withdrawn { row: h.row, by });
+        } else if let Some(challenge) = standing.get(&h.row.event_id) {
             historical.push(Historical {
-                head: newest_head,
-                earlier,
+                head: h.row,
+                earlier: h.earlier,
                 challenge,
             });
-            continue;
+        } else {
+            live.push(h);
         }
-        live.extend(t.heads);
     }
 
     // Step 6: differing accounts, over every live head of every list and chart.

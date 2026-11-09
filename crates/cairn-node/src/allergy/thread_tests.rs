@@ -266,10 +266,10 @@ fn a_repudiated_keys_overlays_count_for_nothing() {
     );
 }
 
-/// D1: an overlay on any version covers the thread; withdrawn outranks de-labelled; a fork's
-/// newest head names a withdrawn or historical thread, the rest are its `earlier`.
+/// R-4a: status is per head — an overlay covers the head it names (and what that head
+/// replaced), never a sibling branch; withdrawn outranks de-labelled.
 #[test]
-fn status_is_per_thread_and_withdrawn_outranks_historical() {
+fn status_is_per_head_and_withdrawn_outranks_historical() {
     let p = pa(
         vec![
             pen(1, "rash", 8),
@@ -281,19 +281,21 @@ fn status_is_per_thread_and_withdrawn_outranks_historical() {
         vec![],
     );
     let r = resolve(&p);
-    assert!(r.live.is_empty());
+    // The de-label of 1 names an ancestor only; 2's own de-label covers 2; 3 is untouched.
+    assert_eq!(live_ids(&r), vec![id(3)]);
     assert_eq!(r.historical.len(), 1);
     let h = &r.historical[0];
-    assert_eq!(h.head.event_id, id(3), "the newest head");
-    assert_eq!(h.challenge.event_id, id(6), "the newest standing challenge");
+    assert_eq!(h.head.event_id, id(2));
+    assert_eq!(h.challenge.event_id, id(6));
     let ids: Vec<Uuid> = h.earlier.iter().map(|e| e.event_id).collect();
-    assert_eq!(ids, vec![id(2), id(1)]);
+    assert_eq!(ids, vec![id(1)]);
 
     let mut p = p;
     p.retractions = vec![retraction(7, 2, 13)];
     let r = resolve(&p);
-    assert!(r.live.is_empty() && r.historical.is_empty());
+    assert_eq!(live_ids(&r), vec![id(3)]);
+    assert!(r.historical.is_empty());
     assert_eq!(r.withdrawn.len(), 1);
-    assert_eq!(r.withdrawn[0].row.event_id, id(3));
+    assert_eq!(r.withdrawn[0].row.event_id, id(2));
     assert_eq!(r.withdrawn[0].by.event_id, id(7));
 }

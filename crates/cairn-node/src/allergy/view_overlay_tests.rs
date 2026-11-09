@@ -164,20 +164,16 @@ fn a_withdrawn_entry_leaves_the_strip_and_reads_entered_in_error() {
     );
 }
 
-/// D1: a withdrawal of the oldest version strikes the whole thread, read as its newest version.
+/// R-4a: a withdrawal covers the version it names and the versions that one replaced.
 #[test]
-fn withdrawing_any_version_withdraws_the_thread() {
+fn withdrawing_a_version_covers_it_and_what_it_replaced() {
     let v = view(&pa(
-        vec![
-            pen(1, "rash", 8),
-            correcting(pen(2, "urticaria", 9), 1),
-            correcting(pen(3, "anaphylaxis", 10), 2),
-        ],
+        vec![pen(1, "rash", 8), correcting(pen(2, "anaphylaxis", 9), 1)],
         vec![],
         vec![],
-        vec![retraction(6, 1, 11)],
+        vec![retraction(6, 2, 11)],
     ));
-    assert!(v.drug_allergies.is_empty());
+    assert!(v.drug_allergies.is_empty() && v.historical.is_empty());
     assert_eq!(v.strip, "Allergies not yet asked");
     assert_eq!(
         v.entered_in_error,
@@ -185,23 +181,48 @@ fn withdrawing_any_version_withdraws_the_thread() {
     );
 }
 
-/// D1: correcting a de-labelled line leaves it de-labelled (undo is withdrawing the de-label).
+/// R-4a: withdrawing A never strikes a later correction of it. Dr Y, offline, strikes the rash
+/// line while Dr X has corrected it to anaphylaxis: the anaphylaxis stays on the strip.
 #[test]
-fn a_correction_after_a_delabel_stays_historical() {
+fn withdrawing_an_older_version_leaves_a_later_correction_live() {
+    let v = view(&pa(
+        vec![pen(1, "rash", 8), correcting(pen(2, "anaphylaxis", 9), 1)],
+        vec![],
+        vec![],
+        vec![retraction(6, 1, 10)],
+    ));
+    assert_eq!(
+        texts(&v.drug_allergies),
+        ["Allergy: penicillin → anaphylaxis"]
+    );
+    assert!(v.drug_allergies[0].prominent);
+    assert_eq!(
+        v.drug_allergies[0].earlier,
+        ["Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada)"]
+    );
+    assert_eq!(v.strip, "Allergy: penicillin → anaphylaxis");
+}
+
+/// R-4a: a correction made after a de-label of its target is a later version the de-label did
+/// not name: it reads live again (a de-label covers what it names and what that replaced).
+#[test]
+fn a_correction_after_a_delabel_reads_live_again() {
     let v = view(&pa(
         vec![pen(1, "rash", 8), correcting(pen(2, "urticaria", 10), 1)],
         vec![],
         vec![challenge(5, 1, 9)],
         vec![],
     ));
-    assert!(v.drug_allergies.is_empty());
-    assert_eq!(v.historical.len(), 1);
-    assert_eq!(v.historical[0].event_id, id(2));
+    assert!(v.historical.is_empty());
     assert_eq!(
-        v.historical[0].earlier,
+        texts(&v.drug_allergies),
+        ["Allergy: penicillin → urticaria"]
+    );
+    assert_eq!(
+        v.drug_allergies[0].earlier,
         ["Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada)"]
     );
-    assert_eq!(v.strip, "Allergies not yet asked · +1 historical");
+    assert_eq!(v.strip, "Allergy: penicillin → urticaria");
 }
 
 #[test]
@@ -236,6 +257,53 @@ fn a_repudiated_keys_withdrawal_takes_nothing_away() {
     assert_eq!(
         v.ignored_overlays,
         ["Not counted: entered in error by Dr Ada (key had been repudiated)"]
+    );
+}
+
+/// R-4b: a suspect withdrawal counts when it ADDS a warning — striking a de-label puts the
+/// allergy back.
+#[test]
+fn a_repudiated_keys_withdrawal_of_a_delabel_counts() {
+    let mut w = retraction(6, 5, 10);
+    w.key = KeyState::Repudiated;
+    let v = view(&pa(
+        vec![pen(1, "anaphylaxis", 8)],
+        vec![],
+        vec![challenge(5, 1, 9)],
+        vec![w],
+    ));
+    assert!(v.historical.is_empty() && v.ignored_overlays.is_empty());
+    assert_eq!(v.strip, "Allergy: penicillin → anaphylaxis");
+    assert_eq!(
+        v.entered_in_error,
+        ["Entered in error: de-label — tolerated amoxicillin (withdrawn 10 Nov 2026 by Dr Ada (key had been repudiated))"]
+    );
+}
+
+/// R-4b: striking a "none known" statement takes a reassurance away, so a suspect one counts.
+#[test]
+fn a_repudiated_keys_withdrawal_of_a_none_statement_counts() {
+    let mut w = retraction(6, 1, 9);
+    w.key = KeyState::Repudiated;
+    let v = view(&pa(vec![], vec![none(1, "all", 8)], vec![], vec![w]));
+    assert_eq!(v.strip, "Allergies not yet asked");
+    assert!(v.standing_none.is_empty() && v.ignored_overlays.is_empty());
+    assert_eq!(
+        v.entered_in_error,
+        ["Entered in error: no known allergies (asked 8 Nov 2026 by Dr Ada)"]
+    );
+}
+
+#[test]
+fn a_cross_chart_withdrawal_of_a_none_statement_counts() {
+    let mut w = retraction(6, 1, 9);
+    w.chart = id(2000);
+    let v = view(&pa(vec![], vec![none(1, "drug", 8)], vec![], vec![w]));
+    assert_eq!(v.strip, "Allergies not yet asked");
+    assert!(v.standing_none.is_empty() && v.ignored_overlays.is_empty());
+    assert_eq!(
+        v.entered_in_error,
+        ["Entered in error: no known drug allergies (asked 8 Nov 2026 by Dr Ada)"]
     );
 }
 

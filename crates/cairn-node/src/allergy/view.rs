@@ -182,7 +182,7 @@ fn local_day(t: chrono::DateTime<chrono::Utc>, offset: FixedOffset) -> NaiveDate
 /// Build the whole view over every linked chart's rows (doubt is carried by `a.doubted_charts`).
 ///
 /// [`resolve`] first folds corrections, de-labels and withdrawals into threads; slice 1's list,
-/// override and strip logic then runs over the LIVE heads only. A de-labelled thread is listed
+/// override and strip logic then runs over the LIVE heads only. A de-labelled head is listed
 /// under `historical` and overrides nothing; a withdrawn one is only "Entered in error".
 pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
     let r = resolve(a);
