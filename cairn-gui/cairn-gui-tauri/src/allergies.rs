@@ -20,7 +20,7 @@
 //! No markup handling anywhere: the text the clinician typed is signed as typed (only surrounding
 //! whitespace trimmed, no escaping) and the webview
 //! draws it with `textContent` only.
-use crate::allergy_check::{canonical_code, CodingArg};
+use crate::allergy_check::{coding_before_the_key, CodingArg};
 use crate::allergy_overlays::{target_before_the_key, Names};
 use crate::allergy_pane::{pane, AllergyPane};
 use crate::chart_set::{check_displayed_set, ChartSetError};
@@ -158,8 +158,11 @@ pub async fn allergy_record_impl(
 ) -> Result<AllergyWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
     let mut read = entry_before_the_key(&entry, local_today())?;
-    // A picked code is signed in its canonical spelling, or refused before the key.
-    let code = coding.as_ref().map(canonical_code).transpose()?;
+    // A pick is refused on a non-drug entry, else signed in its canonical spelling: before the key.
+    let code = coding
+        .as_ref()
+        .map(|c| coding_before_the_key(c, read.allergen_kind))
+        .transpose()?;
     read.coding = coding
         .as_ref()
         .zip(code.as_deref())

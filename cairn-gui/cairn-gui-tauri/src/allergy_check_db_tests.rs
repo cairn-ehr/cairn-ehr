@@ -223,6 +223,32 @@ async fn a_bad_code_is_refused_before_signing() {
     assert!(a.entries.is_empty(), "nothing was signed");
 }
 
+/// Ruling T5-d: a pick sent on an `other` entry is refused before the key — no passphrase is
+/// asked (none is held and none sent, yet the answer is the refusal) and nothing is signed.
+#[tokio::test]
+async fn a_pick_on_an_other_entry_is_refused_before_the_key() {
+    let Some((_guard, owner, state, chart, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let patient = chart.to_string();
+    let mut latex = drug("latex");
+    latex.allergen_kind = Some("other".into());
+    let err = allergy_record_impl(
+        &state,
+        &patient,
+        vec![patient.clone()],
+        latex,
+        picked(MOIETY_SYSTEM, Uuid::from_u128(0x1A7E), "latex"),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.text, NOT_A_DRUG);
+    let a = list_patient_allergies(&owner, chart).await.unwrap();
+    assert!(a.entries.is_empty(), "nothing was signed");
+}
+
 /// No drug list here: an identical code is still a hit (D7), and a line coded to another drug
 /// cannot be verified, so it carries the small tag (D8).
 #[tokio::test]

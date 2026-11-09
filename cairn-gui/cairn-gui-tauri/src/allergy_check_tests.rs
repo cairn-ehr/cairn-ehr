@@ -28,6 +28,9 @@ fn med_lines_come_from_the_rows() {
     let code = moiety.to_string();
     let mut ceased = row(3, "aspirin", None);
     ceased.status = MedicationStatus::Ceased;
+    // Its threads carry two codings and the row shows one: neither can stand for the line.
+    let mut conflicted = row(5, "Coversyl", Some((MOIETY_SYSTEM, &code, "perindopril")));
+    conflicted.coding_conflict = true;
     let rows = [
         row(1, "Amoxil", Some((MOIETY_SYSTEM, &code, "amoxicillin"))),
         // A coding under another system, or a code that is not a uuid, names no moiety.
@@ -42,9 +45,10 @@ fn med_lines_come_from_the_rows() {
             "Augmentin",
             Some((MOIETY_SYSTEM, "not-a-uuid", "amoxicillin")),
         ),
+        conflicted,
     ];
     let lines = med_lines(&rows);
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 5);
     let l = &lines[0];
     assert_eq!(l.group_id, Uuid::from_u128(1));
     assert_eq!(l.name, "amoxicillin", "the name the clinician reads");
@@ -57,6 +61,145 @@ fn med_lines_come_from_the_rows() {
     assert!(!lines[2].current, "a ceased line is never checked");
     assert_eq!(lines[2].coding_display, None);
     assert_eq!(lines[3].moiety, None);
+    assert_eq!(lines[4].moiety, None, "a conflicted group names no moiety");
+    assert!(lines[4].current);
+}
+
+/// Review finding 1: two threads wrongly reconciled into one group, one coded amoxicillin, one
+/// perindopril, showing perindopril. A coded amoxicillin allergy must never read that line clean:
+/// with no drug list it is "not checked" (were the shown code used, drugref's `no-match` for
+/// perindopril would have left it with no tag at all).
+#[test]
+fn a_conflicted_group_is_never_checked_clean() {
+    use cairn_node::allergy::read::{AllergyRow, Coding, KeyState};
+    let amox = Uuid::from_u128(0xA40C);
+    let at = chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap();
+    let allergy = AllergyRow {
+        event_id: Uuid::from_u128(9),
+        chart: Uuid::from_u128(1),
+        allergen_kind: "drug".into(),
+        term: "amoxicillin".into(),
+        kind: "allergy".into(),
+        category: "anaphylaxis".into(),
+        reaction_text: None,
+        onset_precision: "unknown".into(),
+        onset_value: None,
+        source: "patient-stated".into(),
+        recorded_at: at,
+        hlc: (at.timestamp_millis(), 0),
+        signer: None,
+        corrects: None,
+        key: KeyState::Standing,
+        coding: Some(Coding {
+            system: MOIETY_SYSTEM.into(),
+            code: amox.to_string(),
+            display: "amoxicillin".into(),
+        }),
+    };
+    let a = PatientAllergies {
+        entries: vec![allergy],
+        none: vec![],
+        challenges: vec![],
+        retractions: vec![],
+        doubted_charts: vec![],
+        unreadable: 0,
+    };
+    let perindopril = Uuid::from_u128(0x9E81).to_string();
+    let mut r = row(
+        5,
+        "Coversyl",
+        Some((MOIETY_SYSTEM, &perindopril, "perindopril")),
+    );
+    r.coding_conflict = true;
+    let lines = med_lines(std::slice::from_ref(&r));
+    let resolved = cairn_node::allergy::thread::resolve(&a);
+    let (_, meds) = cairn_node::allergy::check::codes_to_ask(&resolved, &lines);
+    assert!(
+        meds.is_empty(),
+        "the drug list is not asked about either coding"
+    );
+    let checks = check_medications(&resolved, &lines, &DrugFacts::Unavailable);
+    assert_eq!(
+        checks.get(&r.group_id),
+        Some(&LineCheck {
+            unverified: true,
+            ..LineCheck::default()
+        })
+    );
+}
+
+/// Ruling T5-c: the allergy rows are used only when they were read over the medication list's
+/// own chart set; a set that moved between the two reads, or a failed read, is the worded line.
+#[test]
+fn allergies_over_another_chart_set_are_not_used() {
+    let set = |ids: &[u128]| ChartSet::new(ids.iter().map(|n| Uuid::from_u128(*n))).unwrap();
+    let rows = || PatientAllergies {
+        entries: vec![],
+        none: vec![],
+        challenges: vec![],
+        retractions: vec![],
+        doubted_charts: vec![],
+        unreadable: 0,
+    };
+    let read = |ids: &[u128]| Ok((set(ids), rows(), HashMap::new()));
+    assert!(allergies_for_the_list(read(&[1, 2]), &set(&[2, 1])).is_ok());
+    for moved in [&[1][..], &[1, 2, 3]] {
+        assert_eq!(
+            allergies_for_the_list(read(moved), &set(&[1, 2])).err(),
+            Some(ALLERGIES_NOT_READ.to_string()),
+            "{moved:?}"
+        );
+    }
+    let failed = Err(ErrorView {
+        text: "connection closed".into(),
+        retry: crate::funnel::view::Retry::Now,
+    });
+    assert_eq!(
+        allergies_for_the_list(failed, &set(&[1])).err(),
+        Some(ALLERGIES_NOT_READ.to_string())
+    );
+}
+
+/// Fixture mode: its allergies are read over the fixture chart, so the check runs and says
+/// nothing (never the failure line).
+#[tokio::test]
+async fn fixture_mode_checks_quietly() {
+    let chart: Uuid = cairn_gui_data::mock::fixtures::FIXTURE_UUID
+        .parse()
+        .unwrap();
+    let state = AppState::mock(Some(chart));
+    let pane = crate::commands::med_list_impl(&state, &chart.to_string(), None)
+        .await
+        .unwrap();
+    assert_eq!(pane.allergy_check_failed, None);
+}
+
+/// Ruling T5-d (D1): a pick on an entry that is not a drug is refused before the key; on a drug
+/// the code is checked as before.
+#[test]
+fn a_pick_on_a_non_drug_entry_is_refused() {
+    let pick = CodingArg {
+        system: MOIETY_SYSTEM.into(),
+        code: Uuid::from_u128(0xA40C).to_string(),
+        display: "amoxicillin".into(),
+    };
+    let err = coding_before_the_key(&pick, AllergenKind::Other).unwrap_err();
+    assert_eq!(err.text, NOT_A_DRUG);
+    assert_eq!(err.retry, crate::funnel::view::Retry::Never);
+    assert_eq!(
+        coding_before_the_key(&pick, AllergenKind::Drug),
+        Ok(pick.code.clone())
+    );
+    let bad = CodingArg {
+        code: "amoxicillin".into(),
+        ..pick
+    };
+    assert_eq!(
+        coding_before_the_key(&bad, AllergenKind::Drug)
+            .unwrap_err()
+            .text,
+        BAD_CODE
+    );
 }
 
 /// D9: a withheld line is still current, so it is checked.

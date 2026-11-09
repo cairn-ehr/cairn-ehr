@@ -24,7 +24,8 @@ use crate::allergies::read_list;
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::state::AppState;
-use cairn_medication_view::{MedicationRow, MedicationStatus, PatientMedicationList};
+use cairn_event::allergy::AllergenKind;
+use cairn_medication_view::{ChartSet, MedicationRow, MedicationStatus, PatientMedicationList};
 use cairn_node::allergy::check::{
     check_medications, codes_to_ask, LineCheck, MedLine, GROUP_SYSTEM, MOIETY_SYSTEM,
 };
@@ -83,7 +84,10 @@ pub async fn drug_search_impl(state: &AppState, text: &str) -> DrugSearch {
                 eprintln!("the drug list could not be searched: {e:#}");
                 None
             }),
-            Err(_) => None,
+            Err(e) => {
+                eprintln!("the drug list could not be searched: the connection was lost: {e}");
+                None
+            }
         },
     };
     DrugSearch {
@@ -98,6 +102,23 @@ pub async fn drug_search_impl(state: &AppState, text: &str) -> DrugSearch {
             })
             .collect(),
     }
+}
+
+/// A pick sent on an entry that is not a drug (D1: only drug entries are coded): refused before
+/// the key, so no passphrase is asked for an entry the floor would refuse.
+pub const NOT_A_DRUG: &str =
+    "Only a drug can be picked from the drug list — choose Drug, or type the name as it is.";
+
+/// What the clinician picked, as it will be signed: refused with [`NOT_A_DRUG`] on an entry that
+/// is not a drug, else its code re-spelled ([`canonical_code`]). Said before the key. Pure.
+pub(crate) fn coding_before_the_key(
+    c: &CodingArg,
+    kind: AllergenKind,
+) -> Result<String, ErrorView> {
+    if kind != AllergenKind::Drug {
+        return Err(refused(NOT_A_DRUG));
+    }
+    canonical_code(c)
 }
 
 /// A picked code, re-spelled as the canonical lowercase hyphenated uuid the floor admits (the
@@ -147,8 +168,11 @@ pub(crate) async fn group_status(
 }
 
 /// The medication rows as the check reads them. A line names a moiety only when it is coded
-/// under `drugref-moiety` with a code that reads as a uuid; it is current while active, withheld
-/// included (D9). Pure.
+/// under `drugref-moiety` with a code that reads as a uuid, and its threads agree on one coding:
+/// a coding-conflicted group shows ONE of its codings (the display winner), so checking that one
+/// alone could read a line clean whose other thread is the allergen. With no moiety a coded
+/// allergy can only mark it by name, or leave it "not checked". It is current while active,
+/// withheld included (D9). Pure.
 pub fn med_lines(rows: &[MedicationRow]) -> Vec<MedLine<'_>> {
     rows.iter()
         .map(|r| MedLine {
@@ -159,7 +183,7 @@ pub fn med_lines(rows: &[MedicationRow]) -> Vec<MedLine<'_>> {
             moiety: r
                 .coding_code
                 .as_deref()
-                .filter(|_| r.coding_system.as_deref() == Some(MOIETY_SYSTEM))
+                .filter(|_| r.coding_system.as_deref() == Some(MOIETY_SYSTEM) && !r.coding_conflict)
                 .and_then(|c| c.parse().ok()),
             current: r.status == MedicationStatus::Active,
         })
@@ -193,23 +217,48 @@ pub(crate) async fn check_list(
     check_medications(&r, &lines, &facts)
 }
 
+/// The allergy rows the medication check may use: those of `read`, when it worked AND was read
+/// over the same chart set as the medication list (`list_charts`). The two are read in separate
+/// snapshots, so a link or unlink can land between them; rows over another set could miss a
+/// chart whose lines are on screen and let them read clean. Either failure is
+/// [`ALLERGIES_NOT_READ`], logged with its reason. Pure.
+pub(crate) fn allergies_for_the_list(
+    read: Result<(ChartSet, PatientAllergies, HashMap<Uuid, String>), ErrorView>,
+    list_charts: &ChartSet,
+) -> Result<PatientAllergies, String> {
+    match read {
+        Ok((set, allergies, _)) if &set == list_charts => Ok(allergies),
+        Ok(_) => {
+            eprintln!("the medication check was not run: the linked charts changed between reads");
+            Err(ALLERGIES_NOT_READ.to_string())
+        }
+        Err(e) => {
+            eprintln!(
+                "the allergy list could not be read for the medication check: {}",
+                e.text
+            );
+            Err(ALLERGIES_NOT_READ.to_string())
+        }
+    }
+}
+
 /// What `med_list` hands `chart_pane`: each line's check, or [`ALLERGIES_NOT_READ`] when the
-/// allergy list could not be read (the medication list still draws). The allergies are read in
-/// their own snapshot, as the allergy pane reads them; fixture mode has none, so nothing is said.
+/// allergy list could not be read over the list's chart set (the medication list still draws;
+/// [`allergies_for_the_list`]). Fixture mode has no allergies, so nothing is said.
 pub(crate) async fn med_list_check(
     state: &AppState,
     patient: Uuid,
     list: &PatientMedicationList,
 ) -> Result<HashMap<Uuid, LineCheck>, String> {
-    let (_, allergies, _) = read_list(state, patient).await.map_err(|e| {
-        eprintln!(
-            "the allergy list could not be read for the medication check: {}",
-            e.text
-        );
-        ALLERGIES_NOT_READ.to_string()
-    })?;
+    let allergies = allergies_for_the_list(read_list(state, patient).await, &list.charts)?;
     let db = match state.db.as_ref() {
-        Some(db) => db.lock().await.ok(),
+        Some(db) => match db.lock().await {
+            Ok(db) => Some(db),
+            Err(e) => {
+                eprintln!("the drug list was not asked: the connection was lost: {e}");
+                None
+            }
+        },
         None => None,
     };
     Ok(check_list(db.as_deref(), &allergies, list).await)
