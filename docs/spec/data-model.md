@@ -70,9 +70,21 @@ or shredded) is counted and said on the strip, never read as "not yet asked". Th
 structure at both doors and vocabulary at the authoring door only (ADR-0056). A linked chart whose link is in doubt
 has its entries shown and marked, not withheld, because over-warning is the safe error; its "none known"
 statements, which would under-warn, never stand for the patient on screen. Allergy events emit no clear
-safety signal until supersession is settled (#406/#401), and the overlays this row's "explicit reconciliation event"
-names (correct, de-label, entered in error) are the next slice
-([ADR-0096](decisions/0096-the-allergy-list.md)).
+safety signal until supersession is settled (#406/#401) ([ADR-0096](decisions/0096-the-allergy-list.md)).
+
+The overlays this row's "explicit reconciliation event" names are three signed acts, never edits. A **correction** is
+an ordinary entry whose `refs` names the line it replaces (`correction-of`), so corrections form a chain and two
+concurrent corrections of one line are two current accounts. A **de-label** ("challenged: tolerated amoxicillin Mar
+2022", `clinical.allergy-challenge.asserted`) and an **entered-in-error** withdrawal
+(`clinical.allergy-retraction.asserted`) name their target; a de-label can itself be withdrawn, which puts the allergy
+back, and a withdrawal never can (a wrong one is repaired by recording the entry again). Each is filed under its
+target's own chart. The read folds them: an overlay covers the version it names and the versions that version
+replaced, never a later correction of it, so every concurrent case across a partition over-warns; an overlay signed
+by a since-repudiated key, or naming another chart's record, counts only when it adds a warning; a de-labelled line
+reads "Historically reported: …", overrides no "none known" statement and is only counted on the strip ("+1 historical"). Two live accounts of one
+allergen (the same term after case and whitespace are folded) that disagree on kind or on a known reaction are both
+marked "differing accounts", and a byline says when its key is unconfirmed or was since repudiated
+([ADR-0097](decisions/0097-allergy-overlays-and-differing-accounts.md)).
 
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 

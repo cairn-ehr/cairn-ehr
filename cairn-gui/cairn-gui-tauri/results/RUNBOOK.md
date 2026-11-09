@@ -2396,3 +2396,172 @@ strip's wording by `allergy/view_tests.rs`. The window's commands were run by `c
 the stubbed walk. An outcome that is not known (#814) and a re-read that fails after a sign cannot be produced by
 hand here; they are pinned by `allergies_tests.rs`'s `an_interrupted_sign_is_not_known_and_never_retried` and
 `a_landed_sign_is_an_ok_with_or_without_its_pane`. `TEMPLATE.md` carries a matching block (*The allergy list*).
+
+## 28. Correct, de-label and entered in error on the allergy list (allergy slice 2, ADR-0097)
+
+The slice's gestures, all in the expanded list (*Show all allergies*): **Correct** on a live line, which fills the
+entry form from the line as recorded and says "Correcting: …" above it, then the form's *Sign*; **De-label** on a live
+line, which opens one inline row under it (*Tolerated*, *When*, *Note (optional)*, *Sign*, *Cancel*); **Entered in
+error** on a live line or a "none known" line, an inline row (*Reason (optional)*, *Sign*, *Cancel*); and **Withdraw
+de-label** on a historical line, the same row aimed at the de-label it rests on. The chart's new words: "Earlier: …"
+under a corrected line, "Historically reported: … Challenged: tolerated …", "Entered in error: …", "Not counted: …",
+" — differing accounts", and the byline markers " (signer unconfirmed)" / " (key had been repudiated)". Paper
+counterpart: strike the line in the drug chart's allergy box and write the corrected one beside it, initialled; write
+"tolerated amoxil 03/22" against a struck penicillin line; strike a slip and initial it. **Live only**: a `--mock`
+window refuses every write ("fixture mode: …"), which is enough for the button labels and the Tab order.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Correct a line's reaction | the press on the line's *Correct* | "Recorded." on the allergy status line and the list redrawn, the old line under "Earlier:" | **≤ 15 s** |
+| De-label a line | the press on the line's *De-label* | "Recorded." and the line under "Historically reported (de-labelled):" | **≤ 15 s** |
+| Entered in error | the press on the line's *Entered in error* | "Recorded." and the line under "Entered in error:" | **≤ 5 s** |
+| See that two accounts of one allergen differ | the chart on screen | the strip read | no click |
+
+The budgets are the plan's gesture, **with the key held** (`--key-hold-seconds 900`, one passphrase first); time each
+again on a shared terminal (no hold, the clock starting at the first keystroke in the signer strip's *Staff ID*) and
+record both. Steps: correct paper *N* = 1 (strike and rewrite) → forced *M* = 1 (one entry carrying `correction-of`) →
+target *K* = 1 (Correct, edit, Sign); de-label 1 → 1 → 1 (De-label, name what was tolerated, Sign); entered in error
+1 → 1 → 1 (Entered in error, Sign). Striking a de-labelled line takes two window acts (*Withdraw de-label*, then
+*Entered in error* on the line it puts back): record it as a `K > M` (ADR-0097 (d)). The node times the write half of
+each as **`allergy-correct`**, **`allergy-challenge`** and **`allergy-retract`** (section 5). **A figure outside its
+budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
+
+**Setup.** Section 27's setup (sections 0 and 2, section 16's Setup and Measurement 2, `nurse-a`, its `cnode` and
+`achart` functions), and section 23's `dr-b`. Section 1's `/tmp/dr-a.key` links two charts. Register:
+
+```bash
+O1=$(achart "Overlay One" 1981-01-01)      # Correct, five timed runs
+O2=$(achart "Overlay Two" 1982-02-02)      # De-label, five timed runs
+O3=$(achart "Overlay Three" 1983-03-03)    # Entered in error, five timed runs
+W1=$(achart "Overlay Words" 1984-04-04)    # Measurement 1: the words
+L1=$(achart "Overlay Linked" 1985-05-05); L2=$(achart "Overlay Linked" 1985-05-05)
+for c in "$O1" "$O2" "$O3" "$W1" "$L1" "$L2"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+cnode link-charts "$L1" "$L2" --attester-key /tmp/dr-a.key
+```
+
+On each of `$O1`, `$O2` and `$O3`, record five drug allergies through the form as section 27 Measurement 2 does
+(untimed): `penicillin`, `amoxicillin`, `cefalexin`, `trimethoprim`, `codeine`, each *Allergy*, *Rash*, *Seen
+documented*. Launch as section 3 on `$W1` with `--key-hold-seconds 900`, and unlock the terminal.
+
+**Measurement 1 — the words (on `$W1`).** Today reads "9 Nov 2026"; `{name}` is the signer's display name.
+
+- [ ] Record `penicillin`, *Allergy*, *Rash*, *Seen documented* (every entry below is *Seen documented*, so its
+      line starts "Allergy:"). *Correct* on its line: the form is filled with penicillin / Drug /
+      Allergy / Rash / Seen documented, and "Correcting: Allergy: penicillin → rash" shows above it. Press
+      *Anaphylaxis*, *Sign*. The list reads "Allergy: penicillin → anaphylaxis" with, under it, muted, "Earlier:
+      Allergy: penicillin → rash (recorded {today} by {name})"; the strip reads "Allergy: penicillin → anaphylaxis";
+      the form is empty and "Correcting" is gone.
+- [ ] *De-label* on that line: one row opens under it, *Tolerated* already `penicillin`. Type `amoxicillin` over it,
+      *When* `03/2022`, *Sign*. The line moves under "Historically reported (de-labelled):" and reads "Historically
+      reported: penicillin allergy. Challenged: tolerated amoxicillin Mar 2022", muted; the strip reads "Allergies not
+      yet asked · +1 historical" and shows the two "none known" buttons.
+- [ ] *Withdraw de-label* on the historical line, *Sign*: the anaphylaxis is back on the strip, prominent, and the
+      list shows "Entered in error: de-label — tolerated amoxicillin (withdrawn {today} by {name})" under "Entered in
+      error:".
+- [ ] *Entered in error* on the live anaphylaxis line, *Reason* `wrong patient`, *Sign*: the strip reads "Allergies not
+      yet asked"; the list reads "Entered in error: Allergy: penicillin → anaphylaxis (withdrawn {today} by {name})",
+      with the "Earlier:" rash line under it. No "Entered in error" line carries a button (a withdrawal is never
+      withdrawn, ADR-0097 (a)).
+- [ ] Differing accounts: record `penicillin`, *Allergy*, *Rash*, then a second entry `Penicillin`, *Allergy*,
+      *Anaphylaxis*. The strip reads "Allergy: Penicillin → anaphylaxis — differing accounts; Allergy: penicillin →
+      rash — differing accounts", with no click. Record `penicillin`, *Allergy*, *Not known*: that line carries no
+      mark ("not known" never differs).
+- [ ] *No known drug allergies (NKDA)* in the list (`$W1`'s drug allergies override it, so it is listed under
+      "Previously recorded:"), then *Entered in error* on that line, *Sign*: it reads "Entered in error: no known drug
+      allergies (asked {today} by {name})", and "Previously recorded:" no longer lists it.
+- [ ] As `nurse-a`, *Entered in error* on a line `dr-b` signed: it signs (a nurse may strike a doctor's line, as on
+      paper; ADR-0097 decision 2).
+- [ ] Each history list sits under its own heading, never under "Other allergies:".
+
+**Measurement 2 — a linked chart's line (ADR-0097 decision 8).** Open `$L2` and record `latex`, *Other substance*,
+*Allergy*, *Urticaria*. Open `$L1`: the latex line is listed. *Correct* it to *Angioedema* and *Sign*: "Recorded.",
+and `$L1`'s list shows the corrected line. Then:
+
+- [ ] `psql "$CONN" -c "SELECT patient_id, term, reaction_category, refs FROM clinical_allergy WHERE term = 'latex'
+      ORDER BY hlc_wall"` shows both rows with `patient_id` = `$L2`, the second with `refs` =
+      `[{"rel": "correction-of", "event": "<the first row's event_id>"}]`.
+- [ ] *De-label* and *Entered in error* on a linked chart's line land on its chart the same way
+      (`clinical_allergy_challenge`, `clinical_allergy_retraction`, column `patient_id`).
+
+**Measurement 3 — the timings (five runs each, held key, then shared terminal).**
+
+- [ ] **Correct (≤ 15 s).** On `$O1`, one line per run: from the press on *Correct* to "Recorded." and the redraw,
+      pressing *Anaphylaxis* in place of *Rash* and *Sign*.
+- [ ] **De-label (≤ 15 s).** On `$O2`, one line per run: from the press on *De-label*, typing `amoxicillin` over
+      *Tolerated* and `03/2022` in *When*, *Sign*, to "Recorded." and the line under the historical heading.
+- [ ] **Entered in error (≤ 5 s).** On `$O3`, one line per run: from the press on *Entered in error*, *Sign* with no
+      reason, to "Recorded." and the line under "Entered in error:".
+- [ ] The write halves: `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind IN ('allergy-correct',
+      'allergy-challenge', 'allergy-retract')"` has a row for each, bucket `1-3`. A correction never adds to
+      `allergy-record`.
+- [ ] Relaunch with no `--key-hold-seconds` on fresh charts (register and seed more with `achart` and the form) and
+      repeat all three.
+
+**Measurement 4 — the refusals, before the key.**
+
+- [ ] *De-label*, *Tolerated* emptied, *Sign*: "Name what was tolerated." in the row (not under the form's
+      *Substance*), what was typed kept. *When* `2999`: "\"2999\" is after today — when it happened cannot be later than
+      today." in the row.
+- [ ] Correct on a line, then empty *Substance* and *Sign*: "Name the substance." under it.
+- [ ] *Cancel* and Escape close a row signing nothing; Escape returns the focus to the line's first button. Neither
+      closes the row while a *Sign* is in flight.
+- [ ] **A line changed on another terminal (two terminals, as section 23).** Both windows on one chart, both lists
+      drawn. On terminal A, *Entered in error* on a line and *Sign*. On terminal B, without reading the chart again,
+      *De-label* that line and *Sign*: "That allergy line is no longer on this chart — read it again.", and the list
+      is read again. Nothing is signed (`clinical_allergy_challenge` has no new row).
+- [ ] **The suspended correction (R-6a).** Terminal B: *Correct* on a live line and change its reaction, leaving the
+      form unsigned. Terminal A: *Entered in error* on that line. Terminal B: *Sign*. The window reads the list again;
+      the form keeps what was typed, *Sign* is disabled, and "The line you were correcting has changed on the record —
+      press Correct on its current line, or Cancel correction." replaces "Correcting: …". Pressing *Sign* again sends
+      nothing. *Cancel correction* empties the form and *Sign* comes back.
+- [ ] Skip the two-terminal checks if a second window cannot be run against this node, and say so.
+
+**Measurement 5 — the real Tauri IPC** (the walk stubbed `invoke`, so it could not prove the argument names). The
+webview sends `patientId`, `charts`, `target`, `tolerated`, `date`, `text` and `credential`, and the entry's own
+snake_case `corrects`; a name Tauri cannot map fails the call with an "invalid args" error.
+
+- [ ] "Recorded." after a correction, a de-label, a withdrawal of a line, of a "none known" statement and of a
+      de-label, never "invalid args" (`allergy_record` with `entry.corrects`, `allergy_challenge`, `allergy_retract`).
+- [ ] The console rows of Measurements 1 and 2 show each field as typed: `tolerated_term`, `date_precision` /
+      `date_value` (`month` / `2022-03`), `text` (`wrong patient`, and `NULL` where nothing was typed).
+
+**The byline markers (optional, with section 24's setup and its `conf` helper).**
+
+- [ ] As `nurse-a`, record `penicillin`, *Allergy*, *Anaphylaxis* on a fresh chart, then *Entered in error* on it.
+      As `boss`, repudiate `nurse-a`'s key (section 24 Measurement 1). Reopen the chart: the anaphylaxis is back on the
+      strip; the list reads "Not counted: entered in error by {Nurse A's name} (key had been repudiated)" under "Not
+      counted:", and the line's byline ends " by {Nurse A's name} (key had been repudiated)". A repudiated key takes
+      no warning away (ADR-0097 decision 11).
+- [ ] A signer whose key `conf` reports `unconfirmed` (section 23's Measurement 3 member): her lines' bylines end
+      " (signer unconfirmed)", and her *Entered in error* counts.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] Each line's buttons are reached by Tab and read with the line: "Correct: Allergy: penicillin → rash …",
+      "De-label: …", "Entered in error: …", "Withdraw de-label: Historically reported: …".
+- [ ] An inline row is read as a group named for its button and line, its fields by their labels (*Tolerated*, "When —
+      leave empty if not known", *Note (optional)*, *Reason (optional)*); the focus lands in its first field.
+- [ ] A refusal in a row is read when it appears.
+- [ ] Note whether "Correcting: …" is read when *Correct* moves the focus to *Substance* (it is a paragraph above the
+      form, not the field's description), and whether the suspension sentence is announced (it is not an alert).
+- [ ] Each history list is read with its heading ("Historically reported (de-labelled):", "Entered in error:", "Not
+      counted:", "Previously recorded:").
+- [ ] A historical or entered-in-error line is distinguishable from a live allergy without colour: its text starts
+      "Historically reported:" or "Entered in error:".
+- [ ] No dialog at any point; the passphrase is asked only by the signer strip.
+
+**WebKit.** The window is WebKit (Tauri on macOS). The webview was walked headlessly in Chromium and Playwright's
+WebKit with a stubbed `invoke`, never in the real window: walk each act above in the real window, including the
+suspended correction, and note anything that differs from the words above, in particular the inline row's focus,
+Escape, and the muted nested "Earlier:" lists.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC, the two-terminal
+checks and the real window's WebKit need the window and a human. The floor was run by
+`db/tests/075_allergy_overlays_test.sql` and `allergy_overlay_floor.rs`; signing and reading by `allergy_overlays.rs`
+and `window_role_grants.rs`; the fold and its words by `allergy/thread_tests.rs` and `allergy/view_overlay_tests.rs`.
+The window's commands were run by `cairn-gui-tauri`'s DB-gated `allergy_overlays_tests.rs` (CI never runs those,
+#905); the webview by source guards (`allergy_overlays_webview_tests.rs`) and the stubbed walk. An outcome that is not
+known (#814) is pinned by `allergy_overlays_tests.rs`'s `an_interrupted_overlay_is_not_known_and_never_retried`.
+`TEMPLATE.md` carries a matching block (*Allergy overlays*).
