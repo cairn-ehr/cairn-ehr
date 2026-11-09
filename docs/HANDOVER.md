@@ -89,7 +89,7 @@
 >   passphrase) · **#1029** (no length limit) · **#1030** · **#1031** (`vault_floor.rs` grants on a shared role); from
 >   the final check **#1032** (an unrecognised kind still reads "not yet asked" — a decision) · **#1033** (drug
 >   allergies, other list never asked — a decision) · **#1034** · **#1035** · **#1036** · **#1037**. Owed by a human: **RUNBOOK §27**.
-> - **Allergy slice 2 BUILT 2026-11-09 on PR [#1038](https://github.com/cairn-ehr/cairn-ehr/pull/1038)** (plan
+> - **Allergy slice 2 MERGED 2026-11-09 in PR [#1038](https://github.com/cairn-ehr/cairn-ehr/pull/1038)** (plan
 >   [`superpowers/plans/2026-11-09-allergy-slice-2-overlays-and-differing-accounts.md`](superpowers/plans/2026-11-09-allergy-slice-2-overlays-and-differing-accounts.md),
 >   [ADR-0097](spec/decisions/0097-allergy-overlays-and-differing-accounts.md), spec **v0.99**, `db/075` with db/074 + db/037 +
 >   db/044 in place, `SCHEMA_GENERATION` **75**): Correct (a new entry carrying `correction-of` the line it replaces),
@@ -143,9 +143,10 @@
 > 1. **Slice 3 is complete** (3a → 3c-3c, the bullets above). **#1021 measured, MERGED 2026-11-08 in PR #1025**
 >    (figures `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: per-key fact lookups 5–6× faster,
 >    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
->    projection and the Pi figures. **Allergy slice 1 MERGED; slice 2 BUILT on PR #1038** (the bullets above). **Next, in order:** merge
->    #1038 after CI + the maintainer's read → **allergy slice 3** (drugref pick + the medication check on MED-RT classes, an
->    honest "not fully checked" line per group; write down the narrow drugref contract) → **charting a medication in
+>    projection and the Pi figures. **Allergy slices 1 + 2 MERGED** (the bullets above). **Next, in order:** **allergy slice 3, PLANNED
+>    2026-11-09** in [`superpowers/plans/2026-11-09-allergy-slice-3-drugref-and-the-medication-check.md`](superpowers/plans/2026-11-09-allergy-slice-3-drugref-and-the-medication-check.md)
+>    (maintainer: a SQL read door in Cairn's own DB, `db/076`, the one file `no_drugref_dependency.rs` exempts; groups
+>    coded `drugref-class` + `class_uuid`; salts walked through drugref's composition tree) — build it, Tasks 1–7 → **charting a medication in
 >    the window** (it cannot yet; its ADR also records the milestone's "prescribe means charted"). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
