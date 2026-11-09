@@ -31,6 +31,7 @@ fn entry() -> EntryInput {
         reaction_text: None,
         onset: Some("2014".into()),
         source: "seen-documented".into(),
+        corrects: None,
     }
 }
 
@@ -267,8 +268,10 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
     );
     assert_eq!(pane.standing_none.len(), 1, "{:?}", pane.standing_none);
     assert!(
-        pane.standing_none[0].starts_with("No known other allergies — asked ")
-            && pane.standing_none[0].ends_with(" by Dr Bea"),
+        pane.standing_none[0]
+            .text
+            .starts_with("No known other allergies — asked ")
+            && pane.standing_none[0].text.ends_with(" by Dr Bea"),
         "{:?}",
         pane.standing_none
     );
@@ -296,7 +299,7 @@ fn interrupted(event: Uuid) -> anyhow::Error {
 #[test]
 fn an_interrupted_sign_is_not_known_and_never_retried() {
     let event = Uuid::from_u128(814);
-    let view = sign_failure(&interrupted(event));
+    let view = sign_failure(&interrupted(event), &Act::None(NoneScope::All));
     assert!(
         view.text
             .starts_with("Whether this allergy was recorded is NOT known — "),
@@ -311,7 +314,7 @@ fn an_interrupted_sign_is_not_known_and_never_retried() {
     assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
     let plain = anyhow::anyhow!("the floor refused it");
     assert_eq!(
-        sign_failure(&plain),
+        sign_failure(&plain, &Act::None(NoneScope::All)),
         crate::write_failure::node_failure(&plain)
     );
 }
@@ -333,6 +336,9 @@ fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
         previously_none: vec![],
         standing_none: vec![],
         unreadable: 0,
+        historical: vec![],
+        entered_in_error: vec![],
+        ignored_overlays: vec![],
         charts: vec![],
     };
     let ok = written(Ok(pane()));
@@ -383,9 +389,11 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
     );
     assert_eq!(p.standing_none.len(), 1);
     assert!(
-        p.standing_none[0].starts_with("No known drug allergies — asked "),
+        p.standing_none[0]
+            .text
+            .starts_with("No known drug allergies — asked "),
         "{:?}",
         p.standing_none
     );
-    assert!(p.standing_none[0].ends_with(" by Dr Bea"));
+    assert!(p.standing_none[0].text.ends_with(" by Dr Bea"));
 }

@@ -24,6 +24,8 @@
 mod allergies;
 #[cfg(test)]
 mod allergies_webview_tests;
+mod allergy_overlays;
+mod allergy_pane;
 mod chart_set;
 #[cfg(test)]
 mod chart_view_webview_tests;
@@ -179,6 +181,8 @@ fn main() -> anyhow::Result<()> {
             allergies::allergy_list,
             allergies::allergy_record,
             allergies::allergy_none,
+            allergy_overlays::allergy_challenge,
+            allergy_overlays::allergy_retract,
             notes::note_list,
             notes::note_draft_save,
             notes::note_sign,

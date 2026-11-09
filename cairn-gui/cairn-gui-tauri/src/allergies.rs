@@ -13,11 +13,15 @@
 //! on screen, the set, fixture mode, then every verdict on what was typed ([`entry_before_the_key`]
 //! — a passphrase that writes nothing is a step paper never has), and only then the key; then one
 //! signed event, its timing sample, and a fresh read for the pane ([`sign_then_reread`]), answered
-//! as an [`AllergyWrite`].
+//! as an [`AllergyWrite`]. A correction (an entry sent with `corrects`) and allergy slice 2's
+//! de-label and withdrawal (`allergy_overlays.rs`) take one more step before the key: the line
+//! they name must still be on a FRESH read of the list, and they are filed under its chart.
 //!
 //! No markup handling anywhere: the text the clinician typed is signed as typed (only surrounding
 //! whitespace trimmed, no escaping) and the webview
 //! draws it with `textContent` only.
+use crate::allergy_overlays::{target_before_the_key, Names};
+use crate::allergy_pane::{pane, AllergyPane};
 use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::commands::record_timing;
 use crate::funnel::view::{ErrorView, Recorded, Retry};
@@ -28,10 +32,10 @@ use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, nod
 use cairn_event::allergy::{
     AllergenKind, AllergyEntry, EntryKind, NoneScope, Onset, ReactionCategory, Source,
 };
+use cairn_event::allergy_overlay::{AllergyChallenge, AllergyRetraction};
 use cairn_medication_view::ChartSet;
 use cairn_node::allergy::read::PatientAllergies;
-use cairn_node::allergy::view::{build_view, EntryLine, ListStatus};
-use chrono::{Datelike, NaiveDate, Offset};
+use chrono::{Datelike, NaiveDate};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -48,30 +52,8 @@ pub struct EntryInput {
     /// As typed: `2019`, `03/2019`, `14/03/2019` (or ISO); empty or `None` = not known.
     pub onset: Option<String>,
     pub source: String,
-}
-
-/// The allergy section as the webview reads it: `cairn_node`'s `AllergyView`, mapped onto plain
-/// strings the way every other pane here is (the node's types carry no `Serialize`).
-#[derive(Debug, serde::Serialize)]
-pub struct AllergyPane {
-    /// The one-line header strip.
-    pub strip: String,
-    /// `"entries"`, `"none-known"` or `"not-yet-asked"`, for the drug list and the other list.
-    pub drug: &'static str,
-    pub other: &'static str,
-    pub drug_allergies: Vec<AllergyLine>,
-    pub other_allergies: Vec<AllergyLine>,
-    pub adverse_effects: Vec<AllergyLine>,
-    /// "Previously recorded: …" lines: "none known" statements standing for no list (overridden,
-    /// superseded, of an unknown scope, or on a chart whose link is in doubt).
-    pub previously_none: Vec<String>,
-    /// The standing "none known" statement(s), each naming when and by whom it was signed.
-    pub standing_none: Vec<String>,
-    /// Allergy records on this chart set this terminal cannot read (no custody, or shredded):
-    /// the strip leads with them, and the window shows it prominent.
-    pub unreadable: usize,
-    /// The chart set these rows were read over: the webview sends it back with every write.
-    pub charts: Vec<String>,
+    /// The line this entry corrects (its `event_id`, as the pane sent it); `None` for a new entry.
+    pub corrects: Option<String>,
 }
 
 /// What a write answers once its event is signed: what happened, and the list read again when
@@ -80,21 +62,6 @@ pub struct AllergyPane {
 pub struct AllergyWrite {
     pub outcome: String,
     pub pane: Option<AllergyPane>,
-}
-
-/// One line of an expanded list.
-#[derive(Debug, serde::Serialize)]
-pub struct AllergyLine {
-    pub event_id: String,
-    /// The line as the clinician reads it, doubt mark included.
-    pub text: String,
-    /// The red sticker: an allergy, not an adverse effect or a kind this node does not know.
-    pub prominent: bool,
-    pub doubted_chart: bool,
-    /// Who signed it, when this node can name the key.
-    pub signer: Option<String>,
-    /// The local day it was recorded, `YYYY-MM-DD`.
-    pub recorded: String,
 }
 
 /// Read the allergy strip and lists of the chart on screen.
@@ -138,6 +105,16 @@ pub async fn allergy_list_impl(
     patient_id: &str,
 ) -> Result<AllergyPane, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
+    let (set, allergies) = read_list(state, patient).await?;
+    Ok(pane(&allergies, &set))
+}
+
+/// The chart set `patient` belongs to and every member chart's allergy rows, read in ONE snapshot
+/// (so the set and the rows agree). Fixture mode has no allergies: the chart alone, no rows.
+pub(crate) async fn read_list(
+    state: &AppState,
+    patient: Uuid,
+) -> Result<(ChartSet, PatientAllergies), ErrorView> {
     let Some(db) = state.db.as_ref() else {
         let empty = PatientAllergies {
             entries: vec![],
@@ -147,17 +124,16 @@ pub async fn allergy_list_impl(
             doubted_charts: vec![],
             unreadable: 0,
         };
-        return Ok(pane(&empty, &ChartSet::single(patient)));
+        return Ok((ChartSet::single(patient), empty));
     };
     let mut db = db.lock().await?;
-    let (set, allergies) = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+    cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
         let set = cairn_node::patient::person::person_charts(tx, patient).await?;
         let allergies = cairn_node::allergy::read::list_patient_allergies(tx, patient).await?;
         Ok((set, allergies))
     })
     .await
-    .map_err(|e| chart_read_failed(db.explain(e)))?;
-    Ok(pane(&allergies, &set))
+    .map_err(|e| chart_read_failed(db.explain(e)))
 }
 
 /// Record one entry on the chart on screen (refusal order: module doc).
@@ -169,8 +145,16 @@ pub async fn allergy_record_impl(
     credential: Option<Credential>,
 ) -> Result<AllergyWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
-    let entry = entry_before_the_key(&entry, local_today())?;
-    sign_then_reread(state, patient, Act::Entry(entry), credential).await
+    let mut read = entry_before_the_key(&entry, local_today())?;
+    // A correction names a live line of a fresh read and is filed under that line's chart (D2).
+    let target = match &entry.corrects {
+        None => None,
+        Some(t) => Some(target_before_the_key(state, patient, &charts, t, Names::Entry).await?),
+    };
+    let id = target.map(|t| t.id.to_string());
+    read.corrects = id.as_deref();
+    let chart = target.map_or(patient, |t| t.chart);
+    sign_then_reread(state, patient, chart, Act::Entry(read), credential).await
 }
 
 /// Record a "none known" statement on the chart on screen (refusal order: module doc).
@@ -183,12 +167,12 @@ pub async fn allergy_none_impl(
 ) -> Result<AllergyWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
     let scope = word(NoneScope::parse, scope)?;
-    sign_then_reread(state, patient, Act::None(scope), credential).await
+    sign_then_reread(state, patient, patient, Act::None(scope), credential).await
 }
 
 /// The first three refusals every write says, in order: not the chart on screen, not the chart
 /// set the list was read over, fixture mode. Answers the chart.
-async fn on_screen_and_writable(
+pub(crate) async fn on_screen_and_writable(
     state: &AppState,
     patient_id: &str,
     charts: &[String],
@@ -215,19 +199,48 @@ async fn read_set(state: &AppState, patient: Uuid) -> anyhow::Result<ChartSet> {
         .map_err(|e| db.explain(e))
 }
 
-/// The two signed acts this file writes.
-enum Act<'a> {
+/// The signed acts of the allergy list: an entry (new, or a correction when `corrects` is set),
+/// a "none known" statement, a de-label and a withdrawal (`allergy_overlays.rs`).
+pub(crate) enum Act<'a> {
     Entry(AllergyEntry<'a>),
     None(NoneScope),
+    Challenge(AllergyChallenge<'a>),
+    Retraction(AllergyRetraction<'a>),
 }
 
-/// Ask for the key, sign `act` on `patient`'s chart, time it, and read the list again.
+impl Act<'_> {
+    /// Its db/044 timing kind: a correction is timed as one, never as a new entry.
+    fn timing_kind(&self) -> &'static str {
+        match self {
+            Act::Entry(e) if e.corrects.is_some() => "allergy-correct",
+            Act::Entry(_) => "allergy-record",
+            Act::None(_) => "allergy-none",
+            Act::Challenge(_) => "allergy-challenge",
+            Act::Retraction(_) => "allergy-retract",
+        }
+    }
+
+    /// How a sign whose outcome is not known (#814) names the act.
+    fn unknown_lead(&self) -> &'static str {
+        match self {
+            Act::Entry(e) if e.corrects.is_some() => "Whether this correction was recorded",
+            Act::Entry(_) | Act::None(_) => "Whether this allergy was recorded",
+            Act::Challenge(_) => "Whether this de-label was recorded",
+            Act::Retraction(_) => "Whether this was marked entered in error",
+        }
+    }
+}
+
+/// Ask for the key, sign `act` filed under `chart` (the chart on screen, or for a correction,
+/// de-label or withdrawal its target's own chart, D2), time it, and read the list of the chart
+/// on screen (`patient`) again.
 ///
 /// A failed sign is an `ErrorView` ([`sign_failure`]: nothing written, or NOT known). A sign
 /// that landed is an Ok whatever the re-read did ([`written`]).
-async fn sign_then_reread(
+pub(crate) async fn sign_then_reread(
     state: &AppState,
     patient: Uuid,
+    chart: Uuid,
     act: Act<'_>,
     credential: Option<Credential>,
 ) -> Result<AllergyWrite, ErrorView> {
@@ -245,46 +258,47 @@ async fn sign_then_reread(
         human_kid: &human_kid,
     };
     let started = Instant::now();
-    let (signed, kind) = {
+    let signed = {
         let mut db = state
             .db
             .as_ref()
             .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
             .await?;
-        use cairn_node::allergy::sign::{sign_allergy, sign_allergy_none};
-        let origin = &state.node_origin;
-        let (result, kind) = match &act {
-            Act::Entry(e) => (
-                sign_allergy(&mut db, node_sk, &node_kid, origin, patient, e, &author).await,
-                "allergy-record",
-            ),
-            Act::None(s) => (
-                sign_allergy_none(&mut db, node_sk, &node_kid, origin, patient, *s, &author).await,
-                "allergy-none",
-            ),
+        use cairn_node::allergy::sign::*;
+        let (sk, kid, origin) = (node_sk, node_kid.as_str(), state.node_origin.as_str());
+        let result = match &act {
+            Act::Entry(e) => sign_allergy(&mut db, sk, kid, origin, chart, e, &author).await,
+            Act::None(s) => sign_allergy_none(&mut db, sk, kid, origin, chart, *s, &author).await,
+            Act::Challenge(c) => {
+                sign_allergy_challenge(&mut db, sk, kid, origin, chart, c, &author).await
+            }
+            Act::Retraction(r) => {
+                sign_allergy_retraction(&mut db, sk, kid, origin, chart, r, &author).await
+            }
         };
-        (result.map_err(|e| db.explain(e)), kind)
+        result.map_err(|e| db.explain(e))
     };
-    signed.map_err(|e| sign_failure(&e))?;
+    signed.map_err(|e| sign_failure(&e, &act))?;
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    record_timing(state, kind, 1, elapsed_ms).await;
+    record_timing(state, act.timing_kind(), 1, elapsed_ms).await;
     Ok(written(
         allergy_list_impl(state, &patient.to_string()).await,
     ))
 }
 
-/// Why a sign failed, as the clinician reads it. A commit that got no ordinary answer (#814) MAY
-/// have landed: it says the outcome is NOT known and re-reads, never a live retry that could
-/// record the allergy twice (worded as `notes::note_sign_impl` words a note's). Any other
-/// failure wrote nothing and is the node's own sentence. Pure.
-pub(crate) fn sign_failure(e: &anyhow::Error) -> ErrorView {
+/// Why a sign of `act` failed, as the clinician reads it. A commit that got no ordinary answer
+/// (#814) MAY have landed: it says the outcome is NOT known, naming the act, and re-reads, never a
+/// live retry that could record it twice (worded as `notes::note_sign_impl` words a note's). Any
+/// other failure wrote nothing and is the node's own sentence. Pure.
+pub(crate) fn sign_failure(e: &anyhow::Error, act: &Act) -> ErrorView {
     match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
         Some(event) => ErrorView {
             text: format!(
-                "Whether this allergy was recorded is NOT known — no ordinary answer came back \
-                 while saving it (event {event}: {}). Once the window can reach the node again, \
-                 the chart shows whether it is there.",
+                "{} is NOT known — no ordinary answer came back while saving it (event {event}: \
+                 {}). Once the window can reach the node again, the chart shows whether it is \
+                 there.",
+                act.unknown_lead(),
                 cairn_gui_live::cause_of(e)
             ),
             retry: Retry::AfterReread(Recorded::Unknown),
@@ -345,6 +359,7 @@ pub(crate) fn entry_before_the_key(
             .filter(|t| !t.is_empty()),
         onset,
         source: word(Source::parse, &e.source)?,
+        // Set by the caller once the line it names is found on a fresh read.
         corrects: None,
     })
 }
@@ -422,44 +437,8 @@ pub fn parse_onset(s: Option<&str>, today: NaiveDate) -> Result<Onset, String> {
 }
 
 /// This terminal's calendar day: an onset "after today" is judged as the clinician here reads it.
-fn local_today() -> NaiveDate {
+pub(crate) fn local_today() -> NaiveDate {
     chrono::Local::now().date_naive()
-}
-
-/// `cairn_node`'s pure view over `a`, in this terminal's zone (the node never knows it), as the
-/// pane, with the chart set it was read over.
-fn pane(a: &PatientAllergies, set: &ChartSet) -> AllergyPane {
-    let v = build_view(a, chrono::Local::now().offset().fix());
-    let status = |s: &ListStatus| match s {
-        ListStatus::Entries => "entries",
-        ListStatus::NoneKnown { .. } => "none-known",
-        ListStatus::NotYetAsked => "not-yet-asked",
-    };
-    let lines = |ls: Vec<EntryLine>| -> Vec<AllergyLine> {
-        ls.into_iter()
-            .map(|l| AllergyLine {
-                event_id: l.event_id.to_string(),
-                text: l.text,
-                prominent: l.prominent,
-                doubted_chart: l.doubted_chart,
-                signer: l.signer,
-                recorded: l.recorded.to_string(),
-            })
-            .collect()
-    };
-    AllergyPane {
-        strip: v.strip,
-        drug: status(&v.drug),
-        other: status(&v.other),
-        drug_allergies: lines(v.drug_allergies),
-        other_allergies: lines(v.other_allergies),
-        adverse_effects: lines(v.adverse_effects),
-        // Words only until the pane's none lines carry their event id (allergy slice 2, Task 5).
-        previously_none: v.previously_none.into_iter().map(|l| l.text).collect(),
-        standing_none: v.standing_none.into_iter().map(|l| l.text).collect(),
-        unreadable: v.unreadable,
-        charts: set.members().iter().map(Uuid::to_string).collect(),
-    }
 }
 
 #[cfg(test)]
