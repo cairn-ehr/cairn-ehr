@@ -479,6 +479,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "075_allergy_overlays",
         include_str!("../../../db/075_allergy_overlays.sql"),
     ),
+    // db/076 (allergy slice 3): the drug read door — the ONE file that reads the optional,
+    // co-resident drugref schema (availability, the pick's search, the medication check's facts).
+    // Its functions answer nothing when drugref is absent or unreadable.
+    (
+        "076_drug_read_door",
+        include_str!("../../../db/076_drug_read_door.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

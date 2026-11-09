@@ -28,8 +28,8 @@
 //! NOT in this list), (c) inside the ONE statement that seeds the ADR-0059 coding-system
 //! registry (`db/041`'s `INSERT INTO medication_coding_system`, where the `note` column
 //! legitimately narrates drugref in prose next to the tokens it defines), or (d) itself
-//! exactly one of the three registered coding-system tokens (`drugref-moiety` /
-//! `drugref-clinical-drug` / `drugref-product`) — those are DATA, not a dependency,
+//! exactly one of the four registered coding-system tokens (`drugref-moiety` /
+//! `drugref-clinical-drug` / `drugref-product` / `drugref-class`) — those are DATA, not a dependency,
 //! wherever a test fixture or the registry names them. A drugref mention inside any
 //! OTHER string — a URL, a connection string, a shelled-out command, an `assert_eq!`'s
 //! compared value — is NOT exempt and fails the guard, same as it would in bare code.
@@ -53,10 +53,19 @@
 //! "drugref-client", … }`) — manifests are never read here. This is a source-code
 //! guard, not a supply-chain audit.
 //!
-//! When a later slice adds the §9 advisory-tier drugref lookup, this guard must be
-//! narrowed deliberately (to the trusted surface — db/ and the floor path), never simply
-//! deleted: the load-bearing invariant is that the FLOOR and the PROJECTIONS never depend
-//! on a drug database, not that no client code exists anywhere.
+//! THE ONE EXEMPT FILE: `db/076_drug_read_door.sql` (allergy slice 3, ADR-0098 M1). drugref,
+//! when a deployment installs it, is a schema in Cairn's own database, and that file is the
+//! read door the window asks through: whether drugref is there and readable, which drugs and
+//! groups match a typed allergen, and which allergens reach which medications. It is advisory —
+//! it refuses nothing, writes nothing, and answers "nothing" (never an error) when drugref is
+//! absent or unreadable — and nothing in the floor, the projections or the sync path calls it.
+//! So the invariant this guard defends still holds over everything it scans: the floor and the
+//! projections never depend on a drug database. The exemption is ONE exact path
+//! (`READ_DOOR`), not a directory or a pattern, and no other file may join it: a second file
+//! that needs drugref belongs in the door (as another door function), so that "what Cairn reads
+//! from drugref" stays one file a reviewer can read whole. The door's own functions are named
+//! without "drugref" (`cairn_drug_available`, `cairn_drug_search`, `cairn_drug_facts`), so the
+//! Rust that calls them stays inside this guard's scan with nothing to exempt.
 //! The recursive walk is the SHARED one (#452). This file used to carry its own, built on
 //! `path.is_dir()` — which FOLLOWS symlinks, so a symlink to an ancestor would have made the
 //! walk unbounded. See `tests/common/sources.rs` for why that fix belongs in one place.
@@ -75,9 +84,11 @@ use std::path::{Path, PathBuf};
 /// doc comment claims.
 ///
 /// `tests` joins `target` in the skip list because a test may legitimately NAME drugref in
-/// prose or in a fixture; `src/` and `db/` may not.
+/// prose or in a fixture; `src/` and `db/` may not. The one exempt file, `READ_DOOR`, is
+/// dropped by exact path (the module doc says why it, and only it, may read drugref).
 fn trusted_sources() -> Vec<PathBuf> {
     let root = repo_root();
+    let door = root.join(READ_DOOR);
     sources::source_files(
         &[
             root.join("db"),
@@ -87,15 +98,54 @@ fn trusted_sources() -> Vec<PathBuf> {
         &["target", "tests"],
         &["sql", "rs"],
     )
+    .into_iter()
+    .filter(|path| *path != door)
+    .collect()
 }
 
-/// The three tokens ADR-0059 decision 2 registers in `medication_coding_system` — DATA
-/// naming the drugref composition-tree levels, not a dependency on drugref itself. A
+/// The ONE file allowed to read drugref: the drug read door (allergy slice 3, ADR-0098 M1). An
+/// exact path relative to the repo root — never a directory or a pattern.
+const READ_DOOR: &str = "db/076_drug_read_door.sql";
+
+/// The exemption must name a file that exists, or it is a dead exemption a later file could be
+/// renamed into unnoticed; and it must drop exactly that one file from the scan, nothing else.
+#[test]
+fn the_read_door_exemption_is_one_file_that_exists() {
+    let root = repo_root();
+    assert!(
+        root.join(READ_DOOR).is_file(),
+        "{READ_DOOR} is the exempt read door; if it moved, move the exemption with it"
+    );
+    let all = sources::source_files(
+        &[
+            root.join("db"),
+            root.join("crates"),
+            root.join("extensions"),
+        ],
+        &["target", "tests"],
+        &["sql", "rs"],
+    );
+    assert_eq!(
+        all.len() - trusted_sources().len(),
+        1,
+        "the exemption drops exactly one file from the scan"
+    );
+}
+
+/// The tokens registered in `medication_coding_system` — ADR-0059 decision 2's three
+/// composition-tree levels, and allergy slice 3's `drugref-class` (a drug GROUP, which an
+/// allergy entry may carry and the medication floors compare against to refuse) — DATA
+/// naming drugref's codes, not a dependency on drugref itself. A
 /// string literal whose content is EXACTLY one of these (checked at the exact-length
 /// boundary, so `"drugref-moiety-extended"` would NOT match) is exempt wherever it
 /// appears — a test fixture asserting on the anchor value, not just the registry seed
 /// row itself, legitimately spells the token out.
-const DATA_TOKENS: [&str; 3] = ["drugref-moiety", "drugref-clinical-drug", "drugref-product"];
+const DATA_TOKENS: [&str; 4] = [
+    "drugref-moiety",
+    "drugref-clinical-drug",
+    "drugref-product",
+    "drugref-class",
+];
 
 /// True iff `chars[i..]` begins with `needle`. SQL keywords are matched
 /// case-insensitively (SQL itself is); Rust macro/method names and the data tokens are
@@ -121,7 +171,7 @@ fn starts_with_at(chars: &[char], i: usize, needle: &str, case_insensitive: bool
 /// SQL constructs whose quoted argument is a human-readable message or seed data, not a
 /// call: `RAISE EXCEPTION`/`NOTICE`/`WARNING` (the message argument explains a rule, it
 /// doesn't invoke one), and the ADR-0059 registry seed itself — db/041's ONE
-/// `INSERT INTO medication_coding_system` statement, the sole place the three
+/// `INSERT INTO medication_coding_system` statement, the sole place the four
 /// coding-system tokens are DEFINED, whose `note` column narrates them in prose in the
 /// same row. Each opens an EXEMPT SPAN that runs to the next unquoted `;` — the
 /// statement terminator both constructs share.
@@ -179,7 +229,7 @@ const RUST_SPAN_TRIGGERS: [&str; 13] = [
 /// dependency, or just prose/data that happens to say the word": unlike blanking every
 /// string unconditionally (which would also hide a URL or connection string embedded in
 /// ordinary code — the exact hole a prior version of this guard had), only a string
-/// that is a recognised diagnostic message, the registry seed, or one of the three data
+/// that is a recognised diagnostic message, the registry seed, or one of the four data
 /// tokens ever gets blanked. Everything else — a `let url = "https://…drugref…"` sitting
 /// in plain code — survives into the residue and can still trip the guard.
 ///
@@ -312,7 +362,7 @@ fn residue_lines(text: &str, is_rust: bool) -> Vec<String> {
         if c == str_delim {
             in_string = true;
             // Exact-token check: does this string's content, independent of any span,
-            // spell exactly one of the three registered coding-system tokens? The
+            // spell exactly one of the four registered coding-system tokens? The
             // length-bounded check (immediately followed by the closing delimiter)
             // means a LONGER string that merely starts with a token does not match.
             let exact_token = DATA_TOKENS.iter().any(|t| {

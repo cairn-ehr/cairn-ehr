@@ -47,8 +47,9 @@ CREATE OR REPLACE FUNCTION cairn_check_medication_coding_overlay(p_type text, b 
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p          jsonb := b -> 'payload';
-    v_has_code boolean;
-    v_strike   boolean;
+    v_has_code  boolean;
+    v_strike    boolean;
+    v_authoring boolean := current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on';
 BEGIN
     IF p IS NULL THEN
         RAISE EXCEPTION 'medication coding: missing payload';
@@ -67,6 +68,10 @@ BEGIN
             RAISE EXCEPTION 'medication coding: coding is required on a coding overlay (to un-code, use clinical.medication-coding-correction.asserted with strike)';
         END IF;
         PERFORM cairn_check_coding_object(p -> 'coding', 'medication coding: coding');
+        -- One drug, never a group (allergy slice 3, D3; db/041 2b says why). Authoring door only.
+        IF v_authoring AND p #>> '{coding,system}' = 'drugref-class' THEN
+            RAISE EXCEPTION 'medication coding: coding names a drug group (drugref-class), never one drug';
+        END IF;
         RETURN;
     END IF;
 
@@ -111,6 +116,9 @@ BEGIN
     END IF;
     IF v_has_code THEN
         PERFORM cairn_check_coding_object(p -> 'coding', 'medication coding-correction: coding');
+        IF v_authoring AND p #>> '{coding,system}' = 'drugref-class' THEN
+            RAISE EXCEPTION 'medication coding-correction: coding names a drug group (drugref-class), never one drug';
+        END IF;
     END IF;
 END;
 $$;

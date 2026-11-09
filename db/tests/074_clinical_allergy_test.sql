@@ -7,7 +7,7 @@
 -- WHY THIS MIRROR EXISTS: the floor has TWO TIERS (ADR-0051, the db/041 idiom), and the split
 -- is the whole point. A STRUCTURAL rule (a key missing, the wrong JSON type, a blank term) must
 -- refuse at BOTH doors — no node can read such a body. A CLOSED-VOCABULARY rule (an enumerated
--- word, an onset's shape, an onset in the future, a filled reserved slot) refuses at the
+-- word, an onset's shape, an onset in the future, a coding the entry may not carry) refuses at the
 -- AUTHORING door only, and the SAME body must be ADMITTED at the remote door
 -- (`cairn.remote_apply = 'on'`), so a newer peer's word never wedges sync (ADR-0056). Each rule
 -- below is pinned at the door(s) it belongs to, by message fragment, so a refusal for the wrong
@@ -212,11 +212,21 @@ SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('day', '0000-03-14')),
 -- An onset after the recording day: the year after the latest calendar year anywhere on earth.
 SELECT pg_temp.authoring_only(pg_temp.entry(pg_temp.onset('year',
     (extract(year FROM now() AT TIME ZONE 'UTC' + interval '14 hours')::int + 1)::text)), 'future');
--- The reserved slot, opened by slice 3: a coding. A correction ref (slice 2) is open, but must
--- name an entry held on this chart — this one names none (db/tests/075 pins the rest).
-SELECT pg_temp.authoring_only(pg_temp.entry(
+-- The coding slot (slice 3): a drug entry may be coded as a drug or a group; an `other` entry may
+-- not, nor may a drug entry carry any other system (db/tests/076 pins the rest). A correction ref
+-- (slice 2) is open, but must name an entry held on this chart — this one names none (db/tests/075
+-- pins the rest).
+SELECT pg_temp.accepts(pg_temp.entry(
     '{"substance":{"term":"amoxicillin","coding":{"system":"drugref-moiety",
-      "code":"01900000-0000-7000-8000-000000000001","display":"amoxicillin"}}}'), 'coding must be null');
+      "code":"01900000-0000-7000-8000-000000000001","display":"amoxicillin"}}}'));
+SELECT pg_temp.authoring_only(pg_temp.entry(
+    '{"allergen_kind":"other","substance":{"term":"latex","coding":{"system":"drugref-moiety",
+      "code":"01900000-0000-7000-8000-000000000001","display":"latex"}}}'),
+    'allergy assertion: substance.coding is for a drug entry only');
+SELECT pg_temp.authoring_only(pg_temp.entry(
+    '{"substance":{"term":"amoxicillin","coding":{"system":"drugref-product",
+      "code":"01900000-0000-7000-8000-000000000001","display":"amoxicillin"}}}'),
+    'allergy assertion: substance.coding.system must be drugref-moiety or drugref-class, got drugref-product');
 SELECT pg_temp.authoring_only(pg_temp.entry(
     '{"refs":[{"rel":"correction-of","event":"01900000-0000-7000-8000-000000000002"}]}'),
     'is not an allergy entry on this chart');

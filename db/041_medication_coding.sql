@@ -56,13 +56,18 @@ END $$;
 
 -- Seed the drugref composition-tree levels. Only `drugref-moiety` exists today; the two
 -- finer levels are RESERVED by ADR-0059 decision 2 so strength/form-level coding lands
--- additively later without reshaping the slot. #214 convergence: DO UPDATE (never DO
+-- additively later without reshaping the slot. `drugref-class` (allergy slice 3, D3) names a
+-- drug GROUP: an allergy entry may be coded with one ("allergic to penicillins"), a medication
+-- never — the medication doors refuse it (2b below, and db/042). It is registered here because
+-- this is the one coding registry, so the allergy floor's registry tier (cairn_check_coding_object)
+-- vouches for it like any other system. #214 convergence: DO UPDATE (never DO
 -- NOTHING) so an edited seed heals on the next connect, with the IS DISTINCT FROM guard
 -- keeping the steady-state replay write-free.
 INSERT INTO medication_coding_system AS r (system, code_format, note) VALUES
     ('drugref-moiety',        'uuid', 'drugref immortal moiety_uuid (UUIDv5 from UNII) — the only level built today'),
     ('drugref-clinical-drug', 'uuid', 'RESERVED for a later drugref slice (substance + strength + form)'),
-    ('drugref-product',       'uuid', 'RESERVED for a later drugref slice (a marketed product)')
+    ('drugref-product',       'uuid', 'RESERVED for a later drugref slice (a marketed product)'),
+    ('drugref-class',         'uuid', 'a drug GROUP (drugref class_uuid) — allergen coding only; the medication doors refuse it')
 ON CONFLICT (system) DO UPDATE SET
     code_format = EXCLUDED.code_format,
     note        = EXCLUDED.note
@@ -172,11 +177,20 @@ REVOKE EXECUTE ON FUNCTION cairn_check_coding_object(jsonb, text) FROM PUBLIC;
 --     EXECUTION, so living in a later file is fine. Kept as its own function (rather than
 --     inlining the delegation into db/031) so db/031 keeps naming one stable check per
 --     concern and the twin-registry lookup test can still find it.
+--
+--     A medication is ONE drug, never a group (allergy slice 3, D3): `drugref-class` is in the
+--     registry for allergen coding, so the registry tier alone would admit it here. Refused at
+--     the authoring door only — the registry-tier rule of ADR-0051, so a peer's event never
+--     wedges sync. (db/042's coding overlays refuse it the same way.)
 CREATE OR REPLACE FUNCTION cairn_check_medication_coding(p jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM cairn_check_coding_object(
         p -> 'substance' -> 'coding', 'medication assertion: substance.coding');
+    IF current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on'
+       AND p #>> '{substance,coding,system}' = 'drugref-class' THEN
+        RAISE EXCEPTION 'medication assertion: substance.coding names a drug group (drugref-class), never one drug';
+    END IF;
 END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_check_medication_coding(jsonb) FROM PUBLIC;
