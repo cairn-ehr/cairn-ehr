@@ -112,6 +112,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         links_error: None,
         duplicates: crate::duplicates::view::DuplicateSection::checked_none_open(),
         set_change: None,
+        allergy_check_failed: None,
     })
     .unwrap();
     let member_json = serde_json::to_value(&member).unwrap();

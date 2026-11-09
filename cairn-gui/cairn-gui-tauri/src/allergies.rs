@@ -20,6 +20,7 @@
 //! No markup handling anywhere: the text the clinician typed is signed as typed (only surrounding
 //! whitespace trimmed, no escaping) and the webview
 //! draws it with `textContent` only.
+use crate::allergy_check::{canonical_code, CodingArg};
 use crate::allergy_overlays::{target_before_the_key, Names};
 use crate::allergy_pane::{pane, AllergyPane};
 use crate::chart_set::{check_displayed_set, ChartSetError};
@@ -33,9 +34,11 @@ use cairn_event::allergy::{
     AllergenKind, AllergyEntry, EntryKind, NoneScope, Onset, ReactionCategory, Source,
 };
 use cairn_event::allergy_overlay::{AllergyChallenge, AllergyRetraction};
+use cairn_event::medication::SubstanceCoding;
 use cairn_medication_view::ChartSet;
 use cairn_node::allergy::read::PatientAllergies;
 use chrono::{Datelike, NaiveDate};
+use std::collections::HashMap;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -75,16 +78,19 @@ pub async fn allergy_list(
     allergy_list_impl(&state, &patient_id).await
 }
 
-/// Record one allergy or adverse-effect entry; answers with the list read again.
+/// Record one allergy or adverse-effect entry; answers with the list read again. `coding` is the
+/// drug or drug group the clinician picked (`allergy_check::drug_search`), `None` for a name as
+/// typed; a correction (`entry.corrects`) takes it the same way.
 #[tauri::command]
 pub async fn allergy_record(
     state: tauri::State<'_, AppState>,
     patient_id: String,
     charts: Vec<String>,
     entry: EntryInput,
+    coding: Option<CodingArg>,
     credential: Option<Credential>,
 ) -> Result<AllergyWrite, ErrorView> {
-    allergy_record_impl(&state, &patient_id, charts, entry, credential).await
+    allergy_record_impl(&state, &patient_id, charts, entry, coding, credential).await
 }
 
 /// Record "no known allergies" (`scope` `"all"`) or "no known drug allergies" (`"drug"`).
@@ -107,16 +113,18 @@ pub async fn allergy_list_impl(
     patient_id: &str,
 ) -> Result<AllergyPane, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
-    let (set, allergies) = read_list(state, patient).await?;
-    Ok(pane(&allergies, &set))
+    let (set, allergies, groups) = read_list(state, patient).await?;
+    Ok(pane(&allergies, &set, &groups))
 }
 
-/// The chart set `patient` belongs to and every member chart's allergy rows, read in ONE snapshot
-/// (so the set and the rows agree). Fixture mode has no allergies: the chart alone, no rows.
+/// The chart set `patient` belongs to, every member chart's allergy rows, and the review status
+/// of the drug groups they are coded to, read in ONE snapshot (so the set and the rows agree).
+/// A failed status read is an empty map, never a failed list (`allergy_check::group_status`,
+/// D11). Fixture mode has no allergies: the chart alone, no rows.
 pub(crate) async fn read_list(
     state: &AppState,
     patient: Uuid,
-) -> Result<(ChartSet, PatientAllergies), ErrorView> {
+) -> Result<(ChartSet, PatientAllergies, HashMap<Uuid, String>), ErrorView> {
     let Some(db) = state.db.as_ref() else {
         let empty = PatientAllergies {
             entries: vec![],
@@ -126,13 +134,14 @@ pub(crate) async fn read_list(
             doubted_charts: vec![],
             unreadable: 0,
         };
-        return Ok((ChartSet::single(patient), empty));
+        return Ok((ChartSet::single(patient), empty, HashMap::new()));
     };
     let mut db = db.lock().await?;
     cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
         let set = cairn_node::patient::person::person_charts(tx, patient).await?;
         let allergies = cairn_node::allergy::read::list_patient_allergies(tx, patient).await?;
-        Ok((set, allergies))
+        let groups = crate::allergy_check::group_status(tx, &allergies).await;
+        Ok((set, allergies, groups))
     })
     .await
     .map_err(|e| chart_read_failed(db.explain(e)))
@@ -144,10 +153,21 @@ pub async fn allergy_record_impl(
     patient_id: &str,
     charts: Vec<String>,
     entry: EntryInput,
+    coding: Option<CodingArg>,
     credential: Option<Credential>,
 ) -> Result<AllergyWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
     let mut read = entry_before_the_key(&entry, local_today())?;
+    // A picked code is signed in its canonical spelling, or refused before the key.
+    let code = coding.as_ref().map(canonical_code).transpose()?;
+    read.coding = coding
+        .as_ref()
+        .zip(code.as_deref())
+        .map(|(c, code)| SubstanceCoding {
+            system: &c.system,
+            code,
+            display: &c.display,
+        });
     // A correction names a live line of a fresh read and is filed under that line's chart (D2).
     let target = match &entry.corrects {
         None => None,

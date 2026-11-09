@@ -198,6 +198,7 @@ fn a_failed_identity_read_keeps_the_list_and_says_so() {
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
         None,
+        Ok(Default::default()),
     );
     assert_eq!(pane.list.rows.len(), list.rows.len(), "the list is kept");
     assert!(pane.members.is_empty());
@@ -222,6 +223,7 @@ fn a_successful_identity_read_carries_no_warning() {
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
         None,
+        Ok(Default::default()),
     );
     assert!(pane.members_error.is_none());
     assert_eq!(pane.list.charts.len(), 1);
@@ -238,6 +240,7 @@ fn a_failed_link_read_keeps_the_list_and_says_so() {
         Err("x".into()),
         DuplicateSection::checked_none_open(),
         None,
+        Ok(Default::default()),
     );
     assert_eq!(pane.list.rows.len(), list.rows.len());
     assert!(pane.links.is_empty());
@@ -364,6 +367,7 @@ fn withhold_and_stop_are_offered_only_where_they_can_write() {
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
         None,
+        Ok(Default::default()),
     );
     let offered: Vec<(bool, bool)> = pane
         .list
@@ -389,6 +393,7 @@ fn withhold_and_stop_are_offered_only_where_they_can_write() {
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
         None,
+        Ok(Default::default()),
     );
     for (row, built) in pane.list.rows.iter().zip(build_view(&sample).rows) {
         assert_eq!(row.can_withhold, built.can_withhold, "{}", row.primary);
@@ -446,6 +451,7 @@ fn release_is_offered_only_where_it_can_write() {
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
         None,
+        Ok(Default::default()),
     );
     let rows = &pane.list.rows;
     assert_eq!(

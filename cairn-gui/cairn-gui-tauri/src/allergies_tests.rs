@@ -191,7 +191,7 @@ async fn record_refuses_a_chart_not_on_screen() {
     let other = another_chart();
     let mut bad = entry();
     bad.kind = None;
-    let err = allergy_record_impl(&state, &other, vec![other.clone()], bad, None)
+    let err = allergy_record_impl(&state, &other, vec![other.clone()], bad, None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
@@ -206,14 +206,14 @@ async fn record_refuses_a_chart_not_on_screen() {
         .contains("not the chart"));
 
     // The right chart, the wrong set: the list on screen is behind the record.
-    let err = allergy_record_impl(&state, &here, vec![other.clone()], entry(), None)
+    let err = allergy_record_impl(&state, &here, vec![other.clone()], entry(), None, None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, Retry::AfterReread(Recorded::No));
     // The right chart and set: fixture mode's own refusal, before the form's.
     let mut bad = entry();
     bad.kind = None;
-    let err = allergy_record_impl(&state, &here, vec![here.clone()], bad, None)
+    let err = allergy_record_impl(&state, &here, vec![here.clone()], bad, None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("fixture mode"), "{}", err.text);
@@ -245,7 +245,7 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
 
     let mut bad = entry();
     bad.kind = None;
-    let err = allergy_record_impl(&state, &patient, charts.clone(), bad, None)
+    let err = allergy_record_impl(&state, &patient, charts.clone(), bad, None, None)
         .await
         .unwrap_err();
     assert_eq!(err.text, "Choose Allergy or Adverse effect.");
@@ -264,9 +264,16 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
     };
     let (records, nones) = (timed("allergy-record").await, timed("allergy-none").await);
 
-    let done = allergy_record_impl(&state, &patient, charts.clone(), entry(), credential("bea"))
-        .await
-        .unwrap();
+    let done = allergy_record_impl(
+        &state,
+        &patient,
+        charts.clone(),
+        entry(),
+        None,
+        credential("bea"),
+    )
+    .await
+    .unwrap();
     assert_eq!(done.outcome, "Recorded.");
     let pane = done.pane.expect("the list is read again");
     assert_eq!(pane.strip, "Allergy: penicillin → anaphylaxis · 2014");
@@ -409,7 +416,7 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
         doubted_charts: vec![],
         unreadable: 1,
     };
-    let p = pane(&a, &ChartSet::single(chart));
+    let p = pane(&a, &ChartSet::single(chart), &HashMap::new());
     assert_eq!(p.unreadable, 1);
     assert!(
         p.strip
