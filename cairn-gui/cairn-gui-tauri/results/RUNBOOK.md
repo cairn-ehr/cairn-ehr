@@ -2703,10 +2703,10 @@ Launch as section 3 on `$K1` with `--key-hold-seconds 900`, and unlock the termi
 whole command against a real drugref; this measurement does).
 
 - [ ] **The pick.** On `$K1`, open *Show all allergies* and press *Drug*, then type `pe`: no list. Type `n`: within
-      a blink, a list of drugs. With the real drugref, `penicillin`, `penic` and `pen` list only drugs (the group is
-      crowded out, #1057). Type `penicillins`: the list offers "Penicillins (allergy group) (group)". Record both
-      observations against #1057.
-- [ ] Choose the group with ↓ and Enter. The field reads "Penicillins (allergy group)" and the list closes. Press
+      a blink, a list. With the real drugref, `pen`, `penic`, `penicillin` and `penicillins` each list the group
+      **first**, reading "Penicillins (allergy group)" with no second "(group)", then drugs (ruling F2, #1057).
+- [ ] Choose the group with ↓ and Enter. The field reads "Penicillins (allergy group)" and the list closes. Under the
+      field, with no hover, a line reads **"Coded as: Penicillins (allergy group)"** (ruling F3). Press
       *Allergy*, *Anaphylaxis*, *Seen documented*, *Sign*. The strip reads "Allergy: Penicillins (allergy group) →
       anaphylaxis" with no suffix. The expanded list line ends **" (drug group not clinically reviewed)"**, because
       the group is `structural-seed`.
@@ -2723,8 +2723,10 @@ whole command against a real drugref; this measurement does).
       shows `{"code": "55a1d1a0-…", "system": "drugref-class", "display": "Penicillins (allergy group)"}`. Check the
       class uuid against `psql "$CONN" -Atc "SELECT class_uuid FROM drugref.allergy_group"`.
 - [ ] **A drug allergen.** On `$K2`, type `amox`. The list starts "amoxapine", "amoxecaine", then "amoxicillin": note
-      whether a look-alike first option makes the wrong pick easy (amoxapine is an antidepressant). Choose
-      "amoxicillin", then *Allergy*, *Anaphylaxis*, *Sign*. Then
+      whether a look-alike first option makes the wrong pick easy (amoxapine is an antidepressant). Press ↓ once and
+      Enter: the line under the field reads **"Coded as: amoxapine (drug)"** — the wrong pick is visible. Type one
+      letter: the line goes. Clear the field, type `amox` again and choose "amoxicillin": the line reads "Coded as:
+      amoxicillin (drug)". Then *Allergy*, *Anaphylaxis*, *Sign*; the line goes with the emptied form. Then
       record an adverse effect: type `metf`, choose "metformin", *Adverse effect*, *GI upset*, *Sign*. The list reads:
       - **amoxicillin**: **Allergy**, "Allergy recorded: amoxicillin → anaphylaxis";
       - **flucloxacillin**: **Allergy**, "flucloxacillin is in the same group as amoxicillin (Penicillins (allergy
@@ -2821,7 +2823,8 @@ follows:
 - **The check:** `allergy/check_tests.rs` and `check_unverified_tests.rs`.
 - **The window's commands:** `cairn-gui-tauri`'s DB-gated `allergy_check_db_tests.rs`, on the stub and on a
   rolled-back transaction (CI never runs those, #905).
-- **The webview:** source guards (`drug_pick_webview_tests.rs`) and the stubbed Chromium walk.
+- **The webview:** source guards (`drug_pick_webview_tests.rs`) and the stubbed walks (Chromium; the pick's labels and
+  "Coded as" line in Chromium and WebKit).
 
-The real drugref's group name and the crowded pick (#1057) were seen only by querying `drugref_allergy`, never in the
-window. `TEMPLATE.md` carries a matching block (*The medication check*).
+The real drugref's group-first order (#1057) was checked only by running the door's query read-only against
+`drugref_allergy`, never in the window. `TEMPLATE.md` carries a matching block (*The medication check*).

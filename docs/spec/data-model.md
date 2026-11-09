@@ -427,9 +427,10 @@ The decision pathway keys on **stable concept identifiers, never free-text names
 > The anchor also sharpens medication reconciliation ([ADR-0047](decisions/0047-medication-reconciliation-resolution.md)) **advisorily** — the dup-key becomes the coding slot **as a `(system, code)` pair** (never a bare `code`, which would re-split the same substance across tree levels once the finer ones exist), the reconciled-group display prefers the coded member's INN label, and two *different* anchors inside one reconciled group is a surfaced *possible-mis-reconciliation* signal, never a silent pick. This closes **coded↔coded** duplicates (brand↔generic once both are coded); the *"asserted once coded, once uncoded"* case closes when the uncoded member gets coded, or later via term→anchor resolution in the drug-matcher — **not** by the key itself.
 
 The same `{system, code, display}` slot codes an **allergen** too ([ADR-0098](decisions/0098-allergy-coding-and-the-medication-check.md)).
-`drugref-class` names a drug **group**: today a drugref *allergy group* (`concept_type` `AG`, such as *Penicillins*),
-coded by its immortal `class_uuid`, never a MED-RT class, because drugref's allergy check cannot check against one. It
-is registered in the same coding registry as the moiety levels, admitted on an allergy entry only, and refused on a
+`drugref-class` names a drug **group**, coded by its immortal `class_uuid`. The window's pick offers only drugref
+*allergy groups* (`concept_type` `AG`, such as *Penicillins (allergy group)*), because drugref's allergy check cannot
+check against a MED-RT class. The floor admits any uuid under `drugref-class`, so an entry coded to any other class
+(a peer's, or one written past the window) reads "not checked" on every medication line it meets. It is registered in the same coding registry as the moiety levels, admitted on an allergy entry only, and refused on a
 medication at the authoring door (a medication is one drug, never a group). The divergence above holds unchanged: the
 group answer comes from the co-resident drugref through one read door, and a node without it checks by name and
 identical code only and says so.

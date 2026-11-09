@@ -107,7 +107,9 @@ drugref's side: `~/src/drugref` `docs/superpowers/specs/2026-11-08-drugref-aller
     - `drugref.substance_moiety`, `drugref.substance_class` and `drugref.allergy_group` exist and the owner may SELECT
       them.
   - `cairn_drug_search(p_text text, p_limit int) RETURNS TABLE(system text, code text, display text)`, as built in
-    Task 2 (literal match, at least 3 characters, limit capped at 20, moieties first), except:
+    Task 2 (literal match, at least 3 characters, limit capped at 20, moieties first — amended by the final review's
+    ruling F2 (#1057): GROUPS first, then moieties, because with the real drugref the group was crowded out of the
+    window's 12 options), except:
     - groups come from `drugref.allergy_group` joined to `drugref.substance_class` (M5);
     - `system` is `drugref-class` and `display` is the class name.
   - `cairn_drug_facts(p_allergens uuid[], p_meds uuid[]) RETURNS TABLE(allergen uuid, med uuid, outcome text, match_kind text, group_name text)`:

@@ -725,8 +725,9 @@ expected: no click). Passphrase retypes after a refusal on a shared terminal: \_
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
-| `pen` / `penic` / `penicillin` list drugs only; `penicillins` offers the group (#1057) | | |
-| A group option reads "… (group)"; choosing it fills the name and closes the list | | |
+| `pen` / `penic` / `penicillin` / `penicillins` list the group first, reading "Penicillins (allergy group)" once (#1057) | | |
+| Choosing the group fills the name, closes the list and shows "Coded as: Penicillins (allergy group)" under the field | | |
+| `amox`, ↓, Enter shows "Coded as: amoxapine (drug)"; one typed letter removes the line; Sign empties it | | |
 | Group-coded entry: expanded line ends " (drug group not clinically reviewed)"; the strip has no suffix | | |
 | `$K1`: amoxicillin and flucloxacillin **Allergy** + "… is a Penicillins (allergy group); …"; cephalexin and metformin no tag; Augmentin **not checked** | | |
 | `$K2`: amoxicillin "Allergy recorded: …"; flucloxacillin "… in the same group as amoxicillin (…)"; metformin muted note only | | |

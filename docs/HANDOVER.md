@@ -97,9 +97,11 @@
 >   through — drugref owns the fold); every current medication line checked on read: the loud **Allergy** tag + words on
 >   a hit, a muted note for an adverse effect, a small **not checked** tag when unverified; a door error is "no drug
 >   list", never a failed pane. Open: **#1053** (code the tolerated drug) · **#1054** (check at charting) · **#1055**
->   (drugref's cephalosporin rule — `no-match` is not "safe") · **#1056** (unknown reaction word ranks last) · **#1057**
->   (real drugref: the group crowded out of the pick; "Penicillins (allergy group) (group)") · **#1058** (review minors)
->   · **#1059** (an unreadable allergy record leaves the medication list untagged). Owed by a human: **RUNBOOK §29**
+>   (drugref's cephalosporin rule — `no-match` is not "safe") · **#1056** (unknown reaction word ranks last) · **#1058**
+>   (review minors). **#1057** (the group crowded out of the pick, its name doubled) and **#1059** (an unreadable
+>   allergy record left the list untagged) are FIXED on #1052's branch by the final fix wave — groups first, labelled
+>   once; unread records make every unmarked current line "not checked"; plus a visible "Coded as: …" line under the
+>   Substance field (ruling F3) — and stay open until it merges. Owed by a human: **RUNBOOK §29**
 >   (copy `drugref_allergy` from :5532 — `drugref_profiles` has no groups).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design

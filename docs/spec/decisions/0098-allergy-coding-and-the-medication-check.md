@@ -17,10 +17,10 @@
   drug, D2), [#1054](https://github.com/cairn-ehr/cairn-ehr/issues/1054) (the check at the moment of charting, (f)),
   [#1055](https://github.com/cairn-ehr/cairn-ehr/issues/1055) (drugref's cross-allergy rule, (a)),
   [#1056](https://github.com/cairn-ehr/cairn-ehr/issues/1056) (an unknown reaction word ranks last, (e)),
-  [#1057](https://github.com/cairn-ehr/cairn-ehr/issues/1057) (the group crowded out of the pick; its real name
-  doubles up, (g)), [#1058](https://github.com/cairn-ehr/cairn-ehr/issues/1058) (the reviews' deferred minors),
-  [#1059](https://github.com/cairn-ehr/cairn-ehr/issues/1059) (an unreadable allergy record leaves the medication
-  list untagged, (k)).
+  [#1057](https://github.com/cairn-ehr/cairn-ehr/issues/1057) (the group was crowded out of the pick and its real
+  name doubled up; fixed before merge, decisions 9 and 23, (g)), [#1058](https://github.com/cairn-ehr/cairn-ehr/issues/1058)
+  (the reviews' deferred minors), [#1059](https://github.com/cairn-ehr/cairn-ehr/issues/1059) (an unreadable allergy
+  record left the medication list untagged; fixed before merge, decision 21, (k)).
 - **Builds on:** [ADR-0096](0096-the-allergy-list.md) (the allergy list) ·
   [ADR-0097](0097-allergy-overlays-and-differing-accounts.md) (overlays, the fold, differing accounts) ·
   [ADR-0059](0059-medication-drug-coding-drugref-moiety-anchor.md) (drugref is optional; the `{system, code, display}`
@@ -72,7 +72,7 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
    error", because db/049's signal has no supersession yet (#406/#401). The check is computed on every read, from the
    decrypted bodies with overlays applied (decisions 15–21). Nothing about it rides the wire. A reader without
    custody of the allergy bodies therefore gets no check. The strip tells them a record cannot be read (ADR-0096
-   decision 10), but the medication list does not ((k), #1059).
+   decision 10), and every current medication line without a mark reads "not checked" (decision 21, (k), #1059).
 
 ### The floor (`db/074` and `db/041`/`db/042` changed in place)
 
@@ -131,8 +131,10 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
      `drugref.substance_class`, answered as `system` `drugref-class`, `code` the `class_uuid` and `display` the
      `class_name`. A MED-RT class such as "Penicillin-class Antibacterial [EPC]" is never offered, because
      `allergy_check` answers `allergen-not-a-group` for one and an allergen coded with it could never be checked.
-   - **Order.** Drugs come first, then groups. Within each, shorter names come first, then byte order (`COLLATE "C"`,
-     so every node orders alike).
+   - **Order.** Groups come first, then drugs (ruling F2, #1057). There are few groups, and a class allergy is the
+     commonest intent. With the real drugref, "penicillin" matches more drugs than the window shows, so a group listed
+     after them was cut off. Within each tier, shorter names come first, then byte order (`COLLATE "C"`, so every
+     node orders alike).
    - **Limit.** At most `least(p_limit, 20)` rows. The window asks for 12.
 10. **`cairn_drug_facts(p_allergens uuid[], p_meds uuid[]) RETURNS TABLE(allergen uuid, med uuid, outcome text,
     match_kind text, group_name text)`**, the check's answers.
@@ -255,8 +257,12 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
       name}); allergy recorded: {reaction}".
     - **An adverse effect**: "Previous adverse effect: {allergen term} → {reaction}". This is a note, never a mark,
       even when drugref says `match`.
-21. **Not checked (D8; rulings R1–R3).** A line is unverified when it has no mark and at least one live allergy-kind
-    head was neither a hit nor answered `no-match` for it. That happens when:
+21. **Not checked (D8; rulings R1–R3).** A current line is unverified when it has no mark and either of two things
+    holds. The first is that the patient holds an allergy record this terminal cannot read
+    (`PatientAllergies::unreadable > 0`, passed to `check_medications` as `unread_records`; #1059). Such a record has
+    no head, but it may be the allergen, so every unmarked current line is unverified, whether the drug list was asked
+    or not. The second is that at least one live allergy-kind head was neither a hit nor answered `no-match` for the
+    line. That happens when:
     - either side is uncoded;
     - the allergen is coded under a system other than the two;
     - there is no drug list;
@@ -280,10 +286,20 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
 23. **The pick** (`drug_search`, `drug_pick.js`).
     - **When it asks.** The pick shows only while the allergen kind pressed is *Drug*. It asks `drug_search` 150 ms
       after the last keystroke, once the trimmed text has at least 3 characters.
-    - **Choosing.** Arrow keys, Enter and click choose an option, and Escape closes the list. A group's option reads
-      "{display} (group)".
+    - **Choosing.** The arrow keys move the highlight. Enter chooses the highlighted option, a click chooses the
+      clicked one, and Escape closes the list. Groups are listed first (decision 9). A group's option reads
+      "{display} (group)", unless its name already contains the word "group" (a whole word, any case). drugref's
+      "Penicillins (allergy group)" therefore reads as it is.
     - **What a choice does.** The term becomes the option's display and the coding is held. **Any later edit of the
       term drops the coding, and so does leaving *Drug*.**
+    - **What it is coded as (ruling F3).** While a coding is held, a visible line under the Substance field says what
+      the entry will be signed as. A drug reads "Coded as: {display} (drug)", and a group reads "Coded as: " followed
+      by its option's words ("Coded as: Penicillins (allergy group)", "Coded as: Cephalosporins (group)"). Within the
+      drugs, shorter names come first, so "amox" lists amoxapine before amoxicillin, and one arrow press too many
+      codes the wrong drug. The line shows that before *Sign*, as text and with no dialog. `setHeldCoding` is the only
+      writer of the held coding and draws or hides the line with it. The line therefore goes whenever the coding goes:
+      on an edit, on leaving *Drug*, and when the form is emptied (a sign included). A correction's held coding shows
+      it too.
     - **No drug list.** `available: false` covers fixture mode, no database, a lost connection, no usable drugref, and
       a search that raised. It shows "No drug list on this terminal: the name is recorded as typed" (a raising search
       looks the same, #1058).
@@ -291,6 +307,9 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
     - **Not a drug.** A pick sent on an entry that is not a drug is refused before the key with "Only a drug can be
       picked from the drug list — choose Drug, or type the name as it is." (ruling T5-d). The floor would refuse the
       entry, so no passphrase is asked first.
+    - **The system.** A pick under any system but `drugref-moiety` or `drugref-class` is refused before the key with
+      "That pick is not a drug or drug group from the drug list; type the name instead". That covers a webview defect
+      and the reserved `drugref-product`.
     - **The code.** It is re-spelled as the canonical uuid. One that does not parse is refused with "That drug's code
       could not be read; type the name instead".
     - **Correct.** *Correct* goes through `allergy_record` too. It keeps the line's coding (`LineWords::coding`, ruling
@@ -336,25 +355,29 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
   older "rash" can make a mark read "→ rash" (#1056).
 - **(f) There is no check at the moment of charting.** The window cannot chart a medication yet. That slice reuses
   this matcher (#1054), and its ADR records the GUI milestone's "prescribe means charted".
-- **(g) With the real drugref, the group is hard to pick and reads awkwardly** (#1057). Typing "penicillin" fills all
-  12 options with moieties, so the group is offered only for text that fewer than 12 drug names start a word with,
-  such as "penicillins". drugref names the group "Penicillins
-  (allergy group)", so its option reads "… (group) (group)" and a mark reads "amoxicillin is a Penicillins (allergy
-  group); …". The stub names it "Penicillins", so no test sees this. It is not a silent miss: a moiety picked instead
-  is still group-checked by drugref.
+- **(g) A wrong pick is made visible, not prevented.** #1057 was fixed before merge. Groups are listed first
+  (decision 9), so the real "Penicillins (allergy group)" heads the list for "penicillin". Its option reads
+  "Penicillins (allergy group)", with no second "(group)", and a mark reads "amoxicillin is a Penicillins (allergy
+  group); …". The stub now carries that real name, so the door and window DB tests use it. The label rule itself is
+  pinned by a source guard and was seen in the headless walk. Within the drugs, the order is
+  length, not likelihood: "amox" lists amoxapine before amoxicillin. Nothing stops a pick of the wrong drug. The
+  "Coded as" line (decision 23) shows it before *Sign*.
 - **(h) The window's commands against a database are pinned only by DB-gated tests** (`allergy_check_db_tests.rs`),
-  which CI does not run (#905). The webview is pinned by source guards (`drug_pick_webview_tests.rs`) and was walked
-  headlessly in Chromium with a stubbed `invoke`. Still owed to RUNBOOK §29: the real Tauri argument names, the real
+  which CI does not run (#905). The webview is pinned by source guards (`drug_pick_webview_tests.rs`). It was walked
+  headlessly in Chromium with a stubbed `invoke`, and the pick's labels and "Coded as" line were walked again in
+  Chromium and WebKit. Still owed to RUNBOOK §29: the real Tauri argument names, the real
   window's WebKit, VoiceOver on both tags, and the budgets.
 - **(i) The allergy list and the medication list are read in two snapshots.** A changed chart set is caught
   (decision 25), but an allergy signed elsewhere between the two reads shows on the next read. Each pane is consistent
   in itself.
 - **(j) A drug search's word match splits on spaces only** ("clav" does not find "amoxicillin/clavulanate"; #1058).
-- **(k) An allergy record this terminal cannot read leaves the medication list untagged** (#1059). An event held
-  without custody, or shredded, has no projected row, so it is no head: `PatientAllergies::unreadable` counts it and
-  the strip leads with "… cannot be read on this terminal", but `check_list` never reads that count. With no readable
-  heads every line reads with no tag at all, so silence reads as checked for exactly the reader decision 4 leaves
-  without a safety signal. Found by this ADR's fact-check; the fix only adds tags.
+- **(k) An allergy record this terminal cannot read makes lines "not checked", never more** (#1059, fixed before
+  merge). An event held without custody, or shredded, has no projected row, so it is no head.
+  `PatientAllergies::unreadable` counts it, and the strip leads with "… cannot be read on this terminal". The check
+  cannot say which line the unread record would mark. So every current line without a mark reads "not checked"
+  (decision 21), and a line that a readable allergy marks shows only its mark. Before the fix, `check_list` never read
+  that count. With no readable heads every line had no tag at all, and silence read as checked for exactly the reader
+  whom decision 4 leaves without a safety signal.
 
 ## Consequences
 
