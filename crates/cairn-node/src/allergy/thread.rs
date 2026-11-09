@@ -25,10 +25,12 @@
 //!    overlay naming an older version changes no head's status; it is said on that version's
 //!    "Earlier:" line (ruling R-4c, the view's job): a correction signed concurrently with (or
 //!    after) a withdrawal or de-label of its target is never struck by it.
-//! 6. **Differing accounts**: two live heads of the same allergen ([`same_allergen`]) that
-//!    disagree ([`accounts_differ`]) are both marked; so are two sibling heads of ONE thread (a
-//!    fork of concurrent corrections) whose recorded words differ at all, even when a fork renamed
-//!    the allergen — they are competing versions of one record, not two allergies.
+//! 6. **Differing accounts**: two live heads of the same allergen ([`same_allergen_rows`]: the
+//!    term, or one coding) that disagree ([`accounts_differ`]) are both marked; so are two sibling
+//!    heads of ONE thread (a fork of concurrent corrections) whose recorded words differ at all —
+//!    the term by [`same_allergen`]'s folding, the allergen kind, the coding, the account — even
+//!    when a fork renamed the allergen under one code: they are competing versions of one record,
+//!    not two allergies.
 //!
 //! Every tie breaks on (HLC, event id), so the fold is deterministic on every node.
 use super::read::{AllergyRow, ChallengeRow, KeyState, NoneRow, PatientAllergies, RetractionRow};
@@ -51,7 +53,7 @@ pub struct Head<'a> {
     /// concurrent versions of one record.
     pub thread: Uuid,
     /// Another live head disagrees with this one: one of the same allergen whose account differs,
-    /// or a sibling head of the same thread whose recorded words differ at all.
+    /// or a sibling head of the same thread whose recorded words (its coding included) differ at all.
     pub differing: bool,
 }
 
@@ -148,13 +150,14 @@ pub fn same_allergen(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
-/// D10 (ADR-0097 D5 widened): two ROWS name the same allergen when their terms match
+/// D10 (ADR-0098 decision 16, widening ADR-0097 decision 16): two ROWS name the same allergen when their terms match
 /// ([`same_allergen`]) OR both carry the same `(system, code)` coding. The code is the stronger
 /// evidence: "Augmentin" and "amoxicillin" typed differently but coded to one moiety are one
 /// allergen. Two uncoded rows, or a coded and an uncoded one, fall back to the names alone.
 pub fn same_allergen_rows(a: &AllergyRow, b: &AllergyRow) -> bool {
     same_allergen(&a.term, &b.term)
-        || matches!((&a.coding, &b.coding), (Some(x), Some(y)) if x.system == y.system && x.code == y.code)
+        // Case-blind: the drug-list codes are uuids, and the remote door admits any spelling.
+        || matches!((&a.coding, &b.coding), (Some(x), Some(y)) if x.system == y.system && x.code.eq_ignore_ascii_case(&y.code))
 }
 
 /// Plan D5: two accounts (of the same allergen) differ when their kinds differ (allergy vs
@@ -419,8 +422,11 @@ pub fn resolve(a: &PatientAllergies) -> Resolved<'_> {
             live.iter().any(|o| {
                 o.row.event_id != h.row.event_id
                     && if o.thread == h.thread {
-                        // Siblings of one thread compete even when a fork renamed the allergen.
-                        !same_allergen_rows(o.row, h.row)
+                        // Siblings of one thread compete even when a fork renamed the allergen —
+                        // a shared code makes two THREADS one allergen, never two versions of one
+                        // record the same words — and when they differ only in their coding.
+                        !same_allergen(&o.row.term, &h.row.term)
+                            || o.row.coding != h.row.coding
                             || o.row.allergen_kind != h.row.allergen_kind
                             || accounts_differ(o.row, h.row)
                     } else {

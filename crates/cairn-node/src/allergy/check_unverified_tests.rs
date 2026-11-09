@@ -44,6 +44,22 @@ fn an_uncoded_allergy_leaves_every_line_not_checked() {
     assert_eq!(got[&id(901)], not_checked());
 }
 
+/// An allergy coded under a drug-list system whose code does not read as a uuid (a peer's
+/// malformed coding: the remote door checks structure only) is asked nothing and checks nothing.
+#[test]
+fn an_allergy_code_that_is_not_a_uuid_is_not_checked() {
+    let mut bad = amox("anaphylaxis");
+    bad.term = "Augmentin".into();
+    bad.coding.as_mut().unwrap().code = "not-a-uuid".into();
+    let f = facts(vec![(AMOX, PARACETAMOL, Answer::NoMatch)]);
+    let got = run(
+        &only(vec![bad]),
+        &[med(900, "paracetamol", Some(PARACETAMOL))],
+        &f,
+    );
+    assert_eq!(got[&id(900)], not_checked());
+}
+
 #[test]
 fn an_uncoded_line_is_not_checked() {
     let a = only(vec![amox("rash")]);

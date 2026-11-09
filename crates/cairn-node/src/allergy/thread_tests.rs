@@ -69,6 +69,11 @@ fn same_allergen_rows_matches_on_code_or_term() {
         &coded("Augmentin", "drugref-moiety", "a"),
         &coded("amoxicillin", "drugref-class", "a")
     ));
+    // A peer's code in another case is the same code (the remote door checks structure only).
+    assert!(same_allergen_rows(
+        &coded("Augmentin", "drugref-moiety", "ABC"),
+        &coded("amoxicillin", "drugref-moiety", "abc")
+    ));
     // One side uncoded: names alone decide.
     assert!(!same_allergen_rows(
         &coded("Augmentin", "drugref-moiety", "a"),
@@ -171,6 +176,113 @@ fn a_fork_that_renames_the_allergen_is_still_differing_accounts() {
         vec![
             entry(1, "drug", "amoxicillin", "allergy", "rash", 8),
             entry(2, "drug", "aspirin", "adverse-effect", "gi-upset", 9),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert!(!head(&r, 1).differing && !head(&r, 2).differing);
+}
+
+/// Slice 3 keeps ADR-0097 decision 16's sibling rule: a coding is part of the recorded words.
+/// A fork that renamed the allergen two ways is still competing even when both branches carry
+/// one code (the code makes them one allergen across THREADS, never one version of a record);
+/// and a fork whose branches differ only in their coding competes too.
+#[test]
+fn a_coded_fork_competes_on_its_words_and_its_coding() {
+    let p = pa(
+        vec![
+            coded(pen(1, "rash", 8), "drugref-moiety", 50),
+            correcting(
+                coded(
+                    entry(2, "drug", "Augmentin", "allergy", "rash", 9),
+                    "drugref-moiety",
+                    50,
+                ),
+                1,
+            ),
+            correcting(
+                coded(
+                    entry(3, "drug", "amoxicillin", "allergy", "rash", 9),
+                    "drugref-moiety",
+                    50,
+                ),
+                1,
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert!(head(&r, 2).differing && head(&r, 3).differing);
+
+    let p = pa(
+        vec![
+            pen(1, "rash", 8),
+            correcting(coded(pen(2, "rash", 9), "drugref-moiety", 50), 1),
+            correcting(coded(pen(3, "rash", 9), "drugref-moiety", 51), 1),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert!(head(&r, 2).differing && head(&r, 3).differing);
+
+    // The same fork twice over (same words, same coding) does not compete.
+    let p = pa(
+        vec![
+            pen(1, "rash", 8),
+            correcting(coded(pen(2, "rash", 9), "drugref-moiety", 50), 1),
+            correcting(coded(pen(3, "rash", 9), "drugref-moiety", 50), 1),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert!(!head(&r, 2).differing && !head(&r, 3).differing);
+}
+
+/// D10 inside `resolve`: two separate entries named differently but coded to one drug are one
+/// allergen, so differing accounts of it are flagged; named differently and coded apart, they
+/// are two allergies and are not.
+#[test]
+fn differently_named_entries_coded_to_one_drug_are_differing_accounts() {
+    let p = pa(
+        vec![
+            coded(
+                entry(1, "drug", "Augmentin", "allergy", "rash", 8),
+                "drugref-moiety",
+                50,
+            ),
+            coded(
+                entry(2, "drug", "amoxicillin", "allergy", "anaphylaxis", 9),
+                "drugref-moiety",
+                50,
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert!(head(&r, 1).differing && head(&r, 2).differing);
+
+    let p = pa(
+        vec![
+            coded(
+                entry(1, "drug", "Augmentin", "allergy", "rash", 8),
+                "drugref-moiety",
+                50,
+            ),
+            coded(
+                entry(2, "drug", "amoxicillin", "allergy", "anaphylaxis", 9),
+                "drugref-moiety",
+                51,
+            ),
         ],
         vec![],
         vec![],

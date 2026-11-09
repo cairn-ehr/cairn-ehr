@@ -481,7 +481,8 @@ const SCHEMA: &[(&str, &str)] = &[
     ),
     // db/076 (allergy slice 3): the drug read door — the ONE file that reads the optional,
     // co-resident drugref schema (availability, the pick's search, the medication check's facts).
-    // Its functions answer nothing when drugref is absent or unreadable.
+    // Its functions answer nothing when drugref is absent or unreadable, and the facts door can
+    // RAISE over a partly readable drugref: callers map that to "no drug list".
     (
         "076_drug_read_door",
         include_str!("../../../db/076_drug_read_door.sql"),

@@ -401,7 +401,7 @@ async fn a_drug_list_that_raises_leaves_every_line_not_checked() {
 }
 
 /// Review Focus 4: the allergy read fails while the medication list is read. The list still
-/// draws, with the worded line above it.
+/// draws, with the worded line above it, and its current line reads "not checked".
 #[tokio::test]
 async fn med_list_draws_when_the_allergy_read_fails() {
     let Some((_guard, mut owner, mut state, chart, _)) = supervised_note().await else {
@@ -430,8 +430,9 @@ async fn med_list_draws_when_the_allergy_read_fails() {
         pane.allergy_check_failed.as_deref(),
         Some(ALLERGIES_NOT_READ)
     );
+    // No allergy was read: the current line says "not checked" on itself too, never clean.
     let amoxil = row(&pane.list.rows, "Amoxil");
-    assert!(amoxil.allergy_marks.is_empty() && !amoxil.allergy_unverified);
+    assert!(amoxil.allergy_marks.is_empty() && amoxil.allergy_unverified);
 }
 
 /// D11 and M7: a group-coded entry whose group is not reviewed says so on the expanded list —

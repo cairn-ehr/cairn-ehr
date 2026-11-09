@@ -3,8 +3,9 @@
 -- WHY A STUB: drugref is OPTIONAL and co-resident — a deployment may install it into Cairn's own
 -- database as the `drugref` schema (ADR-0098 M1), and most never will. The door must work against
 -- the real thing and degrade honestly without it, so the tests build just enough of it:
---   * the three tables the door reads, with ONLY the columns it reads (named and typed as in
---     drugref's db/067 on origin/main, 2026-11-10);
+--   * the three tables the door reads, with the columns it reads (named and typed as in
+--     drugref's db/067 on origin/main, 2026-11-10) — plus substance_class.concept_type, which
+--     the door never reads, kept so a group row looks like drugref's;
 --   * `drugref.allergy_check` with drugref db/068's EXACT signature and RETURNS TABLE. The door
 --     delegates the whole allergy question to it (M4), so the stub does not reproduce drugref's
 --     fold: it answers from a table of canned rows. What the tests pin is that the door passes

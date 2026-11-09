@@ -428,7 +428,7 @@ The decision pathway keys on **stable concept identifiers, never free-text names
 
 The same `{system, code, display}` slot codes an **allergen** too ([ADR-0098](decisions/0098-allergy-coding-and-the-medication-check.md)).
 `drugref-class` names a drug **group**, coded by its immortal `class_uuid`. The window's pick offers only drugref
-*allergy groups* (`concept_type` `AG`, such as *Penicillins (allergy group)*), because drugref's allergy check cannot
+*allergy groups* (the classes listed in drugref's `allergy_group`, such as *Penicillins (allergy group)*), because drugref's allergy check cannot
 check against a MED-RT class. The floor admits any uuid under `drugref-class`, so an entry coded to any other class
 (a peer's, or one written past the window) reads "not checked" on every medication line it meets. It is registered in the same coding registry as the moiety levels, admitted on an allergy entry only, and refused on a
 medication at the authoring door (a medication is one drug, never a group). The divergence above holds unchanged: the

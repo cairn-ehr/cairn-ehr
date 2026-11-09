@@ -10,7 +10,8 @@
 // says so in words under the field ("Coded as: …", ruling F3), so a wrong pick is seen.
 //
 // Words the clinician sees are pinned in drug_pick_webview_tests.rs. Classic script, loaded before
-// allergies.js (which calls `pickedCoding` and `clearPick`), sharing main.js's `el`, `cell`, `invoke`.
+// allergies.js (which calls `pickedCoding` and `clearPick`), sharing main.js's `el`, `cell`, `invoke`
+// and allergies.js's `pressedChoice`.
 "use strict";
 
 const PICK_DELAY_MS = 150;
@@ -125,7 +126,9 @@ async function askPick(text) {
     const answer = await invoke("drug_search", { text: text });
     if (revision === pickRevision && pickIsDrug()) drawPick(answer);
   } catch (failure) {
-    // The pick is optional: a failed search leaves the name to be recorded as typed.
+    // The pick is optional: a failed search leaves the name to be recorded as typed. Logged, so
+    // a broken search is not indistinguishable from "no matches" to whoever debugs it.
+    console.error("drug_search failed:", failure);
     if (revision === pickRevision) closePick();
   }
 }

@@ -381,6 +381,7 @@ async function pressOnce(act) {
     if (patient !== displayedPatient) return; // a chart left: its next read says the truth
     allergyCharts = null;
     allergyRevision += 1; // a read already in flight must not draw and re-enable Sign
+    void readMedList(); // the write may have landed: the medication check's tags follow it (main.js)
     resetAllergyForm();
     // The write may have landed: nothing of the old list stays up (as afterSigned's pane-null
     // branch), and the fault is said once, where the list was.

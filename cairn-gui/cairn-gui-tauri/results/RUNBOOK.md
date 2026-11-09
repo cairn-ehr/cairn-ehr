@@ -2591,7 +2591,8 @@ walk. An outcome that is not known (#814) is pinned by `allergy_overlays_pure_te
 
 The slice's gestures:
 - **The pick.** While the allergen is *Drug*, three letters in *Substance* list drugs and drugref allergy groups under
-  the field (a group reads "{name} (group)"). Choosing one codes the entry. Typing on, or pressing *Other substance*,
+  the field (a group reads "{name} (group)", unless its name already says "group": the real "Penicillins (allergy group)"
+  reads as it is). Choosing one codes the entry. Typing on, or pressing *Other substance*,
   drops the coding, and the entry is then recorded as typed.
 - **The check.** Every current line of the medication list is read against the live drug allergies on every read:
   - a hit carries the loud **Allergy** tag beside the drug's name and its words on a row under the line;
@@ -2806,9 +2807,9 @@ for i in 1 2 3 4 5; do psql "$WINDOW_CONN" -c '\timing on' -c "SELECT count(*) F
 - [ ] The hint "No drug list on this terminal: …" is read or visible.
 - [ ] No dialog at any point.
 
-**WebKit.** The window is WebKit (Tauri on macOS). The webview was walked headlessly in Chromium only, with a stubbed
-`invoke` and rows drawn by `nameCell`/`allergyRows` directly. **WebKit has not been walked.** Walk the pick in the
-real window and note anything that differs from the words above, in particular:
+**WebKit.** The window is WebKit (Tauri on macOS). The webview was walked headlessly in Chromium, with a stubbed
+`invoke` and rows drawn by `nameCell`/`allergyRows` directly; a headless WebKit walk covered only the pick's labels
+and the "Coded as" line. **The real window's WebKit has not been walked.** Walk the pick in the real window and note anything that differs from the words above, in particular:
 - ↓ / ↑ / Enter / Escape in the field;
 - a click on an option, which moves the focus;
 - the list left open when Tab leaves the field (there is no blur close, #1058);

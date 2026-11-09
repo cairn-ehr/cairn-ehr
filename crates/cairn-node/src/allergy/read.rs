@@ -40,7 +40,7 @@ pub struct AllergyRow {
     pub corrects: Option<Uuid>,
     /// The signer key's standing now.
     pub key: KeyState,
-    /// The drug the entry was coded to (`substance.coding`), when it was. Never set on a de-label.
+    /// The drug the entry was coded to (`substance.coding`), when it was.
     pub coding: Option<Coding>,
 }
 

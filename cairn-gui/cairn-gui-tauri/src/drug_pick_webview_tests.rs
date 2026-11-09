@@ -114,7 +114,40 @@ fn an_unverified_line_shows_the_small_tag() {
         position(name, "row.allergy_marks.length > 0") < position(name, "row.allergy_unverified"),
         "{name}"
     );
+    // The tag is actually appended: an empty `else if (row.allergy_unverified) {}` would pass the
+    // order check above and leave every unverified line looking checked (review, PR #1052).
+    assert!(
+        name.contains("th.append(\" \", cell(\"span\", NOT_CHECKED_TAG"),
+        "{name}"
+    );
     assert!(INDEX_HTML.contains("<script src=\"allergy_tags.js\"></script>"));
+}
+
+/// No stylesheet rule hides a tag or the check-failed line: a `display: none` / `visibility:
+/// hidden` on any of them would leave the words in the DOM and off the screen.
+#[test]
+fn no_style_hides_the_allergy_tags() {
+    let css = include_str!("../src-ui/style.css");
+    for selector in [
+        ".allergy-tag",
+        ".allergy-unchecked-tag",
+        "#allergy-check-failed",
+    ] {
+        let mut from = 0;
+        while let Some(at) = css[from..].find(selector) {
+            let start = from + at;
+            let block = &css[start..start + css[start..].find('}').expect("a closed rule")];
+            for hiding in [
+                "display: none",
+                "display:none",
+                "visibility: hidden",
+                "visibility:hidden",
+            ] {
+                assert!(!block.contains(hiding), "{selector} is hidden: {block}");
+            }
+            from = start + selector.len();
+        }
+    }
 }
 
 /// A signed allergy act re-reads the medication list (the check runs inside `med_list`), through
@@ -126,6 +159,14 @@ fn recording_an_allergy_rereads_the_medication_list() {
     assert!(
         patient_gate < position(signed, "void readMedList();"),
         "{signed}"
+    );
+    // A fault mid-press: the write may have landed, so the tags are read again too — on the
+    // chart the press started on only (review, PR #1052).
+    let press = js_fn(ALLERGIES_JS, "pressOnce");
+    assert!(
+        position(press, "if (patient !== displayedPatient) return;")
+            < position(press, "void readMedList();"),
+        "{press}"
     );
     let refresh = js_fn(MAIN_JS, "refresh");
     assert!(

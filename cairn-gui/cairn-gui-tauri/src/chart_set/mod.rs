@@ -26,7 +26,7 @@ pub mod change;
 use crate::hold::plan::release_plan;
 use crate::state::AppState;
 use cairn_gui_tab_medications::view::{build_view, MedListView};
-use cairn_medication_view::{ChartSet, MedicationRow, PatientMedicationList};
+use cairn_medication_view::{ChartSet, MedicationRow, MedicationStatus, PatientMedicationList};
 use cairn_node::allergy::check::LineCheck;
 use cairn_node::patient::person::ChartIdentity;
 use serde::Serialize;
@@ -292,7 +292,8 @@ pub(crate) const HOLD_NOT_ON_OPENED_CHART: &str = "this line's hold is not on th
 ///
 /// `allergy` is the medication check (`allergy_check::med_list_check`): each line's marks,
 /// notes and "not checked" flag by group id, or the sentence saying the allergies could not be
-/// read — the list itself is drawn either way.
+/// read — the list itself is drawn either way, and on that failure every current line reads
+/// "not checked" on the line too (#1059's rule: no allergy read, no line looks checked).
 pub fn chart_pane(
     list: &PatientMedicationList,
     opened: Uuid,
@@ -302,7 +303,7 @@ pub fn chart_pane(
     set_change: Option<String>,
     allergy: Result<HashMap<Uuid, LineCheck>, String>,
 ) -> ChartPane {
-    let (mut checks, allergy_check_failed) = match allergy {
+    let (checks, allergy_check_failed) = match allergy {
         Ok(checks) => (checks, None),
         Err(failed) => (HashMap::new(), Some(failed)),
     };
@@ -329,10 +330,15 @@ pub fn chart_pane(
     // the rows zip one to one.
     for (shown, row) in view.rows.iter_mut().zip(&list.rows) {
         debug_assert_eq!(shown.group_id, row.group_id.to_string());
-        if let Some(c) = checks.remove(&row.group_id) {
-            shown.allergy_marks = c.marks;
-            shown.allergy_notes = c.notes;
+        if let Some(c) = checks.get(&row.group_id) {
+            shown.allergy_marks = c.marks.clone();
+            shown.allergy_notes = c.notes.clone();
             shown.allergy_unverified = c.unverified;
+        }
+        // No allergy was read at all: every current line says "not checked" on the line, as one
+        // unreadable record does (#1059) — the banner alone scrolls away on a long list.
+        if allergy_check_failed.is_some() && row.status == MedicationStatus::Active {
+            shown.allergy_unverified = true;
         }
         if !row.is_wrong_chart_hazard() {
             continue;

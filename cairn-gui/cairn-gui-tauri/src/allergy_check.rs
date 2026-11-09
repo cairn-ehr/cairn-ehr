@@ -163,14 +163,20 @@ pub(crate) async fn group_status(
     a: &PatientAllergies,
 ) -> HashMap<Uuid, String> {
     let groups = group_codes(a);
-    if groups.is_empty() || tx.batch_execute("SAVEPOINT group_status").await.is_err() {
+    if groups.is_empty() {
+        return HashMap::new();
+    }
+    if let Err(e) = tx.batch_execute("SAVEPOINT group_status").await {
+        eprintln!("the drug groups' review status was not asked (no savepoint): {e:#}");
         return HashMap::new();
     }
     match read_group_status(tx, &groups).await {
         Ok(status) => status,
         Err(e) => {
             eprintln!("the drug groups' review status could not be read: {e:#}");
-            let _ = tx.batch_execute("ROLLBACK TO SAVEPOINT group_status").await;
+            if let Err(e) = tx.batch_execute("ROLLBACK TO SAVEPOINT group_status").await {
+                eprintln!("the review-status savepoint could not be rolled back: {e:#}");
+            }
             HashMap::new()
         }
     }

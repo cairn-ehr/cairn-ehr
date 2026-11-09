@@ -25,8 +25,9 @@
 -- allergy_group_member, allergy_mesh_placement, …) as this door's owner. Those are drugref's
 -- implementation, not its interface, so this door does not list them — and an owner who may
 -- read the three interface tables but not one of those makes cairn_drug_facts RAISE. Every
--- caller MUST therefore map an error from these doors to "unavailable" (allergy slice 3, Tasks
--- 3 and 5 pin that): a fault here must never stop the medication list drawing.
+-- caller MUST therefore map an error from these doors to "unavailable" (pinned by the window's
+-- a_drug_list_that_raises_leaves_every_line_not_checked): a fault here must never stop the
+-- medication list drawing.
 --
 -- drugref OWNS THE FOLD (M4). Whether a salt or a hydrate is "the same drug", and which drugs an
 -- allergy group holds, is drugref's question, answered by drugref.allergy_check (drugref db/068),
@@ -43,7 +44,9 @@
 --
 -- What the doors read (drugref origin/main, db/067 + db/068, 2026-11-10):
 --   substance_moiety(moiety_uuid, display_name)            one drug
---   substance_class(class_uuid, class_name, concept_type)  a class; an allergy group is 'AG'
+--   substance_class(class_uuid, class_name)                a class (the door never reads its
+--                                                          concept_type: the groups offered are
+--                                                          those allergy_group lists, #1058)
 --   allergy_group(class_uuid, review_status, …)            the allergy groups, 'structural-seed'
 --                                                          or 'reviewed'
 --   allergy_check(p_prescribed uuid, p_allergen uuid)      the check, one row per path
@@ -95,8 +98,8 @@ $$;
 --      offer most of the table.
 --    * The text matches LITERALLY: LIKE's own `%`, `_` and the escape `\` are escaped first, so a
 --      typed "%%%" is three percent signs, not "every drug".
---    * A drug matches when its name, or a word in it, starts with the text ("moxi" finds
---      nothing). A group matches anywhere in its name.
+--    * A drug matches when its name, or a word in it, starts with the text ("moxi" does
+--      not find amoxicillin). A group matches anywhere in its name.
 --    * Only drugref's ALLERGY GROUPS are offered as groups (M5) — never a MED-RT class such as
 --      "Penicillin-class Antibacterial [EPC]": allergy_check answers `allergen-not-a-group` for
 --      one, so an allergen coded with it could never be checked.
@@ -144,12 +147,13 @@ $$;
 --    order, PRESCRIBED first. drugref answers `match` (one row per path: `same-drug` or
 --    `same-group`, with the group's name), `no-match` (both sides placed, nothing shared), or
 --    `unplaced` (could not be checked). The window treats anything but `match` and `no-match` as
---    "not checked"; this door adds nothing and drops nothing but drugref's reason and path uuids,
---    which the window does not show.
+--    "not checked"; this door adds nothing and drops only what the window does not show:
+--    drugref's reason, its path uuids, the group's MeSH id and its review status (the last is
+--    read on its own, by cairn_drug_group_status).
 --
 --    The shape changed when the door began delegating (M4): the old one was (fact, allergen, med).
---    CREATE OR REPLACE cannot change a RETURNS TABLE, so the old shape is dropped first — only
---    when it is the one present, so a converged node's replay leaves the function untouched.
+--    CREATE OR REPLACE cannot change a RETURNS TABLE, so any shape other than the current one is
+--    dropped first; a converged node's replay leaves the function untouched.
 DO $$
 BEGIN
     -- On a fresh node to_regprocedure is NULL, so the comparison is NULL and nothing is dropped.

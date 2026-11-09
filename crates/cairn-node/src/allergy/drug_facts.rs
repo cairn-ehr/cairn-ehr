@@ -4,7 +4,7 @@
 //! read. It keeps no drug logic of its own: it passes the drug database's allergy check through,
 //! one pair at a time (M4). This module only turns its rows into plain Rust values the medication
 //! check can use, and says "unavailable" when the door has nothing to say. It decides nothing
-//! clinical: which pair becomes a mark or a "not checked" tag is the check's job (Task 4).
+//! clinical: which pair becomes a mark or a "not checked" tag is `check::check_medications`'s job.
 use anyhow::Context;
 use std::collections::HashMap;
 use tokio_postgres::GenericClient;
@@ -57,8 +57,9 @@ fn texts(ids: &[Uuid]) -> Vec<String> {
 
 /// Fold the door's rows for ONE pair into an [`Answer`]. Pure. Rows are `(outcome, kind, group)`.
 /// Any `match` row makes the pair a match (and every match row's path is kept); otherwise the
-/// pair is `unplaced` if any row says so; otherwise `no-match`. A word this build does not know
-/// reads as `unplaced`: "not verified" is the safe reading of an answer we cannot interpret.
+/// pair is `no-match` if it has rows and every one says so; otherwise `unplaced` — a word this
+/// build does not know, and no rows at all, included: "not verified" is the safe reading of an
+/// answer we cannot interpret or were never given.
 fn fold_rows(rows: &[FactRow]) -> Answer {
     let paths: Vec<MatchPath> = rows
         .iter()
@@ -70,7 +71,7 @@ fn fold_rows(rows: &[FactRow]) -> Answer {
         .collect();
     if !paths.is_empty() {
         Answer::Match(paths)
-    } else if rows.iter().all(|(outcome, _, _)| outcome == "no-match") {
+    } else if !rows.is_empty() && rows.iter().all(|(outcome, _, _)| outcome == "no-match") {
         Answer::NoMatch
     } else {
         Answer::Unplaced
@@ -84,7 +85,7 @@ fn fold_rows(rows: &[FactRow]) -> Answer {
 /// `Err` is NOT the same as `Unavailable`: the facts door can raise when the drug database is
 /// installed but only partly readable (db/076's header). **Callers map `Err` to
 /// `DrugFacts::Unavailable`**, so a drug database of unexpected shape degrades to "not checked"
-/// rather than breaking the medication list (Task 5 does this).
+/// rather than breaking the medication list (the window's `allergy_check::check_list` does this).
 pub async fn read_drug_facts(
     c: &impl GenericClient,
     allergens: &[Uuid],
@@ -193,5 +194,11 @@ mod tests {
         assert_eq!(fold_rows(&[row("no-match", None)]), Answer::NoMatch);
         assert_eq!(fold_rows(&[row("unplaced", None)]), Answer::Unplaced);
         assert_eq!(fold_rows(&[row("a-newer-word", None)]), Answer::Unplaced);
+    }
+
+    /// No rows is no answer: only a `no-match` the door actually said is a verified negative.
+    #[test]
+    fn no_rows_is_not_a_verified_negative() {
+        assert_eq!(fold_rows(&[]), Answer::Unplaced);
     }
 }

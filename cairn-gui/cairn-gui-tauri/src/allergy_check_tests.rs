@@ -334,9 +334,20 @@ fn the_pane_carries_each_lines_check() {
 }
 
 /// Review Focus 4, the pure half: an unread allergy list keeps the medication list and says so
-/// above it, in the exact words.
+/// above it, in the exact words — and every current line reads "not checked" on the line itself,
+/// as it does for one unreadable record (#1059): a banner alone scrolls away on a long list, and
+/// an amoxicillin line under it would look exactly like one the check cleared. A past line is
+/// never checked, so it carries no tag either way.
 #[test]
 fn a_failed_allergy_read_keeps_the_list_and_says_so() {
+    let chart = sample_chart();
+    assert!(
+        chart
+            .rows
+            .iter()
+            .any(|r| r.status == MedicationStatus::Active),
+        "the fixture must hold a current line, or the tag assertion below passes empty"
+    );
     let pane = pane_with(Err(ALLERGIES_NOT_READ.into()));
     assert_eq!(pane.list.rows.len(), sample_chart().rows.len());
     assert_eq!(
@@ -345,10 +356,21 @@ fn a_failed_allergy_read_keeps_the_list_and_says_so() {
     );
     let json = serde_json::to_value(&pane).unwrap();
     assert!(json["allergy_check_failed"].is_string());
-    let row = &json["list"]["rows"][0];
-    assert_eq!(row["allergy_marks"], serde_json::json!([]));
-    assert_eq!(row["allergy_notes"], serde_json::json!([]));
-    assert_eq!(row["allergy_unverified"], false);
+    for (row, med) in json["list"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(&chart.rows)
+    {
+        assert_eq!(row["allergy_marks"], serde_json::json!([]));
+        assert_eq!(row["allergy_notes"], serde_json::json!([]));
+        assert_eq!(
+            row["allergy_unverified"],
+            med.status == MedicationStatus::Active,
+            "{}",
+            med.term
+        );
+    }
 }
 
 /// #1059, the window's half: `check_list` hands the unreadable count to the check even on the

@@ -88,7 +88,7 @@
 >   suspect overlay counts only to ADD a warning, no act on a doubted-link chart's line, differing accounts, byline key
 >   markers (#1027 built). Open: **#1039** · **#1040** · **#1041** · **#1042** · **#1043** · **#1044** · **#1045** ·
 >   **#1046** (a decision) · **#1047** · **#1048** · **#1049** · **#1050** · **#1051**; owed **RUNBOOK §28**.
-> - **Allergy slice 3 BUILT 2026-11-10 on draft PR [#1052](https://github.com/cairn-ehr/cairn-ehr/pull/1052)** (plan
+> - **Allergy slice 3 BUILT 2026-11-10 on PR [#1052](https://github.com/cairn-ehr/cairn-ehr/pull/1052)** (plan
 >   [`superpowers/plans/2026-11-09-allergy-slice-3-drugref-and-the-medication-check.md`](superpowers/plans/2026-11-09-allergy-slice-3-drugref-and-the-medication-check.md),
 >   [ADR-0098](spec/decisions/0098-allergy-coding-and-the-medication-check.md), spec **v0.100**, `db/076` with db/074 +
 >   db/041 + db/042 in place, `SCHEMA_GENERATION` **76**): a drug entry may be coded `drugref-moiety` or `drugref-class`
@@ -98,7 +98,11 @@
 >   a hit, a muted note for an adverse effect, a small **not checked** tag when unverified; a door error is "no drug
 >   list", never a failed pane. Open: **#1053** (code the tolerated drug) · **#1054** (check at charting) · **#1055**
 >   (drugref's cephalosporin rule — `no-match` is not "safe") · **#1056** (unknown reaction word ranks last) · **#1058**
->   (review minors). **#1057** (the group crowded out of the pick, its name doubled) and **#1059** (an unreadable
+>   (review minors); from the final check, **#1060** (a reconciled group with an uncoded member can read clean) ·
+>   **#1061** (a mild mark hides an unverified severe allergen — ruling needed) · **#1062** (a degraded drug list is
+>   never said) · **#1063** (stale tags after a failed re-read) · **#1064** (test residuals). The final check also made
+>   a failed allergy read tag every current line "not checked" and restored ADR-0097's sibling rule under a shared
+>   code (ADR-0098 decisions 16 and 25). **#1057** (the group crowded out of the pick, its name doubled) and **#1059** (an unreadable
 >   allergy record left the list untagged) are FIXED on #1052's branch by the final fix wave — groups first, labelled
 >   once; unread records make every unmarked current line "not checked"; plus a visible "Coded as: …" line under the
 >   Substance field (ruling F3) — and stay open until it merges. Owed by a human: **RUNBOOK §29**
@@ -146,7 +150,7 @@
 > 1. **Slice 3 is complete** (3a → 3c-3c, the bullets above). **#1021 measured, MERGED 2026-11-08 in PR #1025**
 >    (figures `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: per-key fact lookups 5–6× faster,
 >    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
->    projection and the Pi figures. **Allergy slices 1 + 2 MERGED; slice 3 BUILT on draft PR #1052** (the bullets
+>    projection and the Pi figures. **Allergy slices 1 + 2 MERGED; slice 3 BUILT on PR #1052** (the bullets
 >    above). **Next, in order:** the maintainer's read + CI on **#1052**, then merge → **charting a medication in the
 >    window** (it cannot yet; reuse slice 3's check at charting, #1054; its ADR records the milestone's "prescribe means
 >    charted"). Later picks: slice 4

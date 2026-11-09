@@ -6,7 +6,7 @@
   maintainer's 2026-11-10 replan replacing the design's per-allergen "not fully checked" line (M6))
 - **Date:** 2026-11-10
 - **Spec version at acceptance:** 0.100
-- **Issues:** draft PR [#1052](https://github.com/cairn-ehr/cairn-ehr/pull/1052) (allergy slice 3). Design:
+- **Issues:** PR [#1052](https://github.com/cairn-ehr/cairn-ehr/pull/1052) (allergy slice 3). Design:
   `docs/superpowers/specs/2026-11-08-allergy-stream-design.md` §3.2, §3.7, §4, §7 risks 2–3; plan:
   `docs/superpowers/plans/2026-11-09-allergy-slice-3-drugref-and-the-medication-check.md`. drugref's side: drugref PR
   #225 (`db/067_allergy_groups.sql`, `db/068_allergy_check.sql`, `db/069_allergy_check_comment.sql` and its design
@@ -47,7 +47,7 @@ The maintainer took three decisions before the plan (M1–M3) and four more afte
 and `allergy_check` (drugref PR #225, 2026-11-10: M4–M7). M4 supersedes M3. M4–M6 supersede the plan's first-draft
 calls D4–D6, which had walked MED-RT classes in Cairn and printed "not fully checked" lines. The plan's designer made
 the calls D1–D3 and D7–D11. The build's rulings are recorded in the slice's ledger and cited by letter below where
-they changed the plan (T2-a, T2R-b, T3-a, T4-a to T4-f, T5-b to T5-f, T6-a, R1–R3). The first signed coded entry
+they changed the plan (T2-a, T2R-b, T3-a, T4-a to T4-f, T5-b to T5-f, T6-a, F2, F3, R1–R3). The first signed coded entry
 freezes the coding's wire shape (principle 11), so that shape is written down exactly.
 
 ## Decision
@@ -78,7 +78,8 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
 
 5. **The coding slot opens for drug entries only (D1).**
    - **At both doors** (`cairn_check_coding_object`, db/041), the check is structural. A coding is null, absent, or
-     an object whose `system`, `code` and `display` are non-empty strings.
+     an object whose `system`, `code` and `display` are non-empty strings. An allergy entry must carry the key
+     (db/074 refuses an absent `coding` at both doors: null when uncoded).
    - **At the authoring door only** (`cairn.remote_apply` is not `'on'`), three more rules apply:
      - `system` must be registered in `medication_coding_system`, and a uuid-format system's `code` must be the
        canonical lowercase hyphenated uuid (db/041);
@@ -106,7 +107,8 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
    `EXECUTE` is revoked. Each door is `SECURITY DEFINER` with `SET search_path = pg_catalog, pg_temp`, and every
    `drugref.` and Cairn name inside it is schema-qualified. **No door's name contains "drugref"**, so the Rust that
    calls them never has to name it, and `no_drugref_dependency.rs`, which scans every `.sql` and `.rs` file under
-   `db/`, `crates/` and `extensions/` (test code excluded), stays strict for all of it.
+   `db/`, `crates/` and `extensions/` (files under a `tests/` directory excluded), stays strict for all of it. The
+   window's own callers under `cairn-gui/` are outside that scan.
 8. **`cairn_drug_available() RETURNS boolean`.** It is true only when the door's owner holds all of these:
    - USAGE on the schema `drugref`;
    - SELECT on `drugref.substance_moiety`, `drugref.substance_class` and `drugref.allergy_group` (each a table,
@@ -147,8 +149,8 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
       holds, is drugref's question. drugref folds **every** composition component, not only the pharmacologically
       active ones: its owner ruled that activity is not what triggers an allergy. Cairn keeps no fold, membership or
       class walk of its own, so a wrong answer is fixed in drugref, in one place, for every client.
-    - **Replay.** The door's shape changed during the build. A guarded `DROP FUNCTION` removes the older shape only
-      when that is the one present, so every connect's replay converges.
+    - **Replay.** The door's shape changed during the build. A guarded `DROP FUNCTION` drops any shape other than the
+      current one, and a converged node's replay leaves the current one untouched, so every connect converges.
 11. **`cairn_drug_group_status(p_groups uuid[]) RETURNS TABLE(group_code uuid, review_status text)`** returns each
     named allergy group's `drugref.allergy_group.review_status`. drugref's two words today are `structural-seed` and
     `reviewed`, and every group is `structural-seed`. A code that is not an allergy group has no row. The search, the
@@ -211,7 +213,12 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
       - otherwise it is `Unplaced`, which covers an outcome word this build does not know.
     - A pair with no row is absent from the map.
 16. **Two accounts are the same allergen (D10)** when their terms match by ADR-0097 decision 16's folding **or** they
-    carry the same `(system, code)` (`thread::same_allergen_rows`). The "differing accounts" test uses this rule now.
+    carry the same `(system, code)` (`thread::same_allergen_rows`). The "differing accounts" test between heads of
+    *different* threads uses this rule now. Between sibling heads of *one* thread (a fork of concurrent corrections)
+    ADR-0097 decision 16's rule stands unchanged, with the coding counted among the recorded words: they compete when
+    their terms differ by that folding even if both carry one code, and when they differ only in their coding — a
+    shared code makes two threads one allergen, never two versions of one record the same words
+    (`a_coded_fork_competes_on_its_words_and_its_coding`).
 
 ### The check (`cairn_node::allergy::check`, pure)
 
@@ -248,7 +255,9 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
     that rank `not-known` comes directly after anaphylaxis and before angioedema, so it outranks every known reaction
     but one, and a word this build does not know comes last ((e), #1056).
 
-    The reaction words come from the component's most severe account. The sentence comes from the first account that
+    Components are built separately over allergy-kind and adverse-effect heads, so "most severe account" means the
+    most severe *allergy-kind* account; an adverse effect of the same allergen is its own note and never words the
+    mark. The reaction words come from the component's most severe account. The sentence comes from the first account that
     hit. The words are exact (`reaction_phrase` gives `{reaction}`; `{line name}` is `MedicationRow::display_name()`):
     - **The same drug** (by name, by code, a path that is not purely `same-group`, or a moiety allergen's
       `same-group` path that names no group): "Allergy recorded: {allergen term} → {reaction}".
@@ -321,7 +330,9 @@ freezes the coding's wire shape (principle 11), so that shape is written down ex
       connection. It hands each line's `LineCheck` to `chart_pane` as `MedListRowView.allergy_marks`,
       `.allergy_notes` and `.allergy_unverified`.
     - **When the allergies cannot be read.** A failed allergy read gives `ChartPane.allergy_check_failed`: "Allergies
-      could not be read: medications not checked against them", above a list that still draws. So does an allergy
+      could not be read: medications not checked against them", above a list that still draws, and every current
+      line on it carries the "not checked" tag, as one unreadable record leaves it (#1059) — a banner alone scrolls
+      away on a long list (`a_failed_allergy_read_keeps_the_list_and_says_so`). So does an allergy
       read whose chart set differs from the medication list's, when a link or unlink landed between the two reads
       (ruling T5-c).
     - **Which moiety a line names.** A line names its moiety only when it is coded `drugref-moiety` and its threads

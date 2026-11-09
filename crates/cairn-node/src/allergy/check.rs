@@ -65,7 +65,8 @@ pub struct MedLine<'a> {
 /// tag already sends the clinician to the allergy list).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LineCheck {
-    /// Confirmed allergy hits, worded, most severe first.
+    /// Confirmed allergy hits, worded, one per allergen, in the order of each allergen's first
+    /// hitting head (the reaction shown is that allergen's most severe live account).
     pub marks: Vec<String>,
     /// Previous adverse effects that meet the line, worded.
     pub notes: Vec<String>,
@@ -76,7 +77,7 @@ pub struct LineCheck {
 /// How one (allergy head, line) pair came out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pair<'f> {
-    /// The same drug: by name, by code, or a drug-list path that is not a named group.
+    /// The same drug: by name, by code, or a drug-list path whose kind is not `same-group`.
     SameDrug,
     /// The drug list put both in one group (its name, when the list gave one).
     SameGroup(Option<&'f str>),
