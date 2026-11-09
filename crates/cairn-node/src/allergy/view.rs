@@ -7,7 +7,8 @@
 //! the historical and entered-in-error lines, and finally the `strip` module composes the one-line
 //! strip from those. Vocabulary stays strings (a peer's newer word must still read), so every
 //! `match` here has an "unknown" arm.
-use super::read::{AllergyRow, ChallengeRow, KeyState, NoneRow, PatientAllergies, RetractionRow};
+use super::history_words::{challenge_date, historical_text, none_history};
+use super::read::{AllergyRow, KeyState, NoneRow, PatientAllergies, RetractionRow};
 use super::strip::{strip_text, Strip};
 use super::thread::{by_words, key_marker, resolve, Head};
 use cairn_event::allergy::entry_words_dated;
@@ -39,10 +40,20 @@ pub struct EntryLine {
     pub signer: Option<String>,
     /// The terminal's local day it was recorded (the caller's offset, R3).
     pub recorded: NaiveDate,
-    /// This line's older versions, "Earlier: … (recorded 8 Nov 2026 by Dr Ada)", newest first.
+    /// This line's older versions, "Earlier: … (recorded 8 Nov 2026 by Dr Ada)", newest first,
+    /// each ending with any counted overlay naming it (" — entered in error …" / " — de-labelled
+    /// …: tolerated …", ruling R-4c).
     pub earlier: Vec<String>,
     /// On a historical line: the standing de-label that made it so (the window withdraws it).
     pub challenge: Option<Uuid>,
+}
+
+/// One "Entered in error: …" line, with the older versions a withdrawn entry had replaced
+/// ("Earlier: …", newest first; empty for a withdrawn de-label or "none known" statement).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnteredInError {
+    pub text: String,
+    pub earlier: Vec<String>,
 }
 
 /// One "none known" line: its words, and the statement it reads (the window withdraws it).
@@ -80,7 +91,7 @@ pub struct AllergyView {
     /// De-labelled lines: "Historically reported: … Challenged: tolerated …". Never prominent.
     pub historical: Vec<EntryLine>,
     /// Withdrawn entries, de-labels and "none known" statements: "Entered in error: …".
-    pub entered_in_error: Vec<String>,
+    pub entered_in_error: Vec<EnteredInError>,
     /// De-labels and withdrawals that count for nothing, and why: "Not counted: …".
     pub ignored_overlays: Vec<String>,
 }
@@ -88,7 +99,7 @@ pub struct AllergyView {
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
-const DOUBT: &str = " (on a chart whose link to this one is in doubt)";
+pub(super) const DOUBT: &str = " (on a chart whose link to this one is in doubt)";
 /// Appended to every live head whose allergen has another, disagreeing, live account (plan D5).
 const DIFFERING: &str = " — differing accounts";
 
@@ -100,7 +111,7 @@ pub(super) fn day_text(d: NaiveDate) -> String {
 
 /// The onset as the clinician reads it (`14 Mar 2019`, `Mar 2019`, `2019`); `None` when unknown.
 /// A value that does not parse (a peer's newer shape) reads as itself.
-fn onset_text(precision: &str, value: Option<&str>) -> Option<String> {
+pub(super) fn onset_text(precision: &str, value: Option<&str>) -> Option<String> {
     let v = value?;
     let month = |m: &str| {
         m.parse::<usize>()
@@ -133,10 +144,15 @@ pub fn entry_line_text(row: &AllergyRow) -> String {
         row.reaction_text.as_deref(),
         onset.as_deref(),
     );
-    // A peer's newer allergen kind (e.g. "food") files under Other but says what it is.
+    format!("{words}{}", allergen_kind_mark(row))
+}
+
+/// `" (food)"` for a peer's newer allergen kind, which files under Other but must say what it
+/// is; nothing for `drug` and `other`.
+pub(super) fn allergen_kind_mark(row: &AllergyRow) -> String {
     match row.allergen_kind.as_str() {
-        "drug" | "other" => words,
-        k => format!("{words} ({k})"),
+        "drug" | "other" => String::new(),
+        k => format!(" ({k})"),
     }
 }
 
@@ -175,7 +191,7 @@ fn newest<'a>(rows: impl Iterator<Item = &'a NoneRow>) -> Option<&'a NoneRow> {
     rows.max_by_key(|n| (n.hlc, n.event_id))
 }
 
-fn local_day(t: chrono::DateTime<chrono::Utc>, offset: FixedOffset) -> NaiveDate {
+pub(super) fn local_day(t: chrono::DateTime<chrono::Utc>, offset: FixedOffset) -> NaiveDate {
     t.with_timezone(&offset).date_naive()
 }
 
@@ -283,6 +299,34 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
             ""
         }
     };
+    // An older version's line. A counted overlay naming THAT version is said on it (ruling
+    // R-4c): it covers the version only, never the later correction above it, but the
+    // clinician's signed act must not vanish from sight.
+    let earlier_text = |e: &AllergyRow| {
+        let overlay = if let Some(w) = r.withdrawals.get(&e.event_id) {
+            format!(
+                " — entered in error {}{}",
+                day(w.recorded_at),
+                by_words(w.signer.as_deref(), w.key)
+            )
+        } else if let Some(c) = r.de_labels.get(&e.event_id) {
+            format!(
+                " — de-labelled {}{}: tolerated {}{}",
+                day(c.recorded_at),
+                by_words(c.signer.as_deref(), c.key),
+                c.tolerated,
+                challenge_date(c)
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "Earlier: {} (recorded {}{}){overlay}",
+            entry_line_text(e),
+            day(e.recorded_at),
+            by_words(e.signer.as_deref(), e.key)
+        )
+    };
     // One expanded-list line: `text` is the caller's (a head's words, or a de-labelled line's).
     let line = |r: &AllergyRow, text: String, earlier: &[&AllergyRow]| EntryLine {
         event_id: r.event_id,
@@ -295,17 +339,7 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
             .as_deref()
             .map(|s| format!("{s}{}", key_marker(r.key))),
         recorded: local_day(r.recorded_at, offset),
-        earlier: earlier
-            .iter()
-            .map(|e| {
-                format!(
-                    "Earlier: {} (recorded {}{})",
-                    entry_line_text(e),
-                    day(e.recorded_at),
-                    by_words(e.signer.as_deref(), e.key)
-                )
-            })
-            .collect(),
+        earlier: earlier.iter().map(|e| earlier_text(e)).collect(),
         challenge: None,
     };
     let head_line = |h: &Head| {
@@ -356,29 +390,36 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
             by_words(by.signer.as_deref(), by.key)
         )
     };
-    let entered_in_error = r
-        .withdrawn
+    // A withdrawn entry keeps its doubt mark and its older versions (A in A←B, B withdrawn).
+    let struck_entries = r.withdrawn.iter().map(|w| EnteredInError {
+        text: format!(
+            "Entered in error: {}{} {}",
+            entry_line_text(w.row),
+            doubt(w.row),
+            withdrawn(w.by)
+        ),
+        earlier: w.earlier.iter().map(|e| earlier_text(e)).collect(),
+    });
+    let struck_others = r
+        .withdrawn_challenges
         .iter()
         .map(|w| {
-            format!(
-                "Entered in error: {} {}",
-                entry_line_text(w.row),
-                withdrawn(w.by)
-            )
-        })
-        .chain(r.withdrawn_challenges.iter().map(|w| {
             format!(
                 "Entered in error: de-label — tolerated {} {}",
                 w.row.tolerated,
                 withdrawn(w.by)
             )
-        }))
+        })
         .chain(
             r.withdrawn_none
                 .iter()
                 .map(|n| none_history("Entered in error", n, offset, doubted(n))),
         )
-        .collect();
+        .map(|text| EnteredInError {
+            text,
+            earlier: vec![],
+        });
+    let entered_in_error = struck_entries.chain(struck_others).collect();
 
     let strip = strip_text(&Strip {
         drug: &drug,
@@ -410,47 +451,6 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
         entered_in_error,
         ignored_overlays: r.ignored_overlays.clone(),
     }
-}
-
-/// A "none known" statement as history: `"{prefix}: no known allergies (asked 8 Nov 2026 by Dr
-/// Bea)"`, ending with the doubt mark when its chart's link is in doubt. `prefix` is "Previously
-/// recorded" (it stands for no list) or "Entered in error" (it was withdrawn).
-fn none_history(prefix: &str, n: &NoneRow, offset: FixedOffset, doubted: bool) -> String {
-    let what = match n.scope.as_str() {
-        "all" => "no known allergies".to_string(),
-        "drug" => "no known drug allergies".to_string(),
-        s => format!("none known ({s})"),
-    };
-    format!(
-        "{prefix}: {what} (asked {}{}){}",
-        day_text(local_day(n.recorded_at, offset)),
-        by_words(n.signer.as_deref(), n.key),
-        if doubted { DOUBT } else { "" }
-    )
-}
-
-/// A de-labelled line: `"Historically reported: penicillin allergy. Challenged: tolerated
-/// amoxicillin Mar 2022 — {note}"`. The date reads as an onset does; an unknown one is left out.
-fn historical_text(r: &AllergyRow, c: &ChallengeRow) -> String {
-    let kind = match r.kind.as_str() {
-        "allergy" => "allergy",
-        "adverse-effect" => "adverse effect",
-        k => k,
-    };
-    let date = onset_text(&c.date_precision, c.date_value.as_deref())
-        .map(|d| format!(" {d}"))
-        .unwrap_or_default();
-    let note = c
-        .text
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(|t| format!(" — {t}"))
-        .unwrap_or_default();
-    format!(
-        "Historically reported: {} {kind}. Challenged: tolerated {}{date}{note}",
-        r.term, c.tolerated
-    )
 }
 
 /// Texts of the lines that may reach the strip (allergies only; unknown kinds never do).

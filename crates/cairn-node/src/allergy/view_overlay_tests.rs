@@ -10,6 +10,9 @@ fn view(p: &PatientAllergies) -> AllergyView {
 fn texts(ls: &[EntryLine]) -> Vec<&str> {
     ls.iter().map(|l| l.text.as_str()).collect()
 }
+fn struck(ls: &[EnteredInError]) -> Vec<&str> {
+    ls.iter().map(|l| l.text.as_str()).collect()
+}
 
 #[test]
 fn a_correction_replaces_its_line_and_keeps_the_older_as_earlier() {
@@ -142,7 +145,7 @@ fn withdrawing_a_delabel_puts_the_allergy_back() {
     assert!(v.drug_allergies[0].prominent);
     assert_eq!(v.strip, "Allergy: penicillin → anaphylaxis");
     assert_eq!(
-        v.entered_in_error,
+        struck(&v.entered_in_error),
         ["Entered in error: de-label — tolerated amoxicillin (withdrawn 10 Nov 2026 by Dr Ada)"]
     );
 }
@@ -159,7 +162,7 @@ fn a_withdrawn_entry_leaves_the_strip_and_reads_entered_in_error() {
     assert_eq!(v.drug, ListStatus::NotYetAsked);
     assert_eq!(v.strip, "Allergies not yet asked");
     assert_eq!(
-        v.entered_in_error,
+        struck(&v.entered_in_error),
         ["Entered in error: Allergy: penicillin → anaphylaxis (withdrawn 10 Nov 2026 by Dr Ada)"]
     );
 }
@@ -176,7 +179,7 @@ fn withdrawing_a_version_covers_it_and_what_it_replaced() {
     assert!(v.drug_allergies.is_empty() && v.historical.is_empty());
     assert_eq!(v.strip, "Allergies not yet asked");
     assert_eq!(
-        v.entered_in_error,
+        struck(&v.entered_in_error),
         ["Entered in error: Allergy: penicillin → anaphylaxis (withdrawn 11 Nov 2026 by Dr Ada)"]
     );
 }
@@ -198,7 +201,7 @@ fn withdrawing_an_older_version_leaves_a_later_correction_live() {
     assert!(v.drug_allergies[0].prominent);
     assert_eq!(
         v.drug_allergies[0].earlier,
-        ["Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada)"]
+        ["Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada) — entered in error 10 Nov 2026 by Dr Ada"]
     );
     assert_eq!(v.strip, "Allergy: penicillin → anaphylaxis");
 }
@@ -220,7 +223,7 @@ fn a_correction_after_a_delabel_reads_live_again() {
     );
     assert_eq!(
         v.drug_allergies[0].earlier,
-        ["Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada)"]
+        ["Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada) — de-labelled 9 Nov 2026 by Dr Ada: tolerated amoxicillin Mar 2022"]
     );
     assert_eq!(v.strip, "Allergy: penicillin → urticaria");
 }
@@ -235,7 +238,7 @@ fn a_withdrawn_none_statement_stands_for_nothing() {
     ));
     assert_eq!(v.strip, "Allergies not yet asked");
     assert!(v.standing_none.is_empty() && v.previously_none.is_empty());
-    let mut eie = v.entered_in_error.clone();
+    let mut eie = struck(&v.entered_in_error);
     eie.sort();
     assert_eq!(
         eie,
@@ -275,7 +278,7 @@ fn a_repudiated_keys_withdrawal_of_a_delabel_counts() {
     assert!(v.historical.is_empty() && v.ignored_overlays.is_empty());
     assert_eq!(v.strip, "Allergy: penicillin → anaphylaxis");
     assert_eq!(
-        v.entered_in_error,
+        struck(&v.entered_in_error),
         ["Entered in error: de-label — tolerated amoxicillin (withdrawn 10 Nov 2026 by Dr Ada (key had been repudiated))"]
     );
 }
@@ -289,7 +292,7 @@ fn a_repudiated_keys_withdrawal_of_a_none_statement_counts() {
     assert_eq!(v.strip, "Allergies not yet asked");
     assert!(v.standing_none.is_empty() && v.ignored_overlays.is_empty());
     assert_eq!(
-        v.entered_in_error,
+        struck(&v.entered_in_error),
         ["Entered in error: no known allergies (asked 8 Nov 2026 by Dr Ada)"]
     );
 }
@@ -302,7 +305,7 @@ fn a_cross_chart_withdrawal_of_a_none_statement_counts() {
     assert_eq!(v.strip, "Allergies not yet asked");
     assert!(v.standing_none.is_empty() && v.ignored_overlays.is_empty());
     assert_eq!(
-        v.entered_in_error,
+        struck(&v.entered_in_error),
         ["Entered in error: no known drug allergies (asked 8 Nov 2026 by Dr Ada)"]
     );
 }
@@ -359,7 +362,7 @@ fn an_unconfirmed_signer_counts_and_is_marked() {
     w.key = KeyState::Unconfirmed;
     let v = view(&pa(vec![pen(1, "anaphylaxis", 8)], vec![], vec![], vec![w]));
     assert_eq!(
-        v.entered_in_error,
+        struck(&v.entered_in_error),
         ["Entered in error: Allergy: penicillin → anaphylaxis (withdrawn 10 Nov 2026 by Dr Ada (signer unconfirmed))"]
     );
 }
@@ -425,5 +428,87 @@ fn an_unreadable_overlay_leaves_its_target_live() {
     assert_eq!(
         v.strip,
         "1 allergy record cannot be read on this terminal · Allergy: penicillin → anaphylaxis"
+    );
+}
+
+/// R-4c: a counted overlay naming an older version is said on that version's "Earlier:" line —
+/// the clinician's signed act never silently vanishes under a later correction.
+#[test]
+fn an_overlay_on_an_older_version_is_shown_on_its_earlier_line() {
+    let entries = || vec![pen(1, "rash", 8), correcting(pen(2, "anaphylaxis", 9), 1)];
+    let mut w = retraction(6, 1, 10);
+    w.key = KeyState::Unconfirmed;
+    let v = view(&pa(entries(), vec![], vec![], vec![w]));
+    assert_eq!(
+        v.drug_allergies[0].earlier,
+        [
+            "Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada) \
+          — entered in error 10 Nov 2026 by Dr Ada (signer unconfirmed)"
+        ]
+    );
+    let v = view(&pa(entries(), vec![], vec![challenge(5, 1, 10)], vec![]));
+    assert_eq!(
+        v.drug_allergies[0].earlier,
+        [
+            "Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada) \
+          — de-labelled 10 Nov 2026 by Dr Ada: tolerated amoxicillin Mar 2022"
+        ]
+    );
+    // An unknown challenge date is left out.
+    let mut c = challenge(5, 1, 10);
+    (c.date_precision, c.date_value) = ("not-known".into(), None);
+    let v = view(&pa(entries(), vec![], vec![c], vec![]));
+    assert_eq!(
+        v.drug_allergies[0].earlier,
+        [
+            "Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada) \
+          — de-labelled 10 Nov 2026 by Dr Ada: tolerated amoxicillin"
+        ]
+    );
+}
+
+/// Review minor 1: withdrawing B in A←B strikes both, and A stays legible under B's line.
+#[test]
+fn a_withdrawn_lines_earlier_versions_stay_legible() {
+    let v = view(&pa(
+        vec![pen(1, "rash", 8), correcting(pen(2, "anaphylaxis", 9), 1)],
+        vec![],
+        vec![],
+        vec![retraction(6, 2, 11)],
+    ));
+    assert_eq!(v.entered_in_error.len(), 1);
+    assert_eq!(
+        v.entered_in_error[0].earlier,
+        ["Earlier: Allergy: penicillin → rash (recorded 8 Nov 2026 by Dr Ada)"]
+    );
+}
+
+#[test]
+fn a_withdrawn_entry_on_a_doubted_chart_keeps_its_mark() {
+    let mut e = pen(1, "anaphylaxis", 8);
+    e.chart = id(2000);
+    let mut w = retraction(6, 1, 10);
+    w.chart = id(2000);
+    let mut p = pa(vec![e], vec![], vec![], vec![w]);
+    p.doubted_charts = vec![id(2000)];
+    let v = view(&p);
+    assert_eq!(
+        struck(&v.entered_in_error),
+        ["Entered in error: Allergy: penicillin → anaphylaxis \
+          (on a chart whose link to this one is in doubt) (withdrawn 10 Nov 2026 by Dr Ada)"]
+    );
+}
+
+/// A peer's newer allergen kind reads on a de-labelled line as on a live one (" (food)").
+#[test]
+fn a_historical_line_keeps_a_newer_allergen_kind() {
+    let mut c = challenge(5, 1, 9);
+    (c.date_precision, c.date_value) = ("not-known".into(), None);
+    c.tolerated = "peanut".into();
+    let peanut = entry(1, "food", "peanut", "allergy", "anaphylaxis", 8);
+    let v = view(&pa(vec![peanut], vec![], vec![c], vec![]));
+    assert_eq!(
+        texts(&v.historical),
+        ["Historically reported: peanut allergy (food). Challenged: tolerated peanut"]
     );
 }

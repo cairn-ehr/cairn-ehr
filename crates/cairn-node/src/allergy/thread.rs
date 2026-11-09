@@ -58,6 +58,14 @@ pub struct Historical<'a> {
     pub challenge: &'a ChallengeRow,
 }
 
+/// A withdrawn head: the entry, the versions it replaced (newest first), and the withdrawal.
+#[derive(Debug)]
+pub struct WithdrawnEntry<'a> {
+    pub row: &'a AllergyRow,
+    pub earlier: Vec<&'a AllergyRow>,
+    pub by: &'a RetractionRow,
+}
+
 /// A row struck by a counted withdrawal, with the withdrawal (its day and signer are worded).
 #[derive(Debug)]
 pub struct Withdrawn<'a, T> {
@@ -72,13 +80,18 @@ pub struct Resolved<'a> {
     pub live: Vec<Head<'a>>,
     pub historical: Vec<Historical<'a>>,
     /// Withdrawn heads, each with the newest counted withdrawal naming it.
-    pub withdrawn: Vec<Withdrawn<'a, AllergyRow>>,
+    pub withdrawn: Vec<WithdrawnEntry<'a>>,
     /// Withdrawn de-labels (their allergy is back in force unless another de-label stands).
     pub withdrawn_challenges: Vec<Withdrawn<'a, ChallengeRow>>,
     /// Withdrawn "none known" statements: they stand for no list.
     pub withdrawn_none: Vec<&'a NoneRow>,
     /// "Not counted: …" lines for the overlays step 1 set aside.
     pub ignored_overlays: Vec<String>,
+    /// The newest COUNTED withdrawal naming each event id (an entry, de-label or "none known"
+    /// statement), so the view can say it on an older version's "Earlier:" line (ruling R-4c).
+    pub withdrawals: HashMap<Uuid, &'a RetractionRow>,
+    /// The newest STANDING de-label naming each entry, for the same reason.
+    pub de_labels: HashMap<Uuid, &'a ChallengeRow>,
 }
 
 /// The marker a byline carries for a key's standing (empty when nothing is in doubt).
@@ -343,7 +356,11 @@ pub fn resolve(a: &PatientAllergies) -> Resolved<'_> {
     let mut withdrawn = Vec::new();
     for h in heads(&a.entries) {
         if let Some(by) = withdrawal.get(&h.row.event_id) {
-            withdrawn.push(Withdrawn { row: h.row, by });
+            withdrawn.push(WithdrawnEntry {
+                row: h.row,
+                earlier: h.earlier,
+                by,
+            });
         } else if let Some(challenge) = standing.get(&h.row.event_id) {
             historical.push(Historical {
                 head: h.row,
@@ -386,6 +403,8 @@ pub fn resolve(a: &PatientAllergies) -> Resolved<'_> {
         withdrawn_challenges,
         withdrawn_none,
         ignored_overlays,
+        withdrawals: withdrawal,
+        de_labels: standing,
     }
 }
 
