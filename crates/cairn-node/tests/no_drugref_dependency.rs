@@ -58,8 +58,9 @@
 //! read door the window asks through: whether drugref is there and readable, which drugs and
 //! groups match a typed allergen, what drugref's own allergy check answers for each allergen and
 //! medication, and a group's review status. It is advisory —
-//! it refuses nothing, writes nothing, and answers "nothing" (never an error) when drugref is
-//! absent or unreadable. This guard proves only HALF of "the floor never depends on drugref":
+//! it refuses nothing, writes nothing, and answers "nothing" when drugref is absent, reshaped or
+//! unreadable (the facts door can still raise when its owner cannot read drugref's internal
+//! tables, so callers map an error to "unavailable" — see the door's header). This guard proves only HALF of "the floor never depends on drugref":
 //! that nothing else names drugref. Because the door's functions are named without the word,
 //! the other half — no floor, projection or sync-path code CALLS the door — is enforced by
 //! `drug_door_callers.rs` (no `cairn_drug_` call in db/ outside the door, or in extensions/).

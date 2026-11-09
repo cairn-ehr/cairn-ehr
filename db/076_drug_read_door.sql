@@ -14,9 +14,19 @@
 --   * the CHECK: what drugref says about each (allergen, medication) pair (cairn_drug_facts);
 --   * the STATUS: whether a coded group has been clinically reviewed (cairn_drug_group_status).
 -- None ever refuses anything or writes anything. An answer of "nothing" is always safe to give:
--- the window then checks by name only and SAYS so (the "not checked" tag, D8). That is why every
--- door answers nothing — never an error — when drugref is absent, too old, or unreadable
--- (cairn_drug_available): a fault here must never stop the medication list drawing.
+-- the window then checks by name only and SAYS so (the "not checked" tag, D8). So every door
+-- answers nothing — no error — when cairn_drug_available says drugref is not usable: absent, too
+-- old (no allergy groups, no allergy_check), reshaped (an allergy_check whose result shape is not
+-- drugref db/068's), or unreadable (no USAGE on the schema, no SELECT on the three tables the
+-- doors read, no EXECUTE on allergy_check).
+--
+-- WHAT AVAILABILITY CANNOT SEE, AND SO CALLERS MUST HANDLE. drugref's allergy_check is LANGUAGE
+-- sql with invoker rights: it reads drugref's INTERNAL tables (moiety_allergy_fold,
+-- allergy_group_member, allergy_mesh_placement, …) as this door's owner. Those are drugref's
+-- implementation, not its interface, so this door does not list them — and an owner who may
+-- read the three interface tables but not one of those makes cairn_drug_facts RAISE. Every
+-- caller MUST therefore map an error from these doors to "unavailable" (allergy slice 3, Tasks
+-- 3 and 5 pin that): a fault here must never stop the medication list drawing.
 --
 -- drugref OWNS THE FOLD (M4). Whether a salt or a hydrate is "the same drug", and which drugs an
 -- allergy group holds, is drugref's question, answered by drugref.allergy_check (drugref db/068),
@@ -44,8 +54,11 @@
 BEGIN;
 
 -- 1. Is there a drugref this door can read? True only when the owner may use the schema, may
---    EXECUTE drugref.allergy_check(uuid, uuid), and may SELECT the three tables. Never raises.
---    A drugref from before allergy groups (no allergy_group, no allergy_check) is "not there".
+--    SELECT the three tables, and may EXECUTE a drugref.allergy_check(uuid, uuid) whose result
+--    is EXACTLY drugref db/068's shape (the facts door reads its columns by name, so another
+--    shape would raise there). Never raises. A drugref from before allergy groups (no
+--    allergy_group, no allergy_check) is "not there". It cannot see allergy_check's internal
+--    reads — see the header: callers map a door's error to "unavailable".
 --
 --    WHY THE CATALOGUE AND NOT to_regclass (ruling T2-a): to_regclass('drugref.x') RAISES
 --    "permission denied for schema" when the schema exists but the caller lacks USAGE on it —
@@ -66,7 +79,13 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalo
                             WHERE p.pronamespace = n.oid
                               AND p.proname = 'allergy_check'
                               AND pg_catalog.oidvectortypes(p.proargtypes) = 'uuid, uuid'
-                              AND has_function_privilege(p.oid, 'EXECUTE'))
+                              AND has_function_privilege(p.oid, 'EXECUTE')
+                              -- on an oid read from pg_proc this cannot raise
+                              AND pg_catalog.pg_get_function_result(p.oid) =
+                                  'TABLE(outcome text, match_kind text, reason text, '
+                                  'group_class_uuid uuid, group_name text, group_mesh_ui text, '
+                                  'review_status text, allergen_component uuid, '
+                                  'prescribed_component uuid)')
           FROM pg_catalog.pg_namespace n
          WHERE n.nspname = 'drugref'), false);
 $$;

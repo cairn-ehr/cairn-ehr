@@ -5,8 +5,8 @@
 -- opens the allergy entry's reserved coding slot.
 --
 -- WHY THIS MIRROR EXISTS. drugref is optional, so the door has two lives: on a node without it
--- (or with one it cannot read) every door answers "nothing", never an error — the medication list
--- must still draw; on a node with it, the door hands each (allergen, medication) pair to
+-- (or with one it cannot read, or one whose allergy_check has another shape) every door answers
+-- "nothing", with no error — the medication list must still draw; on a node with it, the door hands each (allergen, medication) pair to
 -- drugref.allergy_check and returns drugref's answers unchanged (M4). Both lives are pinned here,
 -- rule by rule. The Rust mirror (crates/cairn-node/tests/drug_read_door.rs) runs the same sections
 -- through tokio-postgres and the real seal → sign → submit pipeline.
@@ -231,6 +231,30 @@ BEGIN
     ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('penicillin', 20)), 'no allergy_group: no options';
     ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_group_status(ARRAY[gen_random_uuid()])),
         'no allergy_group: no group status';
+END $$;
+ROLLBACK;
+
+-- 3c. a_reshaped_allergy_check_is_unavailable (ruling T2R-b): an allergy_check(uuid, uuid) whose
+--     RETURNS TABLE is not drugref db/068's would make the facts door raise on its columns, so the
+--     door reads it as unavailable instead — false, zero rows, no error.
+BEGIN;
+\ir ../../crates/cairn-node/tests/fixtures/drug_stub.sql
+DO $$
+BEGIN
+    ASSERT cairn_drug_available(), 'control: the stub has db/068''s shape';
+END $$;
+DROP FUNCTION drugref.allergy_check(uuid, uuid);
+CREATE FUNCTION drugref.allergy_check(p_prescribed uuid, p_allergen uuid)
+RETURNS TABLE (verdict text, group_name text) LANGUAGE sql STABLE AS $$ SELECT 'match', NULL::text $$;
+DO $$
+DECLARE
+    pen uuid := (SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins');
+    amox uuid := (SELECT moiety_uuid FROM drugref.substance_moiety WHERE display_name = 'amoxicillin');
+BEGIN
+    ASSERT cairn_drug_available() IS FALSE, 'a reshaped allergy_check: not available';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('amox', 20)), 'reshaped: no options';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(ARRAY[pen], ARRAY[amox])), 'reshaped: no facts';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_group_status(ARRAY[pen])), 'reshaped: no group status';
 END $$;
 ROLLBACK;
 
