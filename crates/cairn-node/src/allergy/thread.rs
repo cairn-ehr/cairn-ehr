@@ -148,6 +148,15 @@ pub fn same_allergen(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
+/// D10 (ADR-0097 D5 widened): two ROWS name the same allergen when their terms match
+/// ([`same_allergen`]) OR both carry the same `(system, code)` coding. The code is the stronger
+/// evidence: "Augmentin" and "amoxicillin" typed differently but coded to one moiety are one
+/// allergen. Two uncoded rows, or a coded and an uncoded one, fall back to the names alone.
+pub fn same_allergen_rows(a: &AllergyRow, b: &AllergyRow) -> bool {
+    same_allergen(&a.term, &b.term)
+        || matches!((&a.coding, &b.coding), (Some(x), Some(y)) if x.system == y.system && x.code == y.code)
+}
+
 /// Plan D5: two accounts (of the same allergen) differ when their kinds differ (allergy vs
 /// adverse effect), or when both reactions are known and neither is `not-known` and they
 /// differ. A row carrying a kind or reaction word this build does not know never differs, and the
@@ -411,11 +420,11 @@ pub fn resolve(a: &PatientAllergies) -> Resolved<'_> {
                 o.row.event_id != h.row.event_id
                     && if o.thread == h.thread {
                         // Siblings of one thread compete even when a fork renamed the allergen.
-                        !same_allergen(&o.row.term, &h.row.term)
+                        !same_allergen_rows(o.row, h.row)
                             || o.row.allergen_kind != h.row.allergen_kind
                             || accounts_differ(o.row, h.row)
                     } else {
-                        same_allergen(&o.row.term, &h.row.term) && accounts_differ(o.row, h.row)
+                        same_allergen_rows(o.row, h.row) && accounts_differ(o.row, h.row)
                     }
             })
         })

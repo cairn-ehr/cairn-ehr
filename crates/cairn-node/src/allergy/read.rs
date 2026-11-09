@@ -40,6 +40,30 @@ pub struct AllergyRow {
     pub corrects: Option<Uuid>,
     /// The signer key's standing now.
     pub key: KeyState,
+    /// The drug the entry was coded to (`substance.coding`), when it was. Never set on a de-label.
+    pub coding: Option<Coding>,
+}
+
+/// The drug code an allergy entry carries: exactly the wire's `{system, code, display}`. Vocabulary
+/// stays `String`: a peer's newer system word must still read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Coding {
+    pub system: String,
+    pub code: String,
+    pub display: String,
+}
+
+/// Read a projected `coding` column. Pure. SQL NULL, JSON null, a non-object, or an object missing
+/// a key (or holding a non-string) all read as `None`: an entry this build cannot place in a drug
+/// list is still a readable allergy, so a malformed coding must never fail the list.
+pub fn coding_of(coding: Option<&str>) -> Option<Coding> {
+    let v: serde_json::Value = serde_json::from_str(coding?).ok()?;
+    let field = |k: &str| v.get(k)?.as_str().map(str::to_owned);
+    Some(Coding {
+        system: field("system")?,
+        code: field("code")?,
+        display: field("display")?,
+    })
 }
 
 /// One "none known" statement as projected.
@@ -167,7 +191,7 @@ const ENTRIES_SQL: &str =
     "SELECT a.event_id::text, a.patient_id::text, a.allergen_kind, a.term, a.kind, \
         a.reaction_category, a.reaction_text, a.onset_precision, a.onset_value, a.source, \
         a.hlc_wall, a.hlc_counter, cairn_note_signer_name(e.signer_key_id), a.refs::text, \
-        cairn_key_confirmation(e.signer_key_id) \
+        cairn_key_confirmation(e.signer_key_id), a.coding::text \
      FROM clinical_allergy a JOIN event_log e ON e.event_id = a.event_id \
      WHERE a.patient_id = ANY($1::text[]::uuid[]) ORDER BY a.hlc_wall, a.hlc_counter, a.event_id";
 const NONE_SQL: &str =
@@ -250,6 +274,7 @@ pub async fn list_patient_allergies(
                 .ok()
                 .and_then(|v| corrects_of(&v)),
             key: key_state(r.try_get(14)?)?,
+            coding: coding_of(r.try_get::<_, Option<String>>(15)?.as_deref()),
         });
     }
     let mut none = Vec::new();
@@ -311,6 +336,29 @@ pub async fn list_patient_allergies(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_coding_missing_a_key_reads_as_none_never_a_fault() {
+        let ok = r#"{"system":"drugref-moiety","code":"c","display":"d"}"#;
+        assert_eq!(
+            coding_of(Some(ok)),
+            Some(Coding {
+                system: "drugref-moiety".into(),
+                code: "c".into(),
+                display: "d".into()
+            })
+        );
+        for bad in [
+            None,
+            Some("null"),
+            Some("[]"),
+            Some("not json"),
+            Some(r#"{"system":"s","code":"c"}"#),
+            Some(r#"{"system":"s","code":"c","display":3}"#),
+        ] {
+            assert_eq!(coding_of(bad), None, "{bad:?}");
+        }
+    }
 
     #[test]
     fn every_confirmation_word_maps_and_an_unknown_word_fails() {

@@ -39,6 +39,7 @@ pub fn entry(n: u128, ak: &str, term: &str, kind: &str, cat: &str, day: u32) -> 
         signer: Some("Dr Ada".into()),
         corrects: None,
         key: KeyState::Standing,
+        coding: None,
     }
 }
 

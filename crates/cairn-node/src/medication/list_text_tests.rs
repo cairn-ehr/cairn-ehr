@@ -121,6 +121,8 @@ fn list_row(group: u128, outside_set: bool, doubted_link: bool) -> MedicationRow
         display_chart: u(1),
         term: "metformin".into(),
         coding_display: None,
+        coding_system: None,
+        coding_code: None,
         formulation: None,
         dose_amount: None,
         dose_unit: None,

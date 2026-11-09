@@ -197,6 +197,7 @@ fn overlay_fixture(doubted_charts: Vec<Uuid>) -> (PatientAllergies, AllergyView)
         signer: None,
         corrects: None,
         key: KeyState::Standing,
+        coding: None,
     };
     let a = PatientAllergies {
         entries: vec![row(10, linked, "penicillin"), row(11, linked, "codeine")],

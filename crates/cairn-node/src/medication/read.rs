@@ -175,6 +175,8 @@ async fn list_chart_set_medications(
                 display_chart: db_row.get::<_, String>("patient_id").parse()?,
                 term: db_row.get("term"),
                 coding_display: db_row.get("coding_display"),
+                coding_system: db_row.get("coding_system"),
+                coding_code: db_row.get("coding_code"),
                 formulation: db_row.get("formulation"),
                 dose_amount: db_row.get("dose_amount"),
                 dose_unit: db_row.get("dose_unit"),
@@ -398,7 +400,7 @@ fn list_sql(view: &str) -> String {
     format!(
         "SELECT medication_id::text AS medication_id, \
          patient_id::text AS patient_id, term, formulation, dose_amount, \
-         dose_unit, sig, started_value, started_precision, coding_display \
+         dose_unit, sig, started_value, started_precision, coding_display, coding_system, coding_code \
          FROM {view} WHERE medication_id = ANY($1::text[]::uuid[])"
     )
 }

@@ -31,6 +31,52 @@ fn same_allergen_ignores_case_and_spacing_not_spelling() {
 }
 
 #[test]
+fn same_allergen_rows_matches_on_code_or_term() {
+    use crate::allergy::read::Coding;
+    let coded = |term: &str, system: &str, code: &str| AllergyRow {
+        term: term.into(),
+        coding: Some(Coding {
+            system: system.into(),
+            code: code.into(),
+            display: "x".into(),
+        }),
+        ..pen(1, "anaphylaxis", 1)
+    };
+    let plain = |term: &str| AllergyRow {
+        term: term.into(),
+        ..pen(1, "anaphylaxis", 1)
+    };
+    // Same term, no codes: as before.
+    assert!(same_allergen_rows(
+        &plain("Penicillin "),
+        &plain("penicillin")
+    ));
+    assert!(!same_allergen_rows(
+        &plain("penicillin"),
+        &plain("amoxicillin")
+    ));
+    // Different names, one code: the same allergen.
+    assert!(same_allergen_rows(
+        &coded("Augmentin", "drugref-moiety", "a"),
+        &coded("amoxicillin", "drugref-moiety", "a")
+    ));
+    // Different names, different code or different system: not.
+    assert!(!same_allergen_rows(
+        &coded("Augmentin", "drugref-moiety", "a"),
+        &coded("amoxicillin", "drugref-moiety", "b")
+    ));
+    assert!(!same_allergen_rows(
+        &coded("Augmentin", "drugref-moiety", "a"),
+        &coded("amoxicillin", "drugref-class", "a")
+    ));
+    // One side uncoded: names alone decide.
+    assert!(!same_allergen_rows(
+        &coded("Augmentin", "drugref-moiety", "a"),
+        &plain("amoxicillin")
+    ));
+}
+
+#[test]
 fn a_chain_of_corrections_shows_only_the_newest() {
     let p = pa(
         vec![
