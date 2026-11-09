@@ -12,10 +12,10 @@
   [#1027](https://github.com/cairn-ehr/cairn-ehr/issues/1027) (decision 18). Touches
   [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905) (not guaranteed (h)) and
   [#406](https://github.com/cairn-ehr/cairn-ehr/issues/406) / [#401](https://github.com/cairn-ehr/cairn-ehr/issues/401)
-  (not guaranteed (l)). Filed by this slice: #TBD-1 (withdraw a de-label on an older version, (c)), #TBD-4 (no
-  trace of an overlay with no effect, (f)), #TBD-5 (the byline markers, (g)), #TBD-6 (window polish, (i)), #TBD-7
-  (test gaps, (k)), #TBD-8 (files over 500 lines), #TBD-9 (a withdrawn, then shredded entry leads the strip, (e)),
-  #TBD-10 (should withdrawing a correction re-expose what it replaced? a maintainer decision, (d)), #TBD-11 (a struck
+  (not guaranteed (l)). Filed by this slice: [#1039](https://github.com/cairn-ehr/cairn-ehr/issues/1039) (withdraw a de-label on an older version, (c)), [#1040](https://github.com/cairn-ehr/cairn-ehr/issues/1040) (no
+  trace of an overlay with no effect, (f)), [#1041](https://github.com/cairn-ehr/cairn-ehr/issues/1041) (the byline markers, (g)), [#1042](https://github.com/cairn-ehr/cairn-ehr/issues/1042) (window polish, (i)), [#1043](https://github.com/cairn-ehr/cairn-ehr/issues/1043)
+  (test gaps, (k)), [#1044](https://github.com/cairn-ehr/cairn-ehr/issues/1044) (files over 500 lines), [#1045](https://github.com/cairn-ehr/cairn-ehr/issues/1045) (a withdrawn, then shredded entry leads the strip, (e)),
+  [#1046](https://github.com/cairn-ehr/cairn-ehr/issues/1046) (should withdrawing a correction re-expose what it replaced? a maintainer decision, (d)), [#1047](https://github.com/cairn-ehr/cairn-ehr/issues/1047) (a struck
   "none known" line does not say who withdrew it, decision 18).
 - **Builds on:** [ADR-0096](0096-the-allergy-list.md) (the allergy list) ·
   [ADR-0052](0052-born-sealed-clinical-bodies.md) (born sealed) ·
@@ -192,7 +192,7 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
       tail; with its older versions under it;
     - a withdrawn de-label: "Entered in error: de-label — tolerated {term}{ — note} (withdrawn {day}{by}){ — reason}";
     - a withdrawn statement: "Entered in error: no known allergies (asked {day}{by}){doubt mark}{ — reason}", or "no
-      known drug allergies" (who withdrew it is not said, #TBD-11);
+      known drug allergies" (who withdrew it is not said, [#1047](https://github.com/cairn-ehr/cairn-ehr/issues/1047));
     - an older version: "Earlier: {line words} (recorded {day}{by})", newest first, plus decision 15's tail;
     - `{ — reason}` and `{ — note}` are the act's text, trimmed, and nothing when it is blank or absent
       (`history_words::dash_note`);
@@ -271,24 +271,24 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
 - **(b) "The same allergen" is spelling, not meaning.** "amoxycillin" is not "amoxicillin", and "Amoxil" is not
   "amoxicillin", so two such accounts are never flagged as differing; a de-label's tolerated term is not compared to
   the line it de-labels at all. Coded equality is slice 3's.
-- **(c) A de-label on an older version cannot be withdrawn from the window** (#TBD-1). It is said on its "Earlier:"
+- **(c) A de-label on an older version cannot be withdrawn from the window** ([#1039](https://github.com/cairn-ehr/cairn-ehr/issues/1039)). It is said on its "Earlier:"
   line (decision 15), which carries no button; only a historical line carries *Withdraw de-label*. It changes no
   head's status, since it names a version no head is.
 - **(d) Entered in error on a corrected line strikes the line and its earlier versions; it cannot undo just the
-  correction** (#TBD-10). By R-4a a withdrawal covers the version it names and every version that one replaced, so a
+  correction** ([#1046](https://github.com/cairn-ehr/cairn-ehr/issues/1046)). By R-4a a withdrawal covers the version it names and every version that one replaced, so a
   correction signed by mistake is undone by correcting again, as it was (the retract row says so, decision 19), not by
   withdrawing it. Whether withdrawing a correction should instead re-expose its predecessor is a maintainer decision:
   it would make a withdrawal's reach depend on what it names in the chain.
-- **(e) A withdrawn entry that is then shredded keeps "cannot be read" leading the strip** (#TBD-9). The shred
+- **(e) A withdrawn entry that is then shredded keeps "cannot be read" leading the strip** ([#1045](https://github.com/cairn-ehr/cairn-ehr/issues/1045)). The shred
   scrubs its projected row (db/037), so `UNREADABLE_SQL` counts it as an allergy event with no row, and the strip leads
   with "1 allergy record cannot be read on this terminal" for good, though the entry was struck. Over-warning, but a
   permanent false lead.
-- **(f) An overlay that counts but has no effect leaves no trace** (#TBD-4). A withdrawal of a de-label that itself
+- **(f) An overlay that counts but has no effect leaves no trace** ([#1040](https://github.com/cairn-ehr/cairn-ehr/issues/1040)). A withdrawal of a de-label that itself
   does not count; and, from a key that is not suspect, a de-label naming something other than an entry, on its own
   chart (only a remote door admits it), decision (a)'s withdrawal of a withdrawal, and an overlay naming an event this
   node does not hold or cannot read (until that event arrives or becomes readable): none is listed, not even under
   "Not counted".
-- **(g) No marker for a signer this node cannot name, on a line's own byline** (#TBD-5). An expanded line whose key
+- **(g) No marker for a signer this node cannot name, on a line's own byline** ([#1041](https://github.com/cairn-ehr/cairn-ehr/issues/1041)). An expanded line whose key
   this node cannot name ends " · recorded {YYYY-MM-DD}" (the window draws the pane's ISO `recorded` day) with no
   "(key had been repudiated)"; `by_words` shows the marker alone everywhere else. A marker after a name already in
   brackets nests them: "(withdrawn 10 Nov 2026 by Dr Ada (key had been repudiated))"; only a historical line's
@@ -304,7 +304,7 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
   never that it is live. The result is the same pair of acts the fold already meets across a partition, where R-4a
   makes every order over-warn: the new act covers only what it names. Closing the gap would hold a lock across the
   clinician's key entry (held across the passphrase's typing and its KDF, it would serialise the terminal);
-  `target_before_the_key`'s doc says so, so nobody "fixes" it. The window's smaller residuals are #TBD-6: a row's
+  `target_before_the_key`'s doc says so, so nobody "fixes" it. The window's smaller residuals are [#1042](https://github.com/cairn-ehr/cairn-ehr/issues/1042): a row's
   *Cancel* is enabled but inert during a press; a corrected line that comes back live stays suspended until Correct;
   a target that is not a uuid gets the stale-list sentence rather than a window-defect one.
 - **(j) A line struck as wrong-patient can survive as its concurrent correction.** By R-4a a correction signed while
@@ -312,7 +312,7 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
   and the clinician can strike the correction too.
 - **(k) Key standing is this node's.** `KeyState` comes from this node's registry, and a repudiation does not
   replicate (ADR-0093 (i)), so two nodes can fold the same rows differently: one ignores a repudiated key's de-label,
-  another counts it. The fold is deterministic given the same rows and key states. Not pinned by a test (#TBD-7): an
+  another counts it. The fold is deterministic given the same rows and key states. Not pinned by a test ([#1043](https://github.com/cairn-ehr/cairn-ehr/issues/1043)): an
   `Unconfirmed` or `Doubtful` key read from a database; and, in the fold, overlays across a doubted link beyond one
   pure view test of a struck line's doubt mark (`view_overlay_tests.rs::a_withdrawn_entry_on_a_doubted_chart_keeps_its_mark`)
   — not overlay counting or differing accounts across one, and never from a database. (The window's refusal of a

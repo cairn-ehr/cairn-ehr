@@ -138,7 +138,7 @@ Every slice-1 rule below still holds.
   (a "tolerated penicillin" is signed by default against a penicillin line when the drug actually challenged was
   amoxicillin); drop the retract row's sentence "because the floor allows it" (a clinician striking a mistaken
   correction silently strikes the original allergy with it). Whether a withdrawal of a correction should instead
-  re-expose its predecessor is a maintainer decision (#TBD-10), not a tidy-up. Pins:
+  re-expose its predecessor is a maintainer decision (#1046), not a tidy-up. Pins:
   `allergy_overlays_webview_tests.rs::delabel_and_withdraw_rows_are_inline_not_dialogs`,
   `striking_a_corrected_line_says_it_strikes_its_earlier_versions`.
 
