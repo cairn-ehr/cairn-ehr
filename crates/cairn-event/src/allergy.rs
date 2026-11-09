@@ -271,6 +271,15 @@ mod tests {
     fn a_coded_entrys_twin_says_what_it_is_coded_as() {
         let twin = render_allergy_twin(&coded("c"));
         assert!(twin.ends_with(" (coded as Penicillin-class Antibacterial [EPC] [drugref-class])"));
+        // A coded correction: the "Corrects" prefix leads, the coding closes (the order a reader
+        // of the twin alone meets them: what it overlays, what it says, what it is coded as).
+        let mut e = coded("c");
+        e.corrects = Some("E1");
+        assert_eq!(
+            render_allergy_twin(&e),
+            "Corrects allergy record E1: Allergy: penicillin → rash \
+             (coded as Penicillin-class Antibacterial [EPC] [drugref-class])"
+        );
     }
 
     #[test]

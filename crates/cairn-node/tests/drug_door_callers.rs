@@ -62,19 +62,32 @@ fn no_floor_or_projection_calls_the_drug_read_door() {
     let root = repo_root();
     let door = root.join(READ_DOOR);
     let mut offenders = Vec::new();
+    // What the walk saw, so it cannot pass vacuously (a moved directory, a renamed door): the door
+    // itself, some floor SQL and some pgrx Rust.
+    let (mut saw_door, mut sql, mut rust) = (false, 0, 0);
     for path in source_files(
         &[root.join("db"), root.join("extensions")],
         &["target", "tests"],
         &["sql", "rs"],
     ) {
         if path == door {
+            saw_door = true;
             continue;
         }
         let is_rust = path.extension().and_then(|e| e.to_str()) == Some("rs");
+        if is_rust {
+            rust += 1;
+        } else {
+            sql += 1;
+        }
         for line in door_calls(&read_source(&path), is_rust) {
             offenders.push(format!("{}: {line}", path.display()));
         }
     }
+    assert!(
+        saw_door && sql > 0 && rust > 0,
+        "the walk must see the door ({saw_door}), db/*.sql ({sql}) and extensions/ Rust ({rust})"
+    );
     assert!(
         offenders.is_empty(),
         "the floor, the projections and the sync path must never depend on drugref, so nothing in \
