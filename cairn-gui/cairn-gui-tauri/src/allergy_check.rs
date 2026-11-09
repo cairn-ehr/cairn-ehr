@@ -109,14 +109,23 @@ pub async fn drug_search_impl(state: &AppState, text: &str) -> DrugSearch {
 pub const NOT_A_DRUG: &str =
     "Only a drug can be picked from the drug list — choose Drug, or type the name as it is.";
 
+/// A pick whose system is neither of the drug list's own two (a defect in the webview, or a
+/// reserved system such as `drugref-product`): refused before the key, as the floor would after it.
+pub const NOT_FROM_THE_LIST: &str =
+    "That pick is not a drug or drug group from the drug list; type the name instead";
+
 /// What the clinician picked, as it will be signed: refused with [`NOT_A_DRUG`] on an entry that
-/// is not a drug, else its code re-spelled ([`canonical_code`]). Said before the key. Pure.
+/// is not a drug, with [`NOT_FROM_THE_LIST`] under any system but `drugref-moiety` or
+/// `drugref-class`, else its code re-spelled ([`canonical_code`]). Said before the key. Pure.
 pub(crate) fn coding_before_the_key(
     c: &CodingArg,
     kind: AllergenKind,
 ) -> Result<String, ErrorView> {
     if kind != AllergenKind::Drug {
         return Err(refused(NOT_A_DRUG));
+    }
+    if c.system != MOIETY_SYSTEM && c.system != GROUP_SYSTEM {
+        return Err(refused(NOT_FROM_THE_LIST));
     }
     canonical_code(c)
 }

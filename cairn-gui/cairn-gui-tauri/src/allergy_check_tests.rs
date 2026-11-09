@@ -202,6 +202,34 @@ fn a_pick_on_a_non_drug_entry_is_refused() {
     );
 }
 
+/// Review finding 6: only the drug list's own two systems can be picked. Any other system (a
+/// webview defect, a reserved `drugref-product`) is refused before the key, never sent to the
+/// floor to refuse after the passphrase.
+#[test]
+fn a_pick_under_another_system_is_refused_before_the_key() {
+    for system in [GROUP_SYSTEM, MOIETY_SYSTEM] {
+        let pick = CodingArg {
+            system: system.into(),
+            code: Uuid::from_u128(0xA40C).to_string(),
+            display: "amoxicillin".into(),
+        };
+        assert_eq!(
+            coding_before_the_key(&pick, AllergenKind::Drug),
+            Ok(pick.code.clone())
+        );
+    }
+    for system in ["drugref-product", "snomed", ""] {
+        let pick = CodingArg {
+            system: system.into(),
+            code: Uuid::from_u128(0xA40C).to_string(),
+            display: "amoxicillin".into(),
+        };
+        let err = coding_before_the_key(&pick, AllergenKind::Drug).unwrap_err();
+        assert_eq!(err.text, NOT_FROM_THE_LIST, "{system:?}");
+        assert_eq!(err.retry, crate::funnel::view::Retry::Never);
+    }
+}
+
 /// D9: a withheld line is still current, so it is checked.
 #[test]
 fn a_withheld_line_is_current() {
