@@ -2586,3 +2586,242 @@ and `window_role_grants.rs`; the fold and its words by `allergy/thread_tests.rs`
 walk. An outcome that is not known (#814) is pinned by `allergy_overlays_pure_tests.rs`'s
 `an_interrupted_overlay_is_not_known_and_never_retried`.
 `TEMPLATE.md` carries a matching block (*Allergy overlays*).
+
+## 29. A drug allergy coded against drugref, and the medication check (allergy slice 3, ADR-0098)
+
+The slice's gestures:
+- **The pick.** While the allergen is *Drug*, three letters in *Substance* list drugs and drugref allergy groups under
+  the field (a group reads "{name} (group)"). Choosing one codes the entry. Typing on, or pressing *Other substance*,
+  drops the coding, and the entry is then recorded as typed.
+- **The check.** Every current line of the medication list is read against the live drug allergies on every read:
+  - a hit carries the loud **Allergy** tag beside the drug's name and its words on a row under the line;
+  - a previous adverse effect is a muted row;
+  - a line some live allergy could not be verified against carries the small **not checked** tag and no words.
+- **The review status.** A group that is not clinically reviewed is said in the expanded allergy list only:
+  " (drug group not clinically reviewed)".
+
+Paper counterpart: write "Penicillin — anaphylaxis" in the drug chart's allergy box. The prescriber or pharmacist then
+reads that box against every line of the drug chart before a dose is given. **Live only**: a `--mock` window has no
+drug list (the pick shows its hint) and no allergies.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| A coded entry, the form open | the first keystroke in *Substance* | "Recorded." and the medication list's tags redrawn | **≤ 15 s** |
+| A free-text entry, the pick present | the first keystroke in *Substance* | "Recorded." | **≤ 10 s** |
+| The pick appears | the third letter typed | the option list drawn | **≤ 300 ms** |
+| Reading a hit on a medication line | the list on screen | the tag and its words read | no click, no hover |
+| Telling an unchecked line from a checked one | the list on screen | read | at a glance |
+| The medication pane's open, drugref present vs absent | the chart opened | the list drawn | **+ ≤ 100 ms** |
+
+The budgets are the plan's gestures, **with the key held** (`--key-hold-seconds 900`). Time the two entries again on
+a shared terminal (no hold, the clock starting at the first keystroke in the signer strip's *Staff ID*) and record
+both. Steps:
+- record a coded entry: paper *N* = 1 (write the line) → forced *M* = 1 (one signed event; the coding rides on it) →
+  target *K* = 1 (type, choose or keep typing, Sign);
+- check the list: 1 (read the box against the chart) → 0 → 0, computed on every read.
+
+The node times the write half of an entry as **`allergy-record`** (section 5), coded or not. **A figure outside its
+budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
+
+**Setup A: a drugref WITH its allergy groups.** The check needs drugref's `allergy_group` table and its
+`allergy_check` function (drugref db/067–069, drugref PR #225). Which local database to copy it from (all on :5532,
+checked 2026-11-10):
+
+| Database | Has the allergy groups? | Use it? |
+|---|---|---|
+| `drugref_allergy` | Yes: built by drugref's allergy-groups round, at drugref db/069, groups ingested (MeSH 2026). One group, "Penicillins (allergy group)", `structural-seed`. Its `allergy_check` result shape matches db/076's string exactly. | **Yes, the source.** drugref's notes say never patch it, so only `pg_dump` from it. |
+| `drugref_profiles` | **No**: it is at drugref db/065. | No: Cairn would read it as "no drug list". |
+| `drugref_test` | It has db/067–069 but no groups, and drugref's pytest recreates it. | Never: it is not a source. |
+
+If `drugref_allergy` is gone, build a new one from the drugref repository, as its own HANDOVER describes:
+1. `createdb -T drugref_profiles drugref_allergy`;
+2. migrate it to db/069;
+3. `drugref ingest allergy-groups --release 2026 --desc … --supp …` (the MeSH 2026 descriptor and supplementary files).
+
+Then check the source before copying it. The query below must print exactly the line under it; any other shape reads
+as "no drug list" on purpose (ADR-0098 decision 14), and is a finding against db/076's shape string, not something to
+patch around:
+
+```bash
+psql -h 127.0.0.1 -p 5532 -d drugref_allergy -Atc "SELECT pg_get_function_result('drugref.allergy_check(uuid,uuid)'::regprocedure)"
+# TABLE(outcome text, match_kind text, reason text, group_class_uuid uuid, group_name text, group_mesh_ui text, review_status text, allergen_component uuid, prescribed_component uuid)
+```
+
+**Install it into the rig's Cairn database as the schema `drugref`, OWNED BY THE OWNER** (ADR-0098 decision 13):
+whoever can replace `drugref.allergy_check` runs SQL with the door owner's rights every time the window reads a
+medication list. Build this checkout first. Then let any owner `cnode` command load db/076 (every owner connect
+replays the schema), and re-run section 0's `provision-window-role`, because the build moves `SCHEMA_GENERATION` to
+76. Use the PG18 `pg_dump` from `$PGBIN`, never the one on `PATH` (on the maintainer's Mac that is PG16, which refuses a
+PG18 server):
+
+```bash
+"$PGBIN/pg_dump" -h 127.0.0.1 -p 5532 -d drugref_allergy -n drugref --no-owner --no-privileges \
+  | "$PGBIN/psql" "$CONN" -v ON_ERROR_STOP=1 -q
+psql "$CONN" -Atc "SELECT nspowner::regrole FROM pg_namespace WHERE nspname = 'drugref'"   # the owner ($USER)
+psql "$CONN" -Atc "SELECT cairn_drug_available()"                                          # t
+psql "$WINDOW_CONN" -Atc "SELECT count(*) FROM cairn_drug_search('amox', 12)"              # ≥ 1: the window may call the doors
+psql "$WINDOW_CONN" -Atc "SELECT 1 FROM drugref.substance_moiety LIMIT 1"                  # permission denied: and nothing else
+```
+
+The grants are as follows:
+- **Restored this way**, the owner owns the schema, so no grant is needed.
+- **A non-superuser door owner, with drugref owned by another role**, needs USAGE on the schema `drugref`, EXECUTE on
+  `drugref.allergy_check(uuid, uuid)`, and SELECT on **every** drugref table and view that `allergy_check` reads.
+  That is not only the three that `cairn_drug_available()` checks: `moiety_allergy_fold`, `allergy_group_member`,
+  `allergy_mesh_placement`, `identity_claim` and `substance_composition` too. Without them, the facts door raises and
+  every line reads "not checked" (ADR-0098 decision 12). That is honest, but it is not a check.
+- **Never grant drugref to `cairn_window`.** The four doors are its whole interface.
+
+The drug codes the seed below needs come from the copy (`dr` is a function, like `cnode`):
+
+```bash
+dr() { psql "$CONN" -Atc "SELECT moiety_uuid FROM drugref.substance_moiety WHERE display_name = '$1'"; }
+cmed() { cnode medication-assert "$1" --term "$2" --dose-amount 1 --dose-unit g --formulation tablet \
+           --coding-system drugref-moiety --coding-code "$(dr "$2")" --coding-display "$2"; }
+umed() { cnode medication-assert "$1" --term "$2" --dose-amount 1 --dose-unit g --formulation tablet; }   # uncoded
+for d in amoxicillin flucloxacillin cephalexin metformin perindopril codeine; do [ -n "$(dr $d)" ] || echo "no moiety $d" >&2; done
+```
+
+**Setup B: the charts.** Use section 27's setup: sections 0 and 2, section 16's Setup and Measurement 2, `nurse-a`,
+and the `cnode` and `achart` functions. Then:
+
+```bash
+K1=$(achart "Check Group" 1991-01-01)      # a GROUP allergy against five lines
+K2=$(achart "Check Moiety" 1992-02-02)     # a DRUG allergy (amoxicillin) and an adverse effect
+K3=$(achart "Check Typed" 1993-03-03)      # a typed (uncoded) allergy and a drug in no group
+T1=$(achart "Check Timed" 1994-04-04)      # Measurement 3's entries
+for c in "$K1" "$K2" "$K3" "$T1"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+for c in "$K1" "$K2" "$K3"; do cmed "$c" amoxicillin; cmed "$c" flucloxacillin; cmed "$c" cephalexin; cmed "$c" metformin; done
+umed "$K1" Augmentin; cmed "$K2" perindopril; cmed "$K3" perindopril
+```
+
+Launch as section 3 on `$K1` with `--key-hold-seconds 900`, and unlock the terminal.
+
+**Measurement 1: the pick and the words, through the real `med_list` command** (ADR-0098 (d): no test drives the
+whole command against a real drugref; this measurement does).
+
+- [ ] **The pick.** On `$K1`, open *Show all allergies* and press *Drug*, then type `pe`: no list. Type `n`: within
+      a blink, a list of drugs. With the real drugref, `penicillin`, `penic` and `pen` list only drugs (the group is
+      crowded out, #1057). Type `penicillins`: the list offers "Penicillins (allergy group) (group)". Record both
+      observations against #1057.
+- [ ] Choose the group with ↓ and Enter. The field reads "Penicillins (allergy group)" and the list closes. Press
+      *Allergy*, *Anaphylaxis*, *Seen documented*, *Sign*. The strip reads "Allergy: Penicillins (allergy group) →
+      anaphylaxis" with no suffix. The expanded list line ends **" (drug group not clinically reviewed)"**, because
+      the group is `structural-seed`.
+- [ ] **The medication list, redrawn without a refresh** (the act re-reads it). Each line reads as follows, and every
+      tag and every row of words shows with no click or hover:
+      - **amoxicillin**: the **Allergy** tag, and under the line "amoxicillin is a Penicillins (allergy group); allergy
+        recorded: anaphylaxis";
+      - **flucloxacillin**: the same, with "flucloxacillin is a …";
+      - **cephalexin**: **no tag**. drugref answers `no-match`, because it has no cross-allergy rule (ADR-0098 (a),
+        #1055). This is the known gap: note it, and do not file it again;
+      - **metformin**: no tag (`no-match`, a verified negative);
+      - **Augmentin** (uncoded): the small **not checked** tag and no words.
+- [ ] The wire, at the console: `psql "$CONN" -c "SELECT term, coding FROM clinical_allergy WHERE patient_id = '$K1'"`
+      shows `{"code": "55a1d1a0-…", "system": "drugref-class", "display": "Penicillins (allergy group)"}`. Check the
+      class uuid against `psql "$CONN" -Atc "SELECT class_uuid FROM drugref.allergy_group"`.
+- [ ] **A drug allergen.** On `$K2`, type `amox`. The list starts "amoxapine", "amoxecaine", then "amoxicillin": note
+      whether a look-alike first option makes the wrong pick easy (amoxapine is an antidepressant). Choose
+      "amoxicillin", then *Allergy*, *Anaphylaxis*, *Sign*. Then
+      record an adverse effect: type `metf`, choose "metformin", *Adverse effect*, *GI upset*, *Sign*. The list reads:
+      - **amoxicillin**: **Allergy**, "Allergy recorded: amoxicillin → anaphylaxis";
+      - **flucloxacillin**: **Allergy**, "flucloxacillin is in the same group as amoxicillin (Penicillins (allergy
+        group)); allergy recorded: anaphylaxis";
+      - **metformin**: no tag, and a muted "Previous adverse effect: metformin → GI upset" (never the loud tag);
+      - **cephalexin** and **perindopril**: no tag (`no-match`).
+- [ ] **Not checked.** On `$K3`, type `penicillin` and *do not choose*: *Allergy*, *Rash*, *Sign*. Every coded line
+      reads **not checked** (an uncoded allergen cannot be checked by code). Then type `codei`, choose "codeine",
+      *Allergy*, *Rash*, *Sign*. drugref places codeine in no group (`allergen-in-no-group`), so every line still
+      reads **not checked**, and none is marked (ruling R1).
+- [ ] **An edit drops the coding.** On a fresh chart (`achart`), type `amoxi`, choose "amoxicillin", then add a
+      letter to the field and delete it (the name reads as before), then sign. Separately, choose a drug and then
+      press *Other substance*, then *Drug* again, then sign. In both cases the console row's `coding` is `null`.
+- [ ] **Correct keeps the coding.** On `$K2`, press *Correct* on the amoxicillin line and change the reaction only,
+      then *Sign*: the new row's `coding` is the same as the old one's. Press *Correct* again, change the *Substance*
+      text, and *Sign*: `coding` is `null`.
+- [ ] **No drug list.** At the console, run `psql "$CONN" -c "ALTER SCHEMA drugref RENAME TO drugref_off"`, then
+      reopen `$K2`.
+      - The pick shows "No drug list on this terminal: the name is recorded as typed" under *Substance*.
+      - The amoxicillin line is still marked (by name and code). flucloxacillin, cephalexin, perindopril and
+        metformin read **not checked**: there is no group answer without drugref, and the amoxicillin allergy can no
+        longer be verified against them. metformin keeps its muted note.
+      - Nothing fails, and nothing reads "could not be read".
+
+      Then run `psql "$CONN" -c "ALTER SCHEMA drugref_off RENAME TO drugref"`.
+
+**Measurement 2: the pane's open time, drugref present vs absent (+ ≤ 100 ms).** The window times no pane open, so
+measure what this slice adds directly: the facts door, timed as the window, for five allergens by twenty lines (a
+worst case worth timing). The window cannot read drugref, so build the two arrays as the owner:
+
+```bash
+A=$(psql "$CONN" -Atc "SELECT array_agg(moiety_uuid)::text FROM (SELECT moiety_uuid FROM drugref.substance_moiety ORDER BY moiety_uuid LIMIT 5) s")
+M=$(psql "$CONN" -Atc "SELECT array_agg(moiety_uuid)::text FROM (SELECT moiety_uuid FROM drugref.substance_moiety ORDER BY moiety_uuid OFFSET 100 LIMIT 20) s")
+for i in 1 2 3 4 5; do psql "$WINDOW_CONN" -c '\timing on' -c "SELECT count(*) FROM cairn_drug_facts('$A'::uuid[], '$M'::uuid[])"; done
+```
+
+- [ ] Record the five times. 100 pairs took about 5 ms on the maintainer's Mac (`drugref.allergy_check` called
+      directly, 2026-11-10). A figure near 100 ms is the finding.
+- [ ] Then by eye, or with a screen recording stepped frame by frame: open `$K1` five times with drugref present and
+      five times with it renamed away, as above. Note any visible difference in when the list draws.
+
+**Measurement 3: the timings (five runs each, held key, then shared terminal).**
+
+- [ ] **A coded entry (≤ 15 s).** On `$T1`, with the form open: start at the first keystroke in *Substance*, type
+      `amoxi`, ↓, Enter, *Allergy*, *Anaphylaxis*, *Seen documented*, *Sign*; stop when "Recorded." shows and the
+      list's tags are redrawn. On later runs, pick `penicillins` (the group), `codei`, `trimeth` and `flucl`.
+- [ ] **A free-text entry with the pick present (≤ 10 s).** The same gesture, ignoring the list: type `penicillin`,
+      *Allergy*, *Anaphylaxis*, *Seen documented*, *Sign*. The list must not get in the way. Note whether Enter, Tab
+      or the open list ever cost a step.
+- [ ] **The pick (≤ 300 ms).** With a screen recording, step from the frame where the third letter appears to the
+      frame where the list draws, five times. This is 150 ms of deliberate delay plus the search.
+- [ ] Then the write halves: `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind = 'allergy-record'"`.
+- [ ] Relaunch with no `--key-hold-seconds` on fresh charts and repeat both entries.
+
+**Measurement 4: the real Tauri IPC** (the walk stubbed `invoke`). The webview sends `drug_search`'s `text`, and
+`allergy_record`'s `coding` (`{system, code, display}`) beside `entry`. A name Tauri cannot map fails the call with an
+"invalid args" error.
+
+- [ ] The pick lists options. It never reads "No drug list on this terminal" while drugref is installed: that would
+      mean the call failed and was read as no list (#1058).
+- [ ] A picked entry's console row carries its coding (Measurement 1). A medication list that fails shows its own
+      error, never an empty list.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] **The loud tag.** A marked line's row header is read with the drug's name **and the word "Allergy"**, and each
+      mark's row under the line is read as text. Neither relies on colour: the tag is a word.
+- [ ] **The small tag.** An unchecked line's row header is read with "not checked". It is told apart from a checked
+      line by that word, not by colour or weight.
+- [ ] A muted adverse-effect row is read, and it is distinguishable from a mark by its words ("Previous adverse
+      effect: …").
+- [ ] "Allergies could not be read: medications not checked against them" is read when it appears (it is a status,
+      above the list). It cannot be produced by hand on this rig; `allergy_check_db_tests.rs`'s
+      `med_list_draws_when_the_allergy_read_fails` pins its words. If a real failure shows it, note whether it was read.
+- [ ] *Substance* is announced as a combo box. Whether the option count, or the active option during ↓ / ↑, is
+      announced (the list is a `listbox` with `aria-expanded` on the field). Escape closes it.
+- [ ] The hint "No drug list on this terminal: …" is read or visible.
+- [ ] No dialog at any point.
+
+**WebKit.** The window is WebKit (Tauri on macOS). The webview was walked headlessly in Chromium only, with a stubbed
+`invoke` and rows drawn by `nameCell`/`allergyRows` directly. **WebKit has not been walked.** Walk the pick in the
+real window and note anything that differs from the words above, in particular:
+- ↓ / ↑ / Enter / Escape in the field;
+- a click on an option, which moves the focus;
+- the list left open when Tab leaves the field (there is no blur close, #1058);
+- the tags' layout inside the row header on a narrow window.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC, the real window's
+WebKit and the full `med_list` command against a real drugref need the window and a human. The rest was run as
+follows:
+- **The floor:** `db/tests/074_clinical_allergy_test.sql` and `db/tests/076_drug_read_door_test.sql` section 4.
+- **The doors against a stub:** `db/tests/076_drug_read_door_test.sql` and `drug_read_door.rs`,
+  `drug_read_door_shape.rs` and `drug_answers_read.rs`. That includes `the_window_role_can_call_the_doors`.
+- **The check:** `allergy/check_tests.rs` and `check_unverified_tests.rs`.
+- **The window's commands:** `cairn-gui-tauri`'s DB-gated `allergy_check_db_tests.rs`, on the stub and on a
+  rolled-back transaction (CI never runs those, #905).
+- **The webview:** source guards (`drug_pick_webview_tests.rs`) and the stubbed Chromium walk.
+
+The real drugref's group name and the crowded pick (#1057) were seen only by querying `drugref_allergy`, never in the
+window. `TEMPLATE.md` carries a matching block (*The medication check*).

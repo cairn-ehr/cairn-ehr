@@ -10,6 +10,96 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ ALLERGY SLICE 3 — DRUG CODING AND THE MEDICATION CHECK (ADR-0098, db/076, db/074 + db/041 + db/042 in place) — do not undo**
+(pins: `db/tests/076_drug_read_door_test.sql`, `db/tests/074_clinical_allergy_test.sql`,
+`crates/cairn-node/tests/{drug_read_door,drug_read_door_shape,drug_answers_read,drug_door_callers,no_drugref_dependency}.rs`,
+`crates/cairn-node/src/allergy/{check_tests,check_unverified_tests}.rs`, `crates/cairn-event/src/allergy.rs`'s tests,
+`cairn-gui/cairn-gui-tauri/src/{allergy_check,allergy_check_db,drug_pick_webview}_tests.rs`).
+Every slice-1 and slice-2 rule below still holds.
+- **db/076 is the ONE file that reads drugref, and nothing else calls its doors** (M1). `no_drugref_dependency.rs`
+  exempts exactly `db/076_drug_read_door.sql` and asserts that it exists, dropping only it from the scan.
+  `drug_door_callers.rs` forbids any other `db/` or `extensions/` file to call `cairn_drug_*`, so no floor,
+  projection or sync path can lean on an optional database. **Tempting wrong fixes:** widen the exemption to a
+  directory or a pattern "for the next drugref file" (the next file is then unguarded); call `cairn_drug_facts` from a
+  projection "to precompute the marks" (a node without drugref projects differently from one with it, and the floor
+  now depends on an optional schema). A new drugref read goes INTO db/076. Pins:
+  `no_drugref_dependency.rs::the_read_door_exemption_is_one_file_that_exists`, `the_trusted_surface_never_calls_drugref`;
+  `drug_door_callers.rs::no_floor_or_projection_calls_the_drug_read_door`.
+- **No door's NAME contains "drugref"** (`cairn_drug_available`, `cairn_drug_search`, `cairn_drug_facts`,
+  `cairn_drug_group_status`). The Rust that calls them then never spells the word, and `no_drugref_dependency.rs` stays
+  strict for every other `.sql`/`.rs` file. The same goes for words a clinician reads: the expanded-list suffix is
+  " (drug group not clinically reviewed)" (ruling T4-c). **Tempting wrong fixes:** rename a door
+  `cairn_drugref_*` "for clarity" (every caller then trips the guard, and someone widens the guard); build "drugref"
+  through `format!` to slip a word past the guard (concealment the guard's doc warns of). Pin:
+  `no_drugref_dependency.rs::the_trusted_surface_never_calls_drugref`.
+- **`cairn_drug_available()` reads the catalogue, never `to_regclass`, and checks `allergy_check`'s EXACT result
+  shape** (rulings T2-a, T2R-b). `to_regclass('drugref.x')` RAISES "permission denied for schema" when the owner lacks
+  USAGE, which is exactly the installed-but-unreadable case that must answer false. The shape string is drugref db/068's
+  `RETURNS TABLE`, because the facts door reads its columns by name. **Tempting wrong fixes:** "simplify" to
+  `to_regclass(...) IS NOT NULL`; loosen the shape check to "has an `outcome` column" so an additive drugref release
+  works (a renamed column then raises in the facts door instead of degrading). An additive drugref change reads as
+  "no drug list" until db/076's string is updated: that is the intended degrade, so update the string together with
+  the stub (`tests/fixtures/drug_stub.sql`). Pins: `drug_read_door.rs::an_unreadable_drugref_is_unavailable_not_a_fault`,
+  `a_drugref_without_allergy_check_is_unavailable`; `drug_read_door_shape.rs::a_reshaped_allergy_check_is_unavailable`.
+- **Every caller maps a door's ERROR to "no drug list", never to a failed pane** (T2R-b, T5-a). `allergy_check` is
+  invoker-rights SQL, so it reads drugref's internal tables as the door owner, which availability cannot see. A
+  partly-readable drugref makes `cairn_drug_facts` raise. `check_list` maps `Err` to `DrugFacts::Unavailable`, a failed
+  search to `available: false`, and a failed status read (under a savepoint) to an empty map. **Tempting wrong fix:**
+  `?` the error up "so the operator sees it": the medication list then fails to draw because an OPTIONAL database
+  hiccupped. Pin: `allergy_check_db_tests.rs::a_drug_list_that_raises_leaves_every_line_not_checked`,
+  `med_list_draws_when_the_allergy_read_fails`.
+- **drugref owns the fold; Cairn keeps none** (M4). Whether a salt or hydrate is the same drug, and which drugs an
+  allergy group holds, is `drugref.allergy_check`'s answer, and the facts door passes its rows through unchanged.
+  drugref folds every composition component, not only the active ones (its owner's ruling). **Tempting wrong fixes:**
+  re-add a Cairn-side family or class walk "to catch what drugref misses", such as a cephalosporin rule (two folds
+  disagree and nobody can say which warned); filter to "active" components (clemizole penicillin then answers a
+  penicillin allergy with a silent no-match). A wrong answer is fixed in drugref. Pin:
+  `drug_read_door.rs::the_facts_are_drugrefs_rows_for_every_pair`.
+- **The pick offers drugref ALLERGY GROUPS only, never MED-RT classes** (M5). `allergy_check` answers
+  `allergen-not-a-group` for an EPC/PA class, so an allergen coded with one could never be checked. **Tempting wrong
+  fix:** "offer every class, clinicians know 'Penicillin-class Antibacterial'". Pin:
+  `076_drug_read_door_test.sql` section 1 (the EPC class is never offered).
+- **An unverified line ALWAYS carries the small "not checked" tag** (M6, D8, design risk 2). When a line has no mark
+  and some live allergy-kind head was neither a hit nor answered `no-match`, the tag shows. That covers an uncoded side,
+  no drugref, `unplaced` for any reason including `allergen-in-no-group` (R1), and no answer row. **Tempting wrong
+  fixes:** trim it to hit-only marks "because most lines carry it" (silence then reads as checked, and a salt of the
+  allergen on a drugref-less node reads clean); hide it on a coding-conflicted line (that line names no moiety on
+  purpose). The tag is visible text, never a `title` (#871). Pins:
+  `check_unverified_tests.rs::a_salt_without_the_drug_list_is_not_checked`, `unplaced_is_not_checked`,
+  `an_uncoded_line_is_not_checked`, `a_marked_line_is_never_also_unverified`;
+  `allergy_check_tests.rs::a_conflicted_group_is_never_checked_clean`;
+  `drug_pick_webview_tests.rs::an_unverified_line_shows_the_small_tag`.
+- **An adverse effect never marks and never flags a line unverified** (R3, design risk 3). It is a muted note
+  ("Previous adverse effect: …"), even when drugref answers `match`. Every OTHER entry kind, including a peer's word this
+  build does not know, counts as an allergy (T4-d), and every allergen kind except `other` takes part (T4-e).
+  **Tempting wrong fixes:** mark an adverse effect "to be safe" (juniors learn to ignore the mark, the maintainer's
+  inflated-allergy failure); drop an unknown kind "because we cannot word it" (a peer's newer allergy reads clean).
+  Pins: `check_tests.rs::an_adverse_effect_is_a_note_never_a_mark`,
+  `an_adverse_effect_matched_by_the_drug_list_is_a_note`, `a_newer_entry_kind_counts_as_an_allergy`,
+  `a_newer_allergen_kind_counts_as_a_drug`; `check_unverified_tests.rs::an_adverse_effect_never_makes_a_line_unverified`.
+- **One mark per allergen, worded with its most severe live account** (D7, T4-f). An allergen is a CONNECTED component
+  under `same_allergen_rows`, which is not transitive. **Tempting wrong fix:** compare pairs only (two linked accounts
+  give two marks, or the milder one's reaction). Pins: `check_tests.rs::linked_accounts_mark_once_with_the_most_severe`,
+  `differing_accounts_mark_once_with_the_more_severe`.
+- **A coding vouches for the name it was picked with** (`drug_pick.js`). Any edit of the term, or leaving *Drug*, drops
+  the held coding. *Correct* holds the line's coding until the term is edited (T6-a). The node refuses a coding on a
+  non-drug entry before the key (T5-d). **Tempting wrong fix:** keep the coding across an edit "so a typo fix keeps the
+  code" ("penicillin" edited to "latex" would sign as the penicillin moiety). Pins:
+  `drug_pick_webview_tests.rs::editing_the_name_after_a_pick_drops_the_coding`,
+  `a_correction_keeps_the_coding_and_the_pick_follows_the_pressed_kind`;
+  `allergy_check_db_tests.rs::a_pick_on_an_other_entry_is_refused_before_the_key`.
+- **The tags are drawn on the patient's OWN medication list only** (T5-f). `allergy_tags.js`'s `nameCell`/`allergyRows`
+  are called only by `main.js`'s `renderRow`. The duplicates and link views build rows with `allergy_unverified`
+  false. **Tempting wrong fix:** reuse `renderRow` in a comparison view "for consistency" (never-checked rows then look
+  checked and clean).
+- **Allergy rows over another chart set than the list's are not used** (T5-c). A link or unlink between the two reads
+  gives "Allergies could not be read: medications not checked against them". **Tempting wrong fix:** use the rows
+  anyway "because the patient is the same" (a departed chart's lines read clean). Pin:
+  `allergy_check_tests.rs::allergies_over_another_chart_set_are_not_used`.
+- **drugref must be owned by the door's owner or an equally trusted role** (ADR-0098 decision 13). Whoever can replace
+  `drugref.allergy_check` runs SQL as the door owner on every medication-list read. Install it with `pg_dump
+  --no-owner` restored as the owner (RUNBOOK §29), and never grant drugref to `cairn_window`.
+
 **⇒ ALLERGY SLICE 2 — OVERLAYS AND DIFFERING ACCOUNTS (ADR-0097, db/075, db/074 + db/037 + db/044 in place) — do not undo**
 (pins: `db/tests/075_allergy_overlays_test.sql`, `crates/cairn-event/src/{allergy,allergy_overlay}.rs`'s tests,
 `crates/cairn-node/src/allergy/{thread_tests,view_overlay_tests,view_history_tests}.rs`, `crates/cairn-node/src/allergy/read.rs`'s tests,

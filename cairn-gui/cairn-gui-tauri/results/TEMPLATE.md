@@ -705,6 +705,48 @@ Passphrase retypes after a refusal on a shared terminal: \_\_.
 | A historical or entered-in-error line distinguishable without colour | | |
 | No dialog; no passphrase but the signer strip | | |
 
+## The medication check: drug allergies coded against drugref (allergy slice 3, runbook §29)
+
+drugref copied from: \_\_ (database, its drugref db level, `allergy_check` shape line matched? yes / no)
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| A coded entry: first keystroke in *Substance* → "Recorded." and the tags redrawn | held | | | | ≤ 15 s | |
+| The same, credential typed (first keystroke in *Staff ID*) | shared | | | | — (record) | |
+| A free-text entry with the pick present | held | | | | ≤ 10 s | |
+| The same, credential typed | shared | | | | — (record) | |
+| The pick: third letter → list drawn (screen recording) | — | | | | ≤ 300 ms | |
+| `cairn_drug_facts`, 5 allergens × 20 lines, as the window | — | | | | — (pane + ≤ 100 ms) | |
+| Pane open, drugref present vs renamed away (by eye / recording) | — | | | | + ≤ 100 ms | |
+| `ui_gesture_timing` `allergy-record` (the write half) | | | | | — | |
+
+Steps: record a coded entry paper *N* = 1 → forced *M* = 1 → observed \_\_ · check the list 1 → 0 → observed \_\_ (0
+expected: no click). Passphrase retypes after a refusal on a shared terminal: \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| `pen` / `penic` / `penicillin` list drugs only; `penicillins` offers the group (#1057) | | |
+| A group option reads "… (group)"; choosing it fills the name and closes the list | | |
+| Group-coded entry: expanded line ends " (drug group not clinically reviewed)"; the strip has no suffix | | |
+| `$K1`: amoxicillin and flucloxacillin **Allergy** + "… is a Penicillins (allergy group); …"; cephalexin and metformin no tag; Augmentin **not checked** | | |
+| `$K2`: amoxicillin "Allergy recorded: …"; flucloxacillin "… in the same group as amoxicillin (…)"; metformin muted note only | | |
+| `$K3`: a typed allergen, then codeine (in no group): every line **not checked**, none marked | | |
+| `amox` lists a look-alike (amoxapine) first: easy to mis-pick? | | |
+| An edit after a pick, or *Other* then *Drug*: `coding` null on the console | | |
+| Correct keeps the coding; Correct with a changed name drops it | | |
+| drugref renamed away: the hint; marks by name/code stay; the rest **not checked**; nothing fails | | |
+| The real Tauri IPC: options listed; a picked entry's coding on the console | | |
+| WebKit (the real window): ↓ / ↑ / Enter / Escape, click, Tab away (no blur close), tags on a narrow window | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| A marked line's row header read with "Allergy"; each mark row read | | |
+| An unchecked line's row header read with "not checked" | | |
+| An adverse-effect row read, told apart from a mark by its words | | |
+| *Substance* announced as a combo box; options / active option announced; Escape closes | | |
+| The no-drug-list hint read or visible | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**
