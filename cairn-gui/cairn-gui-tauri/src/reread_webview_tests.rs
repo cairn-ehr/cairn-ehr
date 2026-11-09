@@ -55,7 +55,7 @@ fn refresh_calls(body: &str) -> Vec<Vec<String>> {
 #[test]
 fn every_re_read_sends_the_held_set() {
     assert!(MAIN_JS.contains("async function refresh(lead, behind) {"));
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     assert!(
         refresh.contains(
             "await invoke(\"med_list\", { patientId: patient, seenCharts: heldCharts });"
@@ -213,7 +213,7 @@ fn an_own_act_moves_the_held_set_by_its_own_delta_only() {
 /// "read again". Not stale and no change: the outcome line is left alone.
 #[test]
 fn read_again_is_said_only_after_an_accepted_answer() {
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let rendered = position(refresh, "render(answer, patient);");
     let said = position(
         refresh,
@@ -255,7 +255,7 @@ fn read_again_is_said_only_after_an_accepted_answer() {
 /// the refusal and the failed read — alone.
 #[test]
 fn an_older_read_landing_late_keeps_a_stale_mark() {
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let marked = position(refresh, "const marked = listMarkedStale();");
     assert!(
         marked < position(refresh, "render(answer, patient);"),
@@ -318,7 +318,7 @@ fn the_outcome_line_joins_whole_sentences() {
         join.contains("line.charAt(0).toUpperCase() + line.slice(1)"),
         "{join}"
     );
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let caught = &refresh[position(refresh, "catch (e)")..];
     assert!(caught.contains("sayReadFailed(lead, e);"), "{caught}");
     assert!(
@@ -334,7 +334,7 @@ fn the_outcome_line_joins_whole_sentences() {
 /// a fresh list, which must not be marked.
 #[test]
 fn a_failed_stale_re_read_marks_the_list_out_of_date() {
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let caught = &refresh[position(refresh, "catch (e)")..];
     let marked = position(
         caught,
@@ -358,7 +358,7 @@ fn a_failed_stale_re_read_marks_the_list_out_of_date() {
 /// late is the record as it was); taking the list down (`holdCharts(null)`) ends it too.
 #[test]
 fn a_known_stale_list_outlives_the_read_that_learnt_it() {
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let known = position(refresh, "if (behind) knowListBehind(behind, lead);");
     assert!(
         position(refresh, "if (patient === null) return;") < known

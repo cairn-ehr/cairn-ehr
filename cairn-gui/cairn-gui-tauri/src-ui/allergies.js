@@ -206,6 +206,7 @@ function resetAllergyForm() {
   for (const id of ["allergy-term", "allergy-reaction-text", "allergy-onset"]) el(id).value = "";
   clearAllergyErrors();
   clearCorrection();
+  clearPick(); // a coding belongs to the name it was picked with (drug_pick.js)
 }
 
 /** Take down every refusal shown under a field. */
@@ -243,6 +244,7 @@ async function recordAllergy() {
       patientId: patient,
       charts: allergyCharts,
       entry: typedAllergy(),
+      coding: pickedCoding(), // the picked drug or group, or null for a name as typed
       credential: signerCredential(),
     });
     clearSigner(true);
@@ -288,6 +290,7 @@ function afterSigned(answer, patient, wasEntry) {
   // own read in flight must not be outdated by an answer that is not about it.
   if (patient !== displayedPatient) return;
   allergyRevision += 1; // a read sent before this act cannot draw over its answer
+  void readMedList(); // the medication check reads the allergies: redraw its tags (main.js)
   if (wasEntry || allergyCorrecting !== null) resetAllergyForm();
   if (answer.pane === null) {
     allergyCharts = null;

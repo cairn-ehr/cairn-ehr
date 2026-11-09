@@ -166,11 +166,7 @@ function renderRow(row) {
   tr.append(
     // On a combined list the source chart is part of the drug's name, so a screen reader hears
     // WHERE it was recorded in the same utterance as WHAT it is. `source` is present only then.
-    cell(
-      "th",
-      row.source ? row.primary + " — recorded on chart(s) " + row.source : row.primary,
-      { scope: "row" },
-    ),
+    nameCell(row), // the drug's name, its source chart, and the allergy tags (allergy_tags.js)
     cell("td", row.dose),
     statusCell(row), // the status word and each hold's "W" (holds.js, #832)
     cell(
@@ -218,6 +214,7 @@ function renderRow(row) {
     note.append(td);
     rows.push(note);
   }
+  rows.push(...allergyRows(row)); // marks and notes under the line (allergy_tags.js)
   return rows;
 }
 
@@ -249,6 +246,7 @@ function drawList(pane, patient) {
   renderLinks(pane.links);
   setMessage(el("record-links-error"), pane.links_error);
   renderWarnings(view);
+  setMessage(el("allergy-check-failed"), pane.allergy_check_failed); // above the list
 
   const body = el("med-rows");
   const typed = typedReasons();
@@ -303,6 +301,7 @@ function clearDrawnList() {
   setMessage(el("record-links-error"), "");
   el("med-rows").replaceChildren();
   setMessage(el("chart-unshown"), "");
+  setMessage(el("allergy-check-failed"), "");
   setMessage(el("chart-stale"), "");
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
@@ -346,6 +345,17 @@ async function refresh(lead, behind) {
   if (patient === null) return;
   void readNotes(patient); // the note pane, read on its own: its failure never touches the list
   void drawAllergies(patient); // the allergy strip (allergies.js), read on its own too
+  await readMedList(lead, behind);
+}
+
+/**
+ * The medication half of `refresh`. Split out so a signed allergy (allergies.js's `afterSigned`)
+ * can re-read just the list: the allergy check runs inside `med_list`, so a new allergy must
+ * redraw the tags. `lead`/`behind` are `refresh`'s.
+ */
+async function readMedList(lead, behind) {
+  const patient = displayedPatient;
+  if (patient === null) return;
   if (behind) knowListBehind(behind, lead); // window state: whichever read fails last marks the list
   // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
   const revision = ++chartReadRevision;

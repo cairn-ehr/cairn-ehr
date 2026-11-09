@@ -95,7 +95,7 @@ fn allergies_js_is_listed_and_loaded() {
     let refresh = js_fn(MAIN_JS, "refresh");
     assert!(
         position(refresh, "void drawAllergies(patient);")
-            < position(refresh, "invoke(\"med_list\""),
+            < position(refresh, "await readMedList(lead, behind);"),
         "{refresh}"
     );
     let clear = js_fn(MAIN_JS, "clearChart");

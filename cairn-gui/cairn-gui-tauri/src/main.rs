@@ -33,6 +33,8 @@ mod chart_set;
 #[cfg(test)]
 mod chart_view_webview_tests;
 mod commands;
+#[cfg(test)]
+mod drug_pick_webview_tests;
 mod duplicates;
 mod enrol;
 mod funnel;

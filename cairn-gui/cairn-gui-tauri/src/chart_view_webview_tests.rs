@@ -43,7 +43,7 @@ fn a_read_draws_unless_something_newer_is_drawn_and_fails_aloud_only_if_newest()
 /// it says anything.
 #[test]
 fn a_chart_read_is_drawn_only_while_nothing_newer_is_on_screen() {
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let sent = position(refresh, "await invoke(\"med_list\"");
     assert!(
         position(refresh, "const revision = ++chartReadRevision;") < sent,
