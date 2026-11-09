@@ -454,8 +454,9 @@ fn pane(a: &PatientAllergies, set: &ChartSet) -> AllergyPane {
         drug_allergies: lines(v.drug_allergies),
         other_allergies: lines(v.other_allergies),
         adverse_effects: lines(v.adverse_effects),
-        previously_none: v.previously_none,
-        standing_none: v.standing_none,
+        // Words only until the pane's none lines carry their event id (allergy slice 2, Task 5).
+        previously_none: v.previously_none.into_iter().map(|l| l.text).collect(),
+        standing_none: v.standing_none.into_iter().map(|l| l.text).collect(),
         unreadable: v.unreadable,
         charts: set.members().iter().map(Uuid::to_string).collect(),
     }
