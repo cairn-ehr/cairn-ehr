@@ -2402,10 +2402,12 @@ hand here; they are pinned by `allergies_tests.rs`'s `an_interrupted_sign_is_not
 The slice's gestures, all in the expanded list (*Show all allergies*): **Correct** on a live line, which fills the
 entry form from the line as recorded and says "Correcting: …" above it, then the form's *Sign*; **De-label** on a live
 line, which opens one inline row under it (*Tolerated*, *When*, *Note (optional)*, *Sign*, *Cancel*); **Entered in
-error** on a live line or a "none known" line, an inline row (*Reason (optional)*, *Sign*, *Cancel*); and **Withdraw
-de-label** on a historical line, the same row aimed at the de-label it rests on. The chart's new words: "Earlier: …"
-under a corrected line, "Historically reported: … Challenged: tolerated …", "Entered in error: …", "Not counted: …",
-" — differing accounts", and the byline markers " (signer unconfirmed)" / " (key had been repudiated)". Paper
+error** on a live line, a historical line or a "none known" line, an inline row (*Reason (optional)*, *Sign*,
+*Cancel*); and **Withdraw de-label** on a historical line, the same row aimed at the de-label it rests on. A line from a
+chart whose link to this one is in doubt carries no button (ADR-0097 decision 25). The chart's new words: "Earlier: …"
+under a corrected line, "Historically reported: … Challenged: tolerated … (de-labelled {day} by {name})", "Entered in
+error: …" (with the reason typed, " — {reason}"), "Not counted: …", " — differing accounts", and the byline markers
+" (signer unconfirmed)" / " (key had been repudiated)". Paper
 counterpart: strike the line in the drug chart's allergy box and write the corrected one beside it, initialled; write
 "tolerated amoxil 03/22" against a struck penicillin line; strike a slip and initial it. **Live only**: a `--mock`
 window refuses every write ("fixture mode: …"), which is enough for the button labels and the Tab order.
@@ -2423,8 +2425,8 @@ The budgets are the plan's gesture, **with the key held** (`--key-hold-seconds 9
 again on a shared terminal (no hold, the clock starting at the first keystroke in the signer strip's *Staff ID*) and
 record both. Steps: correct paper *N* = 1 (strike and rewrite) → forced *M* = 1 (one entry carrying `correction-of`) →
 target *K* = 1 (Correct, edit, Sign); de-label 1 → 1 → 1 (De-label, name what was tolerated, Sign); entered in error
-1 → 1 → 1 (Entered in error, Sign). Striking a de-labelled line takes two window acts (*Withdraw de-label*, then
-*Entered in error* on the line it puts back): record it as a `K > M` (ADR-0097 (d)). The node times the write half of
+1 → 1 → 1 (Entered in error, Sign); strike a de-labelled line 1 → 1 → 1 (*Entered in error* on the historical line,
+Sign — aimed at its entry, never through *Withdraw de-label*). The node times the write half of
 each as **`allergy-correct`**, **`allergy-challenge`** and **`allergy-retract`** (section 5). **A figure outside its
 budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
 
@@ -2453,17 +2455,25 @@ documented*. Launch as section 3 on `$W1` with `--key-hold-seconds 900`, and unl
       *Anaphylaxis*, *Sign*. The list reads "Allergy: penicillin → anaphylaxis" with, under it, muted, "Earlier:
       Allergy: penicillin → rash (recorded {today} by {name})"; the strip reads "Allergy: penicillin → anaphylaxis";
       the form is empty and "Correcting" is gone.
-- [ ] *De-label* on that line: one row opens under it, *Tolerated* already `penicillin`. Type `amoxicillin` over it,
-      *When* `03/2022`, *Sign*. The line moves under "Historically reported (de-labelled):" and reads "Historically
-      reported: penicillin allergy. Challenged: tolerated amoxicillin Mar 2022", muted; the strip reads "Allergies not
-      yet asked · +1 historical" and shows the two "none known" buttons.
+- [ ] *De-label* on that line: one row opens under it, *Tolerated* EMPTY (*Sign* now: "Name what was tolerated." in
+      the row). Type `amoxicillin`, *When* `03/2022`, *Sign*. The line moves under "Historically reported
+      (de-labelled):" and reads "Historically reported: penicillin allergy. Challenged: tolerated amoxicillin Mar 2022
+      (de-labelled {today} by {name})", muted, carrying *Withdraw de-label* and *Entered in error*; the strip reads
+      "Allergies not yet asked · +1 historical" and shows the two "none known" buttons.
 - [ ] *Withdraw de-label* on the historical line, *Sign*: the anaphylaxis is back on the strip, prominent, and the
       list shows "Entered in error: de-label — tolerated amoxicillin (withdrawn {today} by {name})" under "Entered in
       error:".
-- [ ] *Entered in error* on the live anaphylaxis line, *Reason* `wrong patient`, *Sign*: the strip reads "Allergies not
-      yet asked"; the list reads "Entered in error: Allergy: penicillin → anaphylaxis (withdrawn {today} by {name})",
-      with the "Earlier:" rash line under it. No "Entered in error" line carries a button (a withdrawal is never
-      withdrawn, ADR-0097 (a)).
+- [ ] *Entered in error* on the live anaphylaxis line: its row opens with "This strikes the line and its earlier
+      versions. To undo a correction, press Correct and record it as it was." above *Reason* (the line has an
+      "Earlier:" version; on a line with none, the row has no such sentence). *Reason* `wrong patient`, *Sign*: the
+      strip reads "Allergies not yet asked"; the list reads "Entered in error: Allergy: penicillin → anaphylaxis
+      (withdrawn {today} by {name}) — wrong patient", with the "Earlier:" rash line under it. No "Entered in error"
+      line carries a button (a withdrawal is never withdrawn, ADR-0097 (a)).
+- [ ] Strike a de-labelled line in one act: record `codeine`, *Allergy*, *Rash*; *De-label* it (`codeine`, *When*
+      empty, *Sign*); then *Entered in error* on its historical line, *Reason* `wrong patient`, *Sign*. The strip
+      never shows codeine between the two acts; the list reads "Entered in error: Allergy: codeine → rash (withdrawn
+      {today} by {name}) — wrong patient — de-labelled {today} by {name}: tolerated codeine", and the historical
+      heading is gone.
 - [ ] Differing accounts: record `penicillin`, *Allergy*, *Rash*, then a second entry `Penicillin`, *Allergy*,
       *Anaphylaxis*. The strip reads "Allergy: Penicillin → anaphylaxis — differing accounts; Allergy: penicillin →
       rash — differing accounts", with no click. Record `penicillin`, *Allergy*, *Not known*: that line carries no
@@ -2484,13 +2494,17 @@ and `$L1`'s list shows the corrected line. Then:
       `[{"rel": "correction-of", "event": "<the first row's event_id>"}]`.
 - [ ] *De-label* and *Entered in error* on a linked chart's line land on its chart the same way
       (`clinical_allergy_challenge`, `clinical_allergy_retraction`, column `patient_id`).
+- [ ] **A doubted link (ADR-0097 decision 25).** With section 13's Setup B (A–C separated, still joined through B;
+      `cairn_chart_set_doubts` prints its `separated` row), record `latex`, *Other substance*, *Allergy*, *Urticaria*
+      on `$C`, and open `$A`: the latex line reads "… (on a chart whose link to this one is in doubt)" and carries NO
+      button (no *Correct*, *De-label* or *Entered in error*). Open `$C`: there its own line carries all three.
 
 **Measurement 3 — the timings (five runs each, held key, then shared terminal).**
 
 - [ ] **Correct (≤ 15 s).** On `$O1`, one line per run: from the press on *Correct* to "Recorded." and the redraw,
       pressing *Anaphylaxis* in place of *Rash* and *Sign*.
-- [ ] **De-label (≤ 15 s).** On `$O2`, one line per run: from the press on *De-label*, typing `amoxicillin` over
-      *Tolerated* and `03/2022` in *When*, *Sign*, to "Recorded." and the line under the historical heading.
+- [ ] **De-label (≤ 15 s).** On `$O2`, one line per run: from the press on *De-label*, typing `amoxicillin` in the
+      empty *Tolerated* and `03/2022` in *When*, *Sign*, to "Recorded." and the line under the historical heading.
 - [ ] **Entered in error (≤ 5 s).** On `$O3`, one line per run: from the press on *Entered in error*, *Sign* with no
       reason, to "Recorded." and the line under "Entered in error:".
 - [ ] The write halves: `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind IN ('allergy-correct',
@@ -2501,7 +2515,7 @@ and `$L1`'s list shows the corrected line. Then:
 
 **Measurement 4 — the refusals, before the key.**
 
-- [ ] *De-label*, *Tolerated* emptied, *Sign*: "Name what was tolerated." in the row (not under the form's
+- [ ] *De-label*, *Tolerated* left empty, *Sign*: "Name what was tolerated." in the row (not under the form's
       *Substance*), what was typed kept. *When* `2999`: "\"2999\" is after today — when it happened cannot be later than
       today." in the row.
 - [ ] Correct on a line, then empty *Substance* and *Sign*: "Name the substance." under it.
@@ -2540,7 +2554,10 @@ snake_case `corrects`; a name Tauri cannot map fails the call with an "invalid a
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
 - [ ] Each line's buttons are reached by Tab and read with the line: "Correct: Allergy: penicillin → rash …",
-      "De-label: …", "Entered in error: …", "Withdraw de-label: Historically reported: …".
+      "De-label: …", "Entered in error: …", "Withdraw de-label: Historically reported: …", "Entered in error:
+      Historically reported: …".
+- [ ] Whether the retract row's "This strikes the line and its earlier versions. …" is read when the row opens (it
+      is a paragraph before the focused *Reason* field, not its description).
 - [ ] An inline row is read as a group named for its button and line, its fields by their labels (*Tolerated*, "When —
       leave empty if not known", *Note (optional)*, *Reason (optional)*); the focus lands in its first field.
 - [ ] A refusal in a row is read when it appears.
@@ -2560,8 +2577,10 @@ Escape, and the muted nested "Earlier:" lists.
 **What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC, the two-terminal
 checks and the real window's WebKit need the window and a human. The floor was run by
 `db/tests/075_allergy_overlays_test.sql` and `allergy_overlay_floor.rs`; signing and reading by `allergy_overlays.rs`
-and `window_role_grants.rs`; the fold and its words by `allergy/thread_tests.rs` and `allergy/view_overlay_tests.rs`.
-The window's commands were run by `cairn-gui-tauri`'s DB-gated `allergy_overlays_tests.rs` (CI never runs those,
-#905); the webview by source guards (`allergy_overlays_webview_tests.rs`) and the stubbed walk. An outcome that is not
-known (#814) is pinned by `allergy_overlays_tests.rs`'s `an_interrupted_overlay_is_not_known_and_never_retried`.
+and `window_role_grants.rs`; the fold and its words by `allergy/thread_tests.rs`, `allergy/view_overlay_tests.rs` and
+`allergy/view_history_tests.rs`. The window's commands were run by `cairn-gui-tauri`'s DB-gated
+`allergy_overlays_tests.rs` (CI never runs those, #905), the target rule also by the pure
+`allergy_overlays_pure_tests.rs`; the webview by source guards (`allergy_overlays_webview_tests.rs`) and the stubbed
+walk. An outcome that is not known (#814) is pinned by `allergy_overlays_pure_tests.rs`'s
+`an_interrupted_overlay_is_not_known_and_never_retried`.
 `TEMPLATE.md` carries a matching block (*Allergy overlays*).

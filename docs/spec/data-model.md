@@ -80,7 +80,7 @@ concurrent corrections of one line are two current accounts. A **de-label** ("ch
 back, and a withdrawal never can (a wrong one is repaired by recording the entry again). Each is filed under its
 target's own chart. The read folds them: an overlay covers the version it names and the versions that version
 replaced, never a later correction of it, so every concurrent case across a partition over-warns; an overlay signed
-by a since-repudiated key, or naming another chart's record, counts only when it adds a warning; a de-labelled line
+by a since-repudiated or doubtful key, or naming another chart's record, counts only when it adds a warning; a de-labelled line
 reads "Historically reported: …", overrides no "none known" statement and is only counted on the strip ("+1 historical"). Two live accounts of one
 allergen (the same term after case and whitespace are folded) that disagree on kind or on a known reaction are both
 marked "differing accounts", and a byline says when its key is unconfirmed or was since repudiated

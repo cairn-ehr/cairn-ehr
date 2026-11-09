@@ -669,15 +669,17 @@ Steps: read the allergies paper *N* = 0 → forced *M* = 0 → observed \_\_ · 
 | `ui_gesture_timing` `allergy-correct` / `allergy-challenge` / `allergy-retract` (the write halves) | | | | | — | |
 
 Steps: correct paper *N* = 1 → forced *M* = 1 → observed \_\_ · de-label 1 → 1 → observed \_\_ · entered in error 1 → 1 →
-observed \_\_ · strike a de-labelled line 1 → 1 → observed \_\_ (2 expected, ADR-0097 (d)). Passphrase retypes after a
-refusal on a shared terminal: \_\_.
+observed \_\_ · strike a de-labelled line 1 → 1 → observed \_\_ (1 expected: *Entered in error* on the historical line).
+Passphrase retypes after a refusal on a shared terminal: \_\_.
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
 | Correct: the form filled from the line, "Correcting: …"; the old line under "Earlier:" after Sign | | |
-| De-label: "Historically reported: … Challenged: tolerated amoxicillin Mar 2022"; strip "+1 historical" | | |
+| De-label: *Tolerated* starts empty; "Historically reported: … Challenged: tolerated amoxicillin Mar 2022 (de-labelled {today} by {name})"; strip "+1 historical" | | |
 | Withdraw de-label: the allergy back on the strip; "Entered in error: de-label — …" | | |
-| Entered in error on a live line: off the strip; "Entered in error: … (withdrawn …)" with its "Earlier:" line | | |
+| Entered in error on a live line: the row's "This strikes the line and its earlier versions. …" (only with an "Earlier:" line); off the strip; "Entered in error: … (withdrawn …) — wrong patient" with its "Earlier:" line | | |
+| A de-labelled line struck in one act: "Entered in error: … — de-labelled …: tolerated …"; never back on the strip | | |
+| A doubted link's line: marked, no button on it; its own chart's line carries all three | | |
 | Entered in error on a "none known" line | | |
 | No button on an "Entered in error" line | | |
 | Differing accounts: " — differing accounts" on both lines on the strip, no click; none on a "not known" line | | |

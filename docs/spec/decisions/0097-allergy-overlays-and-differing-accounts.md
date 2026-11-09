@@ -12,10 +12,11 @@
   [#1027](https://github.com/cairn-ehr/cairn-ehr/issues/1027) (decision 18). Touches
   [#905](https://github.com/cairn-ehr/cairn-ehr/issues/905) (not guaranteed (h)) and
   [#406](https://github.com/cairn-ehr/cairn-ehr/issues/406) / [#401](https://github.com/cairn-ehr/cairn-ehr/issues/401)
-  (not guaranteed (l)). Filed by this slice: #TBD-1 (withdraw a de-label on an older version, (c)), #TBD-2 (strike a
-  de-labelled line in one act, (d)), #TBD-3 (a historical line does not name who de-labelled it, (e)), #TBD-4 (no
+  (not guaranteed (l)). Filed by this slice: #TBD-1 (withdraw a de-label on an older version, (c)), #TBD-4 (no
   trace of an overlay with no effect, (f)), #TBD-5 (the byline markers, (g)), #TBD-6 (window polish, (i)), #TBD-7
-  (test gaps, (k)), #TBD-8 (files over 500 lines).
+  (test gaps, (k)), #TBD-8 (files over 500 lines), #TBD-9 (a withdrawn, then shredded entry leads the strip, (e)),
+  #TBD-10 (should withdrawing a correction re-expose what it replaced? a maintainer decision, (d)), #TBD-11 (a struck
+  "none known" line does not say who withdrew it, decision 18).
 - **Builds on:** [ADR-0096](0096-the-allergy-list.md) (the allergy list) ·
   [ADR-0052](0052-born-sealed-clinical-bodies.md) (born sealed) ·
   [ADR-0053](0053-per-write-human-authorship.md) (the human signs, the node seals) ·
@@ -39,7 +40,12 @@ This slice builds those three acts as signed overlays, never edits (principle 1)
 one allergen that disagree (design §3.6) and marks a byline whose key is unconfirmed or since repudiated (#1027,
 design §3.8). The maintainer decided four things before the plan (M1–M4); the plan's designer made six calls
 (D1–D6); the build made rulings recorded in the slice's ledger, two of which replace or refine a call: **R-4a**
-replaces D1, and **R-4b** refines D4 and the plan review's R-P4. Each decision below says which it builds. The first
+replaces D1, and **R-4b** refines D4 and the plan review's R-P4. The slice's final review then found five things
+built in this ADR — a doubted chart's line could be struck from here (C1, decision 25), a doubtful key counted (I1,
+decisions 10–11), a strike of a corrected line said nothing of its earlier versions (I2, decision 19), De-label
+prefilled what was tolerated (M3) and a correction's twin named no target (M5, decision 1) — and the ledger ruled
+that a de-labelled line is struck in one act and names its de-labeller (decisions 18–19). Each decision below says
+which it builds. The first
 signed event of each new type freezes its shape (principle 11), so the wire is written down exactly.
 
 ## Decision
@@ -50,7 +56,8 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
    `clinical.allergy/1`, with ADR-0096's payload unchanged, whose `refs` is exactly
    `[{"rel": "correction-of", "event": "<uuid>"}]`, naming **the line it replaces**, not the first line of the
    chain. A fresh entry keeps `refs: []` (`AllergyEntry::corrects` is `None`). Its twin is
-   `"Corrects an earlier entry: "` followed by slice 1's words with the ISO onset (`render_allergy_twin`, R17). This
+   `"Corrects allergy record {target}: "` followed by slice 1's words with the ISO onset (`render_allergy_twin`,
+   R17), naming its target as the two overlay twins do (decision 4). This
    supersedes ADR-0096 decision 5's reserved-empty `refs`; `substance.coding` stays reserved (slice 3).
 2. **De-label and entered in error are two new types, one per act** (M1, the db/042 precedent):
    - `clinical.allergy-challenge.asserted`, `schema_version` `clinical.allergy-challenge/1`, payload exactly
@@ -118,30 +125,35 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
 
 10. **The read** (`read::list_patient_allergies`) adds the two overlay projections to slice 1's, over the same member
     charts in the window's one snapshot, and every row of all four tables now carries its signer key's standing:
-    `cairn_key_confirmation` folded to `KeyState` — `unconfirmed` or `doubtful` is **Unconfirmed**, `repudiated` is
-    **Repudiated**, `confirmed`, `outside`, `unknown` or no answer is **Standing**, and any other word fails the read
-    (reading an unknown word as standing would fail open). An entry's `corrects` is the `event` of the first element
+    `cairn_key_confirmation` folded to `KeyState` — `unconfirmed` is **Unconfirmed**, `doubtful` (unconfirmed, and a
+    key that approved its enrolment since repudiated) is **Doubtful**, `repudiated` is **Repudiated**, `confirmed`,
+    `outside`, `unknown` or no answer is **Standing**, and any other word fails the read (reading an unknown word as
+    standing would fail open). Repudiated and Doubtful are the *suspect* states (`KeyState::is_suspect`). An entry's `corrects` is the `event` of the first element
     of `refs` whose `rel` is `correction-of` and whose `event` parses as a uuid (`corrects_of`); anything else in
     `refs` is ignored, never an error (D6), so the entry reads as uncorrected, which over-warns. `unreadable`
     (ADR-0096 decision 10) now counts events of all four allergy types with no projected row.
 11. **A suspect overlay counts only when it adds a warning** (ruling R-4b, refining D4 and R-P4;
-    `thread::overlay_counts`). An overlay is *suspect* when its signer key is repudiated, or when it names an entry,
-    a "none known" statement or a de-label this node reads on another chart than its own (only a lenient remote door
-    admits that). A suspect withdrawal of a de-label (the allergy comes back) or of a "none known" statement (the
-    reassurance goes) counts; a suspect de-label, and a suspect withdrawal of anything else, count for nothing and are
-    listed as "Not counted: de-label (tolerated {term}){by}" or "Not counted: entered in error{by}", followed by
-    " — names a record on another chart" when that is why. This supersedes the plan's D4 sentence that a repudiated
-    key's de-label and withdrawal count for nothing. An unconfirmed signer's overlay is not suspect: it counts, marked
-    (the ADR-0094 precedent).
+    `thread::overlay_counts`). An overlay is *suspect* when its signer key is repudiated or doubtful (the final
+    review's I1: a doubtful key is one hop from a repudiation), or when it names an entry, a "none known" statement or
+    a de-label this node reads on another chart than its own (only a lenient remote door admits that). A suspect
+    withdrawal of a de-label (the allergy comes back) or of a "none known" statement (the reassurance goes) counts; a
+    suspect de-label, and a suspect withdrawal of anything else, count for nothing and are listed as "Not counted:
+    de-label (tolerated {term}){by}" or "Not counted: entered in error{by}", followed by " — its signer was enrolled by
+    a key since repudiated" for a doubtful key (whose marker reads as an unconfirmed one's), or " — names a record on
+    another chart" when that is why. This narrows the plan's D4 sentence that a repudiated key's de-label and
+    withdrawal count for nothing. An unconfirmed signer's overlay is not suspect: it counts, marked (the ADR-0094
+    precedent).
 12. **Standing de-labels** are the counted de-labels no counted withdrawal names (M3). For each target the newest
     by (HLC, event id) is the one a line shows.
 13. **Threads** (`thread::heads`). An entry and every correction of it, transitively, are one thread. A `corrects`
-    link counts unless the correcting entry's key is repudiated (D4: it is an account of its own and supersedes
+    link counts unless the correcting entry's key is suspect (D4, I1: it is an account of its own and supersedes
     nothing), it names itself, or it names no entry this node reads on the correcting entry's own chart (D2). The
     threads are a union-find whose root is the smaller event id, so a thread is identified by its smallest event id
     on every node. A thread's **heads** are the members no counted link names: two corrections of one line are two
-    heads, two current accounts (M2), and neither is lost. A forged cycle leaves no such member, so then every
-    member is a head (over-warning). Each head carries `earlier`, the versions it replaced, newest first.
+    heads, two current accounts (M2), and neither is lost. A thread in which every member is named — only a forged
+    cycle with nothing hanging off it — has no such member, so then every member is a head (over-warning); a
+    correction hanging off a forged cycle is that thread's head, and the cycle's members are its `earlier`. Each head
+    carries `earlier`, the versions it replaced, newest first.
 14. **Status is per head, and an overlay covers what it names, never a later correction of it** (ruling R-4a,
     replacing the plan's D1 "overlays are thread-level"). A head is *withdrawn* if a counted withdrawal names it,
     else *historical* if a standing de-label names it, else *live*. An overlay naming an older version strikes that
@@ -150,8 +162,10 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
     de-label reads live again. Every concurrent case over-warns rather than under-warns; and the window offers Correct
     only on live lines, so it cannot itself correct a struck line.
 15. **An overlay on an older version is said on its line** (ruling R-4c). An "Earlier:" line whose version a counted
-    withdrawal or a standing de-label names ends " — entered in error {day}{by}" or " — de-labelled {day}{by}:
-    tolerated {term}{ date}", so a clinician's signed act never vanishes under a later correction.
+    withdrawal or a standing de-label names ends " — entered in error {day}{by}{ — reason}" or " — de-labelled
+    {day}{by}: tolerated {term}{ date}{ — note}", so a clinician's signed act, and what they wrote with it, never
+    vanishes under a later correction. The same de-label tail ends a de-labelled line since struck as entered in
+    error (decision 18).
 16. **Differing accounts** (D5, design §3.6). Two terms name the same allergen when they match after Unicode
     lowercasing, trimming and collapsing whitespace (`thread::same_allergen`); spelling is not forgiven. Two accounts
     of one allergen differ when their kinds differ (allergy vs adverse effect), or when both reactions are known
@@ -164,33 +178,49 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
 17. **The view runs slice 1's logic over the live heads only** (`view::build_view`). A historical (de-labelled) line
     is listed under `historical`, never prominent, and overrides no "none known" statement. A withdrawn entry is off
     the strip and every list but "Entered in error". A withdrawn "none known" statement stands for no list and is not
-    "Previously recorded" either. A since-repudiated key's "none known" statement stands for no list (D4) and is
-    listed as "Previously recorded", marked; its entry is a live head that warns, and its
+    "Previously recorded" either. A suspect (repudiated or doubtful) key's "none known" statement stands for no list
+    (D4, I1) and is listed as "Previously recorded", marked; its entry is a live head that warns, and its
     allergy overrides a "none known" statement in its list as any allergy does. The strip adds "+N historical" after
     the adverse-effect count and before the unrecognised count.
 18. **The words** (`view.rs`, `history_words.rs`; the markers are the note view's, #1027):
     - a de-labelled line: "Historically reported: {term} {allergy|adverse effect|<kind>}{ (newer allergen kind)}.
       Challenged: tolerated {tolerated}", then " {date as read}" ("14 Mar 2022", "Mar 2022", "2022") when known, then
-      " — {text}";
-    - a withdrawn entry: "Entered in error: {line words}{doubt mark} (withdrawn {day}{by})", with its older versions
-      under it;
-    - a withdrawn de-label: "Entered in error: de-label — tolerated {term} (withdrawn {day}{by})";
-    - a withdrawn statement: "Entered in error: no known allergies (asked {day}{by})", or "no known drug allergies";
+      " (de-labelled {day}{by, inside})" naming who lifted the label and the day they signed it, then " — {note}", then
+      the doubt mark;
+    - a withdrawn entry: "Entered in error: {line words}{doubt mark} (withdrawn {day}{by})", then " — {reason}", then,
+      when a standing de-label names it (a de-labelled line struck in one act, decision 19), decision 15's de-label
+      tail; with its older versions under it;
+    - a withdrawn de-label: "Entered in error: de-label — tolerated {term}{ — note} (withdrawn {day}{by}){ — reason}";
+    - a withdrawn statement: "Entered in error: no known allergies (asked {day}{by}){doubt mark}{ — reason}", or "no
+      known drug allergies" (who withdrew it is not said, #TBD-11);
     - an older version: "Earlier: {line words} (recorded {day}{by})", newest first, plus decision 15's tail;
-    - `{by}` is " by {name}" plus " (signer unconfirmed)" or " (key had been repudiated)", and the marker alone when
-      this node cannot name the key (`thread::by_words`). An expanded line's own byline is its signer's name plus the
-      marker (`EntryLine::signer`), and nothing when this node cannot name the key (not guaranteed (g)). Allergies
-      carry no "(student)" mark (ADR-0096 decision 22).
+    - `{ — reason}` and `{ — note}` are the act's text, trimmed, and nothing when it is blank or absent
+      (`history_words::dash_note`);
+    - `{by}` is " by {name}" plus " (signer unconfirmed)" (an unconfirmed or doubtful key) or " (key had been
+      repudiated)", and the marker alone when this node cannot name the key (`thread::by_words`). `{by, inside}` is the
+      same words for inside a bracket — " by {name}" then ", signer unconfirmed" — so that byline is bracketed once
+      (`thread::by_words_inside`; only a de-label from a key that is not suspect stands, so ", key had been
+      repudiated" never appears there). An expanded line's own byline is its signer's name plus the marker
+      (`EntryLine::signer`), and nothing when this node cannot name the key (not guaranteed (g)). Allergies carry no
+      "(student)" mark (ADR-0096 decision 22).
 
 ### The window (`cairn-gui-tauri`'s `allergy_overlays.rs`, `allergies.rs`, `allergy_pane.rs`, `allergy_overlays.js`)
 
 19. **The acts on a line.** A live line of the drug, other or adverse-effect list carries *Correct*, *De-label* and
-    *Entered in error*; a historical line carries only *Withdraw de-label*, an entered-in-error act aimed at the
-    de-label it rests on; a standing or previous "none known" line carries *Entered in error*. Entered-in-error,
-    "Earlier:" and "Not counted" lines carry none. Each button's accessible name adds ": " and its line's text. De-label
-    and Entered in error open one inline row under their line, cloned from the page's `<template>`, with its own *Sign*;
-    one row is open at a time, and *Cancel* or Escape closes it signing nothing once no press is in flight. There is
-    no dialog and no "are you sure?" (principle 3). *Correct* fills the entry form from the line's words as recorded
+    *Entered in error*; a historical line carries *Withdraw de-label*, an entered-in-error act aimed at the de-label it
+    rests on, and *Entered in error*, aimed at its own entry, so a de-labelled line is struck in one act (the ledger's
+    ruling on the plan's #TBD-2; the floor admits it, and withdrawn outranks historical, decision 14); a standing or
+    previous "none known" line carries *Entered in error*. A line or "none known" line from a chart whose link to this
+    one is in doubt carries none (decision 25), nor do Entered-in-error, "Earlier:" and "Not counted" lines. Each
+    button's accessible name adds ": " and its line's text. De-label and Entered in error open one inline row under
+    their line, cloned from the page's `<template>`, with its own *Sign*; one row is open at a time, and *Cancel* or
+    Escape closes it signing nothing once no press is in flight. There is no dialog and no "are you sure?"
+    (principle 3). De-label's *Tolerated* starts empty (the final review's M3, superseding the plan's prefill from
+    the line's term): nothing is signed by default, and the drug challenged is often not the one labelled. Entered in
+    error on a line's own entry that has earlier versions strikes them too (decision 14), so its row says, in the
+    page's words, "This strikes the line and its earlier versions.", followed, when the line can be corrected (it
+    carries its words), by "To undo a correction, press Correct and record it as it was." (the final review's I2;
+    not guaranteed (d)). *Correct* fills the entry form from the line's words as recorded
     (`allergy_pane::LineWords`), pressing only a button whose word is the recorded word, so a newer peer's word this
     window has no button for stays unpressed; the page says "Correcting: {the line}", and the form's *Sign* sends
     `corrects`.
@@ -200,8 +230,10 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
     after today, "Choose where this came from.", then a wire word it should never send), for De-label "Name what was
     tolerated." and a date it cannot read or after today, for Entered in error none; then `target_before_the_key`: a
     fresh read in one snapshot, its chart set checked against the one sent, and the target found on it — a live line
-    for Correct and De-label, also a "none known" line or a historical line's de-label for Entered in error — else
-    "That allergy line is no longer on this chart — read it again." with a re-read. Only then the key, one signed
+    for Correct and De-label, also a "none known" line or a historical line's de-label or its own entry for Entered in
+    error — else "That allergy line is no longer on this chart — read it again." with a re-read; and a target whose
+    row is on a doubted chart is refused "This line is on a chart whose link to this one is in doubt — open that
+    chart, or settle the link, to change it.", also with a re-read (decision 25). Only then the key, one signed
     event filed under the target row's chart (decision 8), its timing sample, and the list of the chart on screen
     read again. `EntryInput`'s `allergen_kind` and `source` are now optional, because Correct can leave them
     unpressed, so ADR-0096 decision 16's four form refusals are six, each under its own field.
@@ -220,12 +252,21 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
 24. **Timing kinds.** A correction is timed as `allergy-correct` (never as `allergy-record`), a de-label as
     `allergy-challenge`, a withdrawal as `allergy-retract` (`Act::timing_kind`). As in slice 1 the sample is the
     write half only: from the key in hand to the sign's return, the re-read excluded.
+25. **No act on a doubted chart's line** (the final review's C1). On a chart set holding a doubted link, a line from
+    another member chart is shown and marked only because over-warning is the safe error (ADR-0096 decision 11): it
+    may be a stranger's. Striking, de-labelling or correcting it from here would take a possible stranger's warning
+    off their own chart, so the window draws no button on it (`allergy_overlays.js`'s `lineActions` and
+    `noneActions`, from the pane's `doubted_chart`, which a "none known" line now carries too), and `target_on`
+    refuses any target whose row is on `PatientAllergies::doubted_charts` — a live line, a historical line's entry or
+    its de-label, a "none known" line, and a Correct — before the key, with a re-read that takes a button drawn
+    before the doubt away. The clinician opens that chart, or settles the link, to change it.
 
 ## What is not guaranteed
 
 - **(a) A withdrawal is never withdrawn** (D3). The authoring door refuses it; a peer's withdrawal of a withdrawal,
-  admitted at the remote door, changes nothing in the fold, because the resolver never looks a withdrawal up as a
-  target (`thread.rs`'s `resolve`; no test pins this). A wrong withdrawal is repaired as on paper, by recording the
+  admitted at the remote door, changes no status in the fold, because the resolver never looks a withdrawal up as a
+  target (`thread.rs`'s `resolve`; no test pins this). One from a suspect key is listed "Not counted: entered in
+  error{by}" (decision 11); one from any other key is shown nowhere ((f)). A wrong withdrawal is repaired as on paper, by recording the
   entry again: a fresh entry, its own thread, while the struck line stays struck.
 - **(b) "The same allergen" is spelling, not meaning.** "amoxycillin" is not "amoxicillin", and "Amoxil" is not
   "amoxicillin", so two such accounts are never flagged as differing; a de-label's tolerated term is not compared to
@@ -233,20 +274,25 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
 - **(c) A de-label on an older version cannot be withdrawn from the window** (#TBD-1). It is said on its "Earlier:"
   line (decision 15), which carries no button; only a historical line carries *Withdraw de-label*. It changes no
   head's status, since it names a version no head is.
-- **(d) A de-labelled line cannot be struck as entered in error in one act from the window** (#TBD-2). Its only button
-  withdraws its de-label, which puts the allergy back on the strip; the clinician then strikes the live line: two acts
-  where paper has one. The floor admits a direct withdrawal of the entry.
-- **(e) A historical line does not say who de-labelled it, or when** (#TBD-3). Its text carries the challenge's date,
-  and its byline is the entry's signer and day; the de-label's signer and signing day are shown only on an "Earlier:"
-  line (decision 15).
+- **(d) Entered in error on a corrected line strikes the line and its earlier versions; it cannot undo just the
+  correction** (#TBD-10). By R-4a a withdrawal covers the version it names and every version that one replaced, so a
+  correction signed by mistake is undone by correcting again, as it was (the retract row says so, decision 19), not by
+  withdrawing it. Whether withdrawing a correction should instead re-expose its predecessor is a maintainer decision:
+  it would make a withdrawal's reach depend on what it names in the chain.
+- **(e) A withdrawn entry that is then shredded keeps "cannot be read" leading the strip** (#TBD-9). The shred
+  scrubs its projected row (db/037), so `UNREADABLE_SQL` counts it as an allergy event with no row, and the strip leads
+  with "1 allergy record cannot be read on this terminal" for good, though the entry was struck. Over-warning, but a
+  permanent false lead.
 - **(f) An overlay that counts but has no effect leaves no trace** (#TBD-4). A withdrawal of a de-label that itself
-  does not count; and, from a key that is not repudiated, a de-label naming something other than an entry (only a
-  remote door admits it), decision (a)'s withdrawal of a withdrawal, and an overlay naming an event this node does not
-  hold or cannot read (until that event arrives or becomes readable): none is listed, not even under "Not counted".
+  does not count; and, from a key that is not suspect, a de-label naming something other than an entry, on its own
+  chart (only a remote door admits it), decision (a)'s withdrawal of a withdrawal, and an overlay naming an event this
+  node does not hold or cannot read (until that event arrives or becomes readable): none is listed, not even under
+  "Not counted".
 - **(g) No marker for a signer this node cannot name, on a line's own byline** (#TBD-5). An expanded line whose key
-  this node cannot name ends " · recorded {day}" with no "(key had been repudiated)"; `by_words` shows the marker
-  alone everywhere else. A marker after a name already in brackets nests them: "(withdrawn 10 Nov 2026 by Dr Ada (key
-  had been repudiated))".
+  this node cannot name ends " · recorded {YYYY-MM-DD}" (the window draws the pane's ISO `recorded` day) with no
+  "(key had been repudiated)"; `by_words` shows the marker alone everywhere else. A marker after a name already in
+  brackets nests them: "(withdrawn 10 Nov 2026 by Dr Ada (key had been repudiated))"; only a historical line's
+  "(de-labelled …)" is worded inside one bracket (decision 18).
 - **(h) The window's commands against a database are pinned only by DB-gated tests**
   (`allergy_overlays_tests.rs`'s walks), which CI does not run (#905). The webview was checked by source guards
   (`allergy_overlays_webview_tests.rs`) and walked headlessly in Chromium and Playwright's WebKit with a stubbed
@@ -257,18 +303,23 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
   the line before the sign lands; the floor checks only that the target is of a type the act may name, on its chart,
   never that it is live. The result is the same pair of acts the fold already meets across a partition, where R-4a
   makes every order over-warn: the new act covers only what it names. Closing the gap would hold a lock across the
-  clinician's key entry. `target_before_the_key` does not yet say so in its doc (#TBD-6, with the window's smaller
-  residuals: a row's *Cancel* is enabled but inert during a press; a corrected line that comes back live stays
-  suspended until Correct; a target that is not a uuid gets the stale-list sentence rather than a window-defect one).
+  clinician's key entry (held across the passphrase's typing and its KDF, it would serialise the terminal);
+  `target_before_the_key`'s doc says so, so nobody "fixes" it. The window's smaller residuals are #TBD-6: a row's
+  *Cancel* is enabled but inert during a press; a corrected line that comes back live stays suspended until Correct;
+  a target that is not a uuid gets the stale-list sentence rather than a window-defect one.
 - **(j) A line struck as wrong-patient can survive as its concurrent correction.** By R-4a a correction signed while
   its target was being withdrawn elsewhere stays live after the withdrawal syncs. This is the over-warning direction,
   and the clinician can strike the correction too.
 - **(k) Key standing is this node's.** `KeyState` comes from this node's registry, and a repudiation does not
   replicate (ADR-0093 (i)), so two nodes can fold the same rows differently: one ignores a repudiated key's de-label,
-  another counts it. The fold is deterministic given the same rows and key states. Not pinned by a test: an
-  `Unconfirmed` key read from a database, and overlays across a doubted link (#TBD-7).
+  another counts it. The fold is deterministic given the same rows and key states. Not pinned by a test (#TBD-7): an
+  `Unconfirmed` or `Doubtful` key read from a database; and, in the fold, overlays across a doubted link beyond one
+  pure view test of a struck line's doubt mark (`view_overlay_tests.rs::a_withdrawn_entry_on_a_doubted_chart_keeps_its_mark`)
+  — not overlay counting or differing accounts across one, and never from a database. (The window's refusal of a
+  doubted chart's target, decision 25, is pinned by a pure and a DB-gated test.)
 - **(l) Still no clear safety signal** (ADR-0096 decision 21; #406/#401). The overlays write `safety: None` too
-  (`allergy_overlays.rs::signing_a_challenge_and_a_retraction_records_human_authorship` asserts it). A reader without
+  (`crates/cairn-node/tests/allergy_overlays.rs::signing_a_challenge_and_a_retraction_records_human_authorship`
+  asserts it). A reader without
   custody of an overlay counts it in `unreadable`, which leads the strip, and reads its target as live
   (`an_unreadable_overlay_is_counted_and_its_target_stays_live`, `an_unreadable_overlay_leaves_its_target_live`).
 
@@ -279,7 +330,8 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
   to an adverse effect and leaves the strip, and a "none known" it had overridden stands again. Steps (paper *N* →
   built *M* → target *K*): correct 1 (strike and rewrite) → 1 (one entry carrying `correction-of`) → 1 (Correct, edit
   the form, Sign); de-label 1 → 1 (one challenge event) → 1 (De-label, name what was tolerated, Sign); entered in
-  error 1 → 1 (one withdrawal event) → 1 (Entered in error, Sign). No `M > N`; (d) is a `K > M` the window owes.
+  error 1 → 1 (one withdrawal event) → 1 (Entered in error, Sign); strike a de-labelled line 1 → 1 (one withdrawal of
+  its entry) → 1 (Entered in error on the historical line, Sign). No `M > N`, and no `K > M`.
   Budgets (the plan's §1.2), owed by a human in RUNBOOK §28, with the key held: correct ≤ 15 s, de-label ≤ 15 s,
   entered in error ≤ 5 s; differing accounts read on the strip with no click.
 - **Harder.** Every reader of the allergy record now folds overlays: a list built from `clinical_allergy` alone
@@ -292,7 +344,8 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
   that it stops being read.
 - **Pinned by** `db/tests/075_allergy_overlays_test.sql` (and `074_clinical_allergy_test.sql` for the in-place
   messages); `crates/cairn-event/src/{allergy,allergy_overlay}.rs`'s tests;
-  `crates/cairn-node/src/allergy/{thread_tests,view_overlay_tests}.rs` and `read.rs`'s tests;
+  `crates/cairn-node/src/allergy/{thread_tests,view_overlay_tests,view_history_tests}.rs` and `read.rs`'s tests;
   `crates/cairn-node/tests/{allergy_overlay_floor,allergy_overlays,window_role_grants,twin_registry,projection_registry}.rs`;
-  `cairn-gui/cairn-gui-tauri/src/{allergy_overlays,allergy_overlays_webview,allergies}_tests.rs`. RUNBOOK §28 carries
+  `cairn-gui/cairn-gui-tauri/src/{allergy_overlays,allergy_overlays_pure,allergy_overlays_webview,allergies}_tests.rs`.
+  RUNBOOK §28 carries
   the human measurements.

@@ -1,5 +1,6 @@
-//! The wording of the allergy list's HISTORY lines — a de-labelled line, and a "none known"
-//! statement that no longer stands or was withdrawn (split out of `view.rs` to keep both files
+//! The wording of the allergy list's HISTORY lines — a de-labelled line, a "none known"
+//! statement that no longer stands or was withdrawn, and the tails that say a de-label or a
+//! signed act's free text wherever that act is worded (split out of `view.rs` to keep both files
 //! short). Pure; `view::build_view` is the only caller.
 use super::read::{AllergyRow, ChallengeRow, NoneRow};
 use super::thread::{by_words, by_words_inside};
