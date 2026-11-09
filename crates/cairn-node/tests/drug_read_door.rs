@@ -1,13 +1,16 @@
-//! Allergy slice 3, Task 2 — the drug read door (db/076) and the opened coding slot (db/074 step 3,
-//! db/041, db/042), driven over tokio-postgres the way the node drives them.
+//! Allergy slice 3, Tasks 2 and 2R — the drug read door (db/076) and the opened coding slot (db/074
+//! step 3, db/041, db/042), driven over tokio-postgres the way the node drives them.
 //!
 //! The door is the ONE place Cairn reads drugref, an optional schema a deployment may install into
-//! Cairn's own database. `db/tests/076_drug_read_door_test.sql` pins its rules one at a time; this
-//! file is the Rust mirror, one test per section of that file:
-//!   0. no drugref → no answers (and only the window may ask);
-//!   1. the pick's search matches literally and finds nothing from fewer than three characters;
-//!   2. the facts: a salt is the same drug, a group reaches its subtree, nothing is "complete";
-//!   3. a drugref the door's owner cannot read is "unavailable", never a fault;
+//! Cairn's own database. It keeps no drug logic of its own: the check is drugref's
+//! `allergy_check`, passed through pair by pair (M4). `db/tests/076_drug_read_door_test.sql` pins
+//! its rules one at a time; this file is the Rust mirror, one test per section of that file:
+//!   0. no drugref → no answers (and only the window may ask), and a replay converges;
+//!   1. the pick's search matches literally, finds nothing from fewer than three characters, and
+//!      offers allergy groups, never MED-RT classes;
+//!   2. the facts are drugref's own rows for every pair, and a group's review status reads back;
+//!   3. a drugref the door's owner cannot read, or one without `allergy_check`, is
+//!      "unavailable", never a fault;
 //!   4. the floor: a coded drug entry signs and projects its coding; nothing else may be coded.
 //!
 //! drugref is simulated by `tests/fixtures/drug_stub.sql`, loaded only inside a transaction this
@@ -32,6 +35,14 @@ mod common;
 /// The drugref stand-in (see its header). Never load it outside a transaction that rolls back.
 const STUB: &str = include_str!("fixtures/drug_stub.sql");
 
+/// The four doors, by their full signatures.
+const DOORS: [&str; 4] = [
+    "cairn_drug_available()",
+    "cairn_drug_search(text, integer)",
+    "cairn_drug_facts(uuid[], uuid[])",
+    "cairn_drug_group_status(uuid[])",
+];
+
 /// A connection with the schema loaded, and the serial guard held for the test's life.
 async fn rig() -> Option<(Client, Client)> {
     let Some(base) = common::cs() else {
@@ -41,6 +52,17 @@ async fn rig() -> Option<(Client, Client)> {
     let guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     Some((guard, c))
+}
+
+/// A connection inside a transaction with the stub loaded; the caller rolls it back.
+macro_rules! with_stub {
+    ($c:ident, $tx:ident) => {
+        let Some((_g, mut $c)) = rig().await else {
+            return;
+        };
+        let $tx = $c.transaction().await.unwrap();
+        $tx.batch_execute(STUB).await.unwrap();
+    };
 }
 
 /// The door's options for `text`, as "system:display" in the door's order.
@@ -56,38 +78,60 @@ async fn options(c: &impl GenericClient, text: Option<&str>, limit: i32) -> Vec<
     .collect()
 }
 
-/// A stub row's uuid, by its name (a drug or a group).
-async fn id(c: &impl GenericClient, name: &str) -> Uuid {
-    let row = c
-        .query_one(
-            "SELECT moiety_uuid::text FROM drugref.substance_moiety WHERE display_name = $1 \
-             UNION ALL SELECT class_uuid::text FROM drugref.substance_class WHERE class_name = $1",
-            &[&name],
-        )
-        .await
-        .unwrap();
-    row.get::<_, String>(0).parse().unwrap()
+/// A stub row's uuid, by its name (a drug or a group), as text.
+async fn id(c: &impl GenericClient, name: &str) -> String {
+    c.query_one(
+        "SELECT moiety_uuid::text FROM drugref.substance_moiety WHERE display_name = $1 \
+         UNION ALL SELECT class_uuid::text FROM drugref.substance_class WHERE class_name = $1",
+        &[&name],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
 
-/// The door's facts for these allergens and medications, as "fact: allergen / med" by name, sorted.
+/// The uuids of these stub names, as text (bound as `$n::text[]::uuid[]`).
+async fn ids(c: &impl GenericClient, names: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in names {
+        out.push(id(c, n).await);
+    }
+    out
+}
+
+/// A stub uuid's name, as an SQL expression over the column `u`.
+fn name_of(u: &str) -> String {
+    format!(
+        "(SELECT display_name FROM drugref.substance_moiety WHERE moiety_uuid = {u} \
+         UNION ALL SELECT class_name FROM drugref.substance_class WHERE class_uuid = {u})"
+    )
+}
+
+/// The door's facts for these allergens and medications, as
+/// "allergen / med / outcome[ / match_kind[ / group]]" by name, sorted byte-wise.
 async fn facts(c: &impl GenericClient, allergens: &[&str], meds: &[&str]) -> Vec<String> {
-    let mut a = Vec::new();
-    for n in allergens {
-        a.push(id(c, n).await.to_string());
-    }
-    let mut m = Vec::new();
-    for n in meds {
-        m.push(id(c, n).await.to_string());
-    }
-    let name = "(SELECT display_name FROM drugref.substance_moiety WHERE moiety_uuid = {u} \
-                UNION ALL SELECT class_name FROM drugref.substance_class WHERE class_uuid = {u})";
     let sql = format!(
-        "SELECT f.fact || ': ' || {} || ' / ' || {} FROM cairn_drug_facts($1::text[]::uuid[], \
-         $2::text[]::uuid[]) f ORDER BY 1",
-        name.replace("{u}", "f.allergen"),
-        name.replace("{u}", "f.med"),
+        "SELECT concat_ws(' / ', {}, {}, f.outcome, f.match_kind, f.group_name) \
+         FROM cairn_drug_facts($1::text[]::uuid[], $2::text[]::uuid[]) f",
+        name_of("f.allergen"),
+        name_of("f.med"),
     );
-    c.query(&sql, &[&a, &m])
+    let (a, m) = (ids(c, allergens).await, ids(c, meds).await);
+    let rows = c.query(&sql, &[&a, &m]).await.unwrap();
+    let mut lines: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
+    lines.sort();
+    lines
+}
+
+/// The door's review status for these groups, as "group: status" by name, sorted.
+async fn group_status(c: &impl GenericClient, groups: &[&str]) -> Vec<String> {
+    let sql = format!(
+        "SELECT {} || ': ' || s.review_status \
+         FROM cairn_drug_group_status($1::text[]::uuid[]) s ORDER BY 1",
+        name_of("s.group_code"),
+    );
+    let g = ids(c, groups).await;
+    c.query(&sql, &[&g])
         .await
         .unwrap()
         .iter()
@@ -103,9 +147,44 @@ async fn available(c: &impl GenericClient) -> bool {
         .get(0)
 }
 
+/// Every door answers nothing — false, no options, no facts, no status — and raises nothing.
+async fn assert_answers_nothing(c: &impl GenericClient, why: &str) {
+    assert!(!available(c).await, "{why}: unavailable");
+    assert!(
+        options(c, Some("amox"), 20).await.is_empty(),
+        "{why}: no options"
+    );
+    assert!(
+        facts(c, &["Penicillins"], &["amoxicillin"])
+            .await
+            .is_empty(),
+        "{why}: no facts"
+    );
+    assert!(
+        group_status(c, &["Penicillins"]).await.is_empty(),
+        "{why}: no status"
+    );
+}
+
 #[tokio::test]
 async fn no_drugref_means_no_answers_and_only_the_window_asks() {
     let Some((_g, c)) = rig().await else { return };
+    // Every connect replays all of db/; a second load on the same database must converge on the
+    // delegated facts shape (db/076 drops the Task 2 shape only when it is the one present).
+    let base = common::cs().unwrap();
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+    let shape: String = c2
+        .query_one(
+            "SELECT pg_get_function_result('cairn_drug_facts(uuid[], uuid[])'::regprocedure)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        shape,
+        "TABLE(allergen uuid, med uuid, outcome text, match_kind text, group_name text)"
+    );
     let schema: bool = c
         .query_one("SELECT to_regnamespace('drugref') IS NULL", &[])
         .await
@@ -116,18 +195,16 @@ async fn no_drugref_means_no_answers_and_only_the_window_asks() {
     assert!(options(&c, Some("amoxicillin"), 20).await.is_empty());
     let n: i64 = c
         .query_one(
-            "SELECT count(*) FROM cairn_drug_facts(ARRAY[gen_random_uuid()], ARRAY[gen_random_uuid()])",
+            "SELECT (SELECT count(*) FROM cairn_drug_facts(ARRAY[gen_random_uuid()], \
+             ARRAY[gen_random_uuid()])) + (SELECT count(*) FROM \
+             cairn_drug_group_status(ARRAY[gen_random_uuid()]))",
             &[],
         )
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 0, "no drugref: no facts");
-    for f in [
-        "cairn_drug_available()",
-        "cairn_drug_search(text, integer)",
-        "cairn_drug_facts(uuid[], uuid[])",
-    ] {
+    assert_eq!(n, 0, "no drugref: no facts, no group status");
+    for f in DOORS {
         let (public, window): (bool, bool) = c
             .query_one(
                 "SELECT has_function_privilege('public', $1, 'EXECUTE'), \
@@ -144,29 +221,20 @@ async fn no_drugref_means_no_answers_and_only_the_window_asks() {
 
 #[tokio::test]
 async fn search_text_is_literal_and_short_text_finds_nothing() {
-    let Some((_g, mut c)) = rig().await else {
-        return;
-    };
-    let tx = c.transaction().await.unwrap();
-    tx.batch_execute(STUB).await.unwrap();
+    with_stub!(c, tx);
     assert!(available(&tx).await, "the stub is a readable drugref");
     assert_eq!(
         options(&tx, Some("amox"), 20).await,
-        [
-            "drugref-moiety:amoxicillin",
-            "drugref-moiety:amoxicillin sodium",
-            "drugref-moiety:amoxicillin anhydrous"
-        ],
-        "the three amoxicillin drugs, shortest first"
+        ["drugref-moiety:amoxicillin"]
     );
     assert_eq!(
         options(&tx, Some("penicillin"), 20).await,
-        ["drugref-class:Penicillin-class Antibacterial [EPC]"],
-        "the EPC group, never the PK class"
+        ["drugref-class:Penicillins"],
+        "the allergy group, never the EPC class (M5)"
     );
     assert!(
-        options(&tx, Some("renal"), 20).await.is_empty(),
-        "a PK class is never offered (D4)"
+        options(&tx, Some("antibacterial"), 20).await.is_empty(),
+        "a MED-RT class is never offered (M5)"
     );
     for short_or_literal in [
         "am", " am ", "", "am%x", "%%%", "amo_", "___", "amo\\", "pen_",
@@ -186,111 +254,111 @@ async fn search_text_is_literal_and_short_text_finds_nothing() {
     assert_eq!(
         options(&tx, Some("zzlimit"), 100).await.len(),
         20,
-        "capped at 20"
-    );
-    assert_eq!(
-        options(&tx, Some("zzlimit"), -1).await.len(),
-        0,
-        "negative: none"
+        "capped at 20 (a negative limit is pinned in the SQL mirror)"
     );
     tx.rollback().await.unwrap();
 }
 
 #[tokio::test]
-async fn a_salt_is_the_same_drug_and_a_group_reaches_its_subtree() {
-    let Some((_g, mut c)) = rig().await else {
-        return;
-    };
-    let tx = c.transaction().await.unwrap();
-    tx.batch_execute(STUB).await.unwrap();
+async fn the_facts_are_drugrefs_rows_for_every_pair() {
+    with_stub!(c, tx);
     assert_eq!(
         facts(
             &tx,
-            &[
-                "amoxicillin sodium",
-                "Penicillin-class Antibacterial [EPC]",
-                "Anti-Bacterial Agents",
-                "Anti-Infective Agents",
-                "metformin",
-            ],
-            &["amoxicillin", "metformin"],
+            &["Penicillins", "flucloxacillin", "amoxicillin", "metformin"],
+            &["amoxicillin", "perindopril"],
         )
         .await,
         [
-            "member: Anti-Bacterial Agents / amoxicillin",
-            "member: Anti-Infective Agents / amoxicillin",
-            "member: Penicillin-class Antibacterial [EPC] / amoxicillin",
-            "same: amoxicillin sodium / amoxicillin",
-            "same: metformin / metformin",
+            "Penicillins / amoxicillin / match / same-group / Penicillins",
+            "Penicillins / perindopril / no-match",
+            "amoxicillin / amoxicillin / match / same-drug",
+            "amoxicillin / amoxicillin / match / same-group / Penicillins",
+            "amoxicillin / perindopril / no-match",
+            "flucloxacillin / amoxicillin / match / same-group / Penicillins",
+            "flucloxacillin / perindopril / no-match",
+            "metformin / amoxicillin / unplaced",
+            "metformin / perindopril / unplaced",
         ],
-        "a salt shares a family member (M3); a group reaches its subtree (D5); a superseded \
-         or inactive component joins nothing; nothing is 'complete' (D6)"
+        "every row allergy_check gives for the 4 × 2 pairs, and nothing else (M4)"
     );
-    assert!(
-        facts(
+    assert_eq!(
+        group_status(
             &tx,
-            &["Penicillin-class Antibacterial [EPC]"],
-            &["metformin"]
+            &["Penicillins", "Penicillin-class Antibacterial [EPC]"]
         )
-        .await
-        .is_empty(),
-        "metformin's superseded UNII does not bring it into the penicillin group"
+        .await,
+        ["Penicillins: structural-seed"],
+        "only an allergy group has a status (M7)"
     );
     tx.rollback().await.unwrap();
 }
 
 #[tokio::test]
 async fn an_unreadable_drugref_is_unavailable_not_a_fault() {
-    let Some((_g, mut c)) = rig().await else {
-        return;
-    };
-    let tx = c.transaction().await.unwrap();
-    tx.batch_execute(STUB).await.unwrap();
+    with_stub!(c, tx);
     // The test database's function owner is a superuser, for whom every privilege check is true
-    // (ruling P1). So the three doors are handed to a throwaway non-superuser role, inside this
-    // rolled-back transaction, which may read every stub table but one. No shared role changes.
+    // (ruling P1). So the four doors are handed to a throwaway non-superuser role, inside this
+    // rolled-back transaction, which may read all of the stub — and then not one part of it. No
+    // shared role changes. EXECUTE is revoked from PUBLIC so the probe's own grant decides.
     tx.batch_execute(
         "DO $$
          DECLARE r text := 'cairn_drug_probe_' || pg_backend_pid(); f text;
          BEGIN
              EXECUTE format('CREATE ROLE %I NOLOGIN', r);
              FOREACH f IN ARRAY ARRAY['cairn_drug_available()', 'cairn_drug_search(text, integer)',
-                                      'cairn_drug_facts(uuid[], uuid[])'] LOOP
+                                      'cairn_drug_facts(uuid[], uuid[])',
+                                      'cairn_drug_group_status(uuid[])'] LOOP
                  EXECUTE format('ALTER FUNCTION %s OWNER TO %I', f, r);
              END LOOP;
              EXECUTE format('GRANT USAGE ON SCHEMA drugref TO %I', r);
              EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA drugref TO %I', r);
+             REVOKE EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) FROM PUBLIC;
+             EXECUTE format('GRANT EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) TO %I', r);
          END $$",
     )
     .await
     .unwrap();
     assert!(
         available(&tx).await,
-        "control: the probe owner reads all six"
+        "control: the probe owner reads it all"
     );
-    assert_eq!(options(&tx, Some("amox"), 20).await.len(), 3, "control");
+    assert_eq!(
+        facts(&tx, &["Penicillins"], &["amoxicillin"]).await.len(),
+        1,
+        "control"
+    );
+    // Each grant in turn: revoke it, every door answers nothing, put it back.
+    for (what, revoke, grant) in [
+        (
+            "allergy_check not executable",
+            "REVOKE EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) FROM %I",
+            "GRANT EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) TO %I",
+        ),
+        (
+            "allergy_group unreadable",
+            "REVOKE SELECT ON drugref.allergy_group FROM %I",
+            "GRANT SELECT ON drugref.allergy_group TO %I",
+        ),
+    ] {
+        let probe = |stmt: &str| {
+            format!("DO $$ BEGIN EXECUTE format('{stmt}', 'cairn_drug_probe_' || pg_backend_pid()); END $$")
+        };
+        tx.batch_execute(&probe(revoke)).await.unwrap();
+        assert_answers_nothing(&tx, what).await;
+        tx.batch_execute(&probe(grant)).await.unwrap();
+    }
+    tx.rollback().await.unwrap();
+}
 
-    tx.batch_execute(
-        "DO $$ BEGIN EXECUTE format('REVOKE SELECT ON drugref.class_parent FROM %I', \
-         'cairn_drug_probe_' || pg_backend_pid()); END $$",
-    )
-    .await
-    .unwrap();
-    assert!(!available(&tx).await, "one unreadable table: unavailable");
-    assert!(
-        options(&tx, Some("amox"), 20).await.is_empty(),
-        "unreadable: no options, and no error"
-    );
-    assert!(
-        facts(
-            &tx,
-            &["Penicillin-class Antibacterial [EPC]"],
-            &["amoxicillin"]
-        )
+#[tokio::test]
+async fn a_drugref_without_allergy_check_is_unavailable() {
+    with_stub!(c, tx);
+    // A drugref from before allergy groups: its tables are there, its check is not.
+    tx.batch_execute("DROP FUNCTION drugref.allergy_check(uuid, uuid)")
         .await
-        .is_empty(),
-        "unreadable: no facts, and no error"
-    );
+        .unwrap();
+    assert_answers_nothing(&tx, "no allergy_check").await;
     tx.rollback().await.unwrap();
 }
 

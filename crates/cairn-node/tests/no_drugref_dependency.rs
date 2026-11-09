@@ -56,7 +56,8 @@
 //! THE ONE EXEMPT FILE: `db/076_drug_read_door.sql` (allergy slice 3, ADR-0098 M1). drugref,
 //! when a deployment installs it, is a schema in Cairn's own database, and that file is the
 //! read door the window asks through: whether drugref is there and readable, which drugs and
-//! groups match a typed allergen, and which allergens reach which medications. It is advisory —
+//! groups match a typed allergen, what drugref's own allergy check answers for each allergen and
+//! medication, and a group's review status. It is advisory —
 //! it refuses nothing, writes nothing, and answers "nothing" (never an error) when drugref is
 //! absent or unreadable. This guard proves only HALF of "the floor never depends on drugref":
 //! that nothing else names drugref. Because the door's functions are named without the word,
@@ -67,7 +68,8 @@
 //! (`READ_DOOR`), not a directory or a pattern, and no other file may join it: a second file
 //! that needs drugref belongs in the door (as another door function), so that "what Cairn reads
 //! from drugref" stays one file a reviewer can read whole. The door's own functions are named
-//! without "drugref" (`cairn_drug_available`, `cairn_drug_search`, `cairn_drug_facts`), so the
+//! without "drugref" (`cairn_drug_available`, `cairn_drug_search`, `cairn_drug_facts`,
+//! `cairn_drug_group_status`), so the
 //! Rust that calls them stays inside this guard's scan with nothing to exempt.
 //! The recursive walk is the SHARED one (#452). This file used to carry its own, built on
 //! `path.is_dir()` — which FOLLOWS symlinks, so a symlink to an ancestor would have made the

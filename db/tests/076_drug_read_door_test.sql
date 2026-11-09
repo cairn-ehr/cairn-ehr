@@ -6,15 +6,15 @@
 --
 -- WHY THIS MIRROR EXISTS. drugref is optional, so the door has two lives: on a node without it
 -- (or with one it cannot read) every door answers "nothing", never an error — the medication list
--- must still draw; on a node with it, the door's answers decide whether a penicillin allergy warns
--- against amoxicillin. Both lives are pinned here, rule by rule. The Rust mirror
--- (crates/cairn-node/tests/drug_read_door.rs) runs the same sections through tokio-postgres and
--- the real seal → sign → submit pipeline.
+-- must still draw; on a node with it, the door hands each (allergen, medication) pair to
+-- drugref.allergy_check and returns drugref's answers unchanged (M4). Both lives are pinned here,
+-- rule by rule. The Rust mirror (crates/cairn-node/tests/drug_read_door.rs) runs the same sections
+-- through tokio-postgres and the real seal → sign → submit pipeline.
 --
--- THE STUB. drugref is simulated by crates/cairn-node/tests/fixtures/drug_stub.sql: its six
--- tables, only the columns the door reads, and the measured amoxicillin rows (M3). It is loaded
--- ONLY inside a transaction that ends in ROLLBACK — one per section — so no other mirror ever sees
--- a `drugref` schema. Section 0 runs first, with none.
+-- THE STUB. drugref is simulated by crates/cairn-node/tests/fixtures/drug_stub.sql: the three
+-- tables the door reads, and an allergy_check of drugref's exact shape answering from canned rows.
+-- It is loaded ONLY inside a transaction that ends in ROLLBACK — one per section — so no other
+-- mirror ever sees a `drugref` schema. Section 0 runs first, with none.
 --
 -- A failure is an ERROR on stderr (ON_ERROR_STOP); result tables go to /dev/null.
 
@@ -23,29 +23,38 @@
 -- 0. No drugref: every door answers nothing, and only the window may call them.
 BEGIN;
 DO $$
+DECLARE
+    f text;
 BEGIN
     ASSERT to_regnamespace('drugref') IS NULL, 'this mirror needs a database with no drugref schema';
     ASSERT cairn_drug_available() IS FALSE, 'no drugref schema: not available';
     ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('amoxicillin', 20)), 'no drugref: no options';
     ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(ARRAY[gen_random_uuid()], ARRAY[gen_random_uuid()])),
         'no drugref: no facts';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_group_status(ARRAY[gen_random_uuid()])),
+        'no drugref: no group status';
     -- The doors are the window's alone (REVOKE … FROM PUBLIC, GRANT … TO cairn_window).
-    ASSERT NOT has_function_privilege('public', 'cairn_drug_available()', 'EXECUTE'), 'PUBLIC: no availability';
-    ASSERT NOT has_function_privilege('public', 'cairn_drug_search(text, integer)', 'EXECUTE'), 'PUBLIC: no search';
-    ASSERT NOT has_function_privilege('public', 'cairn_drug_facts(uuid[], uuid[])', 'EXECUTE'), 'PUBLIC: no facts';
-    ASSERT has_function_privilege('cairn_window', 'cairn_drug_available()', 'EXECUTE'), 'window: availability';
-    ASSERT has_function_privilege('cairn_window', 'cairn_drug_search(text, integer)', 'EXECUTE'), 'window: search';
-    ASSERT has_function_privilege('cairn_window', 'cairn_drug_facts(uuid[], uuid[])', 'EXECUTE'), 'window: facts';
+    FOREACH f IN ARRAY ARRAY['cairn_drug_available()', 'cairn_drug_search(text, integer)',
+                             'cairn_drug_facts(uuid[], uuid[])', 'cairn_drug_group_status(uuid[])'] LOOP
+        ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), format('PUBLIC must not execute %s', f);
+        ASSERT has_function_privilege('cairn_window', f, 'EXECUTE'), format('the window must execute %s', f);
+    END LOOP;
     -- Each is a definer door with the pinned path (pg_temp last, #426), so the window reads
     -- drugref through it and never directly.
-    ASSERT (SELECT bool_and(p.prosecdef AND p.proconfig = ARRAY['search_path=pg_catalog, pg_temp'])
+    ASSERT (SELECT count(*) = 4 AND bool_and(p.prosecdef AND p.proconfig = ARRAY['search_path=pg_catalog, pg_temp'])
               FROM pg_proc p
-             WHERE p.proname IN ('cairn_drug_available', 'cairn_drug_search', 'cairn_drug_facts')),
+             WHERE p.proname IN ('cairn_drug_available', 'cairn_drug_search', 'cairn_drug_facts',
+                                 'cairn_drug_group_status')),
         'every door is SECURITY DEFINER with search_path = pg_catalog, pg_temp';
+    -- The facts door's shape is drugref's answer, not Cairn's fold (M4). Pinned so a replay over
+    -- the older shape is seen to converge.
+    ASSERT pg_get_function_result('cairn_drug_facts(uuid[], uuid[])'::regprocedure)
+           = 'TABLE(allergen uuid, med uuid, outcome text, match_kind text, group_name text)',
+        'the facts door has the delegated shape';
 END $$;
 ROLLBACK;
 
--- 1. search_text_is_literal_and_short_text_finds_nothing (Review Focus 1), and D4's group filter.
+-- 1. search_text_is_literal_and_short_text_finds_nothing (Review Focus 1), and M5's group filter.
 BEGIN;
 \ir ../../crates/cairn-node/tests/fixtures/drug_stub.sql
 -- The options for `t`, as "system:display" in the door's own order.
@@ -55,23 +64,21 @@ $$;
 DO $$
 BEGIN
     ASSERT cairn_drug_available(), 'the stub is a readable drugref';
-    -- Moieties match from the start of their name, or of a word in it; shorter names first.
-    ASSERT pg_temp.options('amox') = ARRAY['drugref-moiety:amoxicillin', 'drugref-moiety:amoxicillin sodium',
-                                           'drugref-moiety:amoxicillin anhydrous'],
-        format('"amox" finds the three amoxicillin moieties, shortest first: %s', pg_temp.options('amox'));
+    -- Moieties match from the start of their name, or of a word in it.
+    ASSERT pg_temp.options('amox') = ARRAY['drugref-moiety:amoxicillin'],
+        format('"amox" finds amoxicillin: %s', pg_temp.options('amox'));
     ASSERT pg_temp.options('AMOX') = pg_temp.options('amox'), 'case does not matter';
     ASSERT pg_temp.options('  amox  ') = pg_temp.options('amox'), 'the text is trimmed';
-    ASSERT pg_temp.options('sodium') = ARRAY['drugref-moiety:amoxicillin sodium'], 'a later word matches';
-    ASSERT pg_temp.options('moxi') = '{}', 'the middle of a word does not';
-    -- Groups match anywhere in the name, EPC and PA only (D4): never the PK class.
-    ASSERT pg_temp.options('penicillin') = ARRAY['drugref-class:Penicillin-class Antibacterial [EPC]'],
-        format('"penicillin" finds the EPC group only: %s', pg_temp.options('penicillin'));
-    ASSERT pg_temp.options('renal') = '{}', 'a PK class is never offered (D4)';
-    ASSERT pg_temp.options('excretion') = '{}', 'a PK class is never offered (D4)';
-    -- Moieties first, then groups; within each, shorter first, then byte order (COLLATE "C").
-    ASSERT pg_temp.options('anti') = ARRAY['drugref-class:Anti-Bacterial Agents', 'drugref-class:Anti-Infective Agents',
-                                           'drugref-class:Penicillin-class Antibacterial [EPC]'],
-        format('"anti" orders by length, then byte order: %s', pg_temp.options('anti'));
+    ASSERT pg_temp.options('moxi') = '{}', 'the middle of a drug name does not';
+    -- Groups are drugref's allergy groups only (M5), matched anywhere in the name; a MED-RT class
+    -- is never offered. The code is the class_uuid, the display its name (M2).
+    ASSERT pg_temp.options('penicillin') = ARRAY['drugref-class:Penicillins'],
+        format('"penicillin" finds the allergy group, never the EPC class: %s', pg_temp.options('penicillin'));
+    ASSERT pg_temp.options('cillins') = ARRAY['drugref-class:Penicillins'], 'a group matches mid-name';
+    ASSERT pg_temp.options('antibacterial') = '{}', 'a MED-RT class is never offered (M5)';
+    ASSERT (SELECT code FROM cairn_drug_search('penicillins', 20))
+           = (SELECT class_uuid::text FROM drugref.substance_class WHERE class_name = 'Penicillins'),
+        'a group is coded by its class_uuid';
     -- Fewer than three characters: nothing, never the whole table.
     ASSERT pg_temp.options('am') = '{}', 'two letters find nothing';
     ASSERT pg_temp.options('  am ') = '{}', 'two letters padded with spaces find nothing';
@@ -84,19 +91,26 @@ BEGIN
     ASSERT pg_temp.options('amo\') = '{}', 'a trailing backslash is a literal and raises nothing';
     ASSERT pg_temp.options('pen_') = '{}', '_ is a literal in a group name too';
 END $$;
--- The limit is capped at 20 (and a negative or missing one asks for no more than that).
+-- The limit is capped at 20, and the order is drugs first, then shorter names, then byte order:
+-- a group named "zzlimit" is shorter than every drug, so it sorts first if the tiers were lost.
 INSERT INTO drugref.substance_moiety (moiety_uuid, display_name)
 SELECT md5('stub limit ' || i)::uuid, 'zzlimit ' || i FROM generate_series(1, 25) i;
+INSERT INTO drugref.substance_class VALUES (md5('stub limit group')::uuid, 'zzlimit', 'AG');
+INSERT INTO drugref.allergy_group VALUES (md5('stub limit group')::uuid, 'structural-seed');
 DO $$
 BEGIN
     ASSERT cardinality(pg_temp.options('zzlimit', 100)) = 20, 'the limit is capped at 20';
-    ASSERT cardinality(pg_temp.options('zzlimit', 5)) = 5, 'a smaller limit is honoured';
+    ASSERT pg_temp.options('zzlimit', 5) = ARRAY['drugref-moiety:zzlimit 1', 'drugref-moiety:zzlimit 2',
+                                                 'drugref-moiety:zzlimit 3', 'drugref-moiety:zzlimit 4',
+                                                 'drugref-moiety:zzlimit 5'],
+        format('drugs first, then length, then byte order: %s', pg_temp.options('zzlimit', 5));
     ASSERT cardinality(pg_temp.options('zzlimit', NULL)) = 20, 'no limit means the cap';
     ASSERT cardinality(pg_temp.options('zzlimit', -1)) = 0, 'a negative limit asks for nothing, and raises nothing';
 END $$;
 ROLLBACK;
 
--- 2. Facts: a salt is the same drug (M3), a group reaches its subtree (D5), nothing is complete (D6).
+-- 2. Facts: every row drugref.allergy_check gives for every pair, and nothing else (M4); and the
+--    groups' review status (M7).
 BEGIN;
 \ir ../../crates/cairn-node/tests/fixtures/drug_stub.sql
 CREATE FUNCTION pg_temp.id(n text) RETURNS uuid LANGUAGE sql AS $$
@@ -111,34 +125,35 @@ DO $$
 DECLARE
     got text[];
 BEGIN
-    SELECT array_agg(l ORDER BY l) INTO got
-      FROM (SELECT f.fact || ': ' || pg_temp.name(f.allergen) || ' / ' || pg_temp.name(f.med) AS l
+    SELECT array_agg(l ORDER BY l COLLATE "C") INTO got
+      FROM (SELECT concat_ws(' / ', pg_temp.name(f.allergen), pg_temp.name(f.med), f.outcome,
+                             f.match_kind, f.group_name) AS l
               FROM cairn_drug_facts(
-          ARRAY[pg_temp.id('amoxicillin sodium'), pg_temp.id('Penicillin-class Antibacterial [EPC]'),
-                pg_temp.id('Anti-Bacterial Agents'), pg_temp.id('Anti-Infective Agents'),
+          ARRAY[pg_temp.id('Penicillins'), pg_temp.id('flucloxacillin'), pg_temp.id('amoxicillin'),
                 pg_temp.id('metformin')],
-          ARRAY[pg_temp.id('amoxicillin'), pg_temp.id('metformin')]) f) lines;
-    -- Every line, and nothing else:
-    --  * amoxicillin sodium ~ amoxicillin: both have the active component amoxicillin anhydrous;
-    --  * the EPC group reaches amoxicillin through that family member (M3), and its parent and
-    --    grandparent reach it through the subtree (D5);
-    --  * metformin is only itself — its superseded UNII (which names amoxicillin anhydrous) joins
-    --    no family, and amoxicillin sodium's INACTIVE component (metformin) is not walked;
-    --  * no 'complete' line (D6).
+          ARRAY[pg_temp.id('amoxicillin'), pg_temp.id('perindopril')]) f) lines;
+    -- The stub's nine rows for the eight pairs, exactly: two paths for amoxicillin against itself,
+    -- and a no-match or unplaced row passed through as drugref gave it.
     ASSERT got = ARRAY[
-        'member: Anti-Bacterial Agents / amoxicillin',
-        'member: Anti-Infective Agents / amoxicillin',
-        'member: Penicillin-class Antibacterial [EPC] / amoxicillin',
-        'same: amoxicillin sodium / amoxicillin',
-        'same: metformin / metformin'], format('the facts: %s', got);
-    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(ARRAY[pg_temp.id('amoxicillin')], ARRAY[pg_temp.id('metformin')])),
-        'metformin gives nothing against amoxicillin';
-    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(ARRAY[pg_temp.id('Penicillin-class Antibacterial [EPC]')],
-                                                      ARRAY[pg_temp.id('metformin')])),
-        'a superseded UNII claim does not bring metformin into the penicillin group';
+        'Penicillins / amoxicillin / match / same-group / Penicillins',
+        'Penicillins / perindopril / no-match',
+        'amoxicillin / amoxicillin / match / same-drug',
+        'amoxicillin / amoxicillin / match / same-group / Penicillins',
+        'amoxicillin / perindopril / no-match',
+        'flucloxacillin / amoxicillin / match / same-group / Penicillins',
+        'flucloxacillin / perindopril / no-match',
+        'metformin / amoxicillin / unplaced',
+        'metformin / perindopril / unplaced'], format('the facts: %s', got);
     ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(NULL, NULL)) AND
-           NOT EXISTS (SELECT 1 FROM cairn_drug_facts('{}', ARRAY[pg_temp.id('amoxicillin')])),
+           NOT EXISTS (SELECT 1 FROM cairn_drug_facts('{}', ARRAY[pg_temp.id('amoxicillin')])) AND
+           NOT EXISTS (SELECT 1 FROM cairn_drug_facts(ARRAY[NULL::uuid], ARRAY[pg_temp.id('amoxicillin')])),
         'no allergens: no facts';
+    -- Only allergy groups have a status; a MED-RT class or an unknown code has none.
+    ASSERT (SELECT array_agg(pg_temp.name(s.group_code) || ': ' || s.review_status)
+              FROM cairn_drug_group_status(ARRAY[pg_temp.id('Penicillins'),
+                                                 pg_temp.id('Penicillin-class Antibacterial [EPC]'),
+                                                 gen_random_uuid()]) s)
+           = ARRAY['Penicillins: structural-seed'], 'the group status';
 END $$;
 ROLLBACK;
 
@@ -148,6 +163,16 @@ ROLLBACK;
 --    that can read some of drugref but not all. No shared role's grants are touched.
 BEGIN;
 \ir ../../crates/cairn-node/tests/fixtures/drug_stub.sql
+CREATE FUNCTION pg_temp.answers_nothing(why text) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    pen uuid := (SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins');
+    amox uuid := (SELECT moiety_uuid FROM drugref.substance_moiety WHERE display_name = 'amoxicillin');
+BEGIN
+    ASSERT cairn_drug_available() IS FALSE, why || ': not available';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('amox', 20)), why || ': no options';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(ARRAY[pen], ARRAY[amox])), why || ': no facts';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_group_status(ARRAY[pen])), why || ': no group status';
+END $$;
 DO $$
 DECLARE
     r text := 'cairn_drug_probe_' || pg_backend_pid();  -- unique on the cluster, gone at ROLLBACK
@@ -155,29 +180,57 @@ DECLARE
 BEGIN
     EXECUTE format('CREATE ROLE %I NOLOGIN', r);
     FOREACH f IN ARRAY ARRAY['cairn_drug_available()', 'cairn_drug_search(text, integer)',
-                             'cairn_drug_facts(uuid[], uuid[])'] LOOP
+                             'cairn_drug_facts(uuid[], uuid[])', 'cairn_drug_group_status(uuid[])'] LOOP
         EXECUTE format('ALTER FUNCTION %s OWNER TO %I', f, r);
     END LOOP;
     EXECUTE format('GRANT USAGE ON SCHEMA drugref TO %I', r);
     EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA drugref TO %I', r);
-    -- The control: with every table readable, the probe-owned doors answer.
-    ASSERT cairn_drug_available(), 'the probe owner can read all six tables';
-    ASSERT (SELECT count(*) FROM cairn_drug_search('amox', 20)) = 3, 'and the search answers';
+    -- A function is executable by PUBLIC unless revoked; revoke so the probe's own grant decides.
+    REVOKE EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) FROM PUBLIC;
+    EXECUTE format('GRANT EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) TO %I', r);
+    -- The control: with everything readable, the probe-owned doors answer.
+    ASSERT cairn_drug_available(), 'the probe owner can read all of it';
+    ASSERT (SELECT count(*) FROM cairn_drug_search('amox', 20)) = 1, 'and the search answers';
+    ASSERT (SELECT count(*) FROM cairn_drug_group_status(
+                ARRAY[(SELECT class_uuid FROM drugref.substance_class WHERE class_name = 'Penicillins')])) = 1,
+        'and the group status answers';
 
-    -- One table unreadable: unavailable, and the doors answer nothing, with no error.
-    EXECUTE format('REVOKE SELECT ON drugref.class_parent FROM %I', r);
-    ASSERT cairn_drug_available() IS FALSE, 'one unreadable table: not available';
-    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('amox', 20)), 'unreadable: no options';
-    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(
-        ARRAY[(SELECT class_uuid FROM drugref.substance_class WHERE concept_type = 'EPC')],
-        ARRAY[(SELECT moiety_uuid FROM drugref.substance_moiety WHERE display_name = 'amoxicillin')])),
-        'unreadable: no facts';
+    -- The check not executable: unavailable, and every door answers nothing, with no error.
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) FROM %I', r);
+    PERFORM pg_temp.answers_nothing('allergy_check not executable');
+    EXECUTE format('GRANT EXECUTE ON FUNCTION drugref.allergy_check(uuid, uuid) TO %I', r);
 
-    -- The schema itself unreadable (no USAGE): still false, still no error.
-    EXECUTE format('GRANT SELECT ON drugref.class_parent TO %I', r);
+    -- The groups unreadable: the same.
+    EXECUTE format('REVOKE SELECT ON drugref.allergy_group FROM %I', r);
+    PERFORM pg_temp.answers_nothing('allergy_group unreadable');
+    EXECUTE format('GRANT SELECT ON drugref.allergy_group TO %I', r);
+
+    -- The schema itself unreadable (no USAGE): the same.
     EXECUTE format('REVOKE USAGE ON SCHEMA drugref FROM %I', r);
-    ASSERT cairn_drug_available() IS FALSE, 'an unusable schema: not available';
-    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('amox', 20)), 'unusable schema: no options';
+    PERFORM pg_temp.answers_nothing('an unusable schema');
+END $$;
+ROLLBACK;
+
+-- 3b. a_drugref_without_allergy_check_is_unavailable (Review Focus 3): a drugref from before
+--     allergy groups — its tables are there, the check is not — is unavailable, not a fault. So is
+--     one without the allergy_group table.
+BEGIN;
+\ir ../../crates/cairn-node/tests/fixtures/drug_stub.sql
+DROP FUNCTION drugref.allergy_check(uuid, uuid);
+DO $$
+BEGIN
+    ASSERT cairn_drug_available() IS FALSE, 'no allergy_check: not available';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('amox', 20)), 'no allergy_check: no options';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_facts(ARRAY[gen_random_uuid()], ARRAY[gen_random_uuid()])),
+        'no allergy_check: no facts';
+END $$;
+DROP TABLE drugref.allergy_group;
+DO $$
+BEGIN
+    ASSERT cairn_drug_available() IS FALSE, 'no allergy_group: not available';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('penicillin', 20)), 'no allergy_group: no options';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_group_status(ARRAY[gen_random_uuid()])),
+        'no allergy_group: no group status';
 END $$;
 ROLLBACK;
 

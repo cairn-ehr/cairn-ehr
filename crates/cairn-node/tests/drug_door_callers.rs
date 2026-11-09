@@ -3,7 +3,8 @@
 //! `no_drugref_dependency.rs` keeps every mention of drugref out of the trusted surface, except in
 //! the read door itself (`db/076_drug_read_door.sql`). That alone no longer proves the floor is
 //! drugref-free: the door's functions are deliberately named WITHOUT "drugref"
-//! (`cairn_drug_available`, `cairn_drug_search`, `cairn_drug_facts`) so the window's Rust can call
+//! (`cairn_drug_available`, `cairn_drug_search`, `cairn_drug_facts`, `cairn_drug_group_status`) so
+//! the window's Rust can call
 //! them, which means a floor check or a projection applier could `PERFORM cairn_drug_facts(…)`
 //! and make admission depend on drugref with the word never appearing. This guard closes that:
 //! no `db/*.sql` other than the door, and no source under `extensions/` (the pgrx floor), may
