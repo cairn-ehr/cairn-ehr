@@ -87,15 +87,27 @@ pub struct RetractionRow {
 }
 
 /// What this node now says about the key that signed a row, folded from db/004's six
-/// `cairn_key_confirmation` words into the three the allergy view acts on.
+/// `cairn_key_confirmation` words into the four the allergy view acts on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyState {
     /// `confirmed`, `outside` or `unknown`: nothing says the signature is in doubt.
     Standing,
-    /// `unconfirmed` or `doubtful`: the key's enrolment has not (yet) been confirmed.
+    /// `unconfirmed`: the key's enrolment has not (yet) been confirmed. Its acts count, marked.
     Unconfirmed,
+    /// `doubtful`: unconfirmed, AND a key that approved its enrolment has since been repudiated.
+    /// Suspect, as a repudiated key is ([`KeyState::is_suspect`]); its byline reads as an
+    /// unconfirmed one's (the note view's word).
+    Doubtful,
     /// `repudiated`: the key was struck out (e.g. stolen) after it may have signed.
     Repudiated,
+}
+
+impl KeyState {
+    /// A suspect key's act may only ADD a warning, never take one away (ruling R-4b): a
+    /// repudiated key, or a doubtful one (one hop from a repudiation). Review I1.
+    pub fn is_suspect(self) -> bool {
+        matches!(self, KeyState::Repudiated | KeyState::Doubtful)
+    }
 }
 
 /// Map one confirmation word to a [`KeyState`]. Pure. `None` (the door does not know) reads as
@@ -111,7 +123,8 @@ pub fn key_state(word: Option<&str>) -> anyhow::Result<KeyState> {
         "a key's confirmation is {w:?}, which this build does not know"
     );
     Ok(match w {
-        "unconfirmed" | "doubtful" => KeyState::Unconfirmed,
+        "unconfirmed" => KeyState::Unconfirmed,
+        "doubtful" => KeyState::Doubtful,
         "repudiated" => KeyState::Repudiated,
         _ => KeyState::Standing,
     })
@@ -302,15 +315,23 @@ mod tests {
     #[test]
     fn every_confirmation_word_maps_and_an_unknown_word_fails() {
         use crate::note::vouch_read::CONFIRMATION_WORDS;
-        let want = |w: &str| match w {
-            "unconfirmed" | "doubtful" => KeyState::Unconfirmed,
-            "repudiated" => KeyState::Repudiated,
-            _ => KeyState::Standing,
-        };
-        for w in CONFIRMATION_WORDS {
-            assert_eq!(key_state(Some(w)).unwrap(), want(w), "{w}");
+        // A literal table, one row per db/004 word: a wrong mapping must be changed here too.
+        let table = [
+            ("unknown", KeyState::Standing),
+            ("repudiated", KeyState::Repudiated),
+            ("outside", KeyState::Standing),
+            ("confirmed", KeyState::Standing),
+            ("doubtful", KeyState::Doubtful),
+            ("unconfirmed", KeyState::Unconfirmed),
+        ];
+        assert_eq!(
+            table.map(|(w, _)| w),
+            CONFIRMATION_WORDS,
+            "every word, once"
+        );
+        for (w, want) in table {
+            assert_eq!(key_state(Some(w)).unwrap(), want, "{w}");
         }
-        assert_eq!(key_state(Some("outside")).unwrap(), KeyState::Standing);
         assert_eq!(key_state(None).unwrap(), KeyState::Standing);
         let e = key_state(Some("revoked")).unwrap_err().to_string();
         assert!(e.contains("revoked"), "{e}");

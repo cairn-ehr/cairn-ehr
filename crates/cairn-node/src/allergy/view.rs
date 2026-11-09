@@ -8,7 +8,7 @@
 //! strip from those. Vocabulary stays strings (a peer's newer word must still read), so every
 //! `match` here has an "unknown" arm.
 use super::history_words::{challenge_date, historical_text, none_history};
-use super::read::{AllergyRow, KeyState, NoneRow, PatientAllergies, RetractionRow};
+use super::read::{AllergyRow, NoneRow, PatientAllergies, RetractionRow};
 use super::strip::{strip_text, Strip};
 use super::thread::{by_words, key_marker, resolve, Head};
 use cairn_event::allergy::entry_words_dated;
@@ -222,10 +222,11 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
     // list while no other allergy exists. An unknown scope stands for nothing (history only).
     // A doubted chart's statement stands for nothing either: a stranger's NKDA would under-warn
     // (decision 11 shows a doubted chart's entries because over-warning is the safe error). Nor
-    // does a since-repudiated key's (plan D4: such a key never takes a warning away). A withdrawn
+    // does a suspect key's — since repudiated, or doubtful (plan D4, review I1: such a key never
+    // takes a warning away). A withdrawn
     // statement is not even history: it is only "Entered in error".
     let doubted = |n: &NoneRow| a.doubted_charts.contains(&n.chart);
-    let can_stand = |n: &NoneRow| !doubted(n) && n.key != KeyState::Repudiated;
+    let can_stand = |n: &NoneRow| !doubted(n) && !n.key.is_suspect();
     let nones: Vec<&NoneRow> = a
         .none
         .iter()

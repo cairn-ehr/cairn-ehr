@@ -299,3 +299,45 @@ fn status_is_per_head_and_withdrawn_outranks_historical() {
     assert_eq!(r.withdrawn[0].row.event_id, id(2));
     assert_eq!(r.withdrawn[0].by.event_id, id(7));
 }
+
+/// Review I1: a DOUBTFUL key (unconfirmed, and an approver of its enrolment since repudiated) is
+/// suspect as a repudiated one is: its withdrawal of an entry and its correction take nothing
+/// away, but its withdrawal of a de-label adds a warning, so it counts.
+#[test]
+fn a_doubtful_keys_overlays_count_only_to_add_a_warning() {
+    let mut w = retraction(6, 1, 10);
+    w.key = KeyState::Doubtful;
+    let mut back = retraction(7, 5, 10);
+    back.key = KeyState::Doubtful;
+    let mut c = correcting(
+        entry(3, "drug", "latex", "adverse-effect", "gi-upset", 9),
+        2,
+    );
+    c.key = KeyState::Doubtful;
+    let p = pa(
+        vec![
+            pen(1, "anaphylaxis", 8),
+            entry(2, "drug", "latex", "allergy", "anaphylaxis", 8),
+            c,
+            entry(4, "drug", "codeine", "allergy", "rash", 8),
+        ],
+        vec![],
+        vec![challenge(5, 4, 9)],
+        vec![w, back],
+    );
+    let r = resolve(&p);
+    assert_eq!(live_ids(&r), vec![id(1), id(2), id(3), id(4)]);
+    assert!(
+        head(&r, 2).earlier.is_empty(),
+        "the correction links to nothing"
+    );
+    assert!(r.withdrawn.is_empty() && r.historical.is_empty());
+    assert_eq!(r.withdrawn_challenges.len(), 1, "the de-label is withdrawn");
+    assert_eq!(
+        r.ignored_overlays,
+        vec![
+            "Not counted: entered in error by Dr Ada (signer unconfirmed) \
+             — its signer was enrolled by a key since repudiated"
+        ]
+    );
+}

@@ -310,6 +310,20 @@ fn a_cross_chart_withdrawal_of_a_none_statement_counts() {
     );
 }
 
+/// Review I1: a doubtful key's "none known" stands for no list, as a repudiated key's does.
+#[test]
+fn a_doubtful_keys_none_statement_does_not_stand() {
+    let mut n = none(1, "all", 8);
+    n.key = KeyState::Doubtful;
+    let v = view(&pa(vec![], vec![n], vec![], vec![]));
+    assert_eq!(v.strip, "Allergies not yet asked");
+    assert!(v.standing_none.is_empty());
+    assert_eq!(
+        v.previously_none,
+        ["Previously recorded: no known allergies (asked 8 Nov 2026 by Dr Ada (signer unconfirmed))"]
+    );
+}
+
 #[test]
 fn a_repudiated_keys_none_statement_does_not_stand() {
     let mut n = none(1, "all", 8);

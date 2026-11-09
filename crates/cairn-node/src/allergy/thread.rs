@@ -7,14 +7,14 @@
 //! over every row, and this module is that fold. Reading order for a junior, matching
 //! [`resolve`]'s steps:
 //!
-//! 1. **Which overlays count.** A SUSPECT overlay — signed by a since-repudiated key (plan D4),
-//!    or filed on another chart than the record it names (D2; only a lenient remote door admits
-//!    it) — counts only when it ADDS a warning (`overlay_counts`, ruling R-4b). The rest are listed
-//!    in `ignored_overlays`, with why.
+//! 1. **Which overlays count.** A SUSPECT overlay — signed by a since-repudiated or doubtful
+//!    key (plan D4, review I1), or filed on another chart than the record it names (D2; only a
+//!    lenient remote door admits it) — counts only when it ADDS a warning (`overlay_counts`,
+//!    ruling R-4b). The rest are listed in `ignored_overlays`, with why.
 //! 2. **Which de-labels stand**: those no counted withdrawal names (M3: withdrawing a de-label
 //!    puts the allergy back).
 //! 3. **Threads.** An entry and every correction of it, transitively, are one thread. A
-//!    repudiated key's correction, or one naming another chart's entry, links to nothing: it is
+//!    suspect key's correction, or one naming another chart's entry, links to nothing: it is
 //!    an account of its own and supersedes nothing (D4, D2).
 //! 4. **Heads**: the members no other member corrects (two corrections of one line are two
 //!    heads, M2). Each head's `earlier` is the line of versions it replaced.
@@ -98,7 +98,7 @@ pub struct Resolved<'a> {
 pub fn key_marker(key: KeyState) -> &'static str {
     match key {
         KeyState::Standing => "",
-        KeyState::Unconfirmed => SIGNER_UNCONFIRMED,
+        KeyState::Unconfirmed | KeyState::Doubtful => SIGNER_UNCONFIRMED,
         KeyState::Repudiated => KEY_REPUDIATED,
     }
 }
@@ -153,7 +153,8 @@ enum Named {
 
 /// Why an overlay is SUSPECT, as the end of its "Not counted" line; `None` when it is not.
 /// `rows` maps every readable row's event id to its chart and kind. A repudiated key's reason is
-/// its byline marker, already in the line, so it adds nothing here.
+/// its byline marker, already in the line, so it adds nothing here; a doubtful key's marker is
+/// an unconfirmed one's (which counts), so its reason is said.
 fn suspicion(
     rows: &HashMap<Uuid, (Uuid, Named)>,
     key: KeyState,
@@ -162,6 +163,8 @@ fn suspicion(
 ) -> Option<&'static str> {
     if key == KeyState::Repudiated {
         Some("")
+    } else if key == KeyState::Doubtful {
+        Some(" — its signer was enrolled by a key since repudiated")
     } else if rows.get(&target).is_some_and(|(c, _)| *c != own_chart) {
         Some(" — names a record on another chart")
     } else {
@@ -197,12 +200,12 @@ fn newest_first(rows: &mut [&AllergyRow]) {
     rows.sort_by_key(|r| std::cmp::Reverse(age(r.hlc, r.event_id)));
 }
 
-/// The entry `e` replaces, when that link counts (step 3): not from a repudiated key, not to
-/// itself, and to an entry on `e`'s own chart.
+/// The entry `e` replaces, when that link counts (step 3): not from a suspect (repudiated or
+/// doubtful) key, not to itself, and to an entry on `e`'s own chart.
 fn link<'a>(e: &AllergyRow, by_id: &HashMap<Uuid, &'a AllergyRow>) -> Option<&'a AllergyRow> {
     let t = e
         .corrects
-        .filter(|t| *t != e.event_id && e.key != KeyState::Repudiated)?;
+        .filter(|t| *t != e.event_id && !e.key.is_suspect())?;
     by_id.get(&t).copied().filter(|t| t.chart == e.chart)
 }
 
