@@ -39,11 +39,11 @@ fn the_pick_offers_drugs_and_groups() {
 fn editing_the_name_after_a_pick_drops_the_coding() {
     let at = position(DRUG_PICK_JS, "addEventListener(\"input\"");
     let on_input = &DRUG_PICK_JS[at..at + position(&DRUG_PICK_JS[at..], "});")];
-    assert!(on_input.contains("heldCoding = null;"), "{on_input}");
+    assert!(on_input.contains("setHeldCoding(null);"), "{on_input}");
     let held = js_fn(DRUG_PICK_JS, "pickedCoding");
     assert!(held.contains("pickIsDrug() ? heldCoding : null"), "{held}");
     let kind = &DRUG_PICK_JS[position(DRUG_PICK_JS, "allergen_kind\"]')")..];
-    assert!(kind.contains("heldCoding = null;"), "{kind}");
+    assert!(kind.contains("setHeldCoding(null);"), "{kind}");
     // The form's emptying forgets it too, and Record/Correct send what is held.
     assert!(js_fn(ALLERGIES_JS, "resetAllergyForm").contains("clearPick();"));
     assert!(js_fn(ALLERGIES_JS, "recordAllergy").contains("coding: pickedCoding(),"));
@@ -169,4 +169,53 @@ fn a_group_is_labelled_a_group_once() {
         "{label}"
     );
     assert!(label.contains("option.display + \" (group)\""), "{label}");
+}
+
+/// Ruling F3: "amox" lists amoxapine before amoxicillin, so one ArrowDown + Enter too many codes
+/// the wrong drug. While a coding is held, a VISIBLE line under the Substance field (text, never
+/// a hover title) says what the entry will be coded as — "Coded as: amoxapine (drug)" — so a
+/// wrong pick is seen at the moment of signing, with no dialog. Every write of the held coding
+/// goes through ONE setter that also draws or hides that line, so the line cannot outlive the
+/// coding: an edit, leaving Drug, the form's emptying (sign included, via `resetAllergyForm`'s
+/// `clearPick`), a pick and a correction's held coding all pass through it.
+#[test]
+fn a_held_coding_says_what_it_is_coded_as() {
+    let line = position(
+        INDEX_HTML,
+        "<p id=\"allergy-coded-as\" class=\"allergy-quiet\"",
+    );
+    assert!(position(INDEX_HTML, "id=\"allergy-term\"") < line);
+    assert!(line < position(INDEX_HTML, "<p id=\"allergy-term-error\""));
+    let words = js_fn(DRUG_PICK_JS, "codedAsWords");
+    assert!(words.contains("\"Coded as: \""), "{words}");
+    assert!(words.contains("\" (drug)\""), "{words}");
+    assert!(
+        words.contains("pickLabel(coding)"),
+        "a group is labelled as in the list: {words}"
+    );
+    let set = js_fn(DRUG_PICK_JS, "setHeldCoding");
+    assert!(set.contains("heldCoding = coding;"), "{set}");
+    assert!(
+        set.contains("line.textContent = coding ? codedAsWords(coding) : \"\";"),
+        "{set}"
+    );
+    assert!(set.contains("line.hidden = !coding;"), "{set}");
+    // One write besides its declaration (`let heldCoding = null;`).
+    assert_eq!(
+        DRUG_PICK_JS.matches("heldCoding = ").count(),
+        2,
+        "the held coding is written only by setHeldCoding"
+    );
+    assert!(DRUG_PICK_JS.contains("let heldCoding = null;"));
+    for (f, call) in [
+        ("holdPick", "setHeldCoding(coding);"),
+        ("clearPick", "setHeldCoding(null);"),
+        ("choosePick", "setHeldCoding({ system: option.system"),
+    ] {
+        assert!(js_fn(DRUG_PICK_JS, f).contains(call), "{f}");
+    }
+    assert!(
+        !DRUG_PICK_JS.contains(".title"),
+        "the line is text, not a hover title"
+    );
 }

@@ -6,7 +6,8 @@
 //
 // The one safety rule here: a coding vouches for THE NAME IT WAS PICKED WITH. Any later edit of
 // the name, or leaving "Drug", drops it (`pickedCoding` is null again) — otherwise "penicillin"
-// edited to "latex" would still be signed as the penicillin moiety.
+// edited to "latex" would still be signed as the penicillin moiety. While one is held, the form
+// says so in words under the field ("Coded as: …", ruling F3), so a wrong pick is seen.
 //
 // Words the clinician sees are pinned in drug_pick_webview_tests.rs. Classic script, loaded before
 // allergies.js (which calls `pickedCoding` and `clearPick`), sharing main.js's `el`, `cell`, `invoke`.
@@ -37,7 +38,7 @@ function pickedCoding() {
 
 /** Hold `coding` (a line's, from Correct) as if picked; null holds nothing. */
 function holdPick(coding) {
-  heldCoding = coding;
+  setHeldCoding(coding);
   closePick();
 }
 
@@ -46,6 +47,22 @@ function holdPick(coding) {
 function pickLabel(option) {
   if (option.system !== GROUP_SYSTEM || /\bgroup\b/i.test(option.display)) return option.display;
   return option.display + " (group)";
+}
+
+/** The line under the Substance field while a coding is held (ruling F3): what the entry will be
+ *  signed as, a drug or a group. "amox" lists amoxapine before amoxicillin, so a wrong pick must
+ *  be visible before Sign — as words on the form, never a dialog. */
+function codedAsWords(coding) {
+  return "Coded as: " + (coding.system === GROUP_SYSTEM ? pickLabel(coding) : coding.display + " (drug)");
+}
+
+/** The ONLY writer of `heldCoding`: holds `coding` (or null) and draws or hides the "Coded as"
+ *  line with it, so the line can never outlive the coding it describes. */
+function setHeldCoding(coding) {
+  heldCoding = coding;
+  const line = el("allergy-coded-as");
+  line.textContent = coding ? codedAsWords(coding) : "";
+  line.hidden = !coding;
 }
 
 /** Close the list and the hint (the options are forgotten). */
@@ -62,7 +79,7 @@ function closePick() {
 
 /** Forget the held coding and close (the form is emptied, or the name was edited). */
 function clearPick() {
-  heldCoding = null;
+  setHeldCoding(null);
   closePick();
 }
 
@@ -77,7 +94,7 @@ function choosePick(index) {
   const option = pickOptions[index];
   if (!option) return;
   el("allergy-term").value = option.display;
-  heldCoding = { system: option.system, code: option.code, display: option.display };
+  setHeldCoding({ system: option.system, code: option.code, display: option.display });
   closePick();
 }
 
@@ -114,7 +131,7 @@ async function askPick(text) {
 }
 
 el("allergy-term").addEventListener("input", () => {
-  heldCoding = null; // any edit of the name drops the coding
+  setHeldCoding(null); // any edit of the name drops the coding
   closePick();
   const text = el("allergy-term").value;
   if (pickIsDrug() && text.trim().length >= PICK_MIN_CHARS) {
@@ -138,7 +155,7 @@ el("allergy-term").addEventListener("keydown", (event) => {
 document.querySelector('.allergy-choice[data-field="allergen_kind"]').addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (button && button.dataset.value !== "drug") {
-    heldCoding = null;
+    setHeldCoding(null);
     closePick();
   }
 });
