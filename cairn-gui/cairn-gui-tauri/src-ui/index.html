@@ -314,8 +314,11 @@
                 <p class="allergy-field-error" role="alert" hidden></p>
               </div>
             </template>
+            <!-- The retract row's first sentence is shown only when the line struck has earlier
+                 versions (they go with it); its second only when that line can be corrected. -->
             <template id="allergy-retract-template">
               <div class="allergy-overlay-row" role="group">
+                <p class="allergy-quiet" data-note="earlier" hidden>This strikes the line and its earlier versions.<span data-note="undo"> To undo a correction, press Correct and record it as it was.</span></p>
                 <label>Reason (optional) <input type="text" data-field="text" /></label>
                 <button type="button" class="allergy-write" data-act="sign">Sign</button>
                 <button type="button" data-act="cancel">Cancel</button>

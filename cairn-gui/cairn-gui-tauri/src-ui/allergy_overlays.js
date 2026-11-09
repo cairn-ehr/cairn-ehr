@@ -2,8 +2,11 @@
 // with a pen on the sticker, done here as signed acts that name the line they are about.
 //
 //   - a live line:            Correct, De-label, Entered in error
-//   - a historical line:      Withdraw de-label (Entered in error, aimed at the de-label it rests on)
+//   - a historical line:      Withdraw de-label (Entered in error, aimed at the de-label it rests
+//                             on), and Entered in error (aimed at its own entry: one act strikes it)
 //   - a "none known" line:    Entered in error
+//   - any line from a chart whose link to this one is in doubt: NOTHING (it may be a stranger's;
+//     Rust refuses such a target before the key anyway, review C1)
 //
 // Correct reuses the entry form (allergies.js): it fills it from the line's words as recorded,
 // says "Correcting: <the line>" above it (the label is the page's), and the form's Sign then sends
@@ -58,22 +61,28 @@ function actionButton(act, line, onPress) {
 
 /**
  * The buttons on one line of a drug, other, adverse-effect or historical list (allergies.js's
- * `lineItem`). A historical line rests on a de-label (`line.challenge`) and is withdrawn through
- * it; a live line is corrected (when its recorded words came with it), de-labelled, or withdrawn.
+ * `lineItem`). A line from a doubted chart carries none. A historical line rests on a de-label
+ * (`line.challenge`): it is withdrawn through it, or the line itself is struck. A live line is
+ * corrected (when its recorded words came with it), de-labelled, or struck.
  */
 function lineActions(line) {
+  if (line.doubted_chart) return [];
   if (line.challenge) {
-    return [actionButton("withdraw", line, (li, opener) => openRetraction(line.challenge, li, opener))];
+    return [
+      actionButton("withdraw", line, (li, opener) => openRetraction(line.challenge, li, opener)),
+      actionButton("error", line, (li, opener) => openRetraction(line.event_id, li, opener, line)),
+    ];
   }
   const buttons = [];
   if (line.words) buttons.push(actionButton("correct", line, () => startCorrection(line)));
   buttons.push(actionButton("delabel", line, (li, opener) => openDelabel(line, li, opener)));
-  buttons.push(actionButton("error", line, (li, opener) => openRetraction(line.event_id, li, opener)));
+  buttons.push(actionButton("error", line, (li, opener) => openRetraction(line.event_id, li, opener, line)));
   return buttons;
 }
 
-/** The button on a standing or previous "none known" line (`{event_id, text}`). */
+/** The button on a standing or previous "none known" line (none from a doubted chart). */
 function noneActions(none) {
+  if (none.doubted_chart) return [];
   return [actionButton("error", none, (li, opener) => openRetraction(none.event_id, li, opener))];
 }
 
@@ -131,13 +140,12 @@ function suspendLostCorrection(pane) {
 }
 
 /**
- * Open the De-label row under `li`: what was tolerated (starting as the line's own term), when
- * (typed as an onset is; empty = not known), an optional note, and Sign.
+ * Open the De-label row under `li`: what was tolerated (EMPTY — the clinician names it; the drug
+ * challenged is often not the labelled one, and nothing is signed by default), when (typed as an
+ * onset is; empty = not known), an optional note, and Sign.
  */
 function openDelabel(line, li, opener) {
-  const words = line.words;
   const row = openRow("allergy-delabel-template", li, opener);
-  rowInput(row, "tolerated").value = words ? words.term : "";
   onSign(row, () => void pressOnce(() => signOverlay(row, (base) => invoke("allergy_challenge", Object.assign(base, {
     target: line.event_id,
     tolerated: rowInput(row, "tolerated").value,
@@ -147,12 +155,17 @@ function openDelabel(line, li, opener) {
 }
 
 /**
- * Open the Entered-in-error row under `li` for event `target` (a live line, a "none known"
+ * Open the Entered-in-error row under `li` for event `target` (a line's entry, a "none known"
  * statement, or the de-label a historical line rests on): an optional reason, and Sign. Nothing
- * is struck until it is signed.
+ * is struck until it is signed. `line` is passed only when the line's own entry is struck: if it
+ * has earlier versions they are struck with it (ruling R-4a), so the page's sentence says so —
+ * and, on a line that can be corrected (its words came with it), how to undo a correction instead.
  */
-function openRetraction(target, li, opener) {
+function openRetraction(target, li, opener, line) {
   const row = openRow("allergy-retract-template", li, opener);
+  const strikesEarlier = Boolean(line) && line.earlier.length > 0;
+  row.querySelector('[data-note="earlier"]').hidden = !strikesEarlier;
+  row.querySelector('[data-note="undo"]').hidden = !(strikesEarlier && line.words);
   onSign(row, () => void pressOnce(() => signOverlay(row, (base) => invoke("allergy_retract", Object.assign(base, {
     target: target,
     text: rowInput(row, "text").value,

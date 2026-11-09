@@ -59,7 +59,7 @@ pub struct AllergyLine {
     /// On a historical line: the de-label it rests on (the window withdraws it). `None` otherwise.
     pub challenge: Option<String>,
     /// On a live line: its words as recorded, which the Correct form starts from. `None` on a
-    /// historical line, which is withdrawn through its de-label, never corrected.
+    /// historical line, which is never corrected (its de-label is withdrawn, or it is struck).
     pub words: Option<LineWords>,
 }
 
@@ -82,6 +82,8 @@ pub struct LineWords {
 pub struct NoneLineView {
     pub event_id: String,
     pub text: String,
+    /// On a chart whose link to this one is in doubt: the window offers no act on it (review C1).
+    pub doubted_chart: bool,
 }
 
 /// One "Entered in error: …" line, with the older versions a withdrawn entry had replaced.
@@ -126,6 +128,7 @@ pub(crate) fn pane(a: &PatientAllergies, set: &ChartSet) -> AllergyPane {
             .map(|n| NoneLineView {
                 event_id: n.event_id.to_string(),
                 text: n.text,
+                doubted_chart: n.doubted_chart,
             })
             .collect()
     };

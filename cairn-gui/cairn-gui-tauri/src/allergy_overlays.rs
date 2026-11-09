@@ -17,7 +17,7 @@ use crate::allergies::{
 };
 use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::funnel::view::{ErrorView, Recorded, Retry};
-use crate::link::judgement_view::refused;
+use crate::link::judgement_view::{refused, stale};
 use crate::signer::Credential;
 use crate::state::AppState;
 use cairn_event::allergy_overlay::{AllergyChallenge, AllergyRetraction};
@@ -134,8 +134,8 @@ fn note(text: Option<&str>) -> Option<&str> {
 pub(crate) enum Names {
     /// A live line of the drug, other or adverse-effect list (Correct, De-label).
     Entry,
-    /// A live line, a standing or previous "none known" line, or the de-label a historical line
-    /// rests on (Entered in error).
+    /// A live line, a standing or previous "none known" line, or a historical line's de-label
+    /// (Withdraw de-label) or its own entry (Entered in error: one act strikes it, TBD-2).
     Withdrawable,
 }
 
@@ -149,6 +149,14 @@ pub(crate) struct Target {
 /// Read the list again over the chart set the window sent, in one snapshot, and find `target`
 /// on it (`target_on`). Said before the key: a passphrase that writes nothing is a step paper
 /// never has.
+///
+/// The gap between this read and the sign is DELIBERATE, and safe — do not "fix" it with a lock.
+/// No human step sits in it except the key (and locking the list across the key's KDF would
+/// serialise the terminal behind one clinician's typing). Whatever another terminal or a peer
+/// signs in it — a correction, de-label or withdrawal of the same line — is a pair of acts a
+/// partitioned peer produces anyway, and the view absorbs it: an overlay covers only what it
+/// names, so every order over-warns (ADR-0097 decision 14 and "not guaranteed" (i)). The floor
+/// still checks the target's type and chart.
 pub(crate) async fn target_before_the_key(
     state: &AppState,
     patient: Uuid,
@@ -162,11 +170,34 @@ pub(crate) async fn target_before_the_key(
     target_on(&a, &v, target, names)
 }
 
+/// Said when the act's target is on a chart whose link to this one is in doubt (review C1).
+pub(crate) const ON_A_DOUBTED_CHART: &str = "This line is on a chart whose link to this one is \
+     in doubt — open that chart, or settle the link, to change it.";
+
 /// Whether `target` names a line `names` allows on view `v` of rows `a`, and that row's chart.
 /// A target not on the view — corrected, de-labelled or withdrawn since the window drew it, or
 /// never a line at all — is refused with a re-read: the list on screen is behind the record.
-/// Pure.
+///
+/// A target on a chart whose link to this one is in DOUBT is refused too (review C1): that line
+/// may be a stranger's, shown here only because over-warning is the safe error, so no act from
+/// this chart may strike, de-label or correct it — that would take a possible stranger's warning
+/// off their own chart. The window draws no button on such a line; this refusal (with a re-read,
+/// which takes a button drawn before the doubt away) is the backstop. Pure.
 pub(crate) fn target_on(
+    a: &PatientAllergies,
+    v: &AllergyView,
+    target: &str,
+    names: Names,
+) -> Result<Target, ErrorView> {
+    let found = find_target(a, v, target, names)?;
+    if a.doubted_charts.contains(&found.chart) {
+        return Err(stale(ON_A_DOUBTED_CHART));
+    }
+    Ok(found)
+}
+
+/// `target_on` without the doubt rule: the line `target` names on `v`, and its row's chart.
+fn find_target(
     a: &PatientAllergies,
     v: &AllergyView,
     target: &str,
@@ -194,13 +225,16 @@ pub(crate) fn target_on(
         .iter()
         .chain(&v.previously_none)
         .any(|n| n.event_id == id)
-        || v.historical.iter().any(|l| l.challenge == Some(id));
+        || v.historical
+            .iter()
+            .any(|l| l.challenge == Some(id) || l.event_id == id);
     // The view names the line; its chart is on the row it reads.
     let chart = a
         .none
         .iter()
         .map(|n| (n.event_id, n.chart))
         .chain(a.challenges.iter().map(|c| (c.event_id, c.chart)))
+        .chain(a.entries.iter().map(|e| (e.event_id, e.chart)))
         .find(|(e, _)| *e == id)
         .map(|(_, chart)| chart);
     match chart {
@@ -212,3 +246,7 @@ pub(crate) fn target_on(
 #[cfg(test)]
 #[path = "allergy_overlays_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "allergy_overlays_pure_tests.rs"]
+mod pure_tests;

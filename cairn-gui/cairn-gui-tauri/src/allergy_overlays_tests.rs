@@ -1,18 +1,13 @@
-//! Tests for `allergy_overlays.rs` and the Correct path of `allergies.rs`: the outcome of a sign
-//! that landed or was interrupted (pure), and DB-gated walks under the window's own login (on
-//! `CAIRN_TEST_PG`, run locally: #905, CI never runs them) — a correction filed under its
-//! target's chart, a de-label and two withdrawals read back, a stale target refused before the
-//! key, the de-label's own refusals, and each act timed with its own kind.
+//! DB-gated walks for `allergy_overlays.rs` and the Correct path of `allergies.rs`, under the
+//! window's own login (on `CAIRN_TEST_PG`, run locally: #905, CI never runs them) — a correction
+//! filed under its target's chart, a de-label and two withdrawals read back, a de-labelled line
+//! struck in one act, a stale target and a doubted chart's target refused before the key, the
+//! de-label's own refusals, and each act timed with its own kind. The pure tests are in
+//! `allergy_overlays_pure_tests.rs`.
 use super::*;
-use crate::allergies::{
-    allergy_list_impl, allergy_none_impl, allergy_record_impl, sign_failure, written, Act,
-    EntryInput,
-};
-use crate::allergy_pane::{AllergyPane, EnteredInErrorLine};
+use crate::allergies::{allergy_list_impl, allergy_none_impl, allergy_record_impl, EntryInput};
 use crate::funnel::view::{Recorded, Retry};
 use crate::notes::review::db_tests::{credential, supervised_note};
-use cairn_event::allergy::{AllergyEntry, NoneScope};
-use cairn_event::allergy_overlay::{AllergyChallenge, AllergyRetraction};
 
 /// A complete entry, as the form sends it.
 fn entry(term: &str) -> EntryInput {
@@ -36,123 +31,6 @@ fn correction(term: &str, target: &str) -> EntryInput {
     }
 }
 
-/// A pane with something in every slice-2 list, so `written` is seen carrying it whole.
-fn full_pane() -> AllergyPane {
-    AllergyPane {
-        strip: "Allergies not yet asked".into(),
-        drug: "not-yet-asked",
-        other: "not-yet-asked",
-        drug_allergies: vec![],
-        other_allergies: vec![],
-        adverse_effects: vec![],
-        previously_none: vec![],
-        standing_none: vec![],
-        unreadable: 0,
-        historical: vec![],
-        entered_in_error: vec![EnteredInErrorLine {
-            text: "Entered in error: de-label — tolerated amoxicillin (withdrawn 9 Nov 2026)"
-                .into(),
-            earlier: vec![],
-        }],
-        ignored_overlays: vec!["Not counted: …".into()],
-        charts: vec![],
-    }
-}
-
-/// Ruling R11 for the overlays: a de-label or withdrawal that landed is an Ok whatever the re-read
-/// did, because both commands end in the one `sign_then_reread`, which hands its re-read to
-/// `written` (pinned at its call site by `allergies_webview_tests`).
-#[test]
-fn a_landed_overlay_is_an_ok_with_or_without_its_pane() {
-    let ok = written(Ok(full_pane()));
-    assert_eq!(ok.outcome, "Recorded.");
-    let pane = ok.pane.expect("the list read again");
-    assert_eq!(pane.entered_in_error.len(), 1);
-    assert_eq!(pane.ignored_overlays.len(), 1);
-    let failed = written(Err(ErrorView {
-        text: "connection closed".into(),
-        retry: Retry::Now,
-    }));
-    assert!(failed.pane.is_none());
-    assert!(
-        failed.outcome.starts_with("Signed — but"),
-        "{}",
-        failed.outcome
-    );
-    let src = include_str!("allergy_overlays.rs");
-    for f in ["allergy_challenge_impl", "allergy_retract_impl"] {
-        let body = crate::source_guard::rust_fn(src, f);
-        assert!(body.contains("sign_then_reread("), "{f}: {body}");
-    }
-}
-
-/// #814 for the overlays: an interrupted commit is NOT known, named as the act it was, and is
-/// re-read, never offered again live.
-#[test]
-fn an_interrupted_overlay_is_not_known_and_never_retried() {
-    let event = Uuid::from_u128(814);
-    let interrupted = || {
-        cairn_node::db_diagnosis::commit_outcome_unknown(
-            event,
-            anyhow::anyhow!("connection closed"),
-        )
-        .context("signing the overlay")
-    };
-    let target = Uuid::from_u128(1).to_string();
-    let challenge = Act::Challenge(AllergyChallenge {
-        target: &target,
-        tolerated: "amoxicillin",
-        date: cairn_event::allergy::Onset::NotKnown,
-        text: None,
-    });
-    let retraction = Act::Retraction(AllergyRetraction {
-        target: &target,
-        text: None,
-    });
-    let corrected = Act::Entry(AllergyEntry {
-        allergen_kind: cairn_event::allergy::AllergenKind::Drug,
-        term: "penicillin",
-        kind: cairn_event::allergy::EntryKind::Allergy,
-        category: cairn_event::allergy::ReactionCategory::Anaphylaxis,
-        reaction_text: None,
-        onset: cairn_event::allergy::Onset::NotKnown,
-        source: cairn_event::allergy::Source::SeenDocumented,
-        corrects: Some(&target),
-    });
-    for (act, lead) in [
-        (
-            &challenge,
-            "Whether this de-label was recorded is NOT known — ",
-        ),
-        (
-            &retraction,
-            "Whether this was marked entered in error is NOT known — ",
-        ),
-        (
-            &corrected,
-            "Whether this correction was recorded is NOT known — ",
-        ),
-        (
-            &Act::None(NoneScope::All),
-            "Whether this allergy was recorded is NOT known — ",
-        ),
-    ] {
-        let view = sign_failure(&interrupted(), act);
-        assert!(view.text.starts_with(lead), "{}", view.text);
-        assert!(
-            view.text.contains(&format!("(event {event}: ")),
-            "{}",
-            view.text
-        );
-        assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
-    }
-    let plain = anyhow::anyhow!("the floor refused it");
-    assert_eq!(
-        sign_failure(&plain, &retraction),
-        crate::write_failure::node_failure(&plain)
-    );
-}
-
 /// How many timing samples of `kind` the table holds (it outlives the fixture's truncation).
 async fn timed(owner: &tokio_postgres::Client, kind: &str) -> i64 {
     owner
@@ -167,18 +45,17 @@ async fn timed(owner: &tokio_postgres::Client, kind: &str) -> i64 {
 
 const GONE: &str = "That allergy line is no longer on this chart — read it again.";
 
-/// D2: a correction of a linked chart's entry, made from the chart on screen, is filed under
-/// THAT entry's chart — the floor admits a correction only of an entry on its own chart.
-#[tokio::test]
-async fn correct_files_under_the_targets_chart() {
-    let Some((_guard, mut owner, state, chart, _)) = supervised_note().await else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
+/// A John Doe chart linked to `chart`, holding one penicillin entry Bea signed on it (her key is
+/// left held, so the caller's acts sign with no credential). Answers (that chart, its entry).
+async fn linked_entry(
+    state: &AppState,
+    owner: &mut tokio_postgres::Client,
+    chart: Uuid,
+) -> (Uuid, Uuid) {
     let here = chart.to_string();
     // Bea signs one entry here, which leaves her key held for the setup below.
     allergy_record_impl(
-        &state,
+        state,
         &here,
         vec![here.clone()],
         entry("aspirin"),
@@ -194,7 +71,7 @@ async fn correct_files_under_the_targets_chart() {
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let origin = state.node_origin.clone();
     let (other, _, _) = cairn_node::john_doe::register_john_doe(
-        &mut owner,
+        owner,
         node_sk,
         &node_kid,
         &origin,
@@ -213,7 +90,7 @@ async fn correct_files_under_the_targets_chart() {
     let read =
         crate::allergies::entry_before_the_key(&typed, crate::allergies::local_today()).unwrap();
     let theirs = cairn_node::allergy::sign::sign_allergy(
-        &mut owner, node_sk, &node_kid, &origin, other, &read, &author,
+        owner, node_sk, &node_kid, &origin, other, &read, &author,
     )
     .await
     .unwrap();
@@ -221,10 +98,23 @@ async fn correct_files_under_the_targets_chart() {
         human_sk: &bea_sk,
         human_kid: &bea_kid,
     };
-    cairn_node::chart_link::link_charts(&mut owner, chart, other, &reviewer, &origin)
+    cairn_node::chart_link::link_charts(owner, chart, other, &reviewer, &origin)
         .await
         .unwrap();
 
+    (other, theirs)
+}
+
+/// D2: a correction of a linked chart's entry, made from the chart on screen, is filed under
+/// THAT entry's chart — the floor admits a correction only of an entry on its own chart.
+#[tokio::test]
+async fn correct_files_under_the_targets_chart() {
+    let Some((_guard, mut owner, state, chart, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let here = chart.to_string();
+    let (other, theirs) = linked_entry(&state, &mut owner, chart).await;
     let pane = allergy_list_impl(&state, &here).await.unwrap();
     assert_eq!(pane.charts.len(), 2, "{:?}", pane.charts);
     let line = pane
@@ -284,6 +174,137 @@ async fn correct_files_under_the_targets_chart() {
     .await
     .unwrap_err();
     assert_eq!(err.text, GONE);
+}
+
+/// Review C1 against a database: once the link to the other chart is in doubt (a veto flag), its
+/// line is still listed — marked, with no act — and every act aimed at it from this chart is
+/// refused before the key with a re-read: Correct, De-label and Entered in error. Nothing is
+/// signed.
+#[tokio::test]
+async fn an_act_on_a_doubted_charts_line_is_refused_before_the_key() {
+    let Some((_guard, mut owner, state, chart, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let here = chart.to_string();
+    let (other, theirs) = linked_entry(&state, &mut owner, chart).await;
+    let (lo, hi) = (chart.min(other), chart.max(other));
+    owner
+        .execute(
+            "INSERT INTO link_veto_flag (low, high, content_address) \
+             SELECT low, high, content_address FROM patient_link \
+             WHERE low = $1::text::uuid AND high = $2::text::uuid",
+            &[&lo.to_string(), &hi.to_string()],
+        )
+        .await
+        .unwrap();
+    let pane = allergy_list_impl(&state, &here).await.unwrap();
+    let line = pane
+        .drug_allergies
+        .iter()
+        .find(|l| l.event_id == theirs.to_string())
+        .expect("a doubted chart's entry is still shown (over-warning)");
+    assert!(line.doubted_chart);
+    let target = theirs.to_string();
+    let errs = [
+        allergy_record_impl(
+            &state,
+            &here,
+            pane.charts.clone(),
+            correction("penicillin V", &target),
+            None,
+        )
+        .await
+        .unwrap_err(),
+        allergy_challenge_impl(
+            &state,
+            &here,
+            pane.charts.clone(),
+            &target,
+            "amoxicillin",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err(),
+        allergy_retract_impl(&state, &here, pane.charts.clone(), &target, None, None)
+            .await
+            .unwrap_err(),
+    ];
+    for err in errs {
+        assert_eq!(err.text, ON_A_DOUBTED_CHART);
+        assert_eq!(err.retry, Retry::AfterReread(Recorded::No));
+    }
+    let signed: i64 = owner
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE patient_id = ANY($1::text[]::uuid[]) \
+             AND event_type LIKE 'clinical.allergy%'",
+            &[&vec![here.clone(), other.to_string()]],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    // Only the two entries the setup signed (aspirin here, penicillin there).
+    assert_eq!(signed, 2, "nothing was signed");
+}
+
+/// TBD-2 against a database: a de-labelled line is struck as entered in error in ONE act, aimed
+/// at its own entry; the struck line still says the de-label it carried, and the reason.
+#[tokio::test]
+async fn a_delabelled_line_is_struck_in_one_act() {
+    let Some((_guard, _owner, state, chart, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let here = chart.to_string();
+    let charts = vec![here.clone()];
+    let pane = allergy_record_impl(
+        &state,
+        &here,
+        charts.clone(),
+        entry("penicillin"),
+        credential("bea"),
+    )
+    .await
+    .unwrap()
+    .pane
+    .unwrap();
+    let target = pane.drug_allergies[0].event_id.clone();
+    let pane = allergy_challenge_impl(
+        &state,
+        &here,
+        charts.clone(),
+        &target,
+        "amoxicillin",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    .pane
+    .unwrap();
+    assert_eq!(pane.historical[0].event_id, target);
+    let pane = allergy_retract_impl(&state, &here, charts, &target, Some("wrong patient"), None)
+        .await
+        .unwrap()
+        .pane
+        .unwrap();
+    assert!(pane.historical.is_empty() && pane.drug_allergies.is_empty());
+    assert_eq!(
+        pane.entered_in_error.len(),
+        1,
+        "{:?}",
+        pane.entered_in_error
+    );
+    let text = &pane.entered_in_error[0].text;
+    assert!(
+        text.starts_with("Entered in error: Allergy: penicillin"),
+        "{text}"
+    );
+    assert!(text.contains(") — wrong patient — de-labelled "), "{text}");
+    assert!(text.ends_with(": tolerated amoxicillin"), "{text}");
 }
 
 /// A de-label moves the line to "historical"; withdrawing the de-label brings it back; withdrawing
@@ -580,86 +601,4 @@ async fn each_act_is_timed_with_its_own_kind() {
         let expected = if *k == "allergy-record" { was } else { was + 1 };
         assert_eq!(timed(&owner, k).await, expected, "{k}");
     }
-}
-
-/// The target rule at its pure seam (runs in CI, unlike the DB walks): Correct and De-label name a
-/// live line only; Entered in error also names a "none known" line or the de-label a historical
-/// line rests on — never the de-labelled entry itself. Each is filed under its own row's chart.
-#[test]
-fn a_target_names_only_what_its_act_may_name() {
-    use cairn_node::allergy::read::{AllergyRow, ChallengeRow, KeyState, NoneRow};
-    let at = chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap();
-    let (here, linked) = (Uuid::from_u128(1), Uuid::from_u128(2));
-    let row = |id: u128, chart: Uuid, term: &str| AllergyRow {
-        event_id: Uuid::from_u128(id),
-        chart,
-        allergen_kind: "drug".into(),
-        term: term.into(),
-        kind: "allergy".into(),
-        category: "rash".into(),
-        reaction_text: None,
-        onset_precision: "not-known".into(),
-        onset_value: None,
-        source: "patient-stated".into(),
-        recorded_at: at,
-        hlc: (at.timestamp_millis(), id as i32),
-        signer: None,
-        corrects: None,
-        key: KeyState::Standing,
-    };
-    let a = PatientAllergies {
-        entries: vec![row(10, linked, "penicillin"), row(11, linked, "codeine")],
-        none: vec![NoneRow {
-            event_id: Uuid::from_u128(20),
-            chart: here,
-            scope: "drug".into(),
-            recorded_at: at,
-            hlc: (at.timestamp_millis(), 20),
-            signer: None,
-            key: KeyState::Standing,
-        }],
-        challenges: vec![ChallengeRow {
-            event_id: Uuid::from_u128(30),
-            chart: linked,
-            target: Uuid::from_u128(11),
-            tolerated: "codeine".into(),
-            date_precision: "not-known".into(),
-            date_value: None,
-            text: None,
-            recorded_at: at,
-            hlc: (at.timestamp_millis(), 30),
-            signer: None,
-            key: KeyState::Standing,
-        }],
-        retractions: vec![],
-        doubted_charts: vec![],
-        unreadable: 0,
-    };
-    let v = build_view(&a, chrono::FixedOffset::east_opt(0).unwrap());
-    let on = |id: u128, names| target_on(&a, &v, &Uuid::from_u128(id).to_string(), names);
-    let filed = |id: u128, chart| {
-        Ok::<_, ErrorView>(Target {
-            id: Uuid::from_u128(id),
-            chart,
-        })
-    };
-    for names in [Names::Entry, Names::Withdrawable] {
-        assert_eq!(
-            on(10, names),
-            filed(10, linked),
-            "a live line, on its own chart"
-        );
-        assert_eq!(on(11, names).unwrap_err().text, GONE, "a de-labelled entry");
-        assert_eq!(on(99, names).unwrap_err().text, GONE, "a stranger");
-        let garbage = target_on(&a, &v, "not-a-uuid", names).unwrap_err();
-        assert_eq!(garbage.retry, Retry::AfterReread(Recorded::No));
-    }
-    assert_eq!(on(20, Names::Entry).unwrap_err().text, GONE);
-    assert_eq!(on(30, Names::Entry).unwrap_err().text, GONE);
-    assert_eq!(on(20, Names::Withdrawable), filed(20, here), "a none line");
-    assert_eq!(
-        on(30, Names::Withdrawable),
-        filed(30, linked),
-        "the de-label"
-    );
 }

@@ -120,7 +120,7 @@ fn correct_prefills_and_sends_corrects() {
 /// row INLINE, under the line it is about — never a dialog, never `confirm(` (paper-parity: the
 /// affordance is the row and one Sign). The rows are the page's `<template>`s, so every label is
 /// written in the page, not the script; one row is open at a time; Escape or Cancel closes it
-/// without signing. "Tolerated" starts as the line's own term.
+/// without signing. "Tolerated" starts empty (review M3).
 #[test]
 fn delabel_and_withdraw_rows_are_inline_not_dialogs() {
     for text in [OVERLAYS_JS, INDEX_HTML] {
@@ -151,11 +151,14 @@ fn delabel_and_withdraw_rows_are_inline_not_dialogs() {
     ] {
         assert!(actions.contains(step), "{step}: {actions}");
     }
+    // Review M3: "Tolerated" starts EMPTY — nothing is signed by default (design anti-goal), and
+    // the drug challenged usually differs from the labelled group. Rust refuses an empty one.
     let delabel = js_fn(OVERLAYS_JS, "openDelabel");
     assert!(
-        delabel.contains("words ? words.term : \"\""),
-        "Tolerated starts as the line's term: {delabel}"
+        !delabel.contains("rowInput(row, \"tolerated\").value ="),
+        "Tolerated is never prefilled: {delabel}"
     );
+    assert!(!delabel.contains("words.term"), "{delabel}");
     let nones = js_fn(OVERLAYS_JS, "noneActions");
     assert!(nones.contains("openRetraction(none.event_id,"), "{nones}");
     let keys = &OVERLAYS_JS[position(OVERLAYS_JS, "addEventListener(\"keydown\"")..];
@@ -454,6 +457,7 @@ fn every_nested_field_the_scripts_read_is_one_rust_sends() {
     let none = NoneLineView {
         event_id: String::new(),
         text: String::new(),
+        doubted_chart: false,
     };
     let withdrawn = EnteredInErrorLine {
         text: String::new(),
@@ -487,6 +491,68 @@ fn every_nested_field_the_scripts_read_is_one_rust_sends() {
             );
         }
     }
+}
+
+/// Review C1: a line from a chart whose link to this one is in doubt may be a stranger's; the
+/// window offers NO act on it — no Correct, De-label, Entered in error or Withdraw de-label on a
+/// line, none on a "none known" line — before anything else is decided. (Rust refuses such a
+/// target before the key anyway, `allergy_overlays::target_on`; this keeps the button away.)
+#[test]
+fn a_doubted_charts_line_carries_no_act() {
+    let actions = js_fn(OVERLAYS_JS, "lineActions");
+    let guard = position(actions, "if (line.doubted_chart) return [];");
+    assert!(guard < position(actions, "actionButton("), "{actions}");
+    let nones = js_fn(OVERLAYS_JS, "noneActions");
+    let guard = position(nones, "if (none.doubted_chart) return [];");
+    assert!(guard < position(nones, "actionButton("), "{nones}");
+}
+
+/// TBD-2: a historical (de-labelled) line carries Entered in error aimed at its OWN entry
+/// (`line.event_id`) beside Withdraw de-label (aimed at the de-label), so striking a
+/// de-labelled line is one act, as on paper.
+#[test]
+fn a_historical_line_can_be_struck_in_one_act() {
+    let actions = js_fn(OVERLAYS_JS, "lineActions");
+    let historical = &actions[position(actions, "if (line.challenge) {")..];
+    let historical = &historical[..position(historical, "}\n")];
+    for step in [
+        "actionButton(\"withdraw\", line, (li, opener) => openRetraction(line.challenge, li, opener))",
+        "actionButton(\"error\", line, (li, opener) => openRetraction(line.event_id, li, opener, line))",
+    ] {
+        assert!(historical.contains(step), "{step}: {historical}");
+    }
+}
+
+/// Review I2: Entered in error on a line with earlier versions strikes them too (ruling R-4a), so
+/// its row says so in the page's own words — and, on a line that can be corrected, how to undo a
+/// correction instead. The sentence is hidden by default and shown only for such a line.
+#[test]
+fn striking_a_corrected_line_says_it_strikes_its_earlier_versions() {
+    let template =
+        &INDEX_HTML[position(INDEX_HTML, "<template id=\"allergy-retract-template\">")..];
+    let template = &template[..position(template, "</template>")];
+    assert!(
+        template.contains(
+            "<p class=\"allergy-quiet\" data-note=\"earlier\" hidden>This strikes the line and its \
+             earlier versions.<span data-note=\"undo\"> To undo a correction, press Correct and \
+             record it as it was.</span></p>"
+        ),
+        "{template}"
+    );
+    let open = js_fn(OVERLAYS_JS, "openRetraction");
+    for step in [
+        "const strikesEarlier = Boolean(line) && line.earlier.length > 0;",
+        "row.querySelector('[data-note=\"earlier\"]').hidden = !strikesEarlier;",
+        "row.querySelector('[data-note=\"undo\"]').hidden = !(strikesEarlier && line.words);",
+    ] {
+        assert!(open.contains(step), "{step}: {open}");
+    }
+    // Only an entry's own strike passes its line; a de-label's withdrawal and a none line do not.
+    let nones = js_fn(OVERLAYS_JS, "noneActions");
+    assert!(
+        nones.contains("openRetraction(none.event_id, li, opener)"),
+        "{nones}"
+    );
 }
 
 /// Files under 500 lines (house rule).
