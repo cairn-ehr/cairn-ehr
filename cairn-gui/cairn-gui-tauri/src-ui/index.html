@@ -283,6 +283,33 @@
             <p id="allergy-adverse-label" hidden>Adverse effects:</p>
             <ul id="allergy-adverse" aria-labelledby="allergy-adverse-label" hidden></ul>
             <ul id="allergy-previously" aria-label="Earlier statements" hidden></ul>
+            <!-- Allergy slice 2: what no longer stands, muted and never the sticker. Each line's text
+                 is Rust's and says what it is ("Historically reported: …", "Entered in error: …",
+                 "Not counted: …"); allergies.js draws them. -->
+            <ul id="allergy-historical" aria-label="De-labelled" hidden></ul>
+            <ul id="allergy-entered-in-error" aria-label="Entered in error" hidden></ul>
+            <ul id="allergy-ignored" aria-label="Not counted" hidden></ul>
+            <!-- The inline rows a line's De-label / Entered in error / Withdraw de-label opens under
+                 it (allergy_overlays.js clones one; one open at a time). Never a dialog: the row and
+                 one Sign are the whole act; Escape or Cancel closes it, signing nothing. -->
+            <template id="allergy-delabel-template">
+              <div class="allergy-overlay-row" role="group">
+                <label>Tolerated <input type="text" data-field="tolerated" /></label>
+                <label>When — leave empty if not known <input type="text" data-field="date" size="30" placeholder="2019 · 03/2019 · 14/03/2019" /></label>
+                <label>Note (optional) <input type="text" data-field="text" /></label>
+                <button type="button" class="allergy-write" data-act="sign">Sign</button>
+                <button type="button" data-act="cancel">Cancel</button>
+                <p class="allergy-field-error" role="alert" hidden></p>
+              </div>
+            </template>
+            <template id="allergy-retract-template">
+              <div class="allergy-overlay-row" role="group">
+                <label>Reason (optional) <input type="text" data-field="text" /></label>
+                <button type="button" class="allergy-write" data-act="sign">Sign</button>
+                <button type="button" data-act="cancel">Cancel</button>
+                <p class="allergy-field-error" role="alert" hidden></p>
+              </div>
+            </template>
             <p>
               <button type="button" class="allergy-none" data-scope="all">No known allergies</button>
               <button type="button" class="allergy-none" data-scope="drug">No known drug allergies (NKDA)</button>
@@ -291,6 +318,10 @@
                  toggle buttons (aria-pressed); "Allergy or Adverse effect" and "What happened" start
                  with NOTHING pressed — the clinician chooses (design §3.2's anti-goal). A refusal
                  lands as text under its own field. -->
+            <!-- Shown while the form corrects a line (its Correct button): the line's own text,
+                 and the way out, which empties the form. -->
+            <p id="allergy-correcting" hidden>Correcting: <span id="allergy-correcting-text"></span>
+              <button type="button" id="allergy-correct-cancel">Cancel correction</button></p>
             <form id="allergy-form" autocomplete="off">
               <div class="allergy-choice" data-field="allergen_kind" role="group" aria-labelledby="allergy-allergen-kind-label">
                 <span id="allergy-allergen-kind-label">Allergen:</span>
@@ -539,6 +570,7 @@
     <script src="notes_compound.js"></script>
     <script src="notes.js"></script>
     <script src="notes_discard.js"></script>
+    <script src="allergy_overlays.js"></script>
     <script src="allergies.js"></script>
     <script src="person_menu.js"></script>
     <script src="whos_here.js"></script>

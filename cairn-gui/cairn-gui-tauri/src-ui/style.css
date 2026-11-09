@@ -498,3 +498,20 @@ h1:focus-visible {
   color: var(--warn-fg);
   margin: 0.1rem 0 0.4rem;
 }
+
+/* Allergy slice 2: the one inline row a line's De-label / Entered in error opens under it. It
+   and a line's buttons are the clinician's tools, never part of the red sticker they sit in. */
+.allergy-overlay-row {
+  margin: 0.3rem 0 0.5rem 1rem;
+  color: var(--fg);
+  font-weight: normal;
+}
+
+li > button.allergy-write {
+  font-weight: normal;
+  margin-left: 0.3rem;
+}
+
+.allergy-overlay-row label {
+  display: block;
+}

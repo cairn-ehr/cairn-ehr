@@ -25,6 +25,8 @@ mod allergies;
 #[cfg(test)]
 mod allergies_webview_tests;
 mod allergy_overlays;
+#[cfg(test)]
+mod allergy_overlays_webview_tests;
 mod allergy_pane;
 mod chart_set;
 #[cfg(test)]

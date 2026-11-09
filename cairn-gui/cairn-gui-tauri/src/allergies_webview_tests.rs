@@ -5,7 +5,7 @@
 //! pins the CHOICE or the ORDER a property is. The behaviour was walked headlessly (a stub
 //! `invoke` in a browser) when it was written — see the PR that added this file.
 use crate::allergies::AllergyWrite;
-use crate::allergy_pane::{AllergyLine, AllergyPane};
+use crate::allergy_pane::{AllergyLine, AllergyPane, LineWords};
 use crate::commands::tests::fields_read_in;
 use crate::source_guard::{js_fn, position, rust_fn};
 use std::collections::BTreeSet;
@@ -337,7 +337,16 @@ fn every_field_allergies_js_reads_is_one_rust_sends() {
         chart: String::new(),
         earlier: vec![],
         challenge: None,
-        words: None,
+        words: Some(LineWords {
+            allergen_kind: String::new(),
+            term: String::new(),
+            kind: String::new(),
+            category: String::new(),
+            reaction_text: None,
+            onset_precision: String::new(),
+            onset_value: None,
+            source: String::new(),
+        }),
     };
     let keys = |v: serde_json::Value| -> BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()

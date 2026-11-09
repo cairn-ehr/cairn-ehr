@@ -14,7 +14,11 @@
 // No markup handling, on purpose: allergy text is plaintext end to end, so every line is drawn
 // with `textContent` (main.js's `cell`) and nothing is escaped or parsed.
 //
-// Classic script, loaded after notes_discard.js and before funnel.js (whose boot can clear the
+// Allergy slice 2's gestures on a line (Correct, De-label, Entered in error, Withdraw de-label)
+// are allergy_overlays.js's; this file draws the lines and calls its `lineActions` /
+// `noneActions` for each line's buttons, and its `clearCorrection` when the form is emptied.
+//
+// Classic script, loaded after notes_discard.js and allergy_overlays.js and before funnel.js (whose boot can clear the
 // chart), sharing main.js's global scope (`el`, `cell`, `setMessage`, `invoke`, `refresh`,
 // `displayedPatient`), signer.js's `signerCredential` and `clearSigner`, funnel.js's
 // `failureText` and chart_stale.js's `behindTheRecord` — all read only when a chart is read or a
@@ -93,11 +97,14 @@ function renderAllergies(pane, patient) {
   const named = pane.unreadable > 0 || pane.drug_allergies.concat(pane.other_allergies).some((line) => line.prominent);
   stripSays(pane.strip, named);
   el("allergy-strip-none").hidden = !(pane.drug === "not-yet-asked" && pane.other === "not-yet-asked" && pane.unreadable === 0);
-  fillAllergyList("allergy-standing", pane.standing_none.map((text) => cell("li", text)));
+  fillAllergyList("allergy-standing", pane.standing_none.map((none) => noneItem(none, false)));
   fillAllergyList("allergy-drug", pane.drug_allergies.map(lineItem));
   fillAllergyList("allergy-other", pane.other_allergies.map(lineItem));
   fillAllergyList("allergy-adverse", pane.adverse_effects.map(lineItem));
-  fillAllergyList("allergy-previously", pane.previously_none.map((text) => cell("li", text, { class: "allergy-quiet" })));
+  fillAllergyList("allergy-previously", pane.previously_none.map((none) => noneItem(none, true)));
+  fillAllergyList("allergy-historical", pane.historical.map(lineItem));
+  fillAllergyList("allergy-entered-in-error", pane.entered_in_error.map(withdrawnItem));
+  fillAllergyList("allergy-ignored", pane.ignored_overlays.map((text) => cell("li", text, { class: "allergy-quiet" })));
   syncAllergyButtons();
 }
 
@@ -109,15 +116,39 @@ function stripSays(text, prominent) {
 
 /**
  * One line of an expanded list: Rust's text (a doubted link's mark included), then when and by
- * whom it was recorded. An allergy is prominent, anything else quiet; a line from a chart whose
- * link is in doubt is marked by style too (the text already says it).
+ * whom it was recorded, the line's buttons (allergy_overlays.js), and its older versions as a
+ * muted list under it. An allergy is prominent, anything else quiet (a de-labelled line always
+ * is); a line from a chart whose link is in doubt is marked by style too (the text says it).
  */
 function lineItem(line) {
   const li = cell("li", line.text, { class: line.prominent ? "allergy-prominent" : "allergy-quiet" });
   if (line.doubted_chart) li.classList.add("allergy-doubted");
   const by = line.signer ? " by " + line.signer : "";
   li.append(cell("span", " · recorded " + line.recorded + by, { class: "allergy-quiet" }));
+  li.append(...lineActions(line));
+  if (line.earlier.length > 0) li.append(quietList(line.earlier));
   return li;
+}
+
+/** A "none known" line (`{event_id, text}`), quiet when it is history, with its button. */
+function noneItem(none, quiet) {
+  const li = cell("li", none.text, quiet ? { class: "allergy-quiet" } : {});
+  li.append(...noneActions(none));
+  return li;
+}
+
+/** An "Entered in error: …" line, with the older versions the withdrawn entry had replaced. */
+function withdrawnItem(withdrawn) {
+  const li = cell("li", withdrawn.text, { class: "allergy-quiet" });
+  if (withdrawn.earlier.length > 0) li.append(quietList(withdrawn.earlier));
+  return li;
+}
+
+/** A nested list of Rust's lines ("Earlier: …"), muted: present, never the sticker. */
+function quietList(texts) {
+  const ul = document.createElement("ul");
+  ul.replaceChildren(...texts.map((text) => cell("li", text, { class: "allergy-quiet" })));
+  return ul;
 }
 
 /** Fill list `id` with `items`, hiding it and its label (`<id>-label`, if any) when empty. */
@@ -130,7 +161,16 @@ function fillAllergyList(id, items) {
 
 /** Take every list down (the strip's text is the caller's). */
 function clearAllergyLists() {
-  for (const id of ["allergy-standing", "allergy-drug", "allergy-other", "allergy-adverse", "allergy-previously"]) {
+  for (const id of [
+    "allergy-standing",
+    "allergy-drug",
+    "allergy-other",
+    "allergy-adverse",
+    "allergy-previously",
+    "allergy-historical",
+    "allergy-entered-in-error",
+    "allergy-ignored",
+  ]) {
     fillAllergyList(id, []);
   }
   el("allergy-strip-none").hidden = true;
@@ -154,11 +194,15 @@ function pressChoice(field, value) {
   }
 }
 
-/** Empty the form and press its defaults (`ALLERGY_DEFAULTS`); its refusals go with it. */
+/**
+ * Empty the form and press its defaults (`ALLERGY_DEFAULTS`); its refusals go with it, and so
+ * does a correction (an emptied form corrects nothing).
+ */
 function resetAllergyForm() {
   for (const [field, value] of Object.entries(ALLERGY_DEFAULTS)) pressChoice(field, value);
   for (const id of ["allergy-term", "allergy-reaction-text", "allergy-onset"]) el(id).value = "";
   clearAllergyErrors();
+  clearCorrection();
 }
 
 /** Take down every refusal shown under a field. */
@@ -166,7 +210,10 @@ function clearAllergyErrors() {
   for (const [, id] of FIELD_REFUSALS) setMessage(el(id), "");
 }
 
-/** The entry as typed, in Rust's `EntryInput` shape: wire words, text exactly as typed. */
+/**
+ * The entry as typed, in Rust's `EntryInput` shape: wire words, text exactly as typed, and the
+ * line it corrects (allergy_overlays.js's `allergyCorrecting`; null for a new entry).
+ */
 function typedAllergy() {
   return {
     allergen_kind: pressedChoice("allergen_kind"),
@@ -176,6 +223,7 @@ function typedAllergy() {
     reaction_text: el("allergy-reaction-text").value,
     onset: el("allergy-onset").value,
     source: pressedChoice("source"),
+    corrects: allergyCorrecting,
   };
 }
 
@@ -225,7 +273,9 @@ async function recordNoneKnown(scope) {
 
 /**
  * A write SIGNED (ruling R11: an Ok is always a landed sign). `wasEntry`: it signed the form's
- * entry, which is emptied so it cannot be signed twice. With the list read again (`answer.pane`)
+ * entry, which is emptied so it cannot be signed twice. A correction in the form is emptied by
+ * ANY signed act: the line it names may be gone from the list read back, and clearing only the
+ * correction would leave its words to be signed as a new entry — a duplicate. With the list read again (`answer.pane`)
  * it is drawn. Without it, nothing of the old list may stay up — it lacks what was just signed —
  * so the strip says Rust's outcome (which names "Read this chart again", the way back) and no
  * write can be pressed until a list draws. Nothing is drawn for a chart the clinician has left.
@@ -235,7 +285,7 @@ function afterSigned(answer, patient, wasEntry) {
   // own read in flight must not be outdated by an answer that is not about it.
   if (patient !== displayedPatient) return;
   allergyRevision += 1; // a read sent before this act cannot draw over its answer
-  if (wasEntry) resetAllergyForm();
+  if (wasEntry || allergyCorrecting !== null) resetAllergyForm();
   if (answer.pane === null) {
     allergyCharts = null;
     clearAllergyLists();
@@ -253,10 +303,11 @@ function afterSigned(answer, patient, wasEntry) {
  * chart is read again (its sentence is that re-read's lead, on `#outcome`) and no write is live
  * until it draws; an outcome NOT known (#814) may have recorded the entry, so the form is
  * emptied too — a live Sign over it could record it twice.
- * Any other refusal recorded nothing: shown under its field (`FIELD_REFUSALS`) or on the status
- * line, with what was typed left as it is.
+ * Any other refusal recorded nothing: said by `sayHere` when the act's own row says it (an
+ * overlay's inline row, allergy_overlays.js), else under its field (`FIELD_REFUSALS`) or on the
+ * status line, with what was typed left as it is.
  */
-async function afterRefused(failure, patient, wasEntry) {
+async function afterRefused(failure, patient, wasEntry, sayHere) {
   if (patient !== displayedPatient) return;
   const text = failureText(failure);
   const behind = behindTheRecord(failure);
@@ -269,6 +320,10 @@ async function afterRefused(failure, patient, wasEntry) {
     // Said once, as the re-read's lead on `#outcome`: chart_stale.js keeps it there (a failed
     // re-read is said after it; a read that overtakes this one still says it).
     await refresh(text, behind);
+    return;
+  }
+  if (sayHere) {
+    sayHere(text);
     return;
   }
   const field = FIELD_REFUSALS.find(([fragment]) => text.includes(fragment));
@@ -286,12 +341,16 @@ function allergyMayWrite() {
   return !allergyBusy && allergyCharts !== null && allergyPatient === displayedPatient;
 }
 
-/** Put every write button (Sign, the four "none known") and the text fields in step with the state. */
+/**
+ * Put every write button (Sign, the four "none known", every line's and inline row's
+ * `.allergy-write`) and the text fields in step with the state.
+ */
 function syncAllergyButtons() {
   const down = !allergyMayWrite();
   el("allergy-sign").disabled = down;
-  for (const button of document.querySelectorAll(".allergy-none")) button.disabled = down;
+  for (const button of document.querySelectorAll(".allergy-none, .allergy-write")) button.disabled = down;
   for (const id of ["allergy-term", "allergy-reaction-text", "allergy-onset"]) el(id).readOnly = allergyBusy;
+  for (const input of document.querySelectorAll(".allergy-overlay-row input")) input.readOnly = allergyBusy;
 }
 
 /**
