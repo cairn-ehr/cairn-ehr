@@ -58,9 +58,12 @@
 //! read door the window asks through: whether drugref is there and readable, which drugs and
 //! groups match a typed allergen, and which allergens reach which medications. It is advisory —
 //! it refuses nothing, writes nothing, and answers "nothing" (never an error) when drugref is
-//! absent or unreadable — and nothing in the floor, the projections or the sync path calls it.
-//! So the invariant this guard defends still holds over everything it scans: the floor and the
-//! projections never depend on a drug database. The exemption is ONE exact path
+//! absent or unreadable. This guard proves only HALF of "the floor never depends on drugref":
+//! that nothing else names drugref. Because the door's functions are named without the word,
+//! the other half — no floor, projection or sync-path code CALLS the door — is enforced by
+//! `drug_door_callers.rs` (no `cairn_drug_` call in db/ outside the door, or in extensions/).
+//! Together they keep the invariant: the floor and the projections never depend on a drug
+//! database. The exemption is ONE exact path
 //! (`READ_DOOR`), not a directory or a pattern, and no other file may join it: a second file
 //! that needs drugref belongs in the door (as another door function), so that "what Cairn reads
 //! from drugref" stays one file a reviewer can read whole. The door's own functions are named
