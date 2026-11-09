@@ -372,6 +372,7 @@ pub(crate) fn entry_before_the_key(
         source: word(Source::parse, source)?,
         // Set by the caller once the line it names is found on a fresh read.
         corrects: None,
+        coding: None,
     })
 }
 

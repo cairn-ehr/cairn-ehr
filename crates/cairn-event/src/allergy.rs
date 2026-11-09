@@ -3,6 +3,7 @@
 //!
 //! Each event is signed with a plaintext legibility twin (principle 11); the twin wording
 //! lives here ONCE ([`entry_words_dated`]) so the signed twin and the strip's line cannot drift.
+use crate::medication::SubstanceCoding;
 use serde_json::{json, Value};
 
 /// Event type of one allergy / adverse-effect entry.
@@ -68,6 +69,8 @@ pub struct AllergyEntry<'a> {
     pub source: Source,
     /// The earlier allergy event this entry corrects (`correction-of` ref); `None` for a fresh entry.
     pub corrects: Option<&'a str>,
+    /// The drugref coding of the substance (ADR-0059 shape); `None` writes `coding: null`.
+    pub coding: Option<SubstanceCoding<'a>>,
 }
 
 /// The wire `(precision, value)` of an onset; shared with the challenge date (`allergy_overlay`).
@@ -80,8 +83,8 @@ pub(crate) fn onset_wire(o: &Onset) -> (&'static str, Option<&str>) {
     }
 }
 
-/// Build the `clinical.allergy/1` payload. Keys are frozen; `substance.coding` is a reserved
-/// slot written null (slice 3 fills it, additively). `refs` is `[]` for a fresh entry and
+/// Build the `clinical.allergy/1` payload. Keys are frozen; `substance.coding` is null for an
+/// uncoded entry, else exactly `{system, code, display}` (the shape db/041 checks). `refs` is `[]` for a fresh entry and
 /// exactly one `{rel: "correction-of", event}` for a correction (ADR-0097 decision 1).
 pub fn allergy_payload(e: &AllergyEntry) -> Value {
     let (precision, value) = onset_wire(&e.onset);
@@ -89,9 +92,13 @@ pub fn allergy_payload(e: &AllergyEntry) -> Value {
         Some(id) => json!([{"rel": "correction-of", "event": id}]),
         None => json!([]),
     };
+    let coding = match &e.coding {
+        Some(c) => json!({"system": c.system, "code": c.code, "display": c.display}),
+        None => Value::Null,
+    };
     json!({
         "allergen_kind": e.allergen_kind.as_str(),
-        "substance": {"term": e.term, "coding": null},
+        "substance": {"term": e.term, "coding": coding},
         "kind": e.kind.as_str(),
         "reaction": {"category": e.category.as_str(), "text": e.reaction_text},
         "onset": {"precision": precision, "value": value},
@@ -106,7 +113,7 @@ pub fn allergy_none_payload(scope: NoneScope) -> Value {
 }
 
 /// The reaction phrase. Takes wire words so a newer peer's unknown word reads as itself.
-fn reaction_phrase(category: &str, text: Option<&str>) -> String {
+pub fn reaction_phrase(category: &str, text: Option<&str>) -> String {
     let with_text = |base: &str| match text {
         Some(t) => format!("{base}: {t}"),
         None => base.to_string(),
@@ -198,11 +205,16 @@ pub fn render_allergy_twin(e: &AllergyEntry) -> String {
         e.reaction_text,
         onset,
     );
-    match e.corrects {
+    let twin = match e.corrects {
         // Names its target, as the overlay twins do (legibility across time: the twin alone says
         // which record this one replaces).
         Some(target) => format!("Corrects allergy record {target}: {words}"),
         None => words,
+    };
+    // A coded entry says so (ADR-0059's "coded as" words); an uncoded twin is byte-identical.
+    match &e.coding {
+        Some(c) => format!("{twin} (coded as {} [{}])", c.display, c.system),
+        None => twin,
     }
 }
 
@@ -228,7 +240,46 @@ mod tests {
             onset: Onset::NotKnown,
             source: Source::SeenDocumented,
             corrects: None,
+            coding: None,
         }
+    }
+
+    const PEN_CLASS: &str = "Penicillin-class Antibacterial [EPC]";
+
+    fn coded(code: &str) -> AllergyEntry<'_> {
+        AllergyEntry {
+            coding: Some(SubstanceCoding {
+                system: "drugref-class",
+                code,
+                display: PEN_CLASS,
+            }),
+            ..entry()
+        }
+    }
+
+    #[test]
+    fn a_coded_entrys_payload_carries_the_coding_object() {
+        let code = format!("{:08x}-0000-4000-8000-000000000001", 7u32);
+        let p = allergy_payload(&coded(&code));
+        assert_eq!(
+            p["substance"]["coding"],
+            json!({"system": "drugref-class", "code": code, "display": PEN_CLASS})
+        );
+    }
+
+    #[test]
+    fn a_coded_entrys_twin_says_what_it_is_coded_as() {
+        let twin = render_allergy_twin(&coded("c"));
+        assert!(twin.ends_with(" (coded as Penicillin-class Antibacterial [EPC] [drugref-class])"));
+    }
+
+    #[test]
+    fn an_uncoded_twin_is_unchanged() {
+        assert_eq!(render_allergy_twin(&entry()), "Allergy: penicillin → rash");
+        assert_eq!(
+            allergy_payload(&entry())["substance"]["coding"],
+            Value::Null
+        );
     }
 
     #[test]

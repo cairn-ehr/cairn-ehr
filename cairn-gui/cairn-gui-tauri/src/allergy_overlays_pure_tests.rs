@@ -93,6 +93,7 @@ fn an_interrupted_overlay_is_not_known_and_never_retried() {
         onset: cairn_event::allergy::Onset::NotKnown,
         source: cairn_event::allergy::Source::SeenDocumented,
         corrects: Some(&target),
+        coding: None,
     });
     for (act, lead) in [
         (

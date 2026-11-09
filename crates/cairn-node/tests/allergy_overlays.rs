@@ -29,6 +29,7 @@ fn entry<'a>(term: &'a str, corrects: Option<&'a str>) -> AllergyEntry<'a> {
         onset: Onset::Year("2019".into()),
         source: Source::PatientStated,
         corrects,
+        coding: None,
     }
 }
 

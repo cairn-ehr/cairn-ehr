@@ -81,6 +81,7 @@ async fn chart_with_both(c: &mut Client, term: &str) -> (Node, Uuid, Uuid) {
         onset: Onset::Year("2019".into()),
         source: Source::PatientStated,
         corrects: None,
+        coding: None,
     };
     let none = NoneScope::Drug;
     let bodies = [
