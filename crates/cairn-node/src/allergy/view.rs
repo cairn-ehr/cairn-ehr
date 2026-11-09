@@ -7,7 +7,7 @@
 //! the historical and entered-in-error lines, and finally the `strip` module composes the one-line
 //! strip from those. Vocabulary stays strings (a peer's newer word must still read), so every
 //! `match` here has an "unknown" arm.
-use super::history_words::{challenge_date, historical_text, none_history};
+use super::history_words::{dash_note, delabel_tail, historical_text, none_history};
 use super::read::{AllergyRow, NoneRow, PatientAllergies, RetractionRow};
 use super::strip::{strip_text, Strip};
 use super::thread::{by_words, key_marker, resolve, Head};
@@ -61,6 +61,9 @@ pub struct EnteredInError {
 pub struct NoneLine {
     pub event_id: Uuid,
     pub text: String,
+    /// The statement is on a chart whose link to this one is in doubt (its text says so too): the
+    /// window offers no act on it (review C1 — a possible stranger's line is never struck here).
+    pub doubted_chart: bool,
 }
 
 /// A none line compares to its words, so a test can say `assert_eq!(v.standing_none, ["…"])`.
@@ -274,10 +277,12 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
         .map(|n| NoneLine {
             event_id: n.event_id,
             text: none_history("Previously recorded", n, offset, doubted(n)),
+            doubted_chart: doubted(n),
         })
         .collect();
     let standing = |what: &str, n: &NoneRow| NoneLine {
         event_id: n.event_id,
+        doubted_chart: doubted(n),
         text: format!(
             "{what} — asked {}{}",
             day(n.recorded_at),
@@ -301,23 +306,18 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
         }
     };
     // An older version's line. A counted overlay naming THAT version is said on it (ruling
-    // R-4c): it covers the version only, never the later correction above it, but the
-    // clinician's signed act must not vanish from sight.
+    // R-4c), with its reason or note: it covers the version only, never the later correction
+    // above it, but the clinician's signed act must not vanish from sight.
     let earlier_text = |e: &AllergyRow| {
         let overlay = if let Some(w) = r.withdrawals.get(&e.event_id) {
             format!(
-                " — entered in error {}{}",
+                " — entered in error {}{}{}",
                 day(w.recorded_at),
-                by_words(w.signer.as_deref(), w.key)
+                by_words(w.signer.as_deref(), w.key),
+                dash_note(w.text.as_deref())
             )
         } else if let Some(c) = r.de_labels.get(&e.event_id) {
-            format!(
-                " — de-labelled {}{}: tolerated {}{}",
-                day(c.recorded_at),
-                by_words(c.signer.as_deref(), c.key),
-                c.tolerated,
-                challenge_date(c)
-            )
+            delabel_tail(c, offset)
         } else {
             String::new()
         };
@@ -376,7 +376,11 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
         .historical
         .iter()
         .map(|h| {
-            let text = format!("{}{}", historical_text(h.head, h.challenge), doubt(h.head));
+            let text = format!(
+                "{}{}",
+                historical_text(h.head, h.challenge, offset),
+                doubt(h.head)
+            );
             EntryLine {
                 prominent: false,
                 challenge: Some(h.challenge.event_id),
@@ -384,20 +388,27 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
             }
         })
         .collect();
+    // "(withdrawn 10 Nov 2026 by Dr Ada) — {reason}": who struck it, when, and why.
     let withdrawn = |by: &RetractionRow| {
         format!(
-            "(withdrawn {}{})",
+            "(withdrawn {}{}){}",
             day(by.recorded_at),
-            by_words(by.signer.as_deref(), by.key)
+            by_words(by.signer.as_deref(), by.key),
+            dash_note(by.text.as_deref())
         )
     };
-    // A withdrawn entry keeps its doubt mark and its older versions (A in A←B, B withdrawn).
+    // A withdrawn entry keeps its doubt mark and its older versions (A in A←B, B withdrawn), and
+    // the standing de-label it carried, if any (a de-labelled line struck in one act, TBD-2).
     let struck_entries = r.withdrawn.iter().map(|w| EnteredInError {
         text: format!(
-            "Entered in error: {}{} {}",
+            "Entered in error: {}{} {}{}",
             entry_line_text(w.row),
             doubt(w.row),
-            withdrawn(w.by)
+            withdrawn(w.by),
+            r.de_labels
+                .get(&w.row.event_id)
+                .map(|c| delabel_tail(c, offset))
+                .unwrap_or_default()
         ),
         earlier: w.earlier.iter().map(|e| earlier_text(e)).collect(),
     });
@@ -406,16 +417,20 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
         .iter()
         .map(|w| {
             format!(
-                "Entered in error: de-label — tolerated {} {}",
+                "Entered in error: de-label — tolerated {}{} {}",
                 w.row.tolerated,
+                dash_note(w.row.text.as_deref()),
                 withdrawn(w.by)
             )
         })
-        .chain(
-            r.withdrawn_none
-                .iter()
-                .map(|n| none_history("Entered in error", n, offset, doubted(n))),
-        )
+        .chain(r.withdrawn_none.iter().map(|n| {
+            let reason = r.withdrawals.get(&n.event_id).map(|w| w.text.as_deref());
+            format!(
+                "{}{}",
+                none_history("Entered in error", n, offset, doubted(n)),
+                dash_note(reason.flatten())
+            )
+        }))
         .map(|text| EnteredInError {
             text,
             earlier: vec![],
@@ -470,3 +485,7 @@ mod tests;
 #[cfg(test)]
 #[path = "view_overlay_tests.rs"]
 mod overlay_tests;
+
+#[cfg(test)]
+#[path = "view_history_tests.rs"]
+mod history_tests;

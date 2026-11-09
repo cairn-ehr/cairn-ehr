@@ -110,6 +110,23 @@ pub fn by_words(signer: Option<&str>, key: KeyState) -> String {
     format!("{name}{}", key_marker(key))
 }
 
+/// [`by_words`] for use INSIDE a bracketed byline: `" by Dr Ada, signer unconfirmed"` — the
+/// marker after a comma rather than in brackets of its own, so a byline is bracketed once
+/// ("(de-labelled 9 Nov 2026 by Dr Ada, signer unconfirmed)"). With no name, the marker alone
+/// (`", signer unconfirmed"`). The words are [`key_marker`]'s, stripped of their brackets.
+pub fn by_words_inside(signer: Option<&str>, key: KeyState) -> String {
+    let name = signer.map(|s| format!(" by {s}")).unwrap_or_default();
+    let marker = key_marker(key)
+        .trim_start()
+        .trim_start_matches('(')
+        .trim_end_matches(')');
+    if marker.is_empty() {
+        name
+    } else {
+        format!("{name}, {marker}")
+    }
+}
+
 /// Plan D5: two terms name the same allergen when they match after trimming, collapsing inner
 /// whitespace and Unicode lowercasing. Spelling is not forgiven ("amoxycillin" is not
 /// "amoxicillin"); coded equality is slice 3's.

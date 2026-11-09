@@ -69,7 +69,7 @@ fn a_delabelled_line_reads_historically_reported() {
     assert!(v.drug_allergies.is_empty());
     assert_eq!(
         texts(&v.historical),
-        ["Historically reported: penicillin allergy. Challenged: tolerated amoxicillin Mar 2022 — oral challenge in clinic"]
+        ["Historically reported: penicillin allergy. Challenged: tolerated amoxicillin Mar 2022 (de-labelled 9 Nov 2026 by Dr Ada) — oral challenge in clinic"]
     );
     assert!(!v.historical[0].prominent);
     assert_eq!(v.historical[0].challenge, Some(id(5)));
@@ -81,7 +81,7 @@ fn a_delabelled_line_reads_historically_reported() {
     let v = view(&pa(vec![pen(1, "rash", 8)], vec![], vec![c], vec![]));
     assert_eq!(
         texts(&v.historical),
-        ["Historically reported: penicillin allergy. Challenged: tolerated amoxicillin 14 Mar 2022"]
+        ["Historically reported: penicillin allergy. Challenged: tolerated amoxicillin 14 Mar 2022 (de-labelled 9 Nov 2026 by Dr Ada)"]
     );
     let mut c = challenge(5, 1, 9);
     (c.date_precision, c.date_value) = ("not-known".into(), None);
@@ -90,14 +90,14 @@ fn a_delabelled_line_reads_historically_reported() {
     let v = view(&pa(vec![ae], vec![], vec![c.clone()], vec![]));
     assert_eq!(
         texts(&v.historical),
-        ["Historically reported: metformin adverse effect. Challenged: tolerated metformin"]
+        ["Historically reported: metformin adverse effect. Challenged: tolerated metformin (de-labelled 9 Nov 2026 by Dr Ada)"]
     );
     assert_eq!(v.strip, "Allergies not yet asked · +1 historical");
     let odd = entry(1, "drug", "metformin", "intolerance", "gi-upset", 8);
     let v = view(&pa(vec![odd], vec![], vec![c], vec![]));
     assert_eq!(
         texts(&v.historical),
-        ["Historically reported: metformin intolerance. Challenged: tolerated metformin"]
+        ["Historically reported: metformin intolerance. Challenged: tolerated metformin (de-labelled 9 Nov 2026 by Dr Ada)"]
     );
 }
 
@@ -523,6 +523,6 @@ fn a_historical_line_keeps_a_newer_allergen_kind() {
     let v = view(&pa(vec![peanut], vec![], vec![c], vec![]));
     assert_eq!(
         texts(&v.historical),
-        ["Historically reported: peanut allergy (food). Challenged: tolerated peanut"]
+        ["Historically reported: peanut allergy (food). Challenged: tolerated peanut (de-labelled 9 Nov 2026 by Dr Ada)"]
     );
 }
