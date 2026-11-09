@@ -354,7 +354,7 @@ fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
 /// standing "none known" statement with its signer, for allergies.js to draw.
 #[test]
 fn the_pane_carries_unreadable_records_and_the_standing_statement() {
-    use cairn_node::allergy::read::NoneRow;
+    use cairn_node::allergy::read::{KeyState, NoneRow};
     let chart = Uuid::from_u128(7);
     let at = chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap();
     let a = PatientAllergies {
@@ -366,7 +366,10 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
             recorded_at: at,
             hlc: (at.timestamp_millis(), 0),
             signer: Some("Dr Bea".into()),
+            key: KeyState::Standing,
         }],
+        challenges: vec![],
+        retractions: vec![],
         doubted_charts: vec![],
         unreadable: 1,
     };

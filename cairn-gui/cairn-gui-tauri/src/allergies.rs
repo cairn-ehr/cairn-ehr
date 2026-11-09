@@ -142,6 +142,8 @@ pub async fn allergy_list_impl(
         let empty = PatientAllergies {
             entries: vec![],
             none: vec![],
+            challenges: vec![],
+            retractions: vec![],
             doubted_charts: vec![],
             unreadable: 0,
         };

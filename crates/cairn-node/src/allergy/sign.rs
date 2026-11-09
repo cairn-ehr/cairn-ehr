@@ -1,6 +1,8 @@
-//! Signing an allergy entry or a "none known" statement (ADR-0053: per-write human authorship).
+//! Signing an allergy entry, a "none known" statement, or one of the two overlays — a de-label by
+//! challenge and an entered-in-error withdrawal (ADR-0053: per-write human authorship). A
+//! correction is an entry whose `corrects` names the line it replaces, so it signs as an entry.
 //!
-//! Both build the body the way `note::sign::note_body` does: no `t_effective` (an allergy's time is
+//! All build the body the way `note::sign::note_body` does: no `t_effective` (an allergy's time is
 //! its onset, inside the payload) and no safety signal (design section 4), then hand it to
 //! `seal_sign_submit`, which rewrites the contributors to `[human authored, node recorded]`, signs
 //! and submits through the strict door. This file commits nothing itself, so it is not a
@@ -9,6 +11,12 @@ use cairn_event::allergy::{
     allergy_none_payload, allergy_payload, render_allergy_none_twin, render_allergy_twin,
     AllergyEntry, NoneScope, ALLERGY_EVENT_TYPE, ALLERGY_NONE_EVENT_TYPE,
     ALLERGY_NONE_SCHEMA_VERSION, ALLERGY_SCHEMA_VERSION,
+};
+use cairn_event::allergy_overlay::{
+    allergy_challenge_payload, allergy_retraction_payload, render_allergy_challenge_twin,
+    render_allergy_retraction_twin, AllergyChallenge, AllergyRetraction,
+    ALLERGY_CHALLENGE_EVENT_TYPE, ALLERGY_CHALLENGE_SCHEMA_VERSION, ALLERGY_RETRACTION_EVENT_TYPE,
+    ALLERGY_RETRACTION_SCHEMA_VERSION,
 };
 use cairn_event::{EventBody, Hlc, SigningKey};
 use uuid::Uuid;
@@ -82,6 +90,58 @@ pub async fn sign_allergy_none(
         (ALLERGY_NONE_EVENT_TYPE, ALLERGY_NONE_SCHEMA_VERSION),
         allergy_none_payload(scope),
         render_allergy_none_twin(scope),
+    );
+    seal_sign_submit(client, node_sk, b, Some(author), None).await
+}
+
+/// Sign a de-label by challenge on `patient`'s chart: "tolerated this substance on this date". The
+/// floor (db/075) refuses a target that is not an allergy entry on the same chart.
+pub async fn sign_allergy_challenge(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    challenge: &AllergyChallenge<'_>,
+    author: &AuthorParams<'_>,
+) -> anyhow::Result<Uuid> {
+    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    let b = body(
+        patient,
+        node_kid,
+        hlc,
+        (
+            ALLERGY_CHALLENGE_EVENT_TYPE,
+            ALLERGY_CHALLENGE_SCHEMA_VERSION,
+        ),
+        allergy_challenge_payload(challenge),
+        render_allergy_challenge_twin(challenge),
+    );
+    seal_sign_submit(client, node_sk, b, Some(author), None).await
+}
+
+/// Sign an entered-in-error withdrawal on `patient`'s chart. Its target may be an entry, a "none
+/// known" statement or a de-label on the same chart, never another withdrawal (db/075).
+pub async fn sign_allergy_retraction(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    retraction: &AllergyRetraction<'_>,
+    author: &AuthorParams<'_>,
+) -> anyhow::Result<Uuid> {
+    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    let b = body(
+        patient,
+        node_kid,
+        hlc,
+        (
+            ALLERGY_RETRACTION_EVENT_TYPE,
+            ALLERGY_RETRACTION_SCHEMA_VERSION,
+        ),
+        allergy_retraction_payload(retraction),
+        render_allergy_retraction_twin(retraction),
     );
     seal_sign_submit(client, node_sk, b, Some(author), None).await
 }
