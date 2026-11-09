@@ -37,7 +37,7 @@ pub(super) fn run(
     meds: &[MedLine],
     facts: &DrugFacts,
 ) -> HashMap<Uuid, LineCheck> {
-    check_medications(&resolve(a), meds, facts)
+    check_medications(&resolve(a), meds, facts, a.unreadable > 0)
 }
 
 pub(super) fn facts(pairs: Vec<(u128, u128, Answer)>) -> DrugFacts {

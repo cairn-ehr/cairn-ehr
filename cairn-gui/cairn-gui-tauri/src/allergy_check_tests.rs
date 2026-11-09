@@ -118,7 +118,7 @@ fn a_conflicted_group_is_never_checked_clean() {
         meds.is_empty(),
         "the drug list is not asked about either coding"
     );
-    let checks = check_medications(&resolved, &lines, &DrugFacts::Unavailable);
+    let checks = check_medications(&resolved, &lines, &DrugFacts::Unavailable, false);
     assert_eq!(
         checks.get(&r.group_id),
         Some(&LineCheck {
@@ -321,4 +321,29 @@ fn a_failed_allergy_read_keeps_the_list_and_says_so() {
     assert_eq!(row["allergy_marks"], serde_json::json!([]));
     assert_eq!(row["allergy_notes"], serde_json::json!([]));
     assert_eq!(row["allergy_unverified"], false);
+}
+
+/// #1059, the window's half: `check_list` hands the unreadable count to the check even on the
+/// path that asks the drug list nothing (no connection, no codes). A patient whose only allergy
+/// record this terminal cannot read must not see a clean medication list.
+#[tokio::test]
+async fn an_unreadable_allergy_record_leaves_current_lines_not_checked() {
+    let a = PatientAllergies {
+        entries: vec![],
+        none: vec![],
+        challenges: vec![],
+        retractions: vec![],
+        doubted_charts: vec![],
+        unreadable: 1,
+    };
+    let mut list = sample_chart();
+    list.rows = vec![row(1, "Amoxil", None)];
+    let checks = check_list(None::<&tokio_postgres::Client>, &a, &list).await;
+    assert_eq!(
+        checks.get(&Uuid::from_u128(1)),
+        Some(&LineCheck {
+            unverified: true,
+            ..LineCheck::default()
+        })
+    );
 }

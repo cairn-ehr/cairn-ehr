@@ -17,7 +17,8 @@
 //!   peer's newer word this build does not know, counts as an allergy (over-warning).
 //! - **"Not checked"** (D8) when the line has no mark and some live ALLERGY could not be
 //!   verified against it: either side uncoded, no drug list, an `unplaced` answer (any reason,
-//!   ruling R1), or no answer at all. Only `no-match` is a verified negative (R2). Adverse
+//!   ruling R1), or no answer at all — or the patient holds an allergy record this terminal
+//!   cannot read at all (#1059: it has no head, but it may be the allergen). Only `no-match` is a verified negative (R2). Adverse
 //!   effects never make a line "not checked" (R3).
 //!
 //! Every live head counts (D9): a doubted chart's and a suspect key's too. Ceased lines are never
@@ -224,8 +225,14 @@ fn per_allergen(
     out
 }
 
-/// One current line against the sorted live drug heads.
-fn check_line(heads: &[&AllergyRow], line: &MedLine, facts: &DrugFacts) -> LineCheck {
+/// One current line against the sorted live drug heads. `unread_records`: the patient holds an
+/// allergy record this terminal cannot read (#1059), which may be the allergen.
+fn check_line(
+    heads: &[&AllergyRow],
+    line: &MedLine,
+    facts: &DrugFacts,
+    unread_records: bool,
+) -> LineCheck {
     let (adverse, allergies): (Vec<&AllergyRow>, Vec<&AllergyRow>) = heads
         .iter()
         .copied()
@@ -239,7 +246,8 @@ fn check_line(heads: &[&AllergyRow], line: &MedLine, facts: &DrugFacts) -> LineC
         let reaction = reaction_phrase(&worst.category, worst.reaction_text.as_deref());
         format!("Previous adverse effect: {} → {reaction}", hit.term)
     });
-    let unverified = marks.is_empty() && allergy_pairs.contains(&Pair::Unverified);
+    let unverified =
+        marks.is_empty() && (unread_records || allergy_pairs.contains(&Pair::Unverified));
     LineCheck {
         marks,
         notes,
@@ -249,6 +257,10 @@ fn check_line(heads: &[&AllergyRow], line: &MedLine, facts: &DrugFacts) -> LineC
 
 /// Check every current line (D7, D8, D9). A line with nothing to say has no key.
 ///
+/// `unread_records` is `PatientAllergies::unreadable > 0`: an allergy record this terminal holds
+/// but cannot read has no head to pair with, yet it may be the allergen, so every current line
+/// without a mark reads "not checked" (#1059) — the strip already says a record cannot be read.
+///
 /// A head of a kind this build does not know (neither `allergy` nor `adverse-effect`, a peer's
 /// newer word) is treated as an allergy: it may mark, and it may leave a line "not checked".
 /// Over-warning is the safe error.
@@ -256,11 +268,12 @@ pub fn check_medications(
     r: &Resolved,
     meds: &[MedLine],
     facts: &DrugFacts,
+    unread_records: bool,
 ) -> HashMap<Uuid, LineCheck> {
     let heads = drug_heads(r);
     meds.iter()
         .filter(|m| m.current)
-        .map(|m| (m.group_id, check_line(&heads, m, facts)))
+        .map(|m| (m.group_id, check_line(&heads, m, facts, unread_records)))
         .filter(|(_, c)| *c != LineCheck::default())
         .collect()
 }

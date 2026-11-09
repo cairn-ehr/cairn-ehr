@@ -170,3 +170,34 @@ fn an_allergen_coded_under_another_system_is_not_checked() {
     assert_eq!(run(&a, &meds, &f)[&id(900)], not_checked());
     assert!(codes_to_ask(&resolve(&a), &meds).0.is_empty());
 }
+
+/// #1059: an allergy record this terminal cannot read (a body it cannot decrypt, a peer's newer
+/// type) has no head, so nothing would pair with a line and every line would read clean while the
+/// strip says a record cannot be read. The unread record may be the allergen: every current line
+/// with no mark reads "not checked"; a ceased line is still never checked, and a marked line
+/// keeps its mark and no tag.
+#[test]
+fn an_unreadable_record_leaves_every_current_line_not_checked() {
+    let mut a = only(vec![]);
+    a.unreadable = 1;
+    let ceased = MedLine {
+        current: false,
+        ..med(901, "amoxicillin", Some(AMOX))
+    };
+    let meds = [med(900, "paracetamol", Some(PARACETAMOL)), ceased];
+    let got = run(&a, &meds, &facts(vec![]));
+    assert_eq!(got[&id(900)], not_checked());
+    assert!(
+        !got.contains_key(&id(901)),
+        "a ceased line is never checked"
+    );
+
+    // A readable allergy that marks the line still marks it, with no tag beside it.
+    let mut a = only(vec![pen(1, "rash", 1)]);
+    a.unreadable = 1;
+    let got = run(&a, &[med(900, "penicillin", None)], &DrugFacts::Unavailable);
+    assert_eq!(
+        got[&id(900)],
+        marks(&["Allergy recorded: penicillin → rash"])
+    );
+}

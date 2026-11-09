@@ -194,7 +194,8 @@ pub fn med_lines(rows: &[MedicationRow]) -> Vec<MedLine<'_>> {
 /// connection to ask). A failed facts read is `DrugFacts::Unavailable` (T2R-b): the door can
 /// raise for a drug list the door's owner can only partly read, and that must leave lines "not
 /// checked", never fail the pane. Nothing is asked when one side has no codes: every pair would
-/// be unverified either way.
+/// be unverified either way. An allergy record this terminal cannot read (`a.unreadable`) leaves
+/// every unmarked current line "not checked" on either path (#1059).
 pub(crate) async fn check_list(
     c: Option<&impl GenericClient>,
     a: &PatientAllergies,
@@ -214,7 +215,7 @@ pub(crate) async fn check_list(
         }
         _ => DrugFacts::Unavailable,
     };
-    check_medications(&r, &lines, &facts)
+    check_medications(&r, &lines, &facts, a.unreadable > 0)
 }
 
 /// The allergy rows the medication check may use: those of `read`, when it worked AND was read
