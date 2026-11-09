@@ -66,16 +66,28 @@ pub struct AllergyEntry<'a> {
     pub reaction_text: Option<&'a str>,
     pub onset: Onset,
     pub source: Source,
+    /// The earlier allergy event this entry corrects (`correction-of` ref); `None` for a fresh entry.
+    pub corrects: Option<&'a str>,
 }
 
-/// Build the `clinical.allergy/1` payload. Keys are frozen; `substance.coding` and `refs`
-/// are reserved slots written empty so filling them later is additive.
-pub fn allergy_payload(e: &AllergyEntry) -> Value {
-    let (precision, value) = match &e.onset {
+/// The wire `(precision, value)` of an onset; shared with the challenge date (`allergy_overlay`).
+pub(crate) fn onset_wire(o: &Onset) -> (&'static str, Option<&str>) {
+    match o {
         Onset::Day(v) => ("day", Some(v)),
         Onset::Month(v) => ("month", Some(v)),
         Onset::Year(v) => ("year", Some(v)),
         Onset::NotKnown => ("not-known", None),
+    }
+}
+
+/// Build the `clinical.allergy/1` payload. Keys are frozen; `substance.coding` is a reserved
+/// slot written null (slice 3 fills it, additively). `refs` is `[]` for a fresh entry and
+/// exactly one `{rel: "correction-of", event}` for a correction (ADR-0097 decision 1).
+pub fn allergy_payload(e: &AllergyEntry) -> Value {
+    let (precision, value) = onset_wire(&e.onset);
+    let refs = match e.corrects {
+        Some(id) => json!([{"rel": "correction-of", "event": id}]),
+        None => json!([]),
     };
     json!({
         "allergen_kind": e.allergen_kind.as_str(),
@@ -84,7 +96,7 @@ pub fn allergy_payload(e: &AllergyEntry) -> Value {
         "reaction": {"category": e.category.as_str(), "text": e.reaction_text},
         "onset": {"precision": precision, "value": value},
         "source": e.source.as_str(),
-        "refs": [],
+        "refs": refs,
     })
 }
 
@@ -174,20 +186,24 @@ pub fn entry_words_dated(
 
 /// The signed plaintext twin of an entry, its onset in ISO form (`2014`, `2019-03`,
 /// `2019-03-04`) and nothing when not known (ruling R17: what the twin omits on the first real
-/// entry it omits for good, principle 11).
+/// entry it omits for good, principle 11). A correction's twin is
+/// `"Corrects allergy record {target}: "` followed by the same words.
 pub fn render_allergy_twin(e: &AllergyEntry) -> String {
-    let onset = match &e.onset {
-        Onset::Day(v) | Onset::Month(v) | Onset::Year(v) => Some(v.as_str()),
-        Onset::NotKnown => None,
-    };
-    entry_words_dated(
+    let onset = onset_wire(&e.onset).1;
+    let words = entry_words_dated(
         e.kind.as_str(),
         e.source.as_str(),
         e.term,
         e.category.as_str(),
         e.reaction_text,
         onset,
-    )
+    );
+    match e.corrects {
+        // Names its target, as the overlay twins do (legibility across time: the twin alone says
+        // which record this one replaces).
+        Some(target) => format!("Corrects allergy record {target}: {words}"),
+        None => words,
+    }
 }
 
 /// The signed plaintext twin of a "none" assertion.
@@ -211,7 +227,35 @@ mod tests {
             reaction_text: None,
             onset: Onset::NotKnown,
             source: Source::SeenDocumented,
+            corrects: None,
         }
+    }
+
+    #[test]
+    fn correction_writes_one_correction_of_ref() {
+        let mut e = entry();
+        e.corrects = Some("E1");
+        assert_eq!(
+            allergy_payload(&e)["refs"],
+            serde_json::json!([{"rel": "correction-of", "event": "E1"}])
+        );
+    }
+
+    #[test]
+    fn correction_twin_says_it_corrects() {
+        let mut e = entry();
+        e.corrects = Some("E1");
+        assert_eq!(
+            render_allergy_twin(&e),
+            "Corrects allergy record E1: Allergy: penicillin → rash"
+        );
+    }
+
+    #[test]
+    fn uncorrected_entry_keeps_empty_refs_and_twin() {
+        let e = entry();
+        assert_eq!(allergy_payload(&e)["refs"], serde_json::json!([]));
+        assert_eq!(render_allergy_twin(&e), "Allergy: penicillin → rash");
     }
 
     #[test]

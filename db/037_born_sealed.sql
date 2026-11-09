@@ -366,6 +366,14 @@ BEGIN
         IF to_regclass('public.clinical_allergy_none') IS NOT NULL THEN
             DELETE FROM clinical_allergy_none WHERE content_address = v_ca;
         END IF;
+        -- The allergy overlays (db/075, allergy slice 2): a de-label's tolerated term and text,
+        -- and a withdrawal's reason, are clinical plaintext too. Guarded the same way.
+        IF to_regclass('public.clinical_allergy_challenge') IS NOT NULL THEN
+            DELETE FROM clinical_allergy_challenge WHERE content_address = v_ca;
+        END IF;
+        IF to_regclass('public.clinical_allergy_retraction') IS NOT NULL THEN
+            DELETE FROM clinical_allergy_retraction WHERE content_address = v_ca;
+        END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;

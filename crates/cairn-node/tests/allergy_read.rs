@@ -20,6 +20,7 @@ fn entry(term: &str) -> AllergyEntry<'_> {
         reaction_text: None,
         onset: Onset::Year("2019".into()),
         source: Source::PatientStated,
+        corrects: None,
     }
 }
 

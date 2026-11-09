@@ -4,7 +4,8 @@
 //! like `notes_webview_tests.rs`, each guard reads the script's source (`crate::source_guard`) and
 //! pins the CHOICE or the ORDER a property is. The behaviour was walked headlessly (a stub
 //! `invoke` in a browser) when it was written — see the PR that added this file.
-use crate::allergies::{AllergyLine, AllergyPane, AllergyWrite};
+use crate::allergies::AllergyWrite;
+use crate::allergy_pane::{AllergyLine, AllergyPane, LineWords};
 use crate::commands::tests::fields_read_in;
 use crate::source_guard::{js_fn, position, rust_fn};
 use std::collections::BTreeSet;
@@ -287,6 +288,11 @@ fn a_chart_change_empties_the_form_and_outdates_every_read() {
 #[test]
 fn every_field_refusal_is_announced_and_describes_its_control() {
     for (error, control) in [
+        (
+            "allergy-allergen-kind-error",
+            "data-field=\"allergen_kind\"",
+        ),
+        ("allergy-source-error", "data-field=\"source\""),
         ("allergy-term-error", "id=\"allergy-term\""),
         ("allergy-kind-error", "data-field=\"kind\""),
         ("allergy-category-error", "data-field=\"category\""),
@@ -333,6 +339,19 @@ fn every_field_allergies_js_reads_is_one_rust_sends() {
         doubted_chart: false,
         signer: None,
         recorded: String::new(),
+        chart: String::new(),
+        earlier: vec![],
+        challenge: None,
+        words: Some(LineWords {
+            allergen_kind: String::new(),
+            term: String::new(),
+            kind: String::new(),
+            category: String::new(),
+            reaction_text: None,
+            onset_precision: String::new(),
+            onset_value: None,
+            source: String::new(),
+        }),
     };
     let keys = |v: serde_json::Value| -> BTreeSet<String> {
         v.as_object().expect("an object").keys().cloned().collect()
@@ -348,6 +367,9 @@ fn every_field_allergies_js_reads_is_one_rust_sends() {
         previously_none: vec![],
         standing_none: vec![],
         unreadable: 0,
+        historical: vec![],
+        entered_in_error: vec![],
+        ignored_overlays: vec![],
         charts: vec![],
     };
     let pane_keys = keys(serde_json::to_value(&pane).unwrap());
@@ -414,7 +436,7 @@ fn allergies_js_stays_small() {
 #[test]
 fn a_landed_sign_hands_its_reread_to_written_never_to_a_question_mark() {
     let f = rust_fn(ALLERGIES_RS, "sign_then_reread");
-    let landed = &f[position(f, "signed.map_err(|e| sign_failure(&e))?;")..];
+    let landed = &f[position(f, "signed.map_err(|e| sign_failure(&e, &act))?;")..];
     let after = &landed[landed.find(';').unwrap() + 1..];
     assert!(
         !after.contains('?'),

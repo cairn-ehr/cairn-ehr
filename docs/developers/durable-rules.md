@@ -10,7 +10,148 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ ALLERGY SLICE 2 — OVERLAYS AND DIFFERING ACCOUNTS (ADR-0097, db/075, db/074 + db/037 + db/044 in place) — do not undo**
+(pins: `db/tests/075_allergy_overlays_test.sql`, `crates/cairn-event/src/{allergy,allergy_overlay}.rs`'s tests,
+`crates/cairn-node/src/allergy/{thread_tests,view_overlay_tests,view_history_tests}.rs`, `crates/cairn-node/src/allergy/read.rs`'s tests,
+`crates/cairn-node/tests/{allergy_overlay_floor,allergy_overlays,window_role_grants}.rs`,
+`cairn-gui/cairn-gui-tauri/src/{allergy_overlays,allergy_overlays_pure,allergy_overlays_webview,allergies}_tests.rs`).
+Every slice-1 rule below still holds.
+- **No act from this chart on a line from a chart whose link to it is in DOUBT** (the final review's C1; ADR-0097
+  decision 25). Such a line is shown and marked only because over-warning is the safe error — it may be a stranger's.
+  `lineActions` / `noneActions` draw no button on a line with `doubted_chart`, and `allergy_overlays::target_on`
+  refuses any target on `doubted_charts` (a live line, a historical line's entry or de-label, a "none known" line, a
+  Correct) before the key: "This line is on a chart whose link to this one is in doubt — open that chart, or settle
+  the link, to change it." **Tempting wrong fix:** "let the clinician correct what they can see" — a clinician on the
+  wrong half of a doubted link strikes the stranger's anaphylaxis, on the stranger's own chart (D2 files it there),
+  and the stranger's next prescriber is never warned. Pins: `allergy_overlays_pure_tests.rs::a_target_on_a_doubted_chart_is_refused_before_the_key`;
+  `allergy_overlays_tests.rs::an_act_on_a_doubted_charts_line_is_refused_before_the_key`;
+  `allergy_overlays_webview_tests.rs::a_doubted_charts_line_carries_no_act`;
+  `view_history_tests.rs::a_none_line_says_when_its_chart_is_doubted`.
+- **An overlay covers the version it NAMES and the versions that one replaced — never a later correction of it**
+  (ruling R-4a; `thread::resolve` decides status per head). A withdrawal or de-label of A leaves a correction B of A
+  live, concurrent or later; the overlay is said on A's "Earlier:" line instead (R-4c). **Tempting wrong fix:** make
+  overlays thread-level "so a de-label sticks to every version" (the plan's D1): Dr Y, offline, strikes the rash line
+  while Dr X corrects it to anaphylaxis, and the anaphylaxis leaves the strip — an under-warning. Second wrong fix:
+  drop the overlay from the "Earlier:" line "because it changes nothing" (a signed act vanishes from sight). Pins:
+  `view_overlay_tests.rs::withdrawing_an_older_version_leaves_a_later_correction_live`,
+  `a_correction_after_a_delabel_reads_live_again`, `withdrawing_a_version_covers_it_and_what_it_replaced`,
+  `an_overlay_on_an_older_version_is_shown_on_its_earlier_line`;
+  `thread_tests.rs::status_is_per_head_and_withdrawn_outranks_historical`.
+- **A SUSPECT overlay counts only when it ADDS a warning** (ruling R-4b; `thread::overlay_counts`). Suspect = signed
+  by a since-repudiated or DOUBTFUL key (`KeyState::is_suspect`; doubtful = unconfirmed and an approver since
+  repudiated, the final review's I1), or naming a row on another chart than its own. Its withdrawal of a de-label or of a "none
+  known" statement counts; its de-label and its withdrawal of an entry are "Not counted: …". **Tempting wrong fixes:**
+  ignore every suspect overlay "for symmetry" (a withdrawal of a de-label whose key is repudiated later is dropped,
+  and the allergy it put back leaves the strip again — an under-warning); count every one (a stolen key strikes an
+  anaphylaxis). Pins: `view_overlay_tests.rs::a_repudiated_keys_withdrawal_takes_nothing_away`,
+  `a_repudiated_keys_withdrawal_of_a_delabel_counts`, `a_repudiated_keys_withdrawal_of_a_none_statement_counts`,
+  `a_cross_chart_withdrawal_of_a_none_statement_counts`, `a_doubtful_keys_none_statement_does_not_stand`;
+  `thread_tests.rs::a_repudiated_keys_overlays_count_for_nothing`, `an_overlay_naming_another_charts_event_is_ignored`,
+  `a_doubtful_keys_overlays_count_only_to_add_a_warning`.
+- **A repudiated (or doubtful) key never takes a warning away elsewhere either** (D4, I1). Its correction links to
+  nothing (an account of its own, flagged as differing when it disagrees); its "none known" statement stands for no
+  list; its entry is listed and warns, marked " (key had been repudiated)" — a doubtful key's " (signer
+  unconfirmed)", the note view's word. An unconfirmed key's acts count, marked " (signer unconfirmed)". **Tempting
+  wrong fixes:** hide a repudiated key's entry "because the key is bad" (a possibly real allergy disappears; a key
+  that may be a thief's is only ever allowed to add a warning); fold `doubtful` into `Unconfirmed` "because they share
+  a marker" (a key enrolled by a thief strikes an anaphylaxis and it counts). Pins: `thread_tests.rs::a_repudiated_keys_correction_is_its_own_account`;
+  `view_overlay_tests.rs::a_repudiated_keys_none_statement_does_not_stand`, `an_unconfirmed_signer_counts_and_is_marked`.
+- **An overlay is filed under its TARGET's chart** (D2). The authoring door refuses a target on another chart
+  (db/075 `cairn_allergy_target_type`, db/074 step 3), the window signs under the target row's chart, and the reader
+  links no correction across charts. **Tempting wrong fix:** sign under the chart on screen "because that is the
+  chart the clinician opened" — a linked chart's correction then lands on the wrong patient (the #689 failure), and
+  the floor refuses it anyway. Pins: `075_allergy_overlays_test.sql` section 2 (`foreign_entry_id` lines);
+  `allergy_overlay_floor.rs::the_authoring_door_refuses_wrong_targets_and_words`;
+  `allergy_overlays_tests.rs::correct_files_under_the_targets_chart`;
+  `allergy_overlays_pure_tests.rs::a_target_names_only_what_its_act_may_name`;
+  `thread_tests.rs::a_correction_naming_another_charts_entry_is_its_own_root`.
+- **A withdrawal is never withdrawn** (D3). The floor refuses it with its own message, the resolver never looks a
+  withdrawal up as a target, and an "Entered in error" line carries no button; a wrong withdrawal is repaired by
+  recording the entry again. A de-label CAN be withdrawn (M3: the allergy comes back). **Tempting wrong fix:** an
+  "undo" button on a struck line (an undo chain no reader can fold safely across a partition). Pins:
+  `075_allergy_overlays_test.sql` section 2 (`a withdrawal is never itself withdrawn`);
+  `allergy_overlay_floor.rs::the_authoring_door_refuses_wrong_targets_and_words`;
+  `view_overlay_tests.rs::withdrawing_a_delabel_puts_the_allergy_back`.
+- **"Same allergen" is case- and whitespace-folded text, nothing more; and the reader never trusts `refs` blindly**
+  (D5, D6). `same_allergen` folds Unicode case and whitespace only; `accounts_differ` never fires on `not-known`, on
+  a word this build does not know, or on a duplicate — except between sibling heads of one thread (a fork of
+  concurrent corrections), which differ whenever their words do, a renamed allergen included. The remote door checks only that `refs` is an array, and
+  `corrects_of` ignores any ref it cannot parse (the entry reads uncorrected, which over-warns). **Tempting wrong
+  fixes:** fuzzy-match spelling ("amoxycillin" ~ "amoxicillin") — that is coded equality, slice 3's, and a fuzzy
+  match calls different drugs one; check `refs` contents at the remote door (a peer's newer `rel` wedges sync,
+  ADR-0056); fail the read on a malformed ref (the whole list stops reading). Pins:
+  `thread_tests.rs::same_allergen_ignores_case_and_spacing_not_spelling`,
+  `not_known_never_differs_and_duplicates_do_not_differ`, `an_allergy_and_an_adverse_effect_on_one_allergen_differ`, `a_fork_that_renames_the_allergen_is_still_differing_accounts`;
+  `view_overlay_tests.rs::the_strip_marks_differing_accounts`; `read.rs::tests::corrects_of_takes_the_first_parseable_correction_ref`;
+  `075_allergy_overlays_test.sql` section 4.
+- **A de-labelled line overrides nothing and is never prominent.** It reads "Historically reported: …", is counted
+  "+N historical" on the strip, and a "none known" statement beside it stands. **Tempting wrong fix:** let it
+  override "none known" "because an allergy was once recorded" (the patient's "No known allergies" stops standing
+  because of an allergy the record says was tolerated). Pin: `view_overlay_tests.rs::a_delabelled_allergy_overrides_no_none_statement`.
+- **Blank overlay text is JSON null in the payload, and no tail in the twin** (`allergy_overlay::present`). **Tempting
+  wrong fix:** write the text "as typed" (a sealed body then carries a value its own signed twin calls absent).
+  The floor does not check it: a raw client's blank string is admitted. Pins: `allergy_overlay.rs::tests::blank_text_is_null_in_payload`,
+  `challenge_twin_words_are_exact`; `075_allergy_overlays_test.sql` section 1 (blank text accepted).
+- **The line an act names must be on a FRESH read before the key** (`allergy_overlays::target_before_the_key`). A
+  line corrected, de-labelled or withdrawn elsewhere is refused "That allergy line is no longer on this chart — read
+  it again." **Tempting wrong fix:** trust the event id the window sent (a de-label lands on a line already struck).
+  The gap between that read and the sign is deliberate and safe (ADR-0097 (i), said in `target_before_the_key`'s
+  doc); second wrong fix: close it with a lock held across the key (it serialises the terminal behind one
+  clinician's passphrase and KDF, and closes nothing a partitioned peer cannot reopen). Pins:
+  `allergy_overlays_tests.rs::a_target_not_in_the_fresh_read_is_refused_before_the_key`;
+  `allergy_overlays_pure_tests.rs::a_target_names_only_what_its_act_may_name`.
+- **A correction whose line left the list is SUSPENDED, never re-sent** (ruling R-6a). On any draw where
+  `allergyCorrecting` is not a live line — or is one on a doubted chart (no act there; Rust refuses it) — the typed
+  words stay, *Sign* is down, and the page's sentence says why;
+  Correct on a line or Cancel correction ends it. And any signed act empties a correction in the form. **Tempting
+  wrong fixes:** keep re-sending it (refused, re-read, refused — a livelock); drop `corrects` and keep the words (they
+  sign as a NEW entry: a duplicate); clear only the "Correcting" label after a de-label or withdrawal (the same
+  duplicate). Pins: `allergy_overlays_webview_tests.rs::a_correction_whose_target_left_the_pane_is_suspended_not_resent`,
+  `correct_prefills_and_sends_corrects`.
+- **A refusal is said where the clinician can see it.** An inline row's refusal goes into the row only while the row
+  is on screen (`said.isConnected`); a list drawn mid-press (a hold timer, another pane's act, "Read this chart
+  again") has detached it, and the status line says it instead. **Tempting wrong fix:** always write into the row
+  (it vanishes, which is what success looks like). Pin:
+  `allergy_overlays_webview_tests.rs::a_refusal_after_a_redraw_mid_press_is_said_on_the_status_line`.
+- **`allergen_kind` and `source` are optional in `EntryInput`, refused before the key when missing.** Correct presses
+  only a button whose word is the recorded word, so a newer peer's allergen kind or source stays unpressed. **Tempting
+  wrong fixes:** make them `String` again (Tauri rejects the `null`, read as "could not reach its backend"); default
+  an unknown word to Drug / Patient stated (the correction silently changes what was recorded); send the unknown word
+  back. Pins: `allergies_tests.rs::record_refuses_a_missing_allergen_kind_before_the_key`,
+  `record_refuses_a_missing_source_before_the_key`; `allergy_overlays_webview_tests.rs::correct_prefills_and_sends_corrects`.
+- **Each history list has its own heading** ("Previously recorded:", "Historically reported (de-labelled):", "Entered
+  in error:", "Not counted:"), hidden with its list. **Tempting wrong fix:** drop the headings or merge the lists "to
+  save space" (a struck line then sits under "Other allergies:" and reads as a current allergy). Pin:
+  `allergy_overlays_webview_tests.rs::every_history_list_has_its_own_heading`.
+- **A correction is timed as `allergy-correct`, never `allergy-record`** (`Act::timing_kind`; db/044's three new
+  kinds). **Tempting wrong fix:** time it as `allergy-record` "because a correction IS an entry" — its samples then
+  mix into the record gesture's, whose budget differs, and the correction's own ≤ 15 s budget can never be read off
+  the table. Pins: `allergy_overlays_tests.rs::each_act_is_timed_with_its_own_kind`; `075_allergy_overlays_test.sql`
+  (`the_three_overlay_gesture_kinds_are_accepted`).
+- **No signed act vanishes from the list's words** (the slice ledger's rulings, and its withdrawal-reason gap;
+  ADR-0097 decisions 15, 18, 19). A historical line names its de-labeller and the day they signed, "(de-labelled
+  {day} by {name})", the key's marker inside that one bracket (`thread::by_words_inside`); a withdrawal's reason and
+  a de-label's note are shown wherever their act is worded; a de-labelled line struck as entered in error (one act,
+  Entered in error on the historical line, aimed at its entry) still says its de-label. **Tempting wrong fixes:** drop
+  the de-label from a struck line "because the line is struck anyway" (the allergist's signed challenge disappears
+  from the chart); word the marker with `by_words` inside the bracket (nested brackets, "(… by Dr Ada (signer
+  unconfirmed))"); offer only *Withdraw de-label* on a historical line again (striking it takes two acts, and the
+  allergy flashes back onto the strip between them). Pins: `view_history_tests.rs` (every test);
+  `allergy_overlays_pure_tests.rs::a_target_names_only_what_its_act_may_name`;
+  `allergy_overlays_tests.rs::a_delabelled_line_is_struck_in_one_act`;
+  `allergy_overlays_webview_tests.rs::a_historical_line_can_be_struck_in_one_act`.
+- **De-label's *Tolerated* starts EMPTY; a strike of a corrected line says it strikes the earlier versions too**
+  (the final review's M3 and I2). **Tempting wrong fixes:** prefill *Tolerated* with the line's term "to save typing"
+  (a "tolerated penicillin" is signed by default against a penicillin line when the drug actually challenged was
+  amoxicillin); drop the retract row's sentence "because the floor allows it" (a clinician striking a mistaken
+  correction silently strikes the original allergy with it). Whether a withdrawal of a correction should instead
+  re-expose its predecessor is a maintainer decision (#1046), not a tidy-up. Pins:
+  `allergy_overlays_webview_tests.rs::delabel_and_withdraw_rows_are_inline_not_dialogs`,
+  `striking_a_corrected_line_says_it_strikes_its_earlier_versions`.
+
 **⇒ ALLERGY SLICE 1 — THE STREAM AND THE STRIP (ADR-0096, db/074, db/037 + db/044 in place) — do not undo**
+(Since slice 2, ADR-0096 decision 5's reserved-empty `refs` is open: db/074 step 3 admits a correction's one
+`correction-of` ref at the authoring door — ADR-0097 decision 6, and the block above. The rules below are unchanged.)
 (pins: `db/tests/074_clinical_allergy_test.sql`, `crates/cairn-event/src/allergy.rs`'s tests,
 `crates/cairn-node/src/allergy/view_tests.rs`, `crates/cairn-node/tests/{allergy_floor,allergy_sign,allergy_read,window_role_grants}.rs`,
 `cairn-gui/cairn-gui-tauri/src/{allergies,allergies_webview}_tests.rs`):

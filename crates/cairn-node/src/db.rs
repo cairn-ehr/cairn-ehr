@@ -472,6 +472,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "074_clinical_allergy",
         include_str!("../../../db/074_clinical_allergy.sql"),
     ),
+    // db/075 (allergy slice 2): the two allergy overlays — a de-label by challenge and an
+    // entered-in-error withdrawal — floor, projections (the shred hook lives in db/037). The
+    // third overlay, a correction, is db/074's entry with a `correction-of` ref.
+    (
+        "075_allergy_overlays",
+        include_str!("../../../db/075_allergy_overlays.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

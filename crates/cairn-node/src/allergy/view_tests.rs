@@ -1,6 +1,6 @@
 //! Pure tests for the allergy strip / list view. No database.
 use super::*;
-use crate::allergy::read::{AllergyRow, NoneRow, PatientAllergies};
+use crate::allergy::read::{AllergyRow, KeyState, NoneRow, PatientAllergies};
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 
 fn bne() -> FixedOffset {
@@ -31,6 +31,8 @@ fn entry(n: u128, ak: &str, term: &str, kind: &str, cat: &str, day: u32) -> Alle
         recorded_at: at(day),
         hlc: hlc(at(day)),
         signer: None,
+        corrects: None,
+        key: KeyState::Standing,
     }
 }
 fn none(n: u128, scope: &str, day: u32) -> NoneRow {
@@ -41,12 +43,15 @@ fn none(n: u128, scope: &str, day: u32) -> NoneRow {
         recorded_at: at(day),
         hlc: hlc(at(day)),
         signer: None,
+        key: KeyState::Standing,
     }
 }
 fn pa(entries: Vec<AllergyRow>, none: Vec<NoneRow>) -> PatientAllergies {
     PatientAllergies {
         entries,
         none,
+        challenges: vec![],
+        retractions: vec![],
         doubted_charts: vec![],
         unreadable: 0,
     }

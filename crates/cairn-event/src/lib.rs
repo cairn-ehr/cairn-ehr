@@ -46,6 +46,7 @@ pub use signer::EventSigner;
 pub use keys::{PublicKey32, Secret32};
 
 pub mod allergy;
+pub mod allergy_overlay;
 pub mod attachment;
 pub mod contributor;
 pub mod demographics;

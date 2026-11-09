@@ -656,6 +656,55 @@ Steps: read the allergies paper *N* = 0 → forced *M* = 0 → observed \_\_ · 
 | An allergy distinguishable from an adverse effect without colour | | |
 | No dialog; no passphrase but the signer strip | | |
 
+## Allergy overlays: correct, de-label, entered in error (allergy slice 2, runbook §28)
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| Correct: the press on *Correct* → "Recorded." and the redraw | held | | | | ≤ 15 s | |
+| The same, credential typed (first keystroke in *Staff ID*) | shared | | | | — (record) | |
+| De-label: the press on *De-label* → "Recorded." and the line under the historical heading | held | | | | ≤ 15 s | |
+| The same, credential typed | shared | | | | — (record) | |
+| Entered in error: the press → "Recorded." and the line under "Entered in error:" | held | | | | ≤ 5 s | |
+| The same, credential typed | shared | | | | — (record) | |
+| `ui_gesture_timing` `allergy-correct` / `allergy-challenge` / `allergy-retract` (the write halves) | | | | | — | |
+
+Steps: correct paper *N* = 1 → forced *M* = 1 → observed \_\_ · de-label 1 → 1 → observed \_\_ · entered in error 1 → 1 →
+observed \_\_ · strike a de-labelled line 1 → 1 → observed \_\_ (1 expected: *Entered in error* on the historical line).
+Passphrase retypes after a refusal on a shared terminal: \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Correct: the form filled from the line, "Correcting: …"; the old line under "Earlier:" after Sign | | |
+| De-label: *Tolerated* starts empty; "Historically reported: … Challenged: tolerated amoxicillin Mar 2022 (de-labelled {today} by {name})"; strip "+1 historical" | | |
+| Withdraw de-label: the allergy back on the strip; "Entered in error: de-label — …" | | |
+| Entered in error on a live line: the row's "This strikes the line and its earlier versions. …" (only with an "Earlier:" line); off the strip; "Entered in error: … (withdrawn …) — wrong patient" with its "Earlier:" line | | |
+| A de-labelled line struck in one act: "Entered in error: … — de-labelled …: tolerated …"; never back on the strip | | |
+| A doubted link's line: marked, no button on it; its own chart's line carries all three | | |
+| Entered in error on a "none known" line | | |
+| No button on an "Entered in error" line | | |
+| Differing accounts: " — differing accounts" on both lines on the strip, no click; none on a "not known" line | | |
+| A nurse strikes a doctor's line | | |
+| Each history list under its own heading | | |
+| A linked chart's line: the correction, de-label and withdrawal filed under its chart (console) | | |
+| "Name what was tolerated." and a future *When* said in the row, what was typed kept | | |
+| *Cancel* / Escape close a row signing nothing; not while a *Sign* is in flight | | |
+| Two terminals: a stale line refused ("… no longer on this chart …"), nothing signed | | |
+| Two terminals: the suspended correction (words kept, *Sign* down, the sentence; *Cancel correction*) | | |
+| The real Tauri IPC: "Recorded." after each act; console rows as typed | | |
+| A repudiated key's withdrawal "Not counted", the anaphylaxis back (optional) | | |
+| " (signer unconfirmed)" on an unconfirmed signer's byline (optional) | | |
+| WebKit (the real window): any difference from the runbook's words | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Each line's buttons reached by Tab and named with the line | | |
+| An inline row read as a group named for its line; its fields by their labels; focus in its first field | | |
+| A refusal in a row read when it appears | | |
+| "Correcting: …" and the suspension sentence: read or not | | |
+| Each history list read with its heading | | |
+| A historical or entered-in-error line distinguishable without colour | | |
+| No dialog; no passphrase but the signer strip | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

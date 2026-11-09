@@ -24,13 +24,14 @@ fn another_chart() -> String {
 /// A complete entry, as the form sends it; each test spoils one field.
 fn entry() -> EntryInput {
     EntryInput {
-        allergen_kind: "drug".into(),
+        allergen_kind: Some("drug".into()),
         term: "penicillin".into(),
         kind: Some("allergy".into()),
         category: Some("anaphylaxis".into()),
         reaction_text: None,
         onset: Some("2014".into()),
-        source: "seen-documented".into(),
+        source: Some("seen-documented".into()),
+        corrects: None,
     }
 }
 
@@ -93,6 +94,36 @@ fn parse_onset_refuses_year_0000_at_every_precision() {
 }
 
 /// The form's refusals, in the brief's order, each before the key.
+/// Task 6 fix round 1, ruling (a): the form presses Drug by default, but Correct on a newer
+/// peer's entry leaves an allergen word it has no button for UNPRESSED, so the window can send
+/// none. That is refused before the key, in words the clinician can act on and under its own
+/// field — never a deserialisation failure that reads as "could not reach its backend".
+#[test]
+fn record_refuses_a_missing_allergen_kind_before_the_key() {
+    let mut e = entry();
+    e.allergen_kind = None;
+    let err = entry_before_the_key(&e, today()).err().unwrap();
+    assert_eq!(err.text, "Choose Drug or Other.");
+    assert_eq!(err.retry, Retry::Never);
+    // An empty substance is still said first.
+    e.term = " ".into();
+    assert_eq!(
+        entry_before_the_key(&e, today()).err().unwrap().text,
+        "Name the substance."
+    );
+}
+
+/// As the allergen: a source word this window has no button for is left unpressed by Correct,
+/// and a missing source is refused before the key.
+#[test]
+fn record_refuses_a_missing_source_before_the_key() {
+    let mut e = entry();
+    e.source = None;
+    let err = entry_before_the_key(&e, today()).err().unwrap();
+    assert_eq!(err.text, "Choose where this came from.");
+    assert_eq!(err.retry, Retry::Never);
+}
+
 #[test]
 fn record_refuses_a_missing_kind_before_the_key() {
     let mut e = entry();
@@ -129,8 +160,8 @@ fn record_refuses_a_missing_kind_before_the_key() {
     for spoil in [
         |e: &mut EntryInput| e.kind = Some("Allergy".into()),
         |e: &mut EntryInput| e.category = Some("hives".into()),
-        |e: &mut EntryInput| e.allergen_kind = "food".into(),
-        |e: &mut EntryInput| e.source = "hearsay".into(),
+        |e: &mut EntryInput| e.allergen_kind = Some("food".into()),
+        |e: &mut EntryInput| e.source = Some("hearsay".into()),
     ] {
         let mut e = entry();
         spoil(&mut e);
@@ -267,8 +298,10 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
     );
     assert_eq!(pane.standing_none.len(), 1, "{:?}", pane.standing_none);
     assert!(
-        pane.standing_none[0].starts_with("No known other allergies — asked ")
-            && pane.standing_none[0].ends_with(" by Dr Bea"),
+        pane.standing_none[0]
+            .text
+            .starts_with("No known other allergies — asked ")
+            && pane.standing_none[0].text.ends_with(" by Dr Bea"),
         "{:?}",
         pane.standing_none
     );
@@ -296,7 +329,7 @@ fn interrupted(event: Uuid) -> anyhow::Error {
 #[test]
 fn an_interrupted_sign_is_not_known_and_never_retried() {
     let event = Uuid::from_u128(814);
-    let view = sign_failure(&interrupted(event));
+    let view = sign_failure(&interrupted(event), &Act::None(NoneScope::All));
     assert!(
         view.text
             .starts_with("Whether this allergy was recorded is NOT known — "),
@@ -311,7 +344,7 @@ fn an_interrupted_sign_is_not_known_and_never_retried() {
     assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
     let plain = anyhow::anyhow!("the floor refused it");
     assert_eq!(
-        sign_failure(&plain),
+        sign_failure(&plain, &Act::None(NoneScope::All)),
         crate::write_failure::node_failure(&plain)
     );
 }
@@ -333,6 +366,9 @@ fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
         previously_none: vec![],
         standing_none: vec![],
         unreadable: 0,
+        historical: vec![],
+        entered_in_error: vec![],
+        ignored_overlays: vec![],
         charts: vec![],
     };
     let ok = written(Ok(pane()));
@@ -354,7 +390,7 @@ fn a_landed_sign_is_an_ok_with_or_without_its_pane() {
 /// standing "none known" statement with its signer, for allergies.js to draw.
 #[test]
 fn the_pane_carries_unreadable_records_and_the_standing_statement() {
-    use cairn_node::allergy::read::NoneRow;
+    use cairn_node::allergy::read::{KeyState, NoneRow};
     let chart = Uuid::from_u128(7);
     let at = chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap();
     let a = PatientAllergies {
@@ -366,7 +402,10 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
             recorded_at: at,
             hlc: (at.timestamp_millis(), 0),
             signer: Some("Dr Bea".into()),
+            key: KeyState::Standing,
         }],
+        challenges: vec![],
+        retractions: vec![],
         doubted_charts: vec![],
         unreadable: 1,
     };
@@ -380,9 +419,11 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
     );
     assert_eq!(p.standing_none.len(), 1);
     assert!(
-        p.standing_none[0].starts_with("No known drug allergies — asked "),
+        p.standing_none[0]
+            .text
+            .starts_with("No known drug allergies — asked "),
         "{:?}",
         p.standing_none
     );
-    assert!(p.standing_none[0].ends_with(" by Dr Bea"));
+    assert!(p.standing_none[0].text.ends_with(" by Dr Bea"));
 }

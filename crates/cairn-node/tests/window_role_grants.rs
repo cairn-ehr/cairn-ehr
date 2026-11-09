@@ -410,9 +410,9 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     r.expect("the cessation is recorded");
 }
 
-/// The allergy list's calls (allergy slice 1): sign an entry and a "none known" statement under
-/// a human author, then read the linked set's rows back — the projections, the signer-name door
-/// and the chart set behind them.
+/// The allergy list's calls (allergy slices 1 and 2): sign an entry, a "none known" statement and
+/// both overlays under a human author, then read the linked set's rows back — the projections, the
+/// signer-name and key-confirmation doors and the chart set behind them.
 #[tokio::test]
 async fn the_windows_allergy_calls_run_under_its_own_login() {
     use cairn_event::allergy::{
@@ -440,10 +440,11 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
         reaction_text: None,
         onset: Onset::Year("2014".into()),
         source: Source::SeenDocumented,
+        corrects: None,
     };
     let r = sign::sign_allergy(&mut window, &sk, &kid, ORIGIN, patient, &entry, &author).await;
     assert_not_denied("allergy::sign::sign_allergy", &r);
-    r.expect("the entry is recorded");
+    let target = r.expect("the entry is recorded").to_string();
     let r = sign::sign_allergy_none(
         &mut window,
         &sk,
@@ -456,10 +457,39 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
     .await;
     assert_not_denied("allergy::sign::sign_allergy_none", &r);
     r.expect("the statement is recorded");
+    // The two overlays (allergy slice 2): a de-label and a withdrawal of the entry above.
+    let challenge = cairn_event::allergy_overlay::AllergyChallenge {
+        target: &target,
+        tolerated: "amoxicillin",
+        date: Onset::NotKnown,
+        text: None,
+    };
+    let r =
+        sign::sign_allergy_challenge(&mut window, &sk, &kid, ORIGIN, patient, &challenge, &author)
+            .await;
+    assert_not_denied("allergy::sign::sign_allergy_challenge", &r);
+    r.expect("the de-label is recorded");
+    let retraction = cairn_event::allergy_overlay::AllergyRetraction {
+        target: &target,
+        text: None,
+    };
+    let r = sign::sign_allergy_retraction(
+        &mut window,
+        &sk,
+        &kid,
+        ORIGIN,
+        patient,
+        &retraction,
+        &author,
+    )
+    .await;
+    assert_not_denied("allergy::sign::sign_allergy_retraction", &r);
+    r.expect("the withdrawal is recorded");
     let r = list_patient_allergies(&window, patient).await;
     let read = expect_as_window("allergy::read::list_patient_allergies", r);
     assert_eq!((read.entries.len(), read.none.len()), (1, 1));
-    // The unreadable count's own read (event_log against both projections) ran under this login.
+    assert_eq!((read.challenges.len(), read.retractions.len()), (1, 1));
+    // The unreadable count's own read (event_log against all four projections) ran under this login.
     assert_eq!(read.unreadable, 0);
     // The set the pane is read over and each write is checked against.
     let r = cairn_node::patient::person::person_charts(&window, patient).await;

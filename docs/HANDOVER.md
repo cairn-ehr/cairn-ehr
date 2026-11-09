@@ -76,7 +76,7 @@
 >   check fixed ADR-0095 (j)'s wording, made "Open note" stay on the chart when the Sign in flight did not go
 >   through (closing the chart erased that outcome), worded a failed bar read, and made the open check's charts a CI-tested
 >   `PersonMenu::charts()`.
-> - **Allergy slice 1 on PR [#1026](https://github.com/cairn-ehr/cairn-ehr/pull/1026)** (2026-11-08/09; design
+> - **Allergy slice 1 MERGED 2026-11-09 in PR [#1026](https://github.com/cairn-ehr/cairn-ehr/pull/1026)** (design
 >   [`superpowers/specs/2026-11-08-allergy-stream-design.md`](superpowers/specs/2026-11-08-allergy-stream-design.md), plan
 >   [`superpowers/plans/2026-11-08-allergy-slice-1-stream-and-strip.md`](superpowers/plans/2026-11-08-allergy-slice-1-stream-and-strip.md),
 >   [ADR-0096](spec/decisions/0096-the-allergy-list.md), spec **v0.98**, `db/074`, `SCHEMA_GENERATION` **74**):
@@ -89,6 +89,17 @@
 >   passphrase) · **#1029** (no length limit) · **#1030** · **#1031** (`vault_floor.rs` grants on a shared role); from
 >   the final check **#1032** (an unrecognised kind still reads "not yet asked" — a decision) · **#1033** (drug
 >   allergies, other list never asked — a decision) · **#1034** · **#1035** · **#1036** · **#1037**. Owed by a human: **RUNBOOK §27**.
+> - **Allergy slice 2 BUILT 2026-11-09 on PR [#1038](https://github.com/cairn-ehr/cairn-ehr/pull/1038)** (plan
+>   [`superpowers/plans/2026-11-09-allergy-slice-2-overlays-and-differing-accounts.md`](superpowers/plans/2026-11-09-allergy-slice-2-overlays-and-differing-accounts.md),
+>   [ADR-0097](spec/decisions/0097-allergy-overlays-and-differing-accounts.md), spec **v0.99**, `db/075` with db/074 + db/037 +
+>   db/044 in place, `SCHEMA_GENERATION` **75**): Correct (a new entry carrying `correction-of` the line it replaces),
+>   De-label (`clinical.allergy-challenge.asserted`) and Entered in error (`clinical.allergy-retraction.asserted`; withdraws an
+>   entry, a "none known" statement or a de-label); an overlay covers the version it names and what that replaced, never a
+>   later correction; a suspect overlay (repudiated or doubtful key, or naming another chart) counts only to ADD a warning;
+>   no act on a doubted-link chart's line; differing accounts flagged; byline key markers (#1027 built). Open: **#1039** ·
+>   **#1040** · **#1041** · **#1042** · **#1043** · **#1044** · **#1045** · **#1046** (a decision) · **#1047**; from the
+>   final check **#1048** (two de-labels on one line) · **#1049** (two legibility calls) · **#1050** (an overlay row lost on
+>   redraw) · **#1051** (db/074's appliers, slice 1's). Owed by a human: **RUNBOOK §28**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -132,9 +143,8 @@
 > 1. **Slice 3 is complete** (3a → 3c-3c, the bullets above). **#1021 measured, MERGED 2026-11-08 in PR #1025**
 >    (figures `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: per-key fact lookups 5–6× faster,
 >    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
->    projection and the Pi figures. **Allergy slice 1 is on PR #1026** (the bullet above). **Next, in order:** merge
->    #1026 after CI + the maintainer's read → **allergy slice 2** (correct / de-label / entered in error; differing
->    accounts; #1027's byline marker) → **allergy slice 3** (drugref pick + the medication check on MED-RT classes, an
+>    projection and the Pi figures. **Allergy slice 1 MERGED; slice 2 BUILT on PR #1038** (the bullets above). **Next, in order:** merge
+>    #1038 after CI + the maintainer's read → **allergy slice 3** (drugref pick + the medication check on MED-RT classes, an
 >    honest "not fully checked" line per group; write down the narrow drugref contract) → **charting a medication in
 >    the window** (it cannot yet; its ADR also records the milestone's "prescribe means charted"). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
@@ -143,7 +153,7 @@
 >    (PR #930, merged; it also carries the per-note "unconfirmed" marker and #918's display half). The maintainer picks
 >    the order of **#909** vs slice 5 (either gates a multi-terminal pilot) and of **#912**.
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
->    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27** (allergies); #838's
+>    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27**, **§28** (allergies); #838's
 >    **§15** (incl. #861's current-line check); **§14** (c) (the cause on screen; a refused reopen offers no retry; the
 >    front door's top line clears) and (d) (no waiting bar on an ordinary press; a locked `medication_statement` →
 >    "Waiting…", cut off by 15 s, and since #893 the outcome says the window cut it off). **#894** needs the satellite
@@ -178,7 +188,7 @@
 >    `cairn_test`'s fixtures).
 >
 > **⇒ DURABLE RULES — READ BEFORE TOUCHING THE CODE THEY NAME:**
-> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (sign-in 3c-3b, 3c-2, 3c-1, 3b-2b, 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
+> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (allergy 2, allergy 1, sign-in 3c-3c, 3c-3a, 3c-3b, 3c-2, 3c-1, 3b-2b, 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
 > R5a, #725, R4, R3, R1b, R2a, R2b-1, R2b-2, R1, the funnel) and the **eighteen traps**, each with its pin and its
 > tempting wrong fix. A slice that adds rules adds its block there, not here.
 >

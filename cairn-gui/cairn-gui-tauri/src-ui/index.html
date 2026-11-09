@@ -282,7 +282,49 @@
             <ul id="allergy-other" aria-labelledby="allergy-other-label" hidden></ul>
             <p id="allergy-adverse-label" hidden>Adverse effects:</p>
             <ul id="allergy-adverse" aria-labelledby="allergy-adverse-label" hidden></ul>
-            <ul id="allergy-previously" aria-label="Earlier statements" hidden></ul>
+            <!-- What no longer stands, muted and never the sticker, each list under its own heading
+                 (hidden with its list) so no struck line sits under "Other allergies:". Each line's
+                 text is Rust's; allergies.js draws them. -->
+            <p id="allergy-previously-label" hidden>Previously recorded:</p>
+            <ul id="allergy-previously" aria-labelledby="allergy-previously-label" hidden></ul>
+            <p id="allergy-historical-label" hidden>Historically reported (de-labelled):</p>
+            <ul id="allergy-historical" aria-labelledby="allergy-historical-label" hidden></ul>
+            <p id="allergy-entered-in-error-label" hidden>Entered in error:</p>
+            <ul id="allergy-entered-in-error" aria-labelledby="allergy-entered-in-error-label" hidden></ul>
+            <p id="allergy-ignored-label" hidden>Not counted:</p>
+            <ul id="allergy-ignored" aria-labelledby="allergy-ignored-label" hidden></ul>
+            <!-- The buttons a line carries (allergy_overlays.js clones the ones it needs; their
+                 accessible name adds the line's text). -->
+            <template id="allergy-line-buttons">
+              <button type="button" class="allergy-write" data-act="correct">Correct</button>
+              <button type="button" class="allergy-write" data-act="delabel">De-label</button>
+              <button type="button" class="allergy-write" data-act="error">Entered in error</button>
+              <button type="button" class="allergy-write" data-act="withdraw">Withdraw de-label</button>
+            </template>
+            <!-- The inline rows a line's De-label / Entered in error / Withdraw de-label opens under
+                 it (allergy_overlays.js clones one; one open at a time). Never a dialog: the row and
+                 one Sign are the whole act; Escape or Cancel closes it, signing nothing. -->
+            <template id="allergy-delabel-template">
+              <div class="allergy-overlay-row" role="group">
+                <label>Tolerated <input type="text" data-field="tolerated" /></label>
+                <label>When — leave empty if not known <input type="text" data-field="date" size="30" placeholder="2019 · 03/2019 · 14/03/2019" /></label>
+                <label>Note (optional) <input type="text" data-field="text" /></label>
+                <button type="button" class="allergy-write" data-act="sign">Sign</button>
+                <button type="button" data-act="cancel">Cancel</button>
+                <p class="allergy-field-error" role="alert" hidden></p>
+              </div>
+            </template>
+            <!-- The retract row's first sentence is shown only when the line struck has earlier
+                 versions (they go with it); its second only when that line can be corrected. -->
+            <template id="allergy-retract-template">
+              <div class="allergy-overlay-row" role="group">
+                <p class="allergy-quiet" data-note="earlier" hidden>This strikes the line and its earlier versions.<span data-note="undo"> To undo a correction, press Correct and record it as it was.</span></p>
+                <label>Reason (optional) <input type="text" data-field="text" /></label>
+                <button type="button" class="allergy-write" data-act="sign">Sign</button>
+                <button type="button" data-act="cancel">Cancel</button>
+                <p class="allergy-field-error" role="alert" hidden></p>
+              </div>
+            </template>
             <p>
               <button type="button" class="allergy-none" data-scope="all">No known allergies</button>
               <button type="button" class="allergy-none" data-scope="drug">No known drug allergies (NKDA)</button>
@@ -291,12 +333,21 @@
                  toggle buttons (aria-pressed); "Allergy or Adverse effect" and "What happened" start
                  with NOTHING pressed — the clinician chooses (design §3.2's anti-goal). A refusal
                  lands as text under its own field. -->
+            <!-- Shown while the form corrects a line (its Correct button): the line's own text,
+                 and the way out, which empties the form. When a re-read no longer has that line
+                 live, the correction is suspended: Sign is down and the second sentence says why. -->
+            <div id="allergy-correcting" hidden>
+              <p id="allergy-correcting-line">Correcting: <span id="allergy-correcting-text"></span></p>
+              <p id="allergy-correcting-gone" hidden>The line you were correcting has changed on the record, or its chart's link came into doubt — press Correct on its current line if it has one, or Cancel correction.</p>
+              <button type="button" id="allergy-correct-cancel">Cancel correction</button>
+            </div>
             <form id="allergy-form" autocomplete="off">
-              <div class="allergy-choice" data-field="allergen_kind" role="group" aria-labelledby="allergy-allergen-kind-label">
+              <div class="allergy-choice" data-field="allergen_kind" role="group" aria-labelledby="allergy-allergen-kind-label" aria-describedby="allergy-allergen-kind-error">
                 <span id="allergy-allergen-kind-label">Allergen:</span>
                 <button type="button" data-value="drug" aria-pressed="false">Drug</button>
                 <button type="button" data-value="other" aria-pressed="false">Other substance</button>
               </div>
+              <p id="allergy-allergen-kind-error" class="allergy-field-error" role="alert" hidden></p>
               <label for="allergy-term">Substance</label>
               <input id="allergy-term" type="text" aria-describedby="allergy-term-error" />
               <p id="allergy-term-error" class="allergy-field-error" role="alert" hidden></p>
@@ -322,12 +373,13 @@
               <label for="allergy-onset">When — leave empty if not known</label>
               <input id="allergy-onset" type="text" size="30" aria-describedby="allergy-onset-error" placeholder="2019 · 03/2019 · 14/03/2019" />
               <p id="allergy-onset-error" class="allergy-field-error" role="alert" hidden></p>
-              <div class="allergy-choice" data-field="source" role="group" aria-labelledby="allergy-source-label">
+              <div class="allergy-choice" data-field="source" role="group" aria-labelledby="allergy-source-label" aria-describedby="allergy-source-error">
                 <span id="allergy-source-label">Source:</span>
                 <button type="button" data-value="patient-stated" aria-pressed="false">Patient stated</button>
                 <button type="button" data-value="seen-documented" aria-pressed="false">Seen documented</button>
                 <button type="button" data-value="another-record" aria-pressed="false">From another record</button>
               </div>
+              <p id="allergy-source-error" class="allergy-field-error" role="alert" hidden></p>
               <button id="allergy-sign" type="button">Sign</button>
             </form>
           </details>
@@ -539,6 +591,7 @@
     <script src="notes_compound.js"></script>
     <script src="notes.js"></script>
     <script src="notes_discard.js"></script>
+    <script src="allergy_overlays.js"></script>
     <script src="allergies.js"></script>
     <script src="person_menu.js"></script>
     <script src="whos_here.js"></script>
