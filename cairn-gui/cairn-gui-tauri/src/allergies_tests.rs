@@ -434,3 +434,56 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
     );
     assert!(p.standing_none[0].text.ends_with(" by Dr Bea"));
 }
+
+/// Fix round T6-a: a live line's words carry its coding (`{system, code, display}`, or null), so
+/// Correct can hold it again — correcting only the reaction must not quietly turn a coded entry
+/// into a name-only one.
+#[test]
+fn a_lines_words_carry_its_coding() {
+    use cairn_node::allergy::read::{AllergyRow, Coding, KeyState};
+    let at = chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap();
+    let row = |id: u128, coding: Option<Coding>| AllergyRow {
+        event_id: Uuid::from_u128(id),
+        chart: Uuid::from_u128(1),
+        allergen_kind: "drug".into(),
+        term: "amoxicillin".into(),
+        kind: "allergy".into(),
+        category: "anaphylaxis".into(),
+        reaction_text: None,
+        onset_precision: "unknown".into(),
+        onset_value: None,
+        source: "patient-stated".into(),
+        recorded_at: at,
+        hlc: (at.timestamp_millis(), 0),
+        signer: None,
+        corrects: None,
+        key: KeyState::Standing,
+        coding,
+    };
+    let a = PatientAllergies {
+        entries: vec![
+            row(
+                1,
+                Some(Coding {
+                    system: "drugref-moiety".into(),
+                    code: Uuid::from_u128(5).to_string(),
+                    display: "amoxicillin".into(),
+                }),
+            ),
+            row(2, None),
+        ],
+        none: vec![],
+        challenges: vec![],
+        retractions: vec![],
+        doubted_charts: vec![],
+        unreadable: 0,
+    };
+    let coded = crate::allergy_pane::line_words(&a, Uuid::from_u128(1)).unwrap();
+    let json = serde_json::to_value(&coded).unwrap();
+    assert_eq!(
+        json["coding"],
+        serde_json::json!({"system": "drugref-moiety", "code": Uuid::from_u128(5).to_string(), "display": "amoxicillin"})
+    );
+    let plain = crate::allergy_pane::line_words(&a, Uuid::from_u128(2)).unwrap();
+    assert!(serde_json::to_value(&plain).unwrap()["coding"].is_null());
+}

@@ -79,6 +79,9 @@ pub struct LineWords {
     pub onset_precision: String,
     pub onset_value: Option<String>,
     pub source: String,
+    /// The drug or group the entry was coded to, or `None` for a name as typed. Correct holds it
+    /// again (until the name is edited), so correcting only the reaction keeps the coding.
+    pub coding: Option<crate::allergy_check::CodingArg>,
 }
 
 /// One "none known" line: its words, and the statement it reads (the window withdraws it).
@@ -173,7 +176,7 @@ pub(crate) fn pane(
 
 /// The recorded words of entry `event_id`, looked up among `a`'s rows (`None` if it is not one).
 /// Pure.
-fn line_words(a: &PatientAllergies, event_id: Uuid) -> Option<LineWords> {
+pub(crate) fn line_words(a: &PatientAllergies, event_id: Uuid) -> Option<LineWords> {
     let r = a.entries.iter().find(|r| r.event_id == event_id)?;
     Some(LineWords {
         allergen_kind: r.allergen_kind.clone(),
@@ -184,5 +187,10 @@ fn line_words(a: &PatientAllergies, event_id: Uuid) -> Option<LineWords> {
         onset_precision: r.onset_precision.clone(),
         onset_value: r.onset_value.clone(),
         source: r.source.clone(),
+        coding: r.coding.as_ref().map(|c| crate::allergy_check::CodingArg {
+            system: c.system.clone(),
+            code: c.code.clone(),
+            display: c.display.clone(),
+        }),
     })
 }

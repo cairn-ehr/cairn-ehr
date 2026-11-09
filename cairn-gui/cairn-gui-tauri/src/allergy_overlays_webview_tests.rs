@@ -474,6 +474,7 @@ fn every_nested_field_the_scripts_read_is_one_rust_sends() {
         onset_precision: String::new(),
         onset_value: None,
         source: String::new(),
+        coding: None,
     };
     let none = NoneLineView {
         event_id: String::new(),

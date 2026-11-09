@@ -41,7 +41,7 @@ fn editing_the_name_after_a_pick_drops_the_coding() {
     let on_input = &DRUG_PICK_JS[at..at + position(&DRUG_PICK_JS[at..], "});")];
     assert!(on_input.contains("heldCoding = null;"), "{on_input}");
     let held = js_fn(DRUG_PICK_JS, "pickedCoding");
-    assert!(held.contains("pickAllowed ? heldCoding : null"), "{held}");
+    assert!(held.contains("pickIsDrug() ? heldCoding : null"), "{held}");
     let kind = &DRUG_PICK_JS[position(DRUG_PICK_JS, "allergen_kind\"]')")..];
     assert!(kind.contains("heldCoding = null;"), "{kind}");
     // The form's emptying forgets it too, and Record/Correct send what is held.
@@ -133,4 +133,28 @@ fn recording_an_allergy_rereads_the_medication_list() {
         "{refresh}"
     );
     assert!(js_fn(MAIN_JS, "readMedList").contains("invoke(\"med_list\""));
+}
+
+/// Fix round T6-a/b: Correct holds the line's coding AFTER setting the term (the input handler
+/// drops a coding on edit, and a programmatic `.value =` fires no input event), and whether a
+/// coding may be sent follows the pressed kind at the point of use — no separate flag that
+/// `pressChoice` (which fires no click) could leave out of step.
+#[test]
+fn a_correction_keeps_the_coding_and_the_pick_follows_the_pressed_kind() {
+    let overlays = include_str!("../src-ui/allergy_overlays.js");
+    let start = js_fn(overlays, "startCorrection");
+    assert!(
+        position(start, "el(\"allergy-term\").value = words.term;")
+            < position(start, "holdPick(words.coding);"),
+        "{start}"
+    );
+    let held = js_fn(DRUG_PICK_JS, "pickedCoding");
+    assert!(held.contains("pickIsDrug()"), "{held}");
+    assert!(
+        js_fn(DRUG_PICK_JS, "pickIsDrug").contains("pressedChoice(\"allergen_kind\") === \"drug\"")
+    );
+    assert!(!DRUG_PICK_JS.contains("pickAllowed"), "no separate flag");
+    let at = position(DRUG_PICK_JS, "addEventListener(\"input\"");
+    let on_input = &DRUG_PICK_JS[at..at + position(&DRUG_PICK_JS[at..], "});")];
+    assert!(on_input.contains("pickIsDrug()"), "{on_input}");
 }

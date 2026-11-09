@@ -351,6 +351,7 @@ fn every_field_allergies_js_reads_is_one_rust_sends() {
             onset_precision: String::new(),
             onset_value: None,
             source: String::new(),
+            coding: None,
         }),
     };
     let keys = |v: serde_json::Value| -> BTreeSet<String> {

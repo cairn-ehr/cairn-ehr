@@ -103,6 +103,7 @@ function startCorrection(line) {
   pressChoice("category", words.category);
   pressChoice("source", words.source);
   el("allergy-term").value = words.term;
+  holdPick(words.coding); // after the term: the line's coding stays until the name is edited
   el("allergy-reaction-text").value = words.reaction_text || "";
   el("allergy-onset").value = words.onset_value || "";
   allergyCorrecting = line.event_id;

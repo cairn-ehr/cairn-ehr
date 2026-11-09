@@ -23,11 +23,22 @@ let pickOptions = [];
 let pickActive = -1;
 let pickTimer = null;
 let pickRevision = 0; // an older answer is dropped
-let pickAllowed = true; // the allergen kind is Drug
 
-/** What `allergy_record` sends as `coding`: the held option, only while the kind is still drug. */
+/** Whether the pressed allergen kind is Drug — read where it matters, never kept in a flag that a
+ *  programmatic press (Correct's `pressChoice`) would leave out of step. */
+function pickIsDrug() {
+  return pressedChoice("allergen_kind") === "drug";
+}
+
+/** What `allergy_record` sends as `coding`: the held option, only while the kind is drug. */
 function pickedCoding() {
-  return pickAllowed ? heldCoding : null;
+  return pickIsDrug() ? heldCoding : null;
+}
+
+/** Hold `coding` (a line's, from Correct) as if picked; null holds nothing. */
+function holdPick(coding) {
+  heldCoding = coding;
+  closePick();
 }
 
 /** The option's words in the list: a group says so. */
@@ -50,7 +61,6 @@ function closePick() {
 /** Forget the held coding and close (the form is emptied, or the name was edited). */
 function clearPick() {
   heldCoding = null;
-  pickAllowed = true;
   closePick();
 }
 
@@ -94,7 +104,7 @@ async function askPick(text) {
   const revision = ++pickRevision;
   try {
     const answer = await invoke("drug_search", { text: text });
-    if (revision === pickRevision && pickAllowed) drawPick(answer);
+    if (revision === pickRevision && pickIsDrug()) drawPick(answer);
   } catch (failure) {
     // The pick is optional: a failed search leaves the name to be recorded as typed.
     if (revision === pickRevision) closePick();
@@ -105,7 +115,7 @@ el("allergy-term").addEventListener("input", () => {
   heldCoding = null; // any edit of the name drops the coding
   closePick();
   const text = el("allergy-term").value;
-  if (pickAllowed && text.trim().length >= PICK_MIN_CHARS) {
+  if (pickIsDrug() && text.trim().length >= PICK_MIN_CHARS) {
     pickTimer = setTimeout(() => void askPick(text), PICK_DELAY_MS);
   }
 });
@@ -121,13 +131,11 @@ el("allergy-term").addEventListener("keydown", (event) => {
   event.preventDefault();
 });
 
-// Leaving "Drug" drops the coding and the list (ruling T5-d: the node refuses a coding on a
-// non-drug entry); pressing Drug again lets the next edit search again.
+// Leaving "Drug" drops the held coding and the list (ruling T5-d: the node refuses a coding on a
+// non-drug entry). `pickedCoding` also checks the kind at signing, so this is the tidy-up, not the guard.
 document.querySelector('.allergy-choice[data-field="allergen_kind"]').addEventListener("click", (event) => {
   const button = event.target.closest("button");
-  if (!button) return;
-  pickAllowed = button.dataset.value === "drug";
-  if (!pickAllowed) {
+  if (button && button.dataset.value !== "drug") {
     heldCoding = null;
     closePick();
   }
