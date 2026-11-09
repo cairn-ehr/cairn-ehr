@@ -1,19 +1,20 @@
-//! The medication check (allergy slice 3, D7–D11): which current line gets a loud mark, a quiet
-//! note, or the small "not checked" tag. Built on `test_fixtures`. Codes are `id(n)`, computed:
-//! 500s are moieties, 600s drug groups, 900s medication lines.
+//! The medication check (allergy slice 3, D7, D9, D10): which current line gets a loud mark or a
+//! quiet note, and which heads take part. The "not checked" tag and the group review status are
+//! `check_unverified_tests`'s. Built on `test_fixtures`; the shared helpers below are
+//! `pub(super)` for that sibling. Codes are `id(n)`, computed: 500s are moieties, 600s drug
+//! groups, 900s medication lines.
 use super::*;
 use crate::allergy::drug_facts::{Answer, DrugFacts, MatchPath};
 use crate::allergy::read::{KeyState, PatientAllergies};
-use crate::allergy::test_fixtures::{bne, challenge, coded, entry, id, pa, pen, retraction};
+use crate::allergy::test_fixtures::{challenge, coded, entry, id, pa, pen, retraction};
 use crate::allergy::thread::resolve;
-use crate::allergy::view::build_view;
 
 pub(super) const AMOX: u128 = 500;
-const FLUCLOX: u128 = 501;
+pub(super) const FLUCLOX: u128 = 501;
 pub(super) const AMOX_SODIUM: u128 = 502;
-const PARACETAMOL: u128 = 700;
-const PEN_GROUP: u128 = 600;
-const CEPH_GROUP: u128 = 601;
+pub(super) const PARACETAMOL: u128 = 700;
+pub(super) const PEN_GROUP: u128 = 600;
+pub(super) const CEPH_GROUP: u128 = 601;
 
 /// A current line whose name and term are both `name`.
 pub(super) fn med(n: u128, name: &str, moiety: Option<u128>) -> MedLine<'_> {
@@ -39,7 +40,7 @@ pub(super) fn run(
     check_medications(&resolve(a), meds, facts)
 }
 
-fn facts(pairs: Vec<(u128, u128, Answer)>) -> DrugFacts {
+pub(super) fn facts(pairs: Vec<(u128, u128, Answer)>) -> DrugFacts {
     DrugFacts::Available(
         pairs
             .into_iter()
@@ -48,7 +49,7 @@ fn facts(pairs: Vec<(u128, u128, Answer)>) -> DrugFacts {
     )
 }
 
-fn path(kind: &str, group: Option<&str>) -> Answer {
+pub(super) fn path(kind: &str, group: Option<&str>) -> Answer {
     Answer::Match(vec![MatchPath {
         kind: kind.into(),
         group_name: group.map(Into::into),
@@ -75,6 +76,24 @@ pub(super) fn amox(cat: &str) -> crate::allergy::read::AllergyRow {
         MOIETY_SYSTEM,
         AMOX,
     )
+}
+
+#[test]
+fn same_code_marks_the_line_without_the_drug_list() {
+    let a = only(vec![coded(
+        entry(1, "drug", "Augmentin", "allergy", "anaphylaxis", 1),
+        MOIETY_SYSTEM,
+        AMOX,
+    )]);
+    let got = run(
+        &a,
+        &[med(900, "Amoxil", Some(AMOX))],
+        &DrugFacts::Unavailable,
+    );
+    assert_eq!(
+        got[&id(900)],
+        marks(&["Allergy recorded: Augmentin → anaphylaxis"])
+    );
 }
 
 #[test]
@@ -342,144 +361,95 @@ fn latex_never_touches_the_medication_list() {
     assert!(run(&a, &meds, &DrugFacts::Unavailable).is_empty());
 }
 
+/// Review finding 2 (ruling T4-f): one allergen is every account LINKED by name or code, not only
+/// the hit's direct matches. B shares A's term, A shares C's code: B's anaphylaxis words the mark.
 #[test]
-fn no_match_is_verified() {
-    let a = only(vec![amox("anaphylaxis")]);
-    let f = facts(vec![(AMOX, PARACETAMOL, Answer::NoMatch)]);
-    assert!(run(&a, &[med(900, "paracetamol", Some(PARACETAMOL))], &f).is_empty());
-}
-
-#[test]
-fn unplaced_is_not_checked() {
-    let a = only(vec![amox("anaphylaxis")]);
-    let line = [med(900, "paracetamol", Some(PARACETAMOL))];
-    // Unplaced (any reason, ruling R1), no row for the pair, or no drug list at all.
-    for f in [
-        facts(vec![(AMOX, PARACETAMOL, Answer::Unplaced)]),
-        facts(vec![]),
-        DrugFacts::Unavailable,
-    ] {
-        assert_eq!(run(&a, &line, &f)[&id(900)], not_checked());
-    }
-}
-
-#[test]
-fn an_uncoded_allergy_leaves_every_line_not_checked() {
-    let a = only(vec![amox("rash"), pen(2, "rash", 1)]);
-    let f = facts(vec![
-        (AMOX, PARACETAMOL, Answer::NoMatch),
-        (AMOX, FLUCLOX + 10, Answer::NoMatch),
-    ]);
-    let meds = [
-        med(900, "paracetamol", Some(PARACETAMOL)),
-        med(901, "metformin", Some(FLUCLOX + 10)),
-    ];
-    let got = run(&a, &meds, &f);
-    assert_eq!(got[&id(900)], not_checked());
-    assert_eq!(got[&id(901)], not_checked());
-}
-
-#[test]
-fn an_uncoded_line_is_not_checked() {
-    let a = only(vec![amox("rash")]);
-    let got = run(&a, &[med(900, "Grandma's tonic", None)], &facts(vec![]));
-    assert_eq!(got[&id(900)], not_checked());
-}
-
-#[test]
-fn a_marked_line_is_never_also_unverified() {
+fn linked_accounts_mark_once_with_the_most_severe() {
     let a = only(vec![
-        pen(1, "rash", 1),
-        entry(2, "drug", "sulfonamide", "allergy", "rash", 1),
-    ]);
-    let got = run(&a, &[med(900, "penicillin", None)], &DrugFacts::Unavailable);
-    assert_eq!(
-        got[&id(900)],
-        marks(&["Allergy recorded: penicillin → rash"])
-    );
-}
-
-#[test]
-fn an_adverse_effect_never_makes_a_line_unverified() {
-    let a = only(vec![entry(
-        1,
-        "drug",
-        "codeine",
-        "adverse-effect",
-        "rash",
-        1,
-    )]);
-    assert!(run(
-        &a,
-        &[med(900, "paracetamol", None)],
-        &DrugFacts::Unavailable
-    )
-    .is_empty());
-}
-
-#[test]
-fn a_group_not_reviewed_is_marked_in_the_expanded_list_only() {
-    let a = only(vec![
+        entry(1, "drug", "Augmentin", "allergy", "anaphylaxis", 1),
         coded(
-            entry(1, "drug", "penicillin", "allergy", "anaphylaxis", 1),
-            GROUP_SYSTEM,
-            PEN_GROUP,
+            entry(2, "drug", "amoxicillin", "allergy", "angioedema", 1),
+            MOIETY_SYSTEM,
+            AMOX,
         ),
         coded(
-            entry(2, "drug", "cephalosporin", "allergy", "rash", 1),
-            GROUP_SYSTEM,
-            CEPH_GROUP,
-        ),
-        coded(
-            entry(3, "drug", "codeine", "adverse-effect", "gi-upset", 1),
+            entry(3, "drug", "Augmentin", "allergy", "rash", 1),
             MOIETY_SYSTEM,
             AMOX,
         ),
     ]);
-    let status = HashMap::from([
-        (id(PEN_GROUP), "structural-seed".to_string()),
-        (id(CEPH_GROUP), "reviewed".to_string()),
-    ]);
-    let unreviewed = unreviewed_groups(&resolve(&a), &status);
-    assert_eq!(unreviewed, HashSet::from([id(PEN_GROUP)]));
-
-    let before = build_view(&a, bne());
-    let after = note_unreviewed_groups(before.clone(), &a, &unreviewed);
-    assert_eq!(after.strip, before.strip, "the strip is untouched (M7)");
-    let changed: Vec<(&str, &str)> = before
-        .drug_allergies
-        .iter()
-        .chain(&before.adverse_effects)
-        .zip(after.drug_allergies.iter().chain(&after.adverse_effects))
-        .filter(|(b, a)| b.text != a.text)
-        .map(|(b, a)| (b.text.as_str(), a.text.as_str()))
-        .collect();
-    assert_eq!(changed.len(), 1, "{changed:?}");
-    let (b, a) = changed[0];
-    assert!(b.contains("penicillin"));
-    // `assert!`, not `assert_eq!`: the clinician words name the drug list, and only a
-    // diagnostic macro's arguments may (no_drugref_dependency.rs).
-    assert!(
-        a == format!("{b} (group from drugref, not clinically reviewed)"),
-        "{a}"
+    let got = run(
+        &a,
+        &[med(900, "Amoxil", Some(AMOX))],
+        &DrugFacts::Unavailable,
+    );
+    assert_eq!(
+        got[&id(900)],
+        marks(&["Allergy recorded: amoxicillin → anaphylaxis"])
     );
 }
 
+/// Ruling T4-d: an entry kind this build does not know counts as an allergy: it marks, and it
+/// can leave a line "not checked".
 #[test]
-fn an_unknown_review_word_reads_as_not_reviewed() {
-    let a = only(vec![coded(
-        entry(1, "drug", "penicillin", "allergy", "rash", 1),
-        GROUP_SYSTEM,
-        PEN_GROUP,
+fn a_newer_entry_kind_counts_as_an_allergy() {
+    let a = only(vec![entry(
+        1,
+        "drug",
+        "penicillin",
+        "suspected-allergy",
+        "rash",
+        1,
     )]);
-    let r = resolve(&a);
-    let with = |word: &str| HashMap::from([(id(PEN_GROUP), word.to_string())]);
-    let not_reviewed = HashSet::from([id(PEN_GROUP)]);
+    let meds = [med(900, "penicillin", None), med(901, "paracetamol", None)];
+    let got = run(&a, &meds, &DrugFacts::Unavailable);
     assert_eq!(
-        unreviewed_groups(&r, &with("peer-reviewed-v2")),
-        not_reviewed
+        got[&id(900)],
+        marks(&["Allergy recorded: penicillin → rash"])
     );
-    // A failed status read is an empty map (D11).
-    assert_eq!(unreviewed_groups(&r, &HashMap::new()), not_reviewed);
-    assert!(unreviewed_groups(&r, &with("reviewed")).is_empty());
+    assert_eq!(got[&id(901)], not_checked());
+}
+
+/// Review finding 1 (ruling T4-e): a peer's newer allergen kind takes part as a drug. Dropping it
+/// would let the adalimumab line read clean.
+#[test]
+fn a_newer_allergen_kind_counts_as_a_drug() {
+    let a = only(vec![entry(
+        1,
+        "biologic",
+        "adalimumab",
+        "allergy",
+        "anaphylaxis",
+        1,
+    )]);
+    let meds = [med(900, "adalimumab", None), med(901, "paracetamol", None)];
+    let got = run(&a, &meds, &DrugFacts::Unavailable);
+    assert_eq!(
+        got[&id(900)],
+        marks(&["Allergy recorded: adalimumab → anaphylaxis"])
+    );
+    assert_eq!(got[&id(901)], not_checked());
+}
+
+/// Ruling T4-g: an adverse effect the drug list matches to a line is a note, never a mark, and
+/// the line is not "not checked" because of it.
+#[test]
+fn an_adverse_effect_matched_by_the_drug_list_is_a_note() {
+    let a = only(vec![coded(
+        entry(1, "drug", "amoxicillin", "adverse-effect", "rash", 1),
+        MOIETY_SYSTEM,
+        AMOX,
+    )]);
+    let f = facts(vec![(
+        AMOX,
+        FLUCLOX,
+        path("same-group", Some("Penicillins")),
+    )]);
+    assert_eq!(
+        run(&a, &[med(900, "flucloxacillin", Some(FLUCLOX))], &f)[&id(900)],
+        LineCheck {
+            notes: vec!["Previous adverse effect: amoxicillin → rash".into()],
+            ..LineCheck::default()
+        }
+    );
 }

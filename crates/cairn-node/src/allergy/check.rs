@@ -9,17 +9,21 @@
 //!
 //! - **A mark** (the loud "Allergy" tag plus words) for each allergen that meets the line (D7):
 //!   by name, by identical code (works with no drug list), or because the drug list answered
-//!   `match`. One mark per allergen ([`same_allergen_rows`]), worded with that allergen's most
-//!   severe live account, so two differing accounts never under-warn.
+//!   `match`. One mark per allergen, worded with that allergen's most severe live account, so two
+//!   differing accounts never under-warn. "One allergen" is every account linked to another by
+//!   [`same_allergen_rows`], transitively (`allergen_groups`).
 //! - **A note** ("Previous adverse effect: …") for an adverse effect that meets it the same way.
-//!   Never a mark: an adverse effect is not an allergy.
+//!   Never a mark: an adverse effect is not an allergy. Every other entry kind, including a
+//!   peer's newer word this build does not know, counts as an allergy (over-warning).
 //! - **"Not checked"** (D8) when the line has no mark and some live ALLERGY could not be
 //!   verified against it: either side uncoded, no drug list, an `unplaced` answer (any reason,
 //!   ruling R1), or no answer at all. Only `no-match` is a verified negative (R2). Adverse
 //!   effects never make a line "not checked" (R3).
 //!
 //! Every live head counts (D9): a doubted chart's and a suspect key's too. Ceased lines are never
-//! checked. Only `drug` entries take part: a latex allergy never touches the medication list.
+//! checked. Every allergen kind except `other` takes part, a peer's newer kind (`biologic`) too:
+//! the remote door admits any word, and dropping one would let its line read clean. An `other`
+//! allergy (latex) never touches the medication list.
 //!
 //! Also here: the D11 review status of a coded drug GROUP, said on the expanded allergy list only
 //! ([`unreviewed_groups`], [`note_unreviewed_groups`]; M7 — the strip and the medication line stay
@@ -36,6 +40,8 @@ use uuid::Uuid;
 pub const MOIETY_SYSTEM: &str = "drugref-moiety";
 /// The coding system of a drug group (an allergy group) in the drug list (M2).
 pub const GROUP_SYSTEM: &str = "drugref-class";
+/// Appended to the expanded-list line of an entry coded to a group not clinically reviewed (D11).
+pub const NOT_REVIEWED: &str = " (drug group not clinically reviewed)";
 
 /// One medication line, as the check needs it (the caller builds it from a `MedicationRow`).
 #[derive(Debug, Clone, Copy)]
@@ -96,14 +102,14 @@ fn drug_code(row: &AllergyRow) -> Option<Uuid> {
     code_under(row, MOIETY_SYSTEM).or_else(|| code_under(row, GROUP_SYSTEM))
 }
 
-/// The live DRUG heads, most severe first (the expanded list's order: reaction rank, newest,
+/// The live heads that take part (every allergen kind but `other`), most severe first (the expanded list's order: reaction rank, newest,
 /// event id), so the first head of an allergen met below is its most severe account.
 fn drug_heads<'a>(r: &Resolved<'a>) -> Vec<&'a AllergyRow> {
     let mut heads: Vec<&AllergyRow> = r
         .live
         .iter()
         .map(|h| h.row)
-        .filter(|row| row.allergen_kind == "drug")
+        .filter(|row| row.allergen_kind != "other")
         .collect();
     heads.sort_by_key(|row| order_key(row));
     heads
@@ -173,26 +179,47 @@ fn mark_words(pair: Pair, hit: &AllergyRow, worst: &AllergyRow, line: &MedLine) 
     }
 }
 
-/// One set of words per allergen. `heads` is most severe first and `pairs` follows it, so the
-/// first hit of an allergen is its most severe hit; a later hit of the same allergen adds
-/// nothing. `worst` is looked up among every head given, hit or not.
+/// Which heads are one allergen: each head's label is the smallest index of its connected
+/// component under [`same_allergen_rows`]. That relation is not transitive ("Augmentin" uncoded
+/// and "Augmentin" coded share a term; the coded one and "amoxicillin" share a code), so the
+/// labels are merged until nothing changes. `heads` is most severe first, so a label is also the
+/// index of its component's most severe account. Quadratic, over one patient's live heads.
+fn allergen_groups(heads: &[&AllergyRow]) -> Vec<usize> {
+    let mut label: Vec<usize> = (0..heads.len()).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..heads.len() {
+            for j in 0..i {
+                if label[i] != label[j] && same_allergen_rows(heads[i], heads[j]) {
+                    let (keep, gone) = (label[i].min(label[j]), label[i].max(label[j]));
+                    label
+                        .iter_mut()
+                        .filter(|l| **l == gone)
+                        .for_each(|l| *l = keep);
+                    changed = true;
+                }
+            }
+        }
+    }
+    label
+}
+
+/// One set of words per allergen ([`allergen_groups`]). `heads` is most severe first and
+/// `pairs` follows it, so an allergen's first hit is its most severe hit (its term and coding
+/// pick the sentence); `worst` is the allergen's most severe account, hit or not.
 fn per_allergen(
     heads: &[&AllergyRow],
     pairs: &[Pair],
     words: impl Fn(Pair, &AllergyRow, &AllergyRow) -> String,
 ) -> Vec<String> {
-    let mut said: Vec<&AllergyRow> = Vec::new();
+    let group = allergen_groups(heads);
+    let mut said: HashSet<usize> = HashSet::new();
     let mut out = Vec::new();
-    for (hit, p) in heads.iter().zip(pairs).filter(|(_, p)| p.is_hit()) {
-        if said.iter().any(|s| same_allergen_rows(s, hit)) {
-            continue;
+    for (i, p) in pairs.iter().enumerate().filter(|(_, p)| p.is_hit()) {
+        if said.insert(group[i]) {
+            out.push(words(*p, heads[i], heads[group[i]]));
         }
-        let worst = heads
-            .iter()
-            .find(|h| same_allergen_rows(h, hit))
-            .unwrap_or(hit);
-        said.push(hit);
-        out.push(words(*p, hit, worst));
     }
     out
 }
@@ -268,12 +295,7 @@ pub fn note_unreviewed_groups(
         .chain(view.other_allergies.iter_mut())
         .chain(view.adverse_effects.iter_mut());
     for line in lines.filter(|l| flagged.contains(&l.event_id)) {
-        // Built with `format!`: clinician words that name the drug list are prose, which
-        // no_drugref_dependency.rs admits only inside a format-family macro's arguments.
-        line.text = format!(
-            "{} (group from drugref, not clinically reviewed)",
-            line.text
-        );
+        line.text.push_str(NOT_REVIEWED);
     }
     view
 }
@@ -282,43 +304,6 @@ pub fn note_unreviewed_groups(
 #[path = "check_tests.rs"]
 mod tests;
 
-/// The two plan-named tests whose NAMES say "drugref". They live in this file's
-/// `#[cfg(test)]` tail, not in `check_tests.rs`: `no_drugref_dependency.rs` blanks a src file's
-/// `#[cfg(test)] mod` tail but scans a `#[path]`-included test file whole, and a test's name is
-/// not one of its exempt places.
 #[cfg(test)]
-mod no_drug_list_tests {
-    use super::tests::{amox, marks, med, not_checked, only, run, AMOX, AMOX_SODIUM};
-    use super::*;
-    use crate::allergy::test_fixtures::{coded, entry, id};
-
-    #[test]
-    fn same_code_marks_the_line_without_drugref() {
-        let a = only(vec![coded(
-            entry(1, "drug", "Augmentin", "allergy", "anaphylaxis", 1),
-            MOIETY_SYSTEM,
-            AMOX,
-        )]);
-        let got = run(
-            &a,
-            &[med(900, "Amoxil", Some(AMOX))],
-            &DrugFacts::Unavailable,
-        );
-        assert_eq!(
-            got[&id(900)],
-            marks(&["Allergy recorded: Augmentin → anaphylaxis"])
-        );
-    }
-
-    /// Review Focus 5: a salt of the allergen is a different code; with no drug list nothing can
-    /// say they are one drug, so the line is never silently clear.
-    #[test]
-    fn a_salt_without_drugref_is_not_checked() {
-        let a = only(vec![amox("anaphylaxis")]);
-        let line = [med(900, "amoxicillin sodium", Some(AMOX_SODIUM))];
-        assert_eq!(
-            run(&a, &line, &DrugFacts::Unavailable)[&id(900)],
-            not_checked()
-        );
-    }
-}
+#[path = "check_unverified_tests.rs"]
+mod unverified_tests;
