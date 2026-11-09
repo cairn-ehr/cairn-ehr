@@ -208,8 +208,8 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
 
 19. **The acts on a line.** A live line of the drug, other or adverse-effect list carries *Correct*, *De-label* and
     *Entered in error*; a historical line carries *Withdraw de-label*, an entered-in-error act aimed at the de-label it
-    rests on, and *Entered in error*, aimed at its own entry, so a de-labelled line is struck in one act (the ledger's
-    ruling on the plan's #TBD-2; the floor admits it, and withdrawn outranks historical, decision 14); a standing or
+    rests on, and *Entered in error*, aimed at its own entry, so a de-labelled line is struck in one act (the slice
+    ledger's ruling; the floor admits it, and withdrawn outranks historical, decision 14); a standing or
     previous "none known" line carries *Entered in error*. A line or "none known" line from a chart whose link to this
     one is in doubt carries none (decision 25), nor do Entered-in-error, "Earlier:" and "Not counted" lines. Each
     button's accessible name adds ": " and its line's text. De-label and Entered in error open one inline row under

@@ -398,7 +398,7 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
         )
     };
     // A withdrawn entry keeps its doubt mark and its older versions (A in A←B, B withdrawn), and
-    // the standing de-label it carried, if any (a de-labelled line struck in one act, TBD-2).
+    // the standing de-label it carried, if any (a de-labelled line struck in one act, ADR-0097 decision 19).
     let struck_entries = r.withdrawn.iter().map(|w| EnteredInError {
         text: format!(
             "Entered in error: {}{} {}{}",

@@ -1,7 +1,7 @@
 //! Pure tests for the words of the allergy list's struck and historical lines added by the
-//! slice-2 final review: who de-labelled a line (TBD-3), a withdrawal's reason and a de-label's
+//! slice-2 final review: who de-labelled a line (ADR-0097 decision 18), a withdrawal's reason and a de-label's
 //! note wherever the act is worded, a withdrawn de-labelled head that still says its de-label
-//! (TBD-2), and a "none known" line's doubt flag (C1). No database; every string is a
+//! (decision 19), and a "none known" line's doubt flag (C1). No database; every string is a
 //! clinician's exact words.
 use super::*;
 use crate::allergy::read::{ChallengeRow, KeyState};
@@ -14,7 +14,7 @@ fn struck(ls: &[EnteredInError]) -> Vec<&str> {
     ls.iter().map(|l| l.text.as_str()).collect()
 }
 
-/// TBD-3: a historical line names who de-labelled it and when, as paper's initialled
+/// Decision 18: a historical line names who de-labelled it and when, as paper's initialled
 /// "tolerated amoxil 03/22". The key's marker is worded INSIDE the bracket (after a comma), so
 /// an unconfirmed de-labeller never nests brackets; with no name, the marker alone.
 #[test]
@@ -130,7 +130,7 @@ fn a_delabels_note_is_shown_on_an_earlier_tail() {
     );
 }
 
-/// TBD-2: a de-labelled line struck as entered in error (the window's one act, aimed at its
+/// Decision 19: a de-labelled line struck as entered in error (the window's one act, aimed at its
 /// head entry) still says the de-label it carried, so no signed act vanishes; it is off the
 /// historical list and the strip.
 #[test]

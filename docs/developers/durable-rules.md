@@ -121,7 +121,7 @@ Every slice-1 rule below still holds.
   mix into the record gesture's, whose budget differs, and the correction's own ≤ 15 s budget can never be read off
   the table. Pins: `allergy_overlays_tests.rs::each_act_is_timed_with_its_own_kind`; `075_allergy_overlays_test.sql`
   (`the_three_overlay_gesture_kinds_are_accepted`).
-- **No signed act vanishes from the list's words** (ledger rulings TBD-2/TBD-3 and the withdrawal-reason gap;
+- **No signed act vanishes from the list's words** (the slice ledger's rulings, and its withdrawal-reason gap;
   ADR-0097 decisions 15, 18, 19). A historical line names its de-labeller and the day they signed, "(de-labelled
   {day} by {name})", the key's marker inside that one bracket (`thread::by_words_inside`); a withdrawal's reason and
   a de-label's note are shown wherever their act is worded; a de-labelled line struck as entered in error (one act,

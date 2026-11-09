@@ -131,7 +131,7 @@ fn an_interrupted_overlay_is_not_known_and_never_retried() {
 /// The target rule at its pure seam (runs in CI, unlike the DB walks): Correct and De-label name a
 /// live line only; Entered in error also names a "none known" line, the de-label a historical
 /// line rests on, or that historical line's own entry (striking a de-labelled line is one act,
-/// TBD-2). Each is filed under its own row's chart.
+/// ADR-0097 decision 19). Each is filed under its own row's chart.
 #[test]
 fn a_target_names_only_what_its_act_may_name() {
     let (a, v) = overlay_fixture(vec![]);

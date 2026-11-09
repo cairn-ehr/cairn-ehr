@@ -249,7 +249,7 @@ async fn an_act_on_a_doubted_charts_line_is_refused_before_the_key() {
     assert_eq!(signed, 2, "nothing was signed");
 }
 
-/// TBD-2 against a database: a de-labelled line is struck as entered in error in ONE act, aimed
+/// ADR-0097 decision 19 against a database: a de-labelled line is struck as entered in error in ONE act, aimed
 /// at its own entry; the struck line still says the de-label it carried, and the reason.
 #[tokio::test]
 async fn a_delabelled_line_is_struck_in_one_act() {

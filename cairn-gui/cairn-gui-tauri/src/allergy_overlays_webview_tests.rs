@@ -507,7 +507,7 @@ fn a_doubted_charts_line_carries_no_act() {
     assert!(guard < position(nones, "actionButton("), "{nones}");
 }
 
-/// TBD-2: a historical (de-labelled) line carries Entered in error aimed at its OWN entry
+/// ADR-0097 decision 19: a historical (de-labelled) line carries Entered in error aimed at its OWN entry
 /// (`line.event_id`) beside Withdraw de-label (aimed at the de-label), so striking a
 /// de-labelled line is one act, as on paper.
 #[test]

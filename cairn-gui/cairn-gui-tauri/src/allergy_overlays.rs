@@ -135,7 +135,7 @@ pub(crate) enum Names {
     /// A live line of the drug, other or adverse-effect list (Correct, De-label).
     Entry,
     /// A live line, a standing or previous "none known" line, or a historical line's de-label
-    /// (Withdraw de-label) or its own entry (Entered in error: one act strikes it, TBD-2).
+    /// (Withdraw de-label) or its own entry (Entered in error: one act strikes it, ADR-0097 decision 19).
     Withdrawable,
 }
 
