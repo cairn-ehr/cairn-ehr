@@ -1,5 +1,6 @@
 //! Folds a patient's allergy rows into THREADS and decides what each head says now (allergy
-//! slice 2). Pure: no database, no clock, no words a clinician reads except `ignored_overlays`.
+//! slice 2). Pure: no database, no clock. The only words a clinician reads that are made here are
+//! `ignored_overlays` and the byline helpers ([`by_words`], [`key_marker`]).
 //!
 //! Nothing in the allergy record is ever edited. A correction is a NEW entry naming the line it
 //! replaces (`AllergyRow::corrects`); a de-label (`ChallengeRow`) or an entered-in-error
@@ -21,11 +22,13 @@
 //! 5. **Status, per head** (ruling R-4a): an overlay covers the version it NAMES and the versions
 //!    that one replaced, never a later correction of it. So a head is *withdrawn* if a counted
 //!    withdrawal names it, else *historical* if a standing de-label names it, else *live*. An
-//!    overlay naming an older version only hides that version under a live head's `earlier`: a
-//!    correction signed concurrently with (or after) a withdrawal or de-label of its target is
-//!    never struck by it.
+//!    overlay naming an older version changes no head's status; it is said on that version's
+//!    "Earlier:" line (ruling R-4c, the view's job): a correction signed concurrently with (or
+//!    after) a withdrawal or de-label of its target is never struck by it.
 //! 6. **Differing accounts**: two live heads of the same allergen ([`same_allergen`]) that
-//!    disagree ([`accounts_differ`]) are both marked.
+//!    disagree ([`accounts_differ`]) are both marked; so are two sibling heads of ONE thread (a
+//!    fork of concurrent corrections) whose recorded words differ at all, even when a fork renamed
+//!    the allergen — they are competing versions of one record, not two allergies.
 //!
 //! Every tie breaks on (HLC, event id), so the fold is deterministic on every node.
 use super::read::{AllergyRow, ChallengeRow, KeyState, NoneRow, PatientAllergies, RetractionRow};
@@ -44,7 +47,11 @@ pub struct Head<'a> {
     pub row: &'a AllergyRow,
     /// The versions this head replaced, newest first.
     pub earlier: Vec<&'a AllergyRow>,
-    /// Another live head of the same allergen disagrees with this one.
+    /// The thread this head belongs to (its set's smallest event id): two heads sharing it are
+    /// concurrent versions of one record.
+    pub thread: Uuid,
+    /// Another live head disagrees with this one: one of the same allergen whose account differs,
+    /// or a sibling head of the same thread whose recorded words differ at all.
     pub differing: bool,
 }
 
@@ -74,7 +81,7 @@ pub struct Withdrawn<'a, T> {
 }
 
 /// The fold's answer. Every list is newest first except `live` (the view sorts it) and
-/// `ignored_overlays` (in the read's order).
+/// `ignored_overlays` (de-labels, then withdrawals, each in the read's order).
 #[derive(Debug)]
 pub struct Resolved<'a> {
     pub live: Vec<Head<'a>>,
@@ -85,7 +92,8 @@ pub struct Resolved<'a> {
     pub withdrawn_challenges: Vec<Withdrawn<'a, ChallengeRow>>,
     /// Withdrawn "none known" statements: they stand for no list.
     pub withdrawn_none: Vec<&'a NoneRow>,
-    /// "Not counted: …" lines for the overlays step 1 set aside.
+    /// "Not counted: …" lines for the overlays step 1 set aside: de-labels first, then withdrawals,
+    /// each in the read's order.
     pub ignored_overlays: Vec<String>,
     /// The newest COUNTED withdrawal naming each event id (an entry, de-label or "none known"
     /// statement), so the view can say it on an older version's "Earlier:" line (ruling R-4c).
@@ -189,9 +197,10 @@ fn suspicion(
     }
 }
 
-/// Ruling R-4b: does an overlay count? A trusted one always does. A SUSPECT one (repudiated key,
-/// or naming another chart's record) counts only when it ADDS a warning: a withdrawal of a
-/// de-label (the allergy is back) or of a "none known" statement (the reassurance is gone). A
+/// Ruling R-4b: does an overlay count? A trusted one always does. A SUSPECT one (repudiated or
+/// doubtful key, or naming another chart's record) counts only when it ADDS a warning: a
+/// withdrawal of a de-label (the allergy is back) or of a "none known" statement (the reassurance
+/// is gone). A
 /// suspect de-label, or a suspect withdrawal of an entry, would TAKE a warning away on the word of
 /// a key nobody can vouch for, so it counts for nothing. Over-warning is the safe error.
 fn overlay_counts(suspect: bool, is_withdrawal: bool, named: Named) -> bool {
@@ -256,7 +265,7 @@ fn heads(entries: &[AllergyRow]) -> Vec<Head<'_>> {
         sets.entry(root(&parent, e.event_id)).or_default().push(e);
     }
     let mut out = Vec::new();
-    for members in sets.into_values() {
+    for (thread, members) in sets {
         let mut heads: Vec<&AllergyRow> = members
             .iter()
             .copied()
@@ -271,6 +280,7 @@ fn heads(entries: &[AllergyRow]) -> Vec<Head<'_>> {
         out.extend(heads.into_iter().map(|row| Head {
             row,
             earlier: earlier_of(row, &by_id, &head_ids),
+            thread,
             differing: false,
         }));
     }
@@ -392,14 +402,21 @@ pub fn resolve(a: &PatientAllergies) -> Resolved<'_> {
         }
     }
 
-    // Step 6: differing accounts, over every live head of every list and chart.
+    // Step 6: differing accounts, over every live head of every list and chart, and between
+    // sibling heads of one thread whatever they now name.
     let differing: Vec<bool> = live
         .iter()
         .map(|h| {
             live.iter().any(|o| {
                 o.row.event_id != h.row.event_id
-                    && same_allergen(&o.row.term, &h.row.term)
-                    && accounts_differ(o.row, h.row)
+                    && if o.thread == h.thread {
+                        // Siblings of one thread compete even when a fork renamed the allergen.
+                        !same_allergen(&o.row.term, &h.row.term)
+                            || o.row.allergen_kind != h.row.allergen_kind
+                            || accounts_differ(o.row, h.row)
+                    } else {
+                        same_allergen(&o.row.term, &h.row.term) && accounts_differ(o.row, h.row)
+                    }
             })
         })
         .collect();

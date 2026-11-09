@@ -21,7 +21,8 @@ pub struct AllergyPane {
     pub other_allergies: Vec<AllergyLine>,
     pub adverse_effects: Vec<AllergyLine>,
     /// "Previously recorded: …" lines: "none known" statements standing for no list (overridden,
-    /// superseded, of an unknown scope, or on a chart whose link is in doubt).
+    /// superseded, of an unknown scope, of a suspect (repudiated or doubtful) key, or on a chart
+    /// whose link is in doubt).
     pub previously_none: Vec<NoneLineView>,
     /// The standing "none known" statement(s), each naming when and by whom it was signed.
     pub standing_none: Vec<NoneLineView>,

@@ -41,8 +41,8 @@ pub struct EntryLine {
     /// The terminal's local day it was recorded (the caller's offset, R3).
     pub recorded: NaiveDate,
     /// This line's older versions, "Earlier: … (recorded 8 Nov 2026 by Dr Ada)", newest first,
-    /// each ending with any counted overlay naming it (" — entered in error …" / " — de-labelled
-    /// …: tolerated …", ruling R-4c).
+    /// each ending with a counted withdrawal or a standing de-label naming it (" — entered in
+    /// error …" / " — de-labelled …: tolerated …", ruling R-4c).
     pub earlier: Vec<String>,
     /// On a historical line: the standing de-label that made it so (the window withdraws it).
     pub challenge: Option<Uuid>,
@@ -83,8 +83,9 @@ pub struct AllergyView {
     /// Other allergies (sorted), then other/unknown-allergen rows of an unknown kind.
     pub other_allergies: Vec<EntryLine>,
     pub adverse_effects: Vec<EntryLine>,
-    /// "Previously recorded: …": statements overridden in every list they cover, superseded, or
-    /// on a doubted chart (those end with the doubt mark and never stand for this patient).
+    /// "Previously recorded: …": statements overridden in every list they cover, superseded, of a
+    /// suspect (repudiated or doubtful) key, or on a doubted chart (those end with the doubt mark
+    /// and never stand for this patient).
     pub previously_none: Vec<NoneLine>,
     /// The statement(s) a "none known" list rests on, with who signed (paper's initialled NKDA):
     /// "No known allergies — asked 8 Nov 2026 by Dr Bea". Drug first when two stand.
@@ -224,7 +225,7 @@ pub fn build_view(a: &PatientAllergies, offset: FixedOffset) -> AllergyView {
     // R16): an "all" statement stands for drugs while no drug allergy exists, and for the other
     // list while no other allergy exists. An unknown scope stands for nothing (history only).
     // A doubted chart's statement stands for nothing either: a stranger's NKDA would under-warn
-    // (decision 11 shows a doubted chart's entries because over-warning is the safe error). Nor
+    // (ADR-0096 decision 11 shows a doubted chart's entries because over-warning is the safe error). Nor
     // does a suspect key's — since repudiated, or doubtful (plan D4, review I1: such a key never
     // takes a warning away). A withdrawn
     // statement is not even history: it is only "Entered in error".

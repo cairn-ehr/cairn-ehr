@@ -191,7 +191,7 @@ fn overlay_presses_go_through_press_once() {
         "charts: allergyCharts,",
         "credential: signerCredential(),",
         "afterSigned(answer, patient, false);",
-        "await afterRefused(failure, patient, false, (text) => setMessage(said, text));",
+        "await afterRefused(failure, patient, false, sayHere);",
     ] {
         assert!(sign.contains(step), "{step}: {sign}");
     }
@@ -357,12 +357,32 @@ fn cancel_and_escape_wait_for_a_press_in_flight() {
     );
 }
 
+/// Final check (review HIGH-1): a list drawn while a press is in flight — a hold boundary's
+/// unattended re-read, "Read this chart again", another pane's act — rebuilds every `<li>`, so
+/// the open row and its error paragraph are detached. A refusal written there is never seen, and
+/// the row's vanishing is exactly what success looks like ("I struck that NKDA"). So the row says
+/// it only while it is still on screen; otherwise the status line does.
+#[test]
+fn a_refusal_after_a_redraw_mid_press_is_said_on_the_status_line() {
+    let sign = js_fn(OVERLAYS_JS, "signOverlay");
+    assert!(
+        sign.contains("(said.isConnected ? setMessage(said, text) : sayAllergy(text))"),
+        "{sign}"
+    );
+    assert!(
+        sign.contains("await afterRefused(failure, patient, false, sayHere);"),
+        "{sign}"
+    );
+}
+
 /// Fix round 1, item 1 (review, ruling R-6a): a correction whose line is no longer a live line
 /// of a NEW pane (corrected, de-labelled or withdrawn elsewhere) would livelock — Rust refuses
 /// "That allergy line is no longer on this chart", the window re-reads, the correction survives
 /// the redraw, and every Sign is refused again. So on any draw where `allergyCorrecting` is not a
 /// live line's `event_id`, the correction is SUSPENDED: the typed words stay, Sign is down, and
-/// the page's sentence replaces "Correcting: …". Correct on a line resumes (via
+/// the page's sentence replaces "Correcting: …". A line still listed but now on a doubted
+/// chart is lost too (final check, review MEDIUM-3): it carries no act, and Rust refuses one —
+/// the same livelock. Correct on a line ends the suspension (via
 /// `resetAllergyForm` → `clearCorrection`); Cancel correction clears as before.
 #[test]
 fn a_correction_whose_target_left_the_pane_is_suspended_not_resent() {
@@ -376,7 +396,7 @@ fn a_correction_whose_target_left_the_pane_is_suspended_not_resent() {
     for step in [
         "if (allergyCorrecting === null) return;",
         "pane.drug_allergies.concat(pane.other_allergies, pane.adverse_effects)",
-        "line.event_id === allergyCorrecting",
+        "line.event_id === allergyCorrecting && !line.doubted_chart",
         "correctionSuspended = true;",
         "el(\"allergy-correcting-line\").hidden = true;",
         "el(\"allergy-correcting-gone\").hidden = false;",
@@ -406,7 +426,8 @@ fn a_correction_whose_target_left_the_pane_is_suspended_not_resent() {
     assert!(
         block.contains(
             "<p id=\"allergy-correcting-gone\" hidden>The line you were correcting has changed on \
-             the record — press Correct on its current line, or Cancel correction.</p>"
+             the record, or its chart's link came into doubt — press Correct on its current line \
+             if it has one, or Cancel correction.</p>"
         ),
         "{block}"
     );

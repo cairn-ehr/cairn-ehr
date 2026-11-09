@@ -83,6 +83,57 @@ fn two_corrections_of_one_line_are_two_accounts() {
     assert!(!head(&r, 2).differing && !head(&r, 3).differing);
 }
 
+/// Two concurrent corrections of one line that rename what it names are still competing
+/// versions of ONE record: both are flagged, though the names no longer match (review finding:
+/// a fork that fixed the spelling two ways, or turned one branch into an adverse effect, read as
+/// two unrelated allergies with nothing saying they compete).
+#[test]
+fn a_fork_that_renames_the_allergen_is_still_differing_accounts() {
+    let p = pa(
+        vec![
+            entry(1, "drug", "amoxicilin", "allergy", "rash", 8),
+            correcting(entry(2, "drug", "amoxicillin", "allergy", "rash", 9), 1),
+            correcting(
+                entry(3, "drug", "amoxycillin", "adverse-effect", "rash", 9),
+                1,
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert_eq!(live_ids(&r), vec![id(2), id(3)]);
+    assert!(head(&r, 2).differing && head(&r, 3).differing);
+
+    // A fork whose branches differ only in what KIND of allergen it names.
+    let p = pa(
+        vec![
+            pen(1, "rash", 8),
+            correcting(entry(2, "drug", "penicillin", "allergy", "rash", 9), 1),
+            correcting(entry(3, "other", "penicillin", "allergy", "rash", 9), 1),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert!(head(&r, 2).differing && head(&r, 3).differing);
+
+    // Two unrelated entries that merely name different allergens are NOT differing accounts.
+    let p = pa(
+        vec![
+            entry(1, "drug", "amoxicillin", "allergy", "rash", 8),
+            entry(2, "drug", "aspirin", "adverse-effect", "gi-upset", 9),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let r = resolve(&p);
+    assert!(!head(&r, 1).differing && !head(&r, 2).differing);
+}
+
 /// A fork whose branches each grew: a head's `earlier` is its own line of versions, not the
 /// other branch's.
 #[test]
@@ -339,5 +390,62 @@ fn a_doubtful_keys_overlays_count_only_to_add_a_warning() {
             "Not counted: entered in error by Dr Ada (signer unconfirmed) \
              — its signer was enrolled by a key since repudiated"
         ]
+    );
+}
+
+/// Final check (review, test gap 3): overlays that name another overlay are refused at the
+/// authoring door but ADMITTED at the remote door, so they reach the fold. A withdrawal of a
+/// withdrawal must NOT undo the first (ADR-0097 D3): honouring it would re-hide an allergy, a
+/// warning taken away. A de-label naming a "none known" statement lifts nothing.
+#[test]
+fn an_overlay_naming_an_overlay_changes_nothing() {
+    let p = pa(
+        vec![pen(1, "anaphylaxis", 8)],
+        vec![none(20, "drug", 8)],
+        vec![challenge(5, 1, 9), challenge(8, 20, 9)],
+        vec![retraction(6, 5, 10), retraction(7, 6, 11)],
+    );
+    let r = resolve(&p);
+    assert_eq!(live_ids(&r), vec![id(1)], "the allergy is back in force");
+    assert!(r.historical.is_empty());
+    assert_eq!(r.withdrawn_challenges.len(), 1);
+    assert_eq!(r.withdrawn_challenges[0].row.event_id, id(5));
+    assert_eq!(r.withdrawn_challenges[0].by.event_id, id(6));
+    assert!(
+        r.withdrawn_none.is_empty(),
+        "the none statement still stands"
+    );
+}
+
+/// Final check (review, test gap 4): two de-labels of one line (two clinicians, perhaps across a
+/// partition). The line rests on the NEWEST standing one — the one "Withdraw de-label" names —
+/// and withdrawing it leaves the line historical on the older one until that is withdrawn too.
+/// (That the window does not yet say a second de-label stands is #1048.)
+#[test]
+fn a_line_with_two_delabels_rests_on_the_newest_standing_one() {
+    let resolve_with = |retractions: Vec<RetractionRow>| {
+        let p = pa(
+            vec![pen(1, "anaphylaxis", 8)],
+            vec![],
+            vec![challenge(5, 1, 9), challenge(6, 1, 10)],
+            retractions,
+        );
+        let r = resolve(&p);
+        (
+            live_ids(&r),
+            r.historical
+                .iter()
+                .map(|h| h.challenge.event_id)
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(resolve_with(vec![]), (vec![], vec![id(6)]));
+    assert_eq!(
+        resolve_with(vec![retraction(7, 6, 11)]),
+        (vec![], vec![id(5)])
+    );
+    assert_eq!(
+        resolve_with(vec![retraction(7, 6, 11), retraction(8, 5, 12)]),
+        (vec![id(1)], vec![])
     );
 }

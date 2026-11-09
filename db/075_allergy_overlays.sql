@@ -14,8 +14,8 @@
 -- targets (cairn_node::allergy).
 --
 -- THE TWO TIERS (ADR-0051, the db/041 idiom, as db/074). STRUCTURAL — a key's JSON type, a uuid
--- target, a blank tolerated term, a date value present exactly when its precision says not-known —
--- refuses at BOTH doors. CLOSED VOCABULARIES and REFERENCES — the schema tag, the date's words,
+-- target, a blank tolerated term, a date value that contradicts its precision (it must be null
+-- exactly when the precision says not-known) — refuses at BOTH doors. CLOSED VOCABULARIES and REFERENCES — the schema tag, the date's words,
 -- shape and window, a filled coding, what the target IS and which chart it sits on — refuse at the
 -- AUTHORING door only (`cairn.remote_apply` <> 'on'): a peer may overlay a target this node has not
 -- received yet, and a newer peer's word must never wedge sync (ADR-0056).
@@ -210,15 +210,23 @@ CREATE INDEX IF NOT EXISTS clinical_allergy_retraction_content_address_idx ON cl
 
 -- 8. The appliers read the CLEAR payload (ADR-0052): NULL means no custody here — nothing to
 --    project; the late-custody path re-runs it when a key lands. No schema_version filter (a
---    peer's /2 projects under /1's keys; ADR-0096 decision 8's reasoning). A target that is not a
---    uuid is SKIPPED, never raised: a sealed peer body admitted without custody never met the
---    structural floor, and a raise here would fail the late-custody heal (the db/071 idiom).
+--    peer's /2 projects under /1's keys; ADR-0096 decision 8's reasoning). A body the read could
+--    not represent — a target that is not a uuid; for a de-label, a tolerated term or a date
+--    precision that is not a string (the read takes both as text) — is SKIPPED, never raised: a
+--    sealed peer body admitted without custody never met the structural floor, a raise here would
+--    fail the late-custody heal (the db/071 idiom), and a NULL there would fail the whole list's
+--    read. A skipped overlay is held but unprojected, so the read counts it unreadable and its
+--    target stays live (over-warns).
 CREATE OR REPLACE FUNCTION clinical_allergy_challenge_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := cairn_clear_payload(e);
 BEGIN
-    IF p IS NULL OR cairn_allergy_target_problem(p) IS NOT NULL THEN RETURN; END IF;
+    IF p IS NULL OR cairn_allergy_target_problem(p) IS NOT NULL
+       OR jsonb_typeof(p #> '{tolerated,term}') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(p #> '{date,precision}') IS DISTINCT FROM 'string' THEN
+        RETURN;
+    END IF;
     INSERT INTO clinical_allergy_challenge
         (event_id, patient_id, target, tolerated_term, tolerated_coding, date_precision, date_value,
          text, hlc_wall, hlc_counter, origin, content_address)

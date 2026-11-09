@@ -114,7 +114,7 @@ function startCorrection(line) {
 
 /**
  * The form corrects nothing any more (allergies.js's `resetAllergyForm` calls this — so Correct on
- * a line, Cancel correction and every emptying of the form resume a suspended correction).
+ * a line, Cancel correction and every emptying of the form END a suspended correction).
  */
 function clearCorrection() {
   allergyCorrecting = null;
@@ -127,13 +127,15 @@ function clearCorrection() {
 
 /**
  * Suspend the correction when `pane` (a list just drawn, allergies.js's `renderAllergies`) no
- * longer has its line among the live ones: the typed words stay, Sign goes down
- * (`syncAllergyButtons`), and the page's sentence replaces "Correcting: …".
+ * longer has its line among the live ones, or has it on a chart whose link came into doubt: the
+ * typed words stay, Sign goes down (`syncAllergyButtons`), and the page's sentence replaces
+ * "Correcting: …".
  */
 function suspendLostCorrection(pane) {
   if (allergyCorrecting === null) return;
   const live = pane.drug_allergies.concat(pane.other_allergies, pane.adverse_effects);
-  if (live.some((line) => line.event_id === allergyCorrecting)) return;
+  // A line on a doubted chart carries no act (`lineActions`), and Rust refuses one: lost too.
+  if (live.some((line) => line.event_id === allergyCorrecting && !line.doubted_chart)) return;
   correctionSuspended = true;
   el("allergy-correcting-line").hidden = true;
   el("allergy-correcting-gone").hidden = false;
@@ -217,7 +219,8 @@ function closeOverlayRow(li) {
  * the arguments every write carries: the chart, the chart set the list was read over, the key.
  * Signed: `afterSigned` redraws the list (the row goes with it). Refused: `afterRefused` — a
  * stale list is read again; any other refusal ("Name what was tolerated.", a date it cannot
- * read) is said IN the row, what was typed kept.
+ * read) is said IN the row, what was typed kept — or on the status line when a list drawn
+ * mid-press has taken the row away.
  */
 async function signOverlay(row, send) {
   const patient = allergyPatient; // the chart this press acts on
@@ -233,7 +236,10 @@ async function signOverlay(row, send) {
     clearSigner(true);
   } catch (failure) {
     clearSigner();
-    await afterRefused(failure, patient, false, (text) => setMessage(said, text));
+    // A list drawn mid-press (a hold timer, another pane's act, a read in flight) replaces the
+    // row: a refusal said into it then would be unseen, and its vanishing reads as success.
+    const sayHere = (text) => (said.isConnected ? setMessage(said, text) : sayAllergy(text));
+    await afterRefused(failure, patient, false, sayHere);
     return;
   }
   afterSigned(answer, patient, false);

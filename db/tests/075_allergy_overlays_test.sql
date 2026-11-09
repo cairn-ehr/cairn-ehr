@@ -342,5 +342,35 @@ BEGIN
         'a_shred_scrubs_the_withdrawal_row';
 END $$;
 
+-- 6. Bodies the floor never saw (a sealed peer overlay admitted remotely without its DEK, projected
+--    when custody lands) that the read could not represent: none may raise (the heal would fail)
+--    and none may be projected (a NULL tolerated term or date precision would fail the whole
+--    list's read). Held but unprojected, each is counted unreadable and leaves its target live.
+SELECT pg_temp.put(r.id, pg_temp.chart(), r.t, r.v, r.pl)
+FROM (VALUES
+    ('75757575-0011-7575-8575-757575757575', 'clinical.allergy-challenge.asserted', 'clinical.allergy-challenge/1',
+     pg_temp.challenge() -> 'payload' #- '{tolerated,term}'),
+    ('75757575-0012-7575-8575-757575757575', 'clinical.allergy-challenge.asserted', 'clinical.allergy-challenge/1',
+     pg_temp.challenge() -> 'payload' #- '{date,precision}'),
+    ('75757575-0013-7575-8575-757575757575', 'clinical.allergy-challenge.asserted', 'clinical.allergy-challenge/1',
+     pg_temp.challenge('{"target":"E1"}') -> 'payload'),
+    ('75757575-0014-7575-8575-757575757575', 'clinical.allergy-retraction.asserted', 'clinical.allergy-retraction/1',
+     pg_temp.retraction('E1') -> 'payload'),
+    ('75757575-0015-7575-8575-757575757575', 'clinical.allergy-retraction.asserted', 'clinical.allergy-retraction/1',
+     jsonb_set(pg_temp.retraction(pg_temp.entry_id()) -> 'payload', '{target}', '7')))
+  AS r(id, t, v, pl);
+DO $$
+BEGIN
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_allergy_challenge
+                        WHERE event_id IN ('75757575-0011-7575-8575-757575757575',
+                                           '75757575-0012-7575-8575-757575757575',
+                                           '75757575-0013-7575-8575-757575757575')),
+        'a_delabel_the_read_could_not_represent_is_skipped_never_raised';
+    ASSERT NOT EXISTS (SELECT 1 FROM clinical_allergy_retraction
+                        WHERE event_id IN ('75757575-0014-7575-8575-757575757575',
+                                           '75757575-0015-7575-8575-757575757575')),
+        'a_withdrawal_whose_target_is_not_a_uuid_is_skipped_never_raised';
+END $$;
+
 ROLLBACK;
 \o

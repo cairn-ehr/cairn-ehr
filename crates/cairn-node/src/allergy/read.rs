@@ -10,8 +10,8 @@
 //! view can mark them. Vocabulary columns stay `String`: a peer's newer word must still read.
 //!
 //! Every row also carries its signer key's standing ([`KeyState`], db/004's
-//! `cairn_key_confirmation`), so the view can say when a key was repudiated after it signed. This
-//! module only reports rows; which overlay takes which entry off the list is the view's job.
+//! `cairn_key_confirmation`), so the view can say when a key is unconfirmed, doubtful, or was
+//! repudiated after it signed. This module only reports rows; which overlay takes which entry off the list is the view's job.
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;

@@ -6,7 +6,7 @@
   flag, its "not guaranteed" (b), and (c)'s missing unconfirmed-key marker; builds slice 2 of the allergy design's §5)
 - **Date:** 2026-11-09
 - **Spec version at acceptance:** 0.99
-- **Issues:** draft PR [#1038](https://github.com/cairn-ehr/cairn-ehr/pull/1038) (allergy slice 2). Design:
+- **Issues:** PR [#1038](https://github.com/cairn-ehr/cairn-ehr/pull/1038) (allergy slice 2). Design:
   `docs/superpowers/specs/2026-11-08-allergy-stream-design.md` §3.5, §3.6, §3.8, §7 risk 4; plan:
   `docs/superpowers/plans/2026-11-09-allergy-slice-2-overlays-and-differing-accounts.md`. Builds
   [#1027](https://github.com/cairn-ehr/cairn-ehr/issues/1027) (decision 18). Touches
@@ -16,7 +16,12 @@
   trace of an overlay with no effect, (f)), [#1041](https://github.com/cairn-ehr/cairn-ehr/issues/1041) (the byline markers, (g)), [#1042](https://github.com/cairn-ehr/cairn-ehr/issues/1042) (window polish, (i)), [#1043](https://github.com/cairn-ehr/cairn-ehr/issues/1043)
   (test gaps, (k)), [#1044](https://github.com/cairn-ehr/cairn-ehr/issues/1044) (files over 500 lines), [#1045](https://github.com/cairn-ehr/cairn-ehr/issues/1045) (a withdrawn, then shredded entry leads the strip, (e)),
   [#1046](https://github.com/cairn-ehr/cairn-ehr/issues/1046) (should withdrawing a correction re-expose what it replaced? a maintainer decision, (d)), [#1047](https://github.com/cairn-ehr/cairn-ehr/issues/1047) (a struck
-  "none known" line does not say who withdrew it, decision 18).
+  "none known" line does not say who withdrew it, or when, decision 18). Filed by the final check:
+  [#1048](https://github.com/cairn-ehr/cairn-ehr/issues/1048) (a line with two standing de-labels: withdrawing one leaves
+  it de-labelled, unsaid), [#1049](https://github.com/cairn-ehr/cairn-ehr/issues/1049) (an uncounted withdrawal names
+  no target; a doubtful key's byline reads as unconfirmed), [#1050](https://github.com/cairn-ehr/cairn-ehr/issues/1050)
+  (an open overlay row is lost on a redraw), [#1051](https://github.com/cairn-ehr/cairn-ehr/issues/1051) (slice 1's
+  appliers, db/074, on a peer body the floor never saw).
 - **Builds on:** [ADR-0096](0096-the-allergy-list.md) (the allergy list) ·
   [ADR-0052](0052-born-sealed-clinical-bodies.md) (born sealed) ·
   [ADR-0053](0053-per-write-human-authorship.md) (the human signs, the node seals) ·
@@ -43,7 +48,7 @@ design §3.8). The maintainer decided four things before the plan (M1–M4); the
 replaces D1, and **R-4b** refines D4 and the plan review's R-P4. The slice's final review then found five things
 built in this ADR — a doubted chart's line could be struck from here (C1, decision 25), a doubtful key counted (I1,
 decisions 10–11), a strike of a corrected line said nothing of its earlier versions (I2, decision 19), De-label
-prefilled what was tolerated (M3) and a correction's twin named no target (M5, decision 1) — and the ledger ruled
+prefilled what was tolerated (the final review's M3) and a correction's twin named no target (M5, decision 1) — and the ledger ruled
 that a de-labelled line is struck in one act and names its de-labeller (decisions 18–19). Each decision below says
 which it builds. The first
 signed event of each new type freezes its shape (principle 11), so the wire is written down exactly.
@@ -170,7 +175,10 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
     lowercasing, trimming and collapsing whitespace (`thread::same_allergen`); spelling is not forgiven. Two accounts
     of one allergen differ when their kinds differ (allergy vs adverse effect), or when both reactions are known
     words, neither is `not-known`, and they differ; a row carrying a kind or reaction word this build does not know
-    never differs, and the same account twice does not (`accounts_differ`). The test runs over every live head of
+    never differs, and the same account twice does not (`accounts_differ`). Two sibling heads of ONE thread (concurrent
+    corrections of one line) are competing versions of one record, so they differ when their recorded words differ
+    at all — term, allergen kind, kind or reaction — even when a fork renamed the allergen and the spelling test alone
+    would call them two allergies; the same words twice still do not differ. The test runs over every live head of
     both lists and every member chart, a doubted chart's included. Every head in a differing pair has
     " — differing accounts" appended to its line's text, after any doubt mark, so the mark is on every such
     head's line in the expanded list, and on the strip for an allergy, the only kind the strip lists. Making both
@@ -192,7 +200,8 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
       tail; with its older versions under it;
     - a withdrawn de-label: "Entered in error: de-label — tolerated {term}{ — note} (withdrawn {day}{by}){ — reason}";
     - a withdrawn statement: "Entered in error: no known allergies (asked {day}{by}){doubt mark}{ — reason}", or "no
-      known drug allergies" (who withdrew it is not said, [#1047](https://github.com/cairn-ehr/cairn-ehr/issues/1047));
+      known drug allergies", or "none known ({scope})" for a scope this build does not know (who withdrew it, and
+      when, is not said, [#1047](https://github.com/cairn-ehr/cairn-ehr/issues/1047));
     - an older version: "Earlier: {line words} (recorded {day}{by})", newest first, plus decision 15's tail;
     - `{ — reason}` and `{ — note}` are the act's text, trimmed, and nothing when it is blank or absent
       (`history_words::dash_note`);
@@ -243,8 +252,10 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
     never retried live. Any signed act empties a correction open in the form: the line it names may be gone from the
     list read back, and clearing only the correction would leave its words to be signed as a new entry.
 22. **A correction whose line has left the list is suspended** (ruling R-6a). On any draw where the line the form is
-    correcting is not a live line, the typed words stay, *Sign* is disabled, and the page says "The line you were
-    correcting has changed on the record — press Correct on its current line, or Cancel correction." Re-sending it
+    correcting is not a live line, or is one on a chart whose link has come into doubt (it carries no act, and the
+    window refuses one), the typed words stay, *Sign* is disabled, and the page says "The line you were correcting
+    has changed on the record, or its chart's link came into doubt — press Correct on its current line if it has
+    one, or Cancel correction." Re-sending it
     could only be refused, read again and refused, forever. Correct on a line, or Cancel correction, ends the
     suspension.
 23. **Each history list has its own heading**, hidden with its list: "Previously recorded:", "Historically reported
@@ -284,10 +295,10 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
   with "1 allergy record cannot be read on this terminal" for good, though the entry was struck. Over-warning, but a
   permanent false lead.
 - **(f) An overlay that counts but has no effect leaves no trace** ([#1040](https://github.com/cairn-ehr/cairn-ehr/issues/1040)). A withdrawal of a de-label that itself
-  does not count; and, from a key that is not suspect, a de-label naming something other than an entry, on its own
-  chart (only a remote door admits it), decision (a)'s withdrawal of a withdrawal, and an overlay naming an event this
-  node does not hold or cannot read (until that event arrives or becomes readable): none is listed, not even under
-  "Not counted".
+  does not count; and — each when its key is not suspect (a suspect key's is listed "Not counted") — a de-label
+  naming something other than an entry, on its own chart (only a remote door admits it), decision (a)'s withdrawal of
+  a withdrawal, and an overlay naming an event this node does not hold or cannot read (until that event arrives or
+  becomes readable): none is listed, not even under "Not counted".
 - **(g) No marker for a signer this node cannot name, on a line's own byline** ([#1041](https://github.com/cairn-ehr/cairn-ehr/issues/1041)). An expanded line whose key
   this node cannot name ends " · recorded {YYYY-MM-DD}" (the window draws the pane's ISO `recorded` day) with no
   "(key had been repudiated)"; `by_words` shows the marker alone everywhere else. A marker after a name already in
@@ -321,7 +332,8 @@ signed event of each new type freezes its shape (principle 11), so the wire is w
   (`crates/cairn-node/tests/allergy_overlays.rs::signing_a_challenge_and_a_retraction_records_human_authorship`
   asserts it). A reader without
   custody of an overlay counts it in `unreadable`, which leads the strip, and reads its target as live
-  (`an_unreadable_overlay_is_counted_and_its_target_stays_live`, `an_unreadable_overlay_leaves_its_target_live`).
+  (`an_unreadable_overlay_is_counted_and_its_target_stays_live`, `an_unreadable_overlay_leaves_its_target_live`;
+  the first reaches it through a shred, which leaves the row as unprojected as missing custody does).
 
 ## Consequences
 

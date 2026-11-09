@@ -2431,7 +2431,8 @@ each as **`allergy-correct`**, **`allergy-challenge`** and **`allergy-retract`**
 budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
 
 **Setup.** Section 27's setup (sections 0 and 2, section 16's Setup and Measurement 2, `nurse-a`, its `cnode` and
-`achart` functions), and section 23's `dr-b`. Section 1's `/tmp/dr-a.key` links two charts. Register:
+`achart` functions), and section 19's `dr-b` (enrolled from the window, so with a passphrase). Section 1's
+`/tmp/dr-a.key` links two charts. Register:
 
 ```bash
 O1=$(achart "Overlay One" 1981-01-01)      # Correct, five timed runs
@@ -2527,8 +2528,9 @@ and `$L1`'s list shows the corrected line. Then:
       is read again. Nothing is signed (`clinical_allergy_challenge` has no new row).
 - [ ] **The suspended correction (R-6a).** Terminal B: *Correct* on a live line and change its reaction, leaving the
       form unsigned. Terminal A: *Entered in error* on that line. Terminal B: *Sign*. The window reads the list again;
-      the form keeps what was typed, *Sign* is disabled, and "The line you were correcting has changed on the record —
-      press Correct on its current line, or Cancel correction." replaces "Correcting: …". Pressing *Sign* again sends
+      the form keeps what was typed, *Sign* is disabled, and "The line you were correcting has changed on the record,
+      or its chart's link came into doubt — press Correct on its current line if it has one, or Cancel correction."
+      replaces "Correcting: …". Pressing *Sign* again sends
       nothing. *Cancel correction* empties the form and *Sign* comes back.
 - [ ] Skip the two-terminal checks if a second window cannot be run against this node, and say so.
 

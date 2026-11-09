@@ -146,7 +146,8 @@ pub(crate) struct Target {
     pub chart: Uuid,
 }
 
-/// Read the list again over the chart set the window sent, in one snapshot, and find `target`
+/// Read the list again over the patient's CURRENT chart set, in one snapshot, check it is the set
+/// the window sent (`check_displayed_set`), and find `target`
 /// on it (`target_on`). Said before the key: a passphrase that writes nothing is a step paper
 /// never has.
 ///

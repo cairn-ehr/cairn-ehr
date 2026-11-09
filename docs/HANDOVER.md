@@ -97,8 +97,9 @@
 >   entry, a "none known" statement or a de-label); an overlay covers the version it names and what that replaced, never a
 >   later correction; a suspect overlay (repudiated or doubtful key, or naming another chart) counts only to ADD a warning;
 >   no act on a doubted-link chart's line; differing accounts flagged; byline key markers (#1027 built). Open: **#1039** ·
->   **#1040** · **#1041** · **#1042** · **#1043** · **#1044** · **#1045** · **#1046** (a decision) · **#1047**. Owed by a
->   human: **RUNBOOK §28**.
+>   **#1040** · **#1041** · **#1042** · **#1043** · **#1044** · **#1045** · **#1046** (a decision) · **#1047**; from the
+>   final check **#1048** (two de-labels on one line) · **#1049** (two legibility calls) · **#1050** (an overlay row lost on
+>   redraw) · **#1051** (db/074's appliers, slice 1's). Owed by a human: **RUNBOOK §28**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,

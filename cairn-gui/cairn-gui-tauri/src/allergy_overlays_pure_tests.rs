@@ -274,3 +274,35 @@ fn a_target_on_a_doubted_chart_is_refused_before_the_key() {
     .unwrap_err();
     assert_eq!(err.text, DOUBTED);
 }
+
+/// Final check (review, test gap 1): the DB walks that exercise these commands never run in CI
+/// (#905), so CI pins here that every act on an existing line finds its target — and with it the
+/// doubted-chart refusal (`target_on`) — BEFORE the key, and files the event under the TARGET's
+/// chart, not the chart on screen. Drop the call from one command and a button drawn before a
+/// link came into doubt could strike a possible stranger's allergy.
+#[test]
+fn every_act_on_a_line_checks_its_target_before_the_key_and_files_under_its_chart() {
+    use crate::source_guard::{position, rust_fn};
+    const OVERLAYS_RS: &str = include_str!("allergy_overlays.rs");
+    const ALLERGIES_RS: &str = include_str!("allergies.rs");
+    for (src, name, filed_under) in [
+        (OVERLAYS_RS, "allergy_challenge_impl", "found.chart"),
+        (OVERLAYS_RS, "allergy_retract_impl", "found.chart"),
+        (ALLERGIES_RS, "allergy_record_impl", "chart"),
+    ] {
+        let body = rust_fn(src, name);
+        assert!(
+            position(body, "target_before_the_key(") < position(body, "sign_then_reread("),
+            "{name}: {body}"
+        );
+        assert!(
+            body.contains(&format!("sign_then_reread(state, patient, {filed_under}, ")),
+            "{name}: {body}"
+        );
+    }
+    let record = rust_fn(ALLERGIES_RS, "allergy_record_impl");
+    assert!(
+        record.contains("let chart = target.map_or(patient, |t| t.chart);"),
+        "{record}"
+    );
+}

@@ -74,13 +74,14 @@ Every slice-1 rule below still holds.
   `view_overlay_tests.rs::withdrawing_a_delabel_puts_the_allergy_back`.
 - **"Same allergen" is case- and whitespace-folded text, nothing more; and the reader never trusts `refs` blindly**
   (D5, D6). `same_allergen` folds Unicode case and whitespace only; `accounts_differ` never fires on `not-known`, on
-  a word this build does not know, or on a duplicate. The remote door checks only that `refs` is an array, and
+  a word this build does not know, or on a duplicate — except between sibling heads of one thread (a fork of
+  concurrent corrections), which differ whenever their words do, a renamed allergen included. The remote door checks only that `refs` is an array, and
   `corrects_of` ignores any ref it cannot parse (the entry reads uncorrected, which over-warns). **Tempting wrong
   fixes:** fuzzy-match spelling ("amoxycillin" ~ "amoxicillin") — that is coded equality, slice 3's, and a fuzzy
   match calls different drugs one; check `refs` contents at the remote door (a peer's newer `rel` wedges sync,
   ADR-0056); fail the read on a malformed ref (the whole list stops reading). Pins:
   `thread_tests.rs::same_allergen_ignores_case_and_spacing_not_spelling`,
-  `not_known_never_differs_and_duplicates_do_not_differ`, `an_allergy_and_an_adverse_effect_on_one_allergen_differ`;
+  `not_known_never_differs_and_duplicates_do_not_differ`, `an_allergy_and_an_adverse_effect_on_one_allergen_differ`, `a_fork_that_renames_the_allergen_is_still_differing_accounts`;
   `view_overlay_tests.rs::the_strip_marks_differing_accounts`; `read.rs::tests::corrects_of_takes_the_first_parseable_correction_ref`;
   `075_allergy_overlays_test.sql` section 4.
 - **A de-labelled line overrides nothing and is never prominent.** It reads "Historically reported: …", is counted
@@ -100,12 +101,18 @@ Every slice-1 rule below still holds.
   `allergy_overlays_tests.rs::a_target_not_in_the_fresh_read_is_refused_before_the_key`;
   `allergy_overlays_pure_tests.rs::a_target_names_only_what_its_act_may_name`.
 - **A correction whose line left the list is SUSPENDED, never re-sent** (ruling R-6a). On any draw where
-  `allergyCorrecting` is not a live line, the typed words stay, *Sign* is down, and the page's sentence says why;
+  `allergyCorrecting` is not a live line — or is one on a doubted chart (no act there; Rust refuses it) — the typed
+  words stay, *Sign* is down, and the page's sentence says why;
   Correct on a line or Cancel correction ends it. And any signed act empties a correction in the form. **Tempting
   wrong fixes:** keep re-sending it (refused, re-read, refused — a livelock); drop `corrects` and keep the words (they
   sign as a NEW entry: a duplicate); clear only the "Correcting" label after a de-label or withdrawal (the same
   duplicate). Pins: `allergy_overlays_webview_tests.rs::a_correction_whose_target_left_the_pane_is_suspended_not_resent`,
   `correct_prefills_and_sends_corrects`.
+- **A refusal is said where the clinician can see it.** An inline row's refusal goes into the row only while the row
+  is on screen (`said.isConnected`); a list drawn mid-press (a hold timer, another pane's act, "Read this chart
+  again") has detached it, and the status line says it instead. **Tempting wrong fix:** always write into the row
+  (it vanishes, which is what success looks like). Pin:
+  `allergy_overlays_webview_tests.rs::a_refusal_after_a_redraw_mid_press_is_said_on_the_status_line`.
 - **`allergen_kind` and `source` are optional in `EntryInput`, refused before the key when missing.** Correct presses
   only a button whose word is the recorded word, so a newer peer's allergen kind or source stays unpressed. **Tempting
   wrong fixes:** make them `String` again (Tauri rejects the `null`, read as "could not reach its backend"); default
