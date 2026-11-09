@@ -80,8 +80,9 @@ pub(crate) fn onset_wire(o: &Onset) -> (&'static str, Option<&str>) {
     }
 }
 
-/// Build the `clinical.allergy/1` payload. Keys are frozen; `substance.coding` and `refs`
-/// are reserved slots written empty so filling them later is additive.
+/// Build the `clinical.allergy/1` payload. Keys are frozen; `substance.coding` is a reserved
+/// slot written null (slice 3 fills it, additively). `refs` is `[]` for a fresh entry and
+/// exactly one `{rel: "correction-of", event}` for a correction (ADR-0097 decision 1).
 pub fn allergy_payload(e: &AllergyEntry) -> Value {
     let (precision, value) = onset_wire(&e.onset);
     let refs = match e.corrects {
@@ -185,7 +186,8 @@ pub fn entry_words_dated(
 
 /// The signed plaintext twin of an entry, its onset in ISO form (`2014`, `2019-03`,
 /// `2019-03-04`) and nothing when not known (ruling R17: what the twin omits on the first real
-/// entry it omits for good, principle 11).
+/// entry it omits for good, principle 11). A correction's twin is
+/// `"Corrects allergy record {target}: "` followed by the same words.
 pub fn render_allergy_twin(e: &AllergyEntry) -> String {
     let onset = onset_wire(&e.onset).1;
     let words = entry_words_dated(
@@ -197,7 +199,9 @@ pub fn render_allergy_twin(e: &AllergyEntry) -> String {
         onset,
     );
     match e.corrects {
-        Some(_) => format!("Corrects an earlier entry: {words}"),
+        // Names its target, as the overlay twins do (legibility across time: the twin alone says
+        // which record this one replaces).
+        Some(target) => format!("Corrects allergy record {target}: {words}"),
         None => words,
     }
 }
@@ -243,7 +247,7 @@ mod tests {
         e.corrects = Some("E1");
         assert_eq!(
             render_allergy_twin(&e),
-            "Corrects an earlier entry: Allergy: penicillin → rash"
+            "Corrects allergy record E1: Allergy: penicillin → rash"
         );
     }
 
