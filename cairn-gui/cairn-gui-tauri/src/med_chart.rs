@@ -10,7 +10,8 @@
 //! - [`med_chart`]: Sign. Refusal order, every one before the key (a passphrase that writes
 //!   nothing is a step paper never has): the chart on screen and writable, the press
 //!   (`started-here` / `pre-existing`), each pick's code, then the allergy check RE-RUN on a
-//!   fresh read — the webview's earlier answer is never trusted — and, on a Start line with an
+//!   fresh read over the set on screen (a set that changed since is refused as a re-read, R15)
+//!   — the webview's earlier answer is never trusted — and, on a Start line with an
 //!   allergy mark, the reason. Then one signed assertion carrying its charting fields
 //!   (`chart_medication`), its timing sample, and the medication list read again.
 //!
@@ -22,18 +23,22 @@ use crate::allergy_check::{
     canonical_code, check_lines, drug_search_answer, part_line, CodingArg, DrugSearch,
     ALLERGIES_NOT_READ,
 };
-use crate::chart_set::{check_displayed_set, ChartPane};
+use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::commands::{med_list_impl, record_timing};
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
+use crate::med_chart_write::{charted, charted_input, substance, MedChartWrite};
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write};
-use cairn_event::medication::{AllergyOverride, ChartedAs, Charting, Component, SubstanceCoding};
+use cairn_event::medication::{AllergyOverride, ChartedAs, Charting, Component};
+use cairn_medication_view::ChartSet;
 use cairn_node::allergy::check::{LineCheck, MedLine, MOIETY_SYSTEM};
 use cairn_node::allergy::drug_facts::search_medication_drugs;
+use cairn_node::allergy::read::PatientAllergies;
 use cairn_node::medication::line::{read_directions, term_to_sign, Directions};
 use cairn_node::medication::{chart_medication, AssertMedicationInput, AuthorParams};
+use std::collections::HashMap;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -88,14 +93,6 @@ pub struct LineCheckView {
     pub reason_needed: bool,
 }
 
-/// What Sign answers once the line is signed: what happened, and the medication list read
-/// again when that read worked. A Sign that signed nothing answers an `ErrorView` instead.
-#[derive(Debug, serde::Serialize)]
-pub struct MedChartWrite {
-    pub outcome: String,
-    pub pane: Option<ChartPane>,
-}
-
 /// Read typed directions into fields; pure, no state.
 #[tauri::command]
 pub async fn med_line_read(text: String) -> Directions {
@@ -111,15 +108,17 @@ pub async fn med_drug_search(
     Ok(med_drug_search_impl(&state, &text).await)
 }
 
-/// Check the line being typed against the chart's allergies.
+/// Check the line being typed against the chart's allergies. `typed_drug` is the drug as typed
+/// (as Sign sends it), so the line term here is the one Sign will check (ruling R16).
 #[tauri::command]
 pub async fn med_line_check(
     state: tauri::State<'_, AppState>,
     patient_id: String,
     charts: Vec<String>,
+    typed_drug: String,
     parts: Vec<PartArg>,
 ) -> Result<LineCheckView, ErrorView> {
-    Ok(med_line_check_impl(&state, &patient_id, &charts, parts).await)
+    Ok(med_line_check_impl(&state, &patient_id, &charts, typed_drug, parts).await)
 }
 
 /// Sign the line on the chart on screen (refusal order: module doc).
@@ -162,6 +161,7 @@ pub async fn med_line_check_impl(
     state: &AppState,
     patient_id: &str,
     charts: &[String],
+    typed_drug: String,
     parts: Vec<PartArg>,
 ) -> LineCheckView {
     let not_checked = || {
@@ -173,23 +173,14 @@ pub async fn med_line_check_impl(
     let Ok(patient) = state.displayed_patient(patient_id).await else {
         return not_checked();
     };
-    // The drug as typed is its parts as the webview split them, joined back.
-    let typed_drug = parts
-        .iter()
-        .map(|p| p.term.trim())
-        .collect::<Vec<_>>()
-        .join(" + ");
-    let line = ChartArg {
-        parts,
-        typed_drug,
-        directions: String::new(),
-        charted_as: String::new(),
-        reason: None,
-    };
-    let Ok((term, parts)) = parts_before_the_key(&line) else {
+    // The term exactly as Sign builds it (ruling R16), so the two checks cannot disagree.
+    let Ok((term, parts)) = parts_before_the_key(&parts, &typed_drug) else {
         return not_checked();
     };
-    view(fresh_check(state, patient, charts, &the_line(&term, &parts)).await)
+    // A set changed since the screen was drawn is only "not checked" while typing; Sign refuses.
+    let lines = the_line(&term, &parts);
+    let check = fresh_check(state, patient, charts, &lines).await;
+    view(check.unwrap_or_else(|_| not_read("the linked charts changed since the list was read")))
 }
 
 /// Sign the line (refusal order: module doc).
@@ -202,9 +193,9 @@ pub async fn med_chart_impl(
 ) -> Result<MedChartWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
     let charted_as = press(&line.charted_as)?;
-    let (term, parts) = parts_before_the_key(&line)?;
+    let (term, parts) = parts_before_the_key(&line.parts, &line.typed_drug)?;
     // Re-run on a fresh read: the allergies may have changed since the webview last asked.
-    let check = fresh_check(state, patient, &charts, &the_line(&term, &parts)).await;
+    let check = fresh_check(state, patient, &charts, &the_line(&term, &parts)).await?;
     let reason = override_before_the_key(charted_as, &check, line.reason.as_deref())?;
     let against: Vec<String> = check.against.iter().map(Uuid::to_string).collect();
     let against: Vec<&str> = against.iter().map(String::as_str).collect();
@@ -294,25 +285,6 @@ async fn sign_then_reread(
     Ok(charted(reread))
 }
 
-/// What a Sign that LANDED answers: always an Ok (as `allergies::written`). With the list read
-/// again, the pane; without it, a sentence saying it was signed and how to see it — never an
-/// error, which the window would offer to retry and so chart the drug twice. Pure.
-pub(crate) fn charted(reread: Result<ChartPane, String>) -> MedChartWrite {
-    match reread {
-        Ok(pane) => MedChartWrite {
-            outcome: "Charted.".into(),
-            pane: Some(pane),
-        },
-        Err(e) => MedChartWrite {
-            outcome: format!(
-                "Signed — but the medication list could not be read again ({e}). \
-                 Use “Read this chart again”."
-            ),
-            pane: None,
-        },
-    }
-}
-
 /// The press, parsed: `started-here` or `pre-existing`. The window has no button for any other
 /// word (not even the wire's `unknown`), so one is a defect in the window, refused and named.
 pub(crate) fn press(w: &str) -> Result<ChartedAs, ErrorView> {
@@ -330,10 +302,13 @@ pub(crate) fn press(w: &str) -> Result<ChartedAs, ErrorView> {
 /// pick)` ("amox" picked as amoxicillin signs "amoxicillin"); a combination's term is the drug
 /// as typed ("amox + clav") and each part's is `term_to_sign` of its own words. No parts sent is
 /// the drug as typed, uncoded. A blank name anywhere is [`NAME_IT`]. Pure.
-pub(crate) fn parts_before_the_key(line: &ChartArg) -> Result<(String, Vec<PartArg>), ErrorView> {
-    let sent = match line.parts.as_slice() {
+pub(crate) fn parts_before_the_key(
+    sent: &[PartArg],
+    typed_drug: &str,
+) -> Result<(String, Vec<PartArg>), ErrorView> {
+    let sent = match sent {
         [] => vec![PartArg {
-            term: line.typed_drug.clone(),
+            term: typed_drug.to_string(),
             coding: None,
         }],
         parts => parts.to_vec(),
@@ -342,7 +317,7 @@ pub(crate) fn parts_before_the_key(line: &ChartArg) -> Result<(String, Vec<PartA
     let mut parts = Vec::with_capacity(sent.len());
     for p in sent {
         let coding = p.coding.map(picked).transpose()?;
-        let typed = if single { &line.typed_drug } else { &p.term };
+        let typed = if single { typed_drug } else { &p.term };
         let term = term_to_sign(typed, coding.as_ref().map(|c| c.display.as_str()));
         if term.is_empty() {
             return Err(refused(NAME_IT));
@@ -351,7 +326,7 @@ pub(crate) fn parts_before_the_key(line: &ChartArg) -> Result<(String, Vec<PartA
     }
     let term = match parts.as_slice() {
         [one] => one.term.clone(),
-        _ => line.typed_drug.trim().to_string(),
+        _ => typed_drug.trim().to_string(),
     };
     if term.is_empty() {
         return Err(refused(NAME_IT));
@@ -385,44 +360,6 @@ pub(crate) fn override_before_the_key<'a>(
     }
 }
 
-/// The assertion the line signs: the directions as typed are the `sig` (blank: none), and the
-/// read-back's dose and form fill their fields only where the parse was certain (`d` leaves the
-/// rest `None`). The press sets the source and the start: Start is the clinician, today (`day`);
-/// Already taking is the patient, start not known. Pure (the caller passes today).
-pub(crate) fn charted_input<'a>(
-    term: &'a str,
-    coding: Option<SubstanceCoding<'a>>,
-    d: &'a Directions,
-    directions: &'a str,
-    charted_as: ChartedAs,
-    today: &'a str,
-) -> AssertMedicationInput<'a> {
-    let start = charted_as == ChartedAs::StartedHere;
-    AssertMedicationInput {
-        term,
-        coding,
-        formulation: d.form.as_deref(),
-        dose_amount: d.dose_amount.as_deref(),
-        dose_unit: d.dose_unit.as_deref(),
-        sig: Some(directions).filter(|s| !s.trim().is_empty()),
-        info_source: if start {
-            "clinician-observed"
-        } else {
-            "patient-reported"
-        },
-        started: start.then_some(today),
-        started_precision: start.then_some("day"),
-    }
-}
-
-fn substance(c: &CodingArg) -> SubstanceCoding<'_> {
-    SubstanceCoding {
-        system: &c.system,
-        code: &c.code,
-        display: &c.display,
-    }
-}
-
 /// The line being charted as the check reads it: one line per part under [`THE_LINE`], each
 /// carrying the line's own term (ruling R12). Pure.
 pub(crate) fn the_line<'a>(term: &'a str, parts: &'a [PartArg]) -> Vec<MedLine<'a>> {
@@ -439,19 +376,15 @@ pub(crate) fn the_line<'a>(term: &'a str, parts: &'a [PartArg]) -> Vec<MedLine<'
 }
 
 /// `lines` checked against the allergies of `patient`, read now, over the chart set the window
-/// showed (`charts`). Never fails: allergies that could not be read, or were read over another
-/// set (a link landed since), leave the line "not checked" with [`ALLERGIES_NOT_READ`] — the
-/// drug list is optional and a failed check never blocks charting (Global Constraints).
+/// showed (`charts`) — see [`fresh_allergies`] for the refusal and the "not checked" case.
 async fn fresh_check(
     state: &AppState,
     patient: Uuid,
     charts: &[String],
     lines: &[MedLine<'_>],
-) -> LineCheck {
-    let allergies = match read_list(state, patient).await {
-        Ok((set, a, _)) if check_displayed_set(&set, charts).is_ok() => a,
-        Ok(_) => return not_read("the linked charts changed since the list was read"),
-        Err(e) => return not_read(&e.text),
+) -> Result<LineCheck, ErrorView> {
+    let Some(allergies) = fresh_allergies(read_list(state, patient).await, charts)? else {
+        return Ok(not_read("the allergy list could not be read"));
     };
     let db = match state.db.as_ref() {
         Some(db) => match db.lock().await {
@@ -464,7 +397,30 @@ async fn fresh_check(
         None => None,
     };
     let mut checks = check_lines(db.as_deref(), &allergies, lines).await;
-    checks.remove(&THE_LINE).unwrap_or_default()
+    Ok(checks.remove(&THE_LINE).unwrap_or_default())
+}
+
+/// The allergies a fresh check uses (ruling R15). Read over the set on screen: `Some`. Read
+/// over ANOTHER set (a link or unlink landed since the screen was drawn): refused as
+/// `ChartSetError::Changed` refuses everywhere, a re-read — a Start line must never sign
+/// unchecked against allergies the clinician has not seen. Not read at all: `None` (logged),
+/// and the line proceeds "not checked", since a failed check never blocks charting. Pure.
+pub(crate) fn fresh_allergies(
+    read: Result<(ChartSet, PatientAllergies, HashMap<Uuid, String>), ErrorView>,
+    charts: &[String],
+) -> Result<Option<PatientAllergies>, ErrorView> {
+    match read {
+        Ok((set, allergies, _)) => check_displayed_set(&set, charts)
+            .map(|_| Some(allergies))
+            .map_err(ChartSetError::into_view),
+        Err(e) => {
+            eprintln!(
+                "the allergy list could not be read for the line: {}",
+                e.text
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// The check when the allergies could not be read for it (`why` goes to stderr).

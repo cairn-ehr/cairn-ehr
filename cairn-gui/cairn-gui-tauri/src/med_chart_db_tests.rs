@@ -12,12 +12,19 @@ use tokio_postgres::Client;
 /// The refusal a Start line with an allergy mark and no reason gets (Global Constraints).
 const NEEDS_A_REASON: &str = "Charting despite a listed allergy needs a reason";
 
-/// Sign an amoxicillin allergy, coded to `moiety`, on `chart` under Dr Bea's key; its record id.
-async fn amoxicillin_allergy(owner: &Client, state: &AppState, chart: Uuid, moiety: Uuid) -> Uuid {
+/// Sign a drug allergy to `term` on `chart` under Dr Bea's key, coded when `coding` is given;
+/// its record id.
+async fn drug_allergy(
+    owner: &Client,
+    state: &AppState,
+    chart: Uuid,
+    term: &str,
+    coding: Option<CodingArg>,
+) -> Uuid {
     let patient = chart.to_string();
     let entry = EntryInput {
         allergen_kind: Some("drug".into()),
-        term: "amoxicillin".into(),
+        term: term.into(),
         kind: Some("allergy".into()),
         category: Some("anaphylaxis".into()),
         reaction_text: None,
@@ -25,11 +32,6 @@ async fn amoxicillin_allergy(owner: &Client, state: &AppState, chart: Uuid, moie
         source: Some("patient-stated".into()),
         corrects: None,
     };
-    let coding = Some(CodingArg {
-        system: MOIETY_SYSTEM.into(),
-        code: moiety.to_string(),
-        display: "amoxicillin".into(),
-    });
     allergy_record_impl(
         state,
         &patient,
@@ -41,6 +43,16 @@ async fn amoxicillin_allergy(owner: &Client, state: &AppState, chart: Uuid, moie
     .await
     .unwrap();
     list_patient_allergies(owner, chart).await.unwrap().entries[0].event_id
+}
+
+/// An amoxicillin allergy coded to `moiety`; its record id.
+async fn amoxicillin_allergy(owner: &Client, state: &AppState, chart: Uuid, moiety: Uuid) -> Uuid {
+    let coding = Some(CodingArg {
+        system: MOIETY_SYSTEM.into(),
+        code: moiety.to_string(),
+        display: "amoxicillin".into(),
+    });
+    drug_allergy(owner, state, chart, "amoxicillin", coding).await
 }
 
 fn amox_part(moiety: Uuid) -> PartArg {
@@ -162,6 +174,7 @@ async fn med_chart_db_the_check_is_reread_at_sign() {
         &state,
         &patient,
         std::slice::from_ref(&patient),
+        "amox".into(),
         vec![amox_part(amox)],
     )
     .await;
@@ -171,6 +184,7 @@ async fn med_chart_db_the_check_is_reread_at_sign() {
         &state,
         &patient,
         std::slice::from_ref(&patient),
+        "amox".into(),
         vec![amox_part(amox)],
     )
     .await;
@@ -286,4 +300,37 @@ async fn med_chart_db_a_combination_signs_components() {
         .find(|r| r.primary == "amox + clav")
         .unwrap();
     assert_eq!(row.allergy_marks.len(), 1, "{:?}", row.allergy_marks);
+}
+
+/// Ruling R16: the check on screen reads the line term as Sign does (the drug as typed), so an
+/// allergy recorded by name on the brand marks a combination typed by it while typing too.
+#[tokio::test]
+async fn med_chart_db_a_by_name_allergy_on_the_typed_drug_marks_the_check() {
+    let Some((_guard, owner, state, chart, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    drug_allergy(&owner, &state, chart, "Augmentin", None).await;
+    let pick = |term: &str, code: u128| PartArg {
+        term: term.into(),
+        coding: Some(CodingArg {
+            system: MOIETY_SYSTEM.into(),
+            code: Uuid::from_u128(code).to_string(),
+            display: term.into(),
+        }),
+    };
+    let parts = vec![
+        pick("amoxicillin", 0xA40C_5007),
+        pick("clavulanic acid", 0xC1A7_5007),
+    ];
+    let patient = chart.to_string();
+    let check = med_line_check_impl(
+        &state,
+        &patient,
+        std::slice::from_ref(&patient),
+        "Augmentin".into(),
+        parts,
+    )
+    .await;
+    assert!(check.reason_needed, "marked by the typed name: {check:?}");
 }

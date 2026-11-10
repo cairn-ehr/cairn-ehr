@@ -242,7 +242,8 @@ pub(crate) fn part_line<'a>(
 /// whose member threads is a combination (`charting` has no row for it, or a row with fewer than
 /// two components) is today's one line exactly. A combination member yields one line per
 /// component ([`part_line`]), under the row's `group_id`. A group that also holds a member which
-/// is not a combination keeps the row's own line too, so that member is still checked. Pure.
+/// is not a combination, or a row that carries a coding, keeps the row's own line too, so that
+/// member or coding is still checked. Pure.
 pub fn charted_lines<'a>(
     rows: &'a [MedicationRow],
     charting: &'a HashMap<Uuid, ChartingRow>,
@@ -256,7 +257,9 @@ pub fn charted_lines<'a>(
             .filter(|c| c.components.len() >= 2)
             .collect();
         let current = whole.current;
-        if combos.is_empty() || combos.len() < r.members.len() {
+        // The row's own line stays beside the parts whenever it is coded (ruling R17): a coding
+        // added later (db/042) is checked too. Over-warning is the safe error.
+        if combos.is_empty() || combos.len() < r.members.len() || r.coding_code.is_some() {
             lines.push(whole);
         }
         for (term, coding) in combos.iter().flat_map(|c| &c.components) {

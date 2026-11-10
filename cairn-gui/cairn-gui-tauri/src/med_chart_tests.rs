@@ -43,6 +43,11 @@ fn line(parts: Vec<PartArg>, typed_drug: &str, charted_as: &str) -> ChartArg {
     }
 }
 
+/// The shared helper, as Sign calls it on the line it was sent.
+fn before_key(l: &ChartArg) -> Result<(String, Vec<PartArg>), ErrorView> {
+    parts_before_the_key(&l.parts, &l.typed_drug)
+}
+
 /// A check with one allergy mark against the record `head`.
 fn hit(head: u128) -> LineCheck {
     LineCheck {
@@ -72,7 +77,7 @@ async fn no_drug_list_in_fixture_mode_is_not_an_error() {
 fn one_part_signs_the_finished_term_and_its_canonical_code() {
     let amox = Uuid::from_u128(0xA40C);
     let upper = amox.to_string().to_uppercase();
-    let (term, parts) = parts_before_the_key(&line(
+    let (term, parts) = before_key(&line(
         vec![part("amox", coded(&upper, "amoxicillin"))],
         "amox",
         "started-here",
@@ -82,7 +87,7 @@ fn one_part_signs_the_finished_term_and_its_canonical_code() {
     assert_eq!(parts.len(), 1);
     assert_eq!(parts[0].term, "amoxicillin");
     assert_eq!(parts[0].coding.as_ref().unwrap().code, amox.to_string());
-    let (term, _) = parts_before_the_key(&line(
+    let (term, _) = before_key(&line(
         vec![part("Amoxil", coded(amox, "amoxicillin"))],
         "Amoxil",
         "started-here",
@@ -95,7 +100,7 @@ fn one_part_signs_the_finished_term_and_its_canonical_code() {
 #[test]
 fn a_combination_signs_the_typed_drug_and_each_part() {
     let amox = Uuid::from_u128(0xA40C);
-    let (term, parts) = parts_before_the_key(&line(
+    let (term, parts) = before_key(&line(
         vec![part("amox", coded(amox, "amoxicillin")), part("clav", None)],
         " amox + clav ",
         "started-here",
@@ -109,7 +114,7 @@ fn a_combination_signs_the_typed_drug_and_each_part() {
 
 #[test]
 fn a_bad_pick_or_a_blank_name_is_refused_before_the_key() {
-    let bad = |p: Vec<PartArg>, typed: &str| parts_before_the_key(&line(p, typed, "started-here"));
+    let bad = |p: Vec<PartArg>, typed: &str| before_key(&line(p, typed, "started-here"));
     assert_eq!(
         bad(
             vec![part("amox", coded("amoxicillin", "amoxicillin"))],
@@ -416,7 +421,7 @@ async fn a_brand_allergy_marks_a_combination_typed_by_the_brand() {
     );
     assert!(!on_list.unverified);
 
-    let (term, parts) = parts_before_the_key(&line(
+    let (term, parts) = before_key(&line(
         vec![
             part("amoxicillin", coded(amox, "amoxicillin")),
             part("clavulanic acid", coded(clav, "clavulanic acid")),
@@ -433,4 +438,51 @@ async fn a_brand_allergy_marks_a_combination_typed_by_the_brand() {
     .await;
     let now = charting_now.get(&Uuid::nil()).cloned().unwrap_or_default();
     assert_eq!(now.against, [Uuid::from_u128(9)]);
+}
+
+/// Ruling R15: allergies read over a set that is no longer the one on screen refuse Sign as
+/// `ChartSetError::Changed` does everywhere (a re-read), never "not checked, sign anyway". A
+/// failed read still proceeds, "not checked" (Global Constraints).
+#[test]
+fn a_changed_set_refuses_and_a_failed_read_proceeds() {
+    use cairn_medication_view::ChartSet;
+    let shown = Uuid::from_u128(1);
+    let charts = [shown.to_string()];
+    let none = || PatientAllergies {
+        entries: vec![],
+        none: vec![],
+        challenges: vec![],
+        retractions: vec![],
+        doubted_charts: vec![],
+        unreadable: 0,
+    };
+    let linked = ChartSet::new(vec![shown, Uuid::from_u128(2)]).unwrap();
+    let err = fresh_allergies(Ok((linked, none(), HashMap::new())), &charts).unwrap_err();
+    assert_eq!(err, crate::chart_set::ChartSetError::Changed.into_view());
+    let same = fresh_allergies(
+        Ok((ChartSet::single(shown), none(), HashMap::new())),
+        &charts,
+    );
+    assert!(matches!(same, Ok(Some(_))));
+    let failed = fresh_allergies(Err(refused("the read failed")), &charts);
+    assert!(matches!(failed, Ok(None)));
+}
+
+/// Ruling R17: a row that carries a coding keeps its own line beside its components, even when
+/// every member is a charted combination: a coding added later (db/042) is still checked.
+#[test]
+fn a_coded_combination_row_keeps_its_own_line() {
+    let (amox, clav) = (Uuid::from_u128(0xA40C), Uuid::from_u128(0xC1A7));
+    let mut r = row(1, "Augmentin", &[11]);
+    r.coding_system = Some(MOIETY_SYSTEM.into());
+    r.coding_code = Some(clav.to_string());
+    r.coding_display = Some("clavulanic acid".into());
+    let charting = HashMap::from([(
+        Uuid::from_u128(11),
+        combo(&[("amoxicillin", Some(amox)), ("clavulanic acid", None)]),
+    )]);
+    let rows = [r];
+    let lines = charted_lines(&rows, &charting);
+    assert_eq!(lines.len(), 3, "the row's own line and both components");
+    assert_eq!(lines[0].moiety, Some(clav));
 }
