@@ -56,9 +56,11 @@ pub(super) fn path(kind: &str, group: Option<&str>) -> Answer {
     }])
 }
 
-pub(super) fn marks(marks: &[&str]) -> LineCheck {
+/// The marks a line should carry, each with the allergy record (`id(n)`) that hit it.
+pub(super) fn marks(marks: &[(&str, u128)]) -> LineCheck {
     LineCheck {
-        marks: marks.iter().map(|s| s.to_string()).collect(),
+        marks: marks.iter().map(|(s, _)| s.to_string()).collect(),
+        against: marks.iter().map(|(_, n)| id(*n)).collect(),
         ..LineCheck::default()
     }
 }
@@ -92,7 +94,7 @@ fn same_code_marks_the_line_without_the_drug_list() {
     );
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: Augmentin → anaphylaxis"])
+        marks(&[("Allergy recorded: Augmentin → anaphylaxis", 1)])
     );
 }
 
@@ -108,7 +110,7 @@ fn same_name_marks_an_uncoded_line() {
         &[med(900, " Penicillin ", None), by_display],
         &DrugFacts::Unavailable,
     );
-    let want = marks(&["Allergy recorded: penicillin → rash"]);
+    let want = marks(&[("Allergy recorded: penicillin → rash", 1)]);
     assert_eq!(got[&id(900)], want);
     assert_eq!(got[&id(901)], want);
 }
@@ -120,7 +122,7 @@ fn a_same_drug_answer_marks_the_line() {
     let got = run(&a, &[med(900, "Moxacin", Some(AMOX_SODIUM))], &f);
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: amoxicillin → urticaria"])
+        marks(&[("Allergy recorded: amoxicillin → urticaria", 1)])
     );
 }
 
@@ -142,7 +144,10 @@ fn a_group_allergen_hit_names_the_group_allergen() {
     };
     assert_eq!(
         run(&a, &[line], &f)[&id(900)],
-        marks(&["Flucloxacillin 500 mg capsule is a penicillin; allergy recorded: anaphylaxis"])
+        marks(&[(
+            "Flucloxacillin 500 mg capsule is a penicillin; allergy recorded: anaphylaxis",
+            1,
+        )])
     );
 }
 
@@ -156,9 +161,10 @@ fn a_moiety_allergen_same_group_hit_names_the_group() {
     )]);
     assert_eq!(
         run(&a, &[med(900, "flucloxacillin", Some(FLUCLOX))], &f)[&id(900)],
-        marks(&[
-            "flucloxacillin is in the same group as amoxicillin (Penicillins); allergy recorded: rash"
-        ])
+        marks(&[(
+            "flucloxacillin is in the same group as amoxicillin (Penicillins); allergy recorded: rash",
+            1,
+        )])
     );
 }
 
@@ -167,7 +173,7 @@ fn a_moiety_allergen_same_group_hit_names_the_group() {
 #[test]
 fn a_newer_or_unnamed_path_reads_as_the_same_drug() {
     let a = only(vec![amox("rash")]);
-    let want = marks(&["Allergy recorded: amoxicillin → rash"]);
+    let want = marks(&[("Allergy recorded: amoxicillin → rash", 1)]);
     for answer in [
         path("", None),
         path("same-salt-family", Some("Penicillins")),
@@ -261,7 +267,7 @@ fn differing_accounts_mark_once_with_the_more_severe() {
     let got = run(&a, &[med(900, "penicillin", None)], &DrugFacts::Unavailable);
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: penicillin → anaphylaxis"])
+        marks(&[("Allergy recorded: penicillin → anaphylaxis", 2)])
     );
 
     // The same allergen by code; the more severe account words the mark.
@@ -284,7 +290,7 @@ fn differing_accounts_mark_once_with_the_more_severe() {
     );
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: amoxicillin → angioedema"])
+        marks(&[("Allergy recorded: amoxicillin → angioedema", 2)])
     );
 
     // The more severe account need not be the one that hit: an uncoded "Augmentin" anaphylaxis
@@ -304,7 +310,7 @@ fn differing_accounts_mark_once_with_the_more_severe() {
     );
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: Augmentin → anaphylaxis"])
+        marks(&[("Allergy recorded: Augmentin → anaphylaxis", 1)])
     );
 }
 
@@ -319,7 +325,7 @@ fn not_known_ranks_with_anaphylaxis() {
     let got = run(&a, &[med(900, "penicillin", None)], &DrugFacts::Unavailable);
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: penicillin → effect not known"])
+        marks(&[("Allergy recorded: penicillin → effect not known", 1)])
     );
 }
 
@@ -385,7 +391,7 @@ fn linked_accounts_mark_once_with_the_most_severe() {
     );
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: amoxicillin → anaphylaxis"])
+        marks(&[("Allergy recorded: amoxicillin → anaphylaxis", 2)])
     );
 }
 
@@ -405,7 +411,7 @@ fn a_newer_entry_kind_counts_as_an_allergy() {
     let got = run(&a, &meds, &DrugFacts::Unavailable);
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: penicillin → rash"])
+        marks(&[("Allergy recorded: penicillin → rash", 1)])
     );
     assert_eq!(got[&id(901)], not_checked());
 }
@@ -426,7 +432,7 @@ fn a_newer_allergen_kind_counts_as_a_drug() {
     let got = run(&a, &meds, &DrugFacts::Unavailable);
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: adalimumab → anaphylaxis"])
+        marks(&[("Allergy recorded: adalimumab → anaphylaxis", 1)])
     );
     assert_eq!(got[&id(901)], not_checked());
 }

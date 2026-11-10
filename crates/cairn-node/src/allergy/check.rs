@@ -68,6 +68,9 @@ pub struct LineCheck {
     /// Confirmed allergy hits, worded, one per allergen, in the order of each allergen's first
     /// hitting head (the reaction shown is that allergen's most severe live account).
     pub marks: Vec<String>,
+    /// One allergy record per mark, in mark order: the live head whose hit produced it (its
+    /// `event_id`). What a "charting despite a listed allergy" override names (design §3.5).
+    pub against: Vec<Uuid>,
     /// Previous adverse effects that meet the line, worded.
     pub notes: Vec<String>,
     /// The small "not checked" tag.
@@ -207,20 +210,21 @@ fn allergen_groups(heads: &[&AllergyRow]) -> Vec<usize> {
     label
 }
 
-/// One set of words per allergen ([`allergen_groups`]). `heads` is most severe first and
-/// `pairs` follows it, so an allergen's first hit is its most severe hit (its term and coding
-/// pick the sentence); `worst` is the allergen's most severe account, hit or not.
+/// One set of words per allergen ([`allergen_groups`]), each beside the `event_id` of the head
+/// whose hit produced it. `heads` is most severe first and `pairs` follows it, so an allergen's
+/// first hit is its most severe hit (its term and coding pick the sentence); `worst` is the
+/// allergen's most severe account, hit or not.
 fn per_allergen(
     heads: &[&AllergyRow],
     pairs: &[Pair],
     words: impl Fn(Pair, &AllergyRow, &AllergyRow) -> String,
-) -> Vec<String> {
+) -> Vec<(String, Uuid)> {
     let group = allergen_groups(heads);
     let mut said: HashSet<usize> = HashSet::new();
     let mut out = Vec::new();
     for (i, p) in pairs.iter().enumerate().filter(|(_, p)| p.is_hit()) {
         if said.insert(group[i]) {
-            out.push(words(*p, heads[i], heads[group[i]]));
+            out.push((words(*p, heads[i], heads[group[i]]), heads[i].event_id));
         }
     }
     out
@@ -240,23 +244,56 @@ fn check_line(
         .partition(|h| h.kind == "adverse-effect");
     let allergy_pairs: Vec<Pair> = allergies.iter().map(|h| pair(h, line, facts)).collect();
     let adverse_pairs: Vec<Pair> = adverse.iter().map(|h| pair(h, line, facts)).collect();
-    let marks = per_allergen(&allergies, &allergy_pairs, |p, hit, worst| {
-        mark_words(p, hit, worst, line)
-    });
+    let (marks, against): (Vec<String>, Vec<Uuid>) =
+        per_allergen(&allergies, &allergy_pairs, |p, hit, worst| {
+            mark_words(p, hit, worst, line)
+        })
+        .into_iter()
+        .unzip();
     let notes = per_allergen(&adverse, &adverse_pairs, |_, hit, worst| {
         let reaction = reaction_phrase(&worst.category, worst.reaction_text.as_deref());
         format!("Previous adverse effect: {} → {reaction}", hit.term)
-    });
+    })
+    .into_iter()
+    .map(|(words, _)| words)
+    .collect();
     let unverified =
         marks.is_empty() && (unread_records || allergy_pairs.contains(&Pair::Unverified));
     LineCheck {
         marks,
+        against,
         notes,
         unverified,
     }
 }
 
-/// Check every current line (D7, D8, D9). A line with nothing to say has no key.
+/// Two answers for ONE medication line, as one (charting slice 1a: a combination is checked
+/// one component at a time, every part sharing the line's `group_id`). `a`'s words come first.
+///
+/// - A mark of `b` is kept unless its words are already there or its allergy record already has
+///   a mark: one warning per allergy record, and `against` stays one record per mark.
+/// - Notes are unioned by their words.
+/// - "Not checked" if either part was, but only while there is no mark (ADR-0098's invariant:
+///   the loud tag already sends the clinician to the allergy list).
+pub fn merge(a: LineCheck, b: LineCheck) -> LineCheck {
+    let mut out = a;
+    for (mark, head) in b.marks.into_iter().zip(b.against) {
+        if !out.marks.contains(&mark) && !out.against.contains(&head) {
+            out.marks.push(mark);
+            out.against.push(head);
+        }
+    }
+    for note in b.notes {
+        if !out.notes.contains(&note) {
+            out.notes.push(note);
+        }
+    }
+    out.unverified = out.marks.is_empty() && (out.unverified || b.unverified);
+    out
+}
+
+/// Check every current line (D7, D8, D9). A line with nothing to say has no key. Lines that share
+/// a `group_id` (a combination's components) answer as one line ([`merge`]).
 ///
 /// `unread_records` is `PatientAllergies::unreadable > 0`: an allergy record this terminal holds
 /// but cannot read has no head to pair with, yet it may be the allergen, so every current line
@@ -272,11 +309,19 @@ pub fn check_medications(
     unread_records: bool,
 ) -> HashMap<Uuid, LineCheck> {
     let heads = drug_heads(r);
-    meds.iter()
-        .filter(|m| m.current)
-        .map(|m| (m.group_id, check_line(&heads, m, facts, unread_records)))
-        .filter(|(_, c)| *c != LineCheck::default())
-        .collect()
+    let mut out: HashMap<Uuid, LineCheck> = HashMap::new();
+    // Lines sharing a group_id are the parts of one combination: merged, never overwritten, so
+    // a later part can neither hide an earlier part's mark nor clear its "not checked".
+    for m in meds.iter().filter(|m| m.current) {
+        let part = check_line(&heads, m, facts, unread_records);
+        let line = match out.remove(&m.group_id) {
+            Some(earlier) => merge(earlier, part),
+            None => part,
+        };
+        out.insert(m.group_id, line);
+    }
+    out.retain(|_, c| *c != LineCheck::default());
+    out
 }
 
 /// D11: the live heads' drug GROUP codes whose review status is not `reviewed`. A group the
@@ -321,3 +366,7 @@ mod tests;
 #[cfg(test)]
 #[path = "check_unverified_tests.rs"]
 mod unverified_tests;
+
+#[cfg(test)]
+#[path = "check_combination_tests.rs"]
+mod combination_tests;

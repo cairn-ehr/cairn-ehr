@@ -179,6 +179,61 @@ pub async fn search_drugs(
         .map(Some)
 }
 
+/// The drugs matching `text` for the MEDICATION pick (charting slice 1a): drugs only, never a
+/// group (one cannot take "penicillins"), the ones this site has charted most first, at most
+/// `limit` (the door caps it at 20). Each is coded under `drugref-moiety`.
+///
+/// `Ok(None)` means "no drug list": drugref is absent or unusable, OR the search failed. A failed
+/// search is logged and swallowed here rather than returned, because the drug list is optional
+/// and must never block charting (the line then charts uncoded, "not checked"). So the `Err` arm
+/// of the signature is never taken; it is kept so a caller reads like `search_drugs`'s. A caller
+/// inside a transaction should know a swallowed error still aborts that transaction.
+pub async fn search_medication_drugs(
+    c: &impl GenericClient,
+    text: &str,
+    limit: i32,
+) -> anyhow::Result<Option<Vec<DrugOption>>> {
+    Ok(try_search_medication_drugs(c, text, limit)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("the drug list could not be searched for a medication: {e:#}");
+            None
+        }))
+}
+
+/// [`search_medication_drugs`], with the drug list's failure still an `Err`.
+async fn try_search_medication_drugs(
+    c: &impl GenericClient,
+    text: &str,
+    limit: i32,
+) -> anyhow::Result<Option<Vec<DrugOption>>> {
+    let available: bool = c
+        .query_one("SELECT cairn_drug_available()", &[])
+        .await
+        .context("asking whether a drug list is available")?
+        .get(0);
+    if !available {
+        return Ok(None);
+    }
+    let rows = c
+        .query(
+            "SELECT code, display FROM cairn_drug_medication_search($1, $2)",
+            &[&text, &limit],
+        )
+        .await
+        .context("searching the drug list for a medication")?;
+    rows.iter()
+        .map(|r| {
+            Ok(DrugOption {
+                system: super::check::MOIETY_SYSTEM.to_string(),
+                code: r.try_get(0)?,
+                display: r.try_get(1)?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

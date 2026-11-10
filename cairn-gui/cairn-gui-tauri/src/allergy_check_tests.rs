@@ -301,6 +301,7 @@ fn the_pane_carries_each_lines_check() {
             first,
             LineCheck {
                 marks: vec!["Allergy recorded: penicillin → anaphylaxis".into()],
+                against: vec![Uuid::from_u128(7)],
                 notes: vec!["Previous adverse effect: codeine → GI upset".into()],
                 unverified: false,
             },
