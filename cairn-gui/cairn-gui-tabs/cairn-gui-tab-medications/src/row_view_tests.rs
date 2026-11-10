@@ -388,3 +388,27 @@ fn a_signed_hazard_line_carries_its_remedy_on_the_row() {
     );
     assert!(!said(&conflict, "cannot be signed"), "{conflict:?}");
 }
+
+/// Rulings R21/R25: the list's dose cell is the dose and the directions as signed ("500 mg — 500mg
+/// tds"); with no structured dose, the directions alone (a "1g IV stat" whose dose was not certain
+/// never reads "dose not recorded — 1g IV stat"); with neither, the unknown, as `dose` says it.
+#[test]
+fn the_dose_cell_reads_the_dose_and_the_directions() {
+    let cell = |amount: Option<&str>, sig: Option<&str>| {
+        let mut r = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        r.dose_amount = amount.map(Into::into);
+        r.dose_unit = amount.map(|_| "mg".into());
+        r.sig = sig.map(Into::into);
+        build_view(&chart(vec![r])).rows[0].dose_cell.clone()
+    };
+    assert_eq!(cell(Some("500"), Some("500mg tds")), "500 mg — 500mg tds");
+    assert_eq!(cell(None, Some("cap 500mg tds")), "cap 500mg tds");
+    assert_eq!(cell(Some("500"), None), "500 mg");
+    assert_eq!(cell(Some("500"), Some("  ")), "500 mg");
+    assert_eq!(cell(None, None), "dose not recorded");
+    assert_eq!(cell(None, Some(" ")), "dose not recorded");
+}

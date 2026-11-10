@@ -67,9 +67,11 @@ pub struct MedLine<'a> {
 pub struct LineCheck {
     /// Confirmed allergy hits, worded, in the order of each allergen's first hitting head (the
     /// reaction shown is that allergen's most severe live account). One line's check gives at
-    /// most one per allergen; a combination's [`merge`] keeps one per allergy record, so one
-    /// allergen met by two components through two records can mark twice (over-warning is the
-    /// safe error; a merge never drops a mark).
+    /// most one per allergen; a combination's [`merge`] keeps a part's mark only when both its
+    /// words and its allergy record are new, so one allergen met by two components through two
+    /// records with different words can mark twice (over-warning is the safe error), while a mark
+    /// whose words are already shown is dropped even from a different record — that record is
+    /// then not in `against`. The line is never left unmarked by a merge.
     pub marks: Vec<String>,
     /// One allergy record per mark, in mark order: the live head whose hit produced it (its
     /// `event_id`). What a "charting despite a listed allergy" override names (design §3.5).

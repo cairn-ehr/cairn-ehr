@@ -221,3 +221,37 @@ fn a_coded_combination_row_keeps_its_own_line() {
     assert_eq!(lines.len(), 3, "the row's own line and both components");
     assert_eq!(lines[0].moiety, Some(clav));
 }
+
+/// Ruling R24: Sign signs a combination as its parts' names joined ("amoxicillin + clavulanic
+/// acid", R22) and the list re-checks the row under that term, so the check at Sign must read it
+/// too: an allergy recorded by name on the joined generic term marks the line being charted, and
+/// a Start line then needs a reason — never "not checked" at Sign and marked once drawn.
+#[tokio::test]
+async fn a_by_name_allergy_on_the_signed_combination_term_marks_the_line() {
+    let (amox, clav) = (Uuid::from_u128(0xA40C), Uuid::from_u128(0xC1A7));
+    let a = uncoded_allergy("amoxicillin + clavulanic acid");
+    let (term, parts) = before_key(&line(
+        vec![
+            part("amox", coded(amox, "amoxicillin")),
+            part("clav", coded(clav, "clavulanic acid")),
+        ],
+        "amox + clav",
+        "started-here",
+    ))
+    .unwrap();
+    assert_eq!(term, "amoxicillin + clavulanic acid");
+    let checks = check_lines(
+        None::<&tokio_postgres::Client>,
+        &a,
+        &the_line("amox + clav", &term, &parts),
+    )
+    .await;
+    let now = checks.get(&Uuid::nil()).cloned().unwrap_or_default();
+    assert_eq!(now.against, [Uuid::from_u128(9)], "{now:?}");
+    assert_eq!(
+        override_before_the_key(ChartedAs::StartedHere, &now, None)
+            .unwrap_err()
+            .text,
+        NEEDS_A_REASON
+    );
+}

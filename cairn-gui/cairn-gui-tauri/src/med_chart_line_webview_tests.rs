@@ -77,16 +77,13 @@ fn a_changed_drug_part_reads_not_checked_until_its_check_answers() {
     );
 }
 
-/// Ruling R21: the list's dose cell shows the signed directions beside the dose ("1 g — 1g IV
-/// stat"), as `link/view.rs` words a line, so a stat, tds or route reads as it was signed; with no
-/// directions, the dose alone (an empty part is dropped, never drawn as a dangling dash).
+/// Rulings R21/R25: the list's dose cell shows the signed directions beside the dose ("1 g — 1g
+/// IV stat"), so a stat, tds or route reads as it was signed. The wording is decided in Rust
+/// (`MedListRowView::dose_cell`, pinned by row_view_tests.rs); the window only draws it.
 #[test]
 fn the_list_shows_the_signed_directions_beside_the_dose() {
     let render = js_fn(MAIN_JS, "renderRow");
-    assert!(
-        render.contains("cell(\"td\", [row.dose, row.sig].filter(Boolean).join(\" — \")),"),
-        "{render}"
-    );
+    assert!(render.contains("cell(\"td\", row.dose_cell),"), "{render}");
     assert!(!render.contains("cell(\"td\", row.dose),"), "{render}");
 }
 

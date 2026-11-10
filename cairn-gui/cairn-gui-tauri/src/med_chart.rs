@@ -109,7 +109,8 @@ pub async fn med_drug_search(
 }
 
 /// Check the line being typed against the chart's allergies. `typed_drug` is the drug as typed
-/// (as Sign sends it), so the line term here is the one Sign will check (ruling R16).
+/// (as Sign sends it); the lines checked are built by the same `the_line` Sign uses, so the
+/// on-screen check and the check at Sign read the same terms (rulings R16, R24).
 #[tauri::command]
 pub async fn med_line_check(
     state: tauri::State<'_, AppState>,
@@ -373,27 +374,32 @@ pub(crate) fn override_before_the_key<'a>(
 }
 
 /// The line being charted as the check reads it: one line per part under [`THE_LINE`], each
-/// carrying the line's own term (ruling R12). One part's line term is its signed `term` (R16); a
-/// combination's is the drug AS TYPED, not its signed generic names (R22), so a by-name allergy
-/// on the typed words ("Augmentin") still marks the line. Pure.
+/// carrying a line term (ruling R12). One part's line term is its signed `term` (R16). A
+/// combination is checked under BOTH its signed term ("amoxicillin + clavulanic acid", R22 —
+/// what the list re-checks the row under once drawn) and the drug AS TYPED ("Augmentin", "amox +
+/// clav"), so a by-name allergy on either marks the line here as it would on the list (R24).
+/// Every line shares the group, so `merge` folds them into one answer; over-warning is the safe
+/// error. Both `med_line_check` and Sign call this, so the two checks agree (R16). Pure.
 pub(crate) fn the_line<'a>(
     typed_drug: &'a str,
     term: &'a str,
     parts: &'a [PartArg],
 ) -> Vec<MedLine<'a>> {
-    let term = if parts.len() > 1 {
-        typed_drug.trim()
-    } else {
-        term
-    };
-    parts
-        .iter()
-        .map(|p| {
-            let coding = p
-                .coding
-                .as_ref()
-                .map(|c| (c.system.as_str(), c.code.as_str(), c.display.as_str()));
-            part_line(THE_LINE, term, &p.term, coding, true)
+    let typed = typed_drug.trim();
+    let mut terms = vec![term];
+    if parts.len() > 1 && typed != term {
+        terms.push(typed);
+    }
+    terms
+        .into_iter()
+        .flat_map(|line_term| {
+            parts.iter().map(move |p| {
+                let coding = p
+                    .coding
+                    .as_ref()
+                    .map(|c| (c.system.as_str(), c.code.as_str(), c.display.as_str()));
+                part_line(THE_LINE, line_term, &p.term, coding, true)
+            })
         })
         .collect()
 }

@@ -96,8 +96,8 @@ fn a_combination_with_an_unpicked_part_is_not_checked_clean() {
 }
 
 /// A combination whose two components each meet a DIFFERENT allergy (amoxicillin, paracetamol):
-/// the line keeps both marks, and `against` names both records, in part order — the merge never
-/// drops a mark, so an override names every allergy it was charted despite.
+/// the line keeps both marks, and `against` names both records, in part order — a merge drops a
+/// mark only when its words or its record are already there, so distinct allergies stay distinct.
 #[test]
 fn two_components_two_allergens_keep_both_marks() {
     let a = only(vec![

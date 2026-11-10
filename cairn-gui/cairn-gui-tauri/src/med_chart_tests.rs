@@ -92,10 +92,10 @@ fn one_part_signs_the_finished_term_and_its_canonical_code() {
 
 /// Ruling R22: a combination signs its parts' signed terms joined " + " — "amox + clav" with
 /// both picked is "amoxicillin + clavulanic acid", the generic names the record displays — and
-/// an unpicked part keeps its typed words. The check still reads the drug AS TYPED as the line's
-/// term (R12), so a by-name allergy on the typed words still marks.
+/// an unpicked part keeps its typed words. The check reads every part under the signed term AND
+/// the drug as typed (R12, R24), so a by-name allergy on either still marks.
 #[test]
-fn a_combination_signs_the_typed_drug_and_each_part() {
+fn a_combination_signs_its_parts_names_and_checks_both_terms() {
     let amox = Uuid::from_u128(0xA40C);
     let clav = Uuid::from_u128(0xC1A4);
     let both = vec![
@@ -105,10 +105,17 @@ fn a_combination_signs_the_typed_drug_and_each_part() {
     let (term, parts) = before_key(&line(both, " amox + clav ", "started-here")).unwrap();
     assert_eq!(term, "amoxicillin + clavulanic acid");
     let checked = the_line(" amox + clav ", &term, &parts);
-    assert!(
-        checked.iter().all(|l| l.term == "amox + clav"),
-        "{checked:?}"
+    let terms: Vec<&str> = checked.iter().map(|l| l.term).collect();
+    assert_eq!(
+        terms,
+        [
+            "amoxicillin + clavulanic acid",
+            "amoxicillin + clavulanic acid",
+            "amox + clav",
+            "amox + clav"
+        ]
     );
+    assert!(checked.iter().all(|l| l.group_id == Uuid::nil()));
 
     let (term, parts) = before_key(&line(
         vec![part("amox", coded(amox, "amoxicillin")), part("clav", None)],
