@@ -1,4 +1,4 @@
-//! Charting slice 1a, Task 3 — the medication pick's drug search (`cairn_medication_drug_search`,
+//! Charting slice 1a, Task 3 — the medication pick's drug search (`cairn_drug_medication_search`,
 //! in the drug read door, db/076 §5).
 //!
 //! The allergy pick (`cairn_drug_search`) offers drugs AND allergy groups. A medication line is
@@ -21,7 +21,7 @@ mod common;
 
 /// The drugref stand-in (see its header). Never load it outside a transaction that rolls back.
 const STUB: &str = include_str!("fixtures/drug_stub.sql");
-const DOOR: &str = "cairn_medication_drug_search(text, integer)";
+const DOOR: &str = "cairn_drug_medication_search(text, integer)";
 
 async fn rig() -> Option<(Client, Client)> {
     let Some(base) = common::cs() else {
@@ -36,7 +36,7 @@ async fn rig() -> Option<(Client, Client)> {
 /// The door's answer for `text`, as "display:uses" in the door's order.
 async fn search(c: &impl GenericClient, text: &str) -> Vec<String> {
     c.query(
-        "SELECT display || ':' || uses FROM cairn_medication_drug_search($1, 20)",
+        "SELECT display || ':' || uses FROM cairn_drug_medication_search($1, 20)",
         &[&text],
     )
     .await
@@ -86,7 +86,7 @@ async fn the_search_lists_drugs_only_ranked_by_use() {
     );
     let code: String = tx
         .query_one(
-            "SELECT code FROM cairn_medication_drug_search('amoxicillin', 20)",
+            "SELECT code FROM cairn_drug_medication_search('amoxicillin', 20)",
             &[],
         )
         .await
@@ -142,4 +142,14 @@ async fn the_search_is_empty_without_drugref() {
     assert!(window, "the window must execute {DOOR}");
     assert!(definer, "{DOOR} is SECURITY DEFINER");
     assert_eq!(path, ["search_path=pg_catalog, pg_temp"]);
+    // The door's first name is dropped on replay: no orphan definer outside the prefix guard.
+    let orphan: bool = c
+        .query_one(
+            "SELECT to_regprocedure('cairn_medication_drug_search(text, integer)') IS NOT NULL",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!orphan, "the old door name must not survive a replay");
 }

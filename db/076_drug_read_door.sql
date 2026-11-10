@@ -14,7 +14,7 @@
 --   * the CHECK: what drugref says about each (allergen, medication) pair (cairn_drug_facts);
 --   * the STATUS: whether a coded group has been clinically reviewed (cairn_drug_group_status).
 --   * the MEDICATION PICK: which drugs match a typed medication, most charted here first
---     (cairn_medication_drug_search, charting slice 1a).
+--     (cairn_drug_medication_search, charting slice 1a).
 -- None ever refuses anything or writes anything. An answer of "nothing" is always safe to give:
 -- the window then checks by name only and SAYS so (the "not checked" tag, D8). So every door
 -- answers nothing — no error — when cairn_drug_available says drugref is not usable: absent, too
@@ -214,7 +214,10 @@ $$;
 --    shortcut: the counts are recomputed per keystroke by scanning medication_coding's drugref
 --    rows and every combination row; keep a per-moiety counter table if a node's medication list
 --    grows large enough for the pick to lag.
-CREATE OR REPLACE FUNCTION cairn_medication_drug_search(p_text text, p_limit int)
+-- The door's first name (pre-merge dev databases): drop it, or the replay leaves an orphan
+-- definer the window can still execute, outside drug_door_callers.rs's `cairn_drug_` guard.
+DROP FUNCTION IF EXISTS cairn_medication_drug_search(text, int);
+CREATE OR REPLACE FUNCTION cairn_drug_medication_search(p_text text, p_limit int)
 RETURNS TABLE(code text, display text, uses bigint)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 #variable_conflict use_column
@@ -254,11 +257,11 @@ REVOKE EXECUTE ON FUNCTION cairn_drug_available() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_search(text, int) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_facts(uuid[], uuid[]) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_group_status(uuid[]) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION cairn_medication_drug_search(text, int) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_drug_medication_search(text, int) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_drug_available() TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_search(text, int) TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_facts(uuid[], uuid[]) TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_group_status(uuid[]) TO cairn_window;
-GRANT EXECUTE ON FUNCTION cairn_medication_drug_search(text, int) TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_drug_medication_search(text, int) TO cairn_window;
 
 COMMIT;
