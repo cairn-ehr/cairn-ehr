@@ -1,7 +1,7 @@
 # GUI milestone — charting a medication (design)
 
 - **Date:** 2026-11-10
-- **Status:** brainstormed with the maintainer 2026-11-10; builder-checked 2026-11-10; maintainer's answers to the builder check pending (§10)
+- **Status:** brainstormed with the maintainer 2026-11-10; builder-checked 2026-11-10; the maintainer answered its three questions 2026-11-10 (§10); awaiting the maintainer's approval
 - **Milestone step:** "chart a medication" (HANDOVER ⇒ NEXT, the 2026-10-31 GUI milestone). The milestone's fourth
   decision, *"prescribe" means CHARTED* (no printed or electronic prescription), is in no ADR yet. This slice's
   ADR records it.
@@ -129,6 +129,9 @@ only on reading the list (ADR-0098), and nothing at charting offers that repair.
 - **[my call, maintainer: "good catch"]** The record has form, dose and directions but **no route**. ED needs it
   (ceftriaxone 1 g IV vs IM). Add `route` as an optional field the line fills from IV / IM / po / …; absent =
   unknown.
+- **Slice 1 codes a combination from the line itself [maintainer, §10 Q2 (a)]**: `amox + clav 875/125 bd`
+  takes one pick per component, each a drugref moiety, so the check sees the amoxicillin in Augmentin before
+  drugref has combinations or aliases. Two picks where one would do, until drugref#231 / PBS make it one.
 - **The component list reaches everywhere a single coding lives today [my call, builder check]:** the
   assertion, `clinical.medication.coded` and its correction (db/042, `CodingClaim`), and the ADR-0063 `safety`
   claim (one precise claim per component). Otherwise coding a line later, or a peer's signal, stays
@@ -151,6 +154,9 @@ The check is ADR-0098's (`cairn_drug_facts`, drugref owns the fold), run on the 
 | **Already taking** | a **group** only (a different drug sharing the allergen's drugref allergy group) | **Never strikes the allergy [maintainer].** At most offers a **comment on the allergy line**: "tolerated {drug} well on {date}". The allergy and its warning stay. |
 | either | not checked (uncoded line, drugref absent) | The small "not checked" tag. No reason asked. |
 
+- **A drug sharing the allergy's group never offers the de-label, only the comment [maintainer, §10 Q1]**, even
+  the classic case: "penicillin" on file and amoxicillin tolerated gets "tolerated amoxicillin well on {date}",
+  and the penicillin line stays. Lifting it is the clinician's own act on the allergy list (ADR-0097's de-label).
 - **The offer keys on the check's `match_kind` = same moiety, and nothing else [my call, builder check].** A hit
   with an empty or unknown kind, or a hit by term match (ADR-0098 decision 19, ruling T4-a words it "same drug"
   for the warning's sake), offers the comment only, never the de-label. A safe bias for a warning is an unsafe
@@ -185,6 +191,9 @@ The check is ADR-0098's (`cairn_drug_facts`, drugref owns the fold), run on the 
   current and visibly "not yet given".
 - **Time:** the HLC (`t_recorded`) orders the two acts objectively. The time given is the asserted `t_effective`,
   stated by the giver (default now, editable to earlier).
+- **A dose given before it was charted is accepted and the gap is shown [maintainer, §10 Q3: "truthful
+  documentation"]**: a verbal order in resus, given 12:30, charted 12:34, reads "given 12:30, before it was charted
+  12:34", never refused and never silently reordered (principle 4: clashes flagged, never auto-resolved).
 
 ## 4. Constraints and facts for the builder
 
@@ -251,13 +260,9 @@ One ADR for charting: *"prescribe" means charted*; started-here vs pre-existing;
 at charting and the override reason as a window rule; the same-drug-only de-label offer; the group comment. A
 second (or the same) for the administration event when slice 2 lands.
 
-## 10. Open for the maintainer (from the builder check)
+## 10. Answered by the maintainer (from the builder check, 2026-11-10)
 
-1. **Does an amoxicillin challenge de-label a "penicillin" allergy?** The same-drug rule (§3.5) offers the de-label
-   only on the same moiety. But an allergy recorded as "penicillin" and a patient tolerating amoxicillin is the
-   standard oral-challenge de-label, and under the rule as written it would get the comment only.
-2. **Combinations before drugref has them.** drugref's search holds single moieties; combinations exist only in
-   the PBS tier, which most sites will not have. Slice 1 either lets the line take `amox + clav` and code each
-   component, or leaves Augmentin uncoded ("not checked") until drugref#231 / PBS.
-3. **A dose given before it was charted** (verbal order in resus: given 12:30, charted 12:34). Accept and flag the
-   gap on the line (principle 4: clashes flagged, never auto-resolved), or refuse?
+1. **A drug sharing the allergy's group (amoxicillin against "penicillin") offers only the comment**, never the
+   de-label (§3.5).
+2. **Combinations: (a)**, the line takes `amox + clav` and codes each component in slice 1 (§3.4).
+3. **A dose given before it was charted is accepted and flagged**: "truthful documentation" (§3.6).
