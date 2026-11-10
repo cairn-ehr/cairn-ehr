@@ -15,6 +15,7 @@
 pub mod assert;
 pub mod attestation;
 pub mod cessation;
+pub mod charting;
 pub mod coding;
 pub mod dose;
 pub mod reconciliation;
@@ -28,6 +29,10 @@ pub use attestation::{
 };
 pub use cessation::{
     medication_cessation_body, render_medication_cessation_twin, MedicationCessation,
+};
+pub use charting::{
+    charting_twin_parts, insert_charting, AllergyOverride, ChartedAs, Charting, Component,
+    TwinParts,
 };
 pub use coding::{
     medication_coding_body, medication_coding_correction_body,

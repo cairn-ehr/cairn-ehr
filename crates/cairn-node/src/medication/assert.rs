@@ -111,6 +111,8 @@ pub fn build_assert_body(
         started: input.started,
         started_precision: input.started_precision,
         safety,
+        // Charting slice 1a Task 4 wires the line's charting fields through here.
+        charting: None,
     };
     EventBody {
         event_id: event_id.to_string(),

@@ -4,6 +4,8 @@
 //! existing event's content address (principle 11).
 use serde_json::{json, Value};
 
+use super::charting::{charting_twin_parts, insert_charting, Charting};
+
 /// A drug-identity coding claim, captured at coding time (ADR-0059).
 ///
 /// The anchor is an *immortal identifier* — drugref's `moiety_uuid` — never a name:
@@ -65,6 +67,10 @@ pub struct MedicationAssertion<'a> {
     /// It is passed IN rather than looked up here because this crate is pure: the lookup
     /// needs a database, and the node's `safety::lookup_class` is where that lives.
     pub safety: Option<crate::safety::PreciseSafety<'a>>,
+    /// The charting fields (charted-as, route, strength, components, allergy override —
+    /// `charting.rs`). `None` and an all-absent `Charting` both write the payload exactly
+    /// as an assertion did before charting existed (principle 11).
+    pub charting: Option<Charting<'a>>,
 }
 
 /// Build the `clinical.medication.asserted` payload. Mirrors the demographics
@@ -84,12 +90,20 @@ pub fn medication_assertion_body(a: &MedicationAssertion) -> Value {
             s.insert("formulation".into(), json!(f));
         }
     }
+    // The charting keys land partly in `substance` and partly at the top level; gather the
+    // top-level ones here, while `substance` is still a separate value we can borrow.
+    let mut charting_top = serde_json::Map::new();
+    if let Some(c) = &a.charting {
+        let s = substance.as_object_mut().expect("json! built an object");
+        insert_charting(&mut charting_top, s, c);
+    }
     let mut p = json!({
         "medication_id": a.medication_id,
         "substance": substance,
         "info_source": a.info_source,
     });
     let obj = p.as_object_mut().expect("json! built an object");
+    obj.extend(charting_top);
     if a.dose_amount.is_some() || a.dose_unit.is_some() {
         let mut dose = json!({});
         let d = dose.as_object_mut().expect("json! built an object");
@@ -127,6 +141,11 @@ pub fn medication_assertion_body(a: &MedicationAssertion) -> Value {
 /// The §3.13/§3.3 legibility twin for a medication statement — a mechanically
 /// derived, honest one-line rendering. Non-empty because `term` is non-empty.
 pub fn render_medication_twin(a: &MedicationAssertion) -> String {
+    let parts = a
+        .charting
+        .as_ref()
+        .map(charting_twin_parts)
+        .unwrap_or_default();
     let mut s = String::from(a.term);
     match (a.dose_amount, a.dose_unit) {
         (Some(amt), Some(u)) => s.push_str(&format!(" {amt} {u}")),
@@ -137,6 +156,7 @@ pub fn render_medication_twin(a: &MedicationAssertion) -> String {
     if let Some(f) = a.formulation {
         s.push_str(&format!(" {f}"));
     }
+    s.push_str(&parts.after_formulation); // { strength}{ route}
     if let Some(sig) = a.sig {
         s.push_str(&format!(" — {sig}"));
     }
@@ -149,11 +169,16 @@ pub fn render_medication_twin(a: &MedicationAssertion) -> String {
     // generic name already wrote it (case-folded compare, so "Atorvastatin" counts).
     // SubstanceCoding is Copy, so `a.coding` reads out a value directly through the
     // `&MedicationAssertion` — no need to borrow it (house rule 4).
-    if let Some(c) = a.coding {
+    // A combination's components bracket is always shown and takes the single coding's place
+    // (the floor never admits both locally; a peer's event carrying both reads by components).
+    if let Some(joined) = &parts.components {
+        s.push_str(&format!(" [{joined}]"));
+    } else if let Some(c) = a.coding {
         if !c.display.eq_ignore_ascii_case(a.term) {
             s.push_str(&format!(" [{}]", c.display));
         }
     }
+    s.push_str(&parts.tail); // { · started here | · already taking}{ · charted despite …}
     s
 }
 
@@ -178,6 +203,7 @@ mod tests {
             started: Some("2024"),
             started_precision: Some("year"),
             safety: None,
+            charting: None,
         }
     }
 
@@ -239,6 +265,7 @@ mod tests {
             started: None,
             started_precision: None,
             safety: None,
+            charting: None,
         };
         let v = medication_assertion_body(&a);
         let subst = v["substance"].as_object().unwrap();
@@ -323,6 +350,7 @@ mod tests {
             started: None,
             started_precision: None,
             safety: None,
+            charting: None,
         };
         let s = render_medication_twin(&a);
         assert!(s.starts_with("little white pill"));
