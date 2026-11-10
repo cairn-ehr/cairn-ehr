@@ -25,6 +25,8 @@
 
 const MED_PICK_MIN_CHARS = 4; // design §3.1: "after 4–5 typed letters"
 const MED_NO_DRUG_LIST = "No drug list on this terminal: the medication is charted as typed";
+/** What the line reads while no check speaks for its words: "not checked", never an old verdict. */
+const LINE_NOT_CHECKED = { marks: [], notes: [], unverified: true };
 
 /** The button pressed ("started-here" | "pre-existing"), or null while the line is closed. */
 let medPress = null;
@@ -33,7 +35,7 @@ let medLine = { typedDrug: "", parts: [], directions: "" };
 /** The codings held, each `{ text, coding }`: the part's words it was picked with, and the pick. */
 let medHeld = [];
 /** The last check drawn (Rust's `LineCheckView`). */
-let medCheck = { marks: [], notes: [], unverified: true };
+let medCheck = LINE_NOT_CHECKED;
 /** Words the reader reads on their own (true) or not (false), by lower-case word. */
 const wordReads = new Map();
 let medPickOptions = [];
@@ -165,9 +167,17 @@ function closeMedLine() {
   closeMedPick();
   drawCodedAs();
   drawReadBack("");
-  drawCheck({ marks: [], notes: [], unverified: true });
+  drawCheck(LINE_NOT_CHECKED);
   setMessage(el("med-line-status"), "");
   el("med-line-row").hidden = true;
+}
+
+/** Cancel, or Escape with no pick list open (ruling R18): the unsigned line is discarded, as a
+ *  line crossed out before it is signed. Not while a Sign is in flight: its answer closes the line. */
+function cancelMedLine() {
+  if (medBusy) return;
+  closeMedLine();
+  el("med-chart-buttons").querySelector("button").focus(); // focus stays in the pane, not lost to the page
 }
 
 /** The chart changed (main.js's `clearChart`): a line typed for one patient is never signed on the next. */
@@ -193,7 +203,7 @@ async function onMedLineInput() {
     medPickTimer = setTimeout(() => void askMedPick(edited), PICK_DELAY_MS);
   }
   void readBack(line);
-  if (drugChanged) scheduleCheck();
+  if (drugChanged) recheck();
 }
 
 /** The line under the field while any part is coded: what each part will be signed as. */
@@ -230,7 +240,7 @@ function chooseMedPick(index) {
   medHeld = medHeld.filter((held) => held.text !== medPickPart).concat([{ text: medPickPart, coding: { system: option.system, code: option.code, display: option.display } }]);
   closeMedPick();
   drawCodedAs();
-  scheduleCheck(); // every coding change is checked
+  recheck(); // every coding change is checked
 }
 
 /** Draw a `med_drug_search` answer: the drugs, top one highlighted, or the no-drug-list hint. */
@@ -299,6 +309,15 @@ function drawReadBack(drug, reading = { unread: [] }) {
   setMessage(el("med-readback"), any ? said.join(" · ") : "");
 }
 
+/** What is checked changed (its words, or a pick): every check in flight is about the old line, so
+ *  it is outdated, and the line reads "not checked" AT ONCE — never the old verdict, which may be
+ *  clean, for the delay and the round trip (or for ever, if the check hangs) — until the new one answers. */
+function recheck() {
+  medCheckRevision += 1;
+  drawCheck(LINE_NOT_CHECKED);
+  scheduleCheck();
+}
+
 /** Check the line again after a moment of quiet. */
 function scheduleCheck() {
   clearTimeout(medCheckTimer);
@@ -319,7 +338,7 @@ async function checkLine() {
     if (revision === medCheckRevision) drawCheck(check);
   } catch (failure) {
     console.error("med_line_check failed:", failure);
-    if (revision === medCheckRevision) drawCheck({ marks: [], notes: [], unverified: true });
+    if (revision === medCheckRevision) drawCheck(LINE_NOT_CHECKED);
   }
 }
 
@@ -355,6 +374,7 @@ function needsReason() {
 /** Sign is down while one is in flight, or while a needed reason is blank. */
 function syncMedSign() {
   el("med-sign").disabled = medBusy || (needsReason() && el("med-reason").value.trim() === "");
+  el("med-line-cancel").disabled = medBusy;
 }
 
 /** Sign the line on the chart whose list is drawn. Rust says every refusal, before the key. */
@@ -434,8 +454,10 @@ for (const button of el("med-chart-buttons").querySelectorAll("button")) {
 el("med-line").addEventListener("input", () => void onMedLineInput());
 el("med-line").addEventListener("keydown", (event) => {
   const n = medPickOptions.length;
-  if (event.key === "Escape") closeMedPick();
-  else if (n === 0) return;
+  if (event.key === "Escape") {
+    if (n > 0) closeMedPick();
+    else cancelMedLine();
+  } else if (n === 0) return;
   else if (event.key === "ArrowDown") activateMedPick((medPickActive + 1) % n);
   else if (event.key === "ArrowUp") activateMedPick((medPickActive - 1 + n) % n);
   else if (event.key === "Enter" && medPickActive >= 0) chooseMedPick(medPickActive);
@@ -444,4 +466,5 @@ el("med-line").addEventListener("keydown", (event) => {
 });
 el("med-reason").addEventListener("input", syncMedSign);
 el("med-sign").addEventListener("click", () => void chartMedication());
+el("med-line-cancel").addEventListener("click", cancelMedLine);
 closeMedLine();

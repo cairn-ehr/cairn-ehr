@@ -24,14 +24,14 @@ const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 
 /// The `#med-chart` section of the page, open tag to close.
-fn section() -> &'static str {
+pub(crate) fn section() -> &'static str {
     let at = position(INDEX_HTML, "<section id=\"med-chart\"");
     &INDEX_HTML[at..at + position(&INDEX_HTML[at..], "</section>")]
 }
 
 /// `id` is inside the line (`#med-line-row`, inside `#med-chart`): it is on screen whenever the
 /// line is open, and the line is open only while the script shows it.
-fn in_the_line(id: &str) {
+pub(crate) fn in_the_line(id: &str) {
     let s = section();
     let row = position(s, "<div id=\"med-line-row\"");
     assert!(
@@ -42,7 +42,7 @@ fn in_the_line(id: &str) {
 
 /// No stylesheet rule on `selector` hides it (`display: none` / `visibility: hidden` would leave
 /// the words in the DOM and off the screen).
-fn not_hidden_by_css(selector: &str) {
+pub(crate) fn not_hidden_by_css(selector: &str) {
     let mut from = 0;
     while let Some(at) = STYLE_CSS[from..].find(selector) {
         let start = from + at;
@@ -183,7 +183,7 @@ fn editing_a_picked_part_drops_its_coding() {
         "medHeld = medHeld.filter((held) => line.parts.includes(held.text));",
     );
     assert!(drop < position(input, "drawCodedAs();"), "{input}");
-    assert!(drop < position(input, "scheduleCheck();"), "{input}");
+    assert!(drop < position(input, "recheck();"), "{input}");
     let coded = js_fn(MED_JS, "drawCodedAs");
     assert!(coded.contains("\"Coded as: \""), "{coded}");
     assert!(coded.contains("line.hidden = !medHeld.some"), "{coded}");
@@ -433,10 +433,7 @@ fn no_drug_list_says_so_and_still_signs() {
     );
     // The check failing is "not checked", never silence.
     let check = js_fn(MED_JS, "checkLine");
-    assert!(
-        check.contains("drawCheck({ marks: [], notes: [], unverified: true });"),
-        "{check}"
-    );
+    assert!(check.contains("drawCheck(LINE_NOT_CHECKED);"), "{check}");
     // After Sign: the outcome, then the list from the write's answer (or read again without it).
     let after = js_fn(MED_JS, "afterCharted");
     assert!(after.contains("say(written.outcome);"), "{after}");

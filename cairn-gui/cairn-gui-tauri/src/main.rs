@@ -46,6 +46,8 @@ mod launch_posture_tests;
 mod link;
 mod med_chart;
 #[cfg(test)]
+mod med_chart_line_webview_tests;
+#[cfg(test)]
 mod med_chart_webview_tests;
 mod med_chart_write;
 #[cfg(test)]
