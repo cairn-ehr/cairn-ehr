@@ -178,7 +178,7 @@ pub async fn med_line_check_impl(
         return not_checked();
     };
     // A set changed since the screen was drawn is only "not checked" while typing; Sign refuses.
-    let lines = the_line(&term, &parts);
+    let lines = the_line(&typed_drug, &term, &parts);
     let check = fresh_check(state, patient, charts, &lines).await;
     view(check.unwrap_or_else(|_| not_read("the linked charts changed since the list was read")))
 }
@@ -195,7 +195,13 @@ pub async fn med_chart_impl(
     let charted_as = press(&line.charted_as)?;
     let (term, parts) = parts_before_the_key(&line.parts, &line.typed_drug)?;
     // Re-run on a fresh read: the allergies may have changed since the webview last asked.
-    let check = fresh_check(state, patient, &charts, &the_line(&term, &parts)).await?;
+    let check = fresh_check(
+        state,
+        patient,
+        &charts,
+        &the_line(&line.typed_drug, &term, &parts),
+    )
+    .await?;
     let reason = override_before_the_key(charted_as, &check, line.reason.as_deref())?;
     let against: Vec<String> = check.against.iter().map(Uuid::to_string).collect();
     let against: Vec<&str> = against.iter().map(String::as_str).collect();
@@ -299,8 +305,9 @@ pub(crate) fn press(w: &str) -> Result<ChartedAs, ErrorView> {
 /// The line's term and its parts as they will be signed, or the refusal, said before the key.
 /// Each pick must be a drug ([`NOT_A_LISTED_DRUG`]) with a code that reads as a uuid (signed in
 /// its canonical spelling, `canonical_code`). One part's term is `term_to_sign(typed_drug, its
-/// pick)` ("amox" picked as amoxicillin signs "amoxicillin"); a combination's term is the drug
-/// as typed ("amox + clav") and each part's is `term_to_sign` of its own words. No parts sent is
+/// pick)` ("amox" picked as amoxicillin signs "amoxicillin"); a combination's term is its parts'
+/// terms joined " + " (R22), each part's being `term_to_sign` of its own words ("amox + clav"
+/// with both picked signs "amoxicillin + clavulanic acid"; an unpicked part keeps its words). No parts sent is
 /// the drug as typed, uncoded. A blank name anywhere is [`NAME_IT`]. Pure.
 pub(crate) fn parts_before_the_key(
     sent: &[PartArg],
@@ -324,9 +331,14 @@ pub(crate) fn parts_before_the_key(
         }
         parts.push(PartArg { term, coding });
     }
+    // A combination signs its parts' signed terms ("amoxicillin + clavulanic acid", R22).
     let term = match parts.as_slice() {
         [one] => one.term.clone(),
-        _ => typed_drug.trim().to_string(),
+        _ => parts
+            .iter()
+            .map(|p| p.term.as_str())
+            .collect::<Vec<_>>()
+            .join(" + "),
     };
     if term.is_empty() {
         return Err(refused(NAME_IT));
@@ -361,8 +373,19 @@ pub(crate) fn override_before_the_key<'a>(
 }
 
 /// The line being charted as the check reads it: one line per part under [`THE_LINE`], each
-/// carrying the line's own term (ruling R12). Pure.
-pub(crate) fn the_line<'a>(term: &'a str, parts: &'a [PartArg]) -> Vec<MedLine<'a>> {
+/// carrying the line's own term (ruling R12). One part's line term is its signed `term` (R16); a
+/// combination's is the drug AS TYPED, not its signed generic names (R22), so a by-name allergy
+/// on the typed words ("Augmentin") still marks the line. Pure.
+pub(crate) fn the_line<'a>(
+    typed_drug: &'a str,
+    term: &'a str,
+    parts: &'a [PartArg],
+) -> Vec<MedLine<'a>> {
+    let term = if parts.len() > 1 {
+        typed_drug.trim()
+    } else {
+        term
+    };
     parts
         .iter()
         .map(|p| {

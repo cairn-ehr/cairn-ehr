@@ -338,7 +338,7 @@ fn a_start_hit_shows_the_reason_field_and_sign_waits_for_it() {
     );
     assert!(
         position(refused, "setMessage(el(\"med-line-status\"), text);")
-            < position(refused, "scheduleCheck();")
+            < position(refused, "recheck();")
     );
     in_the_line("med-line-status");
     not_hidden_by_css("#med-line-status");

@@ -139,6 +139,9 @@ function partArgs(line) {
 /** Show the section over a drawn list on a writable chart only (main.js's `render` calls this). */
 function syncMedChart() {
   el("med-chart").hidden = renderedPatient === null || fixtureMode;
+  // A re-drawn list may hold a changed chart set or a newly signed allergy: an open line's
+  // verdict is about the old one, so it is taken down and asked again.
+  if (medPress !== null && !el("med-chart").hidden) recheck();
 }
 
 /** Press `value`: shown pressed, the line opened, and the line checked. */
@@ -445,7 +448,7 @@ async function afterChartRefused(failure, patient) {
     return;
   }
   setMessage(el("med-line-status"), text);
-  scheduleCheck();
+  recheck();
 }
 
 for (const button of el("med-chart-buttons").querySelectorAll("button")) {

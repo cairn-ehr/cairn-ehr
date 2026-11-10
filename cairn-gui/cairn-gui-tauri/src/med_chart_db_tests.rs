@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio_postgres::Client;
 
 /// The refusal a Start line with an allergy mark and no reason gets (Global Constraints).
+/// Deliberately a copy of `med_chart`'s constant, not an import: it pins the exact words.
 const NEEDS_A_REASON: &str = "Charting despite a listed allergy needs a reason";
 
 /// Sign a drug allergy to `term` on `chart` under Dr Bea's key, coded when `coding` is given;
@@ -281,7 +282,8 @@ async fn med_chart_db_a_combination_signs_components() {
     let done = chart_it(&state, chart, l).await.unwrap();
     let p = &asserted(&owner, chart).await[0];
     let s = &p["substance"];
-    assert_eq!(s["term"], "amox + clav");
+    // R22: the parts' signed terms, joined; the unpicked "clav" keeps its typed words.
+    assert_eq!(s["term"], "amoxicillin + clav");
     assert!(s.get("coding").is_none());
     assert_eq!(s["components"][0]["term"], "amoxicillin");
     assert_eq!(
@@ -297,13 +299,14 @@ async fn med_chart_db_a_combination_signs_components() {
         .list
         .rows
         .iter()
-        .find(|r| r.primary == "amox + clav")
+        .find(|r| r.primary == "amoxicillin + clav")
         .unwrap();
     assert_eq!(row.allergy_marks.len(), 1, "{:?}", row.allergy_marks);
 }
 
-/// Ruling R16: the check on screen reads the line term as Sign does (the drug as typed), so an
-/// allergy recorded by name on the brand marks a combination typed by it while typing too.
+/// Ruling R16: the check on screen reads the line term as Sign does (a combination's: the drug
+/// as typed, R22), so an allergy recorded by name on the brand marks a combination typed by it
+/// while typing too.
 #[tokio::test]
 async fn med_chart_db_a_by_name_allergy_on_the_typed_drug_marks_the_check() {
     let Some((_guard, owner, state, chart, _)) = supervised_note().await else {

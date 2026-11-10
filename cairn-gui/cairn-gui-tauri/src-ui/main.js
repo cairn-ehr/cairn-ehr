@@ -167,7 +167,8 @@ function renderRow(row) {
     // On a combined list the source chart is part of the drug's name, so a screen reader hears
     // WHERE it was recorded in the same utterance as WHAT it is. `source` is present only then.
     nameCell(row), // the drug's name, its source chart, and the allergy tags (allergy_tags.js)
-    cell("td", row.dose),
+    // The dose and the directions as signed ("1 g — 1g IV stat"; R21), worded as the link view does.
+    cell("td", [row.dose, row.sig].filter(Boolean).join(" — ")),
     statusCell(row), // the status word and each hold's "W" (holds.js, #832)
     cell(
       "td",
