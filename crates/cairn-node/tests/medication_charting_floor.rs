@@ -147,6 +147,63 @@ fn coded(term: &str) -> Value {
     json!({"term": term, "coding": {"system": "drugref-moiety", "code": AMOX, "display": term}})
 }
 
+/// A component coded to a drug GROUP: a component is one drug, so the local door refuses it.
+fn group_coded(term: &str) -> Value {
+    json!({"term": term, "coding": {"system": "drugref-class", "code": AMOX, "display": term}})
+}
+
+/// Every charting shape the authoring door refuses but a peer's event may carry (vocabulary,
+/// count, emptiness — never type): each must be ADMITTED at the remote door (ADR-0056). An
+/// override missing its reason or its `against` is one (ruling R20): the remote door checks
+/// only what is present. `allergy` names an allergy record for the `against` lists.
+fn local_only_shapes(allergy: &str) -> Vec<(Value, Value, &'static str)> {
+    vec![
+        (json!({"route": " "}), json!({}), "route"),
+        (json!({}), json!({"strength": " "}), "substance.strength"),
+        (
+            json!({}),
+            json!({"components": [{"term": " ", "coding": null}, coded("amoxicillin")]}),
+            "substance.components",
+        ),
+        (
+            json!({}),
+            json!({"components": [coded("amoxicillin"), coded("clavulanic acid")],
+                   "coding": {"system": "drugref-moiety", "code": AMOX, "display": "amoxicillin"}}),
+            "substance.components",
+        ),
+        (
+            json!({}),
+            json!({"components": [coded("amoxicillin"), group_coded("penicillins")]}),
+            "drugref-class",
+        ),
+        (
+            json!({"allergy_override": {"reason": "  ", "against": [allergy]}}),
+            json!({}),
+            "allergy_override.reason",
+        ),
+        (
+            json!({"allergy_override": {"reason": "no alternative", "against": []}}),
+            json!({}),
+            "allergy_override.against",
+        ),
+        (
+            json!({"allergy_override": {"against": [allergy]}}),
+            json!({}),
+            "allergy_override.reason",
+        ),
+        (
+            json!({"allergy_override": {"reason": "no alternative"}}),
+            json!({}),
+            "allergy_override.against",
+        ),
+        (
+            json!({"allergy_override": {"reason": null, "against": null}}),
+            json!({}),
+            "allergy_override.reason",
+        ),
+    ]
+}
+
 #[tokio::test]
 async fn local_door_refuses_each_bad_shape() {
     let Some(base) = common::cs() else {
@@ -178,24 +235,30 @@ async fn local_door_refuses_each_bad_shape() {
             json!({"components": [coded("amoxicillin")]}),
             "substance.components",
         ),
+        // The type tier, refused at both doors (the remote half: remote_door_admits_a_newer_word).
+        (json!({}), json!({"strength": 5}), "substance.strength"),
         (
             json!({}),
-            json!({"components": [coded("amoxicillin"), coded("clavulanic acid")],
-                   "coding": {"system": "drugref-moiety", "code": AMOX, "display": "amoxicillin"}}),
+            json!({"components": ["amoxicillin", coded("clavulanic acid")]}),
             "substance.components",
         ),
         (
-            json!({"allergy_override": {"reason": "  ", "against": [allergy]}}),
+            json!({"allergy_override": {"reason": 5, "against": [allergy]}}),
             json!({}),
             "allergy_override.reason",
         ),
         (
-            json!({"allergy_override": {"reason": "no alternative", "against": []}}),
+            json!({"allergy_override": {"reason": "x", "against": allergy}}),
+            json!({}),
+            "allergy_override.against",
+        ),
+        (
+            json!({"allergy_override": {"reason": "x", "against": ["E1"]}}),
             json!({}),
             "allergy_override.against",
         ),
     ];
-    for (top, sub, field) in bad {
+    for (top, sub, field) in bad.into_iter().chain(local_only_shapes(&allergy)) {
         let p = with(base_payload(), top.clone(), sub.clone());
         let e = floor(&mut c, &p, false)
             .await
@@ -225,6 +288,19 @@ async fn remote_door_admits_a_newer_word() {
     apply_peer(&c, &sk, &kid, newer)
         .await
         .expect("the remote door admits a peer's newer word");
+
+    // The rest of the local-only tier, each its own peer event: admitted, never wedging sync.
+    let allergy = Uuid::now_v7().to_string();
+    for (top, sub, _) in local_only_shapes(&allergy) {
+        let p = with(base_payload(), top.clone(), sub.clone());
+        assert!(
+            floor(&mut c, &p, false).await.is_err(),
+            "local refuses {top} {sub}"
+        );
+        apply_peer(&c, &sk, &kid, p)
+            .await
+            .unwrap_or_else(|e| panic!("the remote door admits {top} {sub}: {e}"));
+    }
 
     // The type tier still holds at the remote door: a key the projection could not read.
     for (top, sub, field) in [

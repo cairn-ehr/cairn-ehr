@@ -94,3 +94,33 @@ fn a_combination_with_an_unpicked_part_is_not_checked_clean() {
         assert_eq!(run(&a, &reversed, f)[&id(900)], not_checked());
     }
 }
+
+/// A combination whose two components each meet a DIFFERENT allergy (amoxicillin, paracetamol):
+/// the line keeps both marks, and `against` names both records, in part order — the merge never
+/// drops a mark, so an override names every allergy it was charted despite.
+#[test]
+fn two_components_two_allergens_keep_both_marks() {
+    let a = only(vec![
+        amox("anaphylaxis"),
+        coded(
+            entry(2, "drug", "paracetamol", "allergy", "rash", 1),
+            MOIETY_SYSTEM,
+            PARACETAMOL,
+        ),
+    ]);
+    let part = |term, moiety| MedLine {
+        name: "Combination",
+        ..med(900, term, moiety)
+    };
+    let lines = [
+        part("amoxicillin", Some(AMOX)),
+        part("paracetamol", Some(PARACETAMOL)),
+    ];
+    assert_eq!(
+        run(&a, &lines, &DrugFacts::Unavailable)[&id(900)],
+        marks(&[
+            ("Allergy recorded: amoxicillin → anaphylaxis", 1),
+            ("Allergy recorded: paracetamol → rash", 2),
+        ])
+    );
+}

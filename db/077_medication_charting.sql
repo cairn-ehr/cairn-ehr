@@ -26,7 +26,7 @@ BEGIN;
 --                  -> refuse at BOTH doors
 --       vocabulary / count / emptiness (charted_as outside the three words, fewer than two
 --                  components, components beside a single coding, an empty route or reason,
---                  an empty `against`)
+--                  an empty `against`, an override missing its reason or `against`)
 --                  -> refuse locally, ADMIT remotely (ADR-0051/ADR-0056: a peer may speak a
 --                  newer word, and refusing a verifiable event wedges sync)
 --
@@ -38,10 +38,11 @@ BEGIN;
 CREATE OR REPLACE FUNCTION cairn_check_medication_charting(p jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    v_local boolean := current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on';
-    v_key   text;
-    v_val   jsonb;
-    v_elem  jsonb;
+    v_local   boolean := current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on';
+    v_key     text;
+    v_val     jsonb;
+    v_elem    jsonb;
+    v_against jsonb;  -- allergy_override.against, a missing one read as []
 BEGIN
     -- Two plain-string keys. charted_as's vocabulary is closed at the authoring door only.
     FOREACH v_key IN ARRAY ARRAY['charted_as', 'route'] LOOP
@@ -103,28 +104,39 @@ BEGIN
     END IF;
 
     -- allergy_override: {reason, against}. `against` entries become uuids in the projection,
-    -- so a non-uuid entry is a type error at both doors.
+    -- so a non-uuid entry is a type error at both doors. A MISSING reason or `against` (absent
+    -- or JSON null) is refused locally but admitted remotely (ruling R20): the remote door
+    -- checks the type only of what is present, so a future window that leaves the reason
+    -- optional never has its events refused by an older peer.
     v_val := p -> 'allergy_override';
     IF v_val IS NOT NULL AND jsonb_typeof(v_val) <> 'null' THEN
         IF jsonb_typeof(v_val) <> 'object' THEN
             RAISE EXCEPTION 'medication assertion: allergy_override must be an object {reason, against}';
         END IF;
-        IF jsonb_typeof(v_val -> 'reason') IS DISTINCT FROM 'string' THEN
+        IF coalesce(jsonb_typeof(v_val -> 'reason'), 'null') = 'null' THEN
+            IF v_local THEN
+                RAISE EXCEPTION 'medication assertion: allergy_override.reason must be a string';
+            END IF;
+        ELSIF jsonb_typeof(v_val -> 'reason') <> 'string' THEN
             RAISE EXCEPTION 'medication assertion: allergy_override.reason must be a string';
-        END IF;
-        IF v_local AND length(btrim(v_val ->> 'reason')) = 0 THEN
+        ELSIF v_local AND length(btrim(v_val ->> 'reason')) = 0 THEN
             RAISE EXCEPTION 'medication assertion: allergy_override.reason must be a non-empty string';
         END IF;
-        IF jsonb_typeof(v_val -> 'against') IS DISTINCT FROM 'array' THEN
+        IF coalesce(jsonb_typeof(v_val -> 'against'), 'null') = 'null' THEN
+            IF v_local THEN
+                RAISE EXCEPTION 'medication assertion: allergy_override.against must be an array of allergy record uuids';
+            END IF;
+        ELSIF jsonb_typeof(v_val -> 'against') <> 'array' THEN
             RAISE EXCEPTION 'medication assertion: allergy_override.against must be an array of allergy record uuids';
         END IF;
-        FOR v_elem IN SELECT e FROM jsonb_array_elements(v_val -> 'against') AS t(e) LOOP
+        v_against := coalesce(NULLIF(v_val -> 'against', 'null'::jsonb), '[]'::jsonb);
+        FOR v_elem IN SELECT e FROM jsonb_array_elements(v_against) AS t(e) LOOP
             IF jsonb_typeof(v_elem) <> 'string' OR NOT pg_input_is_valid(v_elem #>> '{}', 'uuid') THEN
                 RAISE EXCEPTION 'medication assertion: allergy_override.against entries must be uuid strings, got %',
                     v_elem;
             END IF;
         END LOOP;
-        IF v_local AND jsonb_array_length(v_val -> 'against') = 0 THEN
+        IF v_local AND jsonb_array_length(v_against) = 0 THEN
             RAISE EXCEPTION 'medication assertion: allergy_override.against must name at least one allergy record';
         END IF;
     END IF;

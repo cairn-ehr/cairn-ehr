@@ -393,9 +393,10 @@ mod tests {
                 coding: None,
             },
         ];
-        assert!(
-            render_medication_twin(&augmentin(&ONE_UNCODED, ChartedAs::Unknown))
-                .contains(" [amoxicillin + clav] "),
+        assert_eq!(
+            render_medication_twin(&augmentin(&ONE_UNCODED, ChartedAs::Unknown)),
+            "Augmentin tablet 875/125 mg po — 1 bd (clinician-observed) [amoxicillin + clav] \
+             · charted despite a listed allergy: no alternative"
         );
     }
 }

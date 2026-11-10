@@ -65,8 +65,11 @@ pub struct MedLine<'a> {
 /// tag already sends the clinician to the allergy list).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LineCheck {
-    /// Confirmed allergy hits, worded, one per allergen, in the order of each allergen's first
-    /// hitting head (the reaction shown is that allergen's most severe live account).
+    /// Confirmed allergy hits, worded, in the order of each allergen's first hitting head (the
+    /// reaction shown is that allergen's most severe live account). One line's check gives at
+    /// most one per allergen; a combination's [`merge`] keeps one per allergy record, so one
+    /// allergen met by two components through two records can mark twice (over-warning is the
+    /// safe error; a merge never drops a mark).
     pub marks: Vec<String>,
     /// One allergy record per mark, in mark order: the live head whose hit produced it (its
     /// `event_id`). What a "charting despite a listed allergy" override names (design §3.5).

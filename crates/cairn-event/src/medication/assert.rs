@@ -169,8 +169,8 @@ pub fn render_medication_twin(a: &MedicationAssertion) -> String {
     // generic name already wrote it (case-folded compare, so "Atorvastatin" counts).
     // SubstanceCoding is Copy, so `a.coding` reads out a value directly through the
     // `&MedicationAssertion` — no need to borrow it (house rule 4).
-    // A combination's components bracket is always shown and takes the single coding's place
-    // (the floor never admits both locally; a peer's event carrying both reads by components).
+    // A combination's components bracket is always shown and takes the single coding's place:
+    // if both are ever supplied, the components win (the authoring floor refuses the pair).
     if let Some(joined) = &parts.components {
         s.push_str(&format!(" [{joined}]"));
     } else if let Some(c) = a.coding {
