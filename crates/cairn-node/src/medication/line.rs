@@ -79,7 +79,14 @@ const FORMS: &[(&str, &str)] = &[
     ("inhaler", "inhaler"),
 ];
 
-/// What could be read with certainty; everything else is in `unread`, in typed order.
+/// Words a number may be followed by without changing the dose ("for 5 days").
+const DURATIONS: &[&str] = &[
+    "day", "days", "week", "weeks", "hour", "hours", "month", "months",
+];
+
+/// What could be read with certainty; everything else is in `unread`. Words the loop
+/// could not place come first, in typed order; then the losers of an ambiguous field
+/// (two frequencies, two routes, two forms); then any dose candidate not filled.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct Directions {
     pub dose_amount: Option<String>,
@@ -157,6 +164,9 @@ pub fn read_directions(text: &str) -> Directions {
     // Each dose candidate is (amount, unit); more than one means we cannot know which.
     let mut doses: Vec<(String, Option<String>)> = Vec::new();
     let (mut freqs, mut routes, mut forms) = (Vec::new(), Vec::new(), Vec::new());
+    // How many unread numbers are durations ("5" in "for 5 days"): those alone do not
+    // make the dose uncertain. Every OTHER unread digit does (see after the loop).
+    let mut durations = 0;
     let mut i = 0;
     while i < toks.len() {
         let t = toks[i].as_str();
@@ -192,17 +202,30 @@ pub fn read_directions(text: &str) -> Directions {
             } else if next.is_none_or(is_known) {
                 doses.push((t.to_string(), None));
             } else {
-                d.unread.push(t.to_string()); // "5 days", "8 hours": not a dose
+                // Not a dose: "5 days" (a duration), or "2 x" (a multiplier we cannot read).
+                if next.is_some_and(|n| DURATIONS.contains(&n)) {
+                    durations += 1;
+                }
+                d.unread.push(t.to_string());
             }
         } else {
             d.unread.push(t.to_string());
         }
         i += 1;
     }
+    // A stray number ("2 x 500mg" = 1 g, "500mg x2", "1/2 500mg tab") changes what the
+    // dose means, so if any unread token beside a duration holds a digit, no dose is
+    // certain: the candidate goes to `unread` too. Checked before `settle` adds its
+    // losers, which are table words ("q4h") and never stray numbers.
+    let digits_unread = d
+        .unread
+        .iter()
+        .filter(|u| u.chars().any(|c| c.is_ascii_digit()));
+    let dose_is_certain = doses.len() == 1 && digits_unread.count() == durations;
     d.frequency = settle(freqs, &mut d.unread);
     d.route = settle(routes, &mut d.unread);
     d.form = settle(forms, &mut d.unread);
-    if doses.len() == 1 {
+    if dose_is_certain {
         let (a, u) = doses.remove(0);
         (d.dose_amount, d.dose_unit) = (Some(a), u);
     } else {

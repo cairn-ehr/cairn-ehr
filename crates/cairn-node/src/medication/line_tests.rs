@@ -132,3 +132,39 @@ fn a_strength_after_a_form_is_not_a_dose() {
     assert_eq!(d.strength, s("500 mg"));
     assert_eq!(d.dose_amount, None);
 }
+
+/// A number the tables could not read ("2 x", "x2", "1/2") changes what the dose means
+/// ("2 x 500mg" is 1 g), so the one dose candidate beside it is NOT certain: it stays
+/// unread with the stray number, and nothing is filled. A wrong dose is a safety defect.
+#[test]
+fn a_stray_number_makes_the_dose_uncertain() {
+    for (typed, candidate) in [
+        ("2 x 500mg tds", "500 mg"),
+        ("500mg x2", "500 mg"),
+        ("1/2 500mg tab", "500 mg"),
+        ("tab 2 x 500mg", "500 mg"),
+        ("2 3", "3"),
+    ] {
+        let d = read_directions(typed);
+        assert_eq!((&d.dose_amount, &d.dose_unit), (&None, &None), "{typed}");
+        assert!(
+            d.unread.iter().any(|u| u == candidate),
+            "{typed}: {:?}",
+            d.unread
+        );
+    }
+    let d = read_directions("1/2 tab");
+    assert_eq!((d.dose_amount, d.dose_unit), (None, None));
+    assert_eq!(d.form, s("tablet"));
+    assert_eq!(d.unread, vec!["1/2"]);
+}
+
+/// A duration ("for 5 days") is a number that does not change the dose, so it alone
+/// does not make the dose uncertain. Its words are still unread, never dropped.
+#[test]
+fn a_duration_number_leaves_the_dose_certain() {
+    let d = read_directions("500mg tds for 5 days");
+    assert_eq!((d.dose_amount, d.dose_unit), (s("500"), s("mg")));
+    assert_eq!(d.frequency, s("three times daily"));
+    assert_eq!(d.unread, vec!["for", "5", "days"]);
+}
