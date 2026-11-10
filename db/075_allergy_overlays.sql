@@ -107,9 +107,9 @@ BEGIN
     IF v_date_why IS NOT NULL THEN
         RAISE EXCEPTION 'allergy challenge: date.value %', v_date_why;
     END IF;
-    -- The reserved slot: coding opens in slice 3 (drugref).
+    -- The reserved slot: slice 3 (ADR-0098 decision 3) kept it null on purpose; opening it is #1053.
     IF jsonb_typeof(p #> '{tolerated,coding}') IS DISTINCT FROM 'null' THEN
-        RAISE EXCEPTION 'allergy challenge: tolerated.coding must be null at the authoring door (coding is not built yet)';
+        RAISE EXCEPTION 'allergy challenge: tolerated.coding must be null at the authoring door (the tolerated drug of a de-label is not coded, #1053)';
     END IF;
     -- A de-label lifts an allergy ENTRY (never a "none known", a de-label or a withdrawal).
     IF cairn_allergy_target_type(p, b) IS DISTINCT FROM 'clinical.allergy.asserted' THEN

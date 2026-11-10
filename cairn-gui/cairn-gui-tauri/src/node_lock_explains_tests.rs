@@ -18,6 +18,10 @@ const EXEMPT: &[&str] = &[
     "record_timing",
     // notes_commit.rs: only hands the guard back; its caller, `commit_overdue_impl`, explains.
     "hold",
+    // allergy_check.rs: the drug list is optional, so any failure reading it, a cut included,
+    // is "no drug list" (`available: false`, lines "not checked"); its error goes to stderr only.
+    "drug_search_impl",
+    "med_list_check",
 ];
 
 /// Any of these in a function's body is its errors passed through the cut check: the guard's own

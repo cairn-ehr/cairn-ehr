@@ -34,6 +34,8 @@ fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
         display_chart: uid(1),
         term: term.to_string(),
         coding_display: None,
+        coding_system: None,
+        coding_code: None,
         formulation: Some("tablet".into()),
         dose_amount: Some(amount.into()),
         dose_unit: Some(unit.into()),

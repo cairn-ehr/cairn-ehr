@@ -34,6 +34,7 @@ async fn signing_an_entry_records_human_authorship() {
         onset: Onset::NotKnown,
         source: Source::PatientStated,
         corrects: None,
+        coding: None,
     };
     let id = sign_allergy(&mut c, &node_sk, &node_kid, "n", patient, &entry, &author)
         .await

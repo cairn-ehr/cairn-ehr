@@ -135,6 +135,8 @@ mod tests {
             display_chart: uid(999),
             term: "metformin".into(),
             coding_display: None,
+            coding_system: None,
+            coding_code: None,
             formulation: None,
             dose_amount: None,
             dose_unit: None,

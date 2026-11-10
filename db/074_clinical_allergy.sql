@@ -13,8 +13,8 @@
 -- THE TWO TIERS (ADR-0051, the db/041 idiom). A STRUCTURAL rule — a key missing, the wrong JSON
 -- type, a blank term, onset.value present when the precision says it is not known — refuses at
 -- BOTH doors: no node can read such a body. A CLOSED-VOCABULARY rule — an enumerated word, the
--- shape of onset.value for its precision, an onset in the future, a filled reserved slot
--- (`coding`), a correction ref that is not exactly one `correction-of` naming an entry on this
+-- shape of onset.value for its precision, an onset in the future, a coding on an entry that is
+-- not a drug or in a system an allergen may not carry (allergy slice 3), a correction ref that is not exactly one `correction-of` naming an entry on this
 -- chart (allergy slice 2) — refuses at the AUTHORING door only (`cairn.remote_apply` <> 'on'). At the
 -- remote door a newer peer's word is ADMITTED and projected as itself: refusing it would wedge
 -- sync on every node older than its author (ADR-0056). That is why the projection's vocabulary
@@ -168,9 +168,20 @@ BEGIN
     IF p ->> 'source' NOT IN ('patient-stated', 'seen-documented', 'another-record') THEN
         RAISE EXCEPTION 'allergy assertion: source must be patient-stated, seen-documented or another-record, got %', p ->> 'source';
     END IF;
-    -- The reserved slot: coding opens in slice 3 (drugref).
-    IF jsonb_typeof(p #> '{substance,coding}') IS DISTINCT FROM 'null' THEN
-        RAISE EXCEPTION 'allergy assertion: substance.coding must be null at the authoring door (coding is not built yet)';
+    -- The coding slot (allergy slice 3; D1, M2). Only a DRUG entry is coded, and only as one drug
+    -- (drugref-moiety) or as a drug group (drugref-class) — the two codes the medication check can
+    -- use. The object's shape, the system being registered and the code being a canonical uuid
+    -- were checked above by cairn_check_coding_object; this narrows the registered systems to the
+    -- two an allergen may carry (drugref-product, say, is registered for medications only).
+    -- Authoring door only: a newer peer may code an allergen in a way this node does not know.
+    IF jsonb_typeof(p #> '{substance,coding}') = 'object' THEN
+        IF p ->> 'allergen_kind' IS DISTINCT FROM 'drug' THEN
+            RAISE EXCEPTION 'allergy assertion: substance.coding is for a drug entry only';
+        END IF;
+        IF p #>> '{substance,coding,system}' NOT IN ('drugref-moiety', 'drugref-class') THEN
+            RAISE EXCEPTION 'allergy assertion: substance.coding.system must be drugref-moiety or drugref-class, got %',
+                p #>> '{substance,coding,system}';
+        END IF;
     END IF;
     -- A CORRECTION (allergy slice 2): refs is [] or exactly one {rel: correction-of, event}
     -- naming the line it replaces (plan M2: a chain, not the root). The target must be an entry

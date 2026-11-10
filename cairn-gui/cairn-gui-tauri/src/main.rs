@@ -24,6 +24,7 @@
 mod allergies;
 #[cfg(test)]
 mod allergies_webview_tests;
+mod allergy_check;
 mod allergy_overlays;
 #[cfg(test)]
 mod allergy_overlays_webview_tests;
@@ -32,6 +33,8 @@ mod chart_set;
 #[cfg(test)]
 mod chart_view_webview_tests;
 mod commands;
+#[cfg(test)]
+mod drug_pick_webview_tests;
 mod duplicates;
 mod enrol;
 mod funnel;
@@ -183,6 +186,7 @@ fn main() -> anyhow::Result<()> {
             allergies::allergy_list,
             allergies::allergy_record,
             allergies::allergy_none,
+            allergy_check::drug_search,
             allergy_overlays::allergy_challenge,
             allergy_overlays::allergy_retract,
             notes::note_list,

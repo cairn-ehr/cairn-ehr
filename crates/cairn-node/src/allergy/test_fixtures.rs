@@ -1,8 +1,11 @@
-//! Row builders for the overlay tests (`thread_tests`, `view_overlay_tests`). Test-only.
+//! Row builders for the overlay and check tests (`thread_tests`, `view_overlay_tests`,
+//! `check_tests`). Test-only.
 //!
 //! Every row is on chart `id(CHART)`, signed by "Dr Ada" under a standing key, at noon UTC on a
 //! November 2026 day (the same local day at +10:00). A test changes only the field it is about.
-use super::read::{AllergyRow, ChallengeRow, KeyState, NoneRow, PatientAllergies, RetractionRow};
+use super::read::{
+    AllergyRow, ChallengeRow, Coding, KeyState, NoneRow, PatientAllergies, RetractionRow,
+};
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use uuid::Uuid;
 
@@ -39,6 +42,7 @@ pub fn entry(n: u128, ak: &str, term: &str, kind: &str, cat: &str, day: u32) -> 
         signer: Some("Dr Ada".into()),
         corrects: None,
         key: KeyState::Standing,
+        coding: None,
     }
 }
 
@@ -50,6 +54,16 @@ pub fn pen(n: u128, cat: &str, day: u32) -> AllergyRow {
 /// `row`, now correcting event `target`.
 pub fn correcting(mut row: AllergyRow, target: u128) -> AllergyRow {
     row.corrects = Some(id(target));
+    row
+}
+
+/// `row`, now coded to drug `code` (computed, `id(code)`) under `system`; the display is its term.
+pub fn coded(mut row: AllergyRow, system: &str, code: u128) -> AllergyRow {
+    row.coding = Some(Coding {
+        system: system.into(),
+        code: id(code).to_string(),
+        display: row.term.clone(),
+    });
     row
 }
 

@@ -21,6 +21,7 @@ fn entry(term: &str) -> AllergyEntry<'_> {
         onset: Onset::Year("2019".into()),
         source: Source::PatientStated,
         corrects: None,
+        coding: None,
     }
 }
 

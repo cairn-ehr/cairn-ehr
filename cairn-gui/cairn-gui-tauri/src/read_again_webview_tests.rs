@@ -90,7 +90,7 @@ fn read_again_keeps_the_outcome_line_but_not_a_failure_it_retries() {
     );
 
     // The one place a failed chart read is said, so `failedRead` always knows the line.
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let caught = &refresh[position(refresh, "catch (e)")..];
     assert!(caught.contains("sayReadFailed(lead, e);"), "{caught}");
     assert!(!MAIN_JS.contains("\"Could not read the chart: \""));

@@ -515,3 +515,37 @@ li > button.allergy-write {
 .allergy-overlay-row label {
   display: block;
 }
+
+/* ---- Allergy slice 3: the drug pick and the tags on the medication list ---- */
+
+/* The tags carry WORDS ("Allergy", "not checked"); colour and weight are a second channel. */
+.allergy-tag {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border: 1px solid var(--warn-line);
+  font-weight: 700;
+  padding: 0 0.35rem;
+}
+
+.allergy-unchecked-tag {
+  color: var(--muted);
+  font-size: 0.8em;
+  border: 1px solid var(--line);
+  padding: 0 0.3rem;
+}
+
+#allergy-pick {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+}
+
+#allergy-pick li {
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
+#allergy-pick li[aria-selected="true"] {
+  background: var(--warn-bg);
+}

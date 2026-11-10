@@ -441,6 +441,7 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
         onset: Onset::Year("2014".into()),
         source: Source::SeenDocumented,
         corrects: None,
+        coding: None,
     };
     let r = sign::sign_allergy(&mut window, &sk, &kid, ORIGIN, patient, &entry, &author).await;
     assert_not_denied("allergy::sign::sign_allergy", &r);

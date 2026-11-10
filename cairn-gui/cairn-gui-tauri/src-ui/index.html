@@ -349,7 +349,12 @@
               </div>
               <p id="allergy-allergen-kind-error" class="allergy-field-error" role="alert" hidden></p>
               <label for="allergy-term">Substance</label>
-              <input id="allergy-term" type="text" aria-describedby="allergy-term-error" />
+              <input id="allergy-term" type="text" aria-describedby="allergy-term-error" role="combobox" aria-autocomplete="list" aria-controls="allergy-pick" aria-expanded="false" />
+              <!-- The drug pick (drug_pick.js): options while the allergen is a Drug, or the hint when this terminal has no drug list. -->
+              <ul id="allergy-pick" role="listbox" aria-label="Drugs and drug groups" hidden></ul>
+              <p id="allergy-pick-hint" class="allergy-quiet" hidden></p>
+              <!-- What a held coding will sign the entry as (drug_pick.js's setHeldCoding; ruling F3). -->
+              <p id="allergy-coded-as" class="allergy-quiet" aria-live="polite" hidden></p>
               <p id="allergy-term-error" class="allergy-field-error" role="alert" hidden></p>
               <div class="allergy-choice" data-field="kind" role="group" aria-labelledby="allergy-kind-label" aria-describedby="allergy-kind-error">
                 <span id="allergy-kind-label">What kind:</span>
@@ -499,6 +504,9 @@
           <p id="chart-elsewhere" hidden></p>
         </section>
 
+        <!-- The allergy read failed: the list below was not checked against allergies (main.js's drawList). -->
+        <p id="allergy-check-failed" class="allergy-prominent" role="status" hidden></p>
+
         <table id="med-table">
           <caption>
             Current and ceased medications, with the clinician responsible for each
@@ -586,12 +594,14 @@
     </div>
     <script src="waiting.js"></script>
     <script src="main.js"></script>
+    <script src="allergy_tags.js"></script>
     <script src="signer.js"></script>
     <script src="notes_save.js"></script>
     <script src="notes_compound.js"></script>
     <script src="notes.js"></script>
     <script src="notes_discard.js"></script>
     <script src="allergy_overlays.js"></script>
+    <script src="drug_pick.js"></script>
     <script src="allergies.js"></script>
     <script src="person_menu.js"></script>
     <script src="whos_here.js"></script>

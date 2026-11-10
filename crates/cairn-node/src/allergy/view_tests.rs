@@ -33,6 +33,7 @@ fn entry(n: u128, ak: &str, term: &str, kind: &str, cat: &str, day: u32) -> Alle
         signer: None,
         corrects: None,
         key: KeyState::Standing,
+        coding: None,
     }
 }
 fn none(n: u128, scope: &str, day: u32) -> NoneRow {

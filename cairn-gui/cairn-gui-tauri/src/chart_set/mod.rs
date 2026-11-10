@@ -26,9 +26,11 @@ pub mod change;
 use crate::hold::plan::release_plan;
 use crate::state::AppState;
 use cairn_gui_tab_medications::view::{build_view, MedListView};
-use cairn_medication_view::{ChartSet, MedicationRow, PatientMedicationList};
+use cairn_medication_view::{ChartSet, MedicationRow, MedicationStatus, PatientMedicationList};
+use cairn_node::allergy::check::LineCheck;
 use cairn_node::patient::person::ChartIdentity;
 use serde::Serialize;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Why [`check_displayed_set`] refused. A TYPE, not two sentences compared as text: callers
@@ -262,6 +264,9 @@ pub struct ChartPane {
     /// since the set the window had on screen (#797, [`change::set_change_sentence`]). `None`
     /// when nothing changed or the window sent no set to compare.
     pub set_change: Option<String>,
+    /// Set when the allergy list could not be read, so no line was checked against it
+    /// (`allergy_check::ALLERGIES_NOT_READ`); the window draws it above the list.
+    pub allergy_check_failed: Option<String>,
 }
 
 /// The row sentence on a hazard line whose Withhold and Stop [`chart_pane`] did not draw (#841):
@@ -284,6 +289,11 @@ pub(crate) const HOLD_NOT_ON_OPENED_CHART: &str = "this line's hold is not on th
 ///
 /// `opened` is the chart the clinician opened: Withhold, Stop and Release are drawn only on a
 /// line their command could write from there (#841, #844).
+///
+/// `allergy` is the medication check (`allergy_check::med_list_check`): each line's marks,
+/// notes and "not checked" flag by group id, or the sentence saying the allergies could not be
+/// read — the list itself is drawn either way, and on that failure every current line reads
+/// "not checked" on the line too (#1059's rule: no allergy read, no line looks checked).
 pub fn chart_pane(
     list: &PatientMedicationList,
     opened: Uuid,
@@ -291,7 +301,12 @@ pub fn chart_pane(
     links: Result<crate::link::record_links::RecordLinks, String>,
     duplicates: crate::duplicates::view::DuplicateSection,
     set_change: Option<String>,
+    allergy: Result<HashMap<Uuid, LineCheck>, String>,
 ) -> ChartPane {
+    let (checks, allergy_check_failed) = match allergy {
+        Ok(checks) => (checks, None),
+        Err(failed) => (HashMap::new(), Some(failed)),
+    };
     let (members, members_error) = match members {
         Ok(members) => (members, None),
         Err(e) => (
@@ -315,6 +330,16 @@ pub fn chart_pane(
     // the rows zip one to one.
     for (shown, row) in view.rows.iter_mut().zip(&list.rows) {
         debug_assert_eq!(shown.group_id, row.group_id.to_string());
+        if let Some(c) = checks.get(&row.group_id) {
+            shown.allergy_marks = c.marks.clone();
+            shown.allergy_notes = c.notes.clone();
+            shown.allergy_unverified = c.unverified;
+        }
+        // No allergy was read at all: every current line says "not checked" on the line, as one
+        // unreadable record does (#1059) — the banner alone scrolls away on a long list.
+        if allergy_check_failed.is_some() && row.status == MedicationStatus::Active {
+            shown.allergy_unverified = true;
+        }
         if !row.is_wrong_chart_hazard() {
             continue;
         }
@@ -351,6 +376,7 @@ pub fn chart_pane(
         links_error,
         duplicates,
         set_change,
+        allergy_check_failed,
     }
 }
 

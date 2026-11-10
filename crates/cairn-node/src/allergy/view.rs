@@ -162,7 +162,7 @@ pub(super) fn allergen_kind_mark(row: &AllergyRow) -> String {
 
 /// Sort rank of a reaction: anaphylaxis, not-known, angioedema, urticaria, rash, other, GI upset,
 /// unknown peer word last.
-fn category_rank(c: &str) -> u8 {
+pub(crate) fn category_rank(c: &str) -> u8 {
     match c {
         "anaphylaxis" => 0,
         "not-known" => 1,
@@ -176,7 +176,7 @@ fn category_rank(c: &str) -> u8 {
 }
 
 /// Rank, then newest first, then event id (a total, deterministic order).
-fn order_key(r: &AllergyRow) -> (u8, std::cmp::Reverse<(i64, i32)>, Uuid) {
+pub(crate) fn order_key(r: &AllergyRow) -> (u8, std::cmp::Reverse<(i64, i32)>, Uuid) {
     (
         category_rank(&r.category),
         std::cmp::Reverse(r.hlc),

@@ -3,9 +3,12 @@
 //! were read over. Moved out of `allergies.rs` (allergy slice 2) to keep that file small; the
 //! commands there and in `allergy_overlays.rs` answer with it.
 use cairn_medication_view::ChartSet;
+use cairn_node::allergy::check::{note_unreviewed_groups, unreviewed_groups};
 use cairn_node::allergy::read::PatientAllergies;
+use cairn_node::allergy::thread::resolve;
 use cairn_node::allergy::view::{build_view, EntryLine, ListStatus, NoneLine};
 use chrono::Offset;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// The allergy section as the webview reads it: `cairn_node`'s `AllergyView`, mapped onto plain
@@ -76,6 +79,9 @@ pub struct LineWords {
     pub onset_precision: String,
     pub onset_value: Option<String>,
     pub source: String,
+    /// The drug or group the entry was coded to, or `None` for a name as typed. Correct holds it
+    /// again (until the name is edited), so correcting only the reaction keeps the coding.
+    pub coding: Option<crate::allergy_check::CodingArg>,
 }
 
 /// One "none known" line: its words, and the statement it reads (the window withdraws it).
@@ -95,9 +101,20 @@ pub struct EnteredInErrorLine {
 }
 
 /// `cairn_node`'s pure view over `a`, in this terminal's zone (the node never knows it), as the
-/// pane, with the chart set it was read over.
-pub(crate) fn pane(a: &PatientAllergies, set: &ChartSet) -> AllergyPane {
-    let v = build_view(a, chrono::Local::now().offset().fix());
+/// pane, with the chart set it was read over. `groups` is the drug list's review status of the
+/// groups `a` is coded to (`allergy_check::group_status`): every group it does not say is
+/// `reviewed` gets the not-reviewed suffix on its expanded-list line (D11, M7).
+pub(crate) fn pane(
+    a: &PatientAllergies,
+    set: &ChartSet,
+    groups: &HashMap<Uuid, String>,
+) -> AllergyPane {
+    let unreviewed = unreviewed_groups(&resolve(a), groups);
+    let v = note_unreviewed_groups(
+        build_view(a, chrono::Local::now().offset().fix()),
+        a,
+        &unreviewed,
+    );
     let status = |s: &ListStatus| match s {
         ListStatus::Entries => "entries",
         ListStatus::NoneKnown { .. } => "none-known",
@@ -159,7 +176,7 @@ pub(crate) fn pane(a: &PatientAllergies, set: &ChartSet) -> AllergyPane {
 
 /// The recorded words of entry `event_id`, looked up among `a`'s rows (`None` if it is not one).
 /// Pure.
-fn line_words(a: &PatientAllergies, event_id: Uuid) -> Option<LineWords> {
+pub(crate) fn line_words(a: &PatientAllergies, event_id: Uuid) -> Option<LineWords> {
     let r = a.entries.iter().find(|r| r.event_id == event_id)?;
     Some(LineWords {
         allergen_kind: r.allergen_kind.clone(),
@@ -170,5 +187,10 @@ fn line_words(a: &PatientAllergies, event_id: Uuid) -> Option<LineWords> {
         onset_precision: r.onset_precision.clone(),
         onset_value: r.onset_value.clone(),
         source: r.source.clone(),
+        coding: r.coding.as_ref().map(|c| crate::allergy_check::CodingArg {
+            system: c.system.clone(),
+            code: c.code.clone(),
+            display: c.display.clone(),
+        }),
     })
 }

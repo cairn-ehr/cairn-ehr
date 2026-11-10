@@ -93,6 +93,7 @@ fn an_interrupted_overlay_is_not_known_and_never_retried() {
         onset: cairn_event::allergy::Onset::NotKnown,
         source: cairn_event::allergy::Source::SeenDocumented,
         corrects: Some(&target),
+        coding: None,
     });
     for (act, lead) in [
         (
@@ -196,6 +197,7 @@ fn overlay_fixture(doubted_charts: Vec<Uuid>) -> (PatientAllergies, AllergyView)
         signer: None,
         corrects: None,
         key: KeyState::Standing,
+        coding: None,
     };
     let a = PatientAllergies {
         entries: vec![row(10, linked, "penicillin"), row(11, linked, "codeine")],

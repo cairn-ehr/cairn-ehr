@@ -246,6 +246,8 @@ mod tests {
             display_chart: Uuid::from_u128(1),
             term: "metformin".into(),
             coding_display: None,
+            coding_system: None,
+            coding_code: None,
             formulation: None,
             dose_amount: None,
             dose_unit: None,

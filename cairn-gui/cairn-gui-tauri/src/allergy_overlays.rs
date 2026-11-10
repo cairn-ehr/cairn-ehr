@@ -165,7 +165,7 @@ pub(crate) async fn target_before_the_key(
     target: &str,
     names: Names,
 ) -> Result<Target, ErrorView> {
-    let (set, a) = read_list(state, patient).await?;
+    let (set, a, _) = read_list(state, patient).await?;
     check_displayed_set(&set, charts).map_err(ChartSetError::into_view)?;
     let v = build_view(&a, chrono::Local::now().offset().fix());
     target_on(&a, &v, target, names)

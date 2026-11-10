@@ -154,6 +154,15 @@ pub struct MedicationRow {
     pub term: String,
     /// The ADR-0059 coded display name, when the drug has been coded.
     pub coding_display: Option<String>,
+    /// The coding's system word (`drugref-moiety`...), beside `coding_display`. Never serialized:
+    /// the `--json` golden (a CODED row is in it) must stay byte-identical, and this is a
+    /// Rust-side anchor for the allergy check, not CLI output. (`skip_serializing_if` would still
+    /// emit it on every coded row.)
+    #[serde(skip_serializing)]
+    pub coding_system: Option<String>,
+    /// The coding's immortal code. Never serialized, as `coding_system` is.
+    #[serde(skip_serializing)]
+    pub coding_code: Option<String>,
     pub formulation: Option<String>,
     pub dose_amount: Option<String>,
     pub dose_unit: Option<String>,
@@ -353,6 +362,8 @@ mod tests {
             display_chart: Uuid::from_u128(2),
             term: term.into(),
             coding_display: coding_display.map(Into::into),
+            coding_system: None,
+            coding_code: None,
             formulation: None,
             dose_amount: None,
             dose_unit: None,

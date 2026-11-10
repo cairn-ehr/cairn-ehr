@@ -191,7 +191,7 @@ async fn record_refuses_a_chart_not_on_screen() {
     let other = another_chart();
     let mut bad = entry();
     bad.kind = None;
-    let err = allergy_record_impl(&state, &other, vec![other.clone()], bad, None)
+    let err = allergy_record_impl(&state, &other, vec![other.clone()], bad, None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("not the chart"), "{}", err.text);
@@ -206,14 +206,14 @@ async fn record_refuses_a_chart_not_on_screen() {
         .contains("not the chart"));
 
     // The right chart, the wrong set: the list on screen is behind the record.
-    let err = allergy_record_impl(&state, &here, vec![other.clone()], entry(), None)
+    let err = allergy_record_impl(&state, &here, vec![other.clone()], entry(), None, None)
         .await
         .unwrap_err();
     assert_eq!(err.retry, Retry::AfterReread(Recorded::No));
     // The right chart and set: fixture mode's own refusal, before the form's.
     let mut bad = entry();
     bad.kind = None;
-    let err = allergy_record_impl(&state, &here, vec![here.clone()], bad, None)
+    let err = allergy_record_impl(&state, &here, vec![here.clone()], bad, None, None)
         .await
         .unwrap_err();
     assert!(err.text.contains("fixture mode"), "{}", err.text);
@@ -245,7 +245,7 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
 
     let mut bad = entry();
     bad.kind = None;
-    let err = allergy_record_impl(&state, &patient, charts.clone(), bad, None)
+    let err = allergy_record_impl(&state, &patient, charts.clone(), bad, None, None)
         .await
         .unwrap_err();
     assert_eq!(err.text, "Choose Allergy or Adverse effect.");
@@ -264,9 +264,16 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
     };
     let (records, nones) = (timed("allergy-record").await, timed("allergy-none").await);
 
-    let done = allergy_record_impl(&state, &patient, charts.clone(), entry(), credential("bea"))
-        .await
-        .unwrap();
+    let done = allergy_record_impl(
+        &state,
+        &patient,
+        charts.clone(),
+        entry(),
+        None,
+        credential("bea"),
+    )
+    .await
+    .unwrap();
     assert_eq!(done.outcome, "Recorded.");
     let pane = done.pane.expect("the list is read again");
     assert_eq!(pane.strip, "Allergy: penicillin → anaphylaxis · 2014");
@@ -409,7 +416,7 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
         doubted_charts: vec![],
         unreadable: 1,
     };
-    let p = pane(&a, &ChartSet::single(chart));
+    let p = pane(&a, &ChartSet::single(chart), &HashMap::new());
     assert_eq!(p.unreadable, 1);
     assert!(
         p.strip
@@ -426,4 +433,57 @@ fn the_pane_carries_unreadable_records_and_the_standing_statement() {
         p.standing_none
     );
     assert!(p.standing_none[0].text.ends_with(" by Dr Bea"));
+}
+
+/// Fix round T6-a: a live line's words carry its coding (`{system, code, display}`, or null), so
+/// Correct can hold it again — correcting only the reaction must not quietly turn a coded entry
+/// into a name-only one.
+#[test]
+fn a_lines_words_carry_its_coding() {
+    use cairn_node::allergy::read::{AllergyRow, Coding, KeyState};
+    let at = chrono::DateTime::from_timestamp(1_762_600_000, 0).unwrap();
+    let row = |id: u128, coding: Option<Coding>| AllergyRow {
+        event_id: Uuid::from_u128(id),
+        chart: Uuid::from_u128(1),
+        allergen_kind: "drug".into(),
+        term: "amoxicillin".into(),
+        kind: "allergy".into(),
+        category: "anaphylaxis".into(),
+        reaction_text: None,
+        onset_precision: "unknown".into(),
+        onset_value: None,
+        source: "patient-stated".into(),
+        recorded_at: at,
+        hlc: (at.timestamp_millis(), 0),
+        signer: None,
+        corrects: None,
+        key: KeyState::Standing,
+        coding,
+    };
+    let a = PatientAllergies {
+        entries: vec![
+            row(
+                1,
+                Some(Coding {
+                    system: "drugref-moiety".into(),
+                    code: Uuid::from_u128(5).to_string(),
+                    display: "amoxicillin".into(),
+                }),
+            ),
+            row(2, None),
+        ],
+        none: vec![],
+        challenges: vec![],
+        retractions: vec![],
+        doubted_charts: vec![],
+        unreadable: 0,
+    };
+    let coded = crate::allergy_pane::line_words(&a, Uuid::from_u128(1)).unwrap();
+    let json = serde_json::to_value(&coded).unwrap();
+    assert_eq!(
+        json["coding"],
+        serde_json::json!({"system": "drugref-moiety", "code": Uuid::from_u128(5).to_string(), "display": "amoxicillin"})
+    );
+    let plain = crate::allergy_pane::line_words(&a, Uuid::from_u128(2)).unwrap();
+    assert!(serde_json::to_value(&plain).unwrap()["coding"].is_null());
 }

@@ -206,6 +206,7 @@ function resetAllergyForm() {
   for (const id of ["allergy-term", "allergy-reaction-text", "allergy-onset"]) el(id).value = "";
   clearAllergyErrors();
   clearCorrection();
+  clearPick(); // a coding belongs to the name it was picked with (drug_pick.js)
 }
 
 /** Take down every refusal shown under a field. */
@@ -243,6 +244,7 @@ async function recordAllergy() {
       patientId: patient,
       charts: allergyCharts,
       entry: typedAllergy(),
+      coding: pickedCoding(), // the picked drug or group, or null for a name as typed
       credential: signerCredential(),
     });
     clearSigner(true);
@@ -288,6 +290,7 @@ function afterSigned(answer, patient, wasEntry) {
   // own read in flight must not be outdated by an answer that is not about it.
   if (patient !== displayedPatient) return;
   allergyRevision += 1; // a read sent before this act cannot draw over its answer
+  void readMedList(); // the medication check reads the allergies: redraw its tags (main.js)
   if (wasEntry || allergyCorrecting !== null) resetAllergyForm();
   if (answer.pane === null) {
     allergyCharts = null;
@@ -378,6 +381,7 @@ async function pressOnce(act) {
     if (patient !== displayedPatient) return; // a chart left: its next read says the truth
     allergyCharts = null;
     allergyRevision += 1; // a read already in flight must not draw and re-enable Sign
+    void readMedList(); // the write may have landed: the medication check's tags follow it (main.js)
     resetAllergyForm();
     // The write may have landed: nothing of the old list stays up (as afterSigned's pane-null
     // branch), and the fault is said once, where the list was.

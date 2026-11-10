@@ -72,6 +72,15 @@ pub struct MedListRowView {
     /// `"A stopped record of this drug gave: <reason>"` when a stopped member thread gave one
     /// (#861). The status word reveals it either way.
     pub cessation_detail: Option<String>,
+    /// The allergy check's words on this line (allergy slice 3, M6): one per allergen that meets
+    /// it, most severe first; the window draws the loud "Allergy" tag before them. Empty here:
+    /// only the window, which reads the allergies, fills it (`chart_pane`).
+    pub allergy_marks: Vec<String>,
+    /// Previous adverse effects that meet this line, worded; drawn muted. Filled as `allergy_marks`.
+    pub allergy_notes: Vec<String>,
+    /// The small "not checked" tag: some live allergy could not be verified against this line
+    /// (never set beside a mark). Filled as `allergy_marks`.
+    pub allergy_unverified: bool,
 }
 
 /// Shown instead of a blank cell. Principle 4: an unrecorded dose is a recordable state,
@@ -129,6 +138,9 @@ pub(crate) fn build_row(
             &row.other_cessation_reasons,
         )
         .or_else(|| stopped_record_detail(&row.stopped_member_reasons)),
+        allergy_marks: vec![],
+        allergy_notes: vec![],
+        allergy_unverified: false,
     }
 }
 

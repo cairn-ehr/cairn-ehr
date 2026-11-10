@@ -22,6 +22,11 @@ fn fields_read_by_the_webview(binding: &str) -> BTreeSet<String> {
     ));
     // holds.js draws each row's W and sends Withhold/Release (#832), off the same rows.
     read.extend(fields_read_in(include_str!("../src-ui/holds.js"), binding));
+    // allergy_tags.js draws each row's name cell and its allergy marks (allergy slice 3).
+    read.extend(fields_read_in(
+        include_str!("../src-ui/allergy_tags.js"),
+        binding,
+    ));
     read
 }
 
@@ -112,6 +117,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         links_error: None,
         duplicates: crate::duplicates::view::DuplicateSection::checked_none_open(),
         set_change: None,
+        allergy_check_failed: None,
     })
     .unwrap();
     let member_json = serde_json::to_value(&member).unwrap();
@@ -384,6 +390,8 @@ fn every_command_the_webview_calls_is_registered() {
             "allergy_overlays.js",
             include_str!("../src-ui/allergy_overlays.js"),
         ),
+        ("allergy_tags.js", include_str!("../src-ui/allergy_tags.js")),
+        ("drug_pick.js", include_str!("../src-ui/drug_pick.js")),
         ("allergies.js", include_str!("../src-ui/allergies.js")),
         ("person_menu.js", include_str!("../src-ui/person_menu.js")),
         ("whos_here.js", include_str!("../src-ui/whos_here.js")),

@@ -86,6 +86,17 @@ allergen (the same term after case and whitespace are folded) that disagree on k
 marked "differing accounts", and a byline says when its key is unconfirmed or was since repudiated
 ([ADR-0097](decisions/0097-allergy-overlays-and-differing-accounts.md)).
 
+A drug entry may be **coded** against drugref, as one drug (`drugref-moiety`) or as a drugref allergy group such as
+*Penicillins* (`drugref-class`, the group's immortal `class_uuid`), in the same `{system, code, display}` slot a
+medication uses; picking is optional and an uncoded entry stays fully valid, and two accounts carrying the same code
+are one allergen. Every current medication line is then **checked against the live drug allergies** on every read,
+never on the wire: a hit (the same name, the same moiety code, or drugref's own `allergy_check` answering `match`)
+carries a loud tag and its words on the line, an adverse effect a quiet note, and a line some live allergy could not be
+verified against a small "not checked" tag, so silence never reads as checked. drugref owns the fold and the groups;
+Cairn reads it through one SQL file of definer doors that answer "no drug list" when drugref is absent, too old or
+unreadable, and a drugref `no-match` is not a statement that a cross-reacting drug (a cephalosporin for a penicillin
+allergy) is safe ([ADR-0098](decisions/0098-allergy-coding-and-the-medication-check.md)).
+
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 
 ## 3.4 Interoperability
@@ -414,6 +425,15 @@ The decision pathway keys on **stable concept identifiers, never free-text names
 > **The one divergence from the ICD-11 axis: drugref is a *separable service a node may lack*, so its coding is advisory and honest-degrading — never load-bearing.** ICD-11 ships as a mandated offline container every node has, so the safety projection may *depend* on it; drugref co-resides in a deployment's Postgres or is simply absent, and **never rides Cairn's inter-node wire core** ([principle 12](index.md#founding-principles-the-lens-for-every-decision)). So `drugref`-*the-service* is node-local advisory enrichment: a node **without** it still reads, syncs, lists, and reconciles a coded medication (via the captured `display` + the mandatory `term`), losing only drugref-powered enrichment (DDI alerts, brand↔generic resolution) — the [ADR-0014](decisions/0014-locale-pluggable-matcher-comparators.md)/[ADR-0013](decisions/0013-attachments-content-addressed-lazy-blob-tier.md) degrade-to-references posture.
 > **What that costs the safety floor, precisely.** [§5.9](identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope) derives the safety projection's drug **class** from the code (*"a coded drug's interaction class is a property of the code"*) — a knowledge lookup, so a *reader* cannot re-derive it without drugref. The class is therefore computed **pre-seal on the coding node** — which by construction had a coding authority in hand — and **travels** with the projection §5.9 already replicates in the clear. A drugref-less node honours the §5.9 floor for a **coded** medication without ever holding drugref. An **uncoded** medication has no class on any node: that is principle 4 being honest, not drugref's absence degrading anything. Where a coding authority supplies identifiers but no class, the signal coarsens down the §5.9 ladder — **never** disappears (the safety-floor invariant: coarseness varies, existence does not). *Carrying* the class rather than expecting the reader to compute it is the load-bearing constraint.
 > The anchor also sharpens medication reconciliation ([ADR-0047](decisions/0047-medication-reconciliation-resolution.md)) **advisorily** — the dup-key becomes the coding slot **as a `(system, code)` pair** (never a bare `code`, which would re-split the same substance across tree levels once the finer ones exist), the reconciled-group display prefers the coded member's INN label, and two *different* anchors inside one reconciled group is a surfaced *possible-mis-reconciliation* signal, never a silent pick. This closes **coded↔coded** duplicates (brand↔generic once both are coded); the *"asserted once coded, once uncoded"* case closes when the uncoded member gets coded, or later via term→anchor resolution in the drug-matcher — **not** by the key itself.
+
+The same `{system, code, display}` slot codes an **allergen** too ([ADR-0098](decisions/0098-allergy-coding-and-the-medication-check.md)).
+`drugref-class` names a drug **group**, coded by its immortal `class_uuid`. The window's pick offers only drugref
+*allergy groups* (the classes listed in drugref's `allergy_group`, such as *Penicillins (allergy group)*), because drugref's allergy check cannot
+check against a MED-RT class. The floor admits any uuid under `drugref-class`, so an entry coded to any other class
+(a peer's, or one written past the window) reads "not checked" on every medication line it meets. It is registered in the same coding registry as the moiety levels, admitted on an allergy entry only, and refused on a
+medication at the authoring door (a medication is one drug, never a group). The divergence above holds unchanged: the
+group answer comes from the co-resident drugref through one read door, and a node without it checks by name and
+identical code only and says so.
 
 ## 3.17 Trusted-time anchoring: the clock-confidence grade and the bracketed `t_recorded`
 > Resolves former open question §11.14 — see [ADR-0027](decisions/0027-trusted-time-anchoring.md). [Principle 4](index.md#founding-principles-the-lens-for-every-decision) ([§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)) applied to wall-clock truth. One day-one envelope field; no new founding principle.

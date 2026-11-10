@@ -71,7 +71,7 @@ fn a_banner_that_fails_to_draw_keeps_its_own_lines_and_logs_the_fault() {
 /// never thrown into `refresh`'s "Could not read the chart".
 #[test]
 fn a_failed_chart_read_still_draws_the_banner() {
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let caught = &refresh[position(refresh, "catch (e)")..];
     assert!(
         position(caught, "sayReadFailed(lead, e);")
@@ -90,7 +90,7 @@ fn a_failed_chart_read_still_draws_the_banner() {
 /// review): nothing is loading any more, and a clinician would wait for a read that never comes.
 #[test]
 fn a_failed_first_read_does_not_leave_sign_off_saying_loading() {
-    let refresh = js_fn(MAIN_JS, "refresh");
+    let refresh = js_fn(MAIN_JS, "readMedList");
     let caught = &refresh[position(refresh, "catch (e)")..];
     let unread = &caught[position(caught, "if (renderedPatient === null)")..];
     assert!(

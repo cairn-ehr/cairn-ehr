@@ -185,6 +185,7 @@ fn entry_of(corrects: Option<&str>) -> AllergyEntry<'_> {
         onset: Onset::Year("2019".into()),
         source: Source::PatientStated,
         corrects,
+        coding: None,
     }
 }
 

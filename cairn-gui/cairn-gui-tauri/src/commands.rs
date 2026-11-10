@@ -92,7 +92,13 @@ pub async fn med_list_impl(
         members.as_deref().unwrap_or(&[]),
     )
     .await;
-    Ok(chart_pane(&list, patient, members, links, dups, change))
+    // Every current line against the live drug allergies (allergy slice 3). Never a failed open:
+    // an unread allergy list is a worded line above the list, an absent or failing drug list
+    // leaves lines "not checked".
+    let allergy = crate::allergy_check::med_list_check(state, patient, &list).await;
+    Ok(chart_pane(
+        &list, patient, members, links, dups, change, allergy,
+    ))
 }
 
 /// Whether a signing key is held for the next act, and for whom.

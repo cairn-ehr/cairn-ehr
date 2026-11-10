@@ -13,6 +13,8 @@ fn row(group: u128, display_chart: u128, members: &[(u128, u128)]) -> Medication
         display_chart: uid(display_chart),
         term: "metformin".into(),
         coding_display: None,
+        coding_system: None,
+        coding_code: None,
         formulation: None,
         dose_amount: None,
         dose_unit: None,

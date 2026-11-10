@@ -44,7 +44,8 @@ fn tail(text: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-/// Build the `clinical.allergy-challenge/1` payload. `tolerated.coding` is a reserved slot.
+/// Build the `clinical.allergy-challenge/1` payload. `tolerated.coding` is a reserved slot, kept null
+/// by allergy slice 3 (ADR-0098 decision 3; opening it is #1053).
 pub fn allergy_challenge_payload(c: &AllergyChallenge) -> Value {
     let (precision, value) = onset_wire(&c.date);
     json!({
