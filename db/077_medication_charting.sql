@@ -9,7 +9,9 @@
 --   substance.components       a combination: [{term, coding|null}, …], ≥ 2, never beside
 --                              substance.coding
 --
--- §1 (this task) is the floor. Later sections add the projection and the drug search.
+-- §1 is the floor; §2 the projection (medication_charting). The medication pick's drug search
+-- reads drugref, so it lives in the drug read door, db/076 §5 — the one file that may
+-- (no_drugref_dependency.rs).
 --
 -- WHY A SEPARATE FILE: a floor change needs its own SCHEMA_GENERATION bump (#188), so an
 -- older binary cannot CREATE OR REPLACE the check back down; db/031 only gains the one
@@ -130,5 +132,118 @@ END;
 $$;
 -- The cairn_check_* family is revoked from PUBLIC uniformly (#382).
 REVOKE EXECUTE ON FUNCTION cairn_check_medication_charting(jsonb) FROM PUBLIC;
+
+-- §2. The charting projection. Its OWN table, written by a SECOND apply fn on
+--     clinical.medication.asserted, rather than columns on medication_statement: a later file
+--     may not widen db/031's views (every db/*.sql replays on every connect), and one fact
+--     keeps one home (db/031 §4b's argument for medication_coding). Readers JOIN it by
+--     medication_id. No FK to medication_statement, for the same arrival-order reason.
+--
+--     Columns mirror the five keys: `components` is the combination as signed (jsonb, a
+--     peer's one-element list included — Task 1 admits it remotely); `override_against` the
+--     allergy records the line was charted against. hlc_* / origin / content_address are the
+--     overlay-winner tuple, as medication_coding's, and content_address is what a shred
+--     (db/037) deletes by.
+CREATE TABLE IF NOT EXISTS medication_charting (
+    medication_id    UUID PRIMARY KEY,
+    patient_id       UUID NOT NULL,
+    charted_as       TEXT,
+    route            TEXT,
+    strength         TEXT,
+    components       JSONB,
+    override_reason  TEXT,
+    override_against UUID[],
+    hlc_wall         BIGINT  NOT NULL,
+    hlc_counter      INTEGER NOT NULL,
+    origin           TEXT    NOT NULL,
+    content_address  BYTEA   NOT NULL,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON medication_charting TO cairn_agent;
+CREATE INDEX IF NOT EXISTS medication_charting_content_address_idx
+    ON medication_charting (content_address);
+
+-- The apply fn, registered below beside medication_statement_apply (db/031) for the same
+-- event type. FLOW:
+--   1. read the clear payload (ADR-0052); sealed without custody here -> nothing to project;
+--   2. pull the five keys out; a JSON null reads as absent (the floor's rule);
+--   3. none present -> write nothing. An uncharted assertion has no row, and — as for
+--      medication_coding — a later uncharted re-assertion never clears an earlier charting;
+--   4. upsert under the overlay-winner rule, so set-union sync converges.
+--
+-- Never raises on a shape the remote door admits: charted_as is stored as text (a peer may
+-- speak a newer word), components as given (any array length). `against` is cast to uuid[]
+-- only when it is an array — the floor already refused a non-uuid entry at both doors.
+--
+-- patient_id is the thread's STANDING chart when one is known (db/031's #192 reasoning for
+-- medication_coding), else this event's. Both apply fns share run_order 20, so by name this
+-- one runs BEFORE medication_statement_apply: on a thread's first event no row exists yet
+-- and e.patient_id is the chart the statement is about to take.
+CREATE OR REPLACE FUNCTION medication_charting_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    p         jsonb := cairn_clear_payload(e);
+    v_med     uuid;
+    v_comp    jsonb;
+    v_against uuid[];
+BEGIN
+    IF p IS NULL THEN RETURN; END IF;
+    v_comp := NULLIF(p #> '{substance,components}', 'null'::jsonb);
+    IF jsonb_typeof(p #> '{allergy_override,against}') = 'array' THEN
+        v_against := ARRAY(SELECT x::uuid
+                             FROM jsonb_array_elements_text(p #> '{allergy_override,against}') x);
+    END IF;
+    -- `->>` already reads a JSON null as SQL NULL, so the text keys need no NULLIF.
+    IF p ->> 'charted_as' IS NULL AND p ->> 'route' IS NULL
+       AND p #>> '{substance,strength}' IS NULL AND v_comp IS NULL
+       AND p #>> '{allergy_override,reason}' IS NULL AND v_against IS NULL THEN
+        RETURN;
+    END IF;
+    v_med := (p ->> 'medication_id')::uuid;
+
+    INSERT INTO medication_charting
+        (medication_id, patient_id, charted_as, route, strength, components,
+         override_reason, override_against, hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        v_med,
+        COALESCE(cairn_medication_thread_patient(v_med), e.patient_id),
+        p ->> 'charted_as',
+        p ->> 'route',
+        p #>> '{substance,strength}',
+        v_comp,
+        p #>> '{allergy_override,reason}',
+        v_against,
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
+    ON CONFLICT (medication_id) DO UPDATE SET
+        patient_id       = EXCLUDED.patient_id,
+        charted_as       = EXCLUDED.charted_as,
+        route            = EXCLUDED.route,
+        strength         = EXCLUDED.strength,
+        components       = EXCLUDED.components,
+        override_reason  = EXCLUDED.override_reason,
+        override_against = EXCLUDED.override_against,
+        hlc_wall         = EXCLUDED.hlc_wall,
+        hlc_counter      = EXCLUDED.hlc_counter,
+        origin           = EXCLUDED.origin,
+        content_address  = EXCLUDED.content_address,
+        updated_at       = clock_timestamp()
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        medication_charting.hlc_wall, medication_charting.hlc_counter,
+        medication_charting.origin, medication_charting.content_address);
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION medication_charting_apply(event_log) FROM PUBLIC;
+
+-- Registered for the generic dispatcher and cairn_reproject (db/005, db/039, ADR-0057), and so
+-- for the shred's re-fold (db/037 #863). Converges on replay, write-free once converged (#214).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('clinical.medication.asserted', 'medication_charting_apply', ARRAY['medication_charting'], 20, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

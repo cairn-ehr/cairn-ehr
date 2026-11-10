@@ -13,6 +13,8 @@
 --     (cairn_drug_search) — so the entry can carry a coding as well as the typed name;
 --   * the CHECK: what drugref says about each (allergen, medication) pair (cairn_drug_facts);
 --   * the STATUS: whether a coded group has been clinically reviewed (cairn_drug_group_status).
+--   * the MEDICATION PICK: which drugs match a typed medication, most charted here first
+--     (cairn_medication_drug_search, charting slice 1a).
 -- None ever refuses anything or writes anything. An answer of "nothing" is always safe to give:
 -- the window then checks by name only and SAYS so (the "not checked" tag, D8). So every door
 -- answers nothing — no error — when cairn_drug_available says drugref is not usable: absent, too
@@ -197,14 +199,66 @@ BEGIN
 END;
 $$;
 
+-- 5. The medication pick (charting slice 1a): drugs whose name matches what the clinician typed,
+--    ranked by how often THIS node has charted each one. It lives here, not beside the charting
+--    projection in db/077, because it reads drugref and this is the one file that may.
+--    * Drugs ONLY, never a group: a medication line is one drug (db/041 refuses a
+--      drugref-class coding on a medication, and db/077 on a component).
+--    * The same text rules as the allergy pick (§2): fewer than 3 characters answers nothing,
+--      LIKE's metacharacters are escaped first, and a match is a word start.
+--    * `uses` counts this node's coded lines naming the moiety: one per medication_coding row
+--      (the line's single coding) plus one per coded component of a combination
+--      (medication_charting.components). It reads every patient's rows, as the door's owner, and
+--      answers only a per-drug count, never a patient. Most used first, then shorter names, then
+--      byte order (every node orders alike). At most 20.
+--    shortcut: the counts are recomputed per keystroke by scanning medication_coding's drugref
+--    rows and every combination row; keep a per-moiety counter table if a node's medication list
+--    grows large enough for the pick to lag.
+CREATE OR REPLACE FUNCTION cairn_medication_drug_search(p_text text, p_limit int)
+RETURNS TABLE(code text, display text, uses bigint)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+#variable_conflict use_column
+DECLARE
+    v_text text := btrim(p_text);
+    v_pat  text;
+BEGIN
+    IF v_text IS NULL OR length(v_text) < 3 OR NOT public.cairn_drug_available() THEN
+        RETURN;
+    END IF;
+    v_pat := replace(replace(replace(v_text, '\', '\\'), '%', '\%'), '_', '\_');
+    RETURN QUERY
+        WITH used AS (
+            SELECT mc.coding_code AS code
+              FROM public.medication_coding mc
+             WHERE mc.coding_system = 'drugref-moiety'
+            UNION ALL
+            SELECT part #>> '{coding,code}'
+              FROM public.medication_charting ch
+             CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(ch.components) part
+             WHERE pg_catalog.jsonb_typeof(ch.components) = 'array'
+               AND part #>> '{coding,system}' = 'drugref-moiety'
+        ), counts AS (
+            SELECT u.code, count(*) AS n FROM used u GROUP BY u.code
+        )
+        SELECT m.moiety_uuid::text, m.display_name, coalesce(c.n, 0)
+          FROM drugref.substance_moiety m
+          LEFT JOIN counts c ON c.code = m.moiety_uuid::text
+         WHERE (' ' || m.display_name) ILIKE ('% ' || v_pat || '%') ESCAPE '\'
+         ORDER BY coalesce(c.n, 0) DESC, length(m.display_name), m.display_name COLLATE "C"
+         LIMIT greatest(0, least(coalesce(p_limit, 20), 20));
+END;
+$$;
+
 -- Only the window reads them; PUBLIC (and so any other role) does not.
 REVOKE EXECUTE ON FUNCTION cairn_drug_available() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_search(text, int) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_facts(uuid[], uuid[]) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_group_status(uuid[]) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_medication_drug_search(text, int) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_drug_available() TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_search(text, int) TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_facts(uuid[], uuid[]) TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_group_status(uuid[]) TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_medication_drug_search(text, int) TO cairn_window;
 
 COMMIT;

@@ -9,7 +9,7 @@ BEGIN;
 -- 1. Registry membership pinned. The throwaway DB this script builds loads
 --    every migration in numeric order (scripts/run-db-sql-tests.sh), including
 --    the spike-only db/008 the product loaders deliberately skip (issue #67) —
---    so the expected count here is the product count 37 + db/008's 2 = 39.
+--    so the expected count here is the product count 38 + db/008's 2 = 40.
 --    (27 = 25 + db/048's two #232 sensitivity rows: `sensitivity.grade.asserted`
 --    → `sensitivity_assertion_apply` and `sensitivity.grade-withdrawal.asserted`
 --    → `sensitivity_withdrawal_apply`; 29 = 27 + db/059's two ADR-0081 rows,
@@ -18,7 +18,8 @@ BEGIN;
 --    `clinical_note_apply`; 32 = 31 + db/068's ADR-0089 row, `clinical_note_discard_apply`; 33 = 32 + db/071's
 --    ADR-0092 row, `clinical_note_attestation_apply`; 35 = 33 + db/074's two allergy rows,
 --    `clinical_allergy_apply` and `clinical_allergy_none_apply`; 37 = 35 + db/075's two
---    allergy-overlay rows, `clinical_allergy_challenge_apply` and `clinical_allergy_retraction_apply`.)
+--    allergy-overlay rows, `clinical_allergy_challenge_apply` and `clinical_allergy_retraction_apply`; 38 = 37 + db/077's
+--    charting row, `medication_charting_apply`.)
 --
 --    #345 left the PRODUCT count unchanged at 25 and dropped db/008's from 3 to 2:
 --    retiring `patient.created` removed one product row (its patient_chart_apply
@@ -27,14 +28,14 @@ BEGIN;
 --    `identity.registration.asserted` → patient_chart_apply, the chart-birth
 --    projection registration took over.
 --    Kept in lockstep with the Rust mirror
---    (projection_registry.rs::registry_row_count_is_pinned, which asserts 37 on
+--    (projection_registry.rs::registry_row_count_is_pinned, which asserts 38 on
 --    the product-loader DB that never loads db/008).
 DO $$
 DECLARE n bigint;
 BEGIN
     SELECT count(*) INTO n FROM cairn_projection_apply;
-    IF n <> 39 THEN
-        RAISE EXCEPTION 'cairn_projection_apply: expected 39 rows on the sqltest DB, found %', n;
+    IF n <> 40 THEN
+        RAISE EXCEPTION 'cairn_projection_apply: expected 40 rows on the sqltest DB, found %', n;
     END IF;
 END $$;
 
