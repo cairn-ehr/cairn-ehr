@@ -231,6 +231,7 @@ function render(pane, patient) {
     showUnshownList(failure);
   }
   drawDuplicates(pane.duplicates); // a fault drawing it is said on the banner, never thrown here
+  syncMedChart(); // "Start medication" / "Already taking" only over a drawn list (med_chart.js)
 }
 
 /** The list half of `render`: the drawn chart and set, linked charts, links, warnings, rows. */
@@ -325,6 +326,7 @@ function clearChart() {
   clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   clearNotes(); // the note pane and its editor (notes.js)
   clearAllergies(); // the allergy strip, its lists and its form (allergies.js)
+  clearMedChart(); // the medication line typed for this chart (med_chart.js)
   clearDrawnList();
   const button = el("sign-off");
   button.disabled = true;

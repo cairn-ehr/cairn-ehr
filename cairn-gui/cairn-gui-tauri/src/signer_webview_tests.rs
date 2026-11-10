@@ -20,13 +20,14 @@ const NOTES_JS: &str = concat!(
 );
 const DISCARD_JS: &str = include_str!("../src-ui/notes_discard.js");
 const ALLERGIES_JS: &str = include_str!("../src-ui/allergies.js");
+const MED_CHART_JS: &str = include_str!("../src-ui/med_chart.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 
-/// The eleven functions that send a signed act (`confirm_link` is `confirmCompared`;
+/// The twelve functions that send a signed act (`confirm_link` is `confirmCompared`;
 /// `link_records`/`record_different_people` share `sendJudgement`; a note's Discard is signed too;
-/// an allergy entry and a "none known" statement are each one).
-const WRITERS: [(&str, &str, &str); 11] = [
+/// an allergy entry and a "none known" statement are each one; so is a charted medication line).
+const WRITERS: [(&str, &str, &str); 12] = [
     ("main.js", "signOff", MAIN_JS),
     ("main.js", "cease", MAIN_JS),
     ("holds.js", "withhold", HOLDS_JS),
@@ -38,6 +39,7 @@ const WRITERS: [(&str, &str, &str); 11] = [
     ("notes_discard.js", "discardNote", DISCARD_JS),
     ("allergies.js", "recordAllergy", ALLERGIES_JS),
     ("allergies.js", "recordNoneKnown", ALLERGIES_JS),
+    ("med_chart.js", "chartMedication", MED_CHART_JS),
 ];
 
 #[test]

@@ -45,6 +45,8 @@ mod holds_webview_tests;
 mod launch_posture_tests;
 mod link;
 mod med_chart;
+#[cfg(test)]
+mod med_chart_webview_tests;
 mod med_chart_write;
 #[cfg(test)]
 mod node_lock_explains_tests;
