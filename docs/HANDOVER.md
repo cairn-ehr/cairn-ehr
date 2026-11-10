@@ -154,7 +154,7 @@
 >    (figures `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: per-key fact lookups 5–6× faster,
 >    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
 >    projection and the Pi figures. **Allergy slices 1–3 MERGED** (the bullets above). **Next: charting a
->    medication in the window** (brainstorm begun 2026-11-10 on branch `design/charting-a-medication`) (it cannot yet; reuse slice 3's check at charting, #1054; its ADR records the milestone's "prescribe means
+>    medication in the window** (design APPROVED 2026-11-11: [`superpowers/specs/2026-11-10-charting-a-medication-design.md`](superpowers/specs/2026-11-10-charting-a-medication-design.md), three PRs — the line + the check at charting; stat ordered → given; aliases + PBS forms as drugref supplies them; slice 1's plan next) (it cannot yet; reuse slice 3's check at charting, #1054; its ADR records the milestone's "prescribe means
 >    charted"). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.

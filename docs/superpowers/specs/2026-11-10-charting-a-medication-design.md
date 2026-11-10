@@ -1,7 +1,7 @@
 # GUI milestone — charting a medication (design)
 
 - **Date:** 2026-11-10
-- **Status:** brainstormed with the maintainer 2026-11-10; builder-checked 2026-11-10; the maintainer answered its three questions 2026-11-10 (§10); awaiting the maintainer's approval
+- **Status:** brainstormed with the maintainer 2026-11-10; builder-checked 2026-11-10; the maintainer answered its three questions 2026-11-10 (§10); approved by the maintainer 2026-11-11
 - **Milestone step:** "chart a medication" (HANDOVER ⇒ NEXT, the 2026-10-31 GUI milestone). The milestone's fourth
   decision, *"prescribe" means CHARTED* (no printed or electronic prescription), is in no ADR yet. This slice's
   ADR records it.
