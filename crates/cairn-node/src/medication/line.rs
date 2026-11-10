@@ -129,13 +129,25 @@ fn tokenise(text: &str) -> Vec<String> {
     out
 }
 
-/// Sets `slot` only if empty; a second value is a contradiction, so it goes to unread.
-fn fill(slot: &mut Option<String>, value: &str, token: &str, unread: &mut Vec<String>) {
-    if slot.is_none() {
-        *slot = Some(value.to_string());
-    } else {
-        unread.push(token.to_string());
+/// One value for a field, or none. Two or more tokens for the same field ("bd tds",
+/// "po iv") are ambiguous: we cannot know which the clinician meant, so the field stays
+/// `None` and EVERY conflicting token (the first too) goes to `unread`.
+fn settle(found: Vec<(&'static str, String)>, unread: &mut Vec<String>) -> Option<String> {
+    if found.len() == 1 {
+        return found.into_iter().next().map(|(v, _)| v.to_string());
     }
+    unread.extend(found.into_iter().map(|(_, typed)| typed));
+    None
+}
+
+/// True when `w` is a word the tables understand. A bare number may only be a dose if
+/// what follows it is understood; "5 days" / "8 hours" are durations, not doses.
+fn is_known(w: &str) -> bool {
+    w == "prn"
+        || w == "stat"
+        || lookup(FREQUENCIES, w).is_some()
+        || lookup(ROUTES, w).is_some()
+        || lookup(FORMS, w).is_some()
 }
 
 /// Read typed directions into fields; see the module comment for the "never guess" rule.
@@ -144,6 +156,7 @@ pub fn read_directions(text: &str) -> Directions {
     let mut d = Directions::default();
     // Each dose candidate is (amount, unit); more than one means we cannot know which.
     let mut doses: Vec<(String, Option<String>)> = Vec::new();
+    let (mut freqs, mut routes, mut forms) = (Vec::new(), Vec::new(), Vec::new());
     let mut i = 0;
     while i < toks.len() {
         let t = toks[i].as_str();
@@ -154,31 +167,41 @@ pub fn read_directions(text: &str) -> Directions {
         } else if t == "stat" {
             d.stat = true;
         } else if let Some(w) = lookup(FREQUENCIES, t) {
-            fill(&mut d.frequency, w, t, &mut d.unread);
+            freqs.push((w, t.to_string()));
         } else if let Some(r) = lookup(ROUTES, t) {
-            fill(&mut d.route, r, t, &mut d.unread);
+            routes.push((r, t.to_string()));
         } else if let Some(f) = lookup(FORMS, t) {
-            fill(&mut d.form, f, t, &mut d.unread);
+            forms.push((f, t.to_string()));
         } else if is_number(t) || is_ratio(t) {
             // A strength is a number right after a form word, with a strength unit ("tab 875/125 mg").
             let after_form = i > 0 && lookup(FORMS, &toks[i - 1]).is_some();
             let strength_unit = next.filter(|n| STRENGTH_UNITS.contains(n));
-            if let (true, Some(u), None) = (after_form, strength_unit, &d.strength) {
-                d.strength = Some(format!("{t} {u}"));
+            if let (true, Some(u)) = (after_form, strength_unit) {
+                if d.strength.is_none() {
+                    d.strength = Some(format!("{t} {u}"));
+                } else {
+                    // A second strength is ambiguous; it must never leak into the dose.
+                    d.unread.push(format!("{t} {u}"));
+                }
                 i += 1;
             } else if is_ratio(t) {
                 d.unread.push(t.to_string()); // a ratio is never a dose
             } else if let Some(u) = unit {
                 doses.push((t.to_string(), Some(u.to_string())));
                 i += 1;
-            } else {
+            } else if next.is_none_or(is_known) {
                 doses.push((t.to_string(), None));
+            } else {
+                d.unread.push(t.to_string()); // "5 days", "8 hours": not a dose
             }
         } else {
             d.unread.push(t.to_string());
         }
         i += 1;
     }
+    d.frequency = settle(freqs, &mut d.unread);
+    d.route = settle(routes, &mut d.unread);
+    d.form = settle(forms, &mut d.unread);
     if doses.len() == 1 {
         let (a, u) = doses.remove(0);
         (d.dose_amount, d.dose_unit) = (Some(a), u);

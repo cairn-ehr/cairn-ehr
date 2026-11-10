@@ -67,10 +67,6 @@ fn unknown_words_are_unread_never_dropped() {
         read_directions("500mg tds with food").unread,
         vec!["with", "food"]
     );
-    // A second frequency is a contradiction, not something to pick from.
-    let d = read_directions("bd tds");
-    assert_eq!(d.frequency, s("twice daily"));
-    assert_eq!(d.unread, vec!["tds"]);
 }
 
 #[test]
@@ -94,4 +90,45 @@ fn shown_name_adds_the_typed_brand_only_when_different() {
         "amoxicillin + clavulanic acid (Augmentin)"
     );
     assert_eq!(shown_name("amoxicillin", "Amoxicillin"), "amoxicillin");
+}
+
+#[test]
+fn two_of_a_kind_is_ambiguous_so_none_of_them_is_read() {
+    let d = read_directions("bd tds");
+    assert_eq!(d.frequency, None);
+    assert_eq!(d.unread, vec!["bd", "tds"]);
+    let d = read_directions("po iv");
+    assert_eq!(d.route, None);
+    assert_eq!(d.unread, vec!["po", "iv"]);
+    let d = read_directions("tab cap");
+    assert_eq!(d.form, None);
+    assert_eq!(d.unread, vec!["tab", "cap"]);
+}
+
+#[test]
+fn a_duration_or_interval_number_is_not_a_dose() {
+    for typed in ["tds for 5 days", "every 8 hours", "2 weeks"] {
+        let d = read_directions(typed);
+        assert_eq!(d.dose_amount, None, "{typed}");
+        assert!(
+            d.unread
+                .iter()
+                .any(|u| u.chars().any(|c| c.is_ascii_digit())),
+            "{typed}"
+        );
+    }
+}
+
+#[test]
+fn a_second_strength_never_leaks_into_the_dose() {
+    let d = read_directions("tab 500mg tab 250mg");
+    assert_eq!((d.dose_amount, d.dose_unit), (None, None));
+    assert_eq!(d.strength, s("500 mg"));
+}
+
+#[test]
+fn a_strength_after_a_form_is_not_a_dose() {
+    let d = read_directions("tab 500mg");
+    assert_eq!(d.strength, s("500 mg"));
+    assert_eq!(d.dose_amount, None);
 }
