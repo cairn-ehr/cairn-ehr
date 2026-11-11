@@ -2999,3 +2999,121 @@ WebKit need the window and a human. The rest was run as follows:
 - **The webview:** source guards (`med_chart_webview_tests.rs`, `med_chart_line_webview_tests.rs`).
 
 `TEMPLATE.md` carries a matching block (*Charting a medication*).
+
+## 31. Charting a medication list under one signature (batch charting slice 1, ADR-0100)
+
+The slice's gestures:
+- **The list.** *Start medication* and *Already taking* each add a line to the list under the medication pane, headed
+  "Unsigned lines typed by {name}". Each line has a tick box, *Remove* and section 30's line editor. A line saves one
+  second after its last change. While typed it reads `unfinished`; Enter, Escape or leaving it finishes it.
+- **The ticks.** A finished line that is complete (drug picked, form, dose and how often read), checked clean, and on a
+  chart whose drug allergies were asked, is drawn ticked. Every other line reads "not ticked: Sign leaves it unsigned"
+  until ticked by hand. On a *Start* line with an allergy mark the box stays disabled until a reason is typed. A
+  second line of a drug already in the list or on the chart reads "already on the list: {line}" and is not ticked.
+- **Sign ticked lines** charts every ticked line under one key release, each its own event, and says
+  `Charted {k} of {n}`, then each line not charted with its reason. Charted lines leave the list; the rest stay.
+- **The list waits.** It is never charted by a timer. "Waiting for you" counts it ("{n} unsigned medication
+  line(s)", *Open medication list*). Another terminal holding it shows "These lines are open on another terminal: …"
+  and *Continue here*. *Remove* asks nothing and leaves no record.
+
+Paper counterpart: the admission medication history, lines written under each other and one signature at the
+bottom; a line crossed out. **Live only**: a `--mock` window has no list.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| A common line in the list | the press (or Enter after the last line) | the line drawn ticked or not | **≤ 10 s** (as section 30) |
+| Sign over a 10-line list | the press of *Sign ticked lines* | `Charted 10 of 10` drawn | **≤ 3 s** (M3 Max) |
+| A 10-line home list, start to finish | the first press | `Charted 10 of 10` | — (record; compare section 30's ten Signs) |
+| Resuming after being called away | opening the chart again | the list back as left | **0 acts** |
+| Removing a line | — | — | **1 press**, no dialog |
+
+The budgets are with the key held (`--key-hold-seconds 900`); repeat the Sign on a shared terminal and record both.
+Steps:
+- a 12-line home list: paper *N* = 12 lines + 1 signature → forced *M* = 1 human signature act (12 events) → target
+  *K* = 12 lines + 1 Sign, plus one more Sign only when a warning arrived meanwhile;
+- resuming: *N* = 0 (the sheet lies there) → *M* = 0 → *K* = 0;
+- removing a line: *N* = 1 (cross it out) → *K* = 1 press.
+
+The node times the Sign as **`medication-chart`** (section 5), its count the lines charted. **A figure outside its
+budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
+
+**Setup.** As section 30 (drugref with its allergy groups), but build this checkout and re-run section 0's
+`provision-window-role`, because the build moves `SCHEMA_GENERATION` to 78. Then:
+
+```bash
+L1=$(achart "List Penicillin" 1984-04-04)   # Penicillins (allergy group) recorded, as section 30's $C1
+L2=$(achart "List Clean" 1985-05-05)        # "No known drug allergies" recorded
+L3=$(achart "List Unasked" 1986-06-06)      # nothing recorded: allergies not yet asked
+for c in "$L1" "$L2" "$L3"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+```
+
+Record the allergy on `$L1` and "No known drug allergies" on `$L2` in the window, as section 30's Setup does. Name a
+clinician in who's here (`dr-a`) before typing any line.
+
+**Measurement 1: the list and its ticks.**
+
+- [ ] On `$L2`, *Already taking*, `amox`, choose "amoxicillin", ` cap 500mg tds`, Enter. The line is drawn ticked.
+      *Already taking*, `metfo`, choose it, ` 500mg bd`, Enter: no form word, so it reads "not ticked: Sign leaves it
+      unsigned" (#1081). Note how many lines of a real home list need a typed form word.
+- [ ] Type a third line, `atorv`, and leave it mid-word: it reads `unfinished` and is not ticked.
+- [ ] *Already taking*, `amox` again, choose it, ` cap 250mg tds`, Enter: both amoxicillin lines are untouched by the
+      default tick from now on, and the new one reads "already on the list: amox cap 500mg tds".
+- [ ] Untick the first amoxicillin line by hand. Close the chart and open it again: it is still unticked. Change one
+      word of it: the veto is gone with the old words.
+- [ ] On `$L3` (allergies not yet asked), type a complete clean line: it is **never** drawn ticked. Tick it by hand.
+- [ ] On `$L1`, *Start medication* amoxicillin ` cap 500mg tds`: the **Allergy** mark, the box disabled. Type a
+      reason: the box can be ticked.
+
+**Measurement 2: one Sign, and what it refuses.**
+
+- [ ] On `$L2`, with three lines ticked and one not, *Sign ticked lines*: one passphrase (on a shared terminal), then
+      `Charted 3 of 3`. The three are in the medication list; the unticked line stays in the draft list.
+- [ ] **A warning after the tick.** On a fresh `achart` with "No known drug allergies", tick an amoxicillin line. In a
+      second window (or the console, if one exists by then) record the Penicillins allergy on that chart, then press
+      *Sign ticked lines* in the first: "1 ticked line(s) changed since they were ticked: nothing was signed. Look at
+      them again", the line unticked with its mark. Press Sign again: the rest go in.
+- [ ] **Another person's list.** Switch who's here to `dr-b`: `dr-a`'s lines leave the screen. Type `dr-a`'s staff ID
+      in the strip while `dr-b` is named: Sign is refused "This list was written by …; only they can sign it", and no
+      passphrase is spent.
+- [ ] **Another terminal.** Type two lines as `dr-a`, quit, move the terminal-id file aside (section 18's path),
+      relaunch, name `dr-a` and open the chart: it reads "These lines are open on another terminal: …", with Sign
+      unavailable. *Continue here* moves the list here, and its lines can be edited and signed again.
+- [ ] **Remove.** *Remove* on a line: no dialog, the line is gone, and
+      `psql "$CONN" -c "SELECT count(*) FROM medication_draft_line WHERE line_id = '<its id>'"` reads 0.
+- [ ] **Waiting for you.** Leave two unsigned lines on `$L2`, close the chart: the who's-here bar counts them; the
+      menu reads "2 unsigned medication line(s)", and *Open medication list* opens `$L2` on its medication pane.
+- [ ] **Interrupted.** Quit the window with lines typed and one ticked. Relaunch, name `dr-a`, open the chart: the
+      list is back as left, ticks re-derived (time it: 0 acts budget).
+
+**Measurement 3: the timings (five runs each, held key, then shared terminal).**
+
+- [ ] A 10-line home list on a fresh `achart` with "No known drug allergies": from the first press to
+      `Charted 10 of 10` (record), and from *Sign ticked lines* to the outcome (≤ 3 s). Compare with section 30's ten
+      Signs.
+- [ ] The write halves: `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind = 'medication-chart'"`.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] Each tick box is read "Tick to sign: {line}" with its state; each *Remove* "Remove: {line}".
+- [ ] `unfinished`, "not ticked: Sign leaves it unsigned" and "already on the list: …" are read with their line.
+- [ ] The outcome (`Charted {k} of {n}` and each line not charted) is announced once.
+- [ ] Enter on a finished line puts the focus on the press that started it, so Enter adds the next line.
+- [ ] No dialog at any point.
+
+**WebKit and the real Tauri IPC.** The webview was walked headlessly with a stubbed `invoke`. Walk the list in the
+real window: `med_list_read` (`patientId`, `charts`), `med_list_save` (`patientId`, `charts`, `line`, `writer`),
+`med_list_delete` (`patientId`, `lineId`, `writer`), `med_list_take` (`patientId`) and `med_list_sign` (`patientId`,
+`charts`, `ticked`, `credential`). A name Tauri cannot map fails the call with an "invalid args" error.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
+WebKit need the window and a human. The rest was run as follows:
+- **The store:** `medication_draft_list_store.rs`, `medication_draft_list_ticks.rs` (DB-gated).
+- **The tick rules:** `medication/draft_tick_tests.rs`.
+- **The one-line sign and its spend:** `medication_draft_line_sign.rs` (DB-gated).
+- **The window's commands:** `cairn-gui-tauri`'s `med_list_tests.rs` (pure) and `med_list_db_tests.rs`,
+  `med_list_held_db_tests.rs`, `med_list_review_db_tests.rs` (DB-gated; CI never runs those, #905).
+- **The webview:** `med_list_webview_tests.rs`, `med_list_review_webview_tests.rs`, `med_list_claim_webview_tests.rs`.
+
+`TEMPLATE.md` carries a matching block (*Charting a medication list*).

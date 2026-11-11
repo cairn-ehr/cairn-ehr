@@ -793,6 +793,49 @@ drug: \_\_ of \_\_. Passphrase retypes after a refusal on a shared terminal: \_\
 | A charted row read with its dose cell ("500 mg — 500mg tds"), never "dose not recorded" beside directions | | |
 | No dialog | | |
 
+## Charting a medication list: one Sign over the list (batch charting slice 1, runbook §31)
+
+`SCHEMA_GENERATION` 78 and `provision-window-role` re-run? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| A common line in the list: the press → drawn | held | | | | ≤ 10 s | |
+| *Sign ticked lines* over 10 lines → `Charted 10 of 10` | held | | | | ≤ 3 s | |
+| The same Sign, credential typed | shared | | | | — (record) | |
+| A 10-line home list, first press → `Charted 10 of 10` | held | | | | — (record; vs §30's ten Signs) | |
+| Resuming after quitting: acts before the list is back | | | | | 0 | |
+| `ui_gesture_timing` `medication-chart` (the write half) | | | | | — | |
+
+Steps: a 12-line list paper *N* = 12 + 1 signature → observed \_\_ Signs · resuming 0 → observed \_\_ acts · removing a
+line 1 → observed \_\_ presses. Lines of a real home list needing a typed form word for the default tick (#1081):
+\_\_ of \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| A complete clean line on an asked chart is drawn ticked; `metfo 500mg bd` (no form) is not | | |
+| A line mid-word reads `unfinished`, never ticked | | |
+| A second amoxicillin line reads "already on the list: …"; neither is default-ticked | | |
+| An untick survives closing and opening the chart; a changed word clears it | | |
+| Allergies not yet asked: no line is ever drawn ticked; a hand tick signs | | |
+| A *Start* line with a mark: the box disabled until a reason | | |
+| Three ticked, one not: one passphrase, `Charted 3 of 3`, the unticked one stays | | |
+| An allergy recorded after the tick: "1 ticked line(s) changed …", nothing signed; a second Sign signs the rest | | |
+| A switch to `dr-b` hides `dr-a`'s lines; `dr-a`'s staff ID typed while `dr-b` is named is refused, no passphrase spent | | |
+| Another terminal: "These lines are open on another terminal: …", *Continue here* moves them | | |
+| *Remove*: no dialog, the row gone from `medication_draft_line` | | |
+| "Waiting for you" reads "2 unsigned medication line(s)"; *Open medication list* opens the pane | | |
+| Quit and relaunch: the list back as left | | |
+| The real Tauri IPC: every `med_list_*` call answers | | |
+| WebKit (the real window): the list, ticks, Remove, Sign | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Each box read "Tick to sign: {line}" with its state; each Remove "Remove: {line}" | | |
+| `unfinished`, "not ticked: …" and "already on the list: …" read with their line | | |
+| The outcome announced once | | |
+| Enter on a finished line focuses the press that started it | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**
