@@ -15,7 +15,7 @@ use cairn_node::allergy::view::{build_view, ListStatus};
 use tokio_postgres::Client;
 
 /// Name `staff` in who's here, as the person picker does.
-async fn here(state: &AppState, staff: &str, name: &str) {
+pub(super) async fn here(state: &AppState, staff: &str, name: &str) {
     state.whos_here.lock().await.pick(Claim::Named {
         staff_id: staff.into(),
         display_name: name.into(),
@@ -23,7 +23,7 @@ async fn here(state: &AppState, staff: &str, name: &str) {
 }
 
 /// The fixture with an empty draft list and Bea named; `None` without `CAIRN_TEST_PG`.
-async fn bea_list() -> Option<(tokio_postgres::Client, Client, AppState, Uuid)> {
+pub(super) async fn bea_list() -> Option<(tokio_postgres::Client, Client, AppState, Uuid)> {
     let (guard, owner, state, chart, _) = supervised_note().await?;
     owner
         .batch_execute("TRUNCATE medication_draft_line, medication_draft_line_deleted")
@@ -34,7 +34,7 @@ async fn bea_list() -> Option<(tokio_postgres::Client, Client, AppState, Uuid)> 
 }
 
 /// A drugref moiety pick (no drug list is installed: the code alone is what the check reads).
-fn pick(term: &str, code: u128) -> Vec<PartArg> {
+pub(super) fn pick(term: &str, code: u128) -> Vec<PartArg> {
     vec![PartArg {
         term: term.into(),
         coding: Some(CodingArg {
@@ -45,18 +45,14 @@ fn pick(term: &str, code: u128) -> Vec<PartArg> {
     }]
 }
 
-/// Save one finished line (`typed` + " " + `directions`) for whoever is named; its id.
-async fn save(
-    state: &AppState,
-    chart: Uuid,
+/// One finished Start line (`typed` + " " + `directions`), new, having seen no warning.
+pub(super) fn arg(
     (typed, directions): (&str, &str),
     parts: Vec<PartArg>,
     hand_ticked: bool,
-) -> Uuid {
-    let id = Uuid::now_v7();
-    let patient = chart.to_string();
-    let line = LineArg {
-        line_id: id.to_string(),
+) -> LineArg {
+    LineArg {
+        line_id: Uuid::now_v7().to_string(),
         charted_as: "started-here".into(),
         line_text: format!("{typed} {directions}"),
         parts,
@@ -65,15 +61,50 @@ async fn save(
         reason: None,
         hand_ticked,
         finished: true,
-    };
-    let saved = med_list_save_impl(state, &patient, std::slice::from_ref(&patient), line)
-        .await
-        .unwrap();
-    assert_eq!(saved.answer, "saved");
+        seen: vec![],
+    }
+}
+
+/// Save `line` under `writer` (as the webview sends the writer its list was read under); the
+/// door's word.
+pub(super) async fn save_as(
+    state: &AppState,
+    chart: Uuid,
+    line: LineArg,
+    writer: Option<&str>,
+) -> String {
+    let patient = chart.to_string();
+    med_list_save_impl(
+        state,
+        &patient,
+        std::slice::from_ref(&patient),
+        line,
+        writer,
+    )
+    .await
+    .unwrap()
+    .answer
+}
+
+/// Save one finished line for whoever is named; its id.
+pub(super) async fn save(
+    state: &AppState,
+    chart: Uuid,
+    typed: (&str, &str),
+    parts: Vec<PartArg>,
+    hand_ticked: bool,
+) -> Uuid {
+    let line = arg(typed, parts, hand_ticked);
+    let id = line.line_id.parse().unwrap();
+    let writer = claim_writer(state).await.0;
+    assert_eq!(
+        save_as(state, chart, line, writer.as_deref()).await,
+        "saved"
+    );
     id
 }
 
-async fn read(state: &AppState, chart: Uuid) -> MedListView {
+pub(super) async fn read(state: &AppState, chart: Uuid) -> MedListView {
     let patient = chart.to_string();
     med_list_read_impl(state, &patient, Some(std::slice::from_ref(&patient)))
         .await
@@ -81,7 +112,7 @@ async fn read(state: &AppState, chart: Uuid) -> MedListView {
 }
 
 /// The ids the pane shows ticked, as the webview sends them to Sign.
-fn ticked(view: &MedListView) -> Vec<String> {
+pub(super) fn ticked(view: &MedListView) -> Vec<String> {
     view.lines
         .iter()
         .filter(|l| l.ticked)
@@ -89,7 +120,7 @@ fn ticked(view: &MedListView) -> Vec<String> {
         .collect()
 }
 
-async fn sign(
+pub(super) async fn sign(
     state: &AppState,
     chart: Uuid,
     ticked: &[String],
@@ -100,7 +131,7 @@ async fn sign(
 }
 
 /// How many medication assertions the chart holds (read as the owner).
-async fn assertions(owner: &Client, chart: Uuid) -> i64 {
+pub(super) async fn assertions(owner: &Client, chart: Uuid) -> i64 {
     owner
         .query_one(
             "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication.asserted' \
@@ -114,7 +145,7 @@ async fn assertions(owner: &Client, chart: Uuid) -> i64 {
 
 /// How many times `staff`'s key has been released (db/061's `success_mark`: the attempt number of
 /// their last success, one step per release with the right passphrase).
-async fn releases(owner: &Client, staff: &str) -> i64 {
+pub(super) async fn releases(owner: &Client, staff: &str) -> i64 {
     owner
         .query_one(
             "SELECT success_mark FROM vault_attempt WHERE staff_id = $1",
@@ -126,7 +157,7 @@ async fn releases(owner: &Client, staff: &str) -> i64 {
 }
 
 /// The draft rows left on the chart, by id (read as the owner, whoever is named).
-async fn left(owner: &Client, chart: Uuid) -> Vec<Uuid> {
+pub(super) async fn left(owner: &Client, chart: Uuid) -> Vec<Uuid> {
     owner
         .query(
             "SELECT line_id::text FROM medication_draft_line WHERE patient_id = $1::text::uuid \
@@ -141,7 +172,7 @@ async fn left(owner: &Client, chart: Uuid) -> Vec<Uuid> {
 }
 
 /// A drug allergy to amoxicillin coded to `moiety`, signed by Bea.
-async fn amoxicillin_allergy(state: &AppState, chart: Uuid, moiety: u128) {
+pub(super) async fn amoxicillin_allergy(state: &AppState, chart: Uuid, moiety: u128) {
     let patient = chart.to_string();
     let entry = EntryInput {
         allergen_kind: Some("drug".into()),
@@ -166,7 +197,9 @@ async fn amoxicillin_allergy(state: &AppState, chart: Uuid, moiety: u128) {
     .unwrap();
 }
 
-fn done(signed: MedListSigned) -> (String, usize, usize, Vec<(String, String)>, Vec<String>) {
+pub(super) fn done(
+    signed: MedListSigned,
+) -> (String, usize, usize, Vec<(String, String)>, Vec<String>) {
     match signed {
         MedListSigned::Done {
             outcome,
@@ -252,6 +285,17 @@ async fn an_allergy_after_the_tick(state: &AppState, owner: &Client, chart: Uuid
     .await;
     let met = save(state, chart, ("metformin", "500mg bd"), vec![], true).await;
     amoxicillin_allergy(state, chart, 0xA40C_7002).await;
+    // M1: the pane already shows the tick gone, before any Sign.
+    let shown = read(state, chart).await;
+    let amox_row = shown
+        .lines
+        .iter()
+        .find(|l| l.line_id == amox.to_string())
+        .unwrap();
+    assert!(
+        amox_row.hand_ticked && !amox_row.ticked,
+        "a tick that no longer holds is not shown"
+    );
     let before = releases(owner, "bea").await;
     let ids = [amox.to_string(), met.to_string()];
     match sign(state, chart, &ids, credential("bea")).await.unwrap() {
@@ -372,57 +416,6 @@ async fn a_held_key_of_another_member_writes_nothing() {
     );
     assert_eq!(assertions(&owner, chart).await, 0);
     assert_eq!(left(&owner, chart).await, [met]);
-}
-
-/// Review Focus 4: the second line's COMMIT is lost (a test-only deferred trigger ends the
-/// backend at commit, the `identity_commit_lost.rs` technique, inert for any other line). The
-/// first line is charted and gone; the second is reported NOT known; the third is never tried and
-/// stays in the list.
-#[tokio::test]
-async fn a_lost_commit_stops_and_keeps_the_rest() {
-    let Some((_guard, owner, state, chart)) = bea_list().await else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let lines = [
-        save(&state, chart, ("metformin", "500mg bd"), vec![], true).await,
-        save(&state, chart, ("paracetamol", "1g qid"), vec![], true).await,
-        save(&state, chart, ("aspirin", "100mg daily"), vec![], true).await,
-    ];
-    let drop =
-        "DROP TRIGGER IF EXISTS cairn_test_kill_at_commit ON medication_draft_line_deleted; \
-                DROP FUNCTION IF EXISTS cairn_test_kill_at_commit() CASCADE;";
-    owner.batch_execute(drop).await.unwrap();
-    owner
-        .batch_execute(&format!(
-            "CREATE FUNCTION cairn_test_kill_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$
-             BEGIN
-                 IF NEW.line_id = '{}'::uuid THEN
-                     PERFORM pg_terminate_backend(pg_backend_pid());
-                 END IF;
-                 RETURN NULL;
-             END $$;
-             CREATE CONSTRAINT TRIGGER cairn_test_kill_at_commit
-                 AFTER INSERT ON medication_draft_line_deleted
-                 DEFERRABLE INITIALLY DEFERRED
-                 FOR EACH ROW EXECUTE FUNCTION cairn_test_kill_at_commit();",
-            lines[1]
-        ))
-        .await
-        .unwrap();
-    let ids: Vec<String> = lines.iter().map(Uuid::to_string).collect();
-    let signed = sign(&state, chart, &ids, credential("bea")).await;
-    owner.batch_execute(drop).await.unwrap();
-    let (outcome, charted, of, not_charted, unknown) = done(signed.unwrap());
-    assert_eq!((charted, of), (1, 3), "{outcome}");
-    assert_eq!(unknown, [lines[1].to_string()]);
-    assert!(
-        not_charted.is_empty(),
-        "the third was not tried: {not_charted:?}"
-    );
-    assert!(outcome.contains("is NOT known"), "{outcome}");
-    assert_eq!(assertions(&owner, chart).await, 1);
-    assert_eq!(left(&owner, chart).await, [lines[1], lines[2]]);
 }
 
 /// Review Focus 5: allergies never asked. No line is default-ticked, however complete; a hand

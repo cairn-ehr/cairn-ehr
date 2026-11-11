@@ -8,19 +8,23 @@
 //!      ([`med_list_not_yours`] — the next person at the terminal never signs another's list);
 //!   3. a fresh read (`med_list::fresh_read`) over the set on screen, in which every ticked id
 //!      must be a line held by this terminal ([`MED_LIST_STALE`]);
-//!   4. every ticked line's tick still holds on that read: a default tick by `default_tick`, a
-//!      hand tick by `hand_tick_holds` (a warning that arrived after the tick voids it). Any that
-//!      fails loses its hand tick, and NOTHING is signed ([`med_list_changed`]); a second press
-//!      signs the rest.
+//!   4. every ticked line's tick still holds on that read (`med_list_judge::tick_holds`): a
+//!      default tick by `default_tick`, a hand tick while every warning found is one it was given
+//!      against (one that arrived after the tick voids it). Any that fails loses its hand tick,
+//!      and NOTHING is signed ([`med_list_changed`]); a second press signs the rest. A missing
+//!      reason, or a reason against a check that could not run, is NOT a changed picture: the
+//!      tick stands and that line alone is refused below (ruling R3).
 //!
 //! Then the key, ONCE (`signer_for_act`). For a named writer the key released must be the
-//! writer's CURRENT key, by KEY (ruling R-B): a key held for someone else signs nothing.
+//! writer's CURRENT key, by KEY (ruling R-B): a key held for someone else signs nothing. That key
+//! is read BEFORE the release, so no read failure ever spends a passphrase.
 //!
-//! Then, in list order, each line: slice 1a's per-line checks (the press, the parts, the reason),
+//! Then, in list order, each line: slice 1a's per-line checks (the press, the parts, the reason:
+//! `NEEDS_A_REASON`, `CHECK_DID_NOT_RUN`),
 //! a failure skipping that line only (ADR-0060 decision 1), and `chart_draft_line`, which writes
 //! the event and spends the draft row in one transaction. A line whose commit got no answer may
 //! have landed: it is reported NOT known and the loop STOPS, so the lines after it stay in the
-//! list, ticked, and the re-read list is the truth (Review Focus 4).
+//! list, ticked, each reported [`NOT_TRIED`], and the re-read list is the truth (Review Focus 4).
 //!
 //! The webview's word is never trusted: the lines signed are rebuilt from the stored rows, and
 //! every tick, check and duplicate is re-derived here.
@@ -32,14 +36,15 @@ use crate::link::judgement_view::refused;
 use crate::med_chart::{override_before_the_key, press, UNKNOWN_LEAD};
 use crate::med_chart_write::charted_input;
 use crate::med_line_sign::{charting, components, override_refs, single_coding};
-use crate::med_list::{claim_writer, fresh_read, judge, med_list_read_impl, Judged, MedListView};
+use crate::med_list::{
+    claim_writer, fresh_read, judge, med_list_read_impl, tick_holds, Judged, MedListView,
+};
 use crate::notes::terminal_of;
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write};
 use cairn_event::medication::ChartedAs;
 use cairn_node::medication::draft::{self, SpendRefused};
-use cairn_node::medication::draft_tick::hand_tick_holds;
 use cairn_node::medication::AuthorParams;
 use std::time::Instant;
 use uuid::Uuid;
@@ -51,6 +56,10 @@ pub const MED_LIST_STALE: &str =
 /// Why a line was not charted when its spend found the list moved under it (it was saved again,
 /// moved or removed since the read): nothing was written for it.
 pub const LINE_MOVED: &str = "the line changed since the list was read; look at it again";
+
+/// Why a line after one whose outcome is NOT known was not tried (new copy, review finding I3).
+pub const NOT_TRIED: &str =
+    "not tried: the line above may have been charted; look at the list again";
 
 /// MED_LIST_CHANGED: the refusal when `n` ticks no longer hold (Global Constraints, pinned by test).
 pub fn med_list_changed(n: usize) -> String {
@@ -164,29 +173,38 @@ pub async fn med_list_sign_impl(
             .node_sk
             .as_ref()
             .ok_or_else(|| node_cannot_write("no node key"))?;
+        // Read before the key, so a failed read never spends a passphrase; compared after it.
+        let writer_kid = match &writer {
+            Some(w) => Some(writer_key(state, w).await?),
+            None => None,
+        };
         let (human_sk, human_kid) = state
             .signer_for_act(credential, Now::read())
             .await
             .map_err(|r| key_locked(&r))?;
-        if let Some(w) = &writer {
-            if writer_key(state, w).await?.as_deref() != Some(human_kid.as_str()) {
-                return Err(refused(med_list_not_yours(&name)));
-            }
+        // By KEY (ruling R-B): the only refusal after the key, and it writes nothing.
+        if writer_kid.is_some_and(|kid| kid.as_deref() != Some(human_kid.as_str())) {
+            return Err(refused(med_list_not_yours(&name)));
         }
         let author = AuthorParams {
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        for (j, (charted_as, reason)) in to_sign {
+        let mut lines = to_sign.into_iter();
+        while let Some((j, (charted_as, reason))) = lines.next() {
             let list = (patient, terminal.as_str(), writer.as_deref());
             let signed = sign_line(state, node_sk, list, j, charted_as, reason, &author).await;
             match signed.map_err(|e| line_failure(&e)) {
                 Ok(()) => charted += 1,
                 Err(LineFailure::Unknown(text)) => {
-                    // It may have landed: never try the rest on a guess (Review Focus 4).
+                    // It may have landed: never try the rest on a guess (Review Focus 4). Each
+                    // line left is named, so none is silently missing from the outcome (I3).
                     unknown.push(j.line.line_id.to_string());
                     words.push(format!("{} — {text}", j.line.line_text));
-                    break;
+                    for (rest, _) in lines.by_ref() {
+                        words.push(not_charted_line(&rest.line.line_text, NOT_TRIED));
+                        not_charted.push((rest.line.line_id.to_string(), NOT_TRIED.into()));
+                    }
                 }
                 Err(LineFailure::NotCharted(text)) => {
                     words.push(not_charted_line(&j.line.line_text, &text));
@@ -313,21 +331,6 @@ pub(crate) fn ticked_lines<'a>(
         .iter()
         .filter(|j| ids.contains(&j.line.line_id))
         .collect())
-}
-
-/// Whether a ticked line's tick still holds on the fresh read (module doc, step 4). An unreadable
-/// press is judged as a Start line, the stricter reading. Pure.
-pub(crate) fn tick_holds(j: &Judged) -> bool {
-    if !j.line.hand_ticked {
-        return j.default_ticked;
-    }
-    let charted_as = press(&j.line.charted_as).unwrap_or(ChartedAs::StartedHere);
-    hand_tick_holds(
-        charted_as,
-        &j.check,
-        &j.line.ticked_against,
-        j.line.reason.as_deref(),
-    )
 }
 
 /// Slice 1a's per-line checks on a holding line: its press, what it signs, and the reason a

@@ -9,7 +9,7 @@
 use crate::allergy::check::LineCheck;
 use crate::allergy::view::ListStatus;
 use crate::medication::line::Directions;
-use cairn_event::medication::{ChartedAs, ALLERGY_SOURCE};
+use cairn_event::medication::ALLERGY_SOURCE;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
@@ -55,30 +55,21 @@ pub fn default_tick(f: &TickFacts) -> bool {
         && !f.duplicate
 }
 
-/// Whether a tick the clinician made by hand still stands after the check is re-run at Sign time.
+/// Whether a tick the clinician made by hand still stands after the check is re-run at Sign time:
+/// every warning the fresh check finds must be one the clinician SAW when ticking
+/// (`ticked_against`, as `(source, ref)` pairs). A new one means the world moved under the tick.
 ///
-/// * Every warning the fresh check finds must be one the clinician SAW when ticking
-///   (`ticked_against`, as `(source, ref)` pairs); a new one means the world moved under the tick.
-/// * A Start line that carries a mark needs a non-blank reason (the override the wire records).
-/// * An unverified check holds a hand tick that gave no reason, but not one that gave a reason:
-///   the reason would be an override of a warning that was never shown (ADR-0099 CHECK_DID_NOT_RUN).
-pub fn hand_tick_holds(
-    charted_as: ChartedAs,
-    fresh: &LineCheck,
-    ticked_against: &[(String, Uuid)],
-    reason: Option<&str>,
-) -> bool {
-    let reason_given = reason.is_some_and(|r| !r.trim().is_empty());
-    if fresh.unverified {
-        return !reason_given;
-    }
-    let all_seen = fresh.against.iter().all(|id| {
+/// The reason rules are NOT judged here (Task 4 review, ruling R3): a Start line on a seen mark
+/// with no reason, and a reason against a check that could not run, are slice 1a's PER-LINE
+/// refusals (`NEEDS_A_REASON`, `CHECK_DID_NOT_RUN`) at Sign, not a changed picture, so the tick
+/// stands and the line says what it needs. A check that could not run finds no warning, so it
+/// holds a tick here (and refuses the line's reason there).
+pub fn hand_tick_holds(fresh: &LineCheck, ticked_against: &[(String, Uuid)]) -> bool {
+    fresh.against.iter().all(|id| {
         ticked_against
             .iter()
             .any(|(s, r)| s == ALLERGY_SOURCE && r == id)
-    });
-    let reason_ok = charted_as != ChartedAs::StartedHere || fresh.marks.is_empty() || reason_given;
-    all_seen && reason_ok
+    })
 }
 
 /// The moiety codes that occur on more than one line of `draft` plus `current`, restricted to

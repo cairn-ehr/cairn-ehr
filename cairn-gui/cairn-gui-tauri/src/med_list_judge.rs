@@ -16,7 +16,9 @@ use cairn_node::allergy::check::LineCheck;
 use cairn_node::allergy::read::PatientAllergies;
 use cairn_node::allergy::view::{build_view, ListStatus};
 use cairn_node::medication::draft::{self, DraftLine};
-use cairn_node::medication::draft_tick::{default_tick, duplicate_codes, TickFacts};
+use cairn_node::medication::draft_tick::{
+    default_tick, duplicate_codes, hand_tick_holds, TickFacts,
+};
 use cairn_node::medication::line::{read_directions, Directions};
 use chrono::Offset;
 use std::collections::HashMap;
@@ -217,5 +219,16 @@ fn not_checked() -> LineCheck {
     LineCheck {
         unverified: true,
         ..LineCheck::default()
+    }
+}
+
+/// Whether a line's tick holds on this read: a default tick by its own derivation, a hand tick
+/// while every warning found now is one it was given against (`hand_tick_holds`). The view shows
+/// a tick only while it holds (review M1), and the Sign refuses the whole Sign when a ticked line's
+/// does not (`med_list_sign.rs`, step 4). The reason rules are per-line, at Sign (ruling R3). Pure.
+pub(crate) fn tick_holds(j: &Judged) -> bool {
+    match j.line.hand_ticked {
+        true => hand_tick_holds(&j.check, &j.line.ticked_against),
+        false => j.default_ticked,
     }
 }

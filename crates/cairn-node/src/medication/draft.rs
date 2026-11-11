@@ -117,7 +117,8 @@ pub async fn save_draft_line(
     let parts = line.parts.to_string();
     let row = client
         .query_one(
-            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, $5, $6,                     $7::text::jsonb, $8, $9, $10::text::jsonb, $11, $12, $13)",
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, $5, $6, \
+                    $7::text::jsonb, $8, $9, $10::text::jsonb, $11, $12, $13)",
             &[
                 &line.line_id.to_string(),
                 &patient.to_string(),

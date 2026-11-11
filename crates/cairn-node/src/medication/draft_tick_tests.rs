@@ -131,77 +131,28 @@ fn seen(ids: &[Uuid]) -> Vec<(String, Uuid)> {
 
 #[test]
 fn a_hand_tick_holds_against_the_warnings_it_saw() {
-    assert!(hand_tick_holds(
-        ChartedAs::PreExisting,
-        &marked(&[u(1)]),
-        &seen(&[u(1), u(2)]),
-        None
-    ));
-    assert!(hand_tick_holds(
-        ChartedAs::StartedHere,
-        &LineCheck::default(),
-        &[],
-        None
-    ));
+    assert!(hand_tick_holds(&marked(&[u(1)]), &seen(&[u(1), u(2)])));
+    assert!(hand_tick_holds(&LineCheck::default(), &[]));
 }
 
 #[test]
 fn a_hand_tick_fails_on_a_new_one() {
-    assert!(!hand_tick_holds(
-        ChartedAs::PreExisting,
-        &marked(&[u(1), u(2)]),
-        &seen(&[u(1)]),
-        None
-    ));
+    assert!(!hand_tick_holds(&marked(&[u(1), u(2)]), &seen(&[u(1)])));
     // A ref from another source is not the same warning.
     let other = vec![("other".to_string(), u(1))];
-    assert!(!hand_tick_holds(
-        ChartedAs::PreExisting,
-        &marked(&[u(1)]),
-        &other,
-        None
-    ));
+    assert!(!hand_tick_holds(&marked(&[u(1)]), &other));
 }
 
+/// Ruling R3: the reason rules are per-line refusals at Sign, never a tick that fails. A check
+/// that could not run finds no new warning; a seen mark keeps the tick with or without a reason.
 #[test]
-fn a_hand_tick_with_a_reason_fails_when_the_check_did_not_run() {
+fn the_reason_rules_do_not_judge_the_tick() {
     let unchecked = LineCheck {
         unverified: true,
         ..Default::default()
     };
-    assert!(hand_tick_holds(
-        ChartedAs::StartedHere,
-        &unchecked,
-        &[],
-        None
-    ));
-    assert!(hand_tick_holds(
-        ChartedAs::StartedHere,
-        &unchecked,
-        &[],
-        Some("  ")
-    ));
-    assert!(!hand_tick_holds(
-        ChartedAs::StartedHere,
-        &unchecked,
-        &[],
-        Some("benefit outweighs")
-    ));
-}
-
-#[test]
-fn a_start_hand_tick_on_a_mark_needs_a_reason() {
-    let m = marked(&[u(1)]);
-    let s = seen(&[u(1)]);
-    assert!(!hand_tick_holds(ChartedAs::StartedHere, &m, &s, None));
-    assert!(!hand_tick_holds(ChartedAs::StartedHere, &m, &s, Some("  ")));
-    assert!(hand_tick_holds(
-        ChartedAs::StartedHere,
-        &m,
-        &s,
-        Some("tolerated before")
-    ));
-    assert!(hand_tick_holds(ChartedAs::PreExisting, &m, &s, None));
+    assert!(hand_tick_holds(&unchecked, &[]));
+    assert!(hand_tick_holds(&marked(&[u(1)]), &seen(&[u(1)])));
 }
 
 #[test]

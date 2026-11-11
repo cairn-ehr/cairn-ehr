@@ -4,8 +4,8 @@
 use super::*;
 use crate::med_chart::NAME_IT;
 use crate::med_list_sign::{
-    med_list_changed, not_charted_line, outcome, tick_holds, ticked_lines, writer_matches,
-    MED_LIST_STALE,
+    line_failure, med_list_changed, not_charted_line, outcome, ticked_lines, writer_matches,
+    LineFailure, LINE_MOVED, MED_LIST_STALE,
 };
 use cairn_node::allergy::check::LineCheck;
 
@@ -108,4 +108,26 @@ fn a_tick_holds_by_its_own_rule() {
     assert!(!tick_holds(&j), "a warning arrived after the tick");
     j.line.ticked_against = vec![("allergy".into(), Uuid::from_u128(77))];
     assert!(tick_holds(&j), "the warning was seen when ticked");
+}
+
+/// I4: a spend that found the list moved under it (`SpendRefused`) is "look at it again", never a
+/// node failure, also when `db.explain` has wrapped it in a cut-off context.
+#[test]
+fn a_moved_list_is_not_a_node_failure() {
+    use cairn_node::medication::draft::SpendRefused;
+    let bare = anyhow::Error::from(SpendRefused("changed".into()));
+    assert_eq!(
+        line_failure(&bare),
+        LineFailure::NotCharted(LINE_MOVED.into())
+    );
+    let wrapped = anyhow::Error::from(SpendRefused("moved".into())).context("cut off");
+    assert_eq!(
+        line_failure(&wrapped),
+        LineFailure::NotCharted(LINE_MOVED.into())
+    );
+    let other = anyhow::anyhow!("the node said no");
+    assert_ne!(
+        line_failure(&other),
+        LineFailure::NotCharted(LINE_MOVED.into())
+    );
 }
