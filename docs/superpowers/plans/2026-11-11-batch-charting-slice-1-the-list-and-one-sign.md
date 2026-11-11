@@ -81,7 +81,7 @@ cairn_med_draft_lines(p_patient uuid, p_writer text)          -- the writer's li
                 reason text, hand_ticked boolean, ticked_against jsonb, finished boolean, saved_at timestamptz)
 cairn_med_draft_line_delete(p_line uuid, p_patient uuid, p_terminal text) RETURNS text  -- 'deleted'|'gone'|'moved'|'elsewhere'
 cairn_med_draft_take(p_patient uuid, p_writer text, p_terminal text) RETURNS int        -- lines moved here
-cairn_med_drafts_by_writer() RETURNS TABLE(writer text, patient_id uuid, lines int, newest timestamptz) -- named writers only
+cairn_med_drafts_by_writer() RETURNS TABLE(writer text, patient_id uuid, lines bigint, newest timestamptz) -- named writers only
 ```
 Save rules, in order:
 1. NULL line, patient or terminal raises.
