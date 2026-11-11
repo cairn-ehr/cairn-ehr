@@ -50,6 +50,10 @@ mod med_chart_line_webview_tests;
 #[cfg(test)]
 mod med_chart_webview_tests;
 mod med_chart_write;
+mod med_line_sign;
+mod med_list;
+mod med_list_judge;
+mod med_list_sign;
 #[cfg(test)]
 mod node_lock_explains_tests;
 mod notes;
@@ -197,6 +201,11 @@ fn main() -> anyhow::Result<()> {
             med_chart::med_drug_search,
             med_chart::med_line_check,
             med_chart::med_chart,
+            med_list::med_list_read,
+            med_list::med_list_save,
+            med_list::med_list_delete,
+            med_list::med_list_take,
+            med_list_sign::med_list_sign,
             allergy_overlays::allergy_challenge,
             allergy_overlays::allergy_retract,
             notes::note_list,

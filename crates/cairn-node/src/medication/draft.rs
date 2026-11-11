@@ -3,11 +3,13 @@
 //! The list is mutable, unsigned scratch space beside the record. This file READS it
 //! ([`read_draft_lines`], [`writer_drafts`]) and signs ONE line out of it ([`chart_draft_line`]):
 //! the line's event enters the record and its draft row leaves the list in the same transaction,
-//! so a line is never in both places and never in neither.
+//! so a line is never in both places and never in neither. The window's list commands also write
+//! through here ([`save_draft_line`], [`delete_draft_line`], [`take_draft_lines`]) and ask the
+//! vault the two things the list's Sign checks its writer by ([`staff_id`], [`writer_key`]).
 use super::assert::AssertMedicationInput;
 use super::charting::chart_body;
 use super::sealed_submit::{prepare_sealed, AuthorParams, Prepared};
-use anyhow::{bail, Context};
+use anyhow::Context;
 use cairn_event::medication::Charting;
 use cairn_event::SigningKey;
 use chrono::{DateTime, Utc};
@@ -96,6 +98,129 @@ pub async fn read_draft_lines(
         .collect()
 }
 
+/// Save `line` as `writer`'s on `patient` (insert or update): the door's one word ('saved',
+/// 'moved', 'elsewhere', 'no-chart', 'no-such-writer', 'not-yours', 'deleted'). `line.terminal_id`
+/// is the terminal saving it; `seq` and `saved_at` are the door's own and are not sent. The door
+/// decides what a tick keeps (db/078): send the refs of the moment every time.
+pub async fn save_draft_line(
+    client: &(impl GenericClient + Sync),
+    patient: Uuid,
+    writer: Option<&str>,
+    line: &DraftLine,
+) -> anyhow::Result<String> {
+    let against: Vec<serde_json::Value> = line
+        .ticked_against
+        .iter()
+        .map(|(source, r)| serde_json::json!({"source": source, "ref": r.to_string()}))
+        .collect();
+    let against = serde_json::Value::Array(against).to_string();
+    let parts = line.parts.to_string();
+    let row = client
+        .query_one(
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, $5, $6,                     $7::text::jsonb, $8, $9, $10::text::jsonb, $11, $12, $13)",
+            &[
+                &line.line_id.to_string(),
+                &patient.to_string(),
+                &line.terminal_id,
+                &writer,
+                &line.charted_as,
+                &line.line_text,
+                &parts,
+                &line.reason,
+                &line.hand_ticked,
+                &against,
+                &line.finished,
+                &line.typed_drug,
+                &line.directions,
+            ],
+        )
+        .await
+        .context("saving the medication draft line")?;
+    Ok(row.try_get(0)?)
+}
+
+/// Delete one line the clinician removed, as last read at `saved_at`: the door's word ('deleted',
+/// 'gone', 'moved', 'elsewhere', 'not-yours', 'changed'). No record is kept (design §9 Q3).
+pub async fn delete_draft_line(
+    client: &(impl GenericClient + Sync),
+    line: Uuid,
+    patient: Uuid,
+    terminal: &str,
+    writer: Option<&str>,
+    saved_at: &str,
+) -> anyhow::Result<String> {
+    let row = client
+        .query_one(
+            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3, $4, $5::text::timestamptz)",
+            &[&line.to_string(), &patient.to_string(), &terminal, &writer, &saved_at],
+        )
+        .await
+        .context("deleting the medication draft line")?;
+    Ok(row.try_get(0)?)
+}
+
+/// "Continue here": move the writer's whole list on `patient` to `terminal`; how many lines moved.
+pub async fn take_draft_lines(
+    client: &(impl GenericClient + Sync),
+    patient: Uuid,
+    writer: Option<&str>,
+    terminal: &str,
+) -> anyhow::Result<i32> {
+    let row = client
+        .query_one(
+            "SELECT cairn_med_draft_take($1::text::uuid, $2, $3)",
+            &[&patient.to_string(), &writer, &terminal],
+        )
+        .await
+        .context("moving the medication draft list to this terminal")?;
+    Ok(row.try_get(0)?)
+}
+
+/// `raw` normalised as the vault normalises a staff id (`cairn_vault_staff_id`): the rule lives in
+/// SQL alone, never in a copy here (R7). `None` for a blank id.
+pub async fn staff_id(
+    client: &(impl GenericClient + Sync),
+    raw: &str,
+) -> anyhow::Result<Option<String>> {
+    let row = client
+        .query_one("SELECT cairn_vault_staff_id($1)", &[&raw])
+        .await
+        .context("normalising a staff id")?;
+    Ok(row.try_get(0)?)
+}
+
+/// The CURRENT signing key id of vault member `staff` (`cairn_vault_member_key`), `None` for no
+/// such member. The list's Sign compares the key it was handed with this one: by KEY, never by
+/// staff id, since the key is what the signature proves (ruling R-B, `note::sign`).
+pub async fn writer_key(
+    client: &(impl GenericClient + Sync),
+    staff: &str,
+) -> anyhow::Result<Option<String>> {
+    let row = client
+        .query_one("SELECT cairn_vault_member_key($1)", &[&staff])
+        .await
+        .context("reading the writer's signing key")?;
+    Ok(row.try_get(0)?)
+}
+
+/// Why [`chart_draft_line`] wrote nothing because the LIST moved under it: the spend answered
+/// `changed`, `moved`, `gone`, … instead of `deleted`. Typed, so a caller can tell this ("read the
+/// list again") from a failure of the node, without matching on words.
+#[derive(Debug)]
+pub struct SpendRefused(pub String);
+
+impl std::fmt::Display for SpendRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the draft line was not signed: the list answered {:?} (re-read the list)",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for SpendRefused {}
+
 /// Who has unsigned lines where: `(writer, patient, lines, newest)`.
 pub async fn writer_drafts(
     client: &(impl GenericClient + Sync),
@@ -166,7 +291,7 @@ pub async fn chart_draft_line(
         .get(0);
     if answer != "deleted" {
         // Returning drops `tx`, which rolls back: nothing is written, and the clear error stays.
-        bail!("the draft line was not signed: the list answered {answer:?} (re-read the list)");
+        return Err(SpendRefused(answer).into());
     }
     tx.commit()
         .await
