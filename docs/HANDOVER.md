@@ -111,7 +111,7 @@
 >   amoxycillin, acetaminophen* find no moiety — the entry signs uncoded and reads "not checked"; needs drugref to
 >   persist moiety names first (drugref #227 reads the UNII official names in ingest memory only). Owed by a human: **RUNBOOK §29**
 >   (copy `drugref_allergy` from :5532 — `drugref_profiles` has no groups).
-> - **Charting slice 1a BUILT 2026-11-11 on PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066), ready for review; full local gate green at `bace6621` (3 714 root DB-gated + 1 162 GUI tests, 0 skipped)** (branch
+> - **Charting slice 1a BUILT 2026-11-11 on PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066), ready for review; full local gate green at `7bfbd8ef` (4 878 tests, 0 skipped), after the maintainer's ruling generalised the signed override to `warning_override {reason, against: [{source, ref}]}` before merge; batch signing (#1072) fully ruled, designed next** (branch
 >   `design/charting-a-medication`; design [`superpowers/specs/2026-11-10-charting-a-medication-design.md`](superpowers/specs/2026-11-10-charting-a-medication-design.md),
 >   plan [`superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md`](superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md),
 >   [ADR-0099](spec/decisions/0099-charting-a-medication.md), spec **v0.101**, `db/077` + `db/076` §5 with db/031 + db/037 +
