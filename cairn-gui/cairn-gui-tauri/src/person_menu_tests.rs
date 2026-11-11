@@ -32,6 +32,7 @@ fn read(people: Vec<Person>) -> MenuRead {
     MenuRead {
         people,
         drafts: vec![],
+        med_drafts: vec![],
         parts: vec![],
         read_at: Utc::now(),
     }
@@ -285,4 +286,29 @@ fn a_failed_bar_read_says_notes_may_be_waiting_and_keeps_the_cause() {
          connection refused"
     );
     assert_eq!(failed.retry, crate::funnel::view::Retry::Now);
+}
+
+#[test]
+fn unsigned_medication_lines_are_worded_counted_and_open_their_chart() {
+    let c = Uuid::from_u128(1);
+    let menu = PersonMenu {
+        own: vec![item(c, None, None, Why::MedicationLines { lines: 3 })],
+        ..Default::default()
+    };
+    let v = menu_view(
+        &menu,
+        &read(vec![]),
+        &patients(c, "Ann Jones"),
+        &utc(),
+        at(12),
+    );
+    let (own, _, _) = parts(&v);
+    assert_eq!(own.rows[0].state, "3 unsigned medication line(s)");
+    assert_eq!(own.rows[0].what, "Medication list");
+    assert_eq!(own.rows[0].focus, "meds:");
+    assert_eq!(own.rows[0].patient_id, c.to_string());
+    match v {
+        PersonMenuView::Menu { count, .. } => assert_eq!(count, 1),
+        PersonMenuView::Nobody => panic!(),
+    }
 }

@@ -20,6 +20,8 @@ pub const PROGRESS_NOTE: &str = "Progress note";
 pub const DRAFT_NOTE: &str = "Draft note";
 pub const UNSIGNED: &str = "Went in unsigned — sign it";
 pub const REPUDIATED: &str = "Counts as unsigned — check it is yours, then sign or correct it";
+/// A chart's unsigned medication list: the words of the "what" column.
+pub const MEDICATION_LIST: &str = "Medication list";
 pub const OPEN_NOTE: &str = "Open note";
 /// "Open note" pressed on a row the re-read list no longer holds.
 pub const NO_LONGER_WAITS: &str =
@@ -174,6 +176,7 @@ where
             format!("By {} — needs your co-signature{also}", writer())
         }
         Why::Review => format!("By {} — not yet reviewed", writer()),
+        Why::MedicationLines { lines } => format!("{lines} unsigned medication line(s)"),
     }
 }
 
@@ -197,6 +200,8 @@ where
     let when = instant(item.when, tz, today);
     let (what, focus) = match &item.why {
         Why::Draft { draft_id, .. } => (DRAFT_NOTE, format!("draft:{draft_id}")),
+        // The page brings the chart's medication pane into view; the list is per chart, so no id.
+        Why::MedicationLines { .. } => (MEDICATION_LIST, "meds:".to_string()),
         _ => (
             PROGRESS_NOTE,
             item.part.map_or(String::new(), |p| format!("part:{p}")),

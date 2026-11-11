@@ -88,6 +88,7 @@ pub async fn person_menu_impl(state: &AppState) -> Result<PersonMenuView, ErrorV
         let read = MenuRead {
             people: vec![],
             drafts: vec![],
+            med_drafts: vec![],
             parts: vec![],
             read_at: Utc::now(),
         };

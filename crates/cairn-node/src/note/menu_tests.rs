@@ -368,3 +368,36 @@ fn charts_are_every_groups_charts_once_each_sorted() {
     assert_eq!(m.charts(), want);
     assert!(PersonMenu::default().charts().is_empty());
 }
+
+/// One (writer, chart, lines, newest) row of the medication drafts door.
+fn med(writer: &str, chart: u128, lines: i64, m: i64) -> MedLines {
+    (writer.into(), Uuid::from_u128(chart), lines, ms(m))
+}
+
+/// Batch charting: a writer's unsigned medication lines are ONE waiting item per chart (not one
+/// per line), in the own group, so the bar's number counts charts-with-lines.
+#[test]
+fn a_writers_unsigned_lines_count_once_per_chart() {
+    let mut m = PersonMenu::default();
+    let rows = [med("staff-me", 1, 3, 5), med("staff-me", 2, 1, 9)];
+    add_medication_lines(&mut m, &person("me"), &rows);
+    assert_eq!(m.count(), 2);
+    assert_eq!(m.own[0].why, Why::MedicationLines { lines: 3 });
+    assert_eq!((m.own[0].part, m.own[0].when), (None, ms(5)));
+    assert_eq!(m.charts(), vec![Uuid::from_u128(1), Uuid::from_u128(2)]);
+}
+
+#[test]
+fn another_writers_lines_are_not_mine() {
+    let mut m = PersonMenu::default();
+    add_medication_lines(&mut m, &person("me"), &[med("staff-you", 1, 3, 5)]);
+    assert_eq!(m, PersonMenu::default());
+    // Nobody named: nothing, even for a row with an empty writer.
+    let nobody = Person {
+        actor: String::new(),
+        staff_id: String::new(),
+        ..person("x")
+    };
+    add_medication_lines(&mut m, &nobody, &[med("", 1, 3, 5)]);
+    assert_eq!(m, PersonMenu::default());
+}

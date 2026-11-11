@@ -139,3 +139,48 @@ async fn a_repicked_person_cannot_open_the_previous_persons_row() {
     assert_eq!(err, NO_LONGER_WAITS);
     assert!(state.chart.lock().await.is_none());
 }
+
+/// Batch charting: Sue's two unsigned medication lines on one chart are ONE waiting item, counted by
+/// the bar and the picker alike, and "Open note" on it opens that chart.
+#[tokio::test]
+async fn unsigned_medication_lines_wait_in_the_bar_and_the_picker() {
+    let Some((_guard, owner, state, chart, _part)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    {
+        let db = state.db.as_ref().unwrap().lock().await.unwrap();
+        for _ in 0..2 {
+            let (line, chart) = (Uuid::now_v7().to_string(), chart.to_string());
+            let saved: String = db
+                .query_one(
+                    "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'fixture-terminal', 'sue', 'started-here', 'amoxicillin', '[{\"term\":\"amoxicillin\",\"coding\":null}]'::jsonb, NULL, false, '[]'::jsonb, false, '', '')",
+                    &[&line, &chart],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(saved, "saved");
+        }
+    }
+    let PersonMenuView::Menu { count, own, .. } = person_menu_impl(&state).await.unwrap() else {
+        panic!("Sue is named");
+    };
+    assert_eq!(count, 1, "two lines on one chart are one item");
+    assert_eq!(own.rows[0].state, "2 unsigned medication line(s)");
+    let picker = whos_here_counts_impl(&state).await.unwrap();
+    assert_eq!(
+        picker.iter().find(|c| c.staff_id == "sue").unwrap().count,
+        1
+    );
+    *state.chart.lock().await = None;
+    person_menu_open_impl(&state, &chart.to_string())
+        .await
+        .expect("the medication row names the chart");
+    assert!(state.chart.lock().await.is_some());
+    // The shared test database keeps working state across suites; leave none behind for them.
+    owner
+        .batch_execute("TRUNCATE medication_draft_line")
+        .await
+        .unwrap();
+}

@@ -14,7 +14,7 @@
 //!    does not drop a part signed under it.
 //! 3. **Your supervisees' recent notes** — `review::reviewable`, within [`REVIEW_DAYS`].
 //!
-//! [`PersonMenu::count`] is groups 1 and 2 only. Group 3 is never counted: nothing is owed
+//! [`PersonMenu::count`] is groups 1 and 2 only (group 1 includes unsigned medication lists). Group 3 is never counted: nothing is owed
 //! there, and a number that grows with every supervisee's note would train people to ignore it.
 //!
 //! A part is listed in at most one group, checked in the order 1, 2, 3.
@@ -61,6 +61,9 @@ pub struct MenuDraft {
     pub stuck: bool,
 }
 
+/// One row of the medication drafts door: `(writer staff id, chart, unsigned lines, newest save)`.
+pub type MedLines = (String, Uuid, i64, DateTime<Utc>);
+
 /// Why a row is listed; the window words it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Why {
@@ -71,6 +74,11 @@ pub enum Why {
     },
     WentInUnsigned,
     KeyRepudiated,
+    /// Unsigned medication lines in one chart (batch charting). An unsigned list never reaches the
+    /// record by itself, so it must wait here: the guard against "I thought it went in".
+    MedicationLines {
+        lines: usize,
+    },
     /// `others`: the writer's other current supervisors (actors, sorted); names resolve later.
     NeedsCoSign {
         others: Vec<String>,
@@ -81,7 +89,7 @@ pub enum Why {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub chart: Uuid,
-    /// `None` for a draft.
+    /// `None` for a draft or a medication list.
     pub part: Option<Uuid>,
     /// A part's `recorded_at`, or a draft's `due`.
     pub when: DateTime<Utc>,
@@ -117,6 +125,27 @@ impl PersonMenu {
         ids.dedup();
         ids
     }
+}
+
+/// Add `me`'s unsigned medication lists to group 1: one item per chart, `when` the newest save.
+/// Pure and separate from [`classify`] so the many note-only callers stay as they are; nobody
+/// named (empty actor or staff id) gets nothing.
+pub fn add_medication_lines(menu: &mut PersonMenu, me: &Person, med: &[MedLines]) {
+    if me.actor.is_empty() || me.staff_id.is_empty() {
+        return;
+    }
+    let mut mine: Vec<&MedLines> = med.iter().filter(|m| m.0 == me.staff_id).collect();
+    mine.sort_by_key(|m| (m.3, m.1));
+    menu.own
+        .extend(mine.into_iter().map(|(_, chart, lines, newest)| MenuItem {
+            chart: *chart,
+            part: None,
+            when: *newest,
+            writer: None,
+            why: Why::MedicationLines {
+                lines: usize::try_from(*lines).unwrap_or(0),
+            },
+        }));
 }
 
 /// Group 1 for a part: went in unsigned and still is, or counts as unsigned under `me`'s key.

@@ -4,14 +4,16 @@
 //! disagree; the bar's read and the picker's are two reads (ADR-0095 decision 6).
 //!
 //! The reads run in this order, all on the CALLER's client: people, then the supervision record,
-//! then the drafts, then the parts. The caller supplies a REPEATABLE READ snapshot (as `note_list`
+//! then the drafts, then the medication lines, then the parts. The caller supplies a REPEATABLE READ snapshot (as `note_list`
 //! does); this module opens no transaction of its own.
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::menu::{classify, review_window_start, MenuDraft, Person, PersonMenu};
+use super::menu::{
+    add_medication_lines, classify, review_window_start, MedLines, MenuDraft, Person, PersonMenu,
+};
 use super::read::{parts_by_keys, NoteRow};
 use super::supervision::{self, Supervision};
 use super::vouch::same_actor;
@@ -20,6 +22,8 @@ use super::vouch::same_actor;
 pub struct MenuRead {
     pub people: Vec<Person>,
     pub drafts: Vec<MenuDraft>,
+    /// Unsigned medication lines by writer and chart (`medication::draft::writer_drafts`).
+    pub med_drafts: Vec<MedLines>,
     pub parts: Vec<NoteRow>,
     /// The instant the parts were read for. [`MenuRead::menu_for`] and [`MenuRead::counts`] judge
     /// at this instant and no other: the read skipped every part no menu could list at it (#1021),
@@ -44,6 +48,7 @@ pub async fn read_menus(
     let people = read_people(client).await?;
     let sup = supervision::load(client).await?;
     let mut drafts = read_drafts(client).await?;
+    let mut med_drafts = crate::medication::draft::writer_drafts(client).await?;
 
     let keys = match scope {
         None => people.iter().flat_map(|p| p.keys.clone()).collect(),
@@ -55,6 +60,7 @@ pub async fn read_menus(
                 .context("normalising the staff id")?
                 .get(0);
             drafts.retain(|d| d.writer == staff);
+            med_drafts.retain(|d| d.0 == staff);
             keys_for_bar(&people, &staff, &sup)
         }
     };
@@ -67,6 +73,7 @@ pub async fn read_menus(
     Ok(MenuRead {
         people,
         drafts,
+        med_drafts,
         parts,
         read_at: now,
     })
@@ -145,10 +152,17 @@ impl MenuRead {
         find_person(&self.people, staff_id)
     }
 
+    /// One person's groups: the note groups, then their unsigned medication lists.
+    fn menu_of(&self, me: &Person) -> PersonMenu {
+        let mut menu = classify(me, &self.parts, &self.drafts, self.read_at);
+        add_medication_lines(&mut menu, me, &self.med_drafts);
+        menu
+    }
+
     /// That person's three groups at [`MenuRead::read_at`], or `None` when no such person was read.
     pub fn menu_for(&self, staff_id: &str) -> Option<PersonMenu> {
         let me = self.person(staff_id)?;
-        Some(classify(me, &self.parts, &self.drafts, self.read_at))
+        Some(self.menu_of(me))
     }
 
     /// One `(staff id, count)` per person with a staff id, in people order, at [`MenuRead::read_at`].
@@ -156,12 +170,7 @@ impl MenuRead {
         self.people
             .iter()
             .filter(|p| !p.staff_id.is_empty())
-            .map(|p| {
-                (
-                    p.staff_id.clone(),
-                    classify(p, &self.parts, &self.drafts, self.read_at).count(),
-                )
-            })
+            .map(|p| (p.staff_id.clone(), self.menu_of(p).count()))
             .collect()
     }
 
@@ -191,11 +200,36 @@ mod tests {
                 keys: vec!["k".into()],
             }],
             drafts: Vec::new(),
+            med_drafts: Vec::new(),
             parts: Vec::new(),
             read_at: Utc::now(),
         };
         assert!(read.person("").is_none());
         assert!(read.menu_for("").is_none());
         assert!(read.counts().is_empty());
+    }
+
+    /// The picker's count includes unsigned medication lines (batch charting): it comes from the
+    /// same builder as the bar's, so the two cannot disagree.
+    #[test]
+    fn the_picker_counts_include_medication_lines() {
+        let person = |a: &str| Person {
+            actor: a.into(),
+            staff_id: format!("staff-{a}"),
+            display_name: None,
+            keys: vec![],
+        };
+        let read = MenuRead {
+            people: vec![person("me"), person("you")],
+            drafts: Vec::new(),
+            med_drafts: vec![("staff-me".into(), Uuid::from_u128(1), 2, Utc::now())],
+            parts: Vec::new(),
+            read_at: Utc::now(),
+        };
+        assert_eq!(
+            read.counts(),
+            vec![("staff-me".to_string(), 1), ("staff-you".to_string(), 0)]
+        );
+        assert_eq!(read.menu_for("staff-me").unwrap().count(), 1);
     }
 }
