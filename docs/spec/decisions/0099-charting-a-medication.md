@@ -39,8 +39,7 @@ decision (HANDOVER, 2026-10-31) was in no ADR until this one.
 
 Slice 1a builds the line, the two presses, the charting fields on the wire and the check at charting with its
 override reason. The same-drug de-label offer on *Already taking* and the group comment are slice 1b (#1053, design
-§3.5). The controller's rulings during the build are recorded in the slice's ledger and cited below where they changed
-the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
+§3.5). Where the build changed the plan, the decision below states what was built.
 
 ## Decision
 
@@ -75,12 +74,12 @@ the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
    - **At both doors (types):** `charted_as`, `route` and `substance.strength` are strings; `substance.components` is
      an array of objects with a string `term`, each `coding` judged by db/041's `cairn_check_coding_object`;
      `allergy_override` is an object, its `reason` a string and its `against` an array **when present**, and every
-     `against` entry a uuid string (ruling R4: the projection casts it).
+     `against` entry a uuid string (the projection casts it to `uuid[]`).
    - **At the authoring door only:** `charted_as` is one of the three words; `charted_as`, `route`, `strength` and a
-     component's `term` are non-blank (R3); a component is never coded `drugref-class` (R5); `components` has at least
+     component's `term` are non-blank; a component is never coded `drugref-class` (one drug, never a group); `components` has at least
      two entries and never sits beside a non-null `substance.coding`; the override has a non-blank `reason` and a
      non-empty `against`.
-   - **A peer's override missing its `reason` or `against` is admitted** (ruling R20). The remote door checks the type
+   - **A peer's override missing its `reason` or `against` is admitted**. The remote door checks the type
      only of what is present, so a later window that leaves the reason optional never has its events refused by an
      older node.
 
@@ -111,8 +110,8 @@ the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
 ### The medication pick (`db/076` §5, the drug read door)
 
 8. **`cairn_drug_medication_search(p_text text, p_limit int) RETURNS TABLE(code text, display text, uses bigint)`**
-   lives in db/076, the one file that may read drugref, not in db/077 (ruling R9). Its name starts `cairn_drug_` so
-   `drug_door_callers.rs` guards it (R10), and a replay drops the first name, `cairn_medication_drug_search`.
+   lives in db/076, the one file that may read drugref, not in db/077 (a new drugref read goes into db/076). Its name starts `cairn_drug_` so
+   `drug_door_callers.rs` guards it, and a replay drops the first name, `cairn_medication_drug_search`.
    - It is `SECURITY DEFINER` with `SET search_path = pg_catalog, pg_temp`, answers nothing unless
      `cairn_drug_available()`, is revoked from PUBLIC and granted to `cairn_window` only.
    - **Drugs only**, never an allergy group: rows of `drugref.substance_moiety`. One cannot take "penicillins".
@@ -128,7 +127,7 @@ the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
 9. **`chart_medication`** signs one assertion carrying its `Charting` through the one strict door
    (`seal_sign_submit`, born-sealed, `author` for a human signature). `assert_medication` is `chart_medication` with
    `Charting::default()`, so every earlier caller is unchanged (`assert_medication_is_unchanged`).
-   `build_assert_body` keeps its signature and delegates to `build_charted_body` (ruling R11).
+   `build_assert_body` keeps its signature and delegates to `build_charted_body`, so its many callers are untouched.
 10. **A combination emits no safety claim** (ADR-0063). The §5.9 class is looked up only for a single coding with no
     components. One class cannot speak for several drugs, and a claim for one part would read as the whole line's.
     Absent is the withholding direction, as for an uncoded line.
@@ -136,15 +135,15 @@ the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
     abbreviations list). It fills `dose_amount`/`dose_unit`, `route`, `frequency`, `form`, `strength`, `prn` and
     `stat` only when certain. Every word it cannot place goes to `unread`, and nothing is dropped.
     - A decimal is kept exactly as typed (`"1.5"`, `".5"`). A comma decimal (`1,5mg`) is never read.
-    - **Two of a kind is ambiguous** (R7): two doses, frequencies, routes or forms leave that field `None` and every
+    - **Two of a kind is ambiguous**: two doses, frequencies, routes or forms leave that field `None` and every
       competing token in `unread`.
-    - A number with a strength unit straight after a form word is the strength, never the dose (R8): `tab 500mg`
+    - A number with a strength unit straight after a form word is the strength, never the dose: `tab 500mg`
       reads strength `500 mg` and dose not known, never an assumed 1. A second strength goes to `unread`.
     - A number before a duration word ("5 days") is not a dose. Any other unread number ("2 x 500mg") makes the dose
       uncertain, so the dose too goes to `unread`.
 12. **The term signed** (`line::term_to_sign`). The pick's display is signed only when the typed text is its
     case-folded prefix ("amox" picked as amoxicillin signs "amoxicillin"). Anything else typed, a brand or a
-    spelling, is signed as typed. **A combination's term is its parts' signed terms joined " + "** (ruling R22): "amox
+    spelling, is signed as typed. **A combination's term is its parts' signed terms joined " + "**, so the record shows the generic names: "amox
     + clav" with both picked signs "amoxicillin + clavulanic acid"; an unpicked part keeps its words.
 13. **The check counts every part of a line.** `check_medications` merges lines that share a `group_id` instead of
     overwriting (`merge`). A part's mark is kept unless its words are already shown or its record already has a mark;
@@ -165,15 +164,17 @@ the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
       visible "Coded as: …" line says what each part will be signed as, "(not coded)" for an unpicked one.
     - The read-back row draws the reading: "Drug · Form · Strength · Dose · Route · How often", "—" for each field not
       read, then "not read: …".
-    - **Cancel, or Escape with no list open, discards the unsigned line** (ruling R18). Leaving the chart discards it
+    - **Cancel, or Escape with no list open, discards the unsigned line**, as a line crossed out before it is signed. Leaving the chart discards it
       too.
 16. **The check at charting** (`med_line_check`). The line is checked as it is typed, on each drug-part change and
     pick, and the line reads "not checked" at once until the new answer comes. It shows ADR-0098's loud **Allergy**
     tag and words, the muted notes, or the small **not checked** tag.
-    - Each part is one `MedLine` under one group. Every part carries the line's signed term (R12). A combination is
-      checked under its signed term **and** the drug as typed (R24), so a by-name allergy on "Augmentin", or on
-      "amoxicillin + clavulanic acid", marks it. Over-warning is the safe error.
-    - The on-screen check and the check at Sign build their lines by one function, `the_line` (R16).
+    - Each part is one `MedLine` under one group. Every part carries the line's signed term, so a by-name allergy on
+      the line's name meets each part. A combination's parts are checked under its signed term **and** again under the
+      drug as typed, so a by-name allergy on "Augmentin", or on "amoxicillin + clavulanic acid", marks it.
+      Over-warning is the safe error.
+    - The on-screen check and the check at Sign build their lines by one function, `the_line`, so the two cannot
+      disagree.
 17. **Sign re-runs the check; the webview's answer is never trusted** (`med_chart`). Every refusal comes before the
     key:
     1. the chart on screen and writable;
@@ -181,7 +182,7 @@ the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
     3. each pick, which must be a `drugref-moiety` drug with a code that reads as a uuid (signed canonical), and no
        part may be blank ("Name the medication.");
     4. **the check, on a fresh allergy read over the chart set on screen.** A set that changed since (a link or unlink
-       landed) is refused as a re-read (ruling R15). An allergy list that cannot be read lets the line proceed "not
+       landed) is refused as a re-read, never signed unchecked against allergies not yet seen. An allergy list that cannot be read lets the line proceed "not
        checked";
     5. **a Start line with a mark needs a reason**: a blank trimmed reason refuses with "Charting despite a listed
        allergy needs a reason". The trimmed reason is signed with `against` = the fresh check's records. *Already
@@ -195,11 +196,11 @@ the plan (R3–R5, R7, R8, R9–R13, R15–R18, R20–R22, R24–R26).
 18. **The list reads combinations part by part, and shows the signed directions.**
     - `med_list_check` reads `medication_charting` for the list's threads (`read_charting`). A combination member is one
       line per component. The row's own line is kept beside them when a member is not a combination, or the row
-      carries a coding (ruling R17: a later coding is checked too). A failed read leaves each row its one line, as
+      carries a coding, so a coding added later (db/042) is checked too. A failed read leaves each row its one line, as
       before.
     - **The dose cell is `dose — sig`**, the directions alone with no structured dose, or "dose not recorded" with
-      neither (rulings R21, R25). The row's accessible label says the same cell (R26).
-    - The drug search runs on its own lock, never inside a snapshot (R13). A search that fails reads as no drug list.
+      neither, so a stat or tds line reads as signed. The row's accessible label says the same cell.
+    - The drug search runs on its own lock, never inside a snapshot (its swallowed failure would abort a shared transaction). A search that fails reads as no drug list.
 
 ## What is not guaranteed
 

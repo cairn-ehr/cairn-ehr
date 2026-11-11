@@ -18,15 +18,15 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 Every allergy slice 3 rule below still holds; the pick's door is a db/076 door like the other four.
 - **The override reason is a WINDOW rule, never a floor rule** (design §3.5, ADR-0021). `med_chart` refuses a Start line
   with an allergy mark and a blank trimmed reason, before the key. db/077 checks the override's shape only when it is
-  present, and a peer's override missing its `reason` or `against` is admitted (R20). **Tempting wrong fixes:** make
+  present, and a peer's override missing its `reason` or `against` is admitted. **Tempting wrong fixes:** make
   db/077 require an override whenever a line "would" mark (the floor cannot run the check: it needs the allergies and
   an optional drugref, so the floor would depend on both); refuse a missing `reason` at the remote door (a newer window
   with an optional reason has its events penned). Pins: `medication_charting_floor.rs::remote_door_admits_a_newer_word`,
   `med_chart_tests.rs::a_start_line_with_a_mark_needs_a_trimmed_reason`.
 - **The check is RE-RUN at Sign on a fresh read; the webview's answer is never trusted.** `med_chart` reads the
-  allergies again over the chart set on screen, refuses a changed set as a re-read (R15), and signs `against` from that
-  fresh check. The on-screen check and the check at Sign build their lines with the one `the_line` (R16), which checks
-  a combination under its signed AND its typed term (R24). **Tempting wrong fixes:** pass the webview's
+  allergies again over the chart set on screen, refuses a changed set as a re-read, and signs `against` from that
+  fresh check. The on-screen check and the check at Sign build their lines with the one `the_line`, which checks
+  each part of a combination under its signed AND its typed term. **Tempting wrong fixes:** pass the webview's
   `reason_needed` / marks to `med_chart` "to save a round trip" (an allergy signed since reads clean); treat a changed
   set as "not checked" at Sign the way the on-screen check does (a Start line signs unchecked against a newly linked
   chart's allergies); check a combination under one term only (a by-name allergy on the other term reads "not
@@ -46,8 +46,8 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   as `read_charting` does. Pins: `medication_charting_projection.rs::a_shred_removes_the_charting_row`,
   `a_reprojection_rebuilds_it`; both `cairn_projection_apply` counts (38 / 40).
 - **The directions are read, never guessed** (`line::read_directions`). A field is filled only when one reading is
-  certain: two of a kind (R7), a stray number, or a comma decimal leave it `None` and the tokens in `unread`; a number
-  after a form word is a strength, and no count is assumed (R8). The TYPED text is `sig`. **Tempting wrong fixes:**
+  certain: two of a kind, a stray number, or a comma decimal leave it `None` and the tokens in `unread`; a number
+  after a form word is a strength, and no count is assumed. The TYPED text is `sig`. **Tempting wrong fixes:**
   "keep the first frequency" for `bd tds`; read `1,5mg` as 1.5 or as 15; default a missing count to 1. Pins:
   `line_tests.rs::two_of_a_kind_is_ambiguous_so_none_of_them_is_read`, `a_stray_number_makes_the_dose_uncertain`,
   `keeps_decimals_as_typed`, `a_strength_after_a_form_is_not_a_dose`.
@@ -56,10 +56,10 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   part's coding across an edit, or keep the old verdict drawn while the new check is in flight (a clean verdict for
   the old words reads as the new line's). Pins: `med_chart_webview_tests.rs::editing_a_picked_part_drops_its_coding`,
   `med_chart_line_webview_tests.rs::a_changed_drug_part_reads_not_checked_until_its_check_answers`.
-- **An opened line is always closable without signing** (R18): Cancel, or Escape with no pick list open. **Tempting
+- **An opened line is always closable without signing**: Cancel, or Escape with no pick list open. **Tempting
   wrong fix:** drop Cancel "because Escape exists" (Escape first closes the pick list), or ask "Discard this line?" (a
   dialog). Pin: `med_chart_line_webview_tests.rs::an_opened_line_closes_without_signing`.
-- **The list's dose cell is `dose — sig`, and the row's accessible label says the SAME cell** (R21, R25, R26). Built in
+- **The list's dose cell is `dose — sig`, and the row's accessible label says the SAME cell**. Built in
   `row_view.rs`'s `dose_cell`, never by a JS literal check. **Tempting wrong fix:** label the row with `dose` "because it
   is shorter" (a screen reader hears "dose not recorded" where the screen shows "1g IV stat"). Pins:
   `row_view_tests.rs::the_dose_cell_reads_the_dose_and_the_directions`,

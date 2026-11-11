@@ -2871,7 +2871,7 @@ terminal (no hold, the clock starting at the press) and record both. Steps:
 The node times the write half of a charted line as **`medication-chart`** (section 5). **A figure outside its budget,
 or an `M > N` other than #1072, is the finding: file an issue, and never adjust the budget.**
 
-**Setup.** Section 29's Setup A (drugref with its allergy groups, owned by the owner) and its `dr` function. Build
+**Setup.** Section 29's Setup A (drugref with its allergy groups, owned by the owner). Build
 this checkout first, let an owner `cnode` command replay the schema, and re-run section 0's `provision-window-role`,
 because the build moves `SCHEMA_GENERATION` to 77. Then three charts with section 27's `achart`:
 
@@ -2904,8 +2904,16 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
       - `amox bd tds`: How often —, "not read: bd tds";
       - `amox tab 500mg`: Form tablet, Strength 500 mg, Dose — (no count is assumed).
 - [ ] **An edit drops the coding.** Pick "amoxicillin", then change one letter of the drug word and change it back.
-      "Coded as" is gone, and the line reads **not checked** until a new check answers. Sign: the console row of
-      `medication_coding` has no row for that thread.
+      "Coded as" is gone, and the line reads **not checked** until a new check answers. Sign. Then the newest thread on
+      the chart has no coding:
+
+      ```bash
+      psql "$CONN" -c "SELECT s.medication_id, s.term, c.coding_code FROM medication_statement s
+        LEFT JOIN medication_coding c USING (medication_id) WHERE s.patient_id = '$C2'
+        ORDER BY s.medication_id DESC LIMIT 1"   # coding_code is empty
+      ```
+
+      (Thread ids are UUIDv7, so the largest is the newest.)
 - [ ] **Cancel.** Open the line, type something, press Cancel: the line closes, nothing is signed, and the focus is
       on *Start medication*. Open it again and press Escape with no list open: the same. With the list open, Escape
       closes only the list.
@@ -2922,9 +2930,12 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
 - [ ] **Already taking.** On `$C1`, *Already taking*, `flucl`, choose "flucloxacillin", ` 500mg qid`. The mark shows,
       and no reason field. Sign. The row reads `pre-existing`, no override.
 - [ ] **A combination.** On `$C1`, *Start medication*, type `amox`, choose it, then ` + clav`, choose "clavulanic
-      acid" (or leave it unpicked if the drug list has none), then ` 875/125 bd`. "Coded as" reads both parts. The
-      mark shows (through the amoxicillin part). Type a reason, Sign. The list's name reads "amoxicillin + clavulanic
-      acid", and its line carries the **Allergy** tag. The console row's `components` holds both parts.
+      acid", then ` 875/125 bd`. "Coded as" reads both parts. The mark shows (through the amoxicillin part). Type a
+      reason, Sign. The list's name reads "amoxicillin + clavulanic acid", and its line carries the **Allergy** tag. The
+      console row's `components` holds both parts, each with its coding.
+      - **If the drug list has no clavulanic acid**, leave ` clav` unpicked. "Coded as" reads "amoxicillin + clav (not
+        coded)", and the mark still shows. Sign: the list's name reads **"amoxicillin + clav"** (an unpicked part keeps
+        its words), it carries the **Allergy** tag, and the console row's second component has `"coding": null`.
 - [ ] **A brand typed as the drug.** On `$C1`, *Start medication*, `Augmentin 875/125 bd`, no pick (the drug list has
       no brand names, #1065). The line reads **not checked** and asks no reason. Note it: this is the gap #1065 owes.
 - [ ] **The check is re-run at Sign.** An allergy recorded elsewhere while a line is open cannot be produced by hand
@@ -2968,7 +2979,7 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
 - [ ] Note whether the **Allergy** tag and its words are announced when they appear while typing (they are not live
       regions: #1070). Whether "Coded as: …" and the read-back are read (both are polite live regions).
 - [ ] The reason field is reached by Tab and read with its label. A refusal under the line is read when it appears.
-- [ ] A charted line's row is read with its dose cell, "500 mg — 500mg tds" (R26), never "dose not recorded" for a
+- [ ] A charted line's row is read with its dose cell, "500 mg — 500mg tds", never "dose not recorded" for a
       line with directions.
 - [ ] No dialog at any point.
 

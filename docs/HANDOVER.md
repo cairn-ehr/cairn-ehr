@@ -115,7 +115,7 @@
 >   `design/charting-a-medication`; design [`superpowers/specs/2026-11-10-charting-a-medication-design.md`](superpowers/specs/2026-11-10-charting-a-medication-design.md),
 >   plan [`superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md`](superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md),
 >   [ADR-0099](spec/decisions/0099-charting-a-medication.md), spec **v0.101**, `db/077` + `db/076` §5 with db/031 + db/037 +
->   db/044 in place, `SCHEMA_GENERATION` **77**; the build's rulings cited by number in ADR-0099). *Start medication* /
+>   db/044 in place, `SCHEMA_GENERATION` **77**). *Start medication* /
 >   *Already taking* open one typed line (`amox 500mg tds`); five optional wire keys (`charted_as`, `route`,
 >   `substance.strength`, `substance.components`, `allergy_override`) with their own projection `medication_charting`;
 >   the drugs-only pick `cairn_drug_medication_search`, ranked by this site's use; the directions read, never guessed;
