@@ -111,7 +111,7 @@
 >   amoxycillin, acetaminophen* find no moiety — the entry signs uncoded and reads "not checked"; needs drugref to
 >   persist moiety names first (drugref #227 reads the UNII official names in ingest memory only). Owed by a human: **RUNBOOK §29**
 >   (copy `drugref_allergy` from :5532 — `drugref_profiles` has no groups).
-> - **Charting slice 1a BUILT 2026-11-11 on draft PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066)** (branch
+> - **Charting slice 1a BUILT 2026-11-11 on PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066), ready for review; full local gate green at `bace6621` (3 714 root DB-gated + 1 162 GUI tests, 0 skipped)** (branch
 >   `design/charting-a-medication`; design [`superpowers/specs/2026-11-10-charting-a-medication-design.md`](superpowers/specs/2026-11-10-charting-a-medication-design.md),
 >   plan [`superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md`](superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md),
 >   [ADR-0099](spec/decisions/0099-charting-a-medication.md), spec **v0.101**, `db/077` + `db/076` §5 with db/031 + db/037 +
@@ -172,7 +172,7 @@
 >    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
 >    projection and the Pi figures. **Allergy slices 1–3 MERGED** (the bullets above). **Next: charting a
 >    medication in the window** (design APPROVED 2026-11-11, three PRs: the line + the check at charting; stat ordered →
->    given; aliases + PBS forms as drugref supplies them). **Slice 1a BUILT on draft PR #1066** (the bullet above):
+>    given; aliases + PBS forms as drugref supplies them). **Slice 1a BUILT on PR #1066 (awaiting the maintainer's read + CI, then merge)** (the bullet above):
 >    finish its Task 8 gate, then the maintainer's review and #1072's ruling. **Then 1b**: the same-drug de-label offer
 >    on *Already taking* (#1053, opens db/075's `tolerated.coding`) and the group comment, a new allergy event type,
 >    in one transaction with the line (design §3.5); it closes #1054. Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
