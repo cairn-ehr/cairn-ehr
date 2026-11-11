@@ -84,9 +84,10 @@ impl Semantic for MedicationsTab {
             if let Some(source) = &row.source {
                 label.push_str(&format!(" — recorded on chart(s) {source}"));
             }
+            // `dose_cell`, not `dose`: the utterance says what the screen shows (R26).
             label.push_str(&format!(
                 ", {}, {}, {}",
-                row.dose, row.status_label, row.vouch_label
+                row.dose_cell, row.status_label, row.vouch_label
             ));
             if row.will_be_signed {
                 label.push_str(", will be signed");
@@ -351,6 +352,27 @@ mod semantic_tests {
             "{}",
             first_row.label
         );
+    }
+
+    /// Ruling R26: the row's utterance says the dose cell the screen shows (R21/R25), so a line
+    /// with directions but no structured dose is heard as "1g IV stat", never "dose not recorded".
+    #[test]
+    fn a_row_announces_the_dose_cell_it_shows() {
+        let mut list = cairn_medication_view::fixtures::sample_chart();
+        list.rows[0].dose_amount = None;
+        list.rows[0].dose_unit = None;
+        list.rows[0].sig = Some("1g IV stat".into());
+        let view = crate::view::build_view(&list);
+        let node = MedicationsTab::new(view.clone()).semantics(&ctx());
+        let spoken = &node
+            .fields
+            .iter()
+            .find(|f| f.id == format!("row-{}", view.rows[0].group_id))
+            .expect("a row")
+            .label;
+        assert!(spoken.contains(&view.rows[0].dose_cell), "{spoken}");
+        assert!(spoken.contains("1g IV stat"), "{spoken}");
+        assert!(!spoken.contains("dose not recorded"), "{spoken}");
     }
 
     /// The sign-off control is always present and always labelled, even when it is
