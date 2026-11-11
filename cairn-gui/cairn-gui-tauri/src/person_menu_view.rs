@@ -20,7 +20,11 @@ pub const PROGRESS_NOTE: &str = "Progress note";
 pub const DRAFT_NOTE: &str = "Draft note";
 pub const UNSIGNED: &str = "Went in unsigned — sign it";
 pub const REPUDIATED: &str = "Counts as unsigned — check it is yours, then sign or correct it";
+/// A chart's unsigned medication list: the words of the "what" column.
+pub const MEDICATION_LIST: &str = "Medication list";
 pub const OPEN_NOTE: &str = "Open note";
+/// The button on a medication-list row: it opens the chart on its medication list, not a note.
+pub const OPEN_MEDICATION_LIST: &str = "Open medication list";
 /// "Open note" pressed on a row the re-read list no longer holds.
 pub const NO_LONGER_WAITS: &str =
     "That note no longer waits in your list — the list was read again.";
@@ -44,7 +48,7 @@ pub struct MenuRowView {
     pub what: String,
     pub when: String,
     pub state: String,
-    /// The button's visible words, "Open note".
+    /// The button's visible words, "Open note" ("Open medication list" for a medication list).
     pub open_words: String,
     /// The button's accessible name, "Open note: {patient}, {when}".
     pub open_label: String,
@@ -174,6 +178,7 @@ where
             format!("By {} — needs your co-signature{also}", writer())
         }
         Why::Review => format!("By {} — not yet reviewed", writer()),
+        Why::MedicationLines { lines } => format!("{lines} unsigned medication line(s)"),
     }
 }
 
@@ -195,16 +200,19 @@ where
         .map_or(UNNAMED_PATIENT, |c| c.display_name.as_str())
         .to_string();
     let when = instant(item.when, tz, today);
-    let (what, focus) = match &item.why {
-        Why::Draft { draft_id, .. } => (DRAFT_NOTE, format!("draft:{draft_id}")),
+    let (what, focus, open) = match &item.why {
+        Why::Draft { draft_id, .. } => (DRAFT_NOTE, format!("draft:{draft_id}"), OPEN_NOTE),
+        // The page brings the chart's medication pane into view; the list is per chart, so no id.
+        Why::MedicationLines { .. } => (MEDICATION_LIST, "meds:".to_string(), OPEN_MEDICATION_LIST),
         _ => (
             PROGRESS_NOTE,
             item.part.map_or(String::new(), |p| format!("part:{p}")),
+            OPEN_NOTE,
         ),
     };
     MenuRowView {
-        open_words: OPEN_NOTE.into(),
-        open_label: format!("{OPEN_NOTE}: {patient}, {when}"),
+        open_words: open.into(),
+        open_label: format!("{open}: {patient}, {when}"),
         patient,
         what: what.into(),
         state: state_words(item, read, tz, now),

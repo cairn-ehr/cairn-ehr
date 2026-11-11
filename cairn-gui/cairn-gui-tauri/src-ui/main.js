@@ -233,6 +233,7 @@ function render(pane, patient) {
   }
   drawDuplicates(pane.duplicates); // a fault drawing it is said on the banner, never thrown here
   syncMedChart(); // "Start medication" / "Already taking" only over a drawn list (med_chart.js)
+  syncMedList(); // the chart's unsigned medication lines, read (and so re-checked) again (med_list.js)
 }
 
 /** The list half of `render`: the drawn chart and set, linked charts, links, warnings, rows. */
@@ -327,7 +328,8 @@ function clearChart() {
   clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   clearNotes(); // the note pane and its editor (notes.js)
   clearAllergies(); // the allergy strip, its lists and its form (allergies.js)
-  clearMedChart(); // the medication line typed for this chart (med_chart.js)
+  clearMedList(); // its unsigned medication lines, their pending saves queued (med_list.js)
+  clearMedChart(); // the medication line editor (med_chart.js)
   clearDrawnList();
   const button = el("sign-off");
   button.disabled = true;

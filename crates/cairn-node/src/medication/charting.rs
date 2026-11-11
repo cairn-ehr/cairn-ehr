@@ -37,6 +37,36 @@ pub async fn chart_medication(
     author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<crate::db_diagnosis::Committed<Uuid>> {
+    let (body, medication_id) =
+        chart_body(client, node_kid, node_origin, patient, input, charting).await?;
+    // ADR-0052 seal-at-write: the clear body is sealed, signed, and submitted through the
+    // ONE strict door by seal_sign_submit — which also runs the atomic author-time
+    // attestation when `attest` is Some (it vouches for the thread named in the body's
+    // payload.medication_id), and rewrites the body to human-signed authorship when
+    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). It returns the
+    // content event's id, the one its lost commit names; the thread id rides beside it.
+    let recorded =
+        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+            .await?;
+    Ok(crate::db_diagnosis::Committed {
+        value: medication_id,
+        event_id: recorded,
+    })
+}
+
+/// Everything `chart_medication` does BEFORE the strict door: refuse a blank term, mint the HLC
+/// and ids, look up the safety class, build the clear body. Writes nothing but a gap in the HLC.
+/// Split out so `draft::chart_draft_line` can submit the same body inside a transaction of its
+/// own (the draft row leaves the list in the same transaction). Returns the body and the
+/// thread's `medication_id`.
+pub(crate) async fn chart_body(
+    client: &tokio_postgres::Client,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    input: &AssertMedicationInput<'_>,
+    charting: &Charting<'_>,
+) -> anyhow::Result<(cairn_event::EventBody, Uuid)> {
     validate_term(input.term)?;
     // Mint HLCs up front (self-committing; a rolled-back submit just leaves a gap —
     // the HLC is monotonic and gaps are allowed, exactly like identify_patient).
@@ -85,19 +115,7 @@ pub async fn chart_medication(
         verb_hlc,
         safety,
     );
-    // ADR-0052 seal-at-write: the clear body is sealed, signed, and submitted through the
-    // ONE strict door by seal_sign_submit — which also runs the atomic author-time
-    // attestation when `attest` is Some (it vouches for the thread named in the body's
-    // payload.medication_id), and rewrites the body to human-signed authorship when
-    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). It returns the
-    // content event's id, the one its lost commit names; the thread id rides beside it.
-    let recorded =
-        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-            .await?;
-    Ok(crate::db_diagnosis::Committed {
-        value: medication_id,
-        event_id: recorded,
-    })
+    Ok((body, medication_id))
 }
 
 /// One component of a charted combination: the term as typed, and its coding as

@@ -78,6 +78,7 @@ function showClaim(claim) {
   if (changed) {
     hideMenu(); // person_menu.js: the last person's list leaves before the next person's read
     void refreshMenuCount();
+    medListClaimChanged(); // med_list.js: the last person's medication lines leave, typed into by no one else
   }
   const bar = el("whos-here-name");
   if (bar.textContent !== claim.words) bar.textContent = claim.words;
@@ -125,6 +126,7 @@ async function switchWhosHere() {
  * Pure.
  */
 function signOutcomeLine(outcome) {
+  if (outcome && outcome.words) return outcome.words; // the medication list's Sign, in Rust's words
   if (outcome === "signed") return SIGNED_LINE;
   if (outcome === "not-signed") return NOT_SIGNED_LINE;
   if (outcome === "unknown") return SIGN_UNKNOWN_LINE;

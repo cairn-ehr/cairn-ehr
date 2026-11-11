@@ -590,3 +590,25 @@ li > button.allergy-write {
 #med-line-marks {
   margin: 0.2rem 0;
 }
+
+/* ---- Batch charting slice 1: the medication list (med_list.js) ---- */
+
+#med-list {
+  padding-left: 1.5rem;
+  max-width: 48rem;
+}
+
+#med-list > li {
+  margin: 0.4rem 0;
+}
+
+/* A line's state ("unfinished", "not ticked") is read without hovering: plain visible text. */
+.med-list-state {
+  margin: 0.1rem 0;
+  font-style: italic;
+}
+
+/* The outcome names each line not charted on its own line. */
+#med-list-outcome {
+  white-space: pre-line;
+}

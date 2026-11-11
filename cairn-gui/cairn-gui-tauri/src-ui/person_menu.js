@@ -161,6 +161,18 @@ function takeMenuFocus() {
 function focusMenuTarget(focus) {
   if (!focus) return;
   const [kind, id] = focus.split(/:(.*)/s);
+  // A medication list: the chart's medication pane, when the chart shows one (else the chart opens as is).
+  if (kind === "meds") {
+    const pane = el("med-chart");
+    if (pane.hidden) {
+      pendingMenuFocus = focus; // drawn later: med_list.js asks again once its list is drawn
+      return;
+    }
+    pane.tabIndex = -1;
+    pane.scrollIntoView();
+    pane.focus();
+    return;
+  }
   let target = document.querySelector(
     kind === "part" ? `#note-list [data-parts~="${id}"]` : `#note-drafts [data-draft="${id}"]`,
   );

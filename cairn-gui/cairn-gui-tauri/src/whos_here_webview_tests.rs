@@ -291,7 +291,10 @@ fn a_sign_settled_during_a_switch_is_said_in_the_picker() {
     assert!(NOTES_JS.contains(
         "noteSignInFlight = true;\n  noteSigning = signNote()\n    .catch((failure) => {"
     ));
-    assert!(js_fn(NOTES_JS, "signInFlight").contains("return noteSignInFlight;"));
+    // The medication list's Sign counts too (Task 6 review I1).
+    assert!(
+        js_fn(NOTES_JS, "signInFlight").contains("return noteSignInFlight || medListSignInFlight;")
+    );
 }
 
 /// A draft's parts are drawn as read-only blocks through `cell` (3a's rule: never `innerHTML` a

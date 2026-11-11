@@ -26,6 +26,9 @@ const EXEMPT: &[&str] = &[
     // pick "no drug list" and the line "not checked"; Sign's own write explains (`db.explain`).
     "med_drug_search_impl",
     "fresh_check",
+    // med_list_judge.rs: the list's check, by `fresh_check`'s rule: a cut leaves every line "not
+    // checked" (so no default tick, and a reasoned hand tick refused at Sign); stderr only.
+    "check_all",
 ];
 
 /// Any of these in a function's body is its errors passed through the cut check: the guard's own
