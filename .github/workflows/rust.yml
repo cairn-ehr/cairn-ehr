@@ -270,6 +270,11 @@ jobs:
       - name: scripts/pg-target.sh tests (pure)
         run: bash scripts/tests/pg_target_test.sh
 
+      # The local guards (.githooks/ + the Claude Stop hook) run only on a maintainer's machine,
+      # so CI is the only place their own tests are certain to run. Throwaway repos, stub gh.
+      - name: local git/Claude hook tests (pure)
+        run: bash scripts/tests/git_hooks_test.sh
+
       # The #512 measurement rig's parsers: stdlib-only, about a second. They ride CI for the
       # reason #444 records — a guard checked only by hand is not a control. What they protect
       # is not the rig running, it is the FIGURE it writes into a dated results file that

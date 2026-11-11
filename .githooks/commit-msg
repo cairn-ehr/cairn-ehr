@@ -1,0 +1,11 @@
+#!/bin/bash
+# Refuse a commit message that hands GitHub a closing reference it says is NOT a close
+# ("Filed rather than fixed: #534" closes #534). CI runs the same checker on the PR, but by
+# then the slip is in a pushed commit and removing it needs a force-push (deny-listed).
+# Enabled per clone with: git config core.hooksPath .githooks   (see CONTRIBUTING.md)
+set -euo pipefail
+msg="$(mktemp)"
+trap 'rm -f "$msg"' EXIT
+# Drop git's own "# ..." template lines; they are not message text GitHub will read.
+git stripspace --strip-comments < "$1" > "$msg"
+python3 "$(git rev-parse --show-toplevel)/scripts/check_closing_keywords.py" "$msg"
