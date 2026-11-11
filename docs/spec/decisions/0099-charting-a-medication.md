@@ -60,19 +60,21 @@ override reason. The same-drug de-label offer on *Already taking* and the group 
    - `substance.components`: a combination, `[{term, coding}]`, each `coding` a `{system, code, display}` triple or
      `null`. It takes the place of `substance.coding`, never sits beside it.
    - `warning_override`, top level: `{reason, against: [{source, ref}, …]}`, the reason typed and the warnings the
-     line was charted against (`WarningOverride`, `OverrideRef`). `source` is an open word (lower-case by convention,
-     not checked); `allergy` is the only one today, and its `ref` is the allergy record's event id. A later source defines its own `ref`. The
-     override is general, not allergy-only, because warnings that need a reason will also come from drug–drug
-     interactions, drug–disease interactions and renal/hepatic dosing (mostly from drugref), and the wire is frozen
-     once merged. The batch-sign slice (#1072) therefore keys on "a finding at or above the warning threshold",
-     never on allergy by name.
+     line was charted against (`WarningOverride`, `OverrideRef`). `source` is an open vocabulary of lower-case words
+     (`^[a-z][a-z0-9-]*$`, checked at the authoring door only); `allergy` is the only one today, and its `ref` is the
+     allergy record's event id. A later source defines its own `ref`. The override is general, not allergy-only,
+     because warnings that need a reason will also come from drug–drug interactions, drug–disease interactions and
+     renal/hepatic dosing (mostly from drugref), and the wire is frozen once merged. The batch-sign slice (#1072)
+     therefore keys on "a finding at or above the warning threshold", never on allergy by name.
 3. **The twin** (`render_medication_twin`). Its order is
    `{term}{ amount unit}{ formulation}{ strength}{ route} — {sig} ({info_source}), started {value}{ [bracket]}{ · started here | · already taking}{ · charted despite a warning ({sources}): {reason}}`,
-   each part omitted when absent. `{sources}` is the override's distinct sources in first-seen order, joined ", "
-   (today always `allergy`; `the_tail_names_each_source_once_in_first_seen_order` pins the joining). A
-   combination's bracket is always shown: each part's coding display, or its term
-   when unpicked, joined " + ". Otherwise the single coding's `[display]` follows the rule it had before (omitted
-   when it equals the term, case-folded). `unknown` adds nothing. Pinned by `twin_words_are_exact`.
+   each part omitted when absent. `{sources}` is the override's distinct non-blank sources in first-seen order,
+   joined ", " (today always `allergy`); when no source is named, the parenthetical is omitted
+   (`the_tail_names_each_source_once_in_first_seen_order`,
+   `a_blank_or_missing_source_is_never_rendered_as_empty_parentheses`). A combination's bracket is always shown: each
+   part's coding display, or its term when unpicked, joined " + ". Otherwise the single coding's `[display]` follows
+   the rule it had before (omitted when it equals the term, case-folded). `unknown` adds nothing. Pinned by
+   `twin_words_are_exact`.
 
 ### The floor (`db/077` §1, called from `db/031`)
 
@@ -84,13 +86,16 @@ override reason. The same-drug de-label offer on *Already taking* and the group 
      `against` entry an object whose `source` and `ref` are strings when present. Nothing is cast: the projection
      keeps `against` as jsonb, so a `ref`'s shape is never a type rule.
    - **At the authoring door only:** `charted_as` is one of the three words; `charted_as`, `route`, `strength` and a
-     component's `term` are non-blank; a component is never coded `drugref-class` (one drug, never a group); `components` has at least
-     two entries and never sits beside a non-null `substance.coding`; the override has a non-blank `reason`, a
-     non-empty `against`, and in each entry a non-blank `source` and `ref`; an `allergy` entry's `ref` is a uuid
-     (`pg_input_is_valid`). A `source` word this node does not know is admitted at both doors (an open vocabulary).
+     component's `term` are non-blank; a component is never coded `drugref-class` (one drug, never a group);
+     `components` has at least two entries and never sits beside a non-null `substance.coding`; the override has a
+     non-blank `reason`, a non-empty `against`, and in each entry a non-blank `ref` and a `source` that is a
+     lower-case word (`^[a-z][a-z0-9-]*$`, so "Allergy" cannot step around the next rule); an `allergy` entry's `ref`
+     is a uuid (`pg_input_is_valid`). A `source` word this node does not know is admitted at both doors (an open
+     vocabulary).
    - **A peer's override missing its `reason`, its `against`, or an entry's `source` or `ref` is admitted**, and so is
-     a peer's `allergy` entry whose `ref` is not a uuid. The remote door checks the type only of what is present, so a later window that leaves the reason optional never has its events refused by an
-     older node.
+     a peer's `source` of any spelling and a peer's `allergy` entry whose `ref` is not a uuid. The remote door checks
+     the type only of what is present, so a later window that leaves the reason optional never has its events
+     refused by an older node.
 
    It is revoked from PUBLIC, as the whole `cairn_check_*` family is (#382). Pinned by
    `medication_charting_floor.rs` (`local_door_refuses_each_bad_shape`, `remote_door_admits_a_newer_word`,
@@ -101,9 +106,10 @@ override reason. The same-drug de-label offer on *Already taking* and the group 
 ### The projection (`db/077` §2; `db/037` and `db/044` in place)
 
 6. **`medication_charting`, its own table.** It holds one row per thread: `charted_as`, `route`, `strength`,
-   `components` (jsonb, as signed), `override_reason`, `override_against` (jsonb, the `against` array as signed; NULL when absent), the overlay-winner tuple and
-   `content_address`. `medication_charting_apply` is a second apply fn registered on `clinical.medication.asserted`
-   (`run_order` 20, `heal_safe`), so no view of db/031 widens across files.
+   `components` (jsonb, as signed), `override_reason`, `override_against` (jsonb, the `against` array as signed; NULL
+   when absent), the overlay-winner tuple and `content_address`. `medication_charting_apply` is a second apply fn
+   registered on `clinical.medication.asserted` (`run_order` 20, `heal_safe`), so no view of db/031 widens across
+   files.
    - An assertion carrying none of the keys writes no row, and never clears an earlier row.
    - A later charted assertion of the same thread replaces the whole row under `cairn_hlc_overlay_wins`, so set-union
      sync converges.
@@ -192,11 +198,11 @@ override reason. The same-drug de-label offer on *Already taking* and the group 
     3. each pick, which must be a `drugref-moiety` drug with a code that reads as a uuid (signed canonical), and no
        part may be blank ("Name the medication.");
     4. **the check, on a fresh allergy read over the chart set on screen.** A set that changed since (a link or unlink
-       landed) is refused as a re-read, never signed unchecked against allergies not yet seen. An allergy list that cannot be read lets the line proceed "not
-       checked";
+       landed) is refused as a re-read, never signed unchecked against allergies not yet seen. An allergy list that
+       cannot be read lets the line proceed "not checked";
     5. **a Start line with a mark needs a reason**: a blank trimmed reason refuses with "Charting despite a listed
-       allergy needs a reason". The trimmed reason is signed with `against` = the fresh check's records. *Already
-       taking* never needs one.
+       allergy needs a reason". The trimmed reason is signed with `against` = the fresh check's records, each as a
+       `{source: "allergy", ref}` entry. *Already taking* never needs one.
 
     The webview also keeps Sign disabled while a needed reason is blank. One part is signed as the line's coding, two
     or more as `components`. `sig` is the directions exactly as typed; `formulation`, the dose, `route` and `strength`

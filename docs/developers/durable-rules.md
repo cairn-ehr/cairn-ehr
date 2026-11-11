@@ -20,12 +20,16 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   with an allergy mark and a blank trimmed reason, before the key. db/077 checks the override's shape only when it is
   present, and a peer's override missing its `reason`, `against`, or an entry's `source` / `ref` is admitted.
   The override is `warning_override` `{reason, against: [{source, ref}]}`, never allergy-only: `source` is an
-  open word (`allergy` today; interactions, drug–disease and renal/hepatic dosing later), and only an `allergy`
-  ref is held to the uuid shape, at the authoring door. **Tempting wrong fix:** a new warning kind gets its own
-  top-level key (the wire is frozen; it is a new `source` word), or the floor refuses an unknown source. **Tempting wrong fixes:** make
-  db/077 require an override whenever a line "would" mark (the floor cannot run the check: it needs the allergies and
-  an optional drugref, so the floor would depend on both); refuse a missing `reason` at the remote door (a newer window
-  with an optional reason has its events penned). Pins: `medication_charting_floor.rs::remote_door_admits_a_newer_word`,
+  open vocabulary (`allergy` today; interactions, drug–disease and renal/hepatic dosing later), held to a
+  lower-case word (`^[a-z][a-z0-9-]*$`) and an `allergy` ref to the uuid shape, both at the authoring door only.
+  The twin names each non-blank source once, and omits the parenthetical when none is named. **Tempting wrong
+  fixes:** make db/077 require an override whenever a line "would" mark (the floor cannot run the check: it needs
+  the allergies and an optional drugref, so the floor would depend on both); refuse a missing `reason` at the
+  remote door (a newer window with an optional reason has its events penned); give a new warning kind its own
+  top-level key (the wire is frozen; it is a new `source` word); refuse an unknown source word at either door.
+  Pins: `medication_charting_floor.rs::remote_door_admits_a_newer_word` and its `open_vocabulary_shapes`,
+  `charting.rs::the_tail_names_each_source_once_in_first_seen_order`,
+  `charting.rs::a_blank_or_missing_source_is_never_rendered_as_empty_parentheses`,
   `med_chart_tests.rs::a_start_line_with_a_mark_needs_a_trimmed_reason`.
 - **The check is RE-RUN at Sign on a fresh read; the webview's answer is never trusted.** `med_chart` reads the
   allergies again over the chart set on screen, refuses a changed set as a re-read, and signs `against` from that

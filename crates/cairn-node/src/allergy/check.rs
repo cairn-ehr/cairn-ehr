@@ -74,7 +74,7 @@ pub struct LineCheck {
     /// then not in `against`. The line is never left unmarked by a merge.
     pub marks: Vec<String>,
     /// One allergy record per mark, in mark order: the live head whose hit produced it (its
-    /// `event_id`). What a "charting despite a listed allergy" override names (design §3.5).
+    /// `event_id`). What a warning override names, as its `allergy` refs (design §3.5).
     pub against: Vec<Uuid>,
     /// Previous adverse effects that meet the line, worded.
     pub notes: Vec<String>,

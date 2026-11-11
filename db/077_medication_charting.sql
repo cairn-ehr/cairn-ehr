@@ -28,7 +28,8 @@ BEGIN;
 --       vocabulary / count / emptiness (charted_as outside the three words, fewer than two
 --                  components, components beside a single coding, an empty route or reason,
 --                  an empty `against`, an override missing its reason, `against`, or an
---                  entry's source / ref, an allergy ref that is not a uuid)
+--                  entry's source / ref, a source that is not a lower-case word, an
+--                  allergy ref that is not a uuid)
 --                  -> refuse locally, ADMIT remotely (ADR-0051/ADR-0056: a peer may speak a
 --                  newer word, and refusing a verifiable event wedges sync)
 --
@@ -111,10 +112,10 @@ BEGIN
     -- A MISSING reason, `against`, source or ref (absent or JSON null) is refused locally but
     -- admitted remotely (ruling R20): the remote door checks the type only of what is present,
     -- so a future window that leaves a part optional never has its events refused by an older
-    -- peer. `source` is an OPEN word at both doors (a newer source is not refused); only an
-    -- `allergy` ref has a known shape — the allergy record's event uuid — and that is an
-    -- authoring-door rule (the projection keeps `against` as jsonb, so a peer's malformed ref
-    -- cannot break it).
+    -- peer. `source` is an OPEN vocabulary at both doors (a newer word is not refused), held to
+    -- the lower-case word shape at the authoring door only. Only an `allergy` ref has a known
+    -- shape — the allergy record's event uuid — and that too is an authoring-door rule (the
+    -- projection keeps `against` as jsonb, so a peer's malformed ref cannot break it).
     v_val := p -> 'warning_override';
     IF v_val IS NOT NULL AND jsonb_typeof(v_val) <> 'null' THEN
         IF jsonb_typeof(v_val) <> 'object' THEN
@@ -154,6 +155,12 @@ BEGIN
                     RAISE EXCEPTION 'medication assertion: warning_override.against[].% must be a non-empty string', v_key;
                 END IF;
             END LOOP;
+            -- Authored here, a source is a lower-case word, so "Allergy" or " allergy" cannot
+            -- step around the allergy ref's uuid rule just below. A peer's is admitted as given.
+            IF v_local AND v_elem ->> 'source' !~ '^[a-z][a-z0-9-]*$' THEN
+                RAISE EXCEPTION 'medication assertion: warning_override.against[].source must be a lower-case word (a-z, 0-9, -), got "%"',
+                    v_elem ->> 'source';
+            END IF;
             IF v_local AND v_elem ->> 'source' = 'allergy'
                AND NOT pg_input_is_valid(v_elem ->> 'ref', 'uuid') THEN
                 RAISE EXCEPTION 'medication assertion: warning_override.against[].ref of an allergy must be the allergy record''s uuid, got "%"',

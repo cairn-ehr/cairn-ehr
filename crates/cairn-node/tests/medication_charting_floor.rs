@@ -242,6 +242,23 @@ fn local_only_shapes(allergy: &str) -> Vec<(Value, Value, &'static str)> {
             json!({}),
             "warning_override.against[].ref",
         ),
+        // A source is a lower-case word at the authoring door, so a cased or padded spelling
+        // cannot step around the allergy ref's uuid rule below. A peer's is admitted as given.
+        (
+            override_against(json!({"source": "Allergy", "ref": "E1"})),
+            json!({}),
+            "warning_override.against[].source",
+        ),
+        (
+            override_against(json!({"source": " allergy", "ref": allergy})),
+            json!({}),
+            "warning_override.against[].source",
+        ),
+        (
+            override_against(json!({"source": "renal_dose", "ref": "egfr-below-30"})),
+            json!({}),
+            "warning_override.against[].source",
+        ),
         // uuid shape is an authoring-door rule for ALLERGY refs only (the projection keeps
         // `against` as jsonb, so a peer's malformed ref cannot break it).
         (

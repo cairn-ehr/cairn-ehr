@@ -149,8 +149,8 @@ pub struct TwinParts {
     /// term). When `Some`, it replaces the single-coding `[display]` bracket and is always shown.
     pub components: Option<String>,
     /// `{ · started here | · already taking}{ · charted despite a warning ({sources}): {reason}}`,
-    /// `{sources}` being the distinct sources in first-seen order, joined `", "`,
-    /// rendered at the very end.
+    /// `{sources}` being the distinct non-blank sources in first-seen order, joined `", "`;
+    /// when no source is named, the parenthetical is omitted. Rendered at the very end.
     pub tail: String,
 }
 
@@ -176,16 +176,21 @@ pub fn charting_twin_parts(c: &Charting) -> TwinParts {
     }
     if let Some(o) = c.warning_override {
         // Each source once, in the order first met: the reader learns which KINDS of warning
-        // were overridden; the refs themselves stay in the payload.
+        // were overridden; the refs themselves stay in the payload. A blank source names no
+        // kind, so it is skipped, and with none left the parenthetical is omitted, never "()".
         let mut sources: Vec<&str> = Vec::new();
         for r in o.against {
-            if !sources.contains(&r.source) {
+            if !r.source.trim().is_empty() && !sources.contains(&r.source) {
                 sources.push(r.source);
             }
         }
-        tail.push_str(" · charted despite a warning (");
-        tail.push_str(&sources.join(", "));
-        tail.push_str("): ");
+        tail.push_str(" · charted despite a warning");
+        if !sources.is_empty() {
+            tail.push_str(" (");
+            tail.push_str(&sources.join(", "));
+            tail.push(')');
+        }
+        tail.push_str(": ");
         tail.push_str(o.reason);
     }
     TwinParts {
@@ -466,6 +471,44 @@ mod tests {
         assert_eq!(
             charting_twin_parts(&c).tail,
             " · charted despite a warning (allergy, interaction): benefit outweighs risk"
+        );
+    }
+
+    /// A blank source names no kind of warning, so it is skipped; when no source is left the
+    /// parenthetical is omitted rather than rendered empty. Reachable: the remote door admits
+    /// an empty `against`, and a raw caller of the builder can pass one.
+    #[test]
+    fn a_blank_or_missing_source_is_never_rendered_as_empty_parentheses() {
+        static NONE: [OverrideRef<'static>; 0] = [];
+        static BLANK: [OverrideRef<'static>; 1] = [OverrideRef {
+            source: " ",
+            reference: "X1",
+        }];
+        static BLANK_THEN_ALLERGY: [OverrideRef<'static>; 2] = [
+            OverrideRef {
+                source: "",
+                reference: "X1",
+            },
+            OverrideRef {
+                source: ALLERGY_SOURCE,
+                reference: "E1",
+            },
+        ];
+        let tail = |against: &'static [OverrideRef<'static>]| {
+            charting_twin_parts(&Charting {
+                warning_override: Some(WarningOverride {
+                    reason: "no alternative",
+                    against,
+                }),
+                ..Charting::default()
+            })
+            .tail
+        };
+        assert_eq!(tail(&NONE), " · charted despite a warning: no alternative");
+        assert_eq!(tail(&BLANK), " · charted despite a warning: no alternative");
+        assert_eq!(
+            tail(&BLANK_THEN_ALLERGY),
+            " · charted despite a warning (allergy): no alternative"
         );
     }
 }
