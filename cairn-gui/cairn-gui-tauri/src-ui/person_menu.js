@@ -164,7 +164,10 @@ function focusMenuTarget(focus) {
   // A medication list: the chart's medication pane, when the chart shows one (else the chart opens as is).
   if (kind === "meds") {
     const pane = el("med-chart");
-    if (pane.hidden) return;
+    if (pane.hidden) {
+      pendingMenuFocus = focus; // drawn later: med_list.js asks again once its list is drawn
+      return;
+    }
     pane.tabIndex = -1;
     pane.scrollIntoView();
     pane.focus();

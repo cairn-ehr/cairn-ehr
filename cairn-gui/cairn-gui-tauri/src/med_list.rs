@@ -9,12 +9,12 @@
 //!   check NOW that were also drawn on the line (`seen`, ruling R1). The webview's word can only
 //!   narrow them, never add one.
 //! - [`med_list_delete`]: remove one line, leaving no record (design §9 Q3).
+//! - [`med_list_take`]: "Continue here", moving the list from another terminal to this one.
 //!
 //! Save and delete are written under the writer the list was READ under (`MedListView::writer`,
 //! sent back by the webview, as `note_draft_save` takes its writer, ruling R2): a debounced save
 //! landing after a who's-here switch still names the person who typed it. The door still refuses
 //! a writer who is not a clinical vault member, and Sign checks the writer by key.
-//! - [`med_list_take`]: "Continue here", moving the list from another terminal to this one.
 //!
 //! WHY the ticks are derived here and not in the webview: the default tick is never stored, and
 //! Sign re-derives every tick from a fresh read in Rust (`med_list_sign.rs`). The read and the Sign

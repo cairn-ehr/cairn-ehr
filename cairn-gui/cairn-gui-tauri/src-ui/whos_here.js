@@ -78,6 +78,7 @@ function showClaim(claim) {
   if (changed) {
     hideMenu(); // person_menu.js: the last person's list leaves before the next person's read
     void refreshMenuCount();
+    medListClaimChanged(); // med_list.js: the last person's medication lines leave, typed into by no one else
   }
   const bar = el("whos-here-name");
   if (bar.textContent !== claim.words) bar.textContent = claim.words;

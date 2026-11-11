@@ -1,14 +1,15 @@
-// Charting a medication from ONE typed line (charting slice 1a): the paper drug chart's line,
-// "Amoxycillin 500 mg tds PO", written and signed. Two buttons above the medication table, "Start
-// medication" and "Already taking", open the line; the press is the distinction paper never
-// records (design §3.2) and is sent as `charted_as`.
+// The ONE-line editor of a medication line (charting slice 1a): the paper drug chart's line,
+// "Amoxycillin 500 mg tds PO", as it is typed. Two buttons above the medication table, "Start
+// medication" and "Already taking", add a line to the chart's unsigned list (med_list.js, batch
+// charting slice 1); the press is the distinction paper never records (design §3.2), `charted_as`.
 //
-// What this file does: it splits the line into its drug part(s) and its directions (`splitLine`),
-// offers drugs for a part as it is typed (`med_drug_search`), draws Rust's reading of the
-// directions (`med_line_read`) and Rust's allergy check of the line (`med_line_check`), and signs
-// it (`med_chart`) through the signer strip. What it does NOT do: every reading, every verdict and
-// every refusal is Rust's (med_chart.rs); only labels and hints are worded here. The node re-runs the check at Sign on a fresh read and
-// refuses a Start line with an allergy mark and no reason, before the key, whatever this window drew.
+// What this file does: `MedLineEditor` mounts the one editor on the list line being typed. It
+// splits the line into its drug part(s) and its directions (`splitLine`), offers drugs for a part
+// as it is typed (`med_drug_search`), draws Rust's reading of the directions (`med_line_read`) and
+// Rust's allergy check of the line (`med_line_check`), and tells the list when the line changed
+// or was finished (Enter, Escape, or focus leaving it). It signs nothing: med_list.js saves the
+// line and its one Sign charts every ticked line. Every reading, verdict and refusal is Rust's
+// (med_chart.rs); only labels and hints are worded here.
 //
 // The one safety rule here: a coding vouches only for THE WORDS IT WAS PICKED WITH. A part whose
 // words change loses its coding (`medHeld` is filtered on every input), so "amox" picked as
@@ -16,11 +17,9 @@
 //
 // Never a dialog: warnings, the reason field and refusals all sit on the line. Words the clinician
 // sees are pinned in med_chart_webview_tests.rs. Classic script, loaded after drug_pick.js (its
-// `PICK_DELAY_MS`), sharing main.js's `el`, `cell`, `setMessage`, `say`, `invoke`, `renderedPatient`,
-// `renderedCharts`, `displayedPatient`, `chartReadRevision`, `drawnRevision`, `render`, `readMedList`,
-// `refresh`; chart_stale.js's `listMarkedStale`, `sayAfterDraw`;
-// allergy_tags.js's tag words; signer.js's `signerCredential`, `clearSigner`, `fixtureMode`;
-// funnel.js's `failureText` and chart_stale.js's `behindTheRecord` (read only at a press).
+// `PICK_DELAY_MS`) and before med_list.js (whose `appendMedLine` the buttons call, at a press),
+// sharing main.js's `el`, `cell`, `setMessage`, `invoke`, `renderedPatient`, `renderedCharts`;
+// allergy_tags.js's tag words; signer.js's `fixtureMode`.
 "use strict";
 
 const MED_PICK_MIN_CHARS = 4; // design §3.1: "after 4–5 typed letters"
@@ -46,7 +45,10 @@ let medCheckTimer = null;
 let medPickRevision = 0; // each counter drops an answer older than the newest asked
 let medLineRevision = 0;
 let medCheckRevision = 0;
-let medBusy = false; // a Sign in flight: one press, one signed act
+/** The list's callbacks for the line the editor is mounted on (`MedLineEditor`), or null. */
+let medEditor = null;
+/** The editor's own row: moved into the list line being typed, and home again when it closes. */
+const MED_LINE_ROW = el("med-line-row");
 
 /**
  * Split the typed line into its drug parts and its directions. Pure. The drug part runs from the
@@ -156,8 +158,14 @@ function pressMed(value) {
   scheduleCheck();
 }
 
-/** Close the line and forget everything typed on it (after Sign, or when the chart changes). */
+/**
+ * Close the editor and forget everything typed in it (the list keeps the line). The list is told
+ * nothing more first, and the row goes home first: moving it blurs the field (no "finished"
+ * from that), and the list line it sat in may already be gone.
+ */
 function closeMedLine() {
+  medEditor = null;
+  el("med-chart").append(MED_LINE_ROW);
   medPress = null;
   medHeld = [];
   medLine = { typedDrug: "", parts: [], directions: "" };
@@ -166,7 +174,6 @@ function closeMedLine() {
   clearTimeout(medCheckTimer);
   for (const button of el("med-chart-buttons").querySelectorAll("button")) button.setAttribute("aria-pressed", "false");
   el("med-line").value = "";
-  el("med-reason").value = "";
   closeMedPick();
   drawCodedAs();
   drawReadBack("");
@@ -175,12 +182,36 @@ function closeMedLine() {
   el("med-line-row").hidden = true;
 }
 
-/** Cancel, or Escape with no pick list open (ruling R18): the unsigned line is discarded, as a
- *  line crossed out before it is signed. Not while a Sign is in flight: its answer closes the line. */
-function cancelMedLine() {
-  if (medBusy) return;
+/** Enter or Escape with no pick list open (`byKey`), or focus leaving the line: the line is
+ *  finished (design §3.2: only a finished line can get the default tick). The list closes the editor. */
+function finishMedLine(byKey) {
+  if (medEditor) medEditor.finished(byKey);
+}
+
+/**
+ * Mount the editor on one list line (med_list.js): `container` is the line's slot, `line` its
+ * saved words `{ charted_as, line_text, parts }`, `callbacks` `{ changed(), finished(byKey) }`.
+ * The parts' picks are held again for their exact words, so a saved coding still vouches only
+ * for them. Opening reads the line back and checks it; nothing is saved by opening it.
+ */
+function MedLineEditor(container, line, callbacks) {
   closeMedLine();
-  el("med-chart-buttons").querySelector("button").focus(); // focus stays in the pane, not lost to the page
+  medHeld = line.parts.filter((part) => part.coding).map((part) => ({ text: part.term, coding: part.coding }));
+  container.append(MED_LINE_ROW);
+  el("med-line").value = line.line_text;
+  medEditor = callbacks;
+  pressMed(line.charted_as);
+  void currentLine().then((split) => {
+    if (medEditor !== callbacks) return; // closed meanwhile
+    medLine = split;
+    drawCodedAs();
+    void readBack(split);
+  });
+}
+
+/** What the editor holds now, read at once (the list saves it later): the words and the picks. */
+function medEditorSnapshot() {
+  return { text: el("med-line").value, held: medHeld.slice() };
 }
 
 /** The chart changed (main.js's `clearChart`): a line typed for one patient is never signed on the next. */
@@ -192,6 +223,7 @@ function clearMedChart() {
 /** Every keystroke: split, forget codings whose words changed, offer drugs for an edited part,
  *  read the directions back, and check the line again when its drug part changed. */
 async function onMedLineInput() {
+  if (medEditor) medEditor.changed(); // before any await: a save flushed now carries this keystroke
   const revision = ++medLineRevision;
   setMessage(el("med-line-status"), "");
   const line = await currentLine();
@@ -244,6 +276,7 @@ function chooseMedPick(index) {
   closeMedPick();
   drawCodedAs();
   recheck(); // every coding change is checked
+  if (medEditor) medEditor.changed(); // and saved: the pick is part of the line
 }
 
 /** Draw a `med_drug_search` answer: the drugs, top one highlighted, or the no-drug-list hint. */
@@ -296,8 +329,8 @@ async function readBack(line) {
 }
 
 /** The read-back row: what the line will be signed as, field by field ("—": not read), then the
- *  words the reader could not read. Hidden while nothing is typed. */
-function drawReadBack(drug, reading = { unread: [] }) {
+ *  words the reader could not read. Hidden while nothing is typed. `target`: a list line's own row. */
+function drawReadBack(drug, reading = { unread: [] }, target = el("med-readback")) {
   const dose = reading.dose_amount ? [reading.dose_amount, reading.dose_unit].filter(Boolean).join(" ") : null;
   const often = [reading.frequency, reading.prn ? "when needed" : null, reading.stat ? "stat" : null].filter(Boolean).join(", ");
   const fields = [
@@ -311,7 +344,7 @@ function drawReadBack(drug, reading = { unread: [] }) {
   const said = fields.map(([label, value]) => label + (value || "—"));
   if (reading.unread.length > 0) said.push("not read: " + reading.unread.join(" "));
   const any = fields.some(([, value]) => value) || reading.unread.length > 0;
-  setMessage(el("med-readback"), any ? said.join(" · ") : "");
+  setMessage(target, any ? said.join(" · ") : "");
 }
 
 /** What is checked changed (its words, or a pick): every check in flight is about the old line, so
@@ -347,11 +380,15 @@ async function checkLine() {
   }
 }
 
-/** Draw a check: the loud tag and each mark, the muted notes, or `not checked`; the reason field
- *  on a Start line with a mark. */
+/** Draw the editor's check (the reason field is the list line's own, med_list.js). */
 function drawCheck(check) {
   medCheck = check;
-  const tag = el("med-line-tag");
+  drawMarks(check, el("med-line-tag"), el("med-line-marks"));
+}
+
+/** Draw a check into `tag` and `list`: the loud tag and each mark, the muted notes, or `not
+ *  checked`. Shared with med_list.js, which draws each saved line's check the same way. */
+function drawMarks(check, tag, list) {
   let shown = true;
   if (check.marks.length > 0) {
     tag.textContent = ALLERGY_TAG;
@@ -363,113 +400,33 @@ function drawCheck(check) {
     shown = false;
   }
   tag.hidden = !shown;
-  el("med-line-marks").replaceChildren(
+  list.replaceChildren(
     ...check.marks.map((mark) => cell("li", mark, { class: "allergy-prominent" })),
     ...check.notes.map((note) => cell("li", note, { class: "allergy-quiet" })),
   );
-  el("med-reason-row").hidden = !needsReason();
-  syncMedSign();
-}
-
-/** A Start line with an allergy mark needs a reason (design §3.5); Already taking never does. */
-function needsReason() {
-  return medPress === "started-here" && medCheck.marks.length > 0;
-}
-
-/** Sign is down while one is in flight, or while a needed reason is blank. */
-function syncMedSign() {
-  el("med-sign").disabled = medBusy || (needsReason() && el("med-reason").value.trim() === "");
-  el("med-line-cancel").disabled = medBusy;
-}
-
-/** Sign the line on the chart whose list is drawn. Rust says every refusal, before the key. */
-async function chartMedication() {
-  if (medBusy || renderedPatient === null || medPress === null) return;
-  const patient = renderedPatient;
-  medBusy = true;
-  syncMedSign();
-  setMessage(el("med-line-status"), "");
-  try {
-    const line = await currentLine();
-    let written;
-    try {
-      written = await invoke("med_chart", {
-        patientId: patient,
-        charts: renderedCharts,
-        line: {
-          parts: partArgs(line),
-          typed_drug: line.typedDrug,
-          directions: line.directions,
-          charted_as: medPress,
-          reason: needsReason() ? el("med-reason").value : null,
-        },
-        credential: signerCredential(),
-      });
-      clearSigner(true);
-    } catch (failure) {
-      clearSigner();
-      await afterChartRefused(failure, patient);
-      return;
-    }
-    afterCharted(written, patient);
-  } finally {
-    medBusy = false;
-    syncMedSign();
-  }
-}
-
-/** A Sign that landed: the line closes, the outcome is said, and the list is drawn from the
- *  write's own answer (read after the write) by main.js's `readMedList` steps, under a fresh
- *  revision that outdates every read in flight — or read again, marked behind the record, when
- *  the node could not read it. */
-function afterCharted(written, patient) {
-  if (patient !== displayedPatient) return; // a chart left: its next read says the truth
-  closeMedLine();
-  say(written.outcome);
-  if (!written.pane) {
-    void readMedList(written.outcome, "no");
-    return;
-  }
-  const revision = ++chartReadRevision;
-  drawnRevision = revision;
-  const marked = listMarkedStale(); // before `render`, whose `drawList` takes the mark down
-  render(written.pane, patient);
-  if (renderedPatient === patient) sayAfterDraw(written.outcome, revision, marked, written.pane);
-}
-
-/** A Sign answered with an `ErrorView`. Behind the record: read the chart again (an outcome NOT
- *  known may have charted the line, so it is closed — a live Sign over it could chart it twice).
- *  Any other refusal charted nothing: said on the line, typed words kept, the line checked again. */
-async function afterChartRefused(failure, patient) {
-  if (patient !== displayedPatient) return;
-  const text = failureText(failure);
-  const behind = behindTheRecord(failure);
-  if (behind === "unknown") closeMedLine();
-  if (behind) {
-    await refresh(text, behind);
-    return;
-  }
-  setMessage(el("med-line-status"), text);
-  recheck();
 }
 
 for (const button of el("med-chart-buttons").querySelectorAll("button")) {
-  button.addEventListener("click", () => pressMed(button.dataset.value));
+  button.addEventListener("click", () => appendMedLine(button.dataset.value)); // med_list.js
 }
 el("med-line").addEventListener("input", () => void onMedLineInput());
 el("med-line").addEventListener("keydown", (event) => {
   const n = medPickOptions.length;
   if (event.key === "Escape") {
     if (n > 0) closeMedPick();
-    else cancelMedLine();
-  } else if (n === 0) return;
+    else finishMedLine(true);
+  } else if (event.key === "Enter" && n === 0) finishMedLine(true);
+  else if (n === 0) return;
   else if (event.key === "ArrowDown") activateMedPick((medPickActive + 1) % n);
   else if (event.key === "ArrowUp") activateMedPick((medPickActive - 1 + n) % n);
   else if (event.key === "Enter" && medPickActive >= 0) chooseMedPick(medPickActive);
   else return;
   event.preventDefault();
 });
-el("med-reason").addEventListener("input", syncMedSign);
-el("med-sign").addEventListener("click", () => void chartMedication());
-el("med-line-cancel").addEventListener("click", cancelMedLine);
+// Focus leaving the line finishes it — not a click on a drug (the list keeps the focus in the
+// field), nor the window losing focus to another program (the clinician has not left the line).
+el("med-pick").addEventListener("mousedown", (event) => event.preventDefault());
+MED_LINE_ROW.addEventListener("focusout", (event) => {
+  if (document.hasFocus() && !MED_LINE_ROW.contains(event.relatedTarget)) finishMedLine(false);
+});
 closeMedLine();

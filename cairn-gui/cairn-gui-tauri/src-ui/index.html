@@ -507,10 +507,12 @@
         <!-- The allergy read failed: the list below was not checked against allergies (main.js's drawList). -->
         <p id="allergy-check-failed" class="allergy-prominent" role="status" hidden></p>
 
-        <!-- Charting a medication from one typed line (med_chart.js): "Start medication" or
-             "Already taking" opens the line; the press is sent as charted_as. Shown only over a
-             drawn list on a writable chart (never fixture mode). Warnings, the reason and every
-             refusal sit on the line, never in a dialog (principle 3). -->
+        <!-- Charting medications (med_chart.js, med_list.js): "Start medication" or "Already
+             taking" adds a line to this chart's unsigned list, kept for the person named in who's
+             here; each line has its tick and its Remove, and one Sign charts the ticked lines.
+             The press is sent as charted_as. Shown only over a drawn list on a writable chart
+             (never fixture mode). Warnings, the reason and every refusal sit on the line, never
+             in a dialog (principle 3). -->
         <section id="med-chart" aria-label="Chart a medication" hidden>
           <div id="med-chart-buttons" role="group" aria-label="Chart a medication">
             <button type="button" data-value="started-here" aria-pressed="false">Start medication</button>
@@ -525,15 +527,17 @@
             <p id="med-coded-as" class="allergy-quiet" aria-live="polite" hidden></p>
             <p id="med-readback" aria-live="polite" hidden></p>
             <ul id="med-line-marks"></ul>
-            <p id="med-reason-row" hidden>
-              <label for="med-reason">Reason for charting despite the listed allergy</label>
-              <input id="med-reason" type="text" autocomplete="off" />
-            </p>
-            <button id="med-sign" type="button">Sign</button>
-            <!-- Discards the unsigned line (ruling R18); Escape does too when no pick list is open. -->
-            <button id="med-line-cancel" type="button">Cancel</button>
             <p id="med-line-status" class="allergy-field-error" role="alert" hidden></p>
           </div>
+          <p id="med-list-writer" hidden></p>
+          <ol id="med-list" aria-label="Unsigned medication lines"></ol>
+          <p id="med-list-elsewhere" hidden>
+            <span id="med-list-elsewhere-words"></span>
+            <button id="med-list-take" type="button">Continue here</button>
+          </p>
+          <button id="med-list-sign" type="button" hidden>Sign ticked lines</button>
+          <p id="med-list-status" class="allergy-field-error" role="alert" hidden></p>
+          <p id="med-list-outcome" role="status" hidden></p>
         </section>
 
         <table id="med-table">
@@ -632,6 +636,8 @@
     <script src="allergy_overlays.js"></script>
     <script src="drug_pick.js"></script>
     <script src="med_chart.js"></script>
+    <script src="med_list.js"></script>
+    <script src="med_list_sign.js"></script>
     <script src="allergies.js"></script>
     <script src="person_menu.js"></script>
     <script src="whos_here.js"></script>

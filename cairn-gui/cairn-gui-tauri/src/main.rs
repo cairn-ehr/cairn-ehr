@@ -52,8 +52,12 @@ mod med_chart_webview_tests;
 mod med_chart_write;
 mod med_line_sign;
 mod med_list;
+#[cfg(test)]
+mod med_list_claim_webview_tests;
 mod med_list_judge;
 mod med_list_sign;
+#[cfg(test)]
+mod med_list_webview_tests;
 #[cfg(test)]
 mod node_lock_explains_tests;
 mod notes;

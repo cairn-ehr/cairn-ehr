@@ -62,8 +62,10 @@ pub fn default_tick(f: &TickFacts) -> bool {
 /// The reason rules are NOT judged here (Task 4 review, ruling R3): a Start line on a seen mark
 /// with no reason, and a reason against a check that could not run, are slice 1a's PER-LINE
 /// refusals (`NEEDS_A_REASON`, `CHECK_DID_NOT_RUN`) at Sign, not a changed picture, so the tick
-/// stands and the line says what it needs. A check that could not run finds no warning, so it
-/// holds a tick here (and refuses the line's reason there).
+/// stands and the line says what it needs. Only the warnings the check FOUND are judged: a check
+/// that could not run at all finds none, so it holds a tick here (and refuses the line's reason
+/// there), but a combination checked only in part can carry marks AND be unverified at once, and
+/// each of those marks must still have been seen.
 pub fn hand_tick_holds(fresh: &LineCheck, ticked_against: &[(String, Uuid)]) -> bool {
     fresh.against.iter().all(|id| {
         ticked_against

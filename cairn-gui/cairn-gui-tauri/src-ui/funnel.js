@@ -434,14 +434,14 @@ function resetFrontDoor() {
 async function closeChart() {
   displayedPatient = null;
   clearChart();
-  // Same reason as in `enterChart`: the chart underneath the panel is going away, so the
-  // panel must not survive it. `false` — focus is headed for the front door, not
-  // `#same-person`, which is about to be hidden along with the rest of `#chart-view`.
+  // As in `enterChart`: the panel must not survive the chart under it. `false` — focus heads for
+  // the front door, not `#same-person`, which is hidden with the rest of `#chart-view`.
   if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
   if (typeof closeUnlinkPanel === "function" && !el("unlink-panel").hidden) closeUnlinkPanel(false);
   say("");
   // Every queued note save lands while the node still shows this chart (sent first is not enough).
   if (typeof notesSaved === "function") await notesSaved();
+  await medListSaved(); // and every medication line's (med_list.js)
   try {
     await invoke("close_chart");
   } catch (failure) {

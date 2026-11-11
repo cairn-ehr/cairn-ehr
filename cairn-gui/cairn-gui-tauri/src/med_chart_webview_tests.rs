@@ -13,12 +13,16 @@
 use crate::allergy_check::{CodingArg, DrugSearch};
 use crate::commands::tests::fields_read_in;
 use crate::med_chart::{view, NEEDS_A_REASON};
-use crate::med_chart_write::MedChartWrite;
 use crate::source_guard::{js_fn, position};
 use cairn_node::allergy::check::LineCheck;
 use cairn_node::medication::line::read_directions;
 
 const MED_JS: &str = include_str!("../src-ui/med_chart.js");
+/// The list the editor is mounted in (batch charting slice 1): med_list.js and its Sign.
+const LIST_JS: &str = concat!(
+    include_str!("../src-ui/med_list.js"),
+    include_str!("../src-ui/med_list_sign.js")
+);
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const STYLE_CSS: &str = include_str!("../src-ui/style.css");
@@ -102,7 +106,10 @@ fn both_buttons_show_on_a_writable_chart_and_not_in_fixture_mode() {
         press.contains("scheduleCheck();"),
         "the check runs on open: {press}"
     );
-    assert!(js_fn(MED_JS, "chartMedication").contains("charted_as: medPress,"));
+    // The press is what the list line is charted as (med_list.js's `newLine`), and the editor
+    // mounted on a line shows that line's press as pressed.
+    assert!(js_fn(LIST_JS, "newLine").contains("charted_as: chartedAs,"));
+    assert!(js_fn(MED_JS, "MedLineEditor").contains("pressMed(line.charted_as);"));
     assert!(STYLE_CSS.contains("#med-chart-buttons button[aria-pressed=\"true\"]"));
     // Loaded after drug_pick.js (whose PICK_DELAY_MS it shares) and before funnel.js's boot.
     let tag = position(INDEX_HTML, "<script src=\"med_chart.js\"></script>");
@@ -201,8 +208,8 @@ fn editing_a_picked_part_drops_its_coding() {
     // The held codings are written in four places only: declared, dropped, picked, reset.
     assert_eq!(
         MED_JS.matches("medHeld = ").count(),
-        4,
-        "declaration, drop, pick, reset"
+        5,
+        "declaration, drop, pick, reset, mount"
     );
 }
 
@@ -300,56 +307,28 @@ fn the_read_back_row_shows_the_parse_and_unread_words() {
     );
 }
 
-/// Design §3.5: a Start line with an allergy mark shows the Reason field (exact label), and Sign
-/// stays down until a reason is typed; the node refuses a blank one anyway (`NEEDS_A_REASON`),
-/// and that refusal is said ON the line. The reason is sent only while its field is shown.
+/// Design §3.5: a Start line with an allergy mark needs a reason. Batch charting slice 1 moved
+/// the field from the lone line (whose own Sign waited for it) onto each LIST line, whose tick
+/// box waits for it (med_list_webview_tests.rs pins that); the editor keeps none of its own. The
+/// node refuses a blank one anyway (`NEEDS_A_REASON`), worded by Rust, never by the window.
 #[test]
-fn a_start_hit_shows_the_reason_field_and_sign_waits_for_it() {
-    let s = section();
-    assert!(s.contains(
-        "<label for=\"med-reason\">Reason for charting despite the listed allergy</label>"
-    ));
-    in_the_line("med-reason-row");
-    assert!(position(s, "id=\"med-reason-row\"") < position(s, "id=\"med-reason\""));
-    let needs = js_fn(MED_JS, "needsReason");
+fn a_start_hit_needs_a_reason_on_its_list_line() {
     assert!(
-        needs.contains("medPress === \"started-here\" && medCheck.marks.length > 0"),
-        "{needs}"
+        !INDEX_HTML.contains("id=\"med-reason\""),
+        "the editor has no reason field"
     );
-    let draw = js_fn(MED_JS, "drawCheck");
-    assert!(
-        draw.contains("el(\"med-reason-row\").hidden = !needsReason();"),
-        "{draw}"
-    );
-    let sign = js_fn(MED_JS, "syncMedSign");
-    assert!(
-        sign.contains("medBusy || (needsReason() && el(\"med-reason\").value.trim() === \"\")"),
-        "{sign}"
-    );
-    assert!(MED_JS.contains("el(\"med-reason\").addEventListener(\"input\", syncMedSign);"));
-    assert!(js_fn(MED_JS, "chartMedication")
-        .contains("reason: needsReason() ? el(\"med-reason\").value : null,"));
-    // A refusal is said on the line, and the check is asked again (the node's fresh check may
-    // have found a mark this screen had not drawn yet: the field then appears).
-    let refused = js_fn(MED_JS, "afterChartRefused");
-    assert!(
-        refused.contains("setMessage(el(\"med-line-status\"), text);"),
-        "{refused}"
-    );
-    assert!(
-        position(refused, "setMessage(el(\"med-line-status\"), text);")
-            < position(refused, "recheck();")
-    );
-    in_the_line("med-line-status");
-    not_hidden_by_css("#med-line-status");
+    assert!(!MED_JS.contains("med-reason"), "nor reads one");
+    assert!(LIST_JS.contains("cell(\"label\", \"Reason for charting despite the listed allergy\")"));
     assert_eq!(
         NEEDS_A_REASON,
         "Charting despite a listed allergy needs a reason"
     );
-    assert!(
-        !MED_JS.contains(NEEDS_A_REASON),
-        "Rust words the refusal; the window never re-words it"
-    );
+    for js in [MED_JS, LIST_JS] {
+        assert!(
+            !js.contains(NEEDS_A_REASON),
+            "Rust words the refusal; the window never re-words it"
+        );
+    }
 }
 
 /// An Already-taking line with a mark shows the loud `Allergy` tag and each mark's words on the
@@ -357,7 +336,10 @@ fn a_start_hit_shows_the_reason_field_and_sign_waits_for_it() {
 /// VISIBLE text (allergy_tags.js's words and classes), never a hover title.
 #[test]
 fn an_already_taking_hit_shows_the_tag_but_no_reason() {
-    let draw = js_fn(MED_JS, "drawCheck");
+    // The editor's check and each list line's are drawn by the one `drawMarks`.
+    assert!(js_fn(MED_JS, "drawCheck")
+        .contains("drawMarks(check, el(\"med-line-tag\"), el(\"med-line-marks\"));"));
+    let draw = js_fn(MED_JS, "drawMarks");
     let mark = position(draw, "check.marks.length > 0");
     let unchecked = position(draw, "check.unverified");
     assert!(
@@ -387,8 +369,10 @@ fn an_already_taking_hit_shows_the_tag_but_no_reason() {
         ),
         "{draw}"
     );
-    // Already taking never needs a reason: needsReason asks for started-here.
-    assert!(!js_fn(MED_JS, "needsReason").contains("pre-existing"));
+    // Already taking never needs a reason: the list line asks for started-here.
+    let needs = js_fn(LIST_JS, "needsReasonOn");
+    assert!(needs.contains("=== \"started-here\""), "{needs}");
+    assert!(!needs.contains("pre-existing"), "{needs}");
     in_the_line("med-line-tag");
     in_the_line("med-line-marks");
     not_hidden_by_css("#med-line-tag");
@@ -423,7 +407,7 @@ fn no_drug_list_says_so_and_still_signs() {
     in_the_line("med-pick-hint");
     not_hidden_by_css("#med-pick-hint");
     assert!(
-        !js_fn(MED_JS, "syncMedSign").contains("available"),
+        !js_fn(LIST_JS, "drawMedList").contains("available"),
         "Sign never waits on the drug list"
     );
     let ask = js_fn(MED_JS, "askMedPick");
@@ -434,23 +418,17 @@ fn no_drug_list_says_so_and_still_signs() {
     // The check failing is "not checked", never silence.
     let check = js_fn(MED_JS, "checkLine");
     assert!(check.contains("drawCheck(LINE_NOT_CHECKED);"), "{check}");
-    // After Sign: the outcome, then the list from the write's answer (or read again without it).
-    let after = js_fn(MED_JS, "afterCharted");
-    assert!(after.contains("say(written.outcome);"), "{after}");
-    assert!(
-        after.contains("void readMedList(written.outcome, \"no\");"),
-        "{after}"
-    );
-    // Drawn as `readMedList` draws an answer, under a revision taken fresh (every read in flight
-    // is outdated), and said through the same `sayAfterDraw`.
+    // After the list's Sign, the table is drawn as `readMedList` draws an answer, under a revision
+    // taken fresh (every read in flight is outdated), and said through the same `sayAfterDraw`.
+    let after = js_fn(LIST_JS, "drawSignedTable");
     let read = js_fn(MAIN_JS, "readMedList");
     for (step, ours) in [
         ("drawnRevision = revision;", "drawnRevision = revision;"),
         ("const marked = listMarkedStale();", "const marked = listMarkedStale();"),
-        ("render(answer, patient);", "render(written.pane, patient);"),
+        ("render(answer, patient);", "render(answer.pane, patient);"),
         (
             "if (renderedPatient === patient) sayAfterDraw(lead, revision, marked, answer);",
-            "if (renderedPatient === patient) sayAfterDraw(written.outcome, revision, marked, written.pane);",
+            "if (renderedPatient === patient) sayAfterDraw(answer.outcome, revision, marked, answer.pane);",
         ),
     ] {
         assert!(read.contains(step), "{read}");
@@ -460,16 +438,6 @@ fn no_drug_list_says_so_and_still_signs() {
         position(after, "const revision = ++chartReadRevision;")
             < position(after, "drawnRevision = revision;")
     );
-    let sent = keys_of(&MedChartWrite {
-        outcome: "Charted.".into(),
-        pane: None,
-    });
-    for field in fields_read_in(MED_JS, "written") {
-        assert!(
-            sent.contains(&field),
-            "written.{field}: Rust sends {sent:?}"
-        );
-    }
 }
 
 fn coding() -> CodingArg {

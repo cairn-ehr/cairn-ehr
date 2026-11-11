@@ -307,6 +307,12 @@ fn unsigned_medication_lines_are_worded_counted_and_open_their_chart() {
     assert_eq!(own.rows[0].what, "Medication list");
     assert_eq!(own.rows[0].focus, "meds:");
     assert_eq!(own.rows[0].patient_id, c.to_string());
+    // The button opens a medication list, so it says so (Task 5 review): never "Open note".
+    assert_eq!(own.rows[0].open_words, "Open medication list");
+    assert_eq!(
+        own.rows[0].open_label,
+        format!("Open medication list: Ann Jones, {}", own.rows[0].when)
+    );
     match v {
         PersonMenuView::Menu { count, .. } => assert_eq!(count, 1),
         PersonMenuView::Nobody => panic!(),

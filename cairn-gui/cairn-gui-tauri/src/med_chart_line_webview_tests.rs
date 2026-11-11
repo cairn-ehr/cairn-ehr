@@ -2,33 +2,30 @@
 //! a changed drug part reading "not checked" until its own check answers (Review Focus 2). Source
 //! guards like `med_chart_webview_tests.rs` (whose visibility helpers they share); both behaviours
 //! were also walked headlessly with a stub `invoke` (see the task report).
-use crate::med_chart_webview_tests::{in_the_line, not_hidden_by_css, section};
+use crate::med_chart_webview_tests::{not_hidden_by_css, section};
 use crate::source_guard::{js_fn, position};
 
 const MED_JS: &str = include_str!("../src-ui/med_chart.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
+const LIST_JS: &str = include_str!("../src-ui/med_list_sign.js");
 
-/// R18: an opened line closes without signing — Cancel on the line, or Escape when no pick list is
-/// open (with one open, Escape closes only the list). Closing discards the unsigned line: the row
-/// is HIDDEN again, its words, codings and press forgotten. Neither acts while a Sign is in flight.
+/// R18, as batch charting slice 1 changed it: the lone line's Cancel discarded it, but a list
+/// line is durable, so leaving the editor never deletes — Escape (with no pick list open; with
+/// one, Escape closes only the list) or Enter FINISHES the line and closes the editor, and the
+/// list keeps it. Discarding is the line's own Remove (med_list_webview_tests.rs). Closing
+/// forgets the editor's words, codings and press, and is told to nobody: the list is detached
+/// before the row moves home (moving it blurs the field).
 #[test]
-fn an_opened_line_closes_without_signing() {
+fn an_opened_line_closes_and_the_list_keeps_it() {
     let s = section();
-    assert!(
-        s.contains("<button id=\"med-line-cancel\" type=\"button\">Cancel</button>"),
-        "{s}"
-    );
-    in_the_line("med-line-cancel");
-    not_hidden_by_css("#med-line-cancel");
-    assert!(position(s, "id=\"med-sign\"") < position(s, "id=\"med-line-cancel\""));
-    assert!(MED_JS.contains("el(\"med-line-cancel\").addEventListener(\"click\", cancelMedLine);"));
-    let cancel = js_fn(MED_JS, "cancelMedLine");
-    assert!(
-        position(cancel, "if (medBusy) return;") < position(cancel, "closeMedLine();"),
-        "{cancel}"
-    );
-    // What closing does: the row hidden, the line emptied, nothing held, nothing pressed.
+    assert!(!s.contains("id=\"med-line-cancel\""), "{s}");
+    assert!(!s.contains("id=\"med-sign\""), "{s}");
     let close = js_fn(MED_JS, "closeMedLine");
+    assert!(
+        position(close, "medEditor = null;")
+            < position(close, "el(\"med-chart\").append(MED_LINE_ROW);"),
+        "{close}"
+    );
     for step in [
         "el(\"med-line-row\").hidden = true;",
         "el(\"med-line\").value = \"\";",
@@ -42,10 +39,15 @@ fn an_opened_line_closes_without_signing() {
     let keys = &MED_JS[position(MED_JS, "el(\"med-line\").addEventListener(\"keydown\"")..];
     let keys = &keys[..position(keys, "});")];
     assert!(
-        keys.contains("if (event.key === \"Escape\") {\n    if (n > 0) closeMedPick();\n    else cancelMedLine();"),
+        keys.contains("if (event.key === \"Escape\") {\n    if (n > 0) closeMedPick();\n    else finishMedLine(true);"),
         "{keys}"
     );
-    assert!(js_fn(MED_JS, "syncMedSign").contains("el(\"med-line-cancel\").disabled = medBusy;"));
+    assert!(js_fn(MED_JS, "finishMedLine").contains("if (medEditor) medEditor.finished(byKey);"));
+    // A click on a drug keeps the focus in the field, so it never finishes the line.
+    assert!(MED_JS.contains(
+        "el(\"med-pick\").addEventListener(\"mousedown\", (event) => event.preventDefault());"
+    ));
+    not_hidden_by_css("#med-line");
 }
 
 /// Review Focus 2: when the drug words change (a picked "amoxicillin" retyped "amoxapine"), the
@@ -69,8 +71,8 @@ fn a_changed_drug_part_reads_not_checked_until_its_check_answers() {
         check.contains("if (revision === medCheckRevision) drawCheck(check);"),
         "{check}"
     );
-    // And "not checked" is a visible tag (drawCheck's unverified branch un-hides it).
-    let drawn = js_fn(MED_JS, "drawCheck");
+    // And "not checked" is a visible tag (drawMarks's unverified branch un-hides it).
+    let drawn = js_fn(MED_JS, "drawMarks");
     assert!(
         position(drawn, "} else if (check.unverified) {") < position(drawn, "tag.hidden = !shown;"),
         "{drawn}"
@@ -89,8 +91,8 @@ fn the_list_shows_the_signed_directions_beside_the_dose() {
 
 /// Final review I2: an open line's verdict is about the list it was checked against. Every
 /// re-draw (a refused Sign's re-read after the chart set changed, a newly signed allergy) checks
-/// an open line again, and a plain refusal does too — each through `recheck`, so the old,
-/// possibly clean verdict is taken down AT ONCE rather than left drawn until the answer.
+/// an open line again through `recheck`, so the old, possibly clean verdict is taken down AT
+/// ONCE rather than left drawn until the answer; a refused list Sign reads the list again.
 #[test]
 fn a_redrawn_list_or_a_refusal_checks_an_open_line_again() {
     let sync = js_fn(MED_JS, "syncMedChart");
@@ -102,10 +104,13 @@ fn a_redrawn_list_or_a_refusal_checks_an_open_line_again() {
             ),
         "{sync}"
     );
-    let refused = js_fn(MED_JS, "afterChartRefused");
-    let said = position(refused, "setMessage(el(\"med-line-status\"), text);");
-    assert!(said < position(refused, "recheck();"), "{refused}");
-    assert!(!refused.contains("scheduleCheck();"), "{refused}");
+    // A refused list Sign reads the list again, so each line's verdict is Rust's fresh one.
+    let refused = js_fn(LIST_JS, "afterMedListRefused");
+    let said = position(refused, "setMessage(el(\"med-list-status\"), text);");
+    assert!(
+        said < position(refused, "void readMedDraft();"),
+        "{refused}"
+    );
     // main.js's `render` (every drawn answer, the refused Sign's re-read included) ends in it.
     assert!(js_fn(MAIN_JS, "render").contains("syncMedChart();"));
 }

@@ -131,3 +131,33 @@ fn a_moved_list_is_not_a_node_failure() {
         LineFailure::NotCharted(LINE_MOVED.into())
     );
 }
+
+/// R1 (the core of the "a tick covers what was SEEN" fix): a hand tick vouches only for the
+/// warnings found NOW that were also DRAWN on the line. Kept here, DB-free, because the GUI's DB
+/// walks do not run in CI (#905).
+#[test]
+fn a_tick_vouches_only_for_warnings_both_found_and_drawn() {
+    let (a, b, c) = (
+        Uuid::from_u128(0xA),
+        Uuid::from_u128(0xB),
+        Uuid::from_u128(0xC),
+    );
+    let seen = |source: &str, id: String| WarningRef {
+        source: source.into(),
+        reference: id,
+    };
+    let allergy = |id: Uuid| (ALLERGY_SOURCE.to_string(), id);
+    // The intersection: b was found but never drawn; c was drawn but is gone now.
+    let drawn = [
+        seen("allergy", a.to_string()),
+        seen("allergy", c.to_string()),
+    ];
+    assert_eq!(vouched(&[a, b], &drawn), [allergy(a)]);
+    // Nothing drawn (or nothing sent): the tick vouches for nothing.
+    assert!(vouched(&[a, b], &[]).is_empty());
+    // A ref drawn in upper case is the same warning.
+    let upper = [seen("allergy", a.to_string().to_uppercase())];
+    assert_eq!(vouched(&[a], &upper), [allergy(a)]);
+    // A ref under another source is not an allergy warning, whatever its id.
+    assert!(vouched(&[a], &[seen("interaction", a.to_string())]).is_empty());
+}
