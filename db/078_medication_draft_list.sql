@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
 CREATE INDEX IF NOT EXISTS medication_draft_line_owner_idx
     ON medication_draft_line (patient_id, writer, seq);
 
+-- Is every element of a tick list `{source: non-empty text, ref: uuid-shaped text}`? The shape
+-- check of ticked_against (a CHECK cannot hold a subquery, so it is a function). IMMUTABLE: it
+-- reads nothing but its argument.
+CREATE OR REPLACE FUNCTION cairn_med_ticked_against_ok(p jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT jsonb_typeof(p) = 'array' AND NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(p) e
+         WHERE jsonb_typeof(e) IS DISTINCT FROM 'object'
+            OR jsonb_typeof(e -> 'source') IS DISTINCT FROM 'string'
+            OR btrim(e ->> 'source') = ''
+            OR jsonb_typeof(e -> 'ref') IS DISTINCT FROM 'string'
+            OR (e ->> 'ref') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
+$$;
+
 -- Paired ALTERs for a database created before the shape checks existed (#207's rule). The names
 -- are the ones Postgres gives an inline column CHECK.
 DO $$ BEGIN
@@ -77,6 +91,13 @@ DO $$ BEGIN
                     AND conname = 'medication_draft_line_ticked_against_check') THEN
         ALTER TABLE medication_draft_line ADD CONSTRAINT medication_draft_line_ticked_against_check
             CHECK (jsonb_typeof(ticked_against) = 'array');
+    END IF;
+    -- NOT VALID: new and changed rows must pass; a row saved before this check is left readable
+    -- (the node's reader shows it unticked) rather than failing the schema replay.
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'medication_draft_line'::regclass
+                    AND conname = 'medication_draft_line_ticked_shape_check') THEN
+        ALTER TABLE medication_draft_line ADD CONSTRAINT medication_draft_line_ticked_shape_check
+            CHECK (cairn_med_ticked_against_ok(ticked_against)) NOT VALID;
     END IF;
 END $$;
 
@@ -167,11 +188,14 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 
 -- Delete one line and leave a tombstone (see the header). 'deleted' | 'gone' | 'moved' |
--- 'elsewhere' | 'not-yours'. A function's signature is its identity, so the first slice-1 draft
--- of this door (no writer) is dropped before the new one is created.
+-- 'elsewhere' | 'not-yours' | 'changed'. 'changed' = the row was saved again after the caller read
+-- it (p_saved_at is the saved_at it read): a Sign must spend exactly the content it signed, so a
+-- late autosave answers 'changed' and nothing is deleted. A function's signature is its
+-- identity, so the earlier drafts of this door are dropped before the new one is created.
 DROP FUNCTION IF EXISTS cairn_med_draft_line_delete(uuid, uuid, text);
+DROP FUNCTION IF EXISTS cairn_med_draft_line_delete(uuid, uuid, text, text);
 CREATE OR REPLACE FUNCTION cairn_med_draft_line_delete(
-    p_line uuid, p_patient uuid, p_terminal text, p_writer text)
+    p_line uuid, p_patient uuid, p_terminal text, p_writer text, p_saved_at timestamptz)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_writer text := cairn_vault_staff_id(p_writer);
@@ -191,6 +215,7 @@ BEGIN
     IF v_row.patient_id IS DISTINCT FROM p_patient THEN RETURN 'elsewhere'; END IF;
     IF v_row.terminal_id IS DISTINCT FROM p_terminal THEN RETURN 'moved'; END IF;
     IF v_row.writer IS DISTINCT FROM v_writer THEN RETURN 'not-yours'; END IF;
+    IF v_row.saved_at IS DISTINCT FROM p_saved_at THEN RETURN 'changed'; END IF;
     DELETE FROM medication_draft_line WHERE line_id = p_line;
     INSERT INTO medication_draft_line_deleted (line_id, deleted_at)
     VALUES (p_line, clock_timestamp()) ON CONFLICT DO NOTHING;
@@ -234,9 +259,9 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean),
-    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text),
+    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean),
-    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text),
+    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() TO cairn_window;

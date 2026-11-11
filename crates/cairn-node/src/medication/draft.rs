@@ -28,23 +28,23 @@ pub struct DraftLine {
     /// The warnings the clinician ticked against: `(source, ref)`.
     pub ticked_against: Vec<(String, Uuid)>,
     pub finished: bool,
+    /// When the row was last saved, as the database's own text (microseconds and zone intact).
+    /// Hand it back to [`chart_draft_line`] so the spend only takes the content that was read.
+    pub saved_at: String,
 }
 
-/// `[{"source": "...", "ref": "<uuid>"}]` to pairs. Pure. A malformed element is an error, not
-/// a silent drop: a dropped tick would sign a line without the warning the clinician acknowledged.
-fn parse_ticked_against(v: &serde_json::Value) -> anyhow::Result<Vec<(String, Uuid)>> {
-    let Some(items) = v.as_array() else {
-        bail!("ticked_against is not an array: {v}");
-    };
-    items
+/// `[{"source": "...", "ref": "<uuid>"}]` to pairs, or `None` when ANY element is malformed.
+/// Pure. The floor (db/078) refuses a malformed tick on new rows, so this only meets old rows.
+/// Callers treat `None` as "no usable tick": fewer refs can only make `hand_tick_holds` (which
+/// needs every fresh warning listed) fail, so the line shows unticked and wants a fresh tick.
+/// That fails closed, and one line's scratch data never blocks the whole list.
+fn parse_ticked_against(v: &serde_json::Value) -> Option<Vec<(String, Uuid)>> {
+    v.as_array()?
         .iter()
         .map(|i| {
-            let source = i.get("source").and_then(|s| s.as_str());
-            let r = i.get("ref").and_then(|s| s.as_str());
-            match (source, r.map(str::parse::<Uuid>)) {
-                (Some(s), Some(Ok(r))) => Ok((s.to_owned(), r)),
-                _ => bail!("ticked_against element is not {{source, ref: uuid}}: {i}"),
-            }
+            let source = i.get("source")?.as_str()?;
+            let r = i.get("ref")?.as_str()?.parse::<Uuid>().ok()?;
+            Some((source.to_owned(), r))
         })
         .collect()
 }
@@ -59,7 +59,7 @@ pub async fn read_draft_lines(
     let rows = client
         .query(
             "SELECT line_id::text, terminal_id, seq, charted_as, line_text, parts::text, reason, \
-                    hand_ticked, ticked_against::text, finished \
+                    hand_ticked, ticked_against::text, finished, saved_at::text \
                FROM cairn_med_draft_lines($1::text::uuid, $2)",
             &[&patient.to_string(), &writer],
         )
@@ -67,6 +67,12 @@ pub async fn read_draft_lines(
         .context("reading the medication draft list")?;
     rows.iter()
         .map(|r| {
+            let against: serde_json::Value = serde_json::from_str(&r.try_get::<_, String>(8)?)?;
+            // A malformed tick reads as no tick at all (see `parse_ticked_against`).
+            let (hand_ticked, ticked_against) = match parse_ticked_against(&against) {
+                Some(t) => (r.try_get(7)?, t),
+                None => (false, Vec::new()),
+            };
             Ok(DraftLine {
                 line_id: r.try_get::<_, String>(0)?.parse()?,
                 terminal_id: r.try_get(1)?,
@@ -75,11 +81,10 @@ pub async fn read_draft_lines(
                 line_text: r.try_get(4)?,
                 parts: serde_json::from_str(&r.try_get::<_, String>(5)?)?,
                 reason: r.try_get(6)?,
-                hand_ticked: r.try_get(7)?,
-                ticked_against: parse_ticked_against(&serde_json::from_str(
-                    &r.try_get::<_, String>(8)?,
-                )?)?,
+                hand_ticked,
+                ticked_against,
                 finished: r.try_get(9)?,
+                saved_at: r.try_get(10)?,
             })
         })
         .collect()
@@ -110,7 +115,8 @@ pub async fn writer_drafts(
 
 /// Chart one draft line: submit its event and delete its draft row in ONE transaction, so the
 /// line leaves the list exactly when it enters the record. The delete must answer `'deleted'`,
-/// else the transaction rolls back (the line moved or went: the caller re-reads).
+/// else the transaction rolls back (the line moved, went, or was SAVED AGAIN since the caller
+/// read it at `saved_at`: the caller re-reads).
 ///
 /// FLOW: build and seal the body (`chart_body` + `prepare_sealed`, nothing written) → open a
 /// transaction → `submit_event` → delete the draft row → commit. A lost commit is marked
@@ -125,6 +131,7 @@ pub async fn chart_draft_line(
     terminal: &str,
     writer: Option<&str>,
     line: Uuid,
+    saved_at: &str,
     input: &AssertMedicationInput<'_>,
     charting: &Charting<'_>,
     author: &AuthorParams<'_>,
@@ -145,15 +152,14 @@ pub async fn chart_draft_line(
     .await?;
     let answer: String = tx
         .query_one(
-            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3, $4)",
-            &[&line.to_string(), &patient.to_string(), &terminal, &writer],
+            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3, $4, $5::text::timestamptz)",
+            &[&line.to_string(), &patient.to_string(), &terminal, &writer, &saved_at],
         )
         .await
-        .context("deleting the signed draft line")?
+        .context("spending the draft line (nothing was written)")?
         .get(0);
     if answer != "deleted" {
-        // Dropping `tx` would roll back too; say so explicitly: nothing may be written.
-        tx.rollback().await?;
+        // Returning drops `tx`, which rolls back: nothing is written, and the clear error stays.
         bail!("the draft line was not signed: the list answered {answer:?} (re-read the list)");
     }
     tx.commit()
@@ -171,11 +177,19 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn ticked_against_parses_and_refuses_malformed() {
+    fn ticked_against_parses_and_a_malformed_one_is_no_tick() {
         let id = Uuid::now_v7();
         let ok = parse_ticked_against(&json!([{"source": "allergy", "ref": id.to_string()}]));
-        assert_eq!(ok.unwrap(), vec![("allergy".to_string(), id)]);
-        assert!(parse_ticked_against(&json!([{"source": "allergy", "ref": "r1"}])).is_err());
-        assert!(parse_ticked_against(&json!({})).is_err());
+        assert_eq!(ok, Some(vec![("allergy".to_string(), id)]));
+        assert_eq!(parse_ticked_against(&json!([])), Some(vec![]));
+        assert_eq!(
+            parse_ticked_against(&json!([{"source": "allergy", "ref": "r1"}])),
+            None
+        );
+        assert_eq!(
+            parse_ticked_against(&json!([{"ref": id.to_string()}])),
+            None
+        );
+        assert_eq!(parse_ticked_against(&json!({})), None);
     }
 }

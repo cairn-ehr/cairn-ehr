@@ -71,6 +71,7 @@ async fn sign(
     chart: Uuid,
     terminal: &str,
     line: Uuid,
+    saved_at: &str,
 ) -> anyhow::Result<cairn_node::db_diagnosis::Committed<Uuid>> {
     let author = AuthorParams {
         human_sk: &keys.2,
@@ -85,6 +86,7 @@ async fn sign(
         terminal,
         Some("notewriter"),
         line,
+        saved_at,
         &input(),
         &Charting::default(),
         &author,
@@ -107,9 +109,21 @@ async fn a_signed_line_is_in_the_record_and_gone_from_the_list() {
     let line = Uuid::now_v7();
     save(&c, line, chart, "pc-1", "[]").await;
     let before = events(&c).await;
-    let done = sign(&mut c, &(nsk, nkid, hsk, hkid.clone()), chart, "pc-1", line)
+    let at = read_draft_lines(&c, chart, Some("notewriter"))
         .await
-        .expect("the line signs");
+        .unwrap()[0]
+        .saved_at
+        .clone();
+    let done = sign(
+        &mut c,
+        &(nsk, nkid, hsk, hkid.clone()),
+        chart,
+        "pc-1",
+        line,
+        &at,
+    )
+    .await
+    .expect("the line signs");
     assert_eq!(events(&c).await, before + 1);
     let signer: String = c
         .query_one(
@@ -141,7 +155,12 @@ async fn a_line_taken_by_another_terminal_rolls_back_unwritten() {
     let line = Uuid::now_v7();
     save(&c, line, chart, "pc-1", "[]").await;
     let before = events(&c).await;
-    let err = sign(&mut c, &(nsk, nkid, hsk, hkid), chart, "pc-2", line)
+    let at = read_draft_lines(&c, chart, Some("notewriter"))
+        .await
+        .unwrap()[0]
+        .saved_at
+        .clone();
+    let err = sign(&mut c, &(nsk, nkid, hsk, hkid), chart, "pc-2", line, &at)
         .await
         .expect_err("another terminal's line does not sign");
     assert!(format!("{err:#}").contains("answered"), "{err:#}");
@@ -183,4 +202,51 @@ async fn read_draft_lines_parses_ticked_against() {
     assert_eq!(got[0].line_id, line);
     assert_eq!(got[0].ticked_against, vec![("allergy".to_string(), r)]);
     assert!(got[0].hand_ticked);
+}
+
+#[tokio::test]
+async fn a_save_between_read_and_sign_answers_changed_and_writes_nothing() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (nsk, nkid, hsk, hkid, chart) = note_setup(&c).await;
+    c.batch_execute("TRUNCATE medication_draft_line")
+        .await
+        .unwrap();
+    let line = Uuid::now_v7();
+    save(&c, line, chart, "pc-1", "[]").await;
+    // Sign's fresh read ...
+    let at = read_draft_lines(&c, chart, Some("notewriter"))
+        .await
+        .unwrap()[0]
+        .saved_at
+        .clone();
+    // ... then an autosave lands with the clinician's last edit.
+    let parts = json!([{"term": "Amoxil", "coding": null}]).to_string();
+    let a: String = c
+        .query_one(
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'Amoxil', $3::text::jsonb, NULL, false, '[]'::jsonb, false)",
+            &[&line.to_string(), &chart.to_string(), &parts],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(a, "saved");
+    let before = events(&c).await;
+    let err = sign(&mut c, &(nsk, nkid, hsk, hkid), chart, "pc-1", line, &at)
+        .await
+        .expect_err("a changed line does not sign");
+    assert!(format!("{err:#}").contains("changed"), "{err:#}");
+    assert_eq!(events(&c).await, before, "no event was written");
+    let rows = read_draft_lines(&c, chart, Some("notewriter"))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "the row is intact");
+    assert_eq!(
+        rows[0].line_text, "Amoxil",
+        "with the clinician's last edit"
+    );
 }

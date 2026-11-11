@@ -28,7 +28,8 @@ async fn save(
 ) -> String {
     // tokio-postgres here has no uuid/json codecs: ids and jsonb cross as text, cast in SQL.
     let parts = json!([{"term": text, "coding": null}]).to_string();
-    let against = json!([{"source": "allergy", "ref": "r1"}]).to_string();
+    let against =
+        json!([{"source": "allergy", "ref": "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"}]).to_string();
     let (line, chart) = (line.to_string(), chart.to_string());
     c.query_one(
         "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, 'started-here', $5, $6::text::jsonb, NULL, $7, $8::text::jsonb, false)",
@@ -200,7 +201,7 @@ async fn a_second_terminal_answers_moved_until_it_takes() {
     );
     let del: String = w
         .query_one(
-            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-2', 'notewriter')",
+            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-2', 'notewriter', (SELECT s.saved_at FROM cairn_med_draft_lines($2::text::uuid, 'notewriter') s WHERE s.line_id = $1::text::uuid))",
             &[&line.to_string(), &chart.to_string()],
         )
         .await
@@ -242,7 +243,7 @@ async fn a_second_terminal_answers_moved_until_it_takes() {
         let (w, chart) = (&w, chart);
         async move {
             w.query_one(
-                "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3, 'notewriter')",
+                "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3, 'notewriter', (SELECT s.saved_at FROM cairn_med_draft_lines($2::text::uuid, 'notewriter') s WHERE s.line_id = $1::text::uuid))",
                 &[&line.to_string(), &chart.to_string(), &t],
             )
             .await
@@ -426,7 +427,7 @@ async fn a_save_after_delete_never_brings_the_line_back() {
     save(&w, line, chart, "pc-1", Some("notewriter"), "a", true).await;
     let (l, c) = (line.to_string(), chart.to_string());
     let del: String = w
-        .query_one("SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter')", &[&l, &c])
+        .query_one("SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', (SELECT s.saved_at FROM cairn_med_draft_lines($2::text::uuid, 'notewriter') s WHERE s.line_id = $1::text::uuid))", &[&l, &c])
         .await
         .unwrap()
         .get(0);
@@ -462,7 +463,7 @@ async fn another_writers_delete_answers_not_yours() {
     for who in [Some("nurse-b"), None] {
         let r: String = w
             .query_one(
-                "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', $3)",
+                "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', $3, (SELECT s.saved_at FROM cairn_med_draft_lines($2::text::uuid, 'notewriter') s WHERE s.line_id = $1::text::uuid))",
                 &[&l, &c, &who],
             )
             .await
@@ -488,7 +489,8 @@ async fn only_a_content_change_clears_the_tick_and_the_parts_must_be_an_array() 
     let l = line.to_string();
     let parts = json!([{"term": "x", "coding": null}]).to_string();
     let other = json!([{"term": "y", "coding": null}]).to_string();
-    let against = json!([{"source": "allergy", "ref": "r1"}]).to_string();
+    let against =
+        json!([{"source": "allergy", "ref": "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"}]).to_string();
     // (charted_as, parts, reason, finished) sent; whether the tick must survive.
     let cases: [(&str, &str, Option<&str>, bool, bool); 4] = [
         ("started-here", &parts, Some("why"), false, true), // reason only
@@ -544,4 +546,80 @@ async fn only_a_content_change_clears_the_tick_and_the_parts_must_be_an_array() 
         e.code(),
         Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
     );
+}
+
+/// A tick's `ref` must be uuid-shaped and its `source` a non-empty string: the floor refuses a
+/// malformed element at the door (the node's reader tolerates old bad rows, but none is new).
+#[tokio::test]
+async fn a_malformed_tick_element_is_refused_by_the_floor() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_owner, w, chart) = fixture(&base).await;
+    let parts = json!([{"term": "x", "coding": null}]).to_string();
+    for bad in [
+        json!([{"source": "allergy", "ref": "r1"}]),
+        json!([{"source": "", "ref": "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"}]),
+        json!([{"ref": "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"}]),
+        json!(["x"]),
+    ] {
+        let r = w
+            .query_one(
+                "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'x', $3::text::jsonb, NULL, true, $4::text::jsonb, false)",
+                &[&Uuid::now_v7().to_string(), &chart.to_string(), &parts, &bad.to_string()],
+            )
+            .await;
+        assert!(r.is_err(), "{bad} must be refused");
+    }
+}
+
+/// The person menu's feed: named writers only, the line count, and the newest save.
+#[tokio::test]
+async fn the_node_reader_decodes_drafts_by_writer() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_owner, w, chart) = fixture(&base).await;
+    for _ in 0..2 {
+        save(
+            &w,
+            Uuid::now_v7(),
+            chart,
+            "pc-1",
+            Some("notewriter"),
+            "a",
+            false,
+        )
+        .await;
+    }
+    save(&w, Uuid::now_v7(), chart, "pc-1", None, "unnamed", false).await;
+    let got = cairn_node::medication::draft::writer_drafts(&w)
+        .await
+        .unwrap();
+    assert_eq!(got.len(), 1, "the unnamed bucket is not listed");
+    assert_eq!(
+        (got[0].0.as_str(), got[0].1, got[0].2),
+        ("notewriter", chart, 2)
+    );
+    let newest: String = w
+        .query_one(
+            "SELECT max(saved_at)::text FROM cairn_med_draft_lines($1::text::uuid, 'notewriter')",
+            &[&chart.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let direct: chrono::DateTime<chrono::Utc> = w
+        .query_one(
+            "SELECT max(saved_at) FROM cairn_med_draft_lines($1::text::uuid, 'notewriter')",
+            &[&chart.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(got[0].3, direct, "newest is the last save ({newest})");
 }
