@@ -2925,7 +2925,7 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
       and "Reason for charting despite the listed allergy" below it. Sign is unavailable.
 - [ ] Type three spaces in the reason: Sign stays unavailable. Type `benefit outweighs risk`, Sign. "Charted.".
       `psql "$CONN" -c "SELECT override_reason, override_against FROM medication_charting WHERE patient_id = '$C1'"`
-      reads the reason and one uuid. Check it against
+      reads the reason and one `{"source": "allergy", "ref": <uuid>}` entry. Check the `ref` against
       `psql "$CONN" -Atc "SELECT event_id FROM clinical_allergy WHERE patient_id = '$C1'"`.
 - [ ] **Already taking.** On `$C1`, *Already taking*, `flucl`, choose "flucloxacillin", ` 500mg qid`. The mark shows,
       and no reason field. Sign. The row reads `pre-existing`, no override.

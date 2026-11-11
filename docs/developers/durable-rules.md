@@ -18,7 +18,11 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 Every allergy slice 3 rule below still holds; the pick's door is a db/076 door like the other four.
 - **The override reason is a WINDOW rule, never a floor rule** (design §3.5, ADR-0021). `med_chart` refuses a Start line
   with an allergy mark and a blank trimmed reason, before the key. db/077 checks the override's shape only when it is
-  present, and a peer's override missing its `reason` or `against` is admitted. **Tempting wrong fixes:** make
+  present, and a peer's override missing its `reason`, `against`, or an entry's `source` / `ref` is admitted.
+  The override is `warning_override` `{reason, against: [{source, ref}]}`, never allergy-only: `source` is an
+  open word (`allergy` today; interactions, drug–disease and renal/hepatic dosing later), and only an `allergy`
+  ref is held to the uuid shape, at the authoring door. **Tempting wrong fix:** a new warning kind gets its own
+  top-level key (the wire is frozen; it is a new `source` word), or the floor refuses an unknown source. **Tempting wrong fixes:** make
   db/077 require an override whenever a line "would" mark (the floor cannot run the check: it needs the allergies and
   an optional drugref, so the floor would depend on both); refuse a missing `reason` at the remote door (a newer window
   with an optional reason has its events penned). Pins: `medication_charting_floor.rs::remote_door_admits_a_newer_word`,

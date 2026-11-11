@@ -117,7 +117,7 @@
 >   [ADR-0099](spec/decisions/0099-charting-a-medication.md), spec **v0.101**, `db/077` + `db/076` §5 with db/031 + db/037 +
 >   db/044 in place, `SCHEMA_GENERATION` **77**). *Start medication* /
 >   *Already taking* open one typed line (`amox 500mg tds`); five optional wire keys (`charted_as`, `route`,
->   `substance.strength`, `substance.components`, `allergy_override`) with their own projection `medication_charting`;
+>   `substance.strength`, `substance.components`, `warning_override` — general `{reason, against: [{source, ref}]}`, `allergy` the only source today) with their own projection `medication_charting`;
 >   the drugs-only pick `cairn_drug_medication_search`, ranked by this site's use; the directions read, never guessed;
 >   the check at charting, **re-run at Sign** on a fresh read, and a *Start* line with a mark needs a typed reason (a
 >   window rule, never a floor rule); a combination emits no safety claim; the list's cell is `dose — sig`. **Still to
