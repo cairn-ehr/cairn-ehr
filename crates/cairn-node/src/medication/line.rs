@@ -84,9 +84,16 @@ const DURATIONS: &[&str] = &[
     "day", "days", "week", "weeks", "hour", "hours", "month", "months",
 ];
 
+/// Unread words known NOT to change what a dose means ("with food", "for 5 days"). An
+/// allow-list on purpose: any other unread word ("half", "two", "per", "kg", "max", "up")
+/// may change the dose, so it leaves the dose unread — a deny-list would miss the next one.
+const HARMLESS: &[&str] = &[
+    "for", "with", "food", "meals", "after", "before", "milk", "water",
+];
+
 /// What could be read with certainty; everything else is in `unread`. Words the loop
 /// could not place come first, in typed order; then the losers of an ambiguous field
-/// (two frequencies, two routes, two forms); then any dose candidate not filled.
+/// (two frequencies, two routes, two forms, two strengths); then any dose candidate not filled.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct Directions {
     pub dose_amount: Option<String>,
@@ -164,6 +171,8 @@ pub fn read_directions(text: &str) -> Directions {
     // Each dose candidate is (amount, unit); more than one means we cannot know which.
     let mut doses: Vec<(String, Option<String>)> = Vec::new();
     let (mut freqs, mut routes, mut forms) = (Vec::new(), Vec::new(), Vec::new());
+    // Every strength ("tab 500mg"); more than one is ambiguous, like two routes.
+    let mut strengths: Vec<String> = Vec::new();
     // How many unread numbers are durations ("5" in "for 5 days"): those alone do not
     // make the dose uncertain. Every OTHER unread digit does (see after the loop).
     let mut durations = 0;
@@ -187,12 +196,7 @@ pub fn read_directions(text: &str) -> Directions {
             let after_form = i > 0 && lookup(FORMS, &toks[i - 1]).is_some();
             let strength_unit = next.filter(|n| STRENGTH_UNITS.contains(n));
             if let (true, Some(u)) = (after_form, strength_unit) {
-                if d.strength.is_none() {
-                    d.strength = Some(format!("{t} {u}"));
-                } else {
-                    // A second strength is ambiguous; it must never leak into the dose.
-                    d.unread.push(format!("{t} {u}"));
-                }
+                strengths.push(format!("{t} {u}"));
                 i += 1;
             } else if is_ratio(t) {
                 d.unread.push(t.to_string()); // a ratio is never a dose
@@ -213,15 +217,22 @@ pub fn read_directions(text: &str) -> Directions {
         }
         i += 1;
     }
-    // A stray number ("2 x 500mg" = 1 g, "500mg x2", "1/2 500mg tab") changes what the
-    // dose means, so if any unread token beside a duration holds a digit, no dose is
-    // certain: the candidate goes to `unread` too. Checked before `settle` adds its
-    // losers, which are table words ("q4h") and never stray numbers.
-    let digits_unread = d
+    // Two strengths: we cannot know which, so neither — and, unread BEFORE the dose is judged,
+    // they leave it uncertain too (which product the count is of is not known).
+    if strengths.len() == 1 {
+        d.strength = strengths.pop();
+    } else {
+        d.unread.append(&mut strengths);
+    }
+    // A stray number or word ("2 x 500mg" = 1 g, "half 500mg tab", "15 mg per kg", "max 4 g")
+    // changes what the dose means, so the dose is certain only when every unread token is a
+    // duration number, a duration word or a HARMLESS word: anything else sends the candidate
+    // to `unread` too. Checked before `settle` adds its losers, which are table words.
+    let may_change_the_dose = d
         .unread
         .iter()
-        .filter(|u| u.chars().any(|c| c.is_ascii_digit()));
-    let dose_is_certain = doses.len() == 1 && digits_unread.count() == durations;
+        .filter(|u| !DURATIONS.contains(&u.as_str()) && !HARMLESS.contains(&u.as_str()));
+    let dose_is_certain = doses.len() == 1 && may_change_the_dose.count() == durations;
     d.frequency = settle(freqs, &mut d.unread);
     d.route = settle(routes, &mut d.unread);
     d.form = settle(forms, &mut d.unread);

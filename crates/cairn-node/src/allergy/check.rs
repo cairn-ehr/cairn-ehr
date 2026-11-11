@@ -316,7 +316,8 @@ pub fn check_medications(
     let heads = drug_heads(r);
     let mut out: HashMap<Uuid, LineCheck> = HashMap::new();
     // Lines sharing a group_id are the parts of one combination: merged, never overwritten, so
-    // a later part can neither hide an earlier part's mark nor clear its "not checked".
+    // a later part cannot hide an earlier part's mark, and a clean later part cannot clear its
+    // "not checked" (one that brings a mark does: a mark is never unverified, ADR-0098).
     for m in meds.iter().filter(|m| m.current) {
         let part = check_line(&heads, m, facts, unread_records);
         let line = match out.remove(&m.group_id) {

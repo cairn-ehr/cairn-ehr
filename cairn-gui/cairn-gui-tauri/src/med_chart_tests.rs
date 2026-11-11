@@ -155,6 +155,13 @@ fn a_bad_pick_or_a_blank_name_is_refused_before_the_key() {
         bad(vec![part("pen", class)], "pen").unwrap_err().text,
         NOT_A_LISTED_DRUG
     );
+    // A pick with no words to show would pass here and fail db/041 after the key.
+    assert_eq!(
+        bad(vec![part("amox", coded(Uuid::from_u128(2), "  "))], "amox")
+            .unwrap_err()
+            .text,
+        NOT_A_LISTED_DRUG
+    );
     assert_eq!(bad(vec![part("  ", None)], "  ").unwrap_err().text, NAME_IT);
     assert_eq!(bad(vec![], " ").unwrap_err().text, NAME_IT);
     assert_eq!(
@@ -194,6 +201,28 @@ fn a_start_line_with_a_mark_needs_a_trimmed_reason() {
     };
     assert_eq!(
         override_before_the_key(start, &unchecked, None).unwrap(),
+        None
+    );
+}
+
+/// The window drew a mark (so it sent a reason) but Sign's own fresh check could not run: the
+/// reason must never be dropped silently — refused before the key, so the window checks again
+/// and the clinician sees "not checked" before a line signs unchecked (review finding, PR #1066).
+#[test]
+fn a_reason_sent_against_a_check_that_could_not_run_is_refused() {
+    let unchecked = LineCheck {
+        unverified: true,
+        ..LineCheck::default()
+    };
+    assert_eq!(
+        override_before_the_key(ChartedAs::StartedHere, &unchecked, Some("no alternative"))
+            .unwrap_err()
+            .text,
+        CHECK_DID_NOT_RUN
+    );
+    // A blank reason is no reason: the window drew no mark, so "not checked" signs as before.
+    assert_eq!(
+        override_before_the_key(ChartedAs::StartedHere, &unchecked, Some("  ")).unwrap(),
         None
     );
 }

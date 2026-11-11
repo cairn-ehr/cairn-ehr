@@ -67,7 +67,7 @@ pub struct MedicationAssertion<'a> {
     /// It is passed IN rather than looked up here because this crate is pure: the lookup
     /// needs a database, and the node's `safety::lookup_class` is where that lives.
     pub safety: Option<crate::safety::PreciseSafety<'a>>,
-    /// The charting fields (charted-as, route, strength, components, allergy override —
+    /// The charting fields (charted-as, route, strength, components, warning override —
     /// `charting.rs`). `None` and an all-absent `Charting` both write the payload exactly
     /// as an assertion did before charting existed (principle 11).
     pub charting: Option<Charting<'a>>,

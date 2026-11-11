@@ -3,7 +3,7 @@
 //!
 //! [`chart_medication`] is the medication assertion's orchestrator; `assert_medication` is it
 //! with no charting. The fields themselves (charted-as, route, strength, a combination's
-//! components, the allergy override) are cairn-event's [`Charting`], written into the signed
+//! components, the warning override) are cairn-event's [`Charting`], written into the signed
 //! payload by [`build_charted_body`]. db/077's floor judges them and its projection
 //! (`medication_charting`) keeps them per thread; [`read_charting`] reads that projection.
 use super::assert::{build_charted_body, validate_term, AssertMedicationInput};

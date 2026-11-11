@@ -66,7 +66,7 @@ assertion, with no new type or schema version: whether it was **started here** o
 own coding claim, never beside a single coding), and a **warning override**: the reason typed for charting a new drug
 despite a warning, and the warnings it was charted against, each a `{source, ref}` pair. A listed allergy is the
 only source today (its ref the allergy record); drug interactions, drug–disease warnings and renal/hepatic dosing
-are later sources of the same shape. The reason is a window rule, never a floor
+are later sources of the same shape. Requiring an override is a window rule, never a floor
 rule, so an event without one always syncs. The typed directions are the signed record; a structured field is filled
 only when the reading is certain, and an unread word stays visible as unread (principle 4). The allergy check runs on
 the line before Sign and again at Sign on a fresh read, on every component of a combination, and a combination emits

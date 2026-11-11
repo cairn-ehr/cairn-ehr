@@ -100,8 +100,9 @@ override reason. The same-drug de-label offer on *Already taking* and the group 
    It is revoked from PUBLIC, as the whole `cairn_check_*` family is (#382). Pinned by
    `medication_charting_floor.rs` (`local_door_refuses_each_bad_shape`, `remote_door_admits_a_newer_word`,
    `an_event_without_charting_still_passes`).
-5. **The reason is a window rule, never a floor rule** (design §3.5; ADR-0021 soft policy). The floor never requires
-   an override: an assertion without one is valid at both doors, whatever its `charted_as`.
+5. **Requiring an override is a window rule, never a floor rule** (design §3.5; ADR-0021 soft policy). The floor never
+   requires an override: an assertion without one is valid at both doors, whatever its `charted_as`. A *present*
+   override's shape, its non-blank `reason` included, is the floor's at the authoring door (decision 4).
 
 ### The projection (`db/077` §2; `db/037` and `db/044` in place)
 
@@ -151,12 +152,15 @@ override reason. The same-drug de-label offer on *Already taking* and the group 
     abbreviations list). It fills `dose_amount`/`dose_unit`, `route`, `frequency`, `form`, `strength`, `prn` and
     `stat` only when certain. Every word it cannot place goes to `unread`, and nothing is dropped.
     - A decimal is kept exactly as typed (`"1.5"`, `".5"`). A comma decimal (`1,5mg`) is never read.
-    - **Two of a kind is ambiguous**: two doses, frequencies, routes or forms leave that field `None` and every
-      competing token in `unread`.
+    - **Two of a kind is ambiguous**: two doses, frequencies, routes, forms or strengths leave that field `None`
+      and every competing token in `unread`.
     - A number with a strength unit straight after a form word is the strength, never the dose: `tab 500mg`
-      reads strength `500 mg` and dose not known, never an assumed 1. A second strength goes to `unread`.
-    - A number before a duration word ("5 days") is not a dose. Any other unread number ("2 x 500mg") makes the dose
-      uncertain, so the dose too goes to `unread`.
+      reads strength `500 mg` and dose not known, never an assumed 1.
+    - A number before a duration word ("5 days") is not a dose. The dose is certain only when every unread token is
+      a duration (its number or word) or one of a short **allow-list** of words known not to change it ("with food",
+      "after meals"). Any other unread token, whether a number ("2 x 500mg") or a word ("half", "two", "½", "per kg",
+      "max", "up to"), may change what the dose means, so the dose too goes to `unread`. An allow-list, because a
+      deny-list misses the next word.
 12. **The term signed** (`line::term_to_sign`). The pick's display is signed only when the typed text is its
     case-folded prefix ("amox" picked as amoxicillin signs "amoxicillin"). Anything else typed, a brand or a
     spelling, is signed as typed. **A combination's term is its parts' signed terms joined " + "**, so the record shows the generic names: "amox

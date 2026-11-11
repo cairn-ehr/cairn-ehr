@@ -123,7 +123,7 @@ fn a_duration_or_interval_number_is_not_a_dose() {
 fn a_second_strength_never_leaks_into_the_dose() {
     let d = read_directions("tab 500mg tab 250mg");
     assert_eq!((d.dose_amount, d.dose_unit), (None, None));
-    assert_eq!(d.strength, s("500 mg"));
+    assert_eq!(d.strength, None);
 }
 
 #[test]
@@ -167,4 +167,48 @@ fn a_duration_number_leaves_the_dose_certain() {
     assert_eq!((d.dose_amount, d.dose_unit), (s("500"), s("mg")));
     assert_eq!(d.frequency, s("three times daily"));
     assert_eq!(d.unread, vec!["for", "5", "days"]);
+}
+
+/// A word that changes what the dose means holds no ASCII digit, so a digits-only guard misses
+/// it: "half 500mg tab" is 250 mg, "15 mg/kg" is weight-based, "max 4 g" is a ceiling. The dose
+/// is certain only when every unread word is known not to change it (PR #1066 review finding).
+#[test]
+fn a_word_that_changes_the_dose_makes_it_uncertain() {
+    for (typed, candidate) in [
+        ("half 500mg tab", "500 mg"),
+        ("two 500mg tabs", "500 mg"),
+        ("½ 500mg tds", "500 mg"),
+        ("double dose 500mg", "500 mg"),
+        ("15 mg / kg", "15 mg"),
+        ("15 mg per kg", "15 mg"),
+        ("2.5 mg per hour", "2.5 mg"),
+        ("prn max 4 g daily", "4 g"),
+        ("up to 2 tabs prn", "2 tabs"),
+    ] {
+        let d = read_directions(typed);
+        assert_eq!((&d.dose_amount, &d.dose_unit), (&None, &None), "{typed}");
+        assert!(
+            d.unread.iter().any(|u| u == candidate),
+            "{typed}: {:?}",
+            d.unread
+        );
+    }
+}
+
+/// Words known not to change the dose leave it certain; they are still unread, never dropped.
+#[test]
+fn a_harmless_word_leaves_the_dose_certain() {
+    let d = read_directions("500mg tds with food");
+    assert_eq!((d.dose_amount, d.dose_unit), (s("500"), s("mg")));
+    assert_eq!(d.unread, vec!["with", "food"]);
+}
+
+/// Two strengths are ambiguous like two routes: neither is read, both are unread.
+#[test]
+fn two_strengths_read_neither() {
+    let d = read_directions("cap 250mg 2 cap 500mg tds");
+    assert_eq!(d.strength, None);
+    assert_eq!((d.dose_amount, d.dose_unit), (None, None));
+    assert!(d.unread.iter().any(|u| u == "250 mg"), "{:?}", d.unread);
+    assert!(d.unread.iter().any(|u| u == "500 mg"), "{:?}", d.unread);
 }

@@ -16,9 +16,10 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 `crates/cairn-node/src/medication/line_tests.rs`, `crates/cairn-node/src/allergy/check_combination_tests.rs`,
 `cairn-gui/cairn-gui-tauri/src/{med_chart,med_chart_db,med_chart_rows,med_chart_webview,med_chart_line_webview}_tests.rs`).
 Every allergy slice 3 rule below still holds; the pick's door is a db/076 door like the other four.
-- **The override reason is a WINDOW rule, never a floor rule** (design §3.5, ADR-0021). `med_chart` refuses a Start line
-  with an allergy mark and a blank trimmed reason, before the key. db/077 checks the override's shape only when it is
-  present, and a peer's override missing its `reason`, `against`, or an entry's `source` / `ref` is admitted.
+- **Requiring an override is a WINDOW rule, never a floor rule** (design §3.5, ADR-0021). `med_chart` refuses a Start line
+  with an allergy mark and a blank trimmed reason, before the key, and a reason sent when its own re-check could not
+  run (`CHECK_DID_NOT_RUN`: never dropped). db/077 never requires an override and checks one's shape only when it is
+  present (a blank reason refused at the authoring door only), and a peer's override missing its `reason`, `against`, or an entry's `source` / `ref` is admitted.
   The override is `warning_override` `{reason, against: [{source, ref}]}`, never allergy-only: `source` is an
   open vocabulary (`allergy` today; interactions, drug–disease and renal/hepatic dosing later), held to a
   lower-case word (`^[a-z][a-z0-9-]*$`) and an `allergy` ref to the uuid shape, both at the authoring door only.
@@ -54,10 +55,13 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   as `read_charting` does. Pins: `medication_charting_projection.rs::a_shred_removes_the_charting_row`,
   `a_reprojection_rebuilds_it`; both `cairn_projection_apply` counts (38 / 40).
 - **The directions are read, never guessed** (`line::read_directions`). A field is filled only when one reading is
-  certain: two of a kind, a stray number, or a comma decimal leave it `None` and the tokens in `unread`; a number
-  after a form word is a strength, and no count is assumed. The TYPED text is `sig`. **Tempting wrong fixes:**
-  "keep the first frequency" for `bd tds`; read `1,5mg` as 1.5 or as 15; default a missing count to 1. Pins:
-  `line_tests.rs::two_of_a_kind_is_ambiguous_so_none_of_them_is_read`, `a_stray_number_makes_the_dose_uncertain`,
+  certain: two of a kind (strengths too), a comma decimal, or any unread token outside the duration words and the
+  `HARMLESS` allow-list leave it `None` and the tokens in `unread`; a number after a form word is a strength, and no
+  count is assumed. The TYPED text is `sig`. **Tempting wrong fixes:** "keep the first frequency" for `bd tds`, or
+  the first strength; read `1,5mg` as 1.5 or as 15; default a missing count to 1; guard the dose by "an unread
+  token holds a digit" (misses `half`, `½`, `per kg`, `max`: PR #1066's review), or turn `HARMLESS` into a
+  deny-list. Pins: `line_tests.rs::two_of_a_kind_is_ambiguous_so_none_of_them_is_read`,
+  `a_stray_number_makes_the_dose_uncertain`, `a_word_that_changes_the_dose_makes_it_uncertain`, `two_strengths_read_neither`,
   `keeps_decimals_as_typed`, `a_strength_after_a_form_is_not_a_dose`.
 - **A coding vouches for the words it was picked with, per part** (as `drug_pick.js`). Editing a part drops its coding,
   and a changed drug part reads "not checked" at once until its new check answers. **Tempting wrong fix:** keep a

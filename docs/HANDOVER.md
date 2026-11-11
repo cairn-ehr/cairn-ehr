@@ -119,14 +119,22 @@
 >   *Already taking* open one typed line (`amox 500mg tds`); five optional wire keys (`charted_as`, `route`,
 >   `substance.strength`, `substance.components`, `warning_override` — general `{reason, against: [{source, ref}]}`, `allergy` the only source today) with their own projection `medication_charting`;
 >   the drugs-only pick `cairn_drug_medication_search`, ranked by this site's use; the directions read, never guessed;
->   the check at charting, **re-run at Sign** on a fresh read, and a *Start* line with a mark needs a typed reason (a
->   window rule, never a floor rule); a combination emits no safety claim; the list's cell is `dose — sig`. **Still to
->   do on the PR: Task 8, the whole gate** (every CI gate in CI's order, the GUI tree's DB-gated `--bins`), then ready
->   for review. Filed: **#1067** (the coding overlay cannot code a combination) · **#1068** (no list shows the charting
+>   the check at charting, **re-run at Sign** on a fresh read, and a *Start* line with a mark needs a typed reason
+>   (requiring one is a window rule, never a floor rule); a combination emits no safety claim; the list's cell is
+>   `dose — sig`. **Final-check fixes (2026-11-11):**
+>   - the dose is certain only when every unread word is a duration or on the `HARMLESS` allow-list (`half`, `½`,
+>     `per kg`, `max` and `up to` no longer sign a dose), and two strengths read neither;
+>   - Sign refuses `CHECK_DID_NOT_RUN` rather than dropping a typed reason when its own re-check could not run;
+>   - a failed combinations read leaves the list "not checked";
+>   - a blank pick display is refused before the key;
+>   - a failed read-back shows the directions as not read. Filed: **#1067** (the coding overlay cannot code a combination) · **#1068** (no list shows the charting
 >   fields) · **#1069** (a stat line stays current until slice 2) · **#1070** (the pick's accessibility) · **#1071**
 >   (an override's `against` names one record per mark) · **#1072** (*Already taking*: one Sign per line, an `M > N`
 >   candidate — **a maintainer decision**) · **#1073** (the typed brand is never shown beside the generic;
->   `shown_name` built, unused); commented #1054 (built without the de-label offer). Owed by a human: **RUNBOOK §30**.
+>   `shown_name` built, unused) · **#1074** (CI flake: schema-replay `40P01` between test binaries despite
+>   `test_serial_guard` — a red floor job with that signature is it) · **#1075** (charting authoring rules
+>   enforced only after the passphrase; type hardening) · **#1076** (a failed drug search reads "no drug list") ·
+>   **#1077** (test gaps, incl. an unconfirmed brand-allergy-after-Sign case); commented #1054 (built without the de-label offer). Owed by a human: **RUNBOOK §30**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -173,7 +181,7 @@
 >    projection and the Pi figures. **Allergy slices 1–3 MERGED** (the bullets above). **Next: charting a
 >    medication in the window** (design APPROVED 2026-11-11, three PRs: the line + the check at charting; stat ordered →
 >    given; aliases + PBS forms as drugref supplies them). **Slice 1a BUILT on PR #1066 (awaiting the maintainer's read + CI, then merge)** (the bullet above):
->    finish its Task 8 gate, then the maintainer's review and #1072's ruling. **Then 1b**: the same-drug de-label offer
+>    final check done, then the maintainer's review and merge; batch signing (#1072, ruled) is designed next. **Then 1b**: the same-drug de-label offer
 >    on *Already taking* (#1053, opens db/075's `tolerated.coding`) and the group comment, a new allergy event type,
 >    in one transaction with the line (design §3.5); it closes #1054. Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2

@@ -109,3 +109,15 @@ fn a_redrawn_list_or_a_refusal_checks_an_open_line_again() {
     // main.js's `render` (every drawn answer, the refused Sign's re-read included) ends in it.
     assert!(js_fn(MAIN_JS, "render").contains("syncMedChart();"));
 }
+
+/// PR #1066 review finding: a read-back that fails must never show a blank parse with no
+/// "not read" part. The typed directions show whole, as not read, so nothing is dropped.
+#[test]
+fn a_failed_read_back_shows_the_directions_as_not_read() {
+    let read_back = js_fn(MED_JS, "readBack");
+    assert!(
+        position(read_back, "catch (failure)")
+            < position(read_back, "reading = { unread: [line.directions] };"),
+        "{read_back}"
+    );
+}

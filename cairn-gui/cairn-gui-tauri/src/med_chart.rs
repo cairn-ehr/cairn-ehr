@@ -9,14 +9,16 @@
 //!   the line before Sign.
 //! - [`med_chart`]: Sign. Refusal order, every one before the key (a passphrase that writes
 //!   nothing is a step paper never has): the chart on screen and writable, the press
-//!   (`started-here` / `pre-existing`), each pick's code, then the allergy check RE-RUN on a
+//!   (`started-here` / `pre-existing`), each part named and each pick's code, then the allergy check RE-RUN on a
 //!   fresh read over the set on screen (a set that changed since is refused as a re-read, R15)
 //!   — the webview's earlier answer is never trusted — and, on a Start line with an
-//!   allergy mark, the reason. Then one signed assertion carrying its charting fields
+//!   allergy mark, the reason (or, when the window sent one but that re-run could not check
+//!   the line, [`CHECK_DID_NOT_RUN`]: a typed reason is never dropped). Then one signed assertion carrying its charting fields
 //!   (`chart_medication`), its timing sample, and the medication list read again.
 //!
-//! The reason is a window rule, never a floor rule (design §3.5, ADR-0021 soft policy): the
-//! floor only checks the override's shape when it is there. The drug list is optional: with
+//! Requiring an override is a window rule, never a floor rule (design §3.5, ADR-0021 soft
+//! policy): the floor never requires one, and checks a present override's shape (its reason
+//! non-blank, at the authoring door). The drug list is optional: with
 //! none, or a check that fails, the line still charts, uncoded, and reads "not checked".
 use crate::allergies::{failure_named, local_today, on_screen_and_writable, read_list};
 use crate::allergy_check::{
@@ -46,6 +48,12 @@ use uuid::Uuid;
 
 /// The refusal of Sign on a Start line with an allergy mark and no reason (Global Constraints).
 pub const NEEDS_A_REASON: &str = "Charting despite a listed allergy needs a reason";
+
+/// The refusal of Sign when the window drew a mark (and so sent a reason) but Sign's own fresh
+/// check could not run: signing would drop the reason silently, so nothing is signed and the
+/// window checks the line again (PR #1066 review finding).
+pub const CHECK_DID_NOT_RUN: &str =
+    "The allergy check could not run just now: nothing was signed. Look at the line again";
 
 /// The refusal of a line (or a part of a combination) with no name.
 pub const NAME_IT: &str = "Name the medication.";
@@ -358,27 +366,33 @@ pub(crate) fn parts_before_the_key(
 
 /// A pick as it will be signed: refused unless it is a drug, its code re-spelled. Pure.
 fn picked(c: CodingArg) -> Result<CodingArg, ErrorView> {
-    if c.system != MOIETY_SYSTEM {
+    // A blank display fails db/041's coding check at both doors — after the key, so refused here.
+    if c.system != MOIETY_SYSTEM || c.display.trim().is_empty() {
         return Err(refused(NOT_A_LISTED_DRUG));
     }
     let code = canonical_code(&c)?;
     Ok(CodingArg { code, ..c })
 }
 
-/// The reason to sign as the allergy override, or the refusal. Only a Start line with an
+/// The reason to sign as the warning override (an allergy source today), or the refusal. Only a Start line with an
 /// allergy mark needs one: an already-taking line records what the patient takes, a note or
-/// "not checked" is no listed allergy. A blank trimmed reason is [`NEEDS_A_REASON`]. Pure.
+/// "not checked" is no listed allergy. A blank trimmed reason is [`NEEDS_A_REASON`]; a reason
+/// sent against a check that could not run is [`CHECK_DID_NOT_RUN`]. Pure.
 pub(crate) fn override_before_the_key<'a>(
     charted_as: ChartedAs,
     check: &LineCheck,
     reason: Option<&'a str>,
 ) -> Result<Option<&'a str>, ErrorView> {
-    if charted_as != ChartedAs::StartedHere || check.marks.is_empty() {
+    if charted_as != ChartedAs::StartedHere {
         return Ok(None);
     }
-    match reason.map(str::trim).filter(|r| !r.is_empty()) {
-        Some(r) => Ok(Some(r)),
-        None => Err(refused(NEEDS_A_REASON)),
+    let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+    match (check.marks.is_empty(), reason) {
+        // A reason the window sent for a mark this check could not confirm: never dropped.
+        (true, Some(_)) if check.unverified => Err(refused(CHECK_DID_NOT_RUN)),
+        (true, _) => Ok(None),
+        (false, Some(r)) => Ok(Some(r)),
+        (false, None) => Err(refused(NEEDS_A_REASON)),
     }
 }
 

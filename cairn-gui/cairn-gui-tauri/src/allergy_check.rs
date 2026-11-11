@@ -282,9 +282,9 @@ pub fn charted_lines<'a>(
 /// A combination is checked part by part ([`charted_lines`]): its member threads' charting rows
 /// are read on `c`, after the list's own snapshot. That is complete for every thread on the list,
 /// since a thread's charting row lands in the same transaction as its assertion. A failed read is
-/// logged and read as no combinations: each row is then its one line, as before this slice, and
-/// a combination with no single coding reads "not checked". (One coded later, db/042, is then
-/// checked by that coding alone; a failed read beside a working drug list is the only way there.)
+/// logged and read as no combinations ([`charting_or_unsure`]): each row is then its one line, and
+/// every unmarked current line reads "not checked" — a row checked whole, without its parts, may
+/// miss an allergy to one part, so it must never read clean (PR #1066 review finding).
 pub(crate) async fn check_list(
     c: Option<&impl GenericClient>,
     a: &PatientAllergies,
@@ -296,14 +296,25 @@ pub(crate) async fn check_list(
         .flat_map(|r| &r.members)
         .map(|m| m.medication_id)
         .collect();
-    let charting = match c {
-        Some(c) => read_charting(c, &threads).await.unwrap_or_else(|e| {
-            eprintln!("the combinations on the medication list could not be read: {e:#}");
-            HashMap::new()
-        }),
-        None => HashMap::new(),
+    let (charting, unsure) = match c {
+        Some(c) => charting_or_unsure(read_charting(c, &threads).await),
+        None => (HashMap::new(), false),
     };
-    check_lines(c, a, &charted_lines(&list.rows, &charting)).await
+    check_lines_unsure(c, a, &charted_lines(&list.rows, &charting), unsure).await
+}
+
+/// The combinations read for [`check_list`], and whether the check must stay unsure: a failed
+/// read is logged and read as none, `true`. Pure but for the log line.
+pub(crate) fn charting_or_unsure(
+    read: anyhow::Result<HashMap<Uuid, ChartingRow>>,
+) -> (HashMap<Uuid, ChartingRow>, bool) {
+    match read {
+        Ok(charting) => (charting, false),
+        Err(e) => {
+            eprintln!("the combinations on the medication list could not be read: {e:#}");
+            (HashMap::new(), true)
+        }
+    }
 }
 
 /// Check `lines` against allergy rows `a`, asking the drug list on `c` (the rules of
@@ -312,6 +323,17 @@ pub(crate) async fn check_lines(
     c: Option<&impl GenericClient>,
     a: &PatientAllergies,
     lines: &[MedLine<'_>],
+) -> HashMap<Uuid, LineCheck> {
+    check_lines_unsure(c, a, lines, false).await
+}
+
+/// [`check_lines`], with every unmarked current line "not checked" when `unsure` (something the
+/// check needed could not be read), as an unreadable allergy record leaves it (#1059).
+pub(crate) async fn check_lines_unsure(
+    c: Option<&impl GenericClient>,
+    a: &PatientAllergies,
+    lines: &[MedLine<'_>],
+    unsure: bool,
 ) -> HashMap<Uuid, LineCheck> {
     let r = resolve(a);
     let (allergens, meds) = codes_to_ask(&r, lines);
@@ -326,7 +348,7 @@ pub(crate) async fn check_lines(
         }
         _ => DrugFacts::Unavailable,
     };
-    check_medications(&r, lines, &facts, a.unreadable > 0)
+    check_medications(&r, lines, &facts, a.unreadable > 0 || unsure)
 }
 
 /// The allergy rows the medication check may use: those of `read`, when it worked AND was read

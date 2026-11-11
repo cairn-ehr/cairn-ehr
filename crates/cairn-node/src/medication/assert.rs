@@ -111,7 +111,7 @@ pub fn build_assert_body(
 }
 
 /// [`build_assert_body`] with the line's charting fields (charted-as, route, strength,
-/// components, allergy override — charting slice 1a). Pure, like it. An empty `Charting` adds
+/// components, warning override — charting slice 1a). Pure, like it. An empty `Charting` adds
 /// nothing to the payload or the twin.
 #[allow(clippy::too_many_arguments)] // one parameter per wire value; nothing bundleable without inventing a throwaway struct
 pub fn build_charted_body(

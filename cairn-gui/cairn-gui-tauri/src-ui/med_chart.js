@@ -7,7 +7,7 @@
 // offers drugs for a part as it is typed (`med_drug_search`), draws Rust's reading of the
 // directions (`med_line_read`) and Rust's allergy check of the line (`med_line_check`), and signs
 // it (`med_chart`) through the signer strip. What it does NOT do: every reading, every verdict and
-// every sentence is Rust's (med_chart.rs). The node re-runs the check at Sign on a fresh read and
+// every refusal is Rust's (med_chart.rs); only labels and hints are worded here. The node re-runs the check at Sign on a fresh read and
 // refuses a Start line with an allergy mark and no reason, before the key, whatever this window drew.
 //
 // The one safety rule here: a coding vouches only for THE WORDS IT WAS PICKED WITH. A part whose
@@ -288,6 +288,8 @@ async function readBack(line) {
     if (line.directions) reading = await invoke("med_line_read", { text: line.directions });
   } catch (failure) {
     console.error("med_line_read failed:", failure);
+    // Nothing read is never "nothing typed": the directions show whole, as not read.
+    reading = { unread: [line.directions] };
   }
   const drug = line.parts.map((part) => (codingFor(part) ? codingFor(part).display : part)).join(" + ");
   if (revision === medLineRevision) drawReadBack(drug, reading);

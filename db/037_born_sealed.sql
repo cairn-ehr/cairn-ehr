@@ -341,7 +341,7 @@ BEGIN
         IF to_regclass('public.medication_coding') IS NOT NULL THEN
             DELETE FROM medication_coding WHERE content_address = v_ca;
         END IF;
-        -- The charting projection (db/077 §2): an allergy-override reason is clinical text, and
+        -- The charting projection (db/077 §2): a warning-override reason is clinical text, and
         -- the route, strength and components describe the drug. Its own table, same key.
         IF to_regclass('public.medication_charting') IS NOT NULL THEN
             DELETE FROM medication_charting WHERE content_address = v_ca;

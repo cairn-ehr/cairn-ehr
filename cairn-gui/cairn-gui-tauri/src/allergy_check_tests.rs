@@ -398,3 +398,34 @@ async fn an_unreadable_allergy_record_leaves_current_lines_not_checked() {
         })
     );
 }
+
+/// PR #1066 review finding: a failed read of the combinations must never let the list read
+/// clean. Read as no combinations (each row its one line), and every unmarked current line
+/// "not checked", as an unreadable allergy record leaves it (#1059).
+#[tokio::test]
+async fn a_failed_combination_read_leaves_current_lines_not_checked() {
+    let (charting, unsure) = charting_or_unsure(Err(anyhow::anyhow!("permission denied")));
+    assert!(charting.is_empty() && unsure);
+    let (_, unsure) = charting_or_unsure(Ok(HashMap::new()));
+    assert!(!unsure);
+
+    let a = PatientAllergies {
+        entries: vec![],
+        none: vec![],
+        challenges: vec![],
+        retractions: vec![],
+        doubted_charts: vec![],
+        unreadable: 0,
+    };
+    let mut list = sample_chart();
+    list.rows = vec![row(1, "Augmentin", None)];
+    let lines = charted_lines(&list.rows, &charting);
+    let checks = check_lines_unsure(None::<&tokio_postgres::Client>, &a, &lines, true).await;
+    assert_eq!(
+        checks.get(&Uuid::from_u128(1)),
+        Some(&LineCheck {
+            unverified: true,
+            ..LineCheck::default()
+        })
+    );
+}

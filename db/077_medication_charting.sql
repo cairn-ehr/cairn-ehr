@@ -26,15 +26,16 @@ BEGIN;
 --                  `against` entry that is not an object, a malformed component coding)
 --                  -> refuse at BOTH doors
 --       vocabulary / count / emptiness (charted_as outside the three words, fewer than two
---                  components, components beside a single coding, an empty route or reason,
+--                  components, components beside a single coding, a component coded
+--                  drugref-class, an empty route or reason,
 --                  an empty `against`, an override missing its reason, `against`, or an
 --                  entry's source / ref, a source that is not a lower-case word, an
 --                  allergy ref that is not a uuid)
 --                  -> refuse locally, ADMIT remotely (ADR-0051/ADR-0056: a peer may speak a
 --                  newer word, and refusing a verifiable event wedges sync)
 --
---     The window — not this floor — requires an override's reason (ADR-0021 soft policy);
---     the floor checks the override's shape only when it is present.
+--     The window — not this floor — decides when an override is required (ADR-0021 soft
+--     policy); the floor checks a present override's shape, its reason non-blank locally.
 --
 --     An absent key and an explicit JSON null read the same (honest unknown), as db/041
 --     treats substance.coding: a peer that emits nulls for absent optionals is not refused.
@@ -183,7 +184,7 @@ REVOKE EXECUTE ON FUNCTION cairn_check_medication_charting(jsonb) FROM PUBLIC;
 --     medication_id. No FK to medication_statement, for the same arrival-order reason.
 --
 --     Columns mirror the five keys: `components` is the combination as signed (jsonb, a
---     peer's one-element list included — Task 1 admits it remotely); `override_against` the
+--     peer's one-element list included — the remote door admits it); `override_against` the
 --     warnings the line was charted against, the `[{source, ref}, …]` array as signed (jsonb,
 --     never cast: a peer's newer source or malformed ref must still project). hlc_* / origin / content_address are the
 --     overlay-winner tuple, as medication_coding's, and content_address is what a shred
@@ -210,7 +211,8 @@ GRANT SELECT ON medication_charting TO cairn_agent;
 -- (#726). The old values are DROPPED (USING NULL), not converted with to_jsonb: a converted
 -- value would be a bare-uuid array — neither the new `[{source, ref}]` shape nor what a
 -- re-fold produces, since the events behind those rows carry the old key, which this apply fn
--- no longer reads. For this column a re-fold of those events writes NULL too.
+-- no longer reads, so a re-fold of those events never fills this column either. Such rows
+-- keep their override_reason, which a re-fold would not write: dev databases only.
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns
