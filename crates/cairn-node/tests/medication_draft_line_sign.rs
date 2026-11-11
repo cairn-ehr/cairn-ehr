@@ -37,7 +37,7 @@ async fn save(c: &Client, line: Uuid, chart: Uuid, terminal: &str, against: &str
         .query_one(
             "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, 'notewriter', \
                     'started-here', 'Augmentin Duo Forte', $4::text::jsonb, NULL, true, \
-                    $5::text::jsonb, false)",
+                    $5::text::jsonb, false, '', '')",
             &[
                 &line.to_string(),
                 &chart.to_string(),
@@ -228,7 +228,7 @@ async fn a_save_between_read_and_sign_answers_changed_and_writes_nothing() {
     let parts = json!([{"term": "Amoxil", "coding": null}]).to_string();
     let a: String = c
         .query_one(
-            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'Amoxil', $3::text::jsonb, NULL, false, '[]'::jsonb, false)",
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'Amoxil', $3::text::jsonb, NULL, false, '[]'::jsonb, false, '', '')",
             &[&line.to_string(), &chart.to_string(), &parts],
         )
         .await

@@ -33,9 +33,10 @@
 --   * A named writer must be a vault member whose role may act clinically (db/066's test).
 --     writer NULL = "not known", its own bucket (principle 4: never force a name).
 --   * A HAND TICK is the clinician's attestation that they saw the listed warnings and still
---     want the line. It is bound to the line's content: if the text, the coded parts or the
---     charted-as changed, the tick is cleared HERE, in the door, so a raw-SQL client cannot keep
---     a stale tick on edited text.
+--     want the line. It is bound to the line's content: if the text, the coded parts, the
+--     charted-as, the drug as typed or the directions changed, the tick is cleared HERE, in the
+--     door, so a raw-SQL client cannot keep a stale tick on edited text. The warnings it was
+--     given against are the ones seen when it was GIVEN (see the save door).
 --   * Lines hold the RAW text as typed; the doors store and return it byte-for-byte.
 --
 -- Replay-safe: this file re-runs on every schema replay.
@@ -60,8 +61,16 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
     ticked_against jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(ticked_against) = 'array'),
     finished       boolean NOT NULL DEFAULT false,
     created_at     timestamptz NOT NULL,
-    saved_at       timestamptz NOT NULL
+    saved_at       timestamptz NOT NULL,
+    -- The drug as typed and the directions after it: the window splits the line (only it can,
+    -- as the clinician typed it), and Sign rebuilds the line in Rust from THESE, never from what
+    -- the webview sends at Sign.
+    typed_drug     text NOT NULL DEFAULT '',
+    directions     text NOT NULL DEFAULT ''
 );
+-- Paired with the CREATE above for a table made before the two columns (#207's rule).
+ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS typed_drug text NOT NULL DEFAULT '';
+ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS directions text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS medication_draft_line_owner_idx
     ON medication_draft_line (patient_id, writer, seq);
 
@@ -112,10 +121,20 @@ REVOKE ALL ON medication_draft_line, medication_draft_line_deleted FROM PUBLIC;
 -- Save (insert or update) one line. Answers 'saved' | 'moved' | 'elsewhere' | 'no-chart' |
 -- 'no-such-writer' | 'not-yours' | 'deleted'; every answer but 'saved' wrote nothing. NULL line, patient or
 -- terminal is a caller bug and raises (`<> NULL` is NULL and would slip past the guards).
+--
+-- THE TICK'S REFS: p_ticked_against (the warnings on the line) is taken ONLY when a tick is
+-- GIVEN (no tick stored, p_hand_ticked true). While a stored tick stands and the content is
+-- unchanged, the stored refs are kept and the parameter ignored: the window autosaves every
+-- second with the refs of that moment, and taking them would quietly fold a warning that arrived
+-- AFTER the tick into it (design §3.2). An untick, or changed content, clears them.
+-- The earlier 11-argument door is dropped first: a signature is a function's identity, and a
+-- left-over overload would still accept saves that skip the typed drug and directions.
+DROP FUNCTION IF EXISTS cairn_med_draft_line_save(
+    uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean);
 CREATE OR REPLACE FUNCTION cairn_med_draft_line_save(
     p_line uuid, p_patient uuid, p_terminal text, p_writer text, p_charted_as text,
     p_text text, p_parts jsonb, p_reason text, p_hand_ticked boolean, p_ticked_against jsonb,
-    p_finished boolean)
+    p_finished boolean, p_typed_drug text, p_directions text)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_writer  text := cairn_vault_staff_id(p_writer);
@@ -147,13 +166,19 @@ BEGIN
         -- A tick vouches for THIS content; changed content voids it, whatever the caller sent.
         v_changed := v_row.line_text IS DISTINCT FROM p_text
                   OR v_row.parts IS DISTINCT FROM coalesce(p_parts, '[]'::jsonb)
-                  OR v_row.charted_as IS DISTINCT FROM p_charted_as;
+                  OR v_row.charted_as IS DISTINCT FROM p_charted_as
+                  OR v_row.typed_drug IS DISTINCT FROM coalesce(p_typed_drug, '')
+                  OR v_row.directions IS DISTINCT FROM coalesce(p_directions, '');
         UPDATE medication_draft_line
            SET charted_as = p_charted_as, line_text = p_text,
                parts = coalesce(p_parts, '[]'::jsonb), reason = p_reason,
+               typed_drug = coalesce(p_typed_drug, ''), directions = coalesce(p_directions, ''),
                hand_ticked = coalesce(p_hand_ticked, false) AND NOT v_changed,
-               ticked_against = CASE WHEN v_changed THEN '[]'::jsonb
-                                     ELSE coalesce(p_ticked_against, '[]'::jsonb) END,
+               -- Refs only with a standing tick; a tick already standing keeps its own (header).
+               ticked_against = CASE
+                   WHEN v_changed OR NOT coalesce(p_hand_ticked, false) THEN '[]'::jsonb
+                   WHEN v_row.hand_ticked THEN v_row.ticked_against
+                   ELSE coalesce(p_ticked_against, '[]'::jsonb) END,
                finished = coalesce(p_finished, false), saved_at = v_now
          WHERE line_id = p_line;
         RETURN 'saved';
@@ -162,11 +187,15 @@ BEGIN
         RETURN 'no-chart';
     END IF;
     INSERT INTO medication_draft_line (line_id, patient_id, writer, terminal_id, seq, charted_as,
-        line_text, parts, reason, hand_ticked, ticked_against, finished, created_at, saved_at)
+        line_text, parts, reason, hand_ticked, ticked_against, finished, created_at, saved_at,
+        typed_drug, directions)
     SELECT p_line, p_patient, v_writer, p_terminal,
            coalesce(max(l.seq), 0) + 1, p_charted_as, p_text, coalesce(p_parts, '[]'::jsonb),
-           p_reason, coalesce(p_hand_ticked, false), coalesce(p_ticked_against, '[]'::jsonb),
-           coalesce(p_finished, false), v_now, v_now
+           p_reason, coalesce(p_hand_ticked, false),
+           CASE WHEN coalesce(p_hand_ticked, false) THEN coalesce(p_ticked_against, '[]'::jsonb)
+                ELSE '[]'::jsonb END,
+           coalesce(p_finished, false), v_now, v_now,
+           coalesce(p_typed_drug, ''), coalesce(p_directions, '')
       FROM medication_draft_line l
      WHERE l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM v_writer;
     RETURN 'saved';
@@ -174,14 +203,21 @@ END;
 $$;
 
 -- The writer's lines for one chart, in display order. IS NOT DISTINCT FROM so a NULL writer
--- reads exactly the NULL bucket.
+-- reads exactly the NULL bucket. CREATE OR REPLACE cannot change a return shape, so a door made
+-- before typed_drug/directions were returned is dropped first (only then: no drop per replay).
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cairn_med_draft_lines'
+                AND NOT ('typed_drug' = ANY (proargnames))) THEN
+        DROP FUNCTION cairn_med_draft_lines(uuid, text);
+    END IF;
+END $$;
 CREATE OR REPLACE FUNCTION cairn_med_draft_lines(p_patient uuid, p_writer text)
 RETURNS TABLE(line_id uuid, terminal_id text, seq int, charted_as text, line_text text,
               parts jsonb, reason text, hand_ticked boolean, ticked_against jsonb,
-              finished boolean, saved_at timestamptz)
+              finished boolean, saved_at timestamptz, typed_drug text, directions text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT l.line_id, l.terminal_id, l.seq, l.charted_as, l.line_text, l.parts, l.reason,
-           l.hand_ticked, l.ticked_against, l.finished, l.saved_at
+           l.hand_ticked, l.ticked_against, l.finished, l.saved_at, l.typed_drug, l.directions
       FROM medication_draft_line l
      WHERE l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM cairn_vault_staff_id(p_writer)
      ORDER BY l.seq;
@@ -258,10 +294,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 
 REVOKE EXECUTE ON FUNCTION
-    cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean),
+    cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean,
+                              text, text),
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
-    cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean),
+    cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean,
+                              text, text),
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() TO cairn_window;

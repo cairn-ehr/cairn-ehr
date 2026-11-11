@@ -31,6 +31,10 @@ pub struct DraftLine {
     /// When the row was last saved, as the database's own text (microseconds and zone intact).
     /// Hand it back to [`chart_draft_line`] so the spend only takes the content that was read.
     pub saved_at: String,
+    /// The drug as the clinician typed it, and the directions after it: the window splits the
+    /// line, and Sign rebuilds what it signs from these stored halves, never from the webview.
+    pub typed_drug: String,
+    pub directions: String,
 }
 
 /// `[{"source": "...", "ref": "<uuid>"}]` to pairs, or `None` when ANY element is malformed.
@@ -59,7 +63,7 @@ pub async fn read_draft_lines(
     let rows = client
         .query(
             "SELECT line_id::text, terminal_id, seq, charted_as, line_text, parts::text, reason, \
-                    hand_ticked, ticked_against::text, finished, saved_at::text \
+                    hand_ticked, ticked_against::text, finished, saved_at::text, typed_drug, directions \
                FROM cairn_med_draft_lines($1::text::uuid, $2)",
             &[&patient.to_string(), &writer],
         )
@@ -85,6 +89,8 @@ pub async fn read_draft_lines(
                 ticked_against,
                 finished: r.try_get(9)?,
                 saved_at: r.try_get(10)?,
+                typed_drug: r.try_get(11)?,
+                directions: r.try_get(12)?,
             })
         })
         .collect()

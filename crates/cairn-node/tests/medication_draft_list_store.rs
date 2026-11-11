@@ -32,7 +32,7 @@ async fn save(
         json!([{"source": "allergy", "ref": "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"}]).to_string();
     let (line, chart) = (line.to_string(), chart.to_string());
     c.query_one(
-        "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, 'started-here', $5, $6::text::jsonb, NULL, $7, $8::text::jsonb, false)",
+        "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, 'started-here', $5, $6::text::jsonb, NULL, $7, $8::text::jsonb, false, '', '')",
         &[&line, &chart, &terminal, &writer, &text, &parts, &ticked, &against],
     )
     .await
@@ -508,7 +508,7 @@ async fn only_a_content_change_clears_the_tick_and_the_parts_must_be_an_array() 
             .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
             .unwrap_or(("started-here".into(), parts.clone()));
         w.query_one(
-            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', $3, 'x', $4::text::jsonb, NULL, true, $5::text::jsonb, false)",
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', $3, 'x', $4::text::jsonb, NULL, true, $5::text::jsonb, false, '', '')",
             &[&l, &c, &bc, &bp, &against],
         ).await.unwrap();
         let first = w
@@ -521,7 +521,7 @@ async fn only_a_content_change_clears_the_tick_and_the_parts_must_be_an_array() 
             .get::<_, bool>(0);
         assert!(first, "baseline ticked");
         w.query_one(
-            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', $3, 'x', $4::text::jsonb, $5, true, $6::text::jsonb, $7)",
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', $3, 'x', $4::text::jsonb, $5, true, $6::text::jsonb, $7, '', '')",
             &[&l, &c, &charted, &p, &reason, &against, &finished],
         ).await.unwrap();
         let now = w
@@ -537,7 +537,7 @@ async fn only_a_content_change_clears_the_tick_and_the_parts_must_be_an_array() 
     // A non-array parts is refused at the door (the table's CHECK).
     let e = w
         .query_one(
-            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'x', '{}'::jsonb, NULL, false, '[]'::jsonb, false)",
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'x', '{}'::jsonb, NULL, false, '[]'::jsonb, false, '', '')",
             &[&Uuid::now_v7().to_string(), &c],
         )
         .await
@@ -567,7 +567,7 @@ async fn a_malformed_tick_element_is_refused_by_the_floor() {
     ] {
         let r = w
             .query_one(
-                "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'x', $3::text::jsonb, NULL, true, $4::text::jsonb, false)",
+                "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'x', $3::text::jsonb, NULL, true, $4::text::jsonb, false, '', '')",
                 &[&Uuid::now_v7().to_string(), &chart.to_string(), &parts, &bad.to_string()],
             )
             .await;
