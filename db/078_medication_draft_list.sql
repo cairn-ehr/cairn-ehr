@@ -18,6 +18,13 @@
 -- delete is a plain DELETE with no record. What the clinician SIGNED is in the event log;
 -- what they merely typed and removed is paper that went into the bin.
 --
+-- WHY A TOMBSTONE ANYWAY: the window autosaves. A save already in flight when the clinician deletes
+-- a line would, finding no row, quietly INSERT it again -- possibly with its hand tick -- and the
+-- next Sign would chart a medication the clinician had removed. So a delete leaves
+-- medication_draft_line_deleted(line_id, deleted_at): NOT an audit record (it holds no text, no
+-- patient, no writer), only the fact that this id may never come back. A save of such an id
+-- answers 'deleted' and writes nothing. Delete and save take the same advisory lock.
+--
 -- HOW IT IS KEPT HONEST:
 --   * Reachable ONLY through the SECURITY DEFINER doors below; cairn_window (db/062) holds
 --     EXECUTE on the doors and no table privilege at all.
@@ -46,11 +53,11 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
     -- The whole line, raw, as typed.
     line_text      text NOT NULL,
     -- [{term, coding: {system, code, display} | null}]
-    parts          jsonb NOT NULL DEFAULT '[]',
+    parts          jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(parts) = 'array'),
     reason         text,
     hand_ticked    boolean NOT NULL DEFAULT false,
     -- [{source, ref}] the warnings seen when hand-ticked.
-    ticked_against jsonb NOT NULL DEFAULT '[]',
+    ticked_against jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(ticked_against) = 'array'),
     finished       boolean NOT NULL DEFAULT false,
     created_at     timestamptz NOT NULL,
     saved_at       timestamptz NOT NULL
@@ -58,10 +65,31 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
 CREATE INDEX IF NOT EXISTS medication_draft_line_owner_idx
     ON medication_draft_line (patient_id, writer, seq);
 
-REVOKE ALL ON medication_draft_line FROM PUBLIC;
+-- Paired ALTERs for a database created before the shape checks existed (#207's rule). The names
+-- are the ones Postgres gives an inline column CHECK.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'medication_draft_line'::regclass
+                    AND conname = 'medication_draft_line_parts_check') THEN
+        ALTER TABLE medication_draft_line ADD CONSTRAINT medication_draft_line_parts_check
+            CHECK (jsonb_typeof(parts) = 'array');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'medication_draft_line'::regclass
+                    AND conname = 'medication_draft_line_ticked_against_check') THEN
+        ALTER TABLE medication_draft_line ADD CONSTRAINT medication_draft_line_ticked_against_check
+            CHECK (jsonb_typeof(ticked_against) = 'array');
+    END IF;
+END $$;
+
+-- Ids that were deleted and may never be saved again (see the header). No text, no audit.
+CREATE TABLE IF NOT EXISTS medication_draft_line_deleted (
+    line_id    uuid PRIMARY KEY,
+    deleted_at timestamptz NOT NULL
+);
+
+REVOKE ALL ON medication_draft_line, medication_draft_line_deleted FROM PUBLIC;
 
 -- Save (insert or update) one line. Answers 'saved' | 'moved' | 'elsewhere' | 'no-chart' |
--- 'no-such-writer' | 'not-yours'; every answer but 'saved' wrote nothing. NULL line, patient or
+-- 'no-such-writer' | 'not-yours' | 'deleted'; every answer but 'saved' wrote nothing. NULL line, patient or
 -- terminal is a caller bug and raises (`<> NULL` is NULL and would slip past the guards).
 CREATE OR REPLACE FUNCTION cairn_med_draft_line_save(
     p_line uuid, p_patient uuid, p_terminal text, p_writer text, p_charted_as text,
@@ -85,6 +113,10 @@ BEGIN
     -- One lock per (chart, writer) list: serialises seq assignment and edits to the same list.
     PERFORM pg_advisory_xact_lock(hashtextextended(
         'med_draft:' || p_patient::text || ':' || coalesce(v_writer, ''), 0));
+    -- A deleted id never comes back (a late autosave must not resurrect it).
+    IF EXISTS (SELECT 1 FROM medication_draft_line_deleted WHERE line_id = p_line) THEN
+        RETURN 'deleted';
+    END IF;
     v_now := clock_timestamp();
     SELECT * INTO v_row FROM medication_draft_line WHERE line_id = p_line FOR UPDATE;
     IF FOUND THEN
@@ -134,20 +166,34 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
      ORDER BY l.seq;
 $$;
 
--- Delete one line (unaudited, see the header). 'deleted' | 'gone' | 'moved' | 'elsewhere'.
-CREATE OR REPLACE FUNCTION cairn_med_draft_line_delete(p_line uuid, p_patient uuid, p_terminal text)
+-- Delete one line and leave a tombstone (see the header). 'deleted' | 'gone' | 'moved' |
+-- 'elsewhere' | 'not-yours'. A function's signature is its identity, so the first slice-1 draft
+-- of this door (no writer) is dropped before the new one is created.
+DROP FUNCTION IF EXISTS cairn_med_draft_line_delete(uuid, uuid, text);
+CREATE OR REPLACE FUNCTION cairn_med_draft_line_delete(
+    p_line uuid, p_patient uuid, p_terminal text, p_writer text)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
-    v_row medication_draft_line%ROWTYPE;
+    v_writer text := cairn_vault_staff_id(p_writer);
+    v_row    medication_draft_line%ROWTYPE;
 BEGIN
     IF p_line IS NULL OR p_patient IS NULL OR p_terminal IS NULL THEN
         RAISE EXCEPTION 'cairn_med_draft_line_delete needs a line, a patient and a terminal';
     END IF;
+    -- The lock is the list's (chart, writer), the same one save takes, so it must be read from
+    -- the row first; re-read under the lock in case a concurrent door changed it.
+    SELECT * INTO v_row FROM medication_draft_line WHERE line_id = p_line;
+    IF NOT FOUND THEN RETURN 'gone'; END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended(
+        'med_draft:' || v_row.patient_id::text || ':' || coalesce(v_row.writer, ''), 0));
     SELECT * INTO v_row FROM medication_draft_line WHERE line_id = p_line FOR UPDATE;
     IF NOT FOUND THEN RETURN 'gone'; END IF;
     IF v_row.patient_id IS DISTINCT FROM p_patient THEN RETURN 'elsewhere'; END IF;
     IF v_row.terminal_id IS DISTINCT FROM p_terminal THEN RETURN 'moved'; END IF;
+    IF v_row.writer IS DISTINCT FROM v_writer THEN RETURN 'not-yours'; END IF;
     DELETE FROM medication_draft_line WHERE line_id = p_line;
+    INSERT INTO medication_draft_line_deleted (line_id, deleted_at)
+    VALUES (p_line, clock_timestamp()) ON CONFLICT DO NOTHING;
     RETURN 'deleted';
 END;
 $$;
@@ -188,9 +234,9 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean),
-    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text),
+    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean),
-    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text),
+    cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() TO cairn_window;

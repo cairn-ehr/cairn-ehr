@@ -200,7 +200,7 @@ async fn a_second_terminal_answers_moved_until_it_takes() {
     );
     let del: String = w
         .query_one(
-            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-2')",
+            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-2', 'notewriter')",
             &[&line.to_string(), &chart.to_string()],
         )
         .await
@@ -242,7 +242,7 @@ async fn a_second_terminal_answers_moved_until_it_takes() {
         let (w, chart) = (&w, chart);
         async move {
             w.query_one(
-                "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3)",
+                "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3, 'notewriter')",
                 &[&line.to_string(), &chart.to_string(), &t],
             )
             .await
@@ -412,4 +412,136 @@ async fn drafts_by_writer_counts_named_writers_only() {
     assert_eq!(rows[0].get::<_, String>(1), chart.to_string());
     assert_eq!(rows[0].get::<_, i64>(2), 2);
     let _: chrono::DateTime<chrono::Utc> = rows[0].get(3);
+}
+
+#[tokio::test]
+async fn a_save_after_delete_never_brings_the_line_back() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_owner, w, chart) = fixture(&base).await;
+    let line = Uuid::now_v7();
+    save(&w, line, chart, "pc-1", Some("notewriter"), "a", true).await;
+    let (l, c) = (line.to_string(), chart.to_string());
+    let del: String = w
+        .query_one("SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter')", &[&l, &c])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(del, "deleted");
+    // The stale autosave, ticked, arrives after the delete.
+    assert_eq!(
+        save(&w, line, chart, "pc-1", Some("notewriter"), "a", true).await,
+        "deleted"
+    );
+    let n = w
+        .query(
+            "SELECT 1 FROM cairn_med_draft_lines($1::text::uuid, 'notewriter')",
+            &[&c],
+        )
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(n, 0);
+}
+
+#[tokio::test]
+async fn another_writers_delete_answers_not_yours() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, w, chart) = fixture(&base).await;
+    nurse_b(&owner).await;
+    let line = Uuid::now_v7();
+    save(&w, line, chart, "pc-1", Some("notewriter"), "mine", false).await;
+    let (l, c) = (line.to_string(), chart.to_string());
+    for who in [Some("nurse-b"), None] {
+        let r: String = w
+            .query_one(
+                "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', $3)",
+                &[&l, &c, &who],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(r, "not-yours");
+    }
+    assert_eq!(
+        save(&w, line, chart, "pc-1", Some("notewriter"), "mine", false).await,
+        "saved"
+    );
+}
+
+#[tokio::test]
+async fn only_a_content_change_clears_the_tick_and_the_parts_must_be_an_array() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_owner, w, chart) = fixture(&base).await;
+    let (line, c) = (Uuid::now_v7(), chart.to_string());
+    let l = line.to_string();
+    let parts = json!([{"term": "x", "coding": null}]).to_string();
+    let other = json!([{"term": "y", "coding": null}]).to_string();
+    let against = json!([{"source": "allergy", "ref": "r1"}]).to_string();
+    // (charted_as, parts, reason, finished) sent; whether the tick must survive.
+    let cases: [(&str, &str, Option<&str>, bool, bool); 4] = [
+        ("started-here", &parts, Some("why"), false, true), // reason only
+        ("started-here", &parts, Some("why"), true, true),  // finished only
+        ("started-here", &other, Some("why"), true, false), // parts change
+        ("pre-existing", &other, Some("why"), true, false), // charted_as change
+    ];
+    for (charted, p, reason, finished, kept) in cases {
+        // Re-establish a ticked baseline: same content as the previous step, tick sent.
+        let base_row = w
+            .query_opt("SELECT charted_as, parts::text FROM cairn_med_draft_lines($1::text::uuid, 'notewriter')", &[&c])
+            .await
+            .unwrap();
+        let (bc, bp) = base_row
+            .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
+            .unwrap_or(("started-here".into(), parts.clone()));
+        w.query_one(
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', $3, 'x', $4::text::jsonb, NULL, true, $5::text::jsonb, false)",
+            &[&l, &c, &bc, &bp, &against],
+        ).await.unwrap();
+        let first = w
+            .query_one(
+                "SELECT hand_ticked FROM cairn_med_draft_lines($1::text::uuid, 'notewriter')",
+                &[&c],
+            )
+            .await
+            .unwrap()
+            .get::<_, bool>(0);
+        assert!(first, "baseline ticked");
+        w.query_one(
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', $3, 'x', $4::text::jsonb, $5, true, $6::text::jsonb, $7)",
+            &[&l, &c, &charted, &p, &reason, &against, &finished],
+        ).await.unwrap();
+        let now = w
+            .query_one(
+                "SELECT hand_ticked FROM cairn_med_draft_lines($1::text::uuid, 'notewriter')",
+                &[&c],
+            )
+            .await
+            .unwrap()
+            .get::<_, bool>(0);
+        assert_eq!(now, kept, "{charted} {p} {reason:?} {finished}");
+    }
+    // A non-array parts is refused at the door (the table's CHECK).
+    let e = w
+        .query_one(
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', 'started-here', 'x', '{}'::jsonb, NULL, false, '[]'::jsonb, false)",
+            &[&Uuid::now_v7().to_string(), &c],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.code(),
+        Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
+    );
 }
