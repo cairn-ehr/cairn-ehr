@@ -478,3 +478,22 @@ fn removing_a_line_asks_nothing() {
     // A line removed but not yet deleted is not drawn back by a read in flight.
     assert!(js_fn(LIST_JS, "drawMedRead").contains("!medRemoving.has(v.line_id)"));
 }
+
+/// A Remove the list refused (`moved`, `changed`, `not-yours`, …) says so, as a refused save does:
+/// the re-read draws the line back, and without a word the clinician would think it was gone
+/// (whole-slice review, finding 4). `deleted` and `gone` both mean the line is not in the list.
+#[test]
+fn a_refused_remove_says_so() {
+    let delete = js_fn(LIST_JS, "deleteLine");
+    let asked = position(delete, "const door = await invoke(\"med_list_delete\"");
+    let judged = position(
+        delete,
+        "if (door.answer !== \"deleted\" && door.answer !== \"gone\")",
+    );
+    let said = position(
+        delete,
+        "setMessage(el(\"med-list-status\"), MED_LIST_NOT_REMOVED + \" (the list answered \" + door.answer + \")\");",
+    );
+    assert!(asked < judged && judged < said, "{delete}");
+    assert!(LIST_JS.contains("const MED_LIST_NOT_REMOVED = \"This line was not removed\";"));
+}

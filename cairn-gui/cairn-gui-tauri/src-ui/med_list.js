@@ -32,6 +32,8 @@ const MED_LIST_UNFINISHED = "unfinished";
 /** A line not drawn ticked: Sign leaves it in the list. */
 const MED_LIST_UNTICKED = "not ticked: Sign leaves it unsigned";
 const MED_LIST_ELSEWHERE = "These lines are open on another terminal: ";
+/** A Remove the list refused (the door's word follows it). */
+const MED_LIST_NOT_REMOVED = "This line was not removed";
 const MED_PRESS_WORDS = { "started-here": "Start medication", "pre-existing": "Already taking" };
 /** A line's check while the editor shows its own: nothing drawn twice. */
 const NO_MARKS = { marks: [], notes: [], unverified: false };
@@ -481,7 +483,11 @@ function removeMedLine(line) {
 
 async function deleteLine(line) {
   try {
-    await invoke("med_list_delete", { patientId: line.patient, lineId: line.id, writer: line.writer });
+    const door = await invoke("med_list_delete", { patientId: line.patient, lineId: line.id, writer: line.writer });
+    // Moved, changed, not yours: the re-read below draws it back, so say why (as a refused save).
+    if (door.answer !== "deleted" && door.answer !== "gone") {
+      setMessage(el("med-list-status"), MED_LIST_NOT_REMOVED + " (the list answered " + door.answer + ")");
+    }
   } catch (failure) {
     setMessage(el("med-list-status"), failureText(failure));
   }
