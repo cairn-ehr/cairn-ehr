@@ -59,6 +59,18 @@ still ahead, and before the hold's own end, leaves the hold standing until then,
 release is coming and when, or that it cancels a hold not yet started (principle 4: a release that will take
 effect is never shown as nothing).
 
+A medication line is **charted** from one typed line in the window ([ADR-0099](decisions/0099-charting-a-medication.md));
+in this GUI milestone "prescribe" means charted, and nothing is printed or sent. Five optional keys ride the same
+assertion, with no new type or schema version: whether it was **started here** or was **already being taken** (or
+`unknown`, an old list nobody can vouch for), the **route**, the **strength**, a combination's **components** (each its
+own coding claim, never beside a single coding), and an **allergy override**: the reason typed for charting a new drug
+despite a listed allergy, and the allergy records it was charted against. The reason is a window rule, never a floor
+rule, so an event without one always syncs. The typed directions are the signed record; a structured field is filled
+only when the reading is certain, and an unread word stays visible as unread (principle 4). The allergy check runs on
+the line before Sign and again at Sign on a fresh read, on every component of a combination, and a combination emits
+no safety claim, since one class cannot speak for several drugs. The charting fields have their own projection,
+read beside the medication views by thread, never by widening them.
+
 The allergies row above is built as two born-sealed, additive event types: one entry
 (`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose
 "not known" is a recorded answer, and the source) and a "none known" **statement** (`clinical.allergy-none.asserted`,

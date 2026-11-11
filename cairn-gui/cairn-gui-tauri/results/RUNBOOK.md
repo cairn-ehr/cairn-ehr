@@ -2829,3 +2829,162 @@ follows:
 
 The real drugref's group-first order (#1057) was checked only by running the door's query read-only against
 `drugref_allergy`, never in the window. `TEMPLATE.md` carries a matching block (*The medication check*).
+
+## 30. Charting a medication from one line, and the check at charting (charting slice 1a, ADR-0099)
+
+The slice's gestures:
+- **The presses.** Over a chart on screen the medication pane shows *Start medication* and *Already taking*. Either one
+  opens one line, and the pressed one reads as pressed.
+- **The line.** Type the drug, then the directions: `amox 500mg tds`. From the 4th letter of a drug part a list of
+  drugs drops down (drugs only, never a group), the top one highlighted. Enter takes it, and "Coded as: …" shows under
+  the line. A combination is typed as its parts, `amox + clav 875/125 bd`, one pick per part. Under the line the
+  read-back row says "Drug · Form · Strength · Dose · Route · How often", "—" for each field not read, then "not read:
+  …".
+- **The check.** The line carries ADR-0098's **Allergy** tag and words, a muted note, or the small **not checked** tag,
+  before Sign. On *Start medication* a mark also shows "Reason for charting despite the listed allergy", and Sign stays
+  unavailable until something is typed there. *Already taking* shows the mark and asks no reason.
+- **Cancel**, or Escape with no list open, discards the unsigned line.
+- **After Sign** the line closes, "Charted." is said, and the list shows the line with its dose cell as `dose — sig`.
+
+Paper counterpart: write "Amoxycillin 500 mg tds PO" on the drug chart and sign it; write "penicillin allergy —
+benefit outweighs risk" beside a new order. **Live only**: a `--mock` window shows no presses.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Chart a common drug from the line, the pick present | the press of *Start medication* | "Charted." and the line drawn in the list | **≤ 10 s** |
+| The same, no drug list (drugref renamed away) | the press | "Charted." | — (record) |
+| Reading the line before Sign | the line typed | the drug, dose, route and any allergy hit read | no click, no hover |
+| An override: Start against a listed allergy | the press | "Charted." | — (record; the reason typed is the one extra step) |
+| A combination by its parts (`amox + clav 875/125 bd`) | the press | "Charted." | — (record; two picks) |
+| *Already taking* × 10 lines (a home list) | the first press | the tenth "Charted." | — (record; #1072) |
+
+The budgets are the plan's gestures, **with the key held** (`--key-hold-seconds 900`). Time them again on a shared
+terminal (no hold, the clock starting at the press) and record both. Steps:
+- chart a line: paper *N* = 1 (write and sign) → forced *M* = 1 (one signed event) → target *K* = 1 (the line and Sign);
+- an override: *N* = 1 written note → *M* = 0 extra (it is in the event) → *K* = 1 typed field;
+- *Start* vs *Already taking*: *N* = 0 on paper → *M* = 0 extra → the press replaces one Add;
+- a home list of *n* lines: paper *N* = 1 signature → as built *n* Signs. **This is the `M > N` candidate filed as
+  #1072**: record the figure there, do not re-file it.
+
+The node times the write half of a charted line as **`medication-chart`** (section 5). **A figure outside its budget,
+or an `M > N` other than #1072, is the finding: file an issue, and never adjust the budget.**
+
+**Setup.** Section 29's Setup A (drugref with its allergy groups, owned by the owner) and its `dr` function. Build
+this checkout first, let an owner `cnode` command replay the schema, and re-run section 0's `provision-window-role`,
+because the build moves `SCHEMA_GENERATION` to 77. Then three charts with section 27's `achart`:
+
+```bash
+C1=$(achart "Chart Penicillin" 1981-01-01)   # a GROUP allergy: Penicillins (allergy group)
+C2=$(achart "Chart Clean" 1982-02-02)        # no allergies
+C3=$(achart "Chart Timed" 1983-03-03)        # the timings
+for c in "$C1" "$C2" "$C3"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+```
+
+Launch as section 3 on `$C1` with `--key-hold-seconds 900`, and unlock the terminal. On `$C1`, record the allergy
+in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Penicillins (allergy group)",
+*Allergy*, *Anaphylaxis*, *Seen documented*, *Sign*. On `$C2`, record "No known drug allergies".
+
+**Measurement 1: the line, the pick and the read-back.**
+
+- [ ] On `$C2`, press *Start medication*. It reads as pressed, and the field has the focus. Type `amo`: no list.
+      Type `x`: a list of drugs, no group in it, each by its full name. Note the first option and whether it is the
+      drug most charted on this node (on a fresh rig, the shortest name).
+- [ ] Press ↓ until "amoxicillin" is highlighted, then Enter. "Coded as: amoxicillin" shows under the line. Type
+      ` 500mg tds`. The read-back reads "Drug amoxicillin · Form — · Strength — · Dose 500 mg · Route — · How often
+      three times daily". Sign.
+- [ ] The list shows **amoxicillin** with the dose cell "500 mg — 500mg tds". At the console:
+      `psql "$CONN" -c "SELECT charted_as, route, strength, components FROM medication_charting WHERE patient_id = '$C2'"`
+      reads `started-here` with the rest empty.
+- [ ] **The parse never guesses.** Without signing, type each of these and read the read-back, then Cancel:
+      - `ceftriaxone 1g IV stat`: Dose 1 g, Route iv, How often "stat";
+      - `amox 1,5mg tds`: Dose —, "not read: 1,5mg";
+      - `amox 500mg 250mg tds`: Dose —, both doses under "not read";
+      - `amox bd tds`: How often —, "not read: bd tds";
+      - `amox tab 500mg`: Form tablet, Strength 500 mg, Dose — (no count is assumed).
+- [ ] **An edit drops the coding.** Pick "amoxicillin", then change one letter of the drug word and change it back.
+      "Coded as" is gone, and the line reads **not checked** until a new check answers. Sign: the console row of
+      `medication_coding` has no row for that thread.
+- [ ] **Cancel.** Open the line, type something, press Cancel: the line closes, nothing is signed, and the focus is
+      on *Start medication*. Open it again and press Escape with no list open: the same. With the list open, Escape
+      closes only the list.
+
+**Measurement 2: the check at charting, and the reason.**
+
+- [ ] On `$C1`, *Start medication*, `amox`, choose "amoxicillin", ` 500mg tds`. Before Sign, with no click: the
+      **Allergy** tag and "amoxicillin is a Penicillins (allergy group); allergy recorded: anaphylaxis" on the line,
+      and "Reason for charting despite the listed allergy" below it. Sign is unavailable.
+- [ ] Type three spaces in the reason: Sign stays unavailable. Type `benefit outweighs risk`, Sign. "Charted.".
+      `psql "$CONN" -c "SELECT override_reason, override_against FROM medication_charting WHERE patient_id = '$C1'"`
+      reads the reason and one uuid. Check it against
+      `psql "$CONN" -Atc "SELECT event_id FROM clinical_allergy WHERE patient_id = '$C1'"`.
+- [ ] **Already taking.** On `$C1`, *Already taking*, `flucl`, choose "flucloxacillin", ` 500mg qid`. The mark shows,
+      and no reason field. Sign. The row reads `pre-existing`, no override.
+- [ ] **A combination.** On `$C1`, *Start medication*, type `amox`, choose it, then ` + clav`, choose "clavulanic
+      acid" (or leave it unpicked if the drug list has none), then ` 875/125 bd`. "Coded as" reads both parts. The
+      mark shows (through the amoxicillin part). Type a reason, Sign. The list's name reads "amoxicillin + clavulanic
+      acid", and its line carries the **Allergy** tag. The console row's `components` holds both parts.
+- [ ] **A brand typed as the drug.** On `$C1`, *Start medication*, `Augmentin 875/125 bd`, no pick (the drug list has
+      no brand names, #1065). The line reads **not checked** and asks no reason. Note it: this is the gap #1065 owes.
+- [ ] **The check is re-run at Sign.** An allergy recorded elsewhere while a line is open cannot be produced by hand
+      on this rig: there is no console verb for an allergy, and an allergy recorded in this window re-reads the list,
+      which checks the open line again. `med_chart_db_tests.rs::med_chart_db_the_check_is_reread_at_sign` pins it.
+      What can be seen, on a fresh `achart` (not `$C1`, which Measurement 3 needs) with the Penicillins allergy
+      recorded: open a *Start* line for amoxicillin, see its mark, then sign the allergy's *Entered in error* in the
+      allergy list. The open line reads **not checked** at once, then clean, and the reason field goes.
+- [ ] **No drug list.** `psql "$CONN" -c "ALTER SCHEMA drugref RENAME TO drugref_off"`, then on `$C1` press *Start
+      medication* and type `amox`: "No drug list on this terminal: the medication is charted as typed". Type
+      ` 500mg tds`. The line reads **not checked** and asks no reason (ADR-0099 (h): an uncoded line cannot be checked
+      against a coded group allergy). Sign: it charts uncoded, and the list line reads **not checked**. Then
+      `psql "$CONN" -c "ALTER SCHEMA drugref_off RENAME TO drugref"`.
+
+**Measurement 3: the timings (five runs each, held key, then shared terminal).**
+
+- [ ] **A common drug (≤ 10 s).** On `$C3`, from the press of *Start medication* to "Charted.": `amox`, Enter on the
+      right option, ` 500mg tds`, Sign. On later runs: `paracet` ` 1g qid po`, `cefal` ` 500mg qid`, `metfo` ` 500mg
+      bd`, `atorv` ` 40mg nocte`. Note how often the top option was the wrong drug.
+- [ ] **No drug list.** The same gesture with drugref renamed away (record).
+- [ ] **An override.** On `$C1`: the same gesture plus the reason (record).
+- [ ] **A home list.** On a fresh `achart`, ten lines by *Already taking*, one after another (record; #1072).
+- [ ] Then the write halves:
+      `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind = 'medication-chart'"`.
+- [ ] Relaunch with no `--key-hold-seconds` on fresh charts and repeat the common drug.
+
+**Measurement 4: the real Tauri IPC** (the webview tests stubbed `invoke`). The webview sends `med_line_read`'s
+`text`, `med_drug_search`'s `text`, `med_line_check`'s `patientId`, `charts`, `typedDrug` and `parts`, and
+`med_chart`'s `patientId`, `charts`, `line` (`parts`, `typed_drug`, `directions`, `charted_as`, `reason`) and
+`credential`. A name Tauri cannot map fails the call with an "invalid args" error.
+
+- [ ] The read-back fills as you type, the pick lists options with drugref installed (never the no-drug-list hint),
+      and the line's tag follows the allergies (Measurement 2).
+- [ ] A signed line's console rows match Measurements 1 and 2.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The two presses are reached by Tab and read with their pressed state.
+- [ ] The line is announced as a combo box. Note whether the active option is announced during ↓ / ↑ (it is not
+      expected to be: #1070).
+- [ ] Note whether the **Allergy** tag and its words are announced when they appear while typing (they are not live
+      regions: #1070). Whether "Coded as: …" and the read-back are read (both are polite live regions).
+- [ ] The reason field is reached by Tab and read with its label. A refusal under the line is read when it appears.
+- [ ] A charted line's row is read with its dose cell, "500 mg — 500mg tds" (R26), never "dose not recorded" for a
+      line with directions.
+- [ ] No dialog at any point.
+
+**WebKit.** The window is WebKit (Tauri on macOS). The webview was pinned by source guards and walked headlessly
+with a stubbed `invoke`. **The real window's WebKit has not been walked.** Walk the line in the real window and note
+anything that differs from the words above, in particular ↓ / ↑ / Enter / Escape in the field, a click on an option,
+and the line on a narrow window.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
+WebKit need the window and a human. The rest was run as follows:
+- **The wire:** `cairn-event`'s `medication/charting.rs` tests.
+- **The floor, projection and door:** `medication_charting_floor.rs`, `medication_charting_projection.rs`,
+  `medication_drug_search_door.rs`, `medication_chart.rs` (DB-gated, against the drug stub).
+- **The parser and the check:** `medication/line_tests.rs`, `allergy/check_combination_tests.rs`.
+- **The window's commands:** `cairn-gui-tauri`'s `med_chart_tests.rs` and `med_chart_rows_tests.rs` (pure) and
+  `med_chart_db_tests.rs` (DB-gated; CI never runs those, #905).
+- **The webview:** source guards (`med_chart_webview_tests.rs`, `med_chart_line_webview_tests.rs`).
+
+`TEMPLATE.md` carries a matching block (*Charting a medication*).
