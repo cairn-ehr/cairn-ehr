@@ -73,6 +73,16 @@ the line before Sign and again at Sign on a fresh read, on every component of a 
 no safety claim, since one class cannot speak for several drugs. The charting fields have their own projection,
 read beside the medication views by thread, never by widening them.
 
+Several lines are charted **under one signature** from an unsigned list
+([ADR-0100](decisions/0100-charting-a-list-under-one-signature.md)), as the admission medication history is written on
+paper. The list is mutable working state beside the record, never the record. It is held per writer and per chart,
+is in no backup, is never committed by a timer, and a line removed from it leaves no record. A line starts ticked
+only when it is complete (drug coded, form, dose and directions read) and checked clean against an allergy list that
+was asked; any line may be ticked by hand. One Sign releases the key once and charts every ticked line as its own
+`clinical.medication.asserted`, each in its own transaction together with its removal from the list. A tick that no
+longer holds on the fresh read at Sign (a warning that arrived after it) refuses the whole Sign before the key, so
+nothing is signed.
+
 The allergies row above is built as two born-sealed, additive event types: one entry
 (`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose
 "not known" is a recorded answer, and the source) and a "none known" **statement** (`clinical.allergy-none.asserted`,

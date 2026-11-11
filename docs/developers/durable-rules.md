@@ -10,6 +10,54 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ BATCH CHARTING SLICE 1 — THE MEDICATION LIST AND ONE SIGN (ADR-0100, db/078) — do not undo**
+(pins: `crates/cairn-node/tests/{medication_draft_list_store,medication_draft_list_ticks,medication_draft_line_sign}.rs`,
+`crates/cairn-node/src/medication/draft_tick_tests.rs`,
+`cairn-gui/cairn-gui-tauri/src/{med_list,med_list_db,med_list_held_db,med_list_review_db,med_list_webview}_tests.rs`).
+Every charting 1a rule below still holds; the list's lines are 1a's line, and 1a's per-line refusals run per line.
+- **The default tick is DERIVED at every read, never stored.** Only a hand tick (`hand_ticked` + `ticked_against`) and
+  a hand untick (`held`) are stored. **Tempting wrong fixes:** store `default_ticked` "so the list opens faster" (an
+  allergy recorded since would leave a stored tick standing); let the webview's `ticked` stand at Sign (the webview's
+  word is never trusted: `judge` re-derives every tick on a fresh read). Pins:
+  `draft_tick_tests.rs::allergies_not_yet_asked_withholds_every_default_tick`,
+  `med_list_db_tests.rs::an_allergy_entered_after_the_tick_refuses_and_unticks_only_that_line`.
+- **A content change clears a hand tick and a veto IN THE DOOR**, whatever the caller sent: `line_text`, `parts`,
+  `charted_as`, `typed_drug` or `directions`. **And a standing tick keeps the refs it was GIVEN against**: a later
+  autosave's `p_ticked_against` is ignored. **Tempting wrong fixes:** clear the tick only in the webview (a stale webview
+  or a raw-SQL client signs new words on the old tick); "refresh" the refs on every save (a warning that arrived after
+  the tick is folded into it by the next autosave, a second after it appears). Pins:
+  `medication_draft_list_store.rs::an_edit_after_a_hand_tick_clears_it_in_the_door`,
+  `medication_draft_list_ticks.rs::an_autosave_keeps_the_refs_seen_when_ticked`,
+  `a_held_line_stays_held_until_its_words_change_or_it_is_ticked`.
+- **A hand tick vouches only for warnings both FOUND now and DRAWN on the line** (`med_list::vouched`, ruling R1).
+  **Tempting wrong fix:** vouch for every warning the fresh check finds at the save ("the clinician was looking at the
+  line"): one recorded but not yet drawn would be signed past unseen. Pins:
+  `med_list_tests.rs::a_tick_vouches_only_for_warnings_both_found_and_drawn`,
+  `med_list_review_db_tests.rs::a_warning_recorded_before_the_tick_but_never_drawn_refuses`.
+- **A line's event and its spend are ONE transaction, and never a shared transaction across lines** (ADR-0060 decision
+  7). `chart_draft_line` submits, then spends through the delete door naming the `saved_at` it read, and rolls back
+  unless the spend answers `deleted`. **Tempting wrong fixes:** wrap the whole Sign in one transaction "so it is
+  atomic" (one bad line rolls back eleven good ones, the medication sign-off's old defect); delete the row after the
+  commit (a crash between leaves a signed line in the list to be signed twice); spend without `saved_at` (a save
+  between the read and the Sign is spent on content nobody signed). Pins:
+  `medication_draft_line_sign.rs::a_signed_line_is_in_the_record_and_gone_from_the_list`,
+  `a_save_between_read_and_sign_answers_changed_and_writes_nothing`,
+  `med_list_review_db_tests.rs::a_lost_commit_stops_and_keeps_the_rest`.
+- **Whole-Sign refusals are for a changed picture only, and all come before the key**; a missing reason is a PER-LINE
+  refusal (ruling R3). **Tempting wrong fixes:** refuse the whole Sign for one line's missing reason or blank part
+  (ADR-0060 decision 1); judge the reason in `hand_tick_holds` (it was there in the plan, and made one line's missing
+  reason block the list); compare the writer by staff id after the release (a held key of another member signs: compare
+  by KEY). Pins: `draft_tick_tests.rs::the_reason_rules_do_not_judge_the_tick`,
+  `med_list_review_db_tests.rs::a_start_tick_on_a_seen_mark_with_no_reason_is_one_lines_refusal`,
+  `med_list_db_tests.rs::a_held_key_of_another_member_writes_nothing`.
+- **A removed line's id never comes back** (`medication_draft_line_deleted`). It is a tombstone, not an audit record:
+  no text, no patient, no writer. **Tempting wrong fixes:** drop the tombstone "since removal is unaudited" (a late
+  autosave re-inserts the removed line, perhaps ticked); put the text in it "for audit" (the maintainer ruled removal
+  unaudited, design §9 Q3). Pin: `medication_draft_list_store.rs::a_save_after_delete_never_brings_the_line_back`.
+- **A save is filed under the writer the list was READ under** (ruling R2), never whoever who's here names when the
+  debounced save lands. Pins: `med_list_review_db_tests.rs::a_save_after_a_switch_files_under_the_read_writer`,
+  `a_delete_after_a_switch_deletes_the_read_writers_line`.
+
 **⇒ CHARTING SLICE 1a — THE ONE LINE AND THE CHECK AT CHARTING (ADR-0099, db/077, db/076 §5, db/031 + db/037 + db/044 in place) — do not undo**
 (pins: `crates/cairn-event/src/medication/charting.rs`'s tests,
 `crates/cairn-node/tests/{medication_charting_floor,medication_charting_projection,medication_drug_search_door,medication_chart}.rs`,
