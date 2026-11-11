@@ -13,8 +13,8 @@
 //! is rolled back. DB-gated on `$CAIRN_TEST_PG` (a skipped run prints `skipped:`), serialized via
 //! `db::test_serial_guard`.
 use cairn_event::medication::{
-    medication_assertion_body, render_medication_twin, AllergyOverride, ChartedAs, Charting,
-    Component, MedicationAssertion, SubstanceCoding,
+    medication_assertion_body, render_medication_twin, ChartedAs, Charting, Component,
+    MedicationAssertion, OverrideRef, SubstanceCoding, WarningOverride, ALLERGY_SOURCE,
 };
 use cairn_node::allergy::drug_facts::search_medication_drugs;
 use cairn_node::db;
@@ -75,14 +75,14 @@ fn components() -> [Component<'static>; 2] {
     ]
 }
 
-/// A started-here combination charted despite a listed allergy (`against`).
-fn combination<'a>(parts: &'a [Component<'a>], against: &'a [&'a str]) -> Charting<'a> {
+/// A started-here combination charted despite an allergy warning (`against`).
+fn combination<'a>(parts: &'a [Component<'a>], against: &'a [OverrideRef<'a>]) -> Charting<'a> {
     Charting {
         charted_as: Some(ChartedAs::StartedHere),
         route: Some("po"),
         strength: Some("875/125 mg"),
         components: parts,
-        allergy_override: Some(AllergyOverride {
+        warning_override: Some(WarningOverride {
             reason: "no alternative in the remote clinic",
             against,
         }),
@@ -138,7 +138,11 @@ async fn chart_medication_signs_and_projects() {
     };
     let r = chart(&c).await;
     let allergy = Uuid::now_v7().to_string();
-    let (parts, against) = (components(), [allergy.as_str()]);
+    let against = [OverrideRef {
+        source: ALLERGY_SOURCE,
+        reference: &allergy,
+    }];
+    let parts = components();
     let author = AuthorParams {
         human_sk: &r.human_sk,
         human_kid: &r.human_kid,
@@ -160,7 +164,10 @@ async fn chart_medication_signs_and_projects() {
     let (signer, payload) = signed(&c, done.event_id).await;
     assert_eq!(signer, r.human_kid, "the clinician signs (ADR-0053)");
     assert_eq!(payload["charted_as"], "started-here");
-    assert_eq!(payload["allergy_override"]["against"][0], allergy.as_str());
+    assert_eq!(
+        payload["warning_override"]["against"],
+        serde_json::json!([{"source": "allergy", "ref": allergy}])
+    );
     assert_eq!(payload["substance"]["components"][1]["coding"], Value::Null);
     assert!(
         payload.get("safety").is_none(),
@@ -256,7 +263,11 @@ async fn read_charting_reads_by_thread() {
     };
     let r = chart(&c).await;
     let allergy = Uuid::now_v7().to_string();
-    let (parts, against) = (components(), [allergy.as_str()]);
+    let against = [OverrideRef {
+        source: ALLERGY_SOURCE,
+        reference: &allergy,
+    }];
+    let parts = components();
     let already = Charting {
         charted_as: Some(ChartedAs::PreExisting),
         route: Some("po"),

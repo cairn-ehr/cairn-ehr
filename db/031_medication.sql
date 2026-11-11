@@ -64,7 +64,7 @@ BEGIN
         -- The coding floor lives in db/041 (a floor change needs its own generation
         -- bump, #188); plpgsql resolves the call at execution, so the later file is fine.
         PERFORM cairn_check_medication_coding(p);
-        -- The charting keys (charted_as, route, strength, components, allergy_override)
+        -- The charting keys (charted_as, route, strength, components, warning_override)
         -- are judged in db/077, for the same generation-bump reason.
         PERFORM cairn_check_medication_charting(p);
     END IF;

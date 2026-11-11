@@ -1,6 +1,6 @@
 //! Charting slice 1a, Task 3 — the charting projection (`medication_charting`, db/077 §2).
 //!
-//! A charted line's five charting keys (charted-as, route, strength, components, allergy
+//! A charted line's five charting keys (charted-as, route, strength, components, warning
 //! override) land in their OWN table, written by a second apply fn on
 //! `clinical.medication.asserted`, so no medication view is widened across files. This file
 //! pins that the row is written from the clear payload of a born-sealed assertion, that an
@@ -15,8 +15,8 @@
 //! DB-gated on `$CAIRN_TEST_PG` (a skipped run prints `skipped:`), serialized via
 //! `db::test_serial_guard`.
 use cairn_event::medication::{
-    medication_assertion_body, render_medication_twin, AllergyOverride, ChartedAs, Charting,
-    Component, MedicationAssertion, SubstanceCoding,
+    medication_assertion_body, render_medication_twin, ChartedAs, Charting, Component,
+    MedicationAssertion, OverrideRef, SubstanceCoding, WarningOverride, ALLERGY_SOURCE,
 };
 use cairn_event::SigningKey;
 use cairn_node::db;
@@ -100,16 +100,24 @@ async fn chart_line(
 }
 
 /// The full charting the first test signs: every key present.
-fn full<'a>(components: &'a [Component<'a>], against: &'a [&'a str]) -> Charting<'a> {
+fn full<'a>(components: &'a [Component<'a>], against: &'a [OverrideRef<'a>]) -> Charting<'a> {
     Charting {
         charted_as: Some(ChartedAs::StartedHere),
         route: Some("po"),
         strength: Some("875/125 mg"),
         components,
-        allergy_override: Some(AllergyOverride {
+        warning_override: Some(WarningOverride {
             reason: "no alternative in the remote clinic",
             against,
         }),
+    }
+}
+
+/// One `against` entry naming the allergy record `id`.
+fn allergy(id: &str) -> OverrideRef<'_> {
+    OverrideRef {
+        source: ALLERGY_SOURCE,
+        reference: id,
     }
 }
 
@@ -131,13 +139,13 @@ fn components() -> [Component<'static>; 2] {
 }
 
 /// The thread's charting row as one JSON object (None = no row), so a test compares the
-/// whole row at once. `override_against` is read back as text[] (the column is uuid[]).
+/// whole row at once. `override_against` is jsonb: the `[{source, ref}]` array as signed.
 async fn charting_row(c: &Client, med: Uuid) -> Option<Value> {
     c.query_opt(
         "SELECT jsonb_build_object('patient_id', patient_id::text, 'charted_as', charted_as, \
                 'route', route, 'strength', strength, 'components', components, \
                 'override_reason', override_reason, \
-                'override_against', override_against::text[])::text \
+                'override_against', override_against)::text \
            FROM medication_charting WHERE medication_id = $1::text::uuid",
         &[&med.to_string()],
     )
@@ -159,7 +167,7 @@ fn expected_full(patient: Uuid, e1: &str) -> Value {
             {"term": "clavulanic acid", "coding": null}
         ],
         "override_reason": "no alternative in the remote clinic",
-        "override_against": [e1],
+        "override_against": [{"source": "allergy", "ref": e1}],
     })
 }
 
@@ -181,7 +189,7 @@ macro_rules! rig {
 async fn a_charted_line_projects_its_fields() {
     rig!(c, sk, kid);
     let e1 = Uuid::now_v7().to_string();
-    let (parts, against) = (components(), [e1.as_str()]);
+    let (parts, against) = (components(), [allergy(&e1)]);
     let (patient, med, _) = chart_line(&c, &sk, &kid, full(&parts, &against)).await;
     assert_eq!(
         charting_row(&c, med).await,
@@ -214,7 +222,7 @@ async fn an_event_without_charting_projects_no_row() {
 async fn a_shred_removes_the_charting_row() {
     rig!(c, sk, kid);
     let e1 = Uuid::now_v7().to_string();
-    let (parts, against) = (components(), [e1.as_str()]);
+    let (parts, against) = (components(), [allergy(&e1)]);
     let (_, med, event) = chart_line(&c, &sk, &kid, full(&parts, &against)).await;
     assert!(charting_row(&c, med).await.is_some());
     shred_event(
@@ -239,7 +247,7 @@ async fn a_shred_removes_the_charting_row() {
 async fn a_reprojection_rebuilds_it() {
     rig!(c, sk, kid);
     let e1 = Uuid::now_v7().to_string();
-    let (parts, against) = (components(), [e1.as_str()]);
+    let (parts, against) = (components(), [allergy(&e1)]);
     let (patient, med, _) = chart_line(&c, &sk, &kid, full(&parts, &against)).await;
     c.batch_execute("TRUNCATE medication_charting")
         .await
@@ -260,14 +268,18 @@ async fn a_reprojection_rebuilds_it() {
 #[tokio::test]
 async fn a_peer_newer_word_still_projects() {
     rig!(c, sk, kid);
-    // A word this build does not know and a one-element combination: refused at the authoring
-    // door, admitted from a peer (Task 1). The projection must store both as given, not raise.
+    // A word this build does not know, a one-element combination, and an override against a
+    // warning source this build does not know (with a ref that is no uuid, and a second entry
+    // missing its ref): refused at the authoring door, admitted from a peer (Task 1). The
+    // projection must store each as given, not raise.
     let patient = Uuid::now_v7();
     common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let (mut body, med) = charted_body(&c, &kid, patient, "peer-node", Charting::default()).await;
     let one = json!([{"term": "amoxicillin", "coding": null}]);
     body.payload["charted_as"] = json!("transferred-in");
     body.payload["substance"]["components"] = one.clone();
+    let against = json!([{"source": "renal-dose", "ref": "egfr-below-30"}, {"source": "allergy"}]);
+    body.payload["warning_override"] = json!({"reason": "dose halved", "against": against});
     apply_remote(&c, &sk, &body)
         .await
         .expect("the remote door admits a peer's newer word");
@@ -276,6 +288,8 @@ async fn a_peer_newer_word_still_projects() {
         .expect("the newer word projects");
     assert_eq!(row["charted_as"], "transferred-in");
     assert_eq!(row["components"], one);
+    assert_eq!(row["override_reason"], "dose halved");
+    assert_eq!(row["override_against"], against);
 }
 
 #[tokio::test]

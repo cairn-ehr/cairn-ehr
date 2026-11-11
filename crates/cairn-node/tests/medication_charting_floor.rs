@@ -152,10 +152,31 @@ fn group_coded(term: &str) -> Value {
     json!({"term": term, "coding": {"system": "drugref-class", "code": AMOX, "display": term}})
 }
 
+/// One `against` entry naming the allergy record `id`.
+fn allergy_ref(id: &str) -> Value {
+    json!({"source": "allergy", "ref": id})
+}
+
+/// A `warning_override` whose `against` holds just `entry`, with a good reason.
+fn override_against(entry: Value) -> Value {
+    json!({"warning_override": {"reason": "no alternative", "against": [entry]}})
+}
+
+/// Overrides every door admits: the source vocabulary is open (`interaction`, `renal-dose`, …
+/// come later, mostly from drugref), and a non-allergy source defines its own ref, so only an
+/// allergy ref is held to the uuid shape.
+fn open_vocabulary_shapes() -> Vec<Value> {
+    vec![
+        override_against(json!({"source": "renal-dose", "ref": "egfr-below-30"})),
+        override_against(json!({"source": "interaction", "ref": "E1"})),
+    ]
+}
+
 /// Every charting shape the authoring door refuses but a peer's event may carry (vocabulary,
 /// count, emptiness — never type): each must be ADMITTED at the remote door (ADR-0056). An
-/// override missing its reason or its `against` is one (ruling R20): the remote door checks
-/// only what is present. `allergy` names an allergy record for the `against` lists.
+/// override missing its reason, its `against`, or an entry's `source` / `ref` is one (ruling
+/// R20): the remote door checks only the type of what is present. `allergy` names an allergy
+/// record for the `against` lists.
 fn local_only_shapes(allergy: &str) -> Vec<(Value, Value, &'static str)> {
     vec![
         (json!({"route": " "}), json!({}), "route"),
@@ -177,29 +198,56 @@ fn local_only_shapes(allergy: &str) -> Vec<(Value, Value, &'static str)> {
             "drugref-class",
         ),
         (
-            json!({"allergy_override": {"reason": "  ", "against": [allergy]}}),
+            json!({"warning_override": {"reason": "  ", "against": [allergy_ref(allergy)]}}),
             json!({}),
-            "allergy_override.reason",
+            "warning_override.reason",
         ),
         (
-            json!({"allergy_override": {"reason": "no alternative", "against": []}}),
+            json!({"warning_override": {"reason": "no alternative", "against": []}}),
             json!({}),
-            "allergy_override.against",
+            "warning_override.against",
         ),
         (
-            json!({"allergy_override": {"against": [allergy]}}),
+            json!({"warning_override": {"against": [allergy_ref(allergy)]}}),
             json!({}),
-            "allergy_override.reason",
+            "warning_override.reason",
         ),
         (
-            json!({"allergy_override": {"reason": "no alternative"}}),
+            json!({"warning_override": {"reason": "no alternative"}}),
             json!({}),
-            "allergy_override.against",
+            "warning_override.against",
         ),
         (
-            json!({"allergy_override": {"reason": null, "against": null}}),
+            json!({"warning_override": {"reason": null, "against": null}}),
             json!({}),
-            "allergy_override.reason",
+            "warning_override.reason",
+        ),
+        (
+            override_against(json!({"source": " ", "ref": allergy})),
+            json!({}),
+            "warning_override.against[].source",
+        ),
+        (
+            override_against(json!({"source": "allergy", "ref": " "})),
+            json!({}),
+            "warning_override.against[].ref",
+        ),
+        (
+            override_against(json!({"ref": allergy})),
+            json!({}),
+            "warning_override.against[].source",
+        ),
+        (
+            override_against(json!({"source": "allergy", "ref": null})),
+            json!({}),
+            "warning_override.against[].ref",
+        ),
+        // uuid shape is an authoring-door rule for ALLERGY refs only (the projection keeps
+        // `against` as jsonb, so a peer's malformed ref cannot break it).
+        (
+            override_against(json!({"source": "allergy", "ref": "E1"})),
+            json!({}),
+            "warning_override.against[].ref",
         ),
     ]
 }
@@ -219,7 +267,8 @@ async fn local_door_refuses_each_bad_shape() {
     let good = with(
         base_payload(),
         json!({"charted_as": "started-here", "route": "po",
-               "allergy_override": {"reason": "no alternative", "against": [allergy]}}),
+               "warning_override": {"reason": "no alternative",
+                                    "against": [allergy_ref(&allergy)]}}),
         json!({"strength": "875/125 mg",
                "components": [coded("amoxicillin"), {"term": "clav", "coding": null}]}),
     );
@@ -243,19 +292,35 @@ async fn local_door_refuses_each_bad_shape() {
             "substance.components",
         ),
         (
-            json!({"allergy_override": {"reason": 5, "against": [allergy]}}),
+            json!({"warning_override": "no alternative"}),
             json!({}),
-            "allergy_override.reason",
+            "warning_override",
         ),
         (
-            json!({"allergy_override": {"reason": "x", "against": allergy}}),
+            json!({"warning_override": {"reason": 5, "against": [allergy_ref(&allergy)]}}),
             json!({}),
-            "allergy_override.against",
+            "warning_override.reason",
         ),
         (
-            json!({"allergy_override": {"reason": "x", "against": ["E1"]}}),
+            json!({"warning_override": {"reason": "x", "against": allergy_ref(&allergy)}}),
             json!({}),
-            "allergy_override.against",
+            "warning_override.against",
+        ),
+        // A bare uuid string — the shape `against` entries had before they were general.
+        (
+            override_against(json!(allergy)),
+            json!({}),
+            "warning_override.against",
+        ),
+        (
+            override_against(json!({"source": 5, "ref": allergy})),
+            json!({}),
+            "warning_override.against[].source",
+        ),
+        (
+            override_against(json!({"source": "allergy", "ref": 5})),
+            json!({}),
+            "warning_override.against[].ref",
         ),
     ];
     for (top, sub, field) in bad.into_iter().chain(local_only_shapes(&allergy)) {
@@ -264,6 +329,12 @@ async fn local_door_refuses_each_bad_shape() {
             .await
             .expect_err(&format!("the local door refuses {top} {sub}"));
         assert!(e.contains(field), "the refusal names {field:?}, got: {e}");
+    }
+    for top in open_vocabulary_shapes() {
+        let p = with(base_payload(), top.clone(), json!({}));
+        floor(&mut c, &p, false)
+            .await
+            .unwrap_or_else(|e| panic!("the local door admits {top}: {e}"));
     }
 }
 
@@ -301,6 +372,12 @@ async fn remote_door_admits_a_newer_word() {
             .await
             .unwrap_or_else(|e| panic!("the remote door admits {top} {sub}: {e}"));
     }
+    for top in open_vocabulary_shapes() {
+        let p = with(base_payload(), top.clone(), json!({}));
+        apply_peer(&c, &sk, &kid, p)
+            .await
+            .unwrap_or_else(|e| panic!("the remote door admits {top}: {e}"));
+    }
 
     // The type tier still holds at the remote door: a key the projection could not read.
     for (top, sub, field) in [
@@ -311,9 +388,14 @@ async fn remote_door_admits_a_newer_word() {
             "substance.components",
         ),
         (
-            json!({"allergy_override": {"reason": "x", "against": ["E1"]}}),
+            override_against(json!("E1")),
             json!({}),
-            "allergy_override.against",
+            "warning_override.against",
+        ),
+        (
+            override_against(json!({"source": "allergy", "ref": 5})),
+            json!({}),
+            "warning_override.against[].ref",
         ),
     ] {
         let p = with(base_payload(), top, sub);

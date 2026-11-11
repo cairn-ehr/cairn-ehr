@@ -1,7 +1,7 @@
 //! Charting fields on a medication assertion (charting slice 1a, design §3.4–§3.5).
 //!
 //! Charting a medication adds five OPTIONAL keys to `clinical.medication.asserted` —
-//! top-level `charted_as`, `route`, `allergy_override`, and `substance.strength`,
+//! top-level `charted_as`, `route`, `warning_override`, and `substance.strength`,
 //! `substance.components`. The event type and schema version do not change: an absent key
 //! is the old event, byte for byte (principle 11), so a `Charting` with nothing in it writes
 //! nothing. Every key and every twin word here is wire, frozen once merged.
@@ -58,13 +58,27 @@ pub struct Component<'a> {
     pub coding: Option<SubstanceCoding<'a>>,
 }
 
-/// Charting despite a listed allergy: the clinician's reason, and which allergy record(s) the
-/// line was charted against (their uuids). The window requires the reason; the floor checks
-/// only the shape when it is present (design §3.5, ADR-0021 soft policy).
+/// The `source` word of an override naming an allergy record. The vocabulary is open: later
+/// sources (`interaction`, `drug-disease`, `renal-dose`, …) arrive as new words, never a new key.
+pub const ALLERGY_SOURCE: &str = "allergy";
+
+/// One warning a line was charted against. `source` says what kind of warning it was;
+/// `reference` (wire key `ref` — a Rust keyword) points at it. For [`ALLERGY_SOURCE`] the
+/// reference is the allergy record's event uuid; each future source defines its own.
 #[derive(Debug, Clone, Copy)]
-pub struct AllergyOverride<'a> {
+pub struct OverrideRef<'a> {
+    pub source: &'a str,
+    pub reference: &'a str,
+}
+
+/// Charting despite a warning: the clinician's reason, and which warning(s) the line was
+/// charted against. General on purpose — warnings that need a reason will also come from
+/// interactions, drug–disease and renal/hepatic dosing, and the wire is frozen once merged.
+/// The window requires the reason; the floor checks the shape (design §3.5, db/077 §1).
+#[derive(Debug, Clone, Copy)]
+pub struct WarningOverride<'a> {
     pub reason: &'a str,
-    pub against: &'a [&'a str],
+    pub against: &'a [OverrideRef<'a>],
 }
 
 /// The charting fields of one assertion. Every field is optional; `Default` is "none of
@@ -79,7 +93,7 @@ pub struct Charting<'a> {
     /// A combination's components (≥ 2 when present). Empty = not a combination; the
     /// assertion's single `coding` is then the identity, as before.
     pub components: &'a [Component<'a>],
-    pub allergy_override: Option<AllergyOverride<'a>>,
+    pub warning_override: Option<WarningOverride<'a>>,
 }
 
 /// Write the charting keys into an assertion's `payload` and its `substance` object.
@@ -95,10 +109,15 @@ pub fn insert_charting(
     if let Some(r) = c.route {
         payload.insert("route".into(), json!(r));
     }
-    if let Some(o) = c.allergy_override {
+    if let Some(o) = c.warning_override {
+        let against: Vec<Value> = o
+            .against
+            .iter()
+            .map(|r| json!({ "source": r.source, "ref": r.reference }))
+            .collect();
         payload.insert(
-            "allergy_override".into(),
-            json!({ "reason": o.reason, "against": o.against }),
+            "warning_override".into(),
+            json!({ "reason": o.reason, "against": against }),
         );
     }
     if let Some(s) = c.strength {
@@ -129,7 +148,8 @@ pub struct TwinParts {
     /// The components joined `" + "` (a coded one by its display, an uncoded one by its
     /// term). When `Some`, it replaces the single-coding `[display]` bracket and is always shown.
     pub components: Option<String>,
-    /// `{ · started here | · already taking}{ · charted despite a listed allergy: {reason}}`,
+    /// `{ · started here | · already taking}{ · charted despite a warning ({sources}): {reason}}`,
+    /// `{sources}` being the distinct sources in first-seen order, joined `", "`,
     /// rendered at the very end.
     pub tail: String,
 }
@@ -154,8 +174,18 @@ pub fn charting_twin_parts(c: &Charting) -> TwinParts {
         Some(ChartedAs::PreExisting) => tail.push_str(" · already taking"),
         Some(ChartedAs::Unknown) | None => {}
     }
-    if let Some(o) = c.allergy_override {
-        tail.push_str(" · charted despite a listed allergy: ");
+    if let Some(o) = c.warning_override {
+        // Each source once, in the order first met: the reader learns which KINDS of warning
+        // were overridden; the refs themselves stay in the payload.
+        let mut sources: Vec<&str> = Vec::new();
+        for r in o.against {
+            if !sources.contains(&r.source) {
+                sources.push(r.source);
+            }
+        }
+        tail.push_str(" · charted despite a warning (");
+        tail.push_str(&sources.join(", "));
+        tail.push_str("): ");
         tail.push_str(o.reason);
     }
     TwinParts {
@@ -253,13 +283,16 @@ mod tests {
                 coding: None,
             },
         ];
-        static AGAINST: [&str; 1] = ["E1"];
+        static AGAINST: [OverrideRef<'static>; 1] = [OverrideRef {
+            source: ALLERGY_SOURCE,
+            reference: "E1",
+        }];
         let mut a = lipitor(Some(Charting {
             charted_as: Some(ChartedAs::StartedHere),
             route: Some("po"),
             strength: Some("875/125 mg"),
             components: &COMPONENTS,
-            allergy_override: Some(AllergyOverride {
+            warning_override: Some(WarningOverride {
                 reason: "benefit outweighs risk",
                 against: &AGAINST,
             }),
@@ -271,7 +304,6 @@ mod tests {
         assert_eq!(
             keys,
             [
-                "allergy_override",
                 "charted_as",
                 "dose",
                 "info_source",
@@ -279,7 +311,8 @@ mod tests {
                 "route",
                 "sig",
                 "started",
-                "substance"
+                "substance",
+                "warning_override"
             ]
         );
         let mut skeys: Vec<&str> = v["substance"]
@@ -294,8 +327,9 @@ mod tests {
         assert_eq!(v["route"], "po");
         assert_eq!(v["substance"]["strength"], "875/125 mg");
         assert_eq!(
-            v["allergy_override"],
-            json!({"reason": "benefit outweighs risk", "against": ["E1"]})
+            v["warning_override"],
+            json!({"reason": "benefit outweighs risk",
+                   "against": [{"source": "allergy", "ref": "E1"}]})
         );
         assert_eq!(
             v["substance"]["components"][0],
@@ -326,7 +360,10 @@ mod tests {
         components: &'static [Component<'static>],
         charted_as: ChartedAs,
     ) -> MedicationAssertion<'static> {
-        static AGAINST: [&str; 1] = ["E1"];
+        static AGAINST: [OverrideRef<'static>; 1] = [OverrideRef {
+            source: ALLERGY_SOURCE,
+            reference: "E1",
+        }];
         MedicationAssertion {
             medication_id: "33333333-3333-7333-8333-333333333333",
             term: "Augmentin",
@@ -344,7 +381,7 @@ mod tests {
                 route: Some("po"),
                 strength: Some("875/125 mg"),
                 components,
-                allergy_override: Some(AllergyOverride {
+                warning_override: Some(WarningOverride {
                     reason: "no alternative",
                     against: &AGAINST,
                 }),
@@ -368,19 +405,19 @@ mod tests {
             render_medication_twin(&augmentin(&BOTH_CODED, ChartedAs::StartedHere)),
             "Augmentin tablet 875/125 mg po — 1 bd (clinician-observed) \
              [amoxicillin + clavulanic acid] · started here \
-             · charted despite a listed allergy: no alternative"
+             · charted despite a warning (allergy): no alternative"
         );
         assert_eq!(
             render_medication_twin(&augmentin(&BOTH_CODED, ChartedAs::PreExisting)),
             "Augmentin tablet 875/125 mg po — 1 bd (clinician-observed) \
              [amoxicillin + clavulanic acid] · already taking \
-             · charted despite a listed allergy: no alternative"
+             · charted despite a warning (allergy): no alternative"
         );
         assert_eq!(
             render_medication_twin(&augmentin(&BOTH_CODED, ChartedAs::Unknown)),
             "Augmentin tablet 875/125 mg po — 1 bd (clinician-observed) \
              [amoxicillin + clavulanic acid] \
-             · charted despite a listed allergy: no alternative"
+             · charted despite a warning (allergy): no alternative"
         );
         // An uncoded component reads as its term: the bracket never drops a component.
         static ONE_UNCODED: [Component<'static>; 2] = [
@@ -396,7 +433,39 @@ mod tests {
         assert_eq!(
             render_medication_twin(&augmentin(&ONE_UNCODED, ChartedAs::Unknown)),
             "Augmentin tablet 875/125 mg po — 1 bd (clinician-observed) [amoxicillin + clav] \
-             · charted despite a listed allergy: no alternative"
+             · charted despite a warning (allergy): no alternative"
+        );
+    }
+
+    /// The tail names each warning SOURCE once, in first-seen order. Only `allergy` exists
+    /// today, so the two-source case is built by hand to pin the joining rule before a second
+    /// source (drug interactions, from drugref) reaches the wire.
+    #[test]
+    fn the_tail_names_each_source_once_in_first_seen_order() {
+        static AGAINST: [OverrideRef<'static>; 3] = [
+            OverrideRef {
+                source: ALLERGY_SOURCE,
+                reference: "E1",
+            },
+            OverrideRef {
+                source: "interaction",
+                reference: "X1",
+            },
+            OverrideRef {
+                source: ALLERGY_SOURCE,
+                reference: "E2",
+            },
+        ];
+        let c = Charting {
+            warning_override: Some(WarningOverride {
+                reason: "benefit outweighs risk",
+                against: &AGAINST,
+            }),
+            ..Charting::default()
+        };
+        assert_eq!(
+            charting_twin_parts(&c).tail,
+            " · charted despite a warning (allergy, interaction): benefit outweighs risk"
         );
     }
 }

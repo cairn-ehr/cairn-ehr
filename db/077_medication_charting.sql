@@ -4,7 +4,8 @@
 -- schema version unchanged (principle 11 — an event without them is the old event):
 --   charted_as                 started-here | pre-existing | unknown
 --   route                      an open lower-case token (po, iv, im, sc, …)
---   allergy_override           {reason, against: [allergy record uuid, …]}
+--   warning_override           {reason, against: [{source, ref}, …]} — charted despite a
+--                              warning; source is an open word (`allergy` today)
 --   substance.strength         free strength text ("875/125 mg")
 --   substance.components       a combination: [{term, coding|null}, …], ≥ 2, never beside
 --                              substance.coding
@@ -22,11 +23,12 @@ BEGIN;
 -- §1. The charting floor. TWO TIERS, db/041's split, because the per-type floor runs at
 --     BOTH doors (db/020 dispatches the same check as submit_event):
 --       type       (a key the projection could not read: not a string, not an array, an
---                  `against` entry that is not a uuid, a malformed component coding)
+--                  `against` entry that is not an object, a malformed component coding)
 --                  -> refuse at BOTH doors
 --       vocabulary / count / emptiness (charted_as outside the three words, fewer than two
 --                  components, components beside a single coding, an empty route or reason,
---                  an empty `against`, an override missing its reason or `against`)
+--                  an empty `against`, an override missing its reason, `against`, or an
+--                  entry's source / ref, an allergy ref that is not a uuid)
 --                  -> refuse locally, ADMIT remotely (ADR-0051/ADR-0056: a peer may speak a
 --                  newer word, and refusing a verifiable event wedges sync)
 --
@@ -42,7 +44,7 @@ DECLARE
     v_key     text;
     v_val     jsonb;
     v_elem    jsonb;
-    v_against jsonb;  -- allergy_override.against, a missing one read as []
+    v_against jsonb;  -- warning_override.against, a missing one read as []
 BEGIN
     -- Two plain-string keys. charted_as's vocabulary is closed at the authoring door only.
     FOREACH v_key IN ARRAY ARRAY['charted_as', 'route'] LOOP
@@ -103,41 +105,63 @@ BEGIN
         END IF;
     END IF;
 
-    -- allergy_override: {reason, against}. `against` entries become uuids in the projection,
-    -- so a non-uuid entry is a type error at both doors. A MISSING reason or `against` (absent
-    -- or JSON null) is refused locally but admitted remotely (ruling R20): the remote door
-    -- checks the type only of what is present, so a future window that leaves the reason
-    -- optional never has its events refused by an older peer.
-    v_val := p -> 'allergy_override';
+    -- warning_override: {reason, against: [{source, ref}, …]} — charted despite a warning.
+    -- General, not allergy-only: warnings that need a reason will also come from drug
+    -- interactions, drug–disease and renal/hepatic dosing, and the wire is frozen once merged.
+    -- A MISSING reason, `against`, source or ref (absent or JSON null) is refused locally but
+    -- admitted remotely (ruling R20): the remote door checks the type only of what is present,
+    -- so a future window that leaves a part optional never has its events refused by an older
+    -- peer. `source` is an OPEN word at both doors (a newer source is not refused); only an
+    -- `allergy` ref has a known shape — the allergy record's event uuid — and that is an
+    -- authoring-door rule (the projection keeps `against` as jsonb, so a peer's malformed ref
+    -- cannot break it).
+    v_val := p -> 'warning_override';
     IF v_val IS NOT NULL AND jsonb_typeof(v_val) <> 'null' THEN
         IF jsonb_typeof(v_val) <> 'object' THEN
-            RAISE EXCEPTION 'medication assertion: allergy_override must be an object {reason, against}';
+            RAISE EXCEPTION 'medication assertion: warning_override must be an object {reason, against}';
         END IF;
         IF coalesce(jsonb_typeof(v_val -> 'reason'), 'null') = 'null' THEN
             IF v_local THEN
-                RAISE EXCEPTION 'medication assertion: allergy_override.reason must be a string';
+                RAISE EXCEPTION 'medication assertion: warning_override.reason must be a string';
             END IF;
         ELSIF jsonb_typeof(v_val -> 'reason') <> 'string' THEN
-            RAISE EXCEPTION 'medication assertion: allergy_override.reason must be a string';
+            RAISE EXCEPTION 'medication assertion: warning_override.reason must be a string';
         ELSIF v_local AND length(btrim(v_val ->> 'reason')) = 0 THEN
-            RAISE EXCEPTION 'medication assertion: allergy_override.reason must be a non-empty string';
+            RAISE EXCEPTION 'medication assertion: warning_override.reason must be a non-empty string';
         END IF;
         IF coalesce(jsonb_typeof(v_val -> 'against'), 'null') = 'null' THEN
             IF v_local THEN
-                RAISE EXCEPTION 'medication assertion: allergy_override.against must be an array of allergy record uuids';
+                RAISE EXCEPTION 'medication assertion: warning_override.against must be an array of {source, ref}';
             END IF;
         ELSIF jsonb_typeof(v_val -> 'against') <> 'array' THEN
-            RAISE EXCEPTION 'medication assertion: allergy_override.against must be an array of allergy record uuids';
+            RAISE EXCEPTION 'medication assertion: warning_override.against must be an array of {source, ref}';
         END IF;
         v_against := coalesce(NULLIF(v_val -> 'against', 'null'::jsonb), '[]'::jsonb);
         FOR v_elem IN SELECT e FROM jsonb_array_elements(v_against) AS t(e) LOOP
-            IF jsonb_typeof(v_elem) <> 'string' OR NOT pg_input_is_valid(v_elem #>> '{}', 'uuid') THEN
-                RAISE EXCEPTION 'medication assertion: allergy_override.against entries must be uuid strings, got %',
+            IF jsonb_typeof(v_elem) <> 'object' THEN
+                RAISE EXCEPTION 'medication assertion: warning_override.against entries must be objects {source, ref}, got %',
                     v_elem;
+            END IF;
+            -- source, then ref: each a string when present; non-blank when authored here.
+            FOREACH v_key IN ARRAY ARRAY['source', 'ref'] LOOP
+                IF coalesce(jsonb_typeof(v_elem -> v_key), 'null') = 'null' THEN
+                    IF v_local THEN
+                        RAISE EXCEPTION 'medication assertion: warning_override.against[].% must be a non-empty string', v_key;
+                    END IF;
+                ELSIF jsonb_typeof(v_elem -> v_key) <> 'string' THEN
+                    RAISE EXCEPTION 'medication assertion: warning_override.against[].% must be a string', v_key;
+                ELSIF v_local AND length(btrim(v_elem ->> v_key)) = 0 THEN
+                    RAISE EXCEPTION 'medication assertion: warning_override.against[].% must be a non-empty string', v_key;
+                END IF;
+            END LOOP;
+            IF v_local AND v_elem ->> 'source' = 'allergy'
+               AND NOT pg_input_is_valid(v_elem ->> 'ref', 'uuid') THEN
+                RAISE EXCEPTION 'medication assertion: warning_override.against[].ref of an allergy must be the allergy record''s uuid, got "%"',
+                    v_elem ->> 'ref';
             END IF;
         END LOOP;
         IF v_local AND jsonb_array_length(v_against) = 0 THEN
-            RAISE EXCEPTION 'medication assertion: allergy_override.against must name at least one allergy record';
+            RAISE EXCEPTION 'medication assertion: warning_override.against must name at least one warning';
         END IF;
     END IF;
 END;
@@ -153,7 +177,8 @@ REVOKE EXECUTE ON FUNCTION cairn_check_medication_charting(jsonb) FROM PUBLIC;
 --
 --     Columns mirror the five keys: `components` is the combination as signed (jsonb, a
 --     peer's one-element list included — Task 1 admits it remotely); `override_against` the
---     allergy records the line was charted against. hlc_* / origin / content_address are the
+--     warnings the line was charted against, the `[{source, ref}, …]` array as signed (jsonb,
+--     never cast: a peer's newer source or malformed ref must still project). hlc_* / origin / content_address are the
 --     overlay-winner tuple, as medication_coding's, and content_address is what a shred
 --     (db/037) deletes by.
 CREATE TABLE IF NOT EXISTS medication_charting (
@@ -164,7 +189,7 @@ CREATE TABLE IF NOT EXISTS medication_charting (
     strength         TEXT,
     components       JSONB,
     override_reason  TEXT,
-    override_against UUID[],
+    override_against JSONB,
     hlc_wall         BIGINT  NOT NULL,
     hlc_counter      INTEGER NOT NULL,
     origin           TEXT    NOT NULL,
@@ -172,6 +197,21 @@ CREATE TABLE IF NOT EXISTS medication_charting (
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON medication_charting TO cairn_agent;
+-- One-off for a dev database that loaded an earlier draft of this unmerged file, when the
+-- column was UUID[] and the payload key had its earlier allergy-only name. Guarded on the
+-- column's current type, so a replay on a converged database is a no-op and takes no lock
+-- (#726). The old values are DROPPED (USING NULL), not converted with to_jsonb: a converted
+-- value would be a bare-uuid array — neither the new `[{source, ref}]` shape nor what a
+-- re-fold produces, since the events behind those rows carry the old key, which this apply fn
+-- no longer reads. For this column a re-fold of those events writes NULL too.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'medication_charting'
+                  AND column_name = 'override_against' AND data_type = 'ARRAY') THEN
+        ALTER TABLE medication_charting ALTER COLUMN override_against TYPE JSONB USING NULL;
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS medication_charting_content_address_idx
     ON medication_charting (content_address);
 
@@ -184,8 +224,8 @@ CREATE INDEX IF NOT EXISTS medication_charting_content_address_idx
 --   4. upsert under the overlay-winner rule, so set-union sync converges.
 --
 -- Never raises on a shape the remote door admits: charted_as is stored as text (a peer may
--- speak a newer word), components as given (any array length). `against` is cast to uuid[]
--- only when it is an array — the floor already refused a non-uuid entry at both doors.
+-- speak a newer word), components and `against` as given (any length, any source word, any
+-- ref) — nothing is cast, so nothing a peer signs can make this raise.
 --
 -- patient_id is the thread's STANDING chart when one is known (db/031's #192 reasoning for
 -- medication_coding), else this event's. Both apply fns share run_order 20, so by name this
@@ -197,18 +237,17 @@ DECLARE
     p         jsonb := cairn_clear_payload(e);
     v_med     uuid;
     v_comp    jsonb;
-    v_against uuid[];
+    v_against jsonb;
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
     v_comp := NULLIF(p #> '{substance,components}', 'null'::jsonb);
-    IF jsonb_typeof(p #> '{allergy_override,against}') = 'array' THEN
-        v_against := ARRAY(SELECT x::uuid
-                             FROM jsonb_array_elements_text(p #> '{allergy_override,against}') x);
+    IF jsonb_typeof(p #> '{warning_override,against}') = 'array' THEN
+        v_against := p #> '{warning_override,against}';
     END IF;
     -- `->>` already reads a JSON null as SQL NULL, so the text keys need no NULLIF.
     IF p ->> 'charted_as' IS NULL AND p ->> 'route' IS NULL
        AND p #>> '{substance,strength}' IS NULL AND v_comp IS NULL
-       AND p #>> '{allergy_override,reason}' IS NULL AND v_against IS NULL THEN
+       AND p #>> '{warning_override,reason}' IS NULL AND v_against IS NULL THEN
         RETURN;
     END IF;
     v_med := (p ->> 'medication_id')::uuid;
@@ -223,7 +262,7 @@ BEGIN
         p ->> 'route',
         p #>> '{substance,strength}',
         v_comp,
-        p #>> '{allergy_override,reason}',
+        p #>> '{warning_override,reason}',
         v_against,
         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET

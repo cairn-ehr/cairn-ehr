@@ -146,7 +146,7 @@ async fn med_chart_db_an_already_taking_line_never_needs_a_reason() {
     let p = &asserted(&owner, chart).await[0];
     assert_eq!(p["charted_as"], "pre-existing");
     assert_eq!(p["info_source"], "patient-reported");
-    assert!(p.get("allergy_override").is_none() && p.get("started").is_none());
+    assert!(p.get("warning_override").is_none() && p.get("started").is_none());
     assert_eq!(p["substance"]["term"], "amoxicillin");
     assert_eq!(p["substance"]["coding"]["code"], amox.to_string().as_str());
     assert_eq!(p["sig"], "500mg tds");
@@ -252,10 +252,10 @@ async fn med_chart_db_the_signed_event_carries_the_override() {
     chart_it(&state, chart, l).await.unwrap();
     let p = &asserted(&owner, chart).await[0];
     assert_eq!(p["charted_as"], "started-here");
-    assert_eq!(p["allergy_override"]["reason"], "no alternative");
+    assert_eq!(p["warning_override"]["reason"], "no alternative");
     assert_eq!(
-        p["allergy_override"]["against"],
-        serde_json::json!([head.to_string()])
+        p["warning_override"]["against"],
+        serde_json::json!([{"source": "allergy", "ref": head.to_string()}])
     );
 }
 

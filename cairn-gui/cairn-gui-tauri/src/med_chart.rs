@@ -31,7 +31,9 @@ use crate::med_chart_write::{charted, charted_input, substance, MedChartWrite};
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write};
-use cairn_event::medication::{AllergyOverride, ChartedAs, Charting, Component};
+use cairn_event::medication::{
+    ChartedAs, Charting, Component, OverrideRef, WarningOverride, ALLERGY_SOURCE,
+};
 use cairn_medication_view::ChartSet;
 use cairn_node::allergy::check::{LineCheck, MedLine, MOIETY_SYSTEM};
 use cairn_node::allergy::drug_facts::search_medication_drugs;
@@ -204,8 +206,15 @@ pub async fn med_chart_impl(
     )
     .await?;
     let reason = override_before_the_key(charted_as, &check, line.reason.as_deref())?;
-    let against: Vec<String> = check.against.iter().map(Uuid::to_string).collect();
-    let against: Vec<&str> = against.iter().map(String::as_str).collect();
+    // The fresh check's allergy marks, each named by its allergy record's event id.
+    let ids: Vec<String> = check.against.iter().map(Uuid::to_string).collect();
+    let against: Vec<OverrideRef> = ids
+        .iter()
+        .map(|id| OverrideRef {
+            source: ALLERGY_SOURCE,
+            reference: id,
+        })
+        .collect();
     let d = read_directions(&line.directions);
     let today = local_today().to_string();
     // One part is the line's own coding; two or more are its components, never both.
@@ -229,7 +238,7 @@ pub async fn med_chart_impl(
         route: d.route.as_deref(),
         strength: d.strength.as_deref(),
         components: &components,
-        allergy_override: reason.map(|reason| AllergyOverride {
+        warning_override: reason.map(|reason| WarningOverride {
             reason,
             against: &against,
         }),
