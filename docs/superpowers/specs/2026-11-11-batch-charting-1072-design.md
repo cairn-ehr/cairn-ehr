@@ -2,7 +2,7 @@
 
 - **Date:** 2026-11-11
 - **Status:** brainstormed with the maintainer 2026-11-11 (the rulings in #1072's comments, then this conversation);
-  builder-checked 2026-11-11; the maintainer answered its three questions the same day (§9); awaiting approval
+  builder-checked 2026-11-11; the maintainer answered its three questions the same day (§9); approved by the maintainer 2026-11-11
 - **Milestone step:** "chart a medication" (HANDOVER ⇒ NEXT), for a patient with many. Slice 1a (PR #1066,
   [ADR-0099](../../spec/decisions/0099-charting-a-medication.md)) charts one line per Sign; that costs one signature
   per line where paper costs one for the list. **[maintainer]** ruled that an `M > N` defect (house rule 7).
