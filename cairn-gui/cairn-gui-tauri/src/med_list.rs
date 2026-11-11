@@ -26,7 +26,9 @@ use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::{press, view, LineCheckView, PartArg};
 use crate::med_line_sign::{fresh_check, parts_before_the_key, the_line};
-pub(crate) use crate::med_list_judge::{fresh_read, judge, tick_holds, Judged};
+pub(crate) use crate::med_list_judge::{
+    already_on_the_list, fresh_read, judge, tick_holds, Judged,
+};
 use crate::notes::terminal_of;
 use crate::state::AppState;
 use crate::whos_here::Claim;
@@ -58,6 +60,11 @@ pub struct LineArg {
     /// R1). Missing or empty: the tick vouches for none, and any warning fails it at Sign.
     #[serde(default)]
     pub seen: Vec<WarningRef>,
+    /// The clinician unticked a line the default tick would give: their veto, stored (Task 6
+    /// review C1). Missing: false. The door clears it when the words change or a hand tick is
+    /// given.
+    #[serde(default)]
+    pub held: bool,
 }
 
 /// One warning a line carries, as the wire's override names it: `{"source": "allergy", "ref":
@@ -84,8 +91,8 @@ pub struct MedListView {
 
 /// One line as the pane draws it: what was saved (the [`LineArg`] fields), and what was derived
 /// from it on this read. `read` is the directions read into fields (`med_line_read`'s answer);
-/// `ticked = hand_ticked || default_ticked`; `unfinished` the line was never finished (the label
-/// "unfinished").
+/// `ticked = (hand_ticked && the hand tick still holds) || (default_ticked && !held)`;
+/// `unfinished` the line was never finished (the label "unfinished").
 #[derive(Debug, serde::Serialize)]
 pub struct ListLineView {
     pub line_id: String,
@@ -102,6 +109,11 @@ pub struct ListLineView {
     pub default_ticked: bool,
     pub ticked: bool,
     pub duplicate: bool,
+    /// Rust's sentence naming the line this one duplicates (`already on the list: {line}`), or
+    /// `None` (review I2).
+    pub duplicate_of: Option<String>,
+    /// The stored veto ([`LineArg::held`]).
+    pub held: bool,
     pub unfinished: bool,
     /// The warnings drawn on the line now (its check's allergy marks), for [`LineArg::seen`].
     pub against: Vec<WarningRef>,
@@ -222,6 +234,7 @@ pub async fn med_list_save_impl(
         saved_at: String::new(),
         typed_drug: line.typed_drug,
         directions: line.directions,
+        held: line.held,
     };
     let db = state
         .db
@@ -350,8 +363,10 @@ pub(crate) fn line_view(j: &Judged) -> ListLineView {
         check: view(j.check.clone()),
         read: j.read.clone(),
         default_ticked: j.default_ticked,
-        ticked: (l.hand_ticked && tick_holds(j)) || j.default_ticked,
+        ticked: (l.hand_ticked && tick_holds(j)) || (j.default_ticked && !l.held),
         duplicate: j.duplicate,
+        duplicate_of: j.duplicate_of.as_deref().map(already_on_the_list),
+        held: l.held,
         unfinished: !l.finished,
         against: j
             .check
@@ -376,3 +391,7 @@ mod db_tests;
 #[cfg(test)]
 #[path = "med_list_review_db_tests.rs"]
 mod review_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_held_db_tests.rs"]
+mod held_db_tests;

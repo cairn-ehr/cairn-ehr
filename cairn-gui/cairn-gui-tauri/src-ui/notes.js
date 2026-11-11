@@ -367,12 +367,14 @@ async function signNote() {
  * whos_here.js's switch wait for it.
  */
 function signsSettled() {
-  return noteSigning;
+  // The medication list's Sign in flight (med_list_sign.js) answers instead: `{ words }`.
+  if (!medListSignInFlight) return noteSigning;
+  return Promise.all([noteSigning, medListSigning]).then(([, list]) => list);
 }
 
-/** Whether a Sign, Discard or sign-off is in flight right now. */
+/** Whether a Sign, Discard or sign-off — or the medication list's Sign — is in flight right now. */
 function signInFlight() {
-  return noteSignInFlight;
+  return noteSignInFlight || medListSignInFlight;
 }
 
 /** Say how the note pane's last act went. Never a dialog. */

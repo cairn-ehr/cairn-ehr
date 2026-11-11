@@ -42,7 +42,8 @@ let medList = null;
 let medLines = [];
 /** The line the editor is mounted on, or null. */
 let medEditingLine = null;
-/** Lines unticked here though Rust's default tick stands, or that a Sign found changed. */
+/** Lines a Sign found changed: drawn unticked until the clinician ticks them again. (An untick
+ *  by hand is stored, as `held`: it survives a closed chart, a re-lock and a restart.) */
 const medUnticked = new Set();
 /** A Sign's reason for each line it did not chart, by line id, drawn on the line. */
 const medLineNotes = new Map();
@@ -65,6 +66,7 @@ function lineFrom(v, fresh, patient) {
     content: contentOf(v),
     reason: v.reason || "",
     handTicked: v.hand_ticked,
+    held: v.held, // the clinician's untick of a default tick, stored (review C1)
     finished: v.finished,
     seen: [], // the warnings drawn on the line when it was ticked by hand
     snapshot: null, // the editor's words not yet split and saved (`medEditorSnapshot`)
@@ -86,7 +88,7 @@ function contentOf(v) {
 
 /** A new, empty line pressed as `chartedAs`, in the list on screen. */
 function newLine(chartedAs) {
-  const blank = { line_id: crypto.randomUUID(), charted_as: chartedAs, line_text: "", typed_drug: "", directions: "", parts: [], reason: null, hand_ticked: false, finished: false };
+  const blank = { line_id: crypto.randomUUID(), charted_as: chartedAs, line_text: "", typed_drug: "", directions: "", parts: [], reason: null, hand_ticked: false, held: false, finished: false };
   const line = lineFrom(blank, medList, medList.patient);
   line.view = null;
   line.stored = false;
@@ -218,6 +220,7 @@ function mergeLine(line, v, fresh, patient) {
     line.content = contentOf(v);
     line.reason = v.reason || "";
     line.handTicked = v.hand_ticked;
+    line.held = v.held;
     line.finished = v.finished;
     line.tickPending = false;
   }
@@ -295,7 +298,9 @@ function drawLine(line) {
   const text = line.snapshot ? line.snapshot.text : line.content.line_text;
   const blocked = medSigning || medList === null || medList.elsewhere !== null;
   r.tick.checked = drawnTicked(line);
-  r.tick.disabled = blocked || (waitsForReason(line) && !r.tick.checked);
+  // No tick until the node has read the line's words (`v`): a tick vouches for the warnings drawn
+  // on it, and before that read none are drawn, so it would vouch for nothing (review M4).
+  r.tick.disabled = blocked || !v || (waitsForReason(line) && !r.tick.checked);
   r.tick.setAttribute("aria-label", "Tick to sign: " + text);
   r.kind.textContent = MED_PRESS_WORDS[line.content.charted_as] + ": ";
   r.text.textContent = text;
@@ -313,6 +318,7 @@ function drawLine(line) {
   const words = [];
   if (!line.finished) words.push(MED_LIST_UNFINISHED);
   if (!r.tick.checked) words.push(MED_LIST_UNTICKED);
+  if (v && v.duplicate_of) words.push(v.duplicate_of); // Rust's sentence naming the other line
   setMessage(r.state, words.join(" · "));
   setMessage(r.note, medLineNotes.get(line.id) || "");
 }
@@ -344,6 +350,7 @@ function lineTyped(line) {
   line.snapshot = medEditorSnapshot();
   line.finished = false;
   line.handTicked = false;
+  line.held = false; // the untick covered the old words (the door clears it too)
   line.tickPending = false;
   line.view = null;
   medUnticked.delete(line.id);
@@ -378,6 +385,7 @@ function lineFinished(line, byKey) {
   if (!line.stored && line.version === 0) {
     dropLine(line); // pressed and left without a word typed: nothing to keep
     drawMedList();
+    if (byKey) focusPress(line);
     return;
   }
   if (!line.finished) {
@@ -387,18 +395,25 @@ function lineFinished(line, byKey) {
   void queueSave(line);
   drawLine(line);
   drawMedList();
-  if (byKey) el("med-chart-buttons").querySelector(`[data-value="${line.content.charted_as}"]`).focus();
+  if (byKey) focusPress(line);
 }
 
-/** The box, by hand: saved at once, vouching for the warnings drawn on the line NOW. */
+/** Focus the press that started `line`, so Enter adds the next line (never lost to the page). */
+function focusPress(line) {
+  el("med-chart-buttons").querySelector(`[data-value="${line.content.charted_as}"]`).focus();
+}
+
+/** The box, by hand: saved at once, vouching for the warnings drawn on the line NOW. An untick
+ *  is stored as the clinician's veto (`held`), so a default tick never comes back by itself. */
 function tickMedLine(line, checked) {
   if (medSigning) return;
   if (line.snapshot !== null) void queueSave(line); // the words first, untouched by the tick
   line.seen = line.view ? line.view.against : [];
   line.handTicked = checked;
+  line.held = !checked;
   line.finished = true;
   line.tickPending = true;
-  if (checked) medUnticked.delete(line.id); else medUnticked.add(line.id);
+  medUnticked.delete(line.id);
   medLineNotes.delete(line.id);
   line.version += 1;
   void queueSave(line);
@@ -410,7 +425,7 @@ function tickMedLine(line, checked) {
 function queueSave(line) {
   clearTimeout(line.timer);
   line.timer = null;
-  const sent = { version: line.version, handTicked: line.handTicked, finished: line.finished, reason: line.reason, seen: line.seen };
+  const sent = { version: line.version, handTicked: line.handTicked, held: line.held, finished: line.finished, reason: line.reason, seen: line.seen };
   medSaveQueue = medSaveQueue.then(() => sendLine(line, sent));
   return medSaveQueue;
 }
@@ -437,7 +452,7 @@ async function sendLine(line, sent) {
       patientId: line.patient,
       charts: line.charts,
       writer: line.writer,
-      line: { line_id: line.id, ...content, reason: sent.reason.trim() ? sent.reason : null, hand_ticked: sent.handTicked, finished: sent.finished, seen: sent.handTicked ? sent.seen : [] },
+      line: { line_id: line.id, ...content, reason: sent.reason.trim() ? sent.reason : null, hand_ticked: sent.handTicked, held: sent.held, finished: sent.finished, seen: sent.handTicked ? sent.seen : [] },
     });
     if (door.answer === "saved") {
       line.stored = true;

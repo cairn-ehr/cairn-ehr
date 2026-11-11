@@ -66,11 +66,16 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
     -- as the clinician typed it), and Sign rebuilds the line in Rust from THESE, never from what
     -- the webview sends at Sign.
     typed_drug     text NOT NULL DEFAULT '',
-    directions     text NOT NULL DEFAULT ''
+    directions     text NOT NULL DEFAULT '',
+    -- The clinician's veto (Task 6 review C1): a line the default tick would give, unticked by
+    -- hand. Stored, so a closed chart, a re-lock or a restart never brings it back ticked. It
+    -- covers the words it was given against: changed words or a hand tick clear it (the door).
+    held           boolean NOT NULL DEFAULT false
 );
 -- Paired with the CREATE above for a table made before the two columns (#207's rule).
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS typed_drug text NOT NULL DEFAULT '';
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS directions text NOT NULL DEFAULT '';
+ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS held boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS medication_draft_line_owner_idx
     ON medication_draft_line (patient_id, writer, seq);
 
@@ -131,10 +136,13 @@ REVOKE ALL ON medication_draft_line, medication_draft_line_deleted FROM PUBLIC;
 -- left-over overload would still accept saves that skip the typed drug and directions.
 DROP FUNCTION IF EXISTS cairn_med_draft_line_save(
     uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean);
+DROP FUNCTION IF EXISTS cairn_med_draft_line_save(
+    uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean, text, text);
+-- `p_held` defaults to false, so a caller that never vetoes need not name it.
 CREATE OR REPLACE FUNCTION cairn_med_draft_line_save(
     p_line uuid, p_patient uuid, p_terminal text, p_writer text, p_charted_as text,
     p_text text, p_parts jsonb, p_reason text, p_hand_ticked boolean, p_ticked_against jsonb,
-    p_finished boolean, p_typed_drug text, p_directions text)
+    p_finished boolean, p_typed_drug text, p_directions text, p_held boolean DEFAULT false)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_writer  text := cairn_vault_staff_id(p_writer);
@@ -179,7 +187,8 @@ BEGIN
                    WHEN v_changed OR NOT coalesce(p_hand_ticked, false) THEN '[]'::jsonb
                    WHEN v_row.hand_ticked THEN v_row.ticked_against
                    ELSE coalesce(p_ticked_against, '[]'::jsonb) END,
-               finished = coalesce(p_finished, false), saved_at = v_now
+               finished = coalesce(p_finished, false), saved_at = v_now,
+               held = coalesce(p_held, false) AND NOT v_changed AND NOT coalesce(p_hand_ticked, false)
          WHERE line_id = p_line;
         RETURN 'saved';
     END IF;
@@ -188,14 +197,15 @@ BEGIN
     END IF;
     INSERT INTO medication_draft_line (line_id, patient_id, writer, terminal_id, seq, charted_as,
         line_text, parts, reason, hand_ticked, ticked_against, finished, created_at, saved_at,
-        typed_drug, directions)
+        typed_drug, directions, held)
     SELECT p_line, p_patient, v_writer, p_terminal,
            coalesce(max(l.seq), 0) + 1, p_charted_as, p_text, coalesce(p_parts, '[]'::jsonb),
            p_reason, coalesce(p_hand_ticked, false),
            CASE WHEN coalesce(p_hand_ticked, false) THEN coalesce(p_ticked_against, '[]'::jsonb)
                 ELSE '[]'::jsonb END,
            coalesce(p_finished, false), v_now, v_now,
-           coalesce(p_typed_drug, ''), coalesce(p_directions, '')
+           coalesce(p_typed_drug, ''), coalesce(p_directions, ''),
+           coalesce(p_held, false) AND NOT coalesce(p_hand_ticked, false)
       FROM medication_draft_line l
      WHERE l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM v_writer;
     RETURN 'saved';
@@ -207,17 +217,19 @@ $$;
 -- before typed_drug/directions were returned is dropped first (only then: no drop per replay).
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cairn_med_draft_lines'
-                AND NOT ('typed_drug' = ANY (proargnames))) THEN
+                AND NOT ('held' = ANY (proargnames))) THEN
         DROP FUNCTION cairn_med_draft_lines(uuid, text);
     END IF;
 END $$;
 CREATE OR REPLACE FUNCTION cairn_med_draft_lines(p_patient uuid, p_writer text)
 RETURNS TABLE(line_id uuid, terminal_id text, seq int, charted_as text, line_text text,
               parts jsonb, reason text, hand_ticked boolean, ticked_against jsonb,
-              finished boolean, saved_at timestamptz, typed_drug text, directions text)
+              finished boolean, saved_at timestamptz, typed_drug text, directions text,
+              held boolean)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT l.line_id, l.terminal_id, l.seq, l.charted_as, l.line_text, l.parts, l.reason,
-           l.hand_ticked, l.ticked_against, l.finished, l.saved_at, l.typed_drug, l.directions
+           l.hand_ticked, l.ticked_against, l.finished, l.saved_at, l.typed_drug, l.directions,
+           l.held
       FROM medication_draft_line l
      WHERE l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM cairn_vault_staff_id(p_writer)
      ORDER BY l.seq;
@@ -295,11 +307,11 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean,
-                              text, text),
+                              text, text, boolean),
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean,
-                              text, text),
+                              text, text, boolean),
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() TO cairn_window;

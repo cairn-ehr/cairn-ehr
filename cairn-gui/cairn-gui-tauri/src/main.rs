@@ -55,6 +55,8 @@ mod med_list;
 #[cfg(test)]
 mod med_list_claim_webview_tests;
 mod med_list_judge;
+#[cfg(test)]
+mod med_list_review_webview_tests;
 mod med_list_sign;
 #[cfg(test)]
 mod med_list_webview_tests;

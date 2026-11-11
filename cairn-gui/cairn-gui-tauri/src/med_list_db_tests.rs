@@ -62,6 +62,7 @@ pub(super) fn arg(
         hand_ticked,
         finished: true,
         seen: vec![],
+        held: false,
     }
 }
 

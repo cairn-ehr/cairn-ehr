@@ -25,15 +25,25 @@ async function continueMedListHere() {
   }
 }
 
+/** The last list Sign, done, as `{ words }` (its outcome as said under the list) or null; and
+ *  whether one is in flight. notes.js's `signsSettled` / `signInFlight` include it, so a who's-here
+ *  switch, a re-lock and the person menu wait for it, and the switch says its words in the picker
+ *  (review I1). */
+let medListSigning = Promise.resolve(null);
+let medListSignInFlight = false;
+/** A fault in this window mid-Sign: what went in is the list's next read. */
+const MED_LIST_SIGN_FAULT = "Whether the ticked lines were charted is not known — open the chart and look at the list.";
+
 /**
  * The ONE Sign. The lines sent are those DRAWN ticked at the press; then every pending save
  * lands (a tick or a reason still in its second must be in the node, or Sign reads the line as
  * changed); a line that could not be saved signs nothing. Rust re-derives every tick and check.
  */
 async function signMedList() {
-  if (medSigning || medList === null || renderedPatient === null) return;
+  if (medSigning || medList === null || renderedPatient === null) return null;
   const patient = renderedPatient;
   const charts = renderedCharts;
+  const writer = medList.writer; // whose list this Sign answers for
   const ticked = medLines.filter(drawnTicked).map((line) => line.id);
   if (medEditingLine) lineFinished(medEditingLine, false);
   medSigning = true;
@@ -42,7 +52,10 @@ async function signMedList() {
   setMessage(el("med-list-outcome"), "");
   try {
     const saved = await Promise.all(medLines.filter(pending).map(queueSave));
-    if (saved.includes(false)) return;
+    if (saved.includes(false)) {
+      clearSigner(); // as every other way out: no passphrase is left in the strip
+      return { words: el("med-list-status").textContent }; // the line that could not be saved
+    }
     let answer;
     try {
       answer = await invoke("med_list_sign", {
@@ -54,10 +67,11 @@ async function signMedList() {
       clearSigner(true);
     } catch (failure) {
       clearSigner();
-      await afterMedListRefused(failure, patient);
-      return;
+      await afterMedListRefused(failure, patient, writer);
+      return { words: failureText(failure) };
     }
-    afterMedListSigned(answer, patient);
+    afterMedListSigned(answer, patient, writer);
+    return { words: answer.kind === "changed" ? answer.message : answer.outcome };
   } finally {
     medSigning = false;
     drawMedList();
@@ -66,8 +80,10 @@ async function signMedList() {
 
 /** A Sign's answer. `changed`: nothing signed, those lines drawn unticked, the list read again
  *  (it carries none). `done`: the outcome, each line not charted with its reason, the table. */
-function afterMedListSigned(answer, patient) {
+function afterMedListSigned(answer, patient, writer) {
   if (patient !== displayedPatient) return; // a chart left: its next read says the truth
+  if (answer.kind === "done") drawSignedTable(answer, patient); // the chart's record, whoever is here
+  if (!ownsTheList(writer)) return; // another person's list is on screen: never drawn under it
   medLineNotes.clear();
   if (answer.kind === "changed") {
     for (const id of answer.lines) medUnticked.add(id);
@@ -77,8 +93,13 @@ function afterMedListSigned(answer, patient) {
   }
   for (const [id, reason] of answer.not_charted) medLineNotes.set(id, reason);
   setMessage(el("med-list-outcome"), answer.outcome);
-  drawSignedTable(answer, patient);
   void readMedDraft();
+}
+
+/** The list on screen is still the one `writer`'s Sign answered for (a who's-here switch takes it
+ *  down and reads the next person's). */
+function ownsTheList(writer) {
+  return medList !== null && medList.writer === writer;
 }
 
 /** The medication table after a Sign, from the Sign's own answer (as main.js's `readMedList`
@@ -98,7 +119,7 @@ function drawSignedTable(answer, patient) {
 
 /** A refused Sign charted nothing. Behind the record: the chart is read again. Otherwise the
  *  refusal is said under the list, and the list read again (it may have moved). */
-async function afterMedListRefused(failure, patient) {
+async function afterMedListRefused(failure, patient, writer) {
   if (patient !== displayedPatient) return;
   const text = failureText(failure);
   const behind = behindTheRecord(failure);
@@ -106,9 +127,22 @@ async function afterMedListRefused(failure, patient) {
     await refresh(text, behind);
     return;
   }
+  if (!ownsTheList(writer)) return;
   setMessage(el("med-list-status"), text);
   void readMedDraft();
 }
 
-el("med-list-sign").addEventListener("click", () => void signMedList());
+// As a note's Sign: one press, one act; a note's press in flight holds the strip, so this waits.
+el("med-list-sign").addEventListener("click", () => {
+  if (signInFlight()) return;
+  medListSignInFlight = true;
+  medListSigning = signMedList()
+    .catch((failure) => {
+      console.error(failure);
+      return { words: MED_LIST_SIGN_FAULT };
+    })
+    .finally(() => {
+      medListSignInFlight = false;
+    });
+});
 el("med-list-take").addEventListener("click", () => void continueMedListHere());

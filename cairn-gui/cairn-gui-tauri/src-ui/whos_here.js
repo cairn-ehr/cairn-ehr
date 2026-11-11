@@ -126,6 +126,7 @@ async function switchWhosHere() {
  * Pure.
  */
 function signOutcomeLine(outcome) {
+  if (outcome && outcome.words) return outcome.words; // the medication list's Sign, in Rust's words
   if (outcome === "signed") return SIGNED_LINE;
   if (outcome === "not-signed") return NOT_SIGNED_LINE;
   if (outcome === "unknown") return SIGN_UNKNOWN_LINE;

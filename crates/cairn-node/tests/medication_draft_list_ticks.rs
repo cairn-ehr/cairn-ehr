@@ -144,3 +144,56 @@ async fn an_autosave_keeps_the_refs_seen_when_ticked() {
     save(&w, line, chart, drug, false, &now).await;
     assert_eq!(refs(&w, chart).await, (false, vec![]));
 }
+
+/// Save the line with the clinician's veto `held` (Task 6 review C1): the door's word.
+async fn save_held(c: &Client, line: Uuid, chart: Uuid, text: &str, ticked: bool, held: bool) {
+    let answer: String = c
+        .query_one(
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', \
+                    'pre-existing', $3, '[]'::jsonb, NULL, $4, '[]'::jsonb, true, $3, '', $5)",
+            &[&line.to_string(), &chart.to_string(), &text, &ticked, &held],
+        )
+        .await
+        .expect("the save door answers")
+        .get(0);
+    assert_eq!(answer, "saved");
+}
+
+/// The line's stored veto.
+async fn held(w: &Client, chart: Uuid) -> bool {
+    read_draft_lines(w, chart, Some("notewriter"))
+        .await
+        .unwrap()[0]
+        .held
+}
+
+/// Task 6 review C1: unticking a line the DEFAULT tick would give is the clinician's veto, and it
+/// is stored (`held`): a chart closed, a re-lock or a restart must never bring the line back
+/// ticked. The veto covers the words it was given against: a change to them clears it, as it
+/// clears a hand tick; a hand tick clears it too (the two never stand together).
+#[tokio::test]
+async fn a_held_line_stays_held_until_its_words_change_or_it_is_ticked() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_owner, w, chart) = fixture(&base).await;
+    let line = Uuid::now_v7();
+    save_held(&w, line, chart, "metformin 500mg bd", false, true).await;
+    assert!(held(&w, chart).await, "a new line can be held");
+    save_held(&w, line, chart, "metformin 500mg bd", false, true).await;
+    assert!(held(&w, chart).await, "an autosave keeps it");
+    save_held(&w, line, chart, "metformin 1g bd", false, true).await;
+    assert!(
+        !held(&w, chart).await,
+        "changed words: the veto covered the old ones"
+    );
+    save_held(&w, line, chart, "metformin 1g bd", false, true).await;
+    assert!(held(&w, chart).await);
+    save_held(&w, line, chart, "metformin 1g bd", true, true).await;
+    assert!(
+        !held(&w, chart).await,
+        "a hand tick and a veto never stand together"
+    );
+}

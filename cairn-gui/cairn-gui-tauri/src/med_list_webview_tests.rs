@@ -32,7 +32,7 @@ const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 
 /// `id` is in the `#med-chart` section but NOT inside the editor (`#med-line-row`, shown only
 /// while a line is typed): it is on screen whenever the script un-hides it over a drawn chart.
-fn in_the_pane(id: &str) {
+pub(crate) fn in_the_pane(id: &str) {
     let s = section();
     let at = position(s, &format!("id=\"{id}\""));
     let row = position(s, "<div id=\"med-line-row\"");
@@ -64,6 +64,8 @@ fn line_view() -> ListLineView {
         default_ticked: false,
         ticked: false,
         duplicate: false,
+        duplicate_of: None,
+        held: false,
         unfinished: false,
         against: vec![WarningRef {
             source: "allergy".into(),
@@ -206,15 +208,14 @@ fn two_lines_then_one_sign() {
         sign,
         "const saved = await Promise.all(medLines.filter(pending).map(queueSave));",
     );
-    let refused = position(sign, "if (saved.includes(false)) return;");
+    let refused = position(sign, "if (saved.includes(false)) {");
     let sent = position(sign, "invoke(\"med_list_sign\"");
     assert!(
         ticked < flush && flush < refused && refused < sent,
         "{sign}"
     );
     assert!(sign.contains("ticked: ticked,"), "{sign}");
-    assert!(LIST_JS
-        .contains("el(\"med-list-sign\").addEventListener(\"click\", () => void signMedList());"));
+    assert!(LIST_JS.contains("medListSigning = signMedList()"));
     let tag = position(INDEX_HTML, "<script src=\"med_list.js\"></script>");
     assert!(position(INDEX_HTML, "<script src=\"med_chart.js\"></script>") < tag);
     let sign_tag = position(INDEX_HTML, "<script src=\"med_list_sign.js\"></script>");
@@ -297,7 +298,9 @@ fn a_start_mark_keeps_the_box_disabled_until_a_reason() {
     );
     let draw = js_fn(LIST_JS, "drawLine");
     assert!(
-        draw.contains("r.tick.disabled = blocked || (waitsForReason(line) && !r.tick.checked);"),
+        draw.contains(
+            "r.tick.disabled = blocked || !v || (waitsForReason(line) && !r.tick.checked);"
+        ),
         "{draw}"
     );
     assert!(
@@ -365,8 +368,9 @@ fn changed_lines_come_back_unticked_with_their_warning() {
     in_the_pane("med-list-status");
     not_hidden_by_css("#med-list-status");
     // A hand tick again takes the line out of the untick set; an edit does too.
-    assert!(js_fn(LIST_JS, "tickMedLine")
-        .contains("if (checked) medUnticked.delete(line.id); else medUnticked.add(line.id);"));
+    // A tick by hand (either way) takes the line out of the Changed set; an edit does too. An
+    // untick is stored as `held` (med_list_review_webview_tests.rs), never kept in this set.
+    assert!(js_fn(LIST_JS, "tickMedLine").contains("medUnticked.delete(line.id);"));
     assert!(js_fn(LIST_JS, "lineTyped").contains("medUnticked.delete(line.id);"));
 }
 

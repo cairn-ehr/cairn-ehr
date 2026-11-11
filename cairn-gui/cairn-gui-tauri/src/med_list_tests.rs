@@ -26,12 +26,14 @@ fn judged(id: u128, terminal: &str, hand_ticked: bool, check: LineCheck) -> Judg
             saved_at: "2026-11-11 10:00:00+00".into(),
             typed_drug: format!("drug {id}"),
             directions: String::new(),
+            held: false,
         },
         parts: vec![],
         signable: Ok((format!("drug {id}"), vec![])),
         read: Directions::default(),
         check,
         duplicate: false,
+        duplicate_of: None,
         default_ticked: false,
     }
 }
@@ -160,4 +162,51 @@ fn a_tick_vouches_only_for_warnings_both_found_and_drawn() {
     assert_eq!(vouched(&[a], &upper), [allergy(a)]);
     // A ref under another source is not an allergy warning, whatever its id.
     assert!(vouched(&[a], &[seen("interaction", a.to_string())]).is_empty());
+}
+
+/// Review C1: the clinician's veto voids a default tick — on screen and at Sign alike.
+#[test]
+fn a_held_default_tick_does_not_hold() {
+    let mut j = judged(1, "here", false, LineCheck::default());
+    j.default_ticked = true;
+    assert!(tick_holds(&j));
+    j.line.held = true;
+    assert!(!tick_holds(&j), "vetoed");
+    assert!(!line_view(&j).ticked, "and drawn unticked");
+    assert!(
+        line_view(&j).default_ticked,
+        "the default tick is still derived"
+    );
+}
+
+/// Review I2: a duplicate names the line it duplicates — another list line first, else the chart's
+/// current line — in Rust's words; an uncoded line or a combination never duplicates.
+#[test]
+fn a_duplicate_names_the_other_line_or_the_chart_line() {
+    use crate::med_list_judge::duplicate_of;
+    let codes = [Some("m1"), None, Some("m1"), Some("m2")];
+    let texts = [
+        "amox 500mg tds",
+        "paracetamol 1g",
+        "amox 1g bd",
+        "warfarin 5mg",
+    ];
+    let current = [("m2".to_string(), "Warfarin 5 mg".to_string())];
+    assert_eq!(
+        duplicate_of(0, &codes, &texts, &current).as_deref(),
+        Some("amox 1g bd")
+    );
+    assert_eq!(
+        duplicate_of(2, &codes, &texts, &current).as_deref(),
+        Some("amox 500mg tds")
+    );
+    assert_eq!(
+        duplicate_of(3, &codes, &texts, &current).as_deref(),
+        Some("Warfarin 5 mg")
+    );
+    assert_eq!(duplicate_of(1, &codes, &texts, &current), None);
+    assert_eq!(
+        already_on_the_list("Warfarin 5 mg"),
+        "already on the list: Warfarin 5 mg"
+    );
 }

@@ -37,6 +37,10 @@ pub struct DraftLine {
     /// line, and Sign rebuilds what it signs from these stored halves, never from the webview.
     pub typed_drug: String,
     pub directions: String,
+    /// The clinician unticked a line the default tick would give (Task 6 review C1): their veto,
+    /// stored so the line never comes back ticked. Cleared by the door when the words change or
+    /// a hand tick is given.
+    pub held: bool,
 }
 
 /// `[{"source": "...", "ref": "<uuid>"}]` to pairs, or `None` when ANY element is malformed.
@@ -65,7 +69,7 @@ pub async fn read_draft_lines(
     let rows = client
         .query(
             "SELECT line_id::text, terminal_id, seq, charted_as, line_text, parts::text, reason, \
-                    hand_ticked, ticked_against::text, finished, saved_at::text, typed_drug, directions \
+                    hand_ticked, ticked_against::text, finished, saved_at::text, typed_drug, directions, held \
                FROM cairn_med_draft_lines($1::text::uuid, $2)",
             &[&patient.to_string(), &writer],
         )
@@ -93,6 +97,7 @@ pub async fn read_draft_lines(
                 saved_at: r.try_get(10)?,
                 typed_drug: r.try_get(11)?,
                 directions: r.try_get(12)?,
+                held: r.try_get(13)?,
             })
         })
         .collect()
@@ -118,7 +123,7 @@ pub async fn save_draft_line(
     let row = client
         .query_one(
             "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, $5, $6, \
-                    $7::text::jsonb, $8, $9, $10::text::jsonb, $11, $12, $13)",
+                    $7::text::jsonb, $8, $9, $10::text::jsonb, $11, $12, $13, $14)",
             &[
                 &line.line_id.to_string(),
                 &patient.to_string(),
@@ -133,6 +138,7 @@ pub async fn save_draft_line(
                 &line.finished,
                 &line.typed_drug,
                 &line.directions,
+                &line.held,
             ],
         )
         .await
