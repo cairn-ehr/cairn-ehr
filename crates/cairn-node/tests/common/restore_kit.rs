@@ -382,6 +382,7 @@ pub async fn wipe_to_a_fresh_dr_machine(c: &Client) {
            IF to_regclass('public.medication_projection_flag') IS NOT NULL THEN TRUNCATE medication_projection_flag; END IF; \
            IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
            IF to_regclass('public.medication_attestation') IS NOT NULL THEN TRUNCATE medication_attestation; END IF; \
+           IF to_regclass('public.medication_charting') IS NOT NULL THEN TRUNCATE medication_charting; END IF; \
          END $$;",
     )
     .await

@@ -227,6 +227,7 @@ nav:
       - ADR-0096 · The allergy list: spec/decisions/0096-the-allergy-list.md
       - ADR-0097 · Allergy overlays and differing accounts: spec/decisions/0097-allergy-overlays-and-differing-accounts.md
       - ADR-0098 · Allergy coding and the medication check: spec/decisions/0098-allergy-coding-and-the-medication-check.md
+      - ADR-0099 · Charting a medication: spec/decisions/0099-charting-a-medication.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

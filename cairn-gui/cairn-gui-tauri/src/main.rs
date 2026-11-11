@@ -44,6 +44,12 @@ mod holds_webview_tests;
 #[cfg(test)]
 mod launch_posture_tests;
 mod link;
+mod med_chart;
+#[cfg(test)]
+mod med_chart_line_webview_tests;
+#[cfg(test)]
+mod med_chart_webview_tests;
+mod med_chart_write;
 #[cfg(test)]
 mod node_lock_explains_tests;
 mod notes;
@@ -187,6 +193,10 @@ fn main() -> anyhow::Result<()> {
             allergies::allergy_record,
             allergies::allergy_none,
             allergy_check::drug_search,
+            med_chart::med_line_read,
+            med_chart::med_drug_search,
+            med_chart::med_line_check,
+            med_chart::med_chart,
             allergy_overlays::allergy_challenge,
             allergy_overlays::allergy_retract,
             notes::note_list,

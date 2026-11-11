@@ -2,12 +2,13 @@
 //! by default (signed by the node key, a `recorded` contributor, no attestation);
 //! the slice-4 attestation path (`attestation.rs`) layers human responsibility as a
 //! separable overlay. Orchestrators over an immortal `medication_id` thread:
-//! assert / cease / change-dose / correct-dose / withhold / release-hold, plus reconcile / separate over a
+//! assert (and chart: `charting.rs`) / cease / change-dose / correct-dose / withhold / release-hold, plus reconcile / separate over a
 //! thread PAIR. Offline-first throughout (no event requires its target thread to be
 //! present locally). Split by verb to keep each file focused (house rule 4).
 mod assert;
 mod attestation;
 mod cessation;
+mod charting;
 mod coding;
 mod dose;
 pub mod elsewhere;
@@ -15,6 +16,7 @@ mod hazard;
 // Public for the CLI's benefit, same as `read` and `signoff`: `main.rs`'s `MedicationList`
 // and `MedicationSignOff` arms call straight into these pure formatters.
 pub mod hold_text;
+pub mod line;
 pub mod list_text;
 pub mod read;
 mod reconciliation;
@@ -31,8 +33,9 @@ pub mod snapshot;
 mod withhold;
 
 pub use assert::{
-    assert_medication, assert_medication_returning_event, build_assert_body, coding_from_parts,
-    recorded_medication_line, validate_term, AssertMedicationInput, SubstanceCoding,
+    assert_medication, assert_medication_returning_event, build_assert_body, build_charted_body,
+    coding_from_parts, recorded_medication_line, validate_term, AssertMedicationInput,
+    SubstanceCoding,
 };
 pub use attestation::{
     attest_medication_thread, attest_thread_in_tx, build_attestation_body, thread_commitment,
@@ -42,6 +45,7 @@ pub use cessation::{
     already_stopped_note, build_cease_body, cease_medication, not_known_whether_current,
     not_known_whether_stopped, still_current_note, CeaseMedicationInput,
 };
+pub use charting::{chart_medication, read_charting, ChartedComponent, ChartingRow};
 pub use coding::{
     build_coding_body, build_coding_correction_body, code_medication, coding_claim_from_parts,
     correct_medication_coding, CodeMedicationInput, CorrectCodingInput,

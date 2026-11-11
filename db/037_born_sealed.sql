@@ -137,8 +137,8 @@ ON CONFLICT (event_type) DO NOTHING;
 --    three the walking skeleton first shipped (code-review finding #2). The provenance-precise
 --    key differs per table: medication_statement / medication_coding / medication_cessation /
 --    medication_dose_correction / medication_reconciliation / medication_attestation /
---    medication_withhold / medication_withhold_release all carry the PRODUCING event's
---    content_address (db/031/032/033/034/059) so they scrub by
+--    medication_withhold / medication_withhold_release / medication_charting all carry the
+--    PRODUCING event's content_address (db/031/032/033/034/059/077) so they scrub by
 --    `content_address = v_ca`; the initial-dose seed row is keyed by the assert event's own
 --    id (db/032); and
 --    medication_group_member is a DERIVED table (recomputed from the standing reconciled
@@ -340,6 +340,11 @@ BEGIN
         -- unshredded event survives (never over-erase).
         IF to_regclass('public.medication_coding') IS NOT NULL THEN
             DELETE FROM medication_coding WHERE content_address = v_ca;
+        END IF;
+        -- The charting projection (db/077 §2): a warning-override reason is clinical text, and
+        -- the route, strength and components describe the drug. Its own table, same key.
+        IF to_regclass('public.medication_charting') IS NOT NULL THEN
+            DELETE FROM medication_charting WHERE content_address = v_ca;
         END IF;
         -- The progress note (db/064, ADR-0041): the narrative IS clinical plaintext, one row per
         -- note event, keyed here by THIS event's CA. Guarded like its siblings: the table is

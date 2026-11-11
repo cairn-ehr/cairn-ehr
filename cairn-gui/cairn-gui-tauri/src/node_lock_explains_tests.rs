@@ -22,6 +22,10 @@ const EXEMPT: &[&str] = &[
     // is "no drug list" (`available: false`, lines "not checked"); its error goes to stderr only.
     "drug_search_impl",
     "med_list_check",
+    // med_chart.rs: the same rule for the medication pick and the line's check. A cut leaves the
+    // pick "no drug list" and the line "not checked"; Sign's own write explains (`db.explain`).
+    "med_drug_search_impl",
+    "fresh_check",
 ];
 
 /// Any of these in a function's body is its errors passed through the cut check: the guard's own

@@ -76,7 +76,7 @@ fn a_marked_line_is_never_also_unverified() {
     let got = run(&a, &[med(900, "penicillin", None)], &DrugFacts::Unavailable);
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: penicillin → rash"])
+        marks(&[("Allergy recorded: penicillin → rash", 1)])
     );
 }
 
@@ -214,6 +214,6 @@ fn an_unreadable_record_leaves_every_current_line_not_checked() {
     let got = run(&a, &[med(900, "penicillin", None)], &DrugFacts::Unavailable);
     assert_eq!(
         got[&id(900)],
-        marks(&["Allergy recorded: penicillin → rash"])
+        marks(&[("Allergy recorded: penicillin → rash", 1)])
     );
 }

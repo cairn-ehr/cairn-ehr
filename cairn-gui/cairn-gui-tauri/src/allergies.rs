@@ -317,13 +317,18 @@ pub(crate) async fn sign_then_reread(
 /// live retry that could record it twice (worded as `notes::note_sign_impl` words a note's). Any
 /// other failure wrote nothing and is the node's own sentence. Pure.
 pub(crate) fn sign_failure(e: &anyhow::Error, act: &Act) -> ErrorView {
+    failure_named(e, act.unknown_lead())
+}
+
+/// [`sign_failure`]'s rule for any act, its unknown outcome led by `lead` ("Whether this
+/// medication was charted", `med_chart.rs`). Pure.
+pub(crate) fn failure_named(e: &anyhow::Error, lead: &str) -> ErrorView {
     match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
         Some(event) => ErrorView {
             text: format!(
-                "{} is NOT known — no ordinary answer came back while saving it (event {event}: \
+                "{lead} is NOT known — no ordinary answer came back while saving it (event {event}: \
                  {}). Once the window can reach the node again, the chart shows whether it is \
                  there.",
-                act.unknown_lead(),
                 cairn_gui_live::cause_of(e)
             ),
             retry: Retry::AfterReread(Recorded::Unknown),

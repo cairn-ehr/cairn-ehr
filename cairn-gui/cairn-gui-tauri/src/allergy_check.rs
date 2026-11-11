@@ -30,10 +30,11 @@ use cairn_node::allergy::check::{
     check_medications, codes_to_ask, LineCheck, MedLine, GROUP_SYSTEM, MOIETY_SYSTEM,
 };
 use cairn_node::allergy::drug_facts::{
-    read_drug_facts, read_group_status, search_drugs, DrugFacts,
+    read_drug_facts, read_group_status, search_drugs, DrugFacts, DrugOption,
 };
 use cairn_node::allergy::read::PatientAllergies;
 use cairn_node::allergy::thread::resolve;
+use cairn_node::medication::{read_charting, ChartingRow};
 use std::collections::HashMap;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -90,6 +91,11 @@ pub async fn drug_search_impl(state: &AppState, text: &str) -> DrugSearch {
             }
         },
     };
+    drug_search_answer(found)
+}
+
+/// A search's answer as the pick receives it: `None` (no drug list) is `available: false`. Pure.
+pub(crate) fn drug_search_answer(found: Option<Vec<DrugOption>>) -> DrugSearch {
     DrugSearch {
         available: found.is_some(),
         options: found
@@ -205,20 +211,132 @@ pub fn med_lines(rows: &[MedicationRow]) -> Vec<MedLine<'_>> {
         .collect()
 }
 
+/// One part of a line as the check reads it: a picked or typed single drug, or one component of
+/// a combination (charting slice 1a), every part under the line's `group_id` so the check merges
+/// them into one answer. `line_term` is the LINE's own typed term on every part (ruling R12), so
+/// an allergy recorded by name on the brand ("Augmentin") still meets a combination typed by it;
+/// `coding` is the part's `(system, code, display)` when picked. An unpicked part's own words
+/// stand where a display would, so a by-name allergy can still meet it. Names a moiety only under
+/// `drugref-moiety` with a uuid code, as [`med_lines`] does. Pure.
+pub(crate) fn part_line<'a>(
+    group_id: Uuid,
+    line_term: &'a str,
+    part_term: &'a str,
+    coding: Option<(&'a str, &'a str, &'a str)>,
+    current: bool,
+) -> MedLine<'a> {
+    let display = coding.map(|(_, _, display)| display);
+    MedLine {
+        group_id,
+        name: display.unwrap_or(part_term),
+        term: line_term,
+        coding_display: display.or(Some(part_term)),
+        moiety: coding
+            .filter(|(system, _, _)| *system == MOIETY_SYSTEM)
+            .and_then(|(_, code, _)| code.parse().ok()),
+        current,
+    }
+}
+
+/// [`med_lines`], with each charted combination read one component at a time. A row none of
+/// whose member threads is a combination (`charting` has no row for it, or a row with fewer than
+/// two components) is today's one line exactly. A combination member yields one line per
+/// component ([`part_line`]), under the row's `group_id`. A group that also holds a member which
+/// is not a combination, or a row that carries a coding, keeps the row's own line too, so that
+/// member or coding is still checked. Pure.
+pub fn charted_lines<'a>(
+    rows: &'a [MedicationRow],
+    charting: &'a HashMap<Uuid, ChartingRow>,
+) -> Vec<MedLine<'a>> {
+    let mut lines = Vec::new();
+    for (r, whole) in rows.iter().zip(med_lines(rows)) {
+        let combos: Vec<&ChartingRow> = r
+            .members
+            .iter()
+            .filter_map(|m| charting.get(&m.medication_id))
+            .filter(|c| c.components.len() >= 2)
+            .collect();
+        let current = whole.current;
+        // The row's own line stays beside the parts whenever it is coded (ruling R17): a coding
+        // added later (db/042) is checked too. Over-warning is the safe error.
+        if combos.is_empty() || combos.len() < r.members.len() || r.coding_code.is_some() {
+            lines.push(whole);
+        }
+        for (term, coding) in combos.iter().flat_map(|c| &c.components) {
+            let coding = coding
+                .as_ref()
+                .map(|(s, c, d)| (s.as_str(), c.as_str(), d.as_str()));
+            lines.push(part_line(r.group_id, &r.term, term, coding, current));
+        }
+    }
+    lines
+}
+
 /// Check `list` against allergy rows `a`, asking the drug list on `c` (`None`: there is no
 /// connection to ask). A failed facts read is `DrugFacts::Unavailable` (T2R-b): the door can
 /// raise for a drug list the door's owner can only partly read, and that must leave lines "not
 /// checked", never fail the pane. Nothing is asked when one side has no codes: every pair would
 /// be unverified either way. An allergy record this terminal cannot read (`a.unreadable`) leaves
 /// every unmarked current line "not checked" on either path (#1059).
+///
+/// A combination is checked part by part ([`charted_lines`]): its member threads' charting rows
+/// are read on `c`, after the list's own snapshot. That is complete for every thread on the list,
+/// since a thread's charting row lands in the same transaction as its assertion. A failed read is
+/// logged and read as no combinations ([`charting_or_unsure`]): each row is then its one line, and
+/// every unmarked current line reads "not checked" — a row checked whole, without its parts, may
+/// miss an allergy to one part, so it must never read clean (PR #1066 review finding).
 pub(crate) async fn check_list(
     c: Option<&impl GenericClient>,
     a: &PatientAllergies,
     list: &PatientMedicationList,
 ) -> HashMap<Uuid, LineCheck> {
-    let lines = med_lines(&list.rows);
+    let threads: Vec<Uuid> = list
+        .rows
+        .iter()
+        .flat_map(|r| &r.members)
+        .map(|m| m.medication_id)
+        .collect();
+    let (charting, unsure) = match c {
+        Some(c) => charting_or_unsure(read_charting(c, &threads).await),
+        None => (HashMap::new(), false),
+    };
+    check_lines_unsure(c, a, &charted_lines(&list.rows, &charting), unsure).await
+}
+
+/// The combinations read for [`check_list`], and whether the check must stay unsure: a failed
+/// read is logged and read as none, `true`. Pure but for the log line.
+pub(crate) fn charting_or_unsure(
+    read: anyhow::Result<HashMap<Uuid, ChartingRow>>,
+) -> (HashMap<Uuid, ChartingRow>, bool) {
+    match read {
+        Ok(charting) => (charting, false),
+        Err(e) => {
+            eprintln!("the combinations on the medication list could not be read: {e:#}");
+            (HashMap::new(), true)
+        }
+    }
+}
+
+/// Check `lines` against allergy rows `a`, asking the drug list on `c` (the rules of
+/// [`check_list`], which this is the body of; `med_chart` checks the line being charted with it).
+pub(crate) async fn check_lines(
+    c: Option<&impl GenericClient>,
+    a: &PatientAllergies,
+    lines: &[MedLine<'_>],
+) -> HashMap<Uuid, LineCheck> {
+    check_lines_unsure(c, a, lines, false).await
+}
+
+/// [`check_lines`], with every unmarked current line "not checked" when `unsure` (something the
+/// check needed could not be read), as an unreadable allergy record leaves it (#1059).
+pub(crate) async fn check_lines_unsure(
+    c: Option<&impl GenericClient>,
+    a: &PatientAllergies,
+    lines: &[MedLine<'_>],
+    unsure: bool,
+) -> HashMap<Uuid, LineCheck> {
     let r = resolve(a);
-    let (allergens, meds) = codes_to_ask(&r, &lines);
+    let (allergens, meds) = codes_to_ask(&r, lines);
     let facts = match c {
         Some(c) if !allergens.is_empty() && !meds.is_empty() => {
             read_drug_facts(c, &allergens, &meds)
@@ -230,7 +348,7 @@ pub(crate) async fn check_list(
         }
         _ => DrugFacts::Unavailable,
     };
-    check_medications(&r, &lines, &facts, a.unreadable > 0)
+    check_medications(&r, lines, &facts, a.unreadable > 0 || unsure)
 }
 
 /// The allergy rows the medication check may use: those of `read`, when it worked AND was read

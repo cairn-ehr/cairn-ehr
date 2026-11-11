@@ -748,6 +748,51 @@ expected: no click). Passphrase retypes after a refusal on a shared terminal: \_
 | The no-drug-list hint read or visible | | |
 | No dialog | | |
 
+## Charting a medication: the one line and the check at charting (charting slice 1a, runbook §30)
+
+drugref copied from: \_\_ (database, its drugref db level) · `SCHEMA_GENERATION` 77 and `provision-window-role` re-run? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| A common drug from the line: the press → "Charted." | held | | | | ≤ 10 s | |
+| The same, credential typed (the clock from the press) | shared | | | | — (record) | |
+| The same, no drug list | held | | | | — (record) | |
+| An override (Start against a listed allergy, reason typed) | held | | | | — (record) | |
+| *Already taking* × 10 lines (a home list, #1072) | held | | | | — (record) | |
+| `ui_gesture_timing` `medication-chart` (the write half) | | | | | — | |
+
+Steps: chart a line paper *N* = 1 → forced *M* = 1 → observed \_\_ · an override 1 → 0 extra → observed \_\_ extra
+field(s) · a home list of 10: paper 1 signature → observed \_\_ Signs (#1072). Times the top option was the wrong
+drug: \_\_ of \_\_. Passphrase retypes after a refusal on a shared terminal: \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| The two presses show over a chart; the pressed one reads as pressed; the field takes the focus | | |
+| `amo` lists nothing; `amox` lists drugs only, by full name; the first option noted | | |
+| Enter on a pick shows "Coded as: …"; the read-back reads Drug · Form · Strength · Dose · Route · How often | | |
+| The signed line's list cell is "500 mg — 500mg tds"; `medication_charting` reads `started-here` | | |
+| `1g IV stat`, `1,5mg`, `500mg 250mg`, `bd tds`, `tab 500mg` read back as §30 says (never a guessed field) | | |
+| An edit after a pick drops "Coded as" and reads **not checked** at once; signed uncoded | | |
+| Cancel, and Escape with no list open, discard the line; Escape with the list open closes only the list | | |
+| `$C1` Start amoxicillin: **Allergy** + words before Sign, no click; the reason field; Sign unavailable until typed | | |
+| Spaces only in the reason: Sign stays unavailable; the signed reason and its one `against` uuid on the console | | |
+| *Already taking* flucloxacillin: the mark, no reason field; `pre-existing` | | |
+| `amox + clav 875/125 bd`: both parts coded; the list reads "amoxicillin + clavulanic acid" with the tag | | |
+| `Augmentin` typed, no pick: **not checked**, no reason asked (#1065) | | |
+| *Entered in error* on the allergy with a line open: the line reads not checked, then clean, the reason field gone | | |
+| No drug list: the hint; a Start line on `$C1` reads **not checked** and asks no reason; it charts uncoded | | |
+| The real Tauri IPC: read-back, pick and check all answer; console rows match | | |
+| WebKit (the real window): ↓ / ↑ / Enter / Escape, click, the line on a narrow window | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| The two presses reached by Tab, read with their pressed state | | |
+| The line announced as a combo box; the active option announced during ↓ / ↑? (not expected, #1070) | | |
+| The **Allergy** tag and words announced when they appear? (not live regions, #1070); "Coded as" and the read-back read | | |
+| The reason field read with its label; a refusal read when it appears | | |
+| A charted row read with its dose cell ("500 mg — 500mg tds"), never "dose not recorded" beside directions | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

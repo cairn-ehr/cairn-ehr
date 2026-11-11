@@ -29,6 +29,10 @@ pub struct MedListRowView {
     pub primary: String,
     /// Dose as "500 mg", or an explicit statement that none was recorded.
     pub dose: String,
+    /// The list's dose cell: "500 mg — 500mg tds", the directions alone with no structured dose,
+    /// or "dose not recorded" with neither (rulings R21/R25). `dose` stays the dose alone, for
+    /// readers that word the sig themselves.
+    pub dose_cell: String,
     pub formulation: String,
     pub sig: String,
     pub started: String,
@@ -87,6 +91,21 @@ pub struct MedListRowView {
 /// and a blank would read either as "no dose" or as a rendering bug.
 const DOSE_UNKNOWN: &str = "dose not recorded";
 
+/// The list's dose cell from the structured dose (`None` when none was recorded) and the
+/// directions as typed: "500 mg — 500mg tds"; the directions alone when there is no structured
+/// dose (the parse fills a dose only when certain, so "1g IV stat" may have none, and "dose not
+/// recorded — 1g IV stat" would read as if no dose was given); [`DOSE_UNKNOWN`] with neither.
+/// Pure.
+fn dose_cell(dose: Option<&str>, sig: &str) -> String {
+    let sig = sig.trim();
+    match (dose, sig.is_empty()) {
+        (Some(d), false) => format!("{d} — {sig}"),
+        (Some(d), true) => d.to_string(),
+        (None, false) => sig.to_string(),
+        (None, true) => DOSE_UNKNOWN.to_string(),
+    }
+}
+
 /// Build one row's view from one chart row.
 ///
 /// `targets` is the set of THREAD ids the sign-off gesture will sign, computed once for the
@@ -102,14 +121,16 @@ pub(crate) fn build_row(
     now: &DateTime<Local>,
 ) -> MedListRowView {
     let holds: Vec<HoldView> = row.holds.iter().map(|h| hold_view(h, now)).collect();
+    let dose = match (&row.dose_amount, &row.dose_unit) {
+        (Some(amount), Some(unit)) => Some(format!("{amount} {unit}")),
+        (Some(amount), None) => Some(amount.clone()),
+        _ => None,
+    };
     MedListRowView {
         group_id: row.group_id.to_string(),
         primary: row.display_name().to_string(),
-        dose: match (&row.dose_amount, &row.dose_unit) {
-            (Some(amount), Some(unit)) => format!("{amount} {unit}"),
-            (Some(amount), None) => amount.clone(),
-            _ => DOSE_UNKNOWN.to_string(),
-        },
+        dose_cell: dose_cell(dose.as_deref(), row.sig.as_deref().unwrap_or_default()),
+        dose: dose.unwrap_or_else(|| DOSE_UNKNOWN.to_string()),
         formulation: row.formulation.clone().unwrap_or_default(),
         sig: row.sig.clone().unwrap_or_default(),
         started: row.started_value.clone().unwrap_or_default(),

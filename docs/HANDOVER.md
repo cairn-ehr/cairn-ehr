@@ -9,7 +9,8 @@
 > least one created at installation; (2) **a key vault holds the clinicians' signing keys** (login = "choose who you
 > are + passphrase") — both built, ADR-0083; (3) **a draft auto-committed after the quarantine is RECORDED, NOT
 > ATTESTED** — built, [ADR-0089](spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md); (4) **"prescribe"
-> in this milestone means CHARTED** (printed and electronic prescriptions come much later) — still in no ADR.
+> in this milestone means CHARTED** (printed and electronic prescriptions come much later) — recorded in
+> [ADR-0099](spec/decisions/0099-charting-a-medication.md) decision 1.
 >
 > **Its sign-in / authorship part:** design
 > [`superpowers/specs/2026-10-31-gui-sign-in-and-authorship-design.md`](superpowers/specs/2026-10-31-gui-sign-in-and-authorship-design.md)
@@ -88,7 +89,7 @@
 >   suspect overlay counts only to ADD a warning, no act on a doubted-link chart's line, differing accounts, byline key
 >   markers (#1027 built). Open: **#1039** · **#1040** · **#1041** · **#1042** · **#1043** · **#1044** · **#1045** ·
 >   **#1046** (a decision) · **#1047** · **#1048** · **#1049** · **#1050** · **#1051**; owed **RUNBOOK §28**.
-> - **Allergy slice 3 BUILT 2026-11-10 on PR [#1052](https://github.com/cairn-ehr/cairn-ehr/pull/1052)** (plan
+> - **Allergy slice 3 MERGED 2026-11-10 in PR [#1052](https://github.com/cairn-ehr/cairn-ehr/pull/1052)** (plan
 >   [`superpowers/plans/2026-11-09-allergy-slice-3-drugref-and-the-medication-check.md`](superpowers/plans/2026-11-09-allergy-slice-3-drugref-and-the-medication-check.md),
 >   [ADR-0098](spec/decisions/0098-allergy-coding-and-the-medication-check.md), spec **v0.100**, `db/076` with db/074 +
 >   db/041 + db/042 in place, `SCHEMA_GENERATION` **76**): a drug entry may be coded `drugref-moiety` or `drugref-class`
@@ -103,10 +104,37 @@
 >   never said) · **#1063** (stale tags after a failed re-read) · **#1064** (test residuals). The final check also made
 >   a failed allergy read tag every current line "not checked" and restored ADR-0097's sibling rule under a shared
 >   code (ADR-0098 decisions 16 and 25). **#1057** (the group crowded out of the pick, its name doubled) and **#1059** (an unreadable
->   allergy record left the list untagged) are FIXED on #1052's branch by the final fix wave — groups first, labelled
->   once; unread records make every unmarked current line "not checked"; plus a visible "Coded as: …" line under the
->   Substance field (ruling F3) — and stay open until it merges. Owed by a human: **RUNBOOK §29**
+>   allergy record left the list untagged) were FIXED by its final fix wave (groups first, labelled once; unread records
+>   make every unmarked current line "not checked"; a visible "Coded as: …" line under the Substance field, ruling F3)
+>   — **still OPEN on GitHub: close them** (the 2026-11-10 session was not permitted to). **#1065** (filed 2026-11-10,
+>   with **drugref#231**): the pick matches only drugref's display name, so *adrenaline, lignocaine, frusemide,
+>   amoxycillin, acetaminophen* find no moiety — the entry signs uncoded and reads "not checked"; needs drugref to
+>   persist moiety names first (drugref #227 reads the UNII official names in ingest memory only). Owed by a human: **RUNBOOK §29**
 >   (copy `drugref_allergy` from :5532 — `drugref_profiles` has no groups).
+> - **Charting slice 1a BUILT 2026-11-11 on PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066), ready for review; full local gate green at `7bfbd8ef` (4 878 tests, 0 skipped), after the maintainer's ruling generalised the signed override to `warning_override {reason, against: [{source, ref}]}` before merge; batch signing (#1072) fully ruled, designed next** (branch
+>   `design/charting-a-medication`; design [`superpowers/specs/2026-11-10-charting-a-medication-design.md`](superpowers/specs/2026-11-10-charting-a-medication-design.md),
+>   plan [`superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md`](superpowers/plans/2026-11-11-charting-slice-1a-the-line-and-the-check.md),
+>   [ADR-0099](spec/decisions/0099-charting-a-medication.md), spec **v0.101**, `db/077` + `db/076` §5 with db/031 + db/037 +
+>   db/044 in place, `SCHEMA_GENERATION` **77**). *Start medication* /
+>   *Already taking* open one typed line (`amox 500mg tds`); five optional wire keys (`charted_as`, `route`,
+>   `substance.strength`, `substance.components`, `warning_override` — general `{reason, against: [{source, ref}]}`, `allergy` the only source today) with their own projection `medication_charting`;
+>   the drugs-only pick `cairn_drug_medication_search`, ranked by this site's use; the directions read, never guessed;
+>   the check at charting, **re-run at Sign** on a fresh read, and a *Start* line with a mark needs a typed reason
+>   (requiring one is a window rule, never a floor rule); a combination emits no safety claim; the list's cell is
+>   `dose — sig`. **Final-check fixes (2026-11-11):**
+>   - the dose is certain only when every unread word is a duration or on the `HARMLESS` allow-list (`half`, `½`,
+>     `per kg`, `max` and `up to` no longer sign a dose), and two strengths read neither;
+>   - Sign refuses `CHECK_DID_NOT_RUN` rather than dropping a typed reason when its own re-check could not run;
+>   - a failed combinations read leaves the list "not checked";
+>   - a blank pick display is refused before the key;
+>   - a failed read-back shows the directions as not read. Filed: **#1067** (the coding overlay cannot code a combination) · **#1068** (no list shows the charting
+>   fields) · **#1069** (a stat line stays current until slice 2) · **#1070** (the pick's accessibility) · **#1071**
+>   (an override's `against` names one record per mark) · **#1072** (*Already taking*: one Sign per line, an `M > N`
+>   candidate — **a maintainer decision**) · **#1073** (the typed brand is never shown beside the generic;
+>   `shown_name` built, unused) · **#1074** (CI flake: schema-replay `40P01` between test binaries despite
+>   `test_serial_guard` — a red floor job with that signature is it) · **#1075** (charting authoring rules
+>   enforced only after the passphrase; type hardening) · **#1076** (a failed drug search reads "no drug list") ·
+>   **#1077** (test gaps, incl. an unconfirmed brand-allergy-after-Sign case); commented #1054 (built without the de-label offer). Owed by a human: **RUNBOOK §30**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -150,10 +178,12 @@
 > 1. **Slice 3 is complete** (3a → 3c-3c, the bullets above). **#1021 measured, MERGED 2026-11-08 in PR #1025**
 >    (figures `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: per-key fact lookups 5–6× faster,
 >    then a lossless keep rule — **386 ms at a ward-year, 1.13 s at 100 000**); #1021 stays open for the obligations
->    projection and the Pi figures. **Allergy slices 1 + 2 MERGED; slice 3 BUILT on PR #1052** (the bullets
->    above). **Next, in order:** the maintainer's read + CI on **#1052**, then merge → **charting a medication in the
->    window** (it cannot yet; reuse slice 3's check at charting, #1054; its ADR records the milestone's "prescribe means
->    charted"). Later picks: slice 4
+>    projection and the Pi figures. **Allergy slices 1–3 MERGED** (the bullets above). **Next: charting a
+>    medication in the window** (design APPROVED 2026-11-11, three PRs: the line + the check at charting; stat ordered →
+>    given; aliases + PBS forms as drugref supplies them). **Slice 1a BUILT on PR #1066 (awaiting the maintainer's read + CI, then merge)** (the bullet above):
+>    final check done, then the maintainer's review and merge; batch signing (#1072, ruled) is designed next. **Then 1b**: the same-drug de-label offer
+>    on *Already taking* (#1053, opens db/075's `tolerated.coding`) and the group comment, a new allergy event type,
+>    in one transaction with the line (design §3.5); it closes #1054. Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
@@ -195,7 +225,7 @@
 >    `cairn_test`'s fixtures).
 >
 > **⇒ DURABLE RULES — READ BEFORE TOUCHING THE CODE THEY NAME:**
-> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (allergy 3, allergy 2, allergy 1, sign-in 3c-3c, 3c-3a, 3c-3b, 3c-2, 3c-1, 3b-2b, 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
+> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (charting 1a, allergy 3, allergy 2, allergy 1, sign-in 3c-3c, 3c-3a, 3c-3b, 3c-2, 3c-1, 3b-2b, 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
 > R5a, #725, R4, R3, R1b, R2a, R2b-1, R2b-2, R1, the funnel) and the **eighteen traps**, each with its pin and its
 > tempting wrong fix. A slice that adds rules adds its block there, not here.
 >
@@ -296,10 +326,10 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-11-08 (#1021 measured; key facts once per key; keep rule) · 2026-11-07 (3c-3c plan → SDD, 7 tasks + final fix wave, PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)) · 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
-**Spec:** **v0.97** (newest ADR-0095, PR #1019, `db/073`; v0.96 ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
+**Session date:** 2026-11-11 (charting slice 1a plan → SDD, Tasks 1–7 + final fix wave on draft PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066); #1067–#1073 filed) · 2026-11-10 (#1052 merged; #1065 + drugref#231 filed; charting-a-medication brainstorm) · 2026-11-08 (#1021 measured; key facts once per key; keep rule) · 2026-11-07 (3c-3c plan → SDD, 7 tasks + final fix wave, PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)) · 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
+**Spec:** **v0.101** (newest ADR-0099, PR #1066, `db/077`; v0.100 ADR-0098, PR #1052, `db/076`; v0.99 ADR-0097, PR #1038, `db/075`; v0.98 ADR-0096, PR #1026, `db/074`; v0.97 ADR-0095, PR #1019, `db/073`; v0.96 ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
-wording only) · **`SCHEMA_GENERATION`:** **73** (`db/073`, PR #1019; `db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
+wording only) · **`SCHEMA_GENERATION`:** **77** (`db/077`, PR #1066, with db/031 + db/037 + db/044 in place and its search door in db/076 §5; `db/076`, PR #1052, with db/074 + db/041 + db/042 in place; `db/075`, PR #1038; `db/074`, PR #1026; `db/073`, PR #1019; `db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a

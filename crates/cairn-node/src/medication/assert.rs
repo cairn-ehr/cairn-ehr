@@ -2,7 +2,7 @@
 //! Device-additive: signed by the node/clinician key with a `recorded`
 //! contributor and NO responsibility attestation (mirrors identify.rs).
 use cairn_event::medication::{
-    medication_assertion_body, render_medication_twin, MedicationAssertion,
+    medication_assertion_body, render_medication_twin, Charting, MedicationAssertion,
 };
 // Re-exported (not just used internally): a caller building `coding_from_parts`'/
 // `AssertMedicationInput::coding`'s value needs to name this type too (final-review
@@ -86,12 +86,40 @@ pub fn coding_from_parts<'a>(
 /// without a database (house rule 4 / the §9 blast-radius rule). `None` — an uncoded
 /// medication, or a coding this deployment's class map has no row for — writes no `safety`
 /// key at all, so the event's bytes are identical to the pre-ADR-0063 shape.
-#[allow(clippy::too_many_arguments)] // one parameter per wire value; nothing bundleable without inventing a throwaway struct
+///
+/// No charting: [`build_charted_body`] with [`Charting::default`], which writes the payload
+/// exactly as before charting existed (principle 11).
 pub fn build_assert_body(
     event_id: Uuid,
     medication_id: Uuid,
     patient: Uuid,
     input: &AssertMedicationInput<'_>,
+    node_kid: &str,
+    hlc: Hlc,
+    safety: Option<cairn_event::safety::PreciseSafety<'_>>,
+) -> EventBody {
+    build_charted_body(
+        event_id,
+        medication_id,
+        patient,
+        input,
+        &Charting::default(),
+        node_kid,
+        hlc,
+        safety,
+    )
+}
+
+/// [`build_assert_body`] with the line's charting fields (charted-as, route, strength,
+/// components, warning override — charting slice 1a). Pure, like it. An empty `Charting` adds
+/// nothing to the payload or the twin.
+#[allow(clippy::too_many_arguments)] // one parameter per wire value; nothing bundleable without inventing a throwaway struct
+pub fn build_charted_body(
+    event_id: Uuid,
+    medication_id: Uuid,
+    patient: Uuid,
+    input: &AssertMedicationInput<'_>,
+    charting: &Charting<'_>,
     node_kid: &str,
     hlc: Hlc,
     safety: Option<cairn_event::safety::PreciseSafety<'_>>,
@@ -111,6 +139,7 @@ pub fn build_assert_body(
         started: input.started,
         started_precision: input.started_precision,
         safety,
+        charting: Some(*charting),
     };
     EventBody {
         event_id: event_id.to_string(),
@@ -162,7 +191,8 @@ pub async fn assert_medication(
 }
 
 /// [`assert_medication`], also returning the assert event's id (#828): the id a lost commit of
-/// this call names (`seal_sign_submit`), so the CLI can print it beside the thread.
+/// this call names (`seal_sign_submit`), so the CLI can print it beside the thread. A line with
+/// no charting fields: [`chart_medication`](crate::medication::chart_medication) does the work.
 #[allow(clippy::too_many_arguments)] // as `assert_medication`
 pub async fn assert_medication_returning_event(
     client: &mut tokio_postgres::Client,
@@ -174,60 +204,18 @@ pub async fn assert_medication_returning_event(
     author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<crate::db_diagnosis::Committed<Uuid>> {
-    validate_term(input.term)?;
-    // Mint HLCs up front (self-committing; a rolled-back submit just leaves a gap —
-    // the HLC is monotonic and gaps are allowed, exactly like identify_patient).
-    let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
-    let event_id = Uuid::now_v7();
-    let medication_id = Uuid::now_v7();
-    // §5.9 part B (ADR-0063): the class is looked up on the CODING node, PRE-SEAL, because
-    // it is a drug-knowledge lookup a reader cannot redo without a drug database — and
-    // making the safety floor depend on holding one would defeat the floor (#294 /
-    // ADR-0059 decision 4). An uncoded medication, or a coding this deployment's map has no
-    // row for, yields None: both are honest absences and emit no signal at all, rather than
-    // a content-free marker that would manufacture a warning from nothing.
-    //
-    // Held in a local `class` first because `PreciseSafety` BORROWS its two strings; the
-    // owned pair must outlive the body construction below.
-    //
-    // A lookup that ERRORS is treated as "no class", never propagated: an advisory field
-    // must never be able to fail a clinical write (ADR-0060 — the system may fail to record
-    // an order, but it may never cancel one). Falling back is the WITHHOLDING direction, so
-    // the worst case is a missing decoration on a recorded medication, never a lost
-    // medication. See `crate::safety::advisory_or_withheld` for the full argument.
-    let class = match input.coding.as_ref() {
-        Some(coding) => crate::safety::advisory_or_withheld(
-            crate::safety::lookup_class(client, coding).await,
-            None,
-            "the safety class lookup for a medication assert",
-        ),
-        None => None,
-    };
-    let safety = class
-        .as_ref()
-        .map(|(class, severity)| cairn_event::safety::PreciseSafety { class, severity });
-    let body = build_assert_body(
-        event_id,
-        medication_id,
+    crate::medication::chart_medication(
+        client,
+        node_sk,
+        node_kid,
+        node_origin,
         patient,
         input,
-        node_kid,
-        verb_hlc,
-        safety,
-    );
-    // ADR-0052 seal-at-write: the clear body is sealed, signed, and submitted through the
-    // ONE strict door by seal_sign_submit — which also runs the atomic author-time
-    // attestation when `attest` is Some (it vouches for the thread named in the body's
-    // payload.medication_id), and rewrites the body to human-signed authorship when
-    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). It returns the
-    // content event's id, the one its lost commit names; the thread id rides beside it.
-    let recorded =
-        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-            .await?;
-    Ok(crate::db_diagnosis::Committed {
-        value: medication_id,
-        event_id: recorded,
-    })
+        &Charting::default(),
+        author,
+        attest,
+    )
+    .await
 }
 
 /// What `cairn-node medication-assert` prints on success: the chart, the thread (what later

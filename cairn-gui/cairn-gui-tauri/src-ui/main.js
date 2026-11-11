@@ -167,7 +167,8 @@ function renderRow(row) {
     // On a combined list the source chart is part of the drug's name, so a screen reader hears
     // WHERE it was recorded in the same utterance as WHAT it is. `source` is present only then.
     nameCell(row), // the drug's name, its source chart, and the allergy tags (allergy_tags.js)
-    cell("td", row.dose),
+    // The dose and the directions as signed ("1 g — 1g IV stat"; R21/R25), worded by row_view.rs.
+    cell("td", row.dose_cell),
     statusCell(row), // the status word and each hold's "W" (holds.js, #832)
     cell(
       "td",
@@ -231,6 +232,7 @@ function render(pane, patient) {
     showUnshownList(failure);
   }
   drawDuplicates(pane.duplicates); // a fault drawing it is said on the banner, never thrown here
+  syncMedChart(); // "Start medication" / "Already taking" only over a drawn list (med_chart.js)
 }
 
 /** The list half of `render`: the drawn chart and set, linked charts, links, warnings, rows. */
@@ -325,6 +327,7 @@ function clearChart() {
   clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   clearNotes(); // the note pane and its editor (notes.js)
   clearAllergies(); // the allergy strip, its lists and its form (allergies.js)
+  clearMedChart(); // the medication line typed for this chart (med_chart.js)
   clearDrawnList();
   const button = el("sign-off");
   button.disabled = true;
