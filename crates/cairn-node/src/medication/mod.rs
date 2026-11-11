@@ -11,6 +11,7 @@ mod cessation;
 mod charting;
 mod coding;
 mod dose;
+pub mod draft;
 pub mod draft_tick;
 pub mod elsewhere;
 mod hazard;
