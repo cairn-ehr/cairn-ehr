@@ -166,7 +166,7 @@ async fn an_edit_after_a_hand_tick_clears_it_in_the_door() {
         .await,
         "saved"
     );
-    assert_eq!(read().await.0, true);
+    assert!(read().await.0);
     // New text WITH p_hand_ticked = true: the door itself voids the tick.
     assert_eq!(
         save(
