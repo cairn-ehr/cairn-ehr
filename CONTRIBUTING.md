@@ -55,6 +55,24 @@ DB-gated tests without binding it.
 You lose real coverage by setting it — that is the point of having to say so. The pure Rust crates
 and the matcher's pure suite (`cd matcher && uv run pytest`, never venv/pip) still run in full.
 
+### Local hooks — enable once per clone
+
+```sh
+git config core.hooksPath .githooks
+```
+
+- **`commit-msg`** runs `scripts/check_closing_keywords.py` on the message *before* the commit
+  exists. CI checks the same thing on the PR, but by then the slip is in a pushed commit and the
+  only fix is a force-push.
+- **`pre-commit`**, when a `Cargo.toml`/`Cargo.lock` is staged, refuses if any of the three Cargo
+  trees (root, `cairn-gui`, `extensions/cairn_pgx`) has a stale lockfile — the GUI and pgrx trees
+  path-depend on root crates, and before this only CI's `--locked` GUI clippy noticed.
+
+`.claude/settings.json` also wires a Claude Code **Stop hook**
+(`scripts/hooks/claude-stop-unpushed-work.sh`): when a session's branch has commits beyond `main`
+that are unpushed or have no PR, it reminds the session once per commit (house rule 8). It stays
+silent when `gh` cannot reach GitHub. All three are tested by `bash scripts/tests/git_hooks_test.sh`.
+
 ## Continuous integration — the required checks
 
 Every pull request must pass this set of **required status checks** before it can merge to `main`.

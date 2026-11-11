@@ -270,8 +270,9 @@
 > **⇒ GITHUB CLOSES ON ADJACENCY, NOT ON SENTENCES (2026-09-04).** Seven issues (#101, #115, #434,
 > #441, #468, #500, #534) were closed by prose *disclaiming* the close; all reopened. Guarded by
 > `scripts/check_closing_keywords.py` + `.github/workflows/closing-keywords.yml` (**#444** would make it
-> required). **`fix(#500):` is SAFE** — the parenthesis breaks the adjacency. Run the script BEFORE you
-> commit: the slip lives in the commit message and fixing it needs a force-push. Residuals **#547**, **#548**.
+> required). **`fix(#500):` is SAFE** — the parenthesis breaks the adjacency. The `.githooks/commit-msg`
+> hook runs the script BEFORE the commit exists (enable: `git config core.hooksPath .githooks`): the slip
+> lives in the commit message and fixing it needs a force-push. Residuals **#547**, **#548**.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)): parts A+B (authority floor + operator
 surface) BUILT, enforcing nothing beyond display/emission; C+D DESIGNED, C1 the next §5.9 BUILD.** Read

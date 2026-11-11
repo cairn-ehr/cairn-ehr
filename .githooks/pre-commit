@@ -1,0 +1,18 @@
+#!/bin/bash
+# When a Cargo.toml or Cargo.lock is staged, refuse if ANY of the three Cargo trees has a
+# stale lockfile. cairn-gui and cairn_pgx path-depend on root crates, so a root change can
+# stale their locks too, and nothing local noticed — only CI's `--locked` GUI clippy did.
+# Enabled per clone with: git config core.hooksPath .githooks   (see CONTRIBUTING.md)
+set -euo pipefail
+git diff --cached --name-only | grep -qE '(^|/)Cargo\.(toml|lock)$' || exit 0
+root="$(git rev-parse --show-toplevel)"
+status=0
+for tree in . cairn-gui extensions/cairn_pgx; do
+  [ -f "$root/$tree/Cargo.lock" ] || continue
+  if ! out="$(cd "$root/$tree" && cargo metadata --locked --format-version 1 2>&1 >/dev/null)"; then
+    echo "pre-commit: $tree/Cargo.lock is stale — run \`cargo update -w\` in $tree and stage it:" >&2
+    echo "$out" | tail -5 >&2
+    status=1
+  fi
+done
+exit "$status"
