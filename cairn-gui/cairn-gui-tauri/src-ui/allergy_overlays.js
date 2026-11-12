@@ -253,8 +253,7 @@ async function signOverlay(row, send) {
     await afterRefused(failure, patient, false, sayHere);
     return;
   }
-  afterSigned(answer, patient, false);
-  void readMedDraft(); // the medication list's offers and marks changed with the allergy list
+  afterSigned(answer, patient, false); // re-reads the chart, and so the medication list's offers and marks
 }
 
 el("allergy-correct-cancel").addEventListener("click", () => {

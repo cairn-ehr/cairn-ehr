@@ -3169,7 +3169,7 @@ Record each allergy in the window, then name a clinician in who's here (`dr-a`).
 - [ ] On `$D1`, a line typed `amoxicillin` with no pick: no offer.
 - [ ] On `$D1`, chart the amoxicillin line and sign it (de-label first, or with the mark's reason): the charted
       medication row offers nothing.
-- [ ] On `$D1`, record a second amoxicillin allergy: the line shows two buttons, each naming its own record.
+- [ ] On `$D1`, record a second amoxicillin allergy: the line shows two buttons, one per record; each press brings its own record's line into view.
 
 **Measurement 2: the press and the de-label.**
 

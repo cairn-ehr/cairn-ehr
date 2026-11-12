@@ -145,7 +145,9 @@
 >   **#1082** (the draft doors trust the window's writer, as the note draft's — a decision). Owed by a human:
 >   **RUNBOOK §31**.
 > - **Charting slice 1b — the same-drug de-label offer — built, reviewed (SDD, final review clean) and gated green
->   (3 710 DB-gated root tests at `140db1c9`, GUI 989) on PR [#1086](https://github.com/cairn-ehr/cairn-ehr/pull/1086), ready for review**
+>   (3 710 DB-gated root tests at `140db1c9`, GUI 989) on PR [#1086](https://github.com/cairn-ehr/cairn-ehr/pull/1086), ready for review;
+>   final-check wave 2026-11-12 (GUI 993)**: a press with no allergy list drawn now says so instead of "no longer on
+>   the list", that note is said once (never stored), an edited line draws no offer, and the ADR's sentences match
 >   (design [`superpowers/specs/2026-11-12-charting-slice-1b-same-drug-delabel-offer-design.md`](superpowers/specs/2026-11-12-charting-slice-1b-same-drug-delabel-offer-design.md),
 >   [ADR-0101](spec/decisions/0101-the-same-drug-delabel-offer.md), spec **v0.103**, `db/075` in place (no new file; the
 >   content hash delivers it), `SCHEMA_GENERATION` **78** unchanged; no wire change; it will close #1053 and #1054). An unsigned list line whose
@@ -154,7 +156,7 @@
 >   own act. A de-label may code the tolerated drug (authoring door: `drugref-moiety` only; the row's drugs-only pick
 >   drops on any edit). The charting design's group comment and shared transaction were dropped (maintainer). Open:
 >   **#1084** (an additive comment on an allergy line, a new act) · **#1085** (flag a live allergy whose drug matches a
->   coded tolerance). Owed by a human: **RUNBOOK §32**. **For the maintainer to confirm:** the de-label row pre-fills
+>   coded tolerance) · **#1087** (a failed drug search reads as "no matches", both picks; from the final check). Owed by a human: **RUNBOOK §32**. **For the maintainer to confirm:** the de-label row pre-fills
 >   today only on an *Already taking* line; on a *Start* line the date stays empty ("not known"), since "tolerated
 >   today" would be untrue there (controller ruling from the final review; the design's "date = today" was a designer's call).
 >

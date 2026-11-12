@@ -1,7 +1,7 @@
 // The drugs-only pick on a De-label row's "Tolerated" field (charting slice 1b): typing three or
 // more characters offers drugs from the node's drug list (`med_drug_search`, the same search the
-// medication line uses), so the tolerated drug can be signed CODED and the allergy check can tell
-// which allergy it clears. Choosing is optional: a name left as typed is signed as typed.
+// medication line uses), so the tolerated drug can be signed CODED (recorded only: nothing reads
+// the code yet, #1085). Choosing is optional: a name left as typed is signed as typed.
 //
 // The one safety rule, as drug_pick.js's: a coding vouches for THE NAME IT WAS PICKED WITH. ANY
 // edit of the field drops it (the first thing the `input` handler does), and while one is held

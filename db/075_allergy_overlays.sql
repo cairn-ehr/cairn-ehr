@@ -107,10 +107,12 @@ BEGIN
     IF v_date_why IS NOT NULL THEN
         RAISE EXCEPTION 'allergy challenge: date.value %', v_date_why;
     END IF;
-    -- The coded tolerated drug (#1053). The shape (three strings, a registered system) was checked
-    -- at both doors above; here, at the authoring door only, the SYSTEM must be a drug (a moiety):
-    -- a tolerance is of a drug, never of a group (a class coding is an allergen's, not a challenge's).
-    -- The remote door admits any well-shaped system, so a newer peer's finer level never wedges sync.
+    -- The coded tolerated drug (#1053). Its shape (three non-empty strings) was checked at both
+    -- doors above, and a registered system and canonical uuid at the authoring door only (db/041
+    -- returns early at the remote door); here, at the authoring door only, the SYSTEM must be a drug
+    -- (a moiety): a tolerance is of a drug, never of a group (a class coding is an allergen's, not a
+    -- challenge's). The remote door admits any well-shaped system, so a newer peer's finer level
+    -- never wedges sync.
     IF jsonb_typeof(p #> '{tolerated,coding}') = 'object'
        AND p #>> '{tolerated,coding,system}' IS DISTINCT FROM 'drugref-moiety' THEN
         RAISE EXCEPTION 'allergy challenge: tolerated.coding.system must be drugref-moiety, got %', p #>> '{tolerated,coding,system}';

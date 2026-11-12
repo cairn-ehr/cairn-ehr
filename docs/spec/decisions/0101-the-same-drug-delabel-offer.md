@@ -34,7 +34,7 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
 ### The rule and the offer
 
 1. **Charting never writes the allergy list.** The list's Sign submits medication events only. The only way
-   an allergy is struck is the existing `allergy_challenge` command, signed on its own.
+   an allergy is de-labelled is the existing `allergy_challenge` command, signed on its own.
 2. **The offer is decided by code equality only.** `same_drug_heads` returns the live allergy heads whose coding has
    system `drugref-moiety` and a code that parses as the same `Uuid` as the line part's moiety code. It looks at no
    name, no group and no drugref answer. The allergy check may word a name or drug-list match "same drug" for a warning
@@ -43,7 +43,7 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
 3. **Only an allergy, only live, only a drug.** A head is considered only when its allergen kind is `drug` and its kind
    is `allergy` (an adverse-effect entry, a "none known" statement and a kind added by a newer peer are not offered).
    `r.live` already leaves out de-labelled and withdrawn heads. A head on a chart whose link is in doubt is excluded,
-   because the de-label door refuses such a target.
+   because the window's de-label command refuses such a target.
 4. **Unsigned list lines only.** The offers are derived in `judge` for the clinician's own list lines (a line from
    either *Start medication* or *Already taking*), only when the allergies were read over the chart set on screen and
    the line's parts are signable. A line already charted gets none, and slice 1a's lone-line editor gets none: a
@@ -52,20 +52,24 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
    the list, or while the list's Sign is in flight.
 5. **One control per allergy record.** `offers_for` takes each part coded `drugref-moiety` and, for each live head of
    the same drug, makes one offer, deduplicated by target. A combination offers only for the part that matches. Several
-   live entries for one drug give several controls, each naming its record; none is struck by another's press. The
-   words come from `offer_words` ("De-label the {allergy} allergy: tolerates {drug} (recorded by {signer})", the tail
-   omitted when the signer is unknown). Rust words and derives them; the webview draws one button per offer.
+   live entries for one drug give several controls, one per record (worded by term and byline only, so two alike may
+   read alike; a press brings its own record's line into view); none is struck by another's press. The words come from
+   `offer_words` ("De-label the {allergy} allergy: tolerates {drug} (recorded by {signer})", the tail omitted when the
+   signer is unknown). Rust words and derives them; the webview draws one button per offer.
 
 ### What pressing it does
 
 6. **A press signs nothing.** `pressDelabelOffer` finds the allergy pane's drawn live line for the offer's target and
    opens that line's existing De-label row (`openDelabel` with a prefill): *Tolerated* is the line's drug, its coding is
    held, the note is empty, and the date is today on an *Already taking* line but empty (not known) on a *Start
-   medication* line, whose drug the patient has not yet had in this episode (a date is a claim, and "tolerated today"
-   is true only of a drug already being taken). With no such drawn line (the list moved on) it says the allergy is no
-   longer on the list, at the allergy pane and beside the pressed line, and opens nothing; while the allergy pane may
-   not write (a press in flight, no list drawn) a press does nothing. There is one de-label act and one form, whichever
-   way it is reached.
+   medication* line, whose drug the patient has not yet had in this episode (a date is a claim, and "tolerated today" is
+   true only of a drug already being taken). The allergy pane's state is read first: while it may not write (a press in
+   flight, no list drawn for the chart on screen) a press says why at the allergy pane and opens nothing, never that the
+   allergy is gone, which would be a claim about a list nobody read. With a list drawn but no such line in it (the list
+   moved on) it says the allergy is no longer on the list, at the allergy pane and beside the pressed line, once (the
+   line's next draw takes the note down), and opens nothing. While its line is being edited the line draws no offer:
+   like its marks, an offer is about the saved words. There is one de-label act and one form, whichever way it is
+   reached.
 7. **The de-label signs at once, as its own act.** The clinician signs the row with the signer strip as for any
    de-label: under its own signature, before and independent of the list's Sign (a held key costs no passphrase). It is
    never ticked, pre-pressed or bundled with the list's Sign, and shares no transaction with a line. After an overlay
@@ -84,9 +88,9 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
    coding never wedges sync. A tolerance is of a drug, never of a group.
 10. **The window checks the pick before the key.** `tolerated_coding_before_the_key` refuses a coding whose system is
     not `drugref-moiety` (`NOT_FROM_THE_LIST`) or whose display is blank or whose code does not read as a `Uuid`
-    (`BAD_CODE`), and re-spells the code canonically. In `allergy_challenge_impl` the order of refusals is: what was
-    tolerated is named, the coding, the date, the target, the key. The door checks shape and system only and never
-    looks the drug up.
+    (`BAD_CODE`), and re-spells the code canonically. In `allergy_challenge_impl` the order of refusals is: the chart on
+    screen and writable (`on_screen_and_writable`), what was tolerated is named, the coding, the date, the target, the
+    key. The door checks shape and system only and never looks the drug up.
 11. **The row's pick is optional and drops on any edit.** The De-label row gains a drugs-only pick (`med_drug_search`,
     slice 1a's). Typed text with no pick stays uncoded. Any edit of the *Tolerated* field drops the held coding, and
     while one is held the row says "Coded as: {drug} (drug)". The offer's prefill and a pick on the allergy list use

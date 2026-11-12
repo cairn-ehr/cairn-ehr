@@ -48,7 +48,8 @@ fn the_offer_is_a_button_with_rusts_words_and_no_dialog() {
     not_hidden_by_css(".med-list-delabel");
 }
 
-/// A press opens the row (prefilled with the offer's drug, coding and today) and signs nothing:
+/// A press opens the row (prefilled with the offer's drug, its coding and the date the line can
+/// claim, `prefillDate`) and signs nothing:
 /// the function never reaches `invoke`.
 #[test]
 fn a_press_opens_the_delabel_row_prefilled_and_signs_nothing() {
@@ -93,16 +94,50 @@ fn the_prefill_date_is_today_only_on_an_already_taking_line() {
     assert!(!press.contains("todayDdMmYyyy()"), "{press}");
 }
 
-/// A press does nothing while the allergy pane may not write (busy, no list), checked before
-/// the row is opened; and it takes no unused `opener`.
+/// The allergy pane's state is read FIRST: while it may not write (busy, no list drawn, another
+/// chart's list) a press opens nothing and SAYS why, never a silent press, and never "no longer on
+/// the list", a claim about a list nobody read (principle 4; PR #1086 review). Only with a list
+/// drawn is the target looked up in it.
 #[test]
 fn a_press_waits_for_the_allergy_pane_to_be_writable() {
     let press = js_fn(OFFER_JS, "pressDelabelOffer");
+    let check = position(press, "if (!allergyMayWrite()) {");
+    for later in [
+        "document.querySelector(",
+        "sayOfferGone(line);",
+        "openDelabel(",
+    ] {
+        assert!(check < position(press, later), "{later}: {press}");
+    }
+    let refused = &press[check..position(press, "document.querySelector(")];
     assert!(
-        position(press, "if (!allergyMayWrite()) return;") < position(press, "openDelabel("),
+        refused.contains("sayAllergy(allergyBusy ? ALLERGY_BUSY : NO_ALLERGY_LIST);"),
+        "{refused}"
+    );
+    assert!(
+        !press.contains("if (!allergyMayWrite()) return;"),
         "{press}"
     );
+    for words in [
+        "const ALLERGY_BUSY = \"An allergy record is being signed; press again once it is answered\";",
+        "const NO_ALLERGY_LIST = \"The allergy list is not drawn for this chart; read it again\";",
+    ] {
+        assert!(OFFER_JS.contains(words), "{words}");
+    }
     assert!(OFFER_JS.contains("function pressDelabelOffer(line, offer) {"));
+}
+
+/// While its line is being edited, a line draws no offer: like its marks, an offer is about the
+/// SAVED words, which the editor is replacing (PR #1086 review).
+#[test]
+fn an_edited_line_draws_no_offer() {
+    let draw = js_fn(OFFER_JS, "drawDelabelOffers");
+    assert!(
+        draw.contains(
+            "const offers = line.view && medEditingLine !== line ? line.view.delabel_offers : [];"
+        ),
+        "{draw}"
+    );
 }
 
 /// The offer buttons are down exactly when the line's other controls are: the list is held by
@@ -205,11 +240,13 @@ fn a_press_on_an_allergy_no_longer_drawn_says_so() {
     let gone = js_fn(OFFER_JS, "sayOfferGone");
     for step in [
         "sayAllergy(OFFER_GONE);",
-        "medLineNotes.set(line.id, OFFER_GONE);",
         "setMessage(line.row.note, OFFER_GONE);",
     ] {
         assert!(gone.contains(step), "{step}: {gone}");
     }
+    // Said once, never stored: the line's next draw (a re-read) takes it down, so it never stands
+    // beside a re-drawn offer it contradicts (PR #1086 review).
+    assert!(!OFFER_JS.contains("medLineNotes"), "{OFFER_JS}");
     assert!(press.contains("if (!delabel) {"), "{press}");
     // Only LIVE lists are searched, and allergies.js tags each drawn line with its event id.
     for id in ["allergy-drug", "allergy-other", "allergy-adverse"] {
@@ -256,18 +293,37 @@ fn the_row_sends_the_held_coding_or_null() {
         "{open}"
     );
     assert!(js_fn(PICK_JS, "delabelCoding").contains("return row.heldCoding || null;"));
+    // Tauri maps `toleratedCoding` onto this parameter BY NAME, and a missing `Option` arrives
+    // as `None` with no error: a rename on either side would sign every de-label uncoded.
+    let command =
+        crate::source_guard::rust_fn(include_str!("allergy_overlays.rs"), "allergy_challenge");
+    assert!(
+        command.contains("tolerated_coding: Option<CodingArg>,"),
+        "{command}"
+    );
 }
 
-/// After a signed overlay the allergy list is drawn from the answer, then the medication list
-/// reads again (its offers and marks changed with it).
+/// After a signed overlay the medication list reads again (its offers and marks changed with the
+/// allergy list) through ONE path: `afterSigned` re-reads the chart's list, whose `render` re-reads
+/// the draft. No second, redundant read of its own (PR #1086 review).
 #[test]
 fn the_list_rereads_after_a_delabel() {
     let sign = js_fn(OVERLAYS_JS, "signOverlay");
     assert!(
-        position(sign, "afterSigned(answer, patient, false);")
-            < position(sign, "void readMedDraft();"),
+        sign.contains("afterSigned(answer, patient, false);"),
         "{sign}"
     );
+    assert!(!OVERLAYS_JS.contains("readMedDraft"), "{OVERLAYS_JS}");
+    let after = js_fn(include_str!("../src-ui/allergies.js"), "afterSigned");
+    assert!(
+        position(after, "if (patient !== displayedPatient) return;")
+            < position(after, "void readMedList();"),
+        "{after}"
+    );
+    let main = include_str!("../src-ui/main.js");
+    assert!(js_fn(main, "readMedList").contains("render(answer, patient);"));
+    assert!(js_fn(main, "render").contains("syncMedList();"));
+    assert!(js_fn(LIST_JS, "syncMedList").contains("void readMedDraft();"));
 }
 
 /// Files under 500 lines (house rule): med_list.js was at 497 and gains one call.
