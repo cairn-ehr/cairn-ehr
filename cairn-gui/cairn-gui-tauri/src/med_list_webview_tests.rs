@@ -71,6 +71,7 @@ fn line_view() -> ListLineView {
             source: "allergy".into(),
             reference: "r".into(),
         }],
+        delabel_offers: vec![],
     }
 }
 
