@@ -853,7 +853,7 @@ click: yes / no.
 |---|---|---|
 | A line for the drug of a coded allergy offers the de-label (either press); two such allergies, two buttons | | |
 | A group allergy, an uncoded allergy, an untyped-pick line and a charted row offer nothing | | |
-| The press opens the De-label row pre-filled (drug, "Coded as", today) and signs nothing | | |
+| The press opens the De-label row pre-filled (drug, "Coded as"; date today on Already taking, empty on Start) and signs nothing | | |
 | Sign: the allergy reads "Historically reported", the line's mark and offer go; the coding is stored | | |
 | Editing *Tolerated* drops "Coded as"; the de-label lands uncoded | | |
 | A de-label from the allergy list with a pick lands coded | | |

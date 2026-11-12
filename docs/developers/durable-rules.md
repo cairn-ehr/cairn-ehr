@@ -24,8 +24,13 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   own De-label row pre-filled, and the clinician signs that row as its own act. **Tempting wrong fixes:** have the
   list's Sign de-label "since the drug was charted" (a drug on the list does not attest tolerance); pre-press or
   pre-tick the offer; draw an offer on a charted line (it keeps its warning; the allergy is acted on from the allergy
-  list). Pins: `delabel_webview_tests.rs::a_press_opens_the_delabel_row_prefilled_and_signs_nothing`,
-  `med_list_delabel_db_tests.rs::a_group_allergy_line_carries_no_offer`.
+  list). A charted row is a different view type: only a draft list line becomes a `ListLineView` (the only carrier of
+  `delabel_offers`), and `drawDelabelOffers` is called only from `drawLine`. Pins:
+  `delabel_webview_tests.rs::a_press_opens_the_delabel_row_prefilled_and_signs_nothing`,
+  `delabel_webview_tests.rs::the_offer_is_drawn_only_from_the_lists_unsigned_line`.
+- **The prefill's date is a claim**: today on an *Already taking* line only; on a *Start medication* line it stays EMPTY
+  (not known). **Tempting wrong fix:** prefill today everywhere "for speed" (it asserts a tolerance the patient has not
+  had). Pin: `delabel_webview_tests.rs::the_prefill_date_is_today_only_on_an_already_taking_line`.
 - **A tolerated coding is a DRUG, never a group**, checked in Rust before the key and again at the authoring door
   (`drugref-moiety` only; the remote door admits any well-shaped system so sync never wedges). **Tempting wrong fix:**
   admit `drugref-class` "to match the allergy side" (a tolerance of a group is not a fact anyone observed). Pins:

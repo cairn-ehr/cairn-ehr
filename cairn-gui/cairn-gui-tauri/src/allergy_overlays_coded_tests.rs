@@ -127,8 +127,8 @@ async fn an_uncoded_delabel_is_unchanged() {
 }
 
 /// A second de-label of a line already struck is refused with the existing words BEFORE the key:
-/// the held key is forgotten after the first de-label signs, so a refusal reached only after the
-/// key would be the key's sentence, not GONE_LINE.
+/// this test's own first act signs a de-label and forgets the held key, so a refusal reached only
+/// after the key would be the key's sentence, not GONE_LINE.
 #[tokio::test]
 async fn a_delabel_of_a_head_struck_since_is_refused_before_the_key() {
     let Some((_guard, owner, state, chart, _)) = supervised_note().await else {

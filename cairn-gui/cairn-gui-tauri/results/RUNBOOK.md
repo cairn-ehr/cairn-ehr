@@ -3126,7 +3126,8 @@ The slice's gestures:
   identical drugref code: amoxicillin against a *Penicillins* allergy, a name match, or a line typed without a pick
   offers nothing. A line already charted offers nothing. Two live entries for one drug show two buttons.
 - **The press** opens the allergy list's own *De-label* row for that allergy, with *Tolerated* filled in with the
-  drug ("Coded as: {drug} (drug)"), the date today and the note empty. It signs nothing. The clinician signs the row
+  drug ("Coded as: {drug} (drug)") and the note empty; the date is today for an *Already taking* line and empty (not
+  known) for a *Start medication* line. It signs nothing. The clinician signs the row
   (the signer strip; a held key costs no passphrase) and the allergy line is struck at once, before and apart from the
   list's Sign. Afterwards the lists are read again and the line's mark is gone.
 - **The pick on the row.** *Tolerated* gains a drugs-only pick (three characters offer drugs). Choosing is optional;
@@ -3146,8 +3147,9 @@ Steps: strike, note and initial on paper *N* = 1 act → forced *M* = 1 signed d
 the pre-filled row. From the allergy list directly *K* is as before plus an optional pick. **A figure outside its
 budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
 
-**Setup.** As section 31, but build this checkout (the `db/075` edit reaches an existing database on its next connect;
-`SCHEMA_GENERATION` stays 78). Then:
+**Setup.** As section 31, but build this checkout, let an owner `cnode` command replay the schema (the `db/075` edit
+changes its hash; `SCHEMA_GENERATION` stays 78), then re-run section 0's `provision-window-role`: the window refuses a
+database whose schema hash changed ("prepared by a different build") until you do. Then:
 
 ```bash
 D1=$(achart "Delabel Amoxicillin" 1983-03-03)   # an allergy coded to the drug amoxicillin (picked from the drug list)
@@ -3172,7 +3174,8 @@ Record each allergy in the window, then name a clinician in who's here (`dr-a`).
 **Measurement 2: the press and the de-label.**
 
 - [ ] Press the offer on `$D1`: the allergy pane opens, the *De-label* row is open on that allergy, *Tolerated* reads
-      amoxicillin, "Coded as: amoxicillin (drug)" shows, the date is today. Nothing is signed (no new allergy event):
+      amoxicillin, "Coded as: amoxicillin (drug)" shows, the date is today (an *Already taking* line; on a *Start
+      medication* line the date is empty). Nothing is signed (no new allergy event):
       `psql "$CONN" -c "SELECT count(*) FROM clinical_allergy_challenge"` has not moved.
 - [ ] Sign the row: one passphrase on a shared terminal, none with a held key; the allergy reads "Historically
       reported" with its byline and date, and the list line's mark and offer are gone.
@@ -3193,7 +3196,7 @@ Record each allergy in the window, then name a clinician in who's here (`dr-a`).
 
 - [ ] The offer button reads its whole sentence; Tab reaches it; Enter presses it.
 - [ ] Focus goes into the opened De-label row; the pick list is reachable by keyboard (#1070 applies).
-- [ ] "Coded as: …" is read when it appears or goes (not a live region).
+- [ ] "Coded as: …" is read when it appears or goes (it is a polite live region).
 - [ ] No dialog at any point.
 
 **WebKit and the real Tauri IPC.** The webview was walked headlessly with a stubbed `invoke`. Walk it in the real

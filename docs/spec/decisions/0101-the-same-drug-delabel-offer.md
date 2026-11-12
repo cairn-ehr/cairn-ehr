@@ -44,10 +44,12 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
    is `allergy` (an adverse-effect entry, a "none known" statement and a kind added by a newer peer are not offered).
    `r.live` already leaves out de-labelled and withdrawn heads. A head on a chart whose link is in doubt is excluded,
    because the de-label door refuses such a target.
-4. **Unsigned list lines only.** The offers are derived in `judge` for the clinician's own list lines (a line from either
-   *Start medication* or *Already taking*), only when the allergies were read over the chart set on screen and the line's parts are signable. A line already
-   charted gets none, and slice 1a's lone-line editor gets none: a charted medication that hits an allergy keeps its
-   warning, and acting on the allergy is done on the allergy list.
+4. **Unsigned list lines only.** The offers are derived in `judge` for the clinician's own list lines (a line from
+   either *Start medication* or *Already taking*), only when the allergies were read over the chart set on screen and
+   the line's parts are signable. A line already charted gets none, and slice 1a's lone-line editor gets none: a
+   charted medication that hits an allergy keeps its warning, and acting on the allergy is done on the allergy list.
+   The window draws an offer's button disabled exactly when the line's other controls are: while another terminal holds
+   the list, or while the list's Sign is in flight.
 5. **One control per allergy record.** `offers_for` takes each part coded `drugref-moiety` and, for each live head of
    the same drug, makes one offer, deduplicated by target. A combination offers only for the part that matches. Several
    live entries for one drug give several controls, each naming its record; none is struck by another's press. The
@@ -58,8 +60,12 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
 
 6. **A press signs nothing.** `pressDelabelOffer` finds the allergy pane's drawn live line for the offer's target and
    opens that line's existing De-label row (`openDelabel` with a prefill): *Tolerated* is the line's drug, its coding is
-   held, the date is today, the note is empty. With no such drawn line (the list moved on) it says the allergy is no
-   longer on the list and opens nothing. There is one de-label act and one form, whichever way it is reached.
+   held, the note is empty, and the date is today on an *Already taking* line but empty (not known) on a *Start
+   medication* line, whose drug the patient has not yet had in this episode (a date is a claim, and "tolerated today"
+   is true only of a drug already being taken). With no such drawn line (the list moved on) it says the allergy is no
+   longer on the list, at the allergy pane and beside the pressed line, and opens nothing; while the allergy pane may
+   not write (a press in flight, no list drawn) a press does nothing. There is one de-label act and one form, whichever
+   way it is reached.
 7. **The de-label signs at once, as its own act.** The clinician signs the row with the signer strip as for any
    de-label: under its own signature, before and independent of the list's Sign (a held key costs no passphrase). It is
    never ticked, pre-pressed or bundled with the list's Sign, and shares no transaction with a line. After an overlay

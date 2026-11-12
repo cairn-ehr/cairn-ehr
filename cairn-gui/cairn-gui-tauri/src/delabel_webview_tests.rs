@@ -6,6 +6,7 @@
 //! CHOICE or ORDER a safety property is, as `med_list_webview_tests.rs` does. VISIBILITY, not only
 //! text: each element the clinician must see is un-hidden by the script (or never hidden) and no
 //! stylesheet rule hides it; the behaviour was also walked headlessly (see the task report).
+use crate::commands::tests::fields_read_in;
 use crate::med_chart_webview_tests::not_hidden_by_css;
 use crate::source_guard::{js_fn, position};
 
@@ -56,7 +57,7 @@ fn a_press_opens_the_delabel_row_prefilled_and_signs_nothing() {
         "openDelabel({ event_id: offer.target }, li, delabel,",
         "tolerated: offer.tolerated",
         "coding: offer.coding",
-        "date: todayDdMmYyyy()",
+        "line.content.charted_as",
         "el(\"allergy-details\").open = true;",
     ] {
         assert!(press.contains(step), "{step}: {press}");
@@ -69,10 +70,125 @@ fn a_press_opens_the_delabel_row_prefilled_and_signs_nothing() {
     // The row's prefill is applied, and the row still needs its own Sign.
     let open = js_fn(OVERLAYS_JS, "openDelabel");
     assert!(
-        open.contains("function openDelabel")
-            || OVERLAYS_JS.contains("function openDelabel(line, li, opener, prefill)")
+        OVERLAYS_JS.contains("function openDelabel(line, li, opener, prefill) {"),
+        "the signature the offer's press calls"
     );
     assert!(position(open, "if (prefill)") < position(open, "onSign(row,"));
+}
+
+/// The prefill's date is a claim: "tolerated today" is true of an Already-taking line
+/// (`pre-existing`) only; a Start line (`started-here`) leaves it empty (= not known).
+#[test]
+fn the_prefill_date_is_today_only_on_an_already_taking_line() {
+    let date = js_fn(OFFER_JS, "prefillDate");
+    assert!(
+        date.contains("chartedAs === \"pre-existing\" ? todayDdMmYyyy() : \"\""),
+        "{date}"
+    );
+    let press = js_fn(OFFER_JS, "pressDelabelOffer");
+    assert!(
+        press.contains("date: prefillDate(line.content.charted_as)"),
+        "{press}"
+    );
+    assert!(!press.contains("todayDdMmYyyy()"), "{press}");
+}
+
+/// A press does nothing while the allergy pane may not write (busy, no list), checked before
+/// the row is opened; and it takes no unused `opener`.
+#[test]
+fn a_press_waits_for_the_allergy_pane_to_be_writable() {
+    let press = js_fn(OFFER_JS, "pressDelabelOffer");
+    assert!(
+        position(press, "if (!allergyMayWrite()) return;") < position(press, "openDelabel("),
+        "{press}"
+    );
+    assert!(OFFER_JS.contains("function pressDelabelOffer(line, offer) {"));
+}
+
+/// The offer buttons are down exactly when the line's other controls are: the list is held by
+/// another terminal, or its Sign is in flight.
+#[test]
+fn the_offer_is_disabled_when_the_line_is_blocked() {
+    let draw = js_fn(OFFER_JS, "drawDelabelOffers");
+    assert!(
+        draw.contains(
+            "button.disabled = medSigning || medList === null || medList.elsewhere !== null;"
+        ),
+        "{draw}"
+    );
+}
+
+/// A charted row never carries an offer: only a draft list line becomes a `ListLineView` (the
+/// only carrier of `delabel_offers`, which only `med_list_delabel.js` reads), and the one call
+/// that draws offers is `drawLine`'s, on the list's own unsigned rows.
+#[test]
+fn the_offer_is_drawn_only_from_the_lists_unsigned_line() {
+    for (name, js) in [
+        ("main", include_str!("../src-ui/main.js")),
+        ("med_chart", include_str!("../src-ui/med_chart.js")),
+        ("med_list_sign", include_str!("../src-ui/med_list_sign.js")),
+        ("allergies", include_str!("../src-ui/allergies.js")),
+        ("allergy_overlays", OVERLAYS_JS),
+        ("delabel_pick", PICK_JS),
+    ] {
+        assert!(
+            !js.contains("delabel_offers") && !js.contains("drawDelabelOffers"),
+            "{name}.js"
+        );
+    }
+    assert_eq!(LIST_JS.matches("drawDelabelOffers(").count(), 1);
+    assert_eq!(LIST_JS.matches("delabel_offers").count(), 0);
+}
+
+/// Every field the two scripts read off Rust's answers is one Rust sends.
+#[test]
+fn every_field_read_is_one_rust_sends() {
+    use crate::allergy_check::{CodingArg, DrugSearch};
+    use crate::med_list_delabel::DelabelOffer;
+    let coding = || CodingArg {
+        system: "s".into(),
+        code: "c".into(),
+        display: "d".into(),
+    };
+    let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
+        v.as_object().expect("an object").keys().cloned().collect()
+    };
+    let offer = DelabelOffer {
+        target: "t".into(),
+        words: "w".into(),
+        tolerated: "x".into(),
+        coding: coding(),
+    };
+    let search = DrugSearch {
+        available: true,
+        options: vec![coding()],
+    };
+    for (js, binding, sent) in [
+        (
+            OFFER_JS,
+            "offer",
+            keys(serde_json::to_value(&offer).unwrap()),
+        ),
+        (
+            PICK_JS,
+            "answer",
+            keys(serde_json::to_value(&search).unwrap()),
+        ),
+        (
+            PICK_JS,
+            "option",
+            keys(serde_json::to_value(coding()).unwrap()),
+        ),
+    ] {
+        let read = fields_read_in(js, binding);
+        assert!(!read.is_empty(), "{binding} is read");
+        for field in read {
+            assert!(
+                sent.contains(&field),
+                "{binding}.{field}: Rust sends {sent:?}"
+            );
+        }
+    }
 }
 
 /// With no drawn live line for the target (or one with no De-label button), the sentence is said
@@ -82,9 +198,18 @@ fn a_press_on_an_allergy_no_longer_drawn_says_so() {
     let press = js_fn(OFFER_JS, "pressDelabelOffer");
     assert!(OFFER_JS.contains("That allergy is no longer on the list; look at it again"));
     assert!(
-        position(press, "sayAllergy(OFFER_GONE);") < position(press, "openDelabel("),
+        position(press, "sayOfferGone(line);") < position(press, "openDelabel("),
         "{press}"
     );
+    // Said at the allergy pane (live region) AND next to the medication line, where it was pressed.
+    let gone = js_fn(OFFER_JS, "sayOfferGone");
+    for step in [
+        "sayAllergy(OFFER_GONE);",
+        "medLineNotes.set(line.id, OFFER_GONE);",
+        "setMessage(line.row.note, OFFER_GONE);",
+    ] {
+        assert!(gone.contains(step), "{step}: {gone}");
+    }
     assert!(press.contains("if (!delabel) {"), "{press}");
     // Only LIVE lists are searched, and allergies.js tags each drawn line with its event id.
     for id in ["allergy-drug", "allergy-other", "allergy-adverse"] {

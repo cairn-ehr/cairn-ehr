@@ -5,14 +5,13 @@
 //!
 //! Each runs `allergies.rs`'s steps in its order: the chart on screen and its set, fixture mode
 //! (`on_screen_and_writable`), every verdict on what was typed (for a de-label, in this order:
-//! what was tolerated is named, its optional drug coding is a `drugref-moiety` pick, the date reads),
-//! then ONE step slice 1 does not
-//! have — [`target_before_the_key`]: the line the act names must still be on a FRESH read of the
-//! list over the same chart set (another terminal may have corrected or withdrawn it since the
-//! window drew it), and the event is filed under that line's own chart (plan D2: a linked chart's
-//! entry is overlaid on its chart, which is the only chart the floor admits it on). Only then the
-//! key, the one signed event, its timing sample and the list read again (`sign_then_reread`,
-//! rulings R11 and #814 unchanged).
+//! what was tolerated is named, its optional drug coding is a `drugref-moiety` pick, the date
+//! reads), then ONE step slice 1 does not have — [`target_before_the_key`]: the line the act names
+//! must still be on a FRESH read of the list over the same chart set (another terminal may have
+//! corrected or withdrawn it since the window drew it), and the event is filed under that line's
+//! own chart (plan D2: a linked chart's entry is overlaid on its chart, which is the only chart the
+//! floor admits it on). Only then the key, the one signed event, its timing sample and the list
+//! read again (`sign_then_reread`, rulings R11 and #814 unchanged).
 use crate::allergies::{
     local_today, on_screen_and_writable, parse_onset, read_list, sign_then_reread, Act,
     AllergyWrite,
