@@ -272,7 +272,7 @@ SELECT pg_temp.authoring_only(pg_temp.retraction(pg_temp.foreign_entry_id()),
 SELECT pg_temp.authoring_only(pg_temp.retraction(gen_random_uuid()::text),
     'is not an allergy entry, none statement or de-label on this chart');
 --    The de-label's closed vocabularies: its schema tag, its date's words, shape and window,
---    and the reserved coding slot.
+--    and the coding's system (#1053).
 SELECT pg_temp.authoring_only(pg_temp.dated('year',
     (extract(year FROM now() AT TIME ZONE 'UTC' + interval '14 hours')::int + 1)::text),
     'date.value "');
@@ -285,9 +285,20 @@ SELECT pg_temp.authoring_only(pg_temp.challenge() || '{"schema_version":"clinica
     'schema_version');
 SELECT pg_temp.authoring_only(pg_temp.retraction(pg_temp.entry_id())
     || '{"schema_version":"clinical.allergy-retraction/2"}', 'schema_version');
-SELECT pg_temp.authoring_only(pg_temp.challenge(
-    '{"tolerated":{"term":"amoxicillin","coding":{"system":"drugref-moiety",
-      "code":"01900000-0000-7000-8000-000000000001","display":"amoxicillin"}}}'), 'coding must be null');
+--    #1053: a moiety coding is admitted at both doors; a drug GROUP is refused at the authoring
+--    door only (admitted remotely); a malformed coding is refused at both.
+SELECT pg_temp.door(false);
+SELECT pg_temp.accepts(pg_temp.challenge('{"tolerated":{"term":"amoxicillin","coding":{"system":"drugref-moiety",
+      "code":"01900000-0000-7000-8000-000000000001","display":"amoxicillin"}}}'));
+SELECT pg_temp.authoring_only(pg_temp.challenge('{"tolerated":{"term":"amoxicillin","coding":{"system":"drugref-class",
+      "code":"01900000-0000-7000-8000-000000000001","display":"penicillins"}}}'),
+    'tolerated.coding.system must be drugref-moiety');
+SELECT pg_temp.refuses_both(pg_temp.challenge('{"tolerated":{"term":"amoxicillin","coding":{"system":"drugref-moiety",
+      "code":"01900000-0000-7000-8000-000000000001"}}}'), 'tolerated.coding');
+SELECT pg_temp.door(true);
+SELECT pg_temp.accepts(pg_temp.challenge('{"tolerated":{"term":"amoxicillin","coding":{"system":"drugref-clinical-drug",
+      "code":"01900000-0000-7000-8000-000000000001","display":"amoxicillin 500 mg"}}}'));
+SELECT pg_temp.door(false);
 --    db/074's onset messages keep their field name after the in-place split.
 SELECT pg_temp.authoring_only(pg_temp.body('clinical.allergy/1', pg_temp.entry_payload(
     '{"onset":{"precision":"month","value":"2019-13"}}')), 'allergy assertion: onset.value "2019-13" is not a valid month');

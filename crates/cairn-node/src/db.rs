@@ -498,6 +498,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "078_medication_draft_list",
         include_str!("../../../db/078_medication_draft_list.sql"),
     ),
+    // db/079: a replay marker only (see the file) -- db/075 changed in place (#1053).
+    (
+        "079_schema_replay_marker",
+        include_str!("../../../db/079_schema_replay_marker.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

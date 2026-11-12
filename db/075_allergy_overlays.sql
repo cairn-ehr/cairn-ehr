@@ -6,7 +6,7 @@
 --
 -- WHAT IS ON THE WIRE. Two signed, born-sealed event types (ADR-0052). The pure builders live in
 -- crates/cairn-event/src/allergy_overlay.rs.
---   clinical.allergy-challenge/1   {target, tolerated: {term, coding}, date: {precision, value}, text}
+--   clinical.allergy-challenge/1   {target, tolerated: {term, coding: null | {system, code, display}}, date: {precision, value}, text}
 --   clinical.allergy-retraction/1  {target, text}
 -- `target` names the event overlaid; `date` has the shape of an entry's `onset` (ADR-0096), and is
 -- checked by the same helper (db/074's cairn_allergy_onset_problem). No t_effective, no safety
@@ -16,7 +16,7 @@
 -- THE TWO TIERS (ADR-0051, the db/041 idiom, as db/074). STRUCTURAL — a key's JSON type, a uuid
 -- target, a blank tolerated term, a date value that contradicts its precision (it must be null
 -- exactly when the precision says not-known) — refuses at BOTH doors. CLOSED VOCABULARIES and REFERENCES — the schema tag, the date's words,
--- shape and window, a filled coding, what the target IS and which chart it sits on — refuse at the
+-- shape and window, the coding's system (a moiety only), what the target IS and which chart it sits on — refuse at the
 -- AUTHORING door only (`cairn.remote_apply` <> 'on'): a peer may overlay a target this node has not
 -- received yet, and a newer peer's word must never wedge sync (ADR-0056).
 BEGIN;
@@ -107,9 +107,13 @@ BEGIN
     IF v_date_why IS NOT NULL THEN
         RAISE EXCEPTION 'allergy challenge: date.value %', v_date_why;
     END IF;
-    -- The reserved slot: slice 3 (ADR-0098 decision 3) kept it null on purpose; opening it is #1053.
-    IF jsonb_typeof(p #> '{tolerated,coding}') IS DISTINCT FROM 'null' THEN
-        RAISE EXCEPTION 'allergy challenge: tolerated.coding must be null at the authoring door (the tolerated drug of a de-label is not coded, #1053)';
+    -- The coded tolerated drug (#1053). The shape (three strings, a registered system) was checked
+    -- at both doors above; here, at the authoring door only, the SYSTEM must be a drug (a moiety):
+    -- a tolerance is of a drug, never of a group (a class coding is an allergen's, not a challenge's).
+    -- The remote door admits any well-shaped system, so a newer peer's finer level never wedges sync.
+    IF jsonb_typeof(p #> '{tolerated,coding}') = 'object'
+       AND p #>> '{tolerated,coding,system}' IS DISTINCT FROM 'drugref-moiety' THEN
+        RAISE EXCEPTION 'allergy challenge: tolerated.coding.system must be drugref-moiety, got %', p #>> '{tolerated,coding,system}';
     END IF;
     -- A de-label lifts an allergy ENTRY (never a "none known", a de-label or a withdrawal).
     IF cairn_allergy_target_type(p, b) IS DISTINCT FROM 'clinical.allergy.asserted' THEN

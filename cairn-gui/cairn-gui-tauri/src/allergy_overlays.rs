@@ -99,6 +99,7 @@ pub async fn allergy_challenge_impl(
     let act = Act::Challenge(AllergyChallenge {
         target: &target,
         tolerated,
+        tolerated_coding: None,
         date,
         text: note(text),
     });

@@ -22,6 +22,7 @@ use cairn_event::allergy_overlay::{
     ALLERGY_CHALLENGE_EVENT_TYPE, ALLERGY_CHALLENGE_SCHEMA_VERSION, ALLERGY_RETRACTION_EVENT_TYPE,
     ALLERGY_RETRACTION_SCHEMA_VERSION,
 };
+use cairn_event::medication::SubstanceCoding;
 use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
@@ -134,6 +135,7 @@ impl Rig {
         let ch = AllergyChallenge {
             target: &target,
             tolerated: "amoxicillin",
+            tolerated_coding: None,
             date,
             text: Some("oral challenge"),
         };
@@ -436,19 +438,6 @@ async fn the_authoring_door_refuses_wrong_targets_and_words() {
         .await,
         "schema_version",
     );
-    refused(
-        rig.submit(
-            &mut c,
-            p,
-            CHALLENGE,
-            base_payload(json!({"tolerated": {"term": "amoxicillin", "coding": {
-                "system": "drugref-moiety", "code": "01900000-0000-7000-8000-000000000001",
-                "display": "amoxicillin"}}})),
-            twin(),
-        )
-        .await,
-        "coding must be null",
-    );
     let mut two_refs = allergy_payload(&entry_of(None));
     two_refs["refs"] = json!([
         {"rel": "correction-of", "event": entry.to_string()},
@@ -565,6 +554,103 @@ async fn the_remote_door_admits_newer_words_and_refs() {
             .await
             .expect("the remote door admits it");
     }
+}
+
+/// A de-label body whose tolerated drug carries `coding` (#1053).
+fn coded_body(patient: Uuid, target: Uuid, coding: Value) -> Value {
+    challenge_body(
+        patient,
+        target,
+        json!({"tolerated": {"term": "amoxicillin", "coding": coding}}),
+    )
+}
+
+fn moiety() -> Value {
+    json!({"system": "drugref-moiety", "code": "01900000-0000-7000-8000-000000000001",
+           "display": "amoxicillin"})
+}
+
+/// Section 4b (#1053): the authoring door admits a moiety coding, and the projection reads it back.
+#[tokio::test]
+async fn the_authoring_door_admits_a_moiety_coding() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let rig = Rig::new(&c).await;
+    let entry = rig.entry(&mut c, rig.patient, None).await.unwrap();
+    let target = entry.to_string();
+    let ch = AllergyChallenge {
+        target: &target,
+        tolerated: "amoxicillin",
+        tolerated_coding: Some(SubstanceCoding {
+            system: "drugref-moiety",
+            code: "01900000-0000-7000-8000-000000000001",
+            display: "amoxicillin",
+        }),
+        date: Onset::NotKnown,
+        text: None,
+    };
+    let id = rig
+        .submit(
+            &mut c,
+            rig.patient,
+            CHALLENGE,
+            allergy_challenge_payload(&ch),
+            render_allergy_challenge_twin(&ch),
+        )
+        .await
+        .expect("a moiety coding lands");
+    let code: String = c
+        .query_one(
+            "SELECT tolerated_coding->>'code' FROM clinical_allergy_challenge WHERE event_id = $1::text::uuid",
+            &[&id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(code, "01900000-0000-7000-8000-000000000001");
+}
+
+/// Section 4c (#1053): a drug GROUP is not a tolerated drug; a malformed coding is refused; the
+/// remote door admits any well-shaped system.
+#[tokio::test]
+async fn the_authoring_door_refuses_a_group_and_a_malformed_coding() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (p, target) = (Uuid::now_v7(), Uuid::now_v7());
+    let f = "cairn_check_allergy_challenge";
+
+    let mut group = moiety();
+    group["system"] = json!("drugref-class");
+    let e = floor(&mut c, f, coded_body(p, target, group), false)
+        .await
+        .expect_err("a group coding is refused");
+    assert!(
+        e.contains("tolerated.coding.system must be drugref-moiety"),
+        "{e}"
+    );
+
+    let mut no_display = moiety();
+    no_display.as_object_mut().unwrap().remove("display");
+    for remote in [false, true] {
+        let e = floor(&mut c, f, coded_body(p, target, no_display.clone()), remote)
+            .await
+            .expect_err("a malformed coding is refused at both doors");
+        assert!(e.contains("tolerated.coding"), "{e}");
+    }
+
+    let mut other = moiety();
+    other["system"] = json!("drugref-clinical-drug");
+    floor(&mut c, f, coded_body(p, target, other), true)
+        .await
+        .expect("the remote door admits any well-shaped system");
 }
 
 /// Section 5: a shred scrubs a de-label's row and a withdrawal's row (db/037).

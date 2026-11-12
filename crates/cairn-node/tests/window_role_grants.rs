@@ -462,6 +462,7 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
     let challenge = cairn_event::allergy_overlay::AllergyChallenge {
         target: &target,
         tolerated: "amoxicillin",
+        tolerated_coding: None,
         date: Onset::NotKnown,
         text: None,
     };

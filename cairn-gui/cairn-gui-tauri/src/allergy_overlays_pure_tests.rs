@@ -77,6 +77,7 @@ fn an_interrupted_overlay_is_not_known_and_never_retried() {
     let challenge = Act::Challenge(AllergyChallenge {
         target: &target,
         tolerated: "amoxicillin",
+        tolerated_coding: None,
         date: cairn_event::allergy::Onset::NotKnown,
         text: None,
     });
