@@ -136,6 +136,19 @@ pub(crate) fn coding_before_the_key(
     canonical_code(c)
 }
 
+/// The tolerated drug a de-label may code (#1053): a DRUG, so only a `drugref-moiety` pick (a
+/// group is [`NOT_FROM_THE_LIST`], unlike an allergy entry), its code re-spelled
+/// ([`canonical_code`]) and its display non-blank ([`BAD_CODE`]). Said before the key. Pure.
+pub(crate) fn tolerated_coding_before_the_key(c: &CodingArg) -> Result<String, ErrorView> {
+    if c.system != MOIETY_SYSTEM {
+        return Err(refused(NOT_FROM_THE_LIST));
+    }
+    if c.display.trim().is_empty() {
+        return Err(refused(BAD_CODE));
+    }
+    canonical_code(c)
+}
+
 /// A picked code, re-spelled as the canonical lowercase hyphenated uuid the floor admits (the
 /// webview may send any spelling `Uuid` reads), or refused with [`BAD_CODE`]. Pure.
 pub(crate) fn canonical_code(c: &CodingArg) -> Result<String, ErrorView> {

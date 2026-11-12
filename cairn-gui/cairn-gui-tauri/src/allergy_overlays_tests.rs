@@ -229,6 +229,7 @@ async fn an_act_on_a_doubted_charts_line_is_refused_before_the_key() {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap_err(),
@@ -282,6 +283,7 @@ async fn a_delabelled_line_is_struck_in_one_act() {
         charts.clone(),
         &target,
         "amoxicillin",
+        None,
         None,
         None,
         None,
@@ -343,6 +345,7 @@ async fn a_challenge_and_a_retraction_land_and_reread() {
         charts.clone(),
         &target,
         " amoxicillin ",
+        None,
         Some("03/2025"),
         Some("  "),
         None,
@@ -374,6 +377,7 @@ async fn a_challenge_and_a_retraction_land_and_reread() {
         charts.clone(),
         &target,
         "amoxicillin",
+        None,
         None,
         None,
         None,
@@ -483,6 +487,7 @@ async fn a_target_not_in_the_fresh_read_is_refused_before_the_key() {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap_err(),
@@ -522,6 +527,7 @@ async fn a_challenge_needs_what_was_tolerated() {
             charts.clone(),
             &stranger,
             tolerated,
+            None,
             date,
             None,
             None,
@@ -594,6 +600,7 @@ async fn each_act_is_timed_with_its_own_kind() {
         charts.clone(),
         &head,
         "amoxicillin",
+        None,
         None,
         None,
         None,
