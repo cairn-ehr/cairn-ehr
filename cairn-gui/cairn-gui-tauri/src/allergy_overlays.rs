@@ -4,7 +4,9 @@
 //! `corrects` (`allergies.rs`), because a correction IS a new entry.
 //!
 //! Each runs `allergies.rs`'s steps in its order: the chart on screen and its set, fixture mode
-//! (`on_screen_and_writable`), every verdict on what was typed, then ONE step slice 1 does not
+//! (`on_screen_and_writable`), every verdict on what was typed (for a de-label, in this order:
+//! what was tolerated is named, its optional drug coding is a `drugref-moiety` pick, the date reads),
+//! then ONE step slice 1 does not
 //! have — [`target_before_the_key`]: the line the act names must still be on a FRESH read of the
 //! list over the same chart set (another terminal may have corrected or withdrawn it since the
 //! window drew it), and the event is filed under that line's own chart (plan D2: a linked chart's

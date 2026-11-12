@@ -126,8 +126,9 @@ async fn an_uncoded_delabel_is_unchanged() {
     assert_eq!(stored_codings(&owner, chart).await, vec![None]);
 }
 
-/// A bad coding is refused before the target and the key; a second de-label of a line already
-/// struck is refused with the existing words and writes nothing.
+/// A second de-label of a line already struck is refused with the existing words BEFORE the key:
+/// the held key is forgotten after the first de-label signs, so a refusal reached only after the
+/// key would be the key's sentence, not GONE_LINE.
 #[tokio::test]
 async fn a_delabel_of_a_head_struck_since_is_refused_before_the_key() {
     let Some((_guard, owner, state, chart, _)) = supervised_note().await else {
@@ -163,10 +164,11 @@ async fn a_delabel_of_a_head_struck_since_is_refused_before_the_key() {
     )
     .await
     .unwrap();
+    state.forget_held_key().await;
     let err = allergy_challenge_impl(
         &state,
         &here,
-        charts.clone(),
+        charts,
         &target,
         "amoxicillin",
         Some(&coding),
@@ -178,10 +180,40 @@ async fn a_delabel_of_a_head_struck_since_is_refused_before_the_key() {
     .unwrap_err();
     assert_eq!(err.text, GONE_LINE);
     assert_eq!(err.retry, Retry::AfterReread(Recorded::No));
-    // A group pick says its own words, ahead of the target lookup.
+    assert_eq!(
+        stored_codings(&owner, chart).await.len(),
+        1,
+        "one event written"
+    );
+}
+
+/// A group pick is refused with its own words ahead of the target lookup and the key (no key is
+/// held and none is typed), and nothing is written.
+#[tokio::test]
+async fn a_group_coded_delabel_is_refused_before_the_key() {
+    let Some((_guard, owner, state, chart, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let here = chart.to_string();
+    let charts = vec![here.clone()];
+    let pane = allergy_record_impl(
+        &state,
+        &here,
+        charts.clone(),
+        penicillin(),
+        None,
+        credential("bea"),
+    )
+    .await
+    .unwrap()
+    .pane
+    .unwrap();
+    let target = pane.drug_allergies[0].event_id.clone();
+    state.forget_held_key().await;
     let group = CodingArg {
         system: cairn_node::allergy::check::GROUP_SYSTEM.into(),
-        ..coding
+        ..amoxicillin()
     };
     let err = allergy_challenge_impl(
         &state,
@@ -197,10 +229,9 @@ async fn a_delabel_of_a_head_struck_since_is_refused_before_the_key() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::allergy_check::NOT_FROM_THE_LIST);
-    assert_eq!(
-        stored_codings(&owner, chart).await.len(),
-        1,
-        "one event written"
+    assert!(
+        stored_codings(&owner, chart).await.is_empty(),
+        "nothing written"
     );
 }
 
