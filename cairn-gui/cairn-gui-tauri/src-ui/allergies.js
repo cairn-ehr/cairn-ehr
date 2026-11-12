@@ -126,6 +126,7 @@ function stripSays(text, prominent) {
 function lineItem(line) {
   const li = cell("li", line.text, { class: line.prominent ? "allergy-prominent" : "allergy-quiet" });
   if (line.doubted_chart) li.classList.add("allergy-doubted");
+  li.dataset.event = line.event_id; // med_list_delabel.js finds the drawn line by it
   const by = line.signer ? " by " + line.signer : "";
   li.append(cell("span", " · recorded " + line.recorded + by, { class: "allergy-quiet" }));
   li.append(...lineActions(line));

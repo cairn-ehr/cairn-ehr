@@ -34,6 +34,8 @@ mod chart_set;
 mod chart_view_webview_tests;
 mod commands;
 #[cfg(test)]
+mod delabel_webview_tests;
+#[cfg(test)]
 mod drug_pick_webview_tests;
 mod duplicates;
 mod enrol;

@@ -307,6 +307,9 @@
             <template id="allergy-delabel-template">
               <div class="allergy-overlay-row" role="group">
                 <label>Tolerated <input type="text" data-field="tolerated" /></label>
+                <ul data-field="pick" role="listbox" aria-label="Drugs" hidden></ul>
+                <p data-note="pick-hint" class="allergy-quiet" hidden></p>
+                <p data-note="coded-as" class="allergy-quiet" aria-live="polite" hidden></p>
                 <label>When — leave empty if not known <input type="text" data-field="date" size="30" placeholder="2019 · 03/2019 · 14/03/2019" /></label>
                 <label>Note (optional) <input type="text" data-field="text" /></label>
                 <button type="button" class="allergy-write" data-act="sign">Sign</button>
@@ -634,10 +637,12 @@
     <script src="notes_compound.js"></script>
     <script src="notes.js"></script>
     <script src="notes_discard.js"></script>
+    <script src="delabel_pick.js"></script>
     <script src="allergy_overlays.js"></script>
     <script src="drug_pick.js"></script>
     <script src="med_chart.js"></script>
     <script src="med_list.js"></script>
+    <script src="med_list_delabel.js"></script>
     <script src="med_list_sign.js"></script>
     <script src="allergies.js"></script>
     <script src="person_menu.js"></script>

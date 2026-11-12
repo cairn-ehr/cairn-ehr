@@ -145,13 +145,23 @@ function suspendLostCorrection(pane) {
 /**
  * Open the De-label row under `li`: what was tolerated (EMPTY — the clinician names it; the drug
  * challenged is often not the labelled one, and nothing is signed by default), when (typed as an
- * onset is; empty = not known), an optional note, and Sign.
+ * onset is; empty = not known), an optional note, and Sign. `prefill` (`{tolerated, coding,
+ * date}`, only from a medication-list offer, med_list_delabel.js) fills the row; the clinician
+ * still signs it. The row holds the pick's coding (delabel_pick.js) and signs it as
+ * `toleratedCoding`, or null once the name was edited.
  */
-function openDelabel(line, li, opener) {
+function openDelabel(line, li, opener, prefill) {
   const row = openRow("allergy-delabel-template", li, opener);
+  wireDelabelPick(row);
+  if (prefill) {
+    rowInput(row, "tolerated").value = prefill.tolerated;
+    holdDelabelCoding(row, prefill.coding);
+    rowInput(row, "date").value = prefill.date;
+  }
   onSign(row, () => void pressOnce(() => signOverlay(row, (base) => invoke("allergy_challenge", Object.assign(base, {
     target: line.event_id,
     tolerated: rowInput(row, "tolerated").value,
+    toleratedCoding: delabelCoding(row),
     date: rowInput(row, "date").value,
     text: rowInput(row, "text").value,
   })))));
@@ -244,6 +254,7 @@ async function signOverlay(row, send) {
     return;
   }
   afterSigned(answer, patient, false);
+  void readMedDraft(); // the medication list's offers and marks changed with the allergy list
 }
 
 el("allergy-correct-cancel").addEventListener("click", () => {

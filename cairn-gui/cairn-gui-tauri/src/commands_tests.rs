@@ -395,6 +395,11 @@ fn every_command_the_webview_calls_is_registered() {
         ("med_chart.js", include_str!("../src-ui/med_chart.js")),
         ("med_list.js", include_str!("../src-ui/med_list.js")),
         (
+            "med_list_delabel.js",
+            include_str!("../src-ui/med_list_delabel.js"),
+        ),
+        ("delabel_pick.js", include_str!("../src-ui/delabel_pick.js")),
+        (
             "med_list_sign.js",
             include_str!("../src-ui/med_list_sign.js"),
         ),
