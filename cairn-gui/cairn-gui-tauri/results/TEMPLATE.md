@@ -836,6 +836,38 @@ line 1 → observed \_\_ presses. Lines of a real home list needing a typed form
 | Enter on a finished line focuses the press that started it | | |
 | No dialog | | |
 
+## The same-drug de-label offer (charting slice 1b, runbook §32)
+
+This checkout built and connected to the measurement database (the `db/075` edit replayed)? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| The press of the offer → the allergy line drawn struck | held | | | | ≤ 10 s | |
+| The same, credential typed | shared | | | | — (record) | |
+| The same de-label from the allergy list directly | held | | | | — (record) | |
+
+Steps: paper *N* = 1 act → observed \_\_ presses and \_\_ Signs. The offer readable before the press, without a
+click: yes / no.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| A line for the drug of a coded allergy offers the de-label (either press); two such allergies, two buttons | | |
+| A group allergy, an uncoded allergy, an untyped-pick line and a charted row offer nothing | | |
+| The press opens the De-label row pre-filled (drug, "Coded as"; date today on Already taking, empty on Start) and signs nothing | | |
+| Sign: the allergy reads "Historically reported", the line's mark and offer go; the coding is stored | | |
+| Editing *Tolerated* drops "Coded as"; the de-label lands uncoded | | |
+| A de-label from the allergy list with a pick lands coded | | |
+| An allergy struck elsewhere first: refused as no longer on the list, no key asked | | |
+| The real Tauri IPC: `med_list_read` (`delabel_offers`) and `allergy_challenge` (`toleratedCoding`) answer | | |
+| WebKit (the real window): the offer, the press, the pre-filled row | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| The offer button read as its whole sentence; reachable by Tab, Enter presses it | | |
+| Focus enters the opened De-label row; the pick list reachable by keyboard | | |
+| "Coded as: …" read when it appears or goes | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

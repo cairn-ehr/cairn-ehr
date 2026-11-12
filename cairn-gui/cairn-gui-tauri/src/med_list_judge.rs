@@ -9,6 +9,7 @@ use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::PartArg;
 use crate::med_line_sign::{line_under, not_read, parts_before_the_key};
+use crate::med_list_delabel::{offers_for, DelabelOffer};
 use crate::state::AppState;
 use crate::write_failure::chart_read_failed;
 use cairn_medication_view::{ChartSet, MedicationRow};
@@ -127,6 +128,9 @@ pub(crate) struct Judged {
     /// The line it duplicates, as the clinician reads it ([`duplicate_of`]).
     pub duplicate_of: Option<String>,
     pub default_ticked: bool,
+    /// The same-drug de-label offers ([`offers_for`]); empty unless the allergies were read over
+    /// the set on screen and the line is signable.
+    pub offers: Vec<DelabelOffer>,
 }
 
 /// Judge every line of `fresh`. `use_allergies`: the allergies were read over the set on screen
@@ -165,6 +169,7 @@ pub(crate) async fn judge(
             })
             .collect()
     };
+    let resolved = cairn_node::allergy::thread::resolve(&fresh.allergies);
     decoded
         .into_iter()
         .zip(duplicates)
@@ -189,6 +194,10 @@ pub(crate) async fn judge(
                 duplicate,
                 named_writer,
             });
+            let offers = match (&signable, use_allergies) {
+                (Ok((_, p)), true) => offers_for(&resolved, &fresh.allergies.doubted_charts, p),
+                _ => vec![],
+            };
             Judged {
                 line,
                 parts,
@@ -198,6 +207,7 @@ pub(crate) async fn judge(
                 duplicate,
                 duplicate_of,
                 default_ticked,
+                offers,
             }
         })
         .collect()

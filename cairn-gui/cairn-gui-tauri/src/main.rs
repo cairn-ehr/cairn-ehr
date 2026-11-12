@@ -34,6 +34,8 @@ mod chart_set;
 mod chart_view_webview_tests;
 mod commands;
 #[cfg(test)]
+mod delabel_webview_tests;
+#[cfg(test)]
 mod drug_pick_webview_tests;
 mod duplicates;
 mod enrol;
@@ -54,6 +56,7 @@ mod med_line_sign;
 mod med_list;
 #[cfg(test)]
 mod med_list_claim_webview_tests;
+mod med_list_delabel;
 mod med_list_judge;
 #[cfg(test)]
 mod med_list_review_webview_tests;

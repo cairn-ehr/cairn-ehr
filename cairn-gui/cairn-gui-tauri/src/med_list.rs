@@ -26,6 +26,7 @@ use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::{press, view, LineCheckView, PartArg};
 use crate::med_line_sign::{fresh_check, parts_before_the_key, the_line};
+use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
     already_on_the_list, fresh_read, judge, tick_holds, Judged,
 };
@@ -117,6 +118,8 @@ pub struct ListLineView {
     pub unfinished: bool,
     /// The warnings drawn on the line now (its check's allergy marks), for [`LineArg::seen`].
     pub against: Vec<WarningRef>,
+    /// The same-drug de-label offers this line may show (empty when none).
+    pub delabel_offers: Vec<DelabelOffer>,
 }
 
 /// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …).
@@ -377,6 +380,7 @@ pub(crate) fn line_view(j: &Judged) -> ListLineView {
                 reference: id.to_string(),
             })
             .collect(),
+        delabel_offers: j.offers.clone(),
     }
 }
 
@@ -395,3 +399,7 @@ mod review_db_tests;
 #[cfg(test)]
 #[path = "med_list_held_db_tests.rs"]
 mod held_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_delabel_db_tests.rs"]
+mod delabel_db_tests;

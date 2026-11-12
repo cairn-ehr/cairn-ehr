@@ -35,6 +35,7 @@ fn judged(id: u128, terminal: &str, hand_ticked: bool, check: LineCheck) -> Judg
         duplicate: false,
         duplicate_of: None,
         default_ticked: false,
+        offers: vec![],
     }
 }
 

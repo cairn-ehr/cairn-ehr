@@ -154,9 +154,19 @@ fn delabel_and_withdraw_rows_are_inline_not_dialogs() {
     // Review M3: "Tolerated" starts EMPTY — nothing is signed by default (design anti-goal), and
     // the drug challenged usually differs from the labelled group. Rust refuses an empty one.
     let delabel = js_fn(OVERLAYS_JS, "openDelabel");
+    // Slice 1b: only a medication-list offer prefills it, and only inside `if (prefill)`; a row
+    // opened from the line's own De-label button stays empty.
+    assert_eq!(
+        delabel
+            .matches("rowInput(row, \"tolerated\").value =")
+            .count(),
+        1,
+        "Tolerated is prefilled in exactly one place: {delabel}"
+    );
     assert!(
-        !delabel.contains("rowInput(row, \"tolerated\").value ="),
-        "Tolerated is never prefilled: {delabel}"
+        position(delabel, "if (prefill)")
+            < position(delabel, "rowInput(row, \"tolerated\").value ="),
+        "{delabel}"
     );
     assert!(!delabel.contains("words.term"), "{delabel}");
     let nones = js_fn(OVERLAYS_JS, "noneActions");

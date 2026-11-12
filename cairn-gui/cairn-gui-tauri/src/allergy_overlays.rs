@@ -4,23 +4,27 @@
 //! `corrects` (`allergies.rs`), because a correction IS a new entry.
 //!
 //! Each runs `allergies.rs`'s steps in its order: the chart on screen and its set, fixture mode
-//! (`on_screen_and_writable`), every verdict on what was typed, then ONE step slice 1 does not
-//! have — [`target_before_the_key`]: the line the act names must still be on a FRESH read of the
-//! list over the same chart set (another terminal may have corrected or withdrawn it since the
-//! window drew it), and the event is filed under that line's own chart (plan D2: a linked chart's
-//! entry is overlaid on its chart, which is the only chart the floor admits it on). Only then the
-//! key, the one signed event, its timing sample and the list read again (`sign_then_reread`,
-//! rulings R11 and #814 unchanged).
+//! (`on_screen_and_writable`), every verdict on what was typed (for a de-label, in this order:
+//! what was tolerated is named, its optional drug coding is a `drugref-moiety` pick, the date
+//! reads), then ONE step slice 1 does not have — [`target_before_the_key`]: the line the act names
+//! must still be on a FRESH read of the list over the same chart set (another terminal may have
+//! corrected or withdrawn it since the window drew it), and the event is filed under that line's
+//! own chart (plan D2: a linked chart's entry is overlaid on its chart, which is the only chart the
+//! floor admits it on). Only then the key, the one signed event, its timing sample and the list
+//! read again (`sign_then_reread`, rulings R11 and #814 unchanged).
 use crate::allergies::{
     local_today, on_screen_and_writable, parse_onset, read_list, sign_then_reread, Act,
     AllergyWrite,
 };
+use crate::allergy_check::{tolerated_coding_before_the_key, CodingArg};
 use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use crate::link::judgement_view::{refused, stale};
 use crate::signer::Credential;
 use crate::state::AppState;
 use cairn_event::allergy_overlay::{AllergyChallenge, AllergyRetraction};
+use cairn_event::medication::SubstanceCoding;
+use cairn_node::allergy::check::MOIETY_SYSTEM;
 use cairn_node::allergy::read::PatientAllergies;
 use cairn_node::allergy::view::{build_view, AllergyView};
 use chrono::Offset;
@@ -36,6 +40,7 @@ pub async fn allergy_challenge(
     charts: Vec<String>,
     target: String,
     tolerated: String,
+    tolerated_coding: Option<CodingArg>,
     date: Option<String>,
     text: Option<String>,
     credential: Option<Credential>,
@@ -46,6 +51,7 @@ pub async fn allergy_challenge(
         charts,
         &target,
         &tolerated,
+        tolerated_coding.as_ref(),
         date.as_deref(),
         text.as_deref(),
         credential,
@@ -84,6 +90,7 @@ pub async fn allergy_challenge_impl(
     charts: Vec<String>,
     target: &str,
     tolerated: &str,
+    tolerated_coding: Option<&CodingArg>,
     date: Option<&str>,
     text: Option<&str>,
     credential: Option<Credential>,
@@ -93,12 +100,24 @@ pub async fn allergy_challenge_impl(
     if tolerated.is_empty() {
         return Err(refused("Name what was tolerated."));
     }
+    // The coding is checked here, before the target and the key, like every other verdict.
+    let code = tolerated_coding
+        .map(tolerated_coding_before_the_key)
+        .transpose()?;
     let date = parse_onset(date, local_today()).map_err(refused)?;
     let found = target_before_the_key(state, patient, &charts, target, Names::Entry).await?;
     let target = found.id.to_string();
+    let tolerated_coding = tolerated_coding
+        .zip(code.as_deref())
+        .map(|(c, code)| SubstanceCoding {
+            system: MOIETY_SYSTEM,
+            code,
+            display: c.display.trim(),
+        });
     let act = Act::Challenge(AllergyChallenge {
         target: &target,
         tolerated,
+        tolerated_coding,
         date,
         text: note(text),
     });
@@ -251,3 +270,7 @@ mod tests;
 #[cfg(test)]
 #[path = "allergy_overlays_pure_tests.rs"]
 mod pure_tests;
+
+#[cfg(test)]
+#[path = "allergy_overlays_coded_tests.rs"]
+mod coded_tests;

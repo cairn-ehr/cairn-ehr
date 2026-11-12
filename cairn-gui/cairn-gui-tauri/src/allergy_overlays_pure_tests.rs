@@ -77,6 +77,7 @@ fn an_interrupted_overlay_is_not_known_and_never_retried() {
     let challenge = Act::Challenge(AllergyChallenge {
         target: &target,
         tolerated: "amoxicillin",
+        tolerated_coding: None,
         date: cairn_event::allergy::Onset::NotKnown,
         text: None,
     });
@@ -307,4 +308,43 @@ fn every_act_on_a_line_checks_its_target_before_the_key_and_files_under_its_char
         record.contains("let chart = target.map_or(patient, |t| t.chart);"),
         "{record}"
     );
+}
+
+/// #1053: a de-label's tolerated drug is a DRUG, so a group pick is not one (unlike an allergy
+/// entry, which may be coded to a class), and a blank display is refused.
+#[test]
+fn a_group_coding_is_not_a_tolerated_drug() {
+    use crate::allergy_check::{tolerated_coding_before_the_key, CodingArg, NOT_FROM_THE_LIST};
+    let group = CodingArg {
+        system: cairn_node::allergy::check::GROUP_SYSTEM.into(),
+        code: Uuid::from_u128(7).to_string(),
+        display: "penicillins".into(),
+    };
+    let err = tolerated_coding_before_the_key(&group).unwrap_err();
+    assert_eq!(err.text, NOT_FROM_THE_LIST);
+}
+
+#[test]
+fn a_moiety_code_is_respelled_canonically() {
+    use crate::allergy_check::{tolerated_coding_before_the_key, CodingArg, BAD_CODE};
+    let pick = |code: String, display: &str| CodingArg {
+        system: MOIETY_SYSTEM.into(),
+        code,
+        display: display.into(),
+    };
+    let id = Uuid::from_u128(0xA40C);
+    let shouty = format!(" {} ", id.to_string().to_uppercase());
+    assert_eq!(
+        tolerated_coding_before_the_key(&pick(shouty.clone(), "amoxicillin")).unwrap(),
+        id.to_string()
+    );
+    for bad in [
+        pick("amoxicillin".into(), "amoxicillin"),
+        pick(shouty, "  "),
+    ] {
+        assert_eq!(
+            tolerated_coding_before_the_key(&bad).unwrap_err().text,
+            BAD_CODE
+        );
+    }
 }

@@ -323,6 +323,7 @@ function drawLine(line) {
   if (v && v.duplicate_of) words.push(v.duplicate_of); // Rust's sentence naming the other line
   setMessage(r.state, words.join(" · "));
   setMessage(r.note, medLineNotes.get(line.id) || "");
+  drawDelabelOffers(line); // med_list_delabel.js
 }
 
 /** A press: a new line at the end of the list, the editor in it. */

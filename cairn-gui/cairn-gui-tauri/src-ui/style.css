@@ -550,6 +550,19 @@ li > button.allergy-write {
   background: var(--warn-bg);
 }
 
+/* The De-label row's drug pick (delabel_pick.js) reads as #allergy-pick does. */
+.allergy-overlay-row [data-field="pick"] {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+}
+
+.allergy-overlay-row [data-field="pick"] li {
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
 /* ---- Charting slice 1a: the one-line medication entry (med_chart.js) ---- */
 
 /* The press reads as pressed without colour alone: outline and weight change too. */

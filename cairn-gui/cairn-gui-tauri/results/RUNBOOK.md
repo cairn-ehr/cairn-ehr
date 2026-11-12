@@ -3117,3 +3117,99 @@ WebKit need the window and a human. The rest was run as follows:
 - **The webview:** `med_list_webview_tests.rs`, `med_list_review_webview_tests.rs`, `med_list_claim_webview_tests.rs`.
 
 `TEMPLATE.md` carries a matching block (*Charting a medication list*).
+
+## 32. The same-drug de-label offer, and a coded tolerated drug (charting slice 1b, ADR-0101)
+
+The slice's gestures:
+- **The offer.** An unsigned line in the medication list whose drug is **the same drug** as a live drug allergy shows a
+  button under the line, "De-label the {allergy} allergy: tolerates {drug} (recorded by {name})". "Same drug" means the
+  identical drugref code: amoxicillin against a *Penicillins* allergy, a name match, or a line typed without a pick
+  offers nothing. A line already charted offers nothing. Two live entries for one drug show two buttons.
+- **The press** opens the allergy list's own *De-label* row for that allergy, with *Tolerated* filled in with the
+  drug ("Coded as: {drug} (drug)") and the note empty; the date is today for an *Already taking* line and empty (not
+  known) for a *Start medication* line. It signs nothing. The clinician signs the row
+  (the signer strip; a held key costs no passphrase) and the allergy line is struck at once, before and apart from the
+  list's Sign. Afterwards the lists are read again and the line's mark is gone.
+- **The pick on the row.** *Tolerated* gains a drugs-only pick (three characters offer drugs). Choosing is optional;
+  typing over a picked name drops the "Coded as" line, and the drug is then signed as typed.
+
+Paper counterpart: strike the allergy line, write "tolerated amoxil {date}" beside it, initial it. **Live only**: a
+`--mock` window has no list.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Offer press to the struck line | the press of the offer | the allergy line drawn struck | **≤ 10 s**, key held |
+| The offer readable before the press | the line finished | the button drawn | **0 clicks**: the drug and the allergy are both in its words |
+
+Steps: strike, note and initial on paper *N* = 1 act → forced *M* = 1 signed de-label → target *K* = 1 press + 1 Sign on
+the pre-filled row. From the allergy list directly *K* is as before plus an optional pick. **A figure outside its
+budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
+
+**Setup.** As section 31, but build this checkout, let an owner `cnode` command replay the schema (the `db/075` edit
+changes its hash; `SCHEMA_GENERATION` stays 78), then re-run section 0's `provision-window-role`: the window refuses a
+database whose schema hash changed ("prepared by a different build") until you do. Then:
+
+```bash
+D1=$(achart "Delabel Amoxicillin" 1983-03-03)   # an allergy coded to the drug amoxicillin (picked from the drug list)
+D2=$(achart "Delabel Penicillin" 1984-04-04)    # an allergy coded to the group Penicillins
+D3=$(achart "Delabel Typed" 1985-05-05)         # an allergy "amoxicillin" typed with no pick
+for c in "$D1" "$D2" "$D3"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+```
+
+Record each allergy in the window, then name a clinician in who's here (`dr-a`).
+
+**Measurement 1: when the offer appears.**
+
+- [ ] On `$D1`, *Already taking*, `amox`, choose "amoxicillin": the line carries the offer button with the allergy's
+      byline. The same on a *Start medication* line.
+- [ ] On `$D2`, the same line (amoxicillin): the **Allergy** mark, **no** offer.
+- [ ] On `$D3`, the same line: no offer (the allergy has no code).
+- [ ] On `$D1`, a line typed `amoxicillin` with no pick: no offer.
+- [ ] On `$D1`, chart the amoxicillin line and sign it (de-label first, or with the mark's reason): the charted
+      medication row offers nothing.
+- [ ] On `$D1`, record a second amoxicillin allergy: the line shows two buttons, one per record; each press brings its own record's line into view.
+
+**Measurement 2: the press and the de-label.**
+
+- [ ] Press the offer on `$D1`: the allergy pane opens, the *De-label* row is open on that allergy, *Tolerated* reads
+      amoxicillin, "Coded as: amoxicillin (drug)" shows, the date is today (an *Already taking* line; on a *Start
+      medication* line the date is empty). Nothing is signed (no new allergy event):
+      `psql "$CONN" -c "SELECT count(*) FROM clinical_allergy_challenge"` has not moved.
+- [ ] Sign the row: one passphrase on a shared terminal, none with a held key; the allergy reads "Historically
+      reported" with its byline and date, and the list line's mark and offer are gone.
+      `psql "$CONN" -c "SELECT tolerated_term, tolerated_coding FROM clinical_allergy_challenge"` shows the coding
+      `{"system": "drugref-moiety", …}`.
+- [ ] With two amoxicillin allergies, press the first offer and sign: the second still warns and still offers.
+- [ ] Press the offer, edit one letter of *Tolerated*: "Coded as" goes. Sign: the de-label lands uncoded (the
+      query above reads NULL for it).
+- [ ] From the allergy list directly (no offer): *De-label*, type `amox`, pick it, Sign: the coding lands.
+- [ ] Press an offer, then (second window) have another clinician de-label the same allergy first, then Sign: the
+      window refuses it as no longer on the list, and no key is asked.
+
+**Measurement 3: the timing (five runs each, held key, then shared terminal).**
+
+- [ ] The press of the offer to the struck line (≤ 10 s). Compare with the same de-label from the allergy list.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The offer button reads its whole sentence; Tab reaches it; Enter presses it.
+- [ ] Focus goes into the opened De-label row; the pick list is reachable by keyboard (#1070 applies).
+- [ ] "Coded as: …" is read when it appears or goes (it is a polite live region).
+- [ ] No dialog at any point.
+
+**WebKit and the real Tauri IPC.** The webview was walked headlessly with a stubbed `invoke`. Walk it in the real
+window: `med_list_read` now returns `delabel_offers` on a line, and `allergy_challenge` takes `toleratedCoding`
+(`{system, code, display}` or null). A name Tauri cannot map fails the call with an "invalid args" error.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
+WebKit need the window and a human. The rest was run as follows:
+- **The rule:** `crates/cairn-node/src/allergy/delabel_offer_tests.rs`.
+- **The door:** `crates/cairn-node/tests/allergy_overlay_floor.rs` and `db/tests/075_allergy_overlays_test.sql`
+  (DB-gated).
+- **The window's commands:** `cairn-gui-tauri`'s `med_list_delabel_tests.rs` (pure), `med_list_delabel_db_tests.rs`
+  and `allergy_overlays_coded_tests.rs` (DB-gated; CI never runs those, #905).
+- **The webview:** `delabel_webview_tests.rs`.
+
+`TEMPLATE.md` carries a matching block (*The same-drug de-label offer*).

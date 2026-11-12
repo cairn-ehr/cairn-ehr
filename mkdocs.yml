@@ -229,6 +229,7 @@ nav:
       - ADR-0098 · Allergy coding and the medication check: spec/decisions/0098-allergy-coding-and-the-medication-check.md
       - ADR-0099 · Charting a medication: spec/decisions/0099-charting-a-medication.md
       - ADR-0100 · Charting a list under one signature: spec/decisions/0100-charting-a-list-under-one-signature.md
+      - ADR-0101 · The same-drug de-label offer: spec/decisions/0101-the-same-drug-delabel-offer.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

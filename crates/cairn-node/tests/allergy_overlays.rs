@@ -85,6 +85,7 @@ impl Ward {
         let ch = AllergyChallenge {
             target: &t,
             tolerated: "amoxicillin",
+            tolerated_coding: None,
             date: Onset::Month("2022-03".into()),
             text: Some("oral challenge"),
         };

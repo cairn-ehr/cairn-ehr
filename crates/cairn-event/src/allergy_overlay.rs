@@ -7,6 +7,7 @@
 //! payload AND yields no tail in the twin, so a sealed body never carries a value its own twin
 //! calls absent (one rule, `present`). Non-blank text is kept verbatim in the payload.
 use crate::allergy::{onset_wire, Onset};
+use crate::medication::SubstanceCoding;
 use serde_json::{json, Value};
 
 /// Event type of a de-label-by-challenge.
@@ -22,6 +23,9 @@ pub const ALLERGY_RETRACTION_SCHEMA_VERSION: &str = "clinical.allergy-retraction
 pub struct AllergyChallenge<'a> {
     pub target: &'a str,
     pub tolerated: &'a str,
+    /// The tolerated DRUG as a registry coding (#1053; the floor admits only `drugref-moiety` at the
+    /// authoring door). `None` writes the null slot, byte-identical to before the slot opened.
+    pub tolerated_coding: Option<SubstanceCoding<'a>>,
     pub date: Onset,
     pub text: Option<&'a str>,
 }
@@ -44,13 +48,18 @@ fn tail(text: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-/// Build the `clinical.allergy-challenge/1` payload. `tolerated.coding` is a reserved slot, kept null
-/// by allergy slice 3 (ADR-0098 decision 3; opening it is #1053).
+/// Build the `clinical.allergy-challenge/1` payload. `tolerated.coding` is null for an uncoded
+/// challenge, else `{system, code, display}` (#1053). The twin never names the coding: the term
+/// is what a human reads.
 pub fn allergy_challenge_payload(c: &AllergyChallenge) -> Value {
     let (precision, value) = onset_wire(&c.date);
+    let coding = c.tolerated_coding.as_ref().map_or(
+        Value::Null,
+        |k| json!({"system": k.system, "code": k.code, "display": k.display}),
+    );
     json!({
         "target": c.target,
-        "tolerated": {"term": c.tolerated, "coding": null},
+        "tolerated": {"term": c.tolerated, "coding": coding},
         "date": {"precision": precision, "value": value},
         "text": present(c.text),
     })
@@ -92,6 +101,7 @@ mod tests {
         AllergyChallenge {
             target: "E1",
             tolerated: "amoxicillin",
+            tolerated_coding: None,
             date,
             text,
         }
@@ -111,6 +121,35 @@ mod tests {
         assert_eq!(p["text"], Value::Null);
         let n = allergy_challenge_payload(&challenge(Onset::NotKnown, Some("x")));
         assert_eq!(n["date"], json!({"precision": "not-known", "value": null}));
+    }
+
+    fn coded(date: Onset) -> AllergyChallenge<'static> {
+        AllergyChallenge {
+            tolerated_coding: Some(SubstanceCoding {
+                system: "drugref-moiety",
+                code: "01900000-0000-7000-8000-000000000001",
+                display: "amoxicillin",
+            }),
+            ..challenge(date, None)
+        }
+    }
+
+    #[test]
+    fn a_coded_challenge_writes_its_coding() {
+        let p = allergy_challenge_payload(&coded(Onset::NotKnown));
+        assert_eq!(
+            p["tolerated"]["coding"],
+            json!({"system": "drugref-moiety",
+                   "code": "01900000-0000-7000-8000-000000000001", "display": "amoxicillin"})
+        );
+    }
+
+    #[test]
+    fn the_twin_names_the_term_only() {
+        assert_eq!(
+            render_allergy_challenge_twin(&coded(Onset::NotKnown)),
+            render_allergy_challenge_twin(&challenge(Onset::NotKnown, None))
+        );
     }
 
     #[test]
