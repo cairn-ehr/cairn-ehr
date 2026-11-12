@@ -15,8 +15,7 @@ use crate::med_chart_webview_tests::{not_hidden_by_css, section};
 use crate::med_list::{ListLineView, MedListView, SaveAnswer, WarningRef};
 use crate::med_list_sign::MedListSigned;
 use crate::source_guard::{js_fn, position};
-use cairn_node::allergy::check::LineCheck;
-use cairn_node::medication::line::read_directions;
+use cairn_node::{allergy::check::LineCheck, medication::line::read_directions};
 use std::collections::BTreeSet;
 
 /// The list's two scripts as one text: med_list.js, and its Sign med_list_sign.js.

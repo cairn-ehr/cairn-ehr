@@ -93,9 +93,12 @@ async fn after_the_delabel_signs_the_offer_and_the_mark_are_gone() {
     save_as(&state, chart, l.clone(), Some("bea")).await;
     // The clinician saw the warning, then hand-ticked: the tick is given against it.
     l.hand_ticked = true;
+    // Unfinished, so the DEFAULT tick can never be given: only a surviving hand tick shows ticked.
+    l.finished = false;
     let v = read(&state, chart).await;
     let drawn = the_line(&v, &id);
     assert!(!drawn.check.marks.is_empty(), "{drawn:?}");
+    assert!(!drawn.default_ticked, "{drawn:?}");
     let target = drawn.delabel_offers[0].target.clone();
     l.seen = drawn
         .against
@@ -127,7 +130,10 @@ async fn after_the_delabel_signs_the_offer_and_the_mark_are_gone() {
         after.delabel_offers
     );
     assert!(after.check.marks.is_empty(), "{:?}", after.check.marks);
-    assert!(after.ticked, "a hand-ticked line stays ticked: {after:?}");
+    assert!(
+        !after.default_ticked && after.hand_ticked && after.ticked,
+        "only the hand tick can keep this line ticked: {after:?}"
+    );
 }
 
 #[tokio::test]
