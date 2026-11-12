@@ -1,6 +1,6 @@
 //! The same-drug rule: code equality only, live allergies only.
 use super::*;
-use crate::allergy::check::MOIETY_SYSTEM;
+use crate::allergy::check::{GROUP_SYSTEM, MOIETY_SYSTEM};
 use crate::allergy::read::{AllergyRow, Coding};
 use crate::allergy::test_fixtures::{challenge, coded, entry, id, pa};
 use crate::allergy::thread::resolve;
@@ -33,14 +33,14 @@ fn an_allergy_coded_to_the_same_moiety_is_offered() {
 fn a_group_coded_allergy_is_never_offered() {
     let g = coded(
         entry(1, "drug", "penicillin", "allergy", "rash", 1),
-        "drugref-group",
+        GROUP_SYSTEM,
         PEN_GROUP,
     );
     assert!(offered(vec![g], &[]).is_empty());
     // Even a group row whose code equals the moiety's: the system must be the moiety system.
     let g2 = coded(
         entry(2, "drug", "penicillin", "allergy", "rash", 1),
-        "drugref-group",
+        GROUP_SYSTEM,
         AMOX,
     );
     assert!(offered(vec![g2], &[]).is_empty());
