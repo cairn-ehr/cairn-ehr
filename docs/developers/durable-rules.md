@@ -10,7 +10,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
-**⇒ CHARTING SLICE 1b — THE SAME-DRUG DE-LABEL OFFER (ADR-0101, db/075 in place, db/079 marker) — do not undo**
+**⇒ CHARTING SLICE 1b — THE SAME-DRUG DE-LABEL OFFER (ADR-0101, db/075 in place, no new file) — do not undo**
 (pins: `crates/cairn-node/src/allergy/delabel_offer_tests.rs`, `crates/cairn-node/tests/allergy_overlay_floor.rs`,
 `cairn-gui/cairn-gui-tauri/src/{med_list_delabel_tests,med_list_delabel_db_tests,delabel_webview_tests,allergy_overlays_coded_tests}.rs`,
 `allergy_overlays_pure_tests.rs::a_group_coding_is_not_a_tolerated_drug`).

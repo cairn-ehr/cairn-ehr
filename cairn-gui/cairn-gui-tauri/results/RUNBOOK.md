@@ -3146,8 +3146,8 @@ Steps: strike, note and initial on paper *N* = 1 act → forced *M* = 1 signed d
 the pre-filled row. From the allergy list directly *K* is as before plus an optional pick. **A figure outside its
 budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
 
-**Setup.** As section 31, but build this checkout and re-run section 0's `provision-window-role`, because the build
-moves `SCHEMA_GENERATION` to 79. Then:
+**Setup.** As section 31, but build this checkout (the `db/075` edit reaches an existing database on its next connect;
+`SCHEMA_GENERATION` stays 78). Then:
 
 ```bash
 D1=$(achart "Delabel Amoxicillin" 1983-03-03)   # an allergy coded to the drug amoxicillin (picked from the drug list)

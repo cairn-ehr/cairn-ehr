@@ -44,8 +44,8 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
    is `allergy` (an adverse-effect entry, a "none known" statement and a kind added by a newer peer are not offered).
    `r.live` already leaves out de-labelled and withdrawn heads. A head on a chart whose link is in doubt is excluded,
    because the de-label door refuses such a target.
-4. **Unsigned list lines only.** The offers are derived in `judge` for the clinician's own list lines (either press),
-   only when the allergies were read over the chart set on screen and the line's parts are signable. A line already
+4. **Unsigned list lines only.** The offers are derived in `judge` for the clinician's own list lines (a line from either
+   *Start medication* or *Already taking*), only when the allergies were read over the chart set on screen and the line's parts are signable. A line already
    charted gets none, and slice 1a's lone-line editor gets none: a charted medication that hits an allergy keeps its
    warning, and acting on the allergy is done on the allergy list.
 5. **One control per allergy record.** `offers_for` takes each part coded `drugref-moiety` and, for each live head of
@@ -85,9 +85,10 @@ covering the line and a taken de-label. The maintainer dropped both for this sli
     slice 1a's). Typed text with no pick stays uncoded. Any edit of the *Tolerated* field drops the held coding, and
     while one is held the row says "Coded as: {drug} (drug)". The offer's prefill and a pick on the allergy list use
     the same row, so a de-label from the allergy list can be coded too.
-12. **`db/079` is a marker.** Editing `db/075` in place needs a schema replay, and the generation guard requires
-    `SCHEMA_GENERATION` to equal the newest `db/` prefix; `db/079_schema_replay_marker.sql` holds no objects.
-    `SCHEMA_GENERATION` 78 → 79.
+12. **No new file, no generation bump.** The `db/075` change is in place. A connect replays the schema when its content
+    hash changes (ADR-0080 decisions 1-2), so an existing database receives the edit on its next connect.
+    `SCHEMA_GENERATION` stays 78: it moves only when a new `db/` file lands and gates the projection heal (ADR-0057
+    decision 4), and this slice changes no projection.
 
 ## What is not guaranteed
 

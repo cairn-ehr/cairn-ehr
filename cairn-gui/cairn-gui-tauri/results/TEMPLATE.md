@@ -838,7 +838,7 @@ line 1 → observed \_\_ presses. Lines of a real home list needing a typed form
 
 ## The same-drug de-label offer (charting slice 1b, runbook §32)
 
-`SCHEMA_GENERATION` 79 and `provision-window-role` re-run? yes / no
+This checkout built and connected to the measurement database (the `db/075` edit replayed)? yes / no
 
 | Gesture | Key | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|---|
