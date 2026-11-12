@@ -144,7 +144,8 @@
 >   silent — was fixed there. Open: **#1081** (the pick carries no form, so most lines are hand-ticked — a decision) ·
 >   **#1082** (the draft doors trust the window's writer, as the note draft's — a decision). Owed by a human:
 >   **RUNBOOK §31**.
-> - **Charting slice 1b — the same-drug de-label offer — built on draft PR [#1086](https://github.com/cairn-ehr/cairn-ehr/pull/1086)**
+> - **Charting slice 1b — the same-drug de-label offer — built, reviewed (SDD, final review clean) and gated green
+>   (3 710 DB-gated root tests at `140db1c9`, GUI 989) on PR [#1086](https://github.com/cairn-ehr/cairn-ehr/pull/1086), ready for review**
 >   (design [`superpowers/specs/2026-11-12-charting-slice-1b-same-drug-delabel-offer-design.md`](superpowers/specs/2026-11-12-charting-slice-1b-same-drug-delabel-offer-design.md),
 >   [ADR-0101](spec/decisions/0101-the-same-drug-delabel-offer.md), spec **v0.103**, `db/075` in place (no new file; the
 >   content hash delivers it), `SCHEMA_GENERATION` **78** unchanged; no wire change; it will close #1053 and #1054). An unsigned list line whose
@@ -153,7 +154,9 @@
 >   own act. A de-label may code the tolerated drug (authoring door: `drugref-moiety` only; the row's drugs-only pick
 >   drops on any edit). The charting design's group comment and shared transaction were dropped (maintainer). Open:
 >   **#1084** (an additive comment on an allergy line, a new act) · **#1085** (flag a live allergy whose drug matches a
->   coded tolerance). Owed by a human: **RUNBOOK §32**.
+>   coded tolerance). Owed by a human: **RUNBOOK §32**. **For the maintainer to confirm:** the de-label row pre-fills
+>   today only on an *Already taking* line; on a *Start* line the date stays empty ("not known"), since "tolerated
+>   today" would be untrue there (controller ruling from the final review; the design's "date = today" was a designer's call).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
@@ -203,7 +206,7 @@
 >    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Now: batch-charting slice 2** — versions,
 >    "Set aside" as its own event type, "From:" and the "why" (all wire: design §3.4 and §4; brainstorm the wire shapes,
 >    then plan); then **slice 3** (the warning threshold as administrator policy, lowerable only). Charting **1b** (the same-drug de-label
->    offer, #1053/#1054) is built on draft PR #1086 (the bullet above). Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
+>    offer, #1053/#1054) is built and gated on PR #1086 (the bullet above), ready for review. Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
