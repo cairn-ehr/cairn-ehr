@@ -108,7 +108,11 @@ by a since-repudiated or doubtful key, or naming another chart's record, counts 
 reads "Historically reported: …", overrides no "none known" statement and is only counted on the strip ("+1 historical"). Two live accounts of one
 allergen (the same term after case and whitespace are folded) that disagree on kind or on a known reaction are both
 marked "differing accounts", and a byline says when its key is unconfirmed or was since repudiated
-([ADR-0097](decisions/0097-allergy-overlays-and-differing-accounts.md)).
+([ADR-0097](decisions/0097-allergy-overlays-and-differing-accounts.md)). A de-label may code the tolerated drug
+(`drugref-moiety` only at the authoring door; a tolerance is of a drug, never of a group). An unsigned medication-list
+line offers the de-label of a live drug allergy only when both carry the identical drug code, never on a name or group
+match and never on a charted line; the press opens the allergy list's own de-label row pre-filled, and charting
+itself writes nothing to the allergy list ([ADR-0101](decisions/0101-the-same-drug-delabel-offer.md)).
 
 A drug entry may be **coded** against drugref, as one drug (`drugref-moiety`) or as a drugref allergy group such as
 *Penicillins* (`drugref-class`, the group's immortal `class_uuid`), in the same `{system, code, display}` slot a

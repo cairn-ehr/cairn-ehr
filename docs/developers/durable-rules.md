@@ -10,6 +10,31 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ CHARTING SLICE 1b — THE SAME-DRUG DE-LABEL OFFER (ADR-0101, db/075 in place, db/079 marker) — do not undo**
+(pins: `crates/cairn-node/src/allergy/delabel_offer_tests.rs`, `crates/cairn-node/tests/allergy_overlay_floor.rs`,
+`cairn-gui/cairn-gui-tauri/src/{med_list_delabel_tests,med_list_delabel_db_tests,delabel_webview_tests,allergy_overlays_coded_tests}.rs`,
+`allergy_overlays_pure_tests.rs::a_group_coding_is_not_a_tolerated_drug`).
+- **The offer keys on CODE EQUALITY only**: the line part's `drugref-moiety` code and a live drug allergy's, the same
+  `Uuid`. **Tempting wrong fixes:** reuse the check's match ("the warning already says same drug"), or add a name or
+  group fallback "so amoxicillin offers against penicillin": a de-label LIFTS an allergy, so a guess can clear a true
+  one (the maintainer ruled a related drug offers nothing). Pins: `delabel_offer_tests.rs::a_group_coded_allergy_is_never_offered`,
+  `an_uncoded_allergy_of_the_same_name_is_never_offered`, `an_adverse_effect_is_never_offered`,
+  `an_unknown_kind_is_never_offered`, `a_head_on_a_doubted_chart_is_never_offered`.
+- **Charting never writes the allergy list**, and a press on the offer **signs nothing**: it opens the allergy list's
+  own De-label row pre-filled, and the clinician signs that row as its own act. **Tempting wrong fixes:** have the
+  list's Sign de-label "since the drug was charted" (a drug on the list does not attest tolerance); pre-press or
+  pre-tick the offer; draw an offer on a charted line (it keeps its warning; the allergy is acted on from the allergy
+  list). Pins: `delabel_webview_tests.rs::a_press_opens_the_delabel_row_prefilled_and_signs_nothing`,
+  `med_list_delabel_db_tests.rs::a_group_allergy_line_carries_no_offer`.
+- **A tolerated coding is a DRUG, never a group**, checked in Rust before the key and again at the authoring door
+  (`drugref-moiety` only; the remote door admits any well-shaped system so sync never wedges). **Tempting wrong fix:**
+  admit `drugref-class` "to match the allergy side" (a tolerance of a group is not a fact anyone observed). Pins:
+  `allergy_overlay_floor.rs::the_authoring_door_refuses_a_group_and_a_malformed_coding`,
+  `allergy_overlays_coded_tests.rs::a_group_coded_delabel_is_refused_before_the_key`.
+- **An edit of the tolerated name DROPS its coding** (a coding vouches for the name it was picked with), and a refused
+  coded de-label of a head struck since asks for no key. Pins: `delabel_webview_tests.rs::editing_the_tolerated_field_drops_its_coding`,
+  `allergy_overlays_coded_tests.rs::a_delabel_of_a_head_struck_since_is_refused_before_the_key`.
+
 **⇒ BATCH CHARTING SLICE 1 — THE MEDICATION LIST AND ONE SIGN (ADR-0100, db/078) — do not undo**
 (pins: `crates/cairn-node/tests/{medication_draft_list_store,medication_draft_list_ticks,medication_draft_line_sign}.rs`,
 `crates/cairn-node/src/medication/draft_tick_tests.rs`,
