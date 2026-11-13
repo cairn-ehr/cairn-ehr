@@ -21,6 +21,7 @@ pub mod dose;
 pub mod reconciliation;
 pub mod set_aside;
 pub mod source_note;
+pub mod version_checked;
 pub mod withhold;
 
 pub use assert::{
@@ -55,6 +56,10 @@ pub use set_aside::{
     SET_ASIDE_SCHEMA,
 };
 pub use source_note::{insert_source_note, source_note_twin, SourceNote};
+pub use version_checked::{
+    render_version_checked_twin, version_checked_body, VersionChecked, VERSION_CHECKED_EVENT_TYPE,
+    VERSION_CHECKED_SCHEMA,
+};
 pub use withhold::{
     medication_withhold_body, medication_withhold_release_body,
     render_medication_withhold_release_twin, render_medication_withhold_twin, HoldUntil,

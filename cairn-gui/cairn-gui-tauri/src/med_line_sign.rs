@@ -235,5 +235,6 @@ pub(crate) fn charting<'a>(
         strength: d.strength.as_deref(),
         components,
         warning_override: reason.map(|reason| WarningOverride { reason, against }),
+        restores: None,
     }
 }
