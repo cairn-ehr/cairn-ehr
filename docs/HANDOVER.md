@@ -151,7 +151,7 @@
 >   **#1084** · **#1085** · **#1087**; owed **RUNBOOK §32**. **Confirmed by the maintainer 2026-11-13:** the de-label row
 >   pre-fills today's date only on an *Already taking* line; on a *Start* line the date stays empty ("not known"),
 >   since "tolerated today" would be untrue there.
-> - **Batch-charting slice 2a — "From:", the "why", the set-aside version — BUILT 2026-11-13 on draft PR
+> - **Batch-charting slice 2a — "From:", the "why", the set-aside version — MERGED 2026-11-13 in PR
 >   [#1088](https://github.com/cairn-ehr/cairn-ehr/pull/1088)** (design
 >   [`superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md`](superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md),
 >   plan [`superpowers/plans/2026-11-13-batch-charting-slice-2a-from-and-set-aside.md`](superpowers/plans/2026-11-13-batch-charting-slice-2a-from-and-set-aside.md),
@@ -222,8 +222,8 @@
 >    projection and the Pi figures. **Allergy slices 1–3 MERGED** (the bullets above). **Next: charting a
 >    medication in the window** (design APPROVED 2026-11-11, three PRs: the line + the check at charting; stat ordered →
 >    given; aliases + PBS forms as drugref supplies them). **Slice 1a MERGED in PR #1066** (the bullet above);
->    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Batch-charting slice 2a BUILT** on PR #1088 (the bullet
->    above) — **review and merge it**; then **plan slice 2b** (restore = an editable list line carrying `restores`, the
+>    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Batch-charting slice 2a MERGED** in PR #1088 (the bullet
+>    above); **slice 2b is being planned and built on branch `plan/batch-charting-slice-2b-restore-and-checked`** — **plan slice 2b** (restore = an editable list line carrying `restores`, the
 >    companion's stop paired by the floor; "checked: not current" as its own act — design §3.3/§3.4) from 2a's real
 >    interfaces; then **slice 3** (the warning threshold as administrator policy, lowerable only). Charting **1b** (the same-drug de-label
 >    offer) MERGED in PR #1086 (the bullet above). Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
