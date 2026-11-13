@@ -286,6 +286,8 @@ pub async fn med_list_save_impl(
         source_detail: given(line.source_detail),
         why: given(line.why),
         set_aside_of: given(line.set_aside_of),
+        // Only `add_restore_line` sets it; a save never writes it (db/078).
+        restores: None,
     };
     let db = state
         .db

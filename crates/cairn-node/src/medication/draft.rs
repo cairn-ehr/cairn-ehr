@@ -51,6 +51,9 @@ pub struct DraftLine {
     /// `line:<uuid>` (a draft line) or `med:<uuid>` (a charted medication) this line is a
     /// version of; `None` = not set aside. See `draft_versions`.
     pub set_aside_of: Option<String>,
+    /// The set-aside version this line RESTORES (a restore line, slice 2b); `None` for an
+    /// ordinary line. Only [`add_restore_line`] sets it; a save never writes it.
+    pub restores: Option<Uuid>,
 }
 
 /// `[{"source": "...", "ref": "<uuid>"}]` to pairs, or `None` when ANY element is malformed.
@@ -80,7 +83,7 @@ pub async fn read_draft_lines(
         .query(
             "SELECT line_id::text, terminal_id, seq, charted_as, line_text, parts::text, reason, \
                     hand_ticked, ticked_against::text, finished, saved_at::text, typed_drug, directions, held, \
-                    info_source, source_detail, why, set_aside_of \
+                    info_source, source_detail, why, set_aside_of, restores::text \
                FROM cairn_med_draft_lines($1::text::uuid, $2)",
             &[&patient.to_string(), &writer],
         )
@@ -113,6 +116,10 @@ pub async fn read_draft_lines(
                 source_detail: r.try_get(15)?,
                 why: r.try_get(16)?,
                 set_aside_of: r.try_get(17)?,
+                restores: r
+                    .try_get::<_, Option<String>>(18)?
+                    .map(|s| s.parse())
+                    .transpose()?,
             })
         })
         .collect()
@@ -162,6 +169,49 @@ pub async fn save_draft_line(
         )
         .await
         .context("saving the medication draft line")?;
+    Ok(row.try_get(0)?)
+}
+
+/// The words a restore line starts with (pre-filled from the version it restores).
+pub struct RestoreContent<'a> {
+    pub charted_as: &'a str,
+    pub line_text: &'a str,
+    pub typed_drug: &'a str,
+    pub directions: &'a str,
+    pub parts: &'a serde_json::Value,
+}
+
+/// Add `line` as a RESTORE line of set-aside `version` on `patient` (db/078): the door's one word,
+/// the save door's new-row answers plus `'no-such-version'` (the version is not on this chart).
+pub async fn add_restore_line(
+    client: &(impl GenericClient + Sync),
+    line: Uuid,
+    patient: Uuid,
+    terminal: &str,
+    writer: Option<&str>,
+    version: Uuid,
+    content: &RestoreContent<'_>,
+) -> anyhow::Result<String> {
+    let parts = content.parts.to_string();
+    let row = client
+        .query_one(
+            "SELECT cairn_med_draft_restore_add($1::text::uuid, $2::text::uuid, $3, $4, \
+                    $5::text::uuid, $6, $7, $8::text::jsonb, $9, $10)",
+            &[
+                &line.to_string(),
+                &patient.to_string(),
+                &terminal,
+                &writer,
+                &version.to_string(),
+                &content.charted_as,
+                &content.line_text,
+                &parts,
+                &content.typed_drug,
+                &content.directions,
+            ],
+        )
+        .await
+        .context("adding a restore line to the medication draft list")?;
     Ok(row.try_get(0)?)
 }
 

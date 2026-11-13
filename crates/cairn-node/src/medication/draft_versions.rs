@@ -15,6 +15,7 @@
 
 use crate::allergy::check::MOIETY_SYSTEM;
 use crate::medication::draft::DraftLine;
+use crate::medication::set_aside_read::SetAsideRow;
 use uuid::Uuid;
 
 /// What a version is set aside beside: another draft line, or a charted current medication.
@@ -47,6 +48,10 @@ pub fn companion_candidates(
     draft: &[DraftLine],
     current: &[(Uuid, &str)],
 ) -> Vec<Companion> {
+    // A restore line is a line that REPLACES a companion, never a version of one.
+    if line.restores.is_some() {
+        return vec![];
+    }
     let Some(code) = moiety_of(line) else {
         return vec![];
     };
@@ -60,6 +65,19 @@ pub fn companion_candidates(
         .filter(|(_, c)| *c == code)
         .map(|(id, _)| Companion::Charted(*id));
     drafts.chain(charted).collect()
+}
+
+/// The companions the list's restore lines would stop: `(restore line, companion)` for each line
+/// whose `restores` names a version in `versions` (the opened chart's). A restore naming a version
+/// not in `versions` replaces nothing (it will be refused at Sign, not guessed at here).
+pub fn replaced_by_restores(draft: &[DraftLine], versions: &[SetAsideRow]) -> Vec<(Uuid, Uuid)> {
+    draft
+        .iter()
+        .filter_map(|l| {
+            let v = versions.iter().find(|v| Some(v.version_id) == l.restores)?;
+            Some((l.line_id, v.alternative_to))
+        })
+        .collect()
 }
 
 /// `line:<uuid>` / `med:<uuid>` to a [`Companion`]; `None` for anything else.

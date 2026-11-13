@@ -34,6 +34,7 @@ fn line(id: u128, code: u128, mark: Option<String>) -> DraftLine {
         source_detail: None,
         why: None,
         set_aside_of: mark,
+        restores: None,
     }
 }
 

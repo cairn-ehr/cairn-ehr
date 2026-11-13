@@ -51,6 +51,8 @@ const WIDENED: &[(&str, &str)] = &[
     ("medication_draft_line", "source_detail"),
     ("medication_draft_line", "why"),
     ("medication_draft_line", "set_aside_of"),
+    // Batch charting slice 2b: the version a restore line restores, paired ALTER in db/078.
+    ("medication_draft_line", "restores"),
 ];
 
 #[tokio::test]

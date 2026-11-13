@@ -31,6 +31,7 @@ fn judged(id: u128, terminal: &str, hand_ticked: bool, check: LineCheck) -> Judg
             source_detail: None,
             why: None,
             set_aside_of: None,
+            restores: None,
         },
         parts: vec![],
         signable: Ok((format!("drug {id}"), vec![])),
