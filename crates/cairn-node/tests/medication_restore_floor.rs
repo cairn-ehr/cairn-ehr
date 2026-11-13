@@ -3,9 +3,10 @@
 //! A restore is two events in ONE transaction: a cessation of the companion line, and a NEW
 //! `clinical.medication.asserted` thread carrying `restores` = the set-aside version's id. The
 //! floor makes the pairing hold even for a raw-SQL client: at COMMIT (a deferred check, because
-//! the two events may arrive in either order) every companion of the restored version must be
-//! stopped, or nothing of the transaction lands. Otherwise the chart would show two current
-//! lines of the same drug — the old one and the restored one.
+//! the two events may arrive in either order) nothing else may still stand for the companion —
+//! neither the companion nor an earlier restore's line (ruling R3, `medication_restore_replaces.rs`)
+//! — or nothing of the transaction lands. Otherwise the chart would show two current lines of the
+//! same drug.
 //!
 //! Door rules (ADR-0056): the SHAPE of `restores` (a uuid string, or JSON null = absent) refuses
 //! at BOTH doors; "it names a version on this chart" and the commit-time pairing apply at the
@@ -13,12 +14,7 @@
 //!
 //! DB-gated on `$CAIRN_TEST_PG` (a skipped run prints `skipped:`), serialized via
 //! `db::test_serial_guard`.
-use cairn_event::medication::Charting;
-use cairn_event::{sign, EventBody, SigningKey};
 use cairn_node::db;
-use cairn_node::medication::{
-    build_cease_body, build_charted_body, read_charting, CeaseMedicationInput,
-};
 use serde_json::{json, Value};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -31,78 +27,9 @@ use medication_kit::*;
 #[path = "common/set_aside_kit.rs"]
 mod set_aside_kit;
 use set_aside_kit::*;
-
-/// A registered chart with one current line `med` and a set-aside version `version` beside it.
-/// Returns (patient, med, version).
-async fn chart_with_version(c: &mut Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid, Uuid) {
-    let (p, med) = chart_with_one_med(c, sk, kid).await;
-    let version = Uuid::now_v7();
-    let body = version_body(c, kid, p, version, med, |_| {}).await;
-    seal_and_submit(c, sk, body)
-        .await
-        .map_err(|e| db_msg(&e))
-        .expect("the version is admitted");
-    (p, med, version)
-}
-
-/// A restore line: a NEW thread on `patient` naming `version` in `restores`. Returns the body
-/// and the new thread's id.
-async fn restore_body(c: &Client, kid: &str, patient: Uuid, version: Uuid) -> (EventBody, Uuid) {
-    let (v, med) = (version.to_string(), Uuid::now_v7());
-    let charting = Charting {
-        restores: Some(&v),
-        ..Charting::default()
-    };
-    let hlc = db::next_hlc(c, "test-node").await.unwrap();
-    let body = build_charted_body(
-        Uuid::now_v7(),
-        med,
-        patient,
-        &sample_input(),
-        &charting,
-        kid,
-        hlc,
-        None,
-    );
-    (body, med)
-}
-
-/// The companion's stop, as the restore's first event.
-async fn stop_body(c: &Client, kid: &str, patient: Uuid, med: Uuid) -> EventBody {
-    let none = CeaseMedicationInput {
-        stopped: None,
-        stopped_precision: None,
-        reason: None,
-    };
-    let hlc = db::next_hlc(c, "test-node").await.unwrap();
-    build_cease_body(Uuid::now_v7(), med, patient, &none, kid, hlc)
-}
-
-/// Seal, sign and submit `bodies` through the strict door in ONE transaction, then commit.
-/// `Err` is the refusal text, whether a submit refused or the COMMIT did.
-async fn submit_together(
-    c: &mut Client,
-    sk: &SigningKey,
-    bodies: Vec<EventBody>,
-) -> Result<(), String> {
-    let tx = c.transaction().await.unwrap();
-    for mut body in bodies {
-        // Seal as seal_and_submit does (the DEK is generated, never a literal).
-        let twin = body.plaintext_twin.take().unwrap();
-        let (container, dek) =
-            cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id).unwrap();
-        body.payload = container;
-        body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
-        let signed = sign(&body, sk).unwrap();
-        tx.execute(
-            "SELECT submit_event($1, NULL, NULL, $2)",
-            &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
-        )
-        .await
-        .map_err(|e| db_msg(&e))?;
-    }
-    tx.commit().await.map_err(|e| db_msg(&e))
-}
+#[path = "common/med_restore_kit.rs"]
+mod med_restore_kit;
+use med_restore_kit::*;
 
 /// Call the medication-assertion floor directly on `body` at one door, in a throwaway
 /// transaction (the assertion twin of set_aside_kit's `floor`).
@@ -122,22 +49,6 @@ async fn assertion_floor(c: &mut Client, body: &Value, remote: bool) -> Result<(
         .await;
     tx.rollback().await.unwrap();
     r.map(|_| ()).map_err(|e| db_msg(&e))
-}
-
-/// The projected `restores` of thread `med` (None = no row, or no restore).
-async fn projected_restores(c: &Client, med: Uuid) -> Option<Uuid> {
-    read_charting(c, &[med])
-        .await
-        .unwrap()
-        .remove(&med)
-        .and_then(|r| r.restores)
-}
-
-async fn pending_rows(c: &Client) -> i64 {
-    c.query_one("SELECT count(*) FROM medication_restore_pending", &[])
-        .await
-        .unwrap()
-        .get(0)
 }
 
 #[tokio::test]

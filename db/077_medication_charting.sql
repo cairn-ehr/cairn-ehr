@@ -303,7 +303,8 @@ BEGIN
         override_against = EXCLUDED.override_against,
         source_detail    = EXCLUDED.source_detail,
         why              = EXCLUDED.why,
-        restores         = EXCLUDED.restores,
+        -- Kept when a later re-assertion of the thread omits it: it records how the thread began.
+        restores         = COALESCE(EXCLUDED.restores, medication_charting.restores),
         hlc_wall         = EXCLUDED.hlc_wall,
         hlc_counter      = EXCLUDED.hlc_counter,
         origin           = EXCLUDED.origin,
