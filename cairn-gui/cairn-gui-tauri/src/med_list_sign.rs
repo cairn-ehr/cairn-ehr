@@ -58,7 +58,7 @@ use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write};
 use cairn_event::medication::ChartedAs;
-use cairn_node::medication::draft::{self, SpendRefused};
+use cairn_node::medication::draft::{self, DraftLine, SpendRefused};
 use cairn_node::medication::AuthorParams;
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -163,10 +163,13 @@ pub async fn med_list_sign_impl(
     }
     // Slice 1a's per-line checks, decided before the key so a Sign that could chart nothing never
     // asks for a passphrase; a failing line is skipped, the others sign.
-    // A restore line is judged against the ticked lines before it (ruling R9).
-    let verdicts: Vec<_> = (0..chosen.len())
-        .map(|i| (chosen[i], line_verdict(chosen[i], &chosen[..i], &restores)))
-        .collect();
+    // A restore line is judged against the lines before it that will sign (rulings R9, R10).
+    let mut verdicts: Vec<(&Judged, Result<_, ErrorView>)> = Vec::with_capacity(chosen.len());
+    for j in chosen.iter().copied() {
+        let signing = verdicts.iter().filter(|(_, v)| v.is_ok());
+        let earlier: Vec<&DraftLine> = signing.map(|(e, _)| &e.line).collect();
+        verdicts.push((j, line_verdict(j, &earlier, &restores)));
+    }
     let mut not_charted: Vec<(String, String)> = verdicts
         .iter()
         .filter_map(|(j, v)| {
@@ -412,11 +415,10 @@ pub(crate) fn ticked_lines<'a>(
 /// Start line with an allergy mark needs; a restore line's own (`restore_holds`, 2b). Pure.
 fn line_verdict<'a>(
     j: &'a Judged,
-    earlier: &[&Judged],
+    earlier: &[&DraftLine],
     restores: &Versions,
 ) -> Result<(ChartedAs, Option<&'a str>), ErrorView> {
-    let earlier = earlier.iter().map(|e| &e.line);
-    restore_holds(&j.line, earlier, restores).map_err(refused)?;
+    restore_holds(&j.line, earlier.iter().copied(), restores).map_err(refused)?;
     let charted_as = press(&j.line.charted_as)?;
     j.signable.as_ref().map_err(Clone::clone)?;
     let reason = override_before_the_key(charted_as, &j.check, j.line.reason.as_deref())?;

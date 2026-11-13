@@ -16,8 +16,8 @@
 //! - [`restore_source`]: a restore line with no source of its own signs `unknown`.
 //!
 //! On the list, a restore line is judged a duplicate against the chart WITHOUT the lines it will
-//! stop ([`current_besides_stops`], Review Focus 2), but still against every other line, list lines included
-//! (two restores of one companion duplicate each other, Review Focus 3).
+//! stop ([`current_besides_stops`], Review Focus 2), but still against every other line, list
+//! lines included (two restores of one companion duplicate each other, Review Focus 3).
 use crate::allergy_check::CodingArg;
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
@@ -304,9 +304,11 @@ pub(crate) fn not_added(answer: &str) -> String {
 
 /// Ruling R9 (a): a ticked line's restore, judged before the key in Sign order. `Ok` for an
 /// ordinary line or a restore that may sign; [`RESTORE_VERSION_GONE`] when its version is not on
-/// the opened chart; [`SAME_LINE_RESTORED`] when an `earlier` ticked restore line replaces the
-/// same companion (its stops were read before that one charts, so the floor would refuse it at
-/// commit in its own words). Pure.
+/// the opened chart; [`SAME_LINE_RESTORED`] when an `earlier` restore line about to sign
+/// replaces the same lineage (its stops were read before that one charts, so the floor would
+/// refuse it at commit in its own words). Same lineage (ruling R10): the same companion — two
+/// restores of a stopped companion both stop nothing — or a line both would stop (a version set
+/// aside beside a restore line has that line as its companion, under the same original). Pure.
 pub(crate) fn restore_holds<'a>(
     line: &DraftLine,
     earlier: impl IntoIterator<Item = &'a DraftLine>,
@@ -317,7 +319,10 @@ pub(crate) fn restore_holds<'a>(
     }
     let v = version_of(line, versions).ok_or(RESTORE_VERSION_GONE)?;
     let same = |e: &DraftLine| {
-        version_of(e, versions).is_some_and(|w| w.alternative_to == v.alternative_to)
+        version_of(e, versions).is_some_and(|w| {
+            w.alternative_to == v.alternative_to
+                || w.standing.iter().any(|s| v.standing.contains(s))
+        })
     };
     match earlier.into_iter().any(same) {
         true => Err(SAME_LINE_RESTORED),

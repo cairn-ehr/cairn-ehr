@@ -399,3 +399,35 @@ async fn a_restore_with_its_own_charting_restores_is_refused() {
     assert!(sign(&mut r, line, &at, &charting, Some(&rs)).await.is_err());
     assert_eq!(count(&r.c, "event_log").await, before);
 }
+
+/// Ruling R10: the lineage is ROOTED. X charted; L1 restored v1 (X stopped); v3 set aside beside
+/// L1 while an older v2 is still beside X. A restores v2 (stopping L1) in one transaction; B then
+/// restores v3 in another, stopping L1 again but not A. B's companion is L1, whose DOWNWARD
+/// closure alone ({L1, B}) misses A, its sibling under X: B must fail at commit, and then
+/// succeed once it stops A, leaving one current line.
+#[tokio::test]
+async fn a_restore_of_a_version_set_aside_beside_a_restore_line_is_checked_against_the_whole_lineage(
+) {
+    db_test!(base);
+    let mut r = rig(&base).await;
+    let x = charted(&mut r).await;
+    let (v1, v2) = (
+        version_beside(&mut r, x).await,
+        version_beside(&mut r, x).await,
+    );
+    let l1 = restore(&mut r, v1, &[x]).await.unwrap().value.0;
+    let v3 = version_beside(&mut r, l1).await;
+    let a = restore(&mut r, v2, &[l1]).await.unwrap().value.0;
+    let refused = restore(&mut r, v3, &[l1]).await;
+    assert!(
+        format!("{:#}", refused.as_ref().unwrap_err()).contains("still stands"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        standing(&r, v3).await,
+        [a],
+        "the whole lineage, read from L1"
+    );
+    let b = restore(&mut r, v3, &[a]).await.unwrap().value.0;
+    assert_eq!(standing(&r, v2).await, [b], "one current line");
+}

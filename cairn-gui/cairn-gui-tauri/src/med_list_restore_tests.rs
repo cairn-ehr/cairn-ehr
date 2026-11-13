@@ -198,6 +198,7 @@ fn a_later_restore_of_the_same_line_is_refused() {
     assert_eq!(restore_holds(&ordinary, [&first], &versions), Ok(()));
     let mut other = version(None);
     other.alternative_to = Uuid::from_u128(0xC1);
+    other.standing = vec![Uuid::from_u128(0xC1)];
     versions.insert(Uuid::from_u128(0x7F), other);
     assert_eq!(restore_holds(&second, [&first], &versions), Ok(()));
     assert_eq!(
@@ -240,4 +241,40 @@ fn a_refused_add_is_said_in_words() {
         assert!(said.starts_with("The line was not added"), "{said}");
     }
     assert_eq!(not_added("no-such-version"), VERSION_GONE);
+}
+
+/// Ruling R10: two restores conflict when they would stop a line in common even under different
+/// companions (a version set aside beside a restore line, beside a sibling of the original's);
+/// two restores of a stopped companion (both standing empty) still conflict by companion; two
+/// restores of different lines with nothing in common do not.
+#[test]
+fn restores_of_one_lineage_conflict_through_what_they_stop() {
+    let l1 = Uuid::from_u128(0xB1);
+    let under = |companion: u128, standing: Vec<Uuid>| VersionForRestore {
+        alternative_to: Uuid::from_u128(companion),
+        standing,
+        ..version(None)
+    };
+    let mut versions = Versions::new();
+    versions.insert(Uuid::from_u128(VERSION), under(COMPANION, vec![l1]));
+    versions.insert(Uuid::from_u128(0x7F), under(0xB1, vec![l1]));
+    let sibling = line(Some(VERSION), None);
+    let mut chain = line(Some(0x7F), None);
+    chain.line_id = Uuid::from_u128(0x12);
+    assert_eq!(
+        restore_holds(&chain, [&sibling], &versions),
+        Err(SAME_LINE_RESTORED)
+    );
+    versions.insert(Uuid::from_u128(VERSION), under(COMPANION, vec![]));
+    versions.insert(Uuid::from_u128(0x7F), under(COMPANION, vec![]));
+    assert_eq!(
+        restore_holds(&chain, [&sibling], &versions),
+        Err(SAME_LINE_RESTORED),
+        "a stopped companion: equal companions still conflict"
+    );
+    versions.insert(
+        Uuid::from_u128(0x7F),
+        under(0xC2, vec![Uuid::from_u128(0xC2)]),
+    );
+    assert_eq!(restore_holds(&chain, [&sibling], &versions), Ok(()));
 }

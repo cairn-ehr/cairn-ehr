@@ -204,7 +204,8 @@ pub struct VersionForRestore {
 
 /// One version of `patient`, for the restore press and for Sign. `None`: not on this chart, its
 /// companion is not on it, or it is gone. `standing` is read through
-/// `cairn_medication_restore_lineage`, the function the floor's COMMIT check reads.
+/// `cairn_medication_restore_lineage`, the function the floor's COMMIT check reads, once: its
+/// current members, and those of them that are restore lines (`standing_restored`).
 pub async fn version_for_restore(
     client: &(impl GenericClient + Sync),
     patient: Uuid,
@@ -214,22 +215,21 @@ pub async fn version_for_restore(
         .query_opt(
             "SELECT a.alternative_to::text, \
                     NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = a.alternative_to), \
-                    ARRAY(SELECT l::text FROM cairn_medication_restore_lineage(a.alternative_to, a.patient_id) l \
-                           WHERE EXISTS (SELECT 1 FROM medication_statement m WHERE m.medication_id = l) \
-                             AND NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = l) \
-                           ORDER BY 1), \
+                    st.standing, \
                     ch.charted_as, COALESCE(a.source_detail, a.info_source), a.term, \
                     a.coding_system, a.coding_code, a.coding_display, a.formulation, a.dose_amount, \
-                    a.dose_unit, a.sig, a.route, a.strength, \
-                    ARRAY(SELECT l::text FROM cairn_medication_restore_lineage(a.alternative_to, a.patient_id) l \
-                           WHERE EXISTS (SELECT 1 FROM medication_statement m WHERE m.medication_id = l) \
-                             AND NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = l) \
-                             AND EXISTS (SELECT 1 FROM medication_restore r WHERE r.medication_id = l) \
-                           ORDER BY 1) \
+                    a.dose_unit, a.sig, a.route, a.strength, st.restored \
                FROM medication_set_aside a \
                JOIN medication_statement m \
                  ON m.medication_id = a.alternative_to AND m.patient_id = a.patient_id \
                LEFT JOIN medication_charting ch ON ch.medication_id = a.alternative_to \
+               CROSS JOIN LATERAL ( \
+                    SELECT COALESCE(array_agg(l::text ORDER BY l), '{}') AS standing, \
+                           COALESCE(array_agg(l::text ORDER BY l) FILTER (WHERE EXISTS \
+                               (SELECT 1 FROM medication_restore r WHERE r.medication_id = l)), '{}') AS restored \
+                      FROM cairn_medication_restore_lineage(a.alternative_to, a.patient_id) l \
+                     WHERE EXISTS (SELECT 1 FROM medication_statement s WHERE s.medication_id = l) \
+                       AND NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = l)) st \
               WHERE a.version_id = $2::text::uuid AND a.patient_id = $1::text::uuid \
               ORDER BY a.t_recorded, a.event_id LIMIT 1",
             &[&patient.to_string(), &version.to_string()],

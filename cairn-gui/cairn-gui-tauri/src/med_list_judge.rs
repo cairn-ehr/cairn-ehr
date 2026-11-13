@@ -44,7 +44,8 @@ pub fn already_on_the_list(line: &str) -> String {
 /// the writer's "From:" as `(preset, detail)`; and the opened chart's lines as the "Version of
 /// which line?" pick names them (`med_list_versions::charted_words`). Slice 2b: the versions the
 /// restore lines name, on the opened chart (`med_list_restore::read_versions`), and each restore
-/// line's own `current`, without the lines it will stop (`med_list_restore::current_besides_stops`).
+/// line's own `current`, without the lines it will stop
+/// (`med_list_restore::current_besides_stops`).
 pub(crate) struct Fresh {
     pub set: ChartSet,
     pub allergies: PatientAllergies,
