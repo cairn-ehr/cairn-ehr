@@ -8,7 +8,7 @@
 //! `db::test_serial_guard` taken BEFORE connecting.
 mod common;
 
-use cairn_event::medication::{Charting, MedicationAssertion, SourceNote};
+use cairn_event::medication::{drug_line_twin, Charting, MedicationAssertion, SourceNote};
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::draft::{chart_draft_line, read_draft_lines, SpendRefused};
@@ -260,7 +260,7 @@ async fn a_version_beside_a_charted_line_signs_alone() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].version_id, done.value);
     assert_eq!(rows[0].alternative_to, thread);
-    assert_eq!(rows[0].drug_line, "Lipitor 25 mg");
+    assert_eq!(rows[0].drug_line, "Lipitor 25 mg (external-record)");
     assert_eq!(rows[0].source, "GP letter");
     assert_eq!(rows[0].why.as_deref(), Some("packet says 25 mg"));
 }
@@ -312,7 +312,8 @@ async fn a_charted_companion_stopped_since_refuses_and_keeps_the_version() {
         &author,
     )
     .await;
-    assert!(err.is_err(), "a stopped companion refuses");
+    let text = format!("{:#}", err.expect_err("a stopped companion refuses"));
+    assert!(text.contains("is not a current medication"), "{text}");
     assert_eq!(count(&r.c, "event_log").await, before);
     assert_eq!(
         read_draft_lines(&r.c, r.chart, Some("notewriter"))
@@ -373,4 +374,60 @@ async fn chart_draft_line_with_no_versions_is_unchanged() {
     let done = chart(&mut r, comp, &at, &[]).await.unwrap();
     assert!(done.value.1.is_empty());
     assert_eq!(count(&r.c, "event_log").await, before + 1);
+}
+
+/// Plant a morphine 10 mg version with `route`; return its `drug_line` as read back.
+async fn route_line(r: &Rig, thread: Uuid, route: &str) -> String {
+    r.c.execute(
+        "INSERT INTO medication_set_aside (content_address, event_id, patient_id, version_id, \
+            alternative_to, term, dose_amount, dose_unit, route, info_source, t_recorded) \
+         VALUES (gen_random_bytes(8), gen_random_uuid(), $1::text::uuid, gen_random_uuid(), \
+                 $2::text::uuid, 'Morphine', '10', 'mg', $3, 'external-record', now())",
+        &[&r.chart.to_string(), &thread.to_string(), &route],
+    )
+    .await
+    .unwrap();
+    read_set_asides(&r.c, &[r.chart])
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|x| x.drug_line)
+        .next_back()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_version_differing_only_by_route_reads_differently() {
+    db_test!(base);
+    let mut r = rig(&base).await;
+    let thread = charted(&mut r).await;
+    let oral = route_line(&r, thread, "po").await;
+    r.c.batch_execute("TRUNCATE medication_set_aside")
+        .await
+        .unwrap();
+    let iv = route_line(&r, thread, "iv").await;
+    assert_ne!(oral, iv);
+    // One spelling of a drug line: exactly the twin's.
+    let want = |route| {
+        drug_line_twin(&MedicationAssertion {
+            medication_id: "",
+            term: "Morphine",
+            coding: None,
+            formulation: None,
+            dose_amount: Some("10"),
+            dose_unit: Some("mg"),
+            sig: None,
+            info_source: "external-record",
+            started: None,
+            started_precision: None,
+            safety: None,
+            charting: Some(Charting {
+                route: Some(route),
+                ..Charting::default()
+            }),
+            source_note: None,
+        })
+    };
+    assert_eq!(oral, want("po"));
+    assert_eq!(iv, want("iv"));
 }

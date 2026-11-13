@@ -74,7 +74,8 @@ pub(crate) async fn submit(tx: &Transaction<'_>, p: &Prepared) -> anyhow::Result
         "SELECT submit_event($1, NULL, NULL, $2)",
         &[&p.signed_bytes, &p.dek.as_bytes().as_slice()],
     )
-    .await?;
+    .await
+    .context("submitting the event (nothing was written)")?;
     Ok(())
 }
 

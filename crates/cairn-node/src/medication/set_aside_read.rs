@@ -1,5 +1,6 @@
 //! Batch charting slice 2a: read the set-aside versions back, to show under their companion line.
 use anyhow::Context;
+use cairn_event::medication::{drug_line_twin, Charting, MedicationAssertion, SubstanceCoding};
 use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -9,7 +10,9 @@ use uuid::Uuid;
 pub struct SetAsideRow {
     pub version_id: Uuid,
     pub alternative_to: Uuid,
-    /// The drug as one line (term, dose, formulation, sig).
+    /// The drug as `drug_line_twin` spells it (term, dose, formulation, strength, route, sig,
+    /// `(info_source)`, coding display). It carries the info_source WORD in brackets, as the
+    /// set-aside's own twin does; `source` below is the finer detail, shown beside it.
     pub drug_line: String,
     /// Who reported it: the `source_detail` if given, else the `info_source` word.
     pub source: String,
@@ -30,7 +33,9 @@ pub async fn read_set_asides(
     let rows = client
         .query(
             "SELECT a.version_id::text, a.alternative_to::text, a.term, a.dose_amount, a.dose_unit, \
-                    a.formulation, a.sig, COALESCE(a.source_detail, a.info_source), a.why, a.t_recorded \
+                    a.formulation, a.sig, a.route, a.strength, \
+                    a.coding_system, a.coding_code, a.coding_display, a.info_source, \
+                    COALESCE(a.source_detail, a.info_source), a.why, a.t_recorded \
                FROM medication_set_aside a \
                JOIN medication_statement m \
                  ON m.medication_id = a.alternative_to AND m.patient_id = a.patient_id \
@@ -42,62 +47,48 @@ pub async fn read_set_asides(
         .context("reading the set-aside versions")?;
     rows.iter()
         .map(|r| {
-            let (term, amt, unit, form, sig): (
-                String,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            ) = (
-                r.try_get(2)?,
-                r.try_get(3)?,
-                r.try_get(4)?,
-                r.try_get(5)?,
-                r.try_get(6)?,
-            );
+            let text = |i: usize| r.try_get::<_, Option<String>>(i);
+            let (term, info_source) = (r.try_get::<_, String>(2)?, r.try_get::<_, String>(12)?);
+            let (amt, unit, form, sig) = (text(3)?, text(4)?, text(5)?, text(6)?);
+            let (route, strength) = (text(7)?, text(8)?);
+            let (csys, ccode, cdisp) = (text(9)?, text(10)?, text(11)?);
+            let coding = match (&csys, &ccode, &cdisp) {
+                (Some(system), Some(code), Some(display)) => Some(SubstanceCoding {
+                    system,
+                    code,
+                    display,
+                }),
+                _ => None,
+            };
+            // Rebuilt from the projected columns so the line is spelled by the ONE function the
+            // set-aside's own twin uses (`drug_line_twin`), never a second copy of its rules.
+            let drug = MedicationAssertion {
+                medication_id: "",
+                term: &term,
+                coding,
+                formulation: form.as_deref(),
+                dose_amount: amt.as_deref(),
+                dose_unit: unit.as_deref(),
+                sig: sig.as_deref(),
+                info_source: &info_source,
+                started: None,
+                started_precision: None,
+                safety: None,
+                charting: Some(Charting {
+                    route: route.as_deref(),
+                    strength: strength.as_deref(),
+                    ..Charting::default()
+                }),
+                source_note: None,
+            };
             Ok(SetAsideRow {
                 version_id: r.try_get::<_, String>(0)?.parse()?,
                 alternative_to: r.try_get::<_, String>(1)?.parse()?,
-                drug_line: drug_line(&term, amt, unit, form, sig),
-                source: r.try_get(7)?,
-                why: r.try_get(8)?,
-                t_recorded: r.try_get(9)?,
+                drug_line: drug_line_twin(&drug),
+                source: r.try_get(13)?,
+                why: r.try_get(14)?,
+                t_recorded: r.try_get(15)?,
             })
         })
         .collect()
-}
-
-/// `term amount unit formulation — sig`, each part only when present.
-fn drug_line(
-    term: &str,
-    amt: Option<String>,
-    unit: Option<String>,
-    form: Option<String>,
-    sig: Option<String>,
-) -> String {
-    let mut s = term.to_string();
-    for p in [amt, unit, form].into_iter().flatten() {
-        s.push(' ');
-        s.push_str(&p);
-    }
-    if let Some(sig) = sig {
-        s.push_str(" — ");
-        s.push_str(&sig);
-    }
-    s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::drug_line;
-
-    #[test]
-    fn the_drug_line_names_only_what_is_known() {
-        let s = |x: &str| Some(x.to_string());
-        assert_eq!(
-            drug_line("Lipitor", s("25"), s("mg"), None, s("BD")),
-            "Lipitor 25 mg — BD"
-        );
-        assert_eq!(drug_line("Lipitor", None, None, None, None), "Lipitor");
-    }
 }

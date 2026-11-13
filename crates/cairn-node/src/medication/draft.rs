@@ -9,7 +9,7 @@
 use super::assert::AssertMedicationInput;
 use super::charting::chart_body;
 use super::draft_versions_sign::{prepare_version, spend_row, submit, VersionToSign};
-use super::sealed_submit::{prepare_sealed, AuthorParams, Prepared};
+use super::sealed_submit::{prepare_sealed, AuthorParams};
 use anyhow::Context;
 use cairn_event::medication::Charting;
 use cairn_event::SigningKey;
@@ -304,11 +304,8 @@ pub async fn chart_draft_line(
 ) -> anyhow::Result<crate::db_diagnosis::Committed<(Uuid, Vec<Uuid>)>> {
     let (body, medication_id) =
         chart_body(client, node_kid, node_origin, patient, input, charting).await?;
-    let Prepared {
-        event_id,
-        signed_bytes,
-        dek,
-    } = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
+    let companion = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
+    let event_id = companion.event_id;
     let mut prepared_versions = Vec::with_capacity(versions.len());
     for v in versions {
         prepared_versions.push(
@@ -327,11 +324,7 @@ pub async fn chart_draft_line(
     }
 
     let tx = client.transaction().await?;
-    tx.execute(
-        "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed_bytes, &dek.as_bytes().as_slice()],
-    )
-    .await?;
+    submit(&tx, &companion).await?;
     for (p, _) in &prepared_versions {
         submit(&tx, p).await?;
     }
