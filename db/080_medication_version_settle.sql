@@ -295,4 +295,128 @@ CREATE CONSTRAINT TRIGGER medication_restore_pairs
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION medication_restore_pairs();
 
+-- §2. "Checked: not current" — a set-aside version looked at again and found still not current.
+-- Its own event type (ADR-0102 / spec §3.4): the type IS the verdict, so there is no flag to get
+-- backwards; the opposite outcome is a restore (§1). Never a medication line, never a thread:
+-- it is not in medication_statement, the active read or the safety projection. A second check of
+-- the same version is admitted and shown. Modelled on db/079 §2's set-aside type.
+
+INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
+    ('clinical.medication-set-aside-checked.asserted', 'additive', FALSE)
+ON CONFLICT (event_type) DO NOTHING;
+
+-- Two tiers (ADR-0056):
+--   STRUCTURAL, both doors: version_id a uuid string; info_source a non-blank string; the
+--     current-line keys absent; no §5.9 claim; the shared From:/why note judged as a charted line's.
+--   REFERENCE, the authoring door only: the schema tag, and version_id names a set-aside version
+--     of THIS chart. A peer's check may arrive before its version has synced; it is held and shown
+--     nowhere (readers join on version_id AND patient_id), so sync never wedges.
+CREATE OR REPLACE FUNCTION cairn_check_medication_version_checked(p_type text, b jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    p jsonb := b -> 'payload';
+    k text;
+BEGIN
+    -- ---- Structural: both doors ----
+    IF jsonb_typeof(p) IS DISTINCT FROM 'object' THEN
+        RAISE EXCEPTION 'medication version-checked: missing payload';
+    END IF;
+    IF jsonb_typeof(p -> 'version_id') IS DISTINCT FROM 'string'
+       OR NOT pg_input_is_valid(p ->> 'version_id', 'uuid') THEN
+        RAISE EXCEPTION 'medication version-checked: version_id must be a uuid string';
+    END IF;
+    IF jsonb_typeof(p -> 'info_source') IS DISTINCT FROM 'string'
+       OR btrim(p ->> 'info_source') = '' THEN
+        RAISE EXCEPTION 'medication version-checked: info_source must be a non-blank string';
+    END IF;
+    -- A check is not a charted line: refused even as a JSON null.
+    FOREACH k IN ARRAY ARRAY['charted_as', 'warning_override', 'restores'] LOOP
+        IF p ? k THEN
+            RAISE EXCEPTION 'medication version-checked: % must be absent (a check is not a medication line)', k;
+        END IF;
+    END LOOP;
+    PERFORM cairn_check_medication_source_note(b);
+    -- No §5.9 claim at BOTH doors (db/020 writes b->'safety' into event_log.safety and
+    -- cairn_patient_safety reports any non-null one). A JSON null reads as absent.
+    IF jsonb_typeof(b -> 'safety') IS NOT NULL AND jsonb_typeof(b -> 'safety') <> 'null' THEN
+        RAISE EXCEPTION 'medication version-checked: a check carries no safety claim';
+    END IF;
+
+    -- ---- References: the authoring door only (ADR-0056) ----
+    IF current_setting('cairn.remote_apply', true) = 'on' THEN
+        RETURN;
+    END IF;
+    IF b ->> 'schema_version' IS DISTINCT FROM 'clinical.medication-set-aside-checked/1' THEN
+        RAISE EXCEPTION 'medication version-checked: schema_version must be clinical.medication-set-aside-checked/1, got %', b ->> 'schema_version';
+    END IF;
+    -- A version submitted earlier in the same transaction is already projected, so it counts.
+    IF NOT EXISTS (SELECT 1 FROM medication_set_aside
+                    WHERE version_id = (p ->> 'version_id')::uuid
+                      AND patient_id = (b ->> 'patient_id')::uuid) THEN
+        RAISE EXCEPTION 'medication version-checked: version_id % is not a set-aside version on this chart', p ->> 'version_id';
+    END IF;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_check_medication_version_checked(text, jsonb) FROM PUBLIC;
+
+-- Register the floor + the hard twin requirement (#173). DO UPDATE converges on replay (#214).
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('clinical.medication-set-aside-checked.asserted', 'cairn_check_medication_version_checked',
+     'medication version-checked requires a non-empty authored twin (§3.13/§3.3)')
+ON CONFLICT (event_type) DO UPDATE SET
+    check_fn          = EXCLUDED.check_fn,
+    twin_required_msg = EXCLUDED.twin_required_msg
+WHERE (cairn_event_twin_check.check_fn, cairn_event_twin_check.twin_required_msg)
+      IS DISTINCT FROM (EXCLUDED.check_fn, EXCLUDED.twin_required_msg);
+
+-- The projection: one row per check event, keyed by its content address (what a shred scrubs by,
+-- db/037). Columns are final: a widened CREATE TABLE never reaches an existing table.
+CREATE TABLE IF NOT EXISTS medication_set_aside_checked (
+    content_address BYTEA PRIMARY KEY,
+    event_id        UUID NOT NULL,
+    patient_id      UUID NOT NULL,
+    version_id      UUID NOT NULL,
+    info_source     TEXT NOT NULL,
+    source_detail   TEXT,
+    why             TEXT,
+    t_recorded      TIMESTAMPTZ NOT NULL
+);
+GRANT SELECT ON medication_set_aside_checked TO cairn_agent;
+CREATE INDEX IF NOT EXISTS medication_set_aside_checked_patient_idx ON medication_set_aside_checked (patient_id);
+CREATE INDEX IF NOT EXISTS medication_set_aside_checked_version_idx ON medication_set_aside_checked (version_id);
+
+-- The applier reads the CLEAR payload (ADR-0052): NULL = no custody here, nothing to project. A
+-- shape it cannot represent is SKIPPED, never raised (a sealed peer body admitted without custody
+-- never met the structural floor; a raise would fail the late-custody heal). Insert-or-nothing.
+CREATE OR REPLACE FUNCTION medication_set_aside_checked_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    p jsonb := cairn_clear_payload(e);
+BEGIN
+    IF p IS NULL
+       OR jsonb_typeof(p -> 'version_id') IS DISTINCT FROM 'string'
+       OR NOT pg_input_is_valid(p ->> 'version_id', 'uuid')
+       OR jsonb_typeof(p -> 'info_source') IS DISTINCT FROM 'string' THEN
+        RETURN;
+    END IF;
+    INSERT INTO medication_set_aside_checked
+        (content_address, event_id, patient_id, version_id, info_source, source_detail, why, t_recorded)
+    VALUES (e.content_address, e.event_id, e.patient_id, (p ->> 'version_id')::uuid,
+            p ->> 'info_source', p ->> 'source_detail', p ->> 'why',
+            to_timestamp(e.hlc_wall / 1000.0))
+    ON CONFLICT (content_address) DO NOTHING;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION medication_set_aside_checked_apply(event_log) FROM PUBLIC;
+
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('clinical.medication-set-aside-checked.asserted', 'medication_set_aside_checked_apply',
+     ARRAY['medication_set_aside_checked'], 20, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
+
 COMMIT;

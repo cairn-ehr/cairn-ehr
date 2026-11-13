@@ -592,6 +592,18 @@ BEGIN
     ) t
     WHERE t.content_address = v_ca
     LIMIT 1;
+    -- db/080 §2: a "checked: not current" belongs to its VERSION's companion thread, so a grade on
+    -- that thread covers the check's note too. Its own probe, behind the first resolution: the
+    -- table arrives in a later file than the ones probed above, and its absence must not blind
+    -- the threads those already resolve. The join is on version_id AND patient_id, as readers do.
+    IF v_thread IS NULL AND to_regclass('public.medication_set_aside_checked') IS NOT NULL THEN
+        SELECT s.alternative_to INTO v_thread
+          FROM medication_set_aside_checked k
+          JOIN medication_set_aside s
+            ON s.version_id = k.version_id AND s.patient_id = k.patient_id
+         WHERE k.content_address = v_ca
+         LIMIT 1;
+    END IF;
     RETURN v_thread;
 END;
 $$;

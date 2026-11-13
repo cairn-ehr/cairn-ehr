@@ -390,6 +390,10 @@ BEGIN
         IF to_regclass('public.medication_restore') IS NOT NULL THEN
             DELETE FROM medication_restore WHERE content_address = v_ca;
         END IF;
+        -- A "checked: not current" (db/080 §2): the checker's note, one row per event. Guarded the same way.
+        IF to_regclass('public.medication_set_aside_checked') IS NOT NULL THEN
+            DELETE FROM medication_set_aside_checked WHERE content_address = v_ca;
+        END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
         END IF;
