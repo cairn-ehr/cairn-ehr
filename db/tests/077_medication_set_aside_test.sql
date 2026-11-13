@@ -80,6 +80,9 @@ BEGIN
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"charted_as":"brand"}'), 'charted_as');
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"warning_override":{"reason":"x"}}'), 'warning_override');
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"why":true}'), 'why');
+        PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"route":{"a":1}}'), 'route');
+        PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live()) || '{"safety":{"rung":"existence"}}', 'safety');
+        PERFORM pg_temp.accepts(pg_temp.v(pg_temp.live(), '{"route":"oral"}'));
     END LOOP;
 END $$;
 
@@ -94,13 +97,11 @@ BEGIN
     PERFORM pg_temp.refuses(
         jsonb_set(pg_temp.v(pg_temp.live()), '{schema_version}', '"clinical.medication-set-aside/2"'),
         'schema_version');
-    PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live()) || '{"safety":{"rung":"existence"}}', 'safety');
     -- The same refusals' bodies are ADMITTED at the remote door (orphan, other chart, stopped).
     PERFORM pg_temp.door(true);
     PERFORM pg_temp.accepts(pg_temp.v(pg_temp.foreign_()));
     PERFORM pg_temp.accepts(pg_temp.v(gen_random_uuid()::text));
     PERFORM pg_temp.accepts(pg_temp.v(pg_temp.ceased()));
-    PERFORM pg_temp.accepts(pg_temp.v(pg_temp.live()) || '{"safety":{"rung":"existence"}}');
 END $$;
 
 -- ---- Registration: the type is classified, floored, and projected ----

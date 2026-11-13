@@ -84,10 +84,9 @@ COMMIT;
 -- peer, and it stops a version posing as a charted line.
 --
 -- THE §5.9 CLAIM. There is no per-type safety rule in db/049: the signal is a field on the
--- envelope, shape-checked once (cairn_check_safety_signal) at the strict door for every type. So
--- the guarantee that a version asserts no safety claim is (1) the builder carries none and
--- (2) this floor refuses a non-null `safety` at the authoring door. Not at the remote door: the
--- signal rides a clinical event and a refusal there would drop the event (ADR-0060).
+-- envelope that db/020 writes into event_log.safety for EVERY type, and cairn_patient_safety
+-- reports any non-null one. So this floor refuses a non-null `safety` at BOTH doors (no honest
+-- writer emits one; the builder carries none).
 -- ===========================================================================================
 BEGIN;
 
@@ -128,6 +127,17 @@ BEGIN
     -- The drug's coding and the From:/why notes are judged by the same functions as a charted line.
     PERFORM cairn_check_medication_coding(p);
     PERFORM cairn_check_medication_source_note(b);
+    -- route / substance.strength / components: the projection reads them with `->>`, so a peer's
+    -- object must be refused here. With charted_as absent (refused above) its closed-vocabulary
+    -- arm never fires; it also handles both doors itself.
+    PERFORM cairn_check_medication_charting(p);
+    -- No §5.9 claim, at BOTH doors: db/020 writes b->'safety' into event_log.safety for every
+    -- type and cairn_patient_safety reports any non-null one, so a peer's claim on a set-aside
+    -- version would become a live safety signal on the chart. No honest writer emits one, so
+    -- refusing it pens nothing legitimate. A JSON null reads as absent.
+    IF jsonb_typeof(b -> 'safety') IS NOT NULL AND jsonb_typeof(b -> 'safety') <> 'null' THEN
+        RAISE EXCEPTION 'medication set-aside: a set-aside version carries no safety claim';
+    END IF;
 
     -- ---- References: the authoring door only (ADR-0056) ----
     IF current_setting('cairn.remote_apply', true) = 'on' THEN
@@ -135,9 +145,6 @@ BEGIN
     END IF;
     IF b ->> 'schema_version' IS DISTINCT FROM 'clinical.medication-set-aside/1' THEN
         RAISE EXCEPTION 'medication set-aside: schema_version must be clinical.medication-set-aside/1, got %', b ->> 'schema_version';
-    END IF;
-    IF jsonb_typeof(b -> 'safety') IS NOT NULL AND jsonb_typeof(b -> 'safety') <> 'null' THEN
-        RAISE EXCEPTION 'medication set-aside: a set-aside version carries no safety claim';
     END IF;
     v_alt := (p ->> 'alternative_to')::uuid;
     -- The companion must be a thread on THIS chart (the body's patient_id; the db/075 idiom). A

@@ -227,6 +227,28 @@ async fn a_set_aside_is_never_a_current_medication() {
         .await,
         0
     );
+    // The chart's safety report lists nothing for it, and the current-lines read (the allergy
+    // check's line set) holds only the real line.
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM cairn_patient_safety($1::text::uuid)",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "a set-aside version raises no safety signal");
+    let terms: Vec<String> = c
+        .query(
+            "SELECT term FROM patient_medication_current WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(terms, vec!["metoprolol".to_string()]);
     // No §5.9 claim rides it (the builder carries none, and the floor refuses one: next test).
     let safety_null: bool = c
         .query_one(
@@ -293,18 +315,49 @@ async fn structural_shape_is_refused_at_both_doors() {
 }
 
 #[tokio::test]
-async fn a_safety_claim_is_refused_at_the_authoring_door() {
+async fn a_safety_claim_is_refused_at_both_doors() {
     rig!(c, _sk, _kid);
     let (v, a) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
     let mut b = floor_body(json!({"version_id": v, "alternative_to": a,
                                   "info_source": "external-record", "substance": {"term": "x"}}));
     b["safety"] = json!({"rung": "existence"});
-    let e = floor(&mut c, &b, false)
-        .await
-        .expect_err("a claim is refused");
-    assert!(e.contains("safety"), "{e}");
-    // The remote door never refuses a field that rides a peer's clinical event (ADR-0060).
+    // db/020 writes b->'safety' into event_log.safety for EVERY type and cairn_patient_safety
+    // reports it, so a peer's claim would become a live safety signal: refused at both doors.
+    for remote in [false, true] {
+        let e = floor(&mut c, &b, remote)
+            .await
+            .expect_err("a claim is refused");
+        assert!(e.contains("safety"), "remote={remote}: {e}");
+    }
+    // A JSON null reads as absent.
+    b["safety"] = json!(null);
     floor(&mut c, &b, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_object_route_strength_or_components_is_refused_at_both_doors() {
+    rig!(c, _sk, _kid);
+    let (v, a) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    let ok = json!({"version_id": v, "alternative_to": a, "info_source": "external-record",
+                    "route": "oral", "substance": {"term": "Lipitor", "strength": "40 mg"}});
+    floor(&mut c, &floor_body(ok.clone()), true).await.unwrap();
+    for (frag, key, bad) in [
+        ("route", "route", json!({"a": 1})),
+        (
+            "strength",
+            "substance",
+            json!({"term": "x", "strength": {"a": 1}}),
+        ),
+    ] {
+        let mut p = ok.clone();
+        p[key] = bad;
+        for remote in [false, true] {
+            let e = floor(&mut c, &floor_body(p.clone()), remote)
+                .await
+                .expect_err(&format!("{frag} must be refused (remote={remote})"));
+            assert!(e.contains(frag), "wanted {frag:?} in {e}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -495,4 +548,24 @@ async fn a_companion_in_the_same_transaction_satisfies_the_floor() {
         .await,
         1
     );
+}
+
+#[tokio::test]
+async fn a_peers_set_aside_with_a_safety_claim_is_not_admitted_and_raises_no_signal() {
+    rig!(c, sk, kid);
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let mut body = version_body(&c, &kid, p, Uuid::now_v7(), med, |_| {}).await;
+    body.hlc = peer_hlc(wall);
+    body.safety = Some(json!({"rung": "existence"}));
+    let _ = apply_remote(&c, &sk, &body).await;
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM cairn_patient_safety($1::text::uuid)",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "no safety signal from a set-aside version");
 }
