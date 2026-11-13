@@ -132,6 +132,7 @@ async fn chart(
         &Charting::default(),
         &author,
         versions,
+        None,
     )
     .await
 }

@@ -35,6 +35,9 @@ pub mod sealed_submit;
 pub mod signoff;
 // Public for the CLI and the window: every production list read runs in one snapshot (#864).
 pub mod snapshot;
+// Slice 2b: settle a set-aside version (restore / check), and read the settlements back.
+pub mod version_settle;
+pub mod version_settle_read;
 mod withhold;
 
 pub use assert::{

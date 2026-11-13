@@ -189,6 +189,7 @@ fn version(id: u128, alt: u128) -> SetAsideRow {
     SetAsideRow {
         version_id: u(id),
         alternative_to: u(alt),
+        patient_id: u(0),
         drug_line: String::new(),
         source: String::new(),
         why: None,

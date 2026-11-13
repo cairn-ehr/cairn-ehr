@@ -92,6 +92,7 @@ async fn sign(
         &Charting::default(),
         &author,
         &[],
+        None,
     )
     .await
     .map(|c| cairn_node::db_diagnosis::Committed {

@@ -10,6 +10,8 @@ use uuid::Uuid;
 pub struct SetAsideRow {
     pub version_id: Uuid,
     pub alternative_to: Uuid,
+    /// The chart the version is on (its own `patient_id`): settlements join on it (slice 2b).
+    pub patient_id: Uuid,
     /// The drug as `drug_line_twin` spells it (term, dose, formulation, strength, route, sig,
     /// `(info_source)`, coding display). It carries the info_source WORD in brackets, as the
     /// set-aside's own twin does; `source` below is the finer detail, shown beside it.
@@ -35,7 +37,7 @@ pub async fn read_set_asides(
             "SELECT a.version_id::text, a.alternative_to::text, a.term, a.dose_amount, a.dose_unit, \
                     a.formulation, a.sig, a.route, a.strength, \
                     a.coding_system, a.coding_code, a.coding_display, a.info_source, \
-                    COALESCE(a.source_detail, a.info_source), a.why, a.t_recorded \
+                    COALESCE(a.source_detail, a.info_source), a.why, a.t_recorded, a.patient_id::text \
                FROM medication_set_aside a \
                JOIN medication_statement m \
                  ON m.medication_id = a.alternative_to AND m.patient_id = a.patient_id \
@@ -88,6 +90,7 @@ pub async fn read_set_asides(
                 source: r.try_get(13)?,
                 why: r.try_get(14)?,
                 t_recorded: r.try_get(15)?,
+                patient_id: r.try_get::<_, String>(16)?.parse()?,
             })
         })
         .collect()

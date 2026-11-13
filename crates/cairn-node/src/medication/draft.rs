@@ -10,6 +10,7 @@ use super::assert::AssertMedicationInput;
 use super::charting::chart_body;
 use super::draft_versions_sign::{prepare_version, spend_row, submit, VersionToSign};
 use super::sealed_submit::{prepare_sealed, AuthorParams};
+use super::version_settle::{prepare_stops, RestoreToSign};
 use anyhow::Context;
 use cairn_event::medication::Charting;
 use cairn_event::SigningKey;
@@ -370,6 +371,11 @@ pub async fn writer_drafts(
 /// version's spend answer `changed` and roll everything back. A lost commit is marked
 /// outcome-unknown (#814) exactly as `seal_sign_submit`'s attested arm does.
 ///
+/// A RESTORE line (`restore` Some, slice 2b) first stops every line in `restore.stop` (one
+/// cessation each, submitted FIRST so db/080's pairing check passes even IMMEDIATE), and the line
+/// carries `restores` = `restore.version_id`, the ONE source of it: a caller's own
+/// `charting.restores` is refused. A failed spend rolls the stops back with everything else.
+///
 /// Returns the companion's thread and the versions' ids; `event_id` is the companion's.
 #[allow(clippy::too_many_arguments)] // signer + node context + the line's identity + its content
 pub async fn chart_draft_line(
@@ -386,9 +392,34 @@ pub async fn chart_draft_line(
     charting: &Charting<'_>,
     author: &AuthorParams<'_>,
     versions: &[VersionToSign<'_>],
+    restore: Option<&RestoreToSign<'_>>,
 ) -> anyhow::Result<crate::db_diagnosis::Committed<(Uuid, Vec<Uuid>)>> {
+    anyhow::ensure!(
+        restore.is_none() || charting.restores.is_none(),
+        "a restore line's `restores` comes from its RestoreToSign, never from its charting"
+    );
+    let stops = match restore {
+        Some(r) => {
+            prepare_stops(
+                client,
+                node_sk,
+                node_kid,
+                node_origin,
+                patient,
+                &r.stop,
+                author,
+            )
+            .await?
+        }
+        None => Vec::new(),
+    };
+    let restores = restore.map(|r| r.version_id.to_string());
+    let charting = Charting {
+        restores: restores.as_deref().or(charting.restores),
+        ..*charting
+    };
     let (body, medication_id) =
-        chart_body(client, node_kid, node_origin, patient, input, charting).await?;
+        chart_body(client, node_kid, node_origin, patient, input, &charting).await?;
     let companion = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
     let event_id = companion.event_id;
     let mut prepared_versions = Vec::with_capacity(versions.len());
@@ -409,6 +440,9 @@ pub async fn chart_draft_line(
     }
 
     let tx = client.transaction().await?;
+    for stop in &stops {
+        submit(&tx, stop).await?;
+    }
     submit(&tx, &companion).await?;
     for (p, _) in &prepared_versions {
         submit(&tx, p).await?;

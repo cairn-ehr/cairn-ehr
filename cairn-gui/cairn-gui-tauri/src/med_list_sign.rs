@@ -343,6 +343,7 @@ async fn sign_line(
         &charting,
         author,
         &versions,
+        None,
     )
     .await
     .map(|c| c.value.1.len())
