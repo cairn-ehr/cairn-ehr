@@ -52,7 +52,7 @@ Every batch charting slice 1 rule below still holds; a version's spend is slice 
   read, never taken from the webview. A version beside a ticked list line goes in that line's one transaction; beside a
   charted current line it signs alone; any other stays with its reason. A version's floor refusal rolls the companion
   back with it. **Tempting wrong fixes:** sign the version in its own transaction before its companion (the floor
-  refuses a companion that is not projected); trust `set_aside_of` from the webview; let a version go in when its
+  refuses a VERSION whose companion is not projected); trust `set_aside_of` from the webview; let a version go in when its
   companion was refused (a version in the record beside nothing). Pins: `med_list_versions_db_tests.rs::one_sign_charts_the_line_and_its_version_together`,
   `a_webview_naming_another_companion_cannot_move_a_version`, `a_refused_companion_keeps_its_versions_unsigned`,
   `medication_set_aside_sign.rs::a_version_spend_that_fails_rolls_back_the_companion_too`.

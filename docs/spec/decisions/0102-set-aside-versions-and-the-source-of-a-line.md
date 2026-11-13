@@ -11,8 +11,9 @@
 - **Builds on:** [ADR-0099](0099-charting-a-medication.md) (the charted line, `info_source`, the check) ·
   [ADR-0100](0100-charting-a-list-under-one-signature.md) (the list, one Sign, the spend in the line's transaction) ·
   [ADR-0052](0052-born-sealed-clinical-bodies.md) and [ADR-0053](0053-per-write-human-authorship.md) (sealed bodies, per-write
-  authorship) · [ADR-0056](0056-unknown-event-types-admitted-uninterpreted.md) (structure at both doors, the rest at the
-  authoring door) · [ADR-0021](0021-layering-the-node-api-and-ui-pluralism.md) (soft policy in the window)
+  authorship) · [ADR-0051](0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) (structure at both doors,
+  vocabulary at the authoring door) · [ADR-0056](0056-unknown-event-types-admitted-uninterpreted.md) (a peer's event of a
+  type this node does not know is admitted, never refused) · [ADR-0021](0021-layering-the-node-api-and-ui-pluralism.md) (soft policy in the window)
 
 ## Context
 
@@ -39,7 +40,7 @@ restores a version and lets a reviewer mark one "checked: not current".
    them serialises byte-identically to one built before they existed. The twin appends ` — from {detail}` and
    ` — why: {why}` in that order (twin = wire).
 2. **The floor is `db/079` §1**, called from `db/031`'s assertion check. Both doors refuse a present key that is not
-   a string; a JSON null reads as absent at both doors (as `db/077` reads every optional key; ruling R2), so a peer
+   a string; a JSON null reads as absent at both doors (as `db/077` reads every optional key), so a peer
    that emits nulls is not penned. The authoring door alone also refuses a blank value or one with a control
    character (newline and tab included: these are one-line labels). `db/077` gains the two projection columns on
    `medication_charting`, paired with `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for a table made before them.
@@ -48,14 +49,15 @@ restores a version and lets a reviewer mark one "checked: not current".
    (`info_source_of`): *Patient* and *Carer / family* to `patient-reported`; *GP letter* and *Pharmacy* to
    `external-record`; *Packets / Webster pack seen* to `clinician-observed`; *Other* to `unknown`. The free text beside
    it becomes `source_detail`, or, when blank, the label itself (`stamp`).
-4. **"From:" stamps only a NEW line** (ruling R12): a line with no stored row yet and no source of its own. A line
+4. **"From:" stamps only a NEW line**: a line with no stored row yet and no source of its own. A line
    typed before "From:" keeps whatever it stored, none included, so a typo fix never signs a provenance nobody gave
    and never costs the line its hand tick. A line may name its own source, which "From:" never overwrites. With no
    "From:" set, nothing is stamped and slice 1a's press default stands.
 5. **The preset is stored with the writer.** `medication_draft_from` holds one row per (chart, writer), a NULL writer
    being its own bucket, so the next line starts with it after a crash. It stores the exact label with a `CHECK` on
-   the six (ruling R6), so `info_source_of` can never silently miss a stored label; renaming a label is an in-place
-   `db/078` edit. The row is working state like the lines: never exported, never backed up.
+   the six, so `info_source_of` can never silently miss a stored label; renaming a label is not
+   an in-place edit: the constraint reaches an existing table only through a guarded block that adds it when absent, so
+   it must be dropped and re-added, and `info_source_of` and the window's preset list changed with it. The row is working state like the lines: never exported, never backed up.
 
 ### The set-aside version: its own type, never a flag
 
@@ -71,11 +73,11 @@ restores a version and lets a reviewer mark one "checked: not current".
    type, which every existing reader would then have to remember to filter.
 8. **The floor refuses `charted_as`, `warning_override` and `safety` at BOTH doors.** A version was never charted
    and overrode nothing, so no honest writer emits them and refusing them pens nothing legitimate. The `safety` ban
-   has a specific reason (ruling R3): `db/020` copies the envelope's `safety` into `event_log.safety` for every type,
+   has a specific reason: `db/020` copies the envelope's `safety` into `event_log.safety` for every type,
    and `cairn_patient_safety` reports any event carrying one, so a peer's claim on a set-aside would become a live
    safety signal on the chart. The structural shape (ids, `substance.term`, `info_source`, the coding, route,
    strength, components, the two notes) is checked at both doors too.
-9. **The references are checked at the authoring door only** (ADR-0056): the schema tag, that `alternative_to` is a
+9. **The references are checked at the authoring door only** (ADR-0051): the schema tag, that `alternative_to` is a
    thread on this chart, that it is still current (not stopped), and that `version_id` is new. A companion submitted
    earlier in the same transaction counts, because it is already projected.
 10. **The remote door tolerates an orphan.** A peer may send a version before its companion has synced; the event is
@@ -103,22 +105,22 @@ restores a version and lets a reviewer mark one "checked: not current".
     aside — not current" where the tick's words were.
 15. **Provenance edits are content changes, in the door.** A change to a line's source, why or mark clears a hand
     tick, because the signature vouches for them. It does NOT clear a stored untick (`held`): only the drug's words
-    do (ruling R15), otherwise adding a "why" to a line the clinician had unticked would re-derive the default tick
+    do, otherwise adding a "why" to a line the clinician had unticked would re-derive the default tick
     and the line would tick itself. The save door treats an omitted parameter as null, so the window sends all four
     own fields on every save; and a read brings back the line's own fields even while it is being typed, unless a
-    local edit changed that field since the last send (ruling R18), which keeps a stamped source from being wiped by
+    local edit changed that field since the last send, which keeps a stamped source from being wiped by
     the next autosave.
-16. **Unmarking leaves the line held** (ruling R1). Removing the mark through the save door, or deleting a companion
+16. **Unmarking leaves the line held**. Removing the mark through the save door, or deleting a companion
     (which unmarks its versions, with a fresh `saved_at`), leaves the line unticked with its tick gone: a version the
     clinician believed wrong must never become default-ticked.
 17. **A version signs only in or after its companion.** At Sign `plan_versions` derives every version's companion
-    from the STORED mark on the fresh read, never from the webview (ruling R9), and `version_holds` re-checks it. A
+    from the STORED mark on the fresh read, never from the webview, and `version_holds` re-checks it. A
     version beside a ticked list line goes in that line's one transaction (`chart_draft_line`: the companion's event
     first, then each version's, because `alternative_to` needs the companion's thread). A version beside a charted
     current line signs alone, with its spend, in its own transaction (`set_aside_draft_line`), after every ticked
     line, even when nothing is ticked. Any other version stays in the list with its line saying why ("its line was
     not charted", or the companion is gone, stopped, or now another drug).
-18. **The spends run the other way round** (ruling R5): every version's draft row is spent before its companion's,
+18. **The spends run the other way round**: every version's draft row is spent before its companion's,
     because the delete door unmarks and re-stamps the versions of a line it deletes, and a version spent after that
     would answer `changed` and roll everything back.
 19. **A version's refusal rolls back its companion.** The floor refusing a version (a companion stopped since the
@@ -126,16 +128,17 @@ restores a version and lets a reviewer mark one "checked: not current".
     stay in the list. A lost commit is reported not known for the companion and its versions together.
 20. **Sign says it records versions.** Near Sign the list reads "Sign also records {n} set-aside version(s), as not
     current" when it will, because a Sign with nothing ticked still signs a version beside a charted line. The count
-    comes from the same grouping Sign uses (ruling R16), so it never names a version Sign would keep.
+    comes from the same grouping Sign uses, so it never names a version Sign would keep.
 
 ### Reading it back
 
 21. **A charted line shows its versions collapsed under it**, one closed `<details>`, "{n} other version(s)", read in
     the same snapshot as the chart. A line is `{source}: {drug line} — set aside, not current`, then ` — {why}` when
-    given. The drug line is `drug_line_twin`'s, rebuilt from the projected columns (ruling R8), so there is one
+    given. The drug line is `drug_line_twin`'s, rebuilt from the projected columns, so there is one
     spelling of a drug line and a version differing only in route reads differently from its companion. That twin
-    carries the `info_source` word in brackets (ruling R11), so beside a free-text source the line reads e.g. "GP
-    letter: Lipitor 25 mg (external-record) — set aside, not current". The versions of a since-stopped line stay shown
+    carries the `info_source` word in parentheses and, when the coding's display differs from the term, the display in
+    square brackets, so the line reads e.g. "GP letter: Lipitor 25 mg (external-record) [atorvastatin] — set aside, not
+    current". The versions of a since-stopped line stay shown
     under it.
 22. **Soft policy.** Which lines may be set aside, the pick ("Version of which line?" when two or more qualify), the
     copy and the collapse live in the window. The type, its refusals and the projection are the floor and the same
