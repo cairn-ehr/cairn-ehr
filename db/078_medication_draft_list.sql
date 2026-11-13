@@ -147,8 +147,8 @@ CREATE TABLE IF NOT EXISTS medication_draft_line_deleted (
 -- The writer's "From:" row for one chart (slice 2a): the category preset and detail they last
 -- chose, kept so the next line they add starts with it. One row per (chart, writer); a NULL
 -- writer is its own bucket (NULLS NOT DISTINCT). Like the lines, never exported or backed up.
--- It lives only as long as the writer has a line here: the delete door drops it with the last
--- (ruling R22), so a "From:" given at one admission never stamps the next one's lines.
+-- The delete door drops it with the writer's last line here, so a completed Sign resets it;
+-- a "From:" set with no line ever added is never dropped (#1090).
 CREATE TABLE IF NOT EXISTS medication_draft_from (
     patient_id uuid NOT NULL,
     writer     text,

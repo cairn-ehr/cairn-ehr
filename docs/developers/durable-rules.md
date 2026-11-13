@@ -48,8 +48,8 @@ Every batch charting slice 1 rule below still holds; a version's spend is slice 
   line's hand tick); guess `info_source` from the free text. Pins: `med_list_source_db_tests.rs::editing_a_line_typed_before_from_keeps_its_own_source_and_tick`,
   `from_sets_each_new_lines_source_and_a_line_can_change_its_own`, `draft_versions_tests.rs::each_preset_maps_to_its_category`,
   `every_stored_preset_label_maps_to_a_category`, `medication_draft_list_versions_store.rs::the_from_row_refuses_an_unknown_preset`.
-- **"From:" lives only while the writer has a line on the chart** (ruling R22): the delete door drops the row with their
-  last line, so a completed Sign resets it. **Tempting wrong fix:** keep it "for convenience" (Monday's "Packets seen"
+- **The delete door drops "From:" with the writer's last line on the chart**, so a completed Sign resets it (a "From:"
+  set with no line ever added is not dropped yet, #1090). **Tempting wrong fix:** keep it "for convenience" (Monday's "Packets seen"
   silently stamps Friday's lines). Pins: `medication_draft_list_versions_store.rs::the_last_line_leaving_resets_from`,
   `from_survives_while_a_line_remains`.
 - **A version signs only in or after its companion**, and its companion is re-derived from the STORED mark on the fresh

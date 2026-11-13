@@ -58,9 +58,9 @@ restores a version and lets a reviewer mark one "checked: not current".
    the six, so `info_source_of` can never silently miss a stored label; renaming a label is not an in-place edit: the
    constraint reaches an existing table only through a guarded block that adds it when absent, so it must be dropped
    and re-added, and `info_source_of` and the window's preset list changed with it. The row is working state like the
-   lines: never exported, never backed up. It lives only while the writer has a line on the chart: the delete door
-   drops it with their last line, and every Sign spends through that door, so a completed Sign resets "From:" and a
-   "From:" given at one admission never stamps the next one's lines.
+   lines: never exported, never backed up. The delete door drops it with the writer's last line on the chart, and
+   every Sign spends through that door, so a completed Sign resets "From:". Not yet guaranteed: a "From:" set with no
+   line ever added is never dropped (#1090).
 
 ### The set-aside version: its own type, never a flag
 
