@@ -36,6 +36,17 @@
 -- `restores` from version to line as far as it goes. The window lists what a restore must stop
 -- with the SAME function, so what the window offers and what the floor demands cannot drift.
 --
+-- A DOCUMENTED LIMIT: AN ERASED LINK (#1097). The closure walks projected rows, so a shred that
+-- deletes one of them cuts the chain:
+--   (1) a shredded set-aside VERSION in the middle of a chain hides the whole subtree below it
+--       from the lineage;
+--   (2) a shredded restore EVENT whose line stays current through a later re-assertion loses
+--       its medication_restore row, so that line drops out of every lineage.
+-- In both cases a later restore of a sibling version passes, leaving two current lines.
+-- Accepted, not fixed: it needs a deliberate erasure; both lines stay visible on the chart (an
+-- over-statement, never a silent loss); erasure is best-effort and declared (ADR-0005); and the
+-- erased event was the only holder of the link, so nothing left could restore it.
+--
 -- WHY `restores` HAS ITS OWN PROJECTION (ruling R5), medication_restore, rather than a column on
 -- medication_charting. That table holds one HLC-winner row per thread, so a sealed restore that
 -- heals late (its key arrives after a newer re-assertion) would lose to the newer row, and a
