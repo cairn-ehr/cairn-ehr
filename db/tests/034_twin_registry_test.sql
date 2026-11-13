@@ -31,14 +31,15 @@ END $$;
 --    + db/074's clinical.allergy.asserted and clinical.allergy-none.asserted (allergy slice 1) = 31
 --    + db/075's clinical.allergy-challenge.asserted and clinical.allergy-retraction.asserted
 --      (allergy slice 2) = 33
---    + db/079's clinical.medication-set-aside.asserted (batch charting slice 2a) = 34.
+--    + db/079's clinical.medication-set-aside.asserted (batch charting slice 2a) = 34
+--    + db/080 §2's clinical.medication-set-aside-checked.asserted (batch charting slice 2b) = 35.
 --    Kept in lockstep with the Rust mirror
---    (twin_registry.rs::registry_is_seeded_with_the_expected_mapping, which asserts 34).
+--    (twin_registry.rs::registry_is_seeded_with_the_expected_mapping, which asserts 35).
 DO $$
 DECLARE n int;
 BEGIN
     SELECT count(*) INTO n FROM cairn_event_twin_check;
-    IF n <> 34 THEN RAISE EXCEPTION 'FAIL: expected 34 twin-check rows, got %', n; END IF;
+    IF n <> 35 THEN RAISE EXCEPTION 'FAIL: expected 35 twin-check rows, got %', n; END IF;
 END $$;
 
 -- 3. Dispatch runs the registered check: a self-link raises via the dispatcher.

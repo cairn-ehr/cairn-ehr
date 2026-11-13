@@ -13,7 +13,10 @@
 //!   (`event_type_class` in the projection-registry trigger, `contributor_role` in
 //!   `cairn_check_contributors`, `medication_coding_system` reached via
 //!   `cairn_check_coding_object`). A caller learns strictly less than the door already tells
-//!   it by refusing, and the refusal messages are deliberately legible.
+//!   it by refusing, and the refusal messages are deliberately legible. One exception writes:
+//!   `cairn_check_medication_restores` (db/080) records a restore's commit-time pairing in
+//!   `medication_restore_pending`, a table `PUBLIC` cannot touch, so a `PUBLIC` caller could
+//!   not reach that write even with `EXECUTE`.
 //!
 //!   The earlier version of this paragraph said "pure `jsonb` shape checks: they read no
 //!   table". That was false for four of the twenty-two, which does not change the conclusion

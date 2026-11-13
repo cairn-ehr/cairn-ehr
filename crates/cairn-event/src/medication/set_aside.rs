@@ -51,7 +51,13 @@ pub fn set_aside_body(s: &MedicationSetAside) -> Value {
 fn stripped_body(s: &MedicationSetAside) -> Value {
     let mut v = medication_assertion_body(s.drug);
     let o = v.as_object_mut().expect("assertion body is an object");
-    for k in ["medication_id", "charted_as", "warning_override", "safety"] {
+    for k in [
+        "medication_id",
+        "charted_as",
+        "warning_override",
+        "restores",
+        "safety",
+    ] {
         o.remove(k);
     }
     o.insert("version_id".into(), json!(s.version_id));
@@ -139,6 +145,18 @@ mod tests {
     fn a_charted_drug_trips_the_debug_assert() {
         let d = charted_drug();
         set_aside_body(&set_aside(&d));
+    }
+
+    #[test]
+    fn a_set_aside_body_never_carries_restores() {
+        let mut d = charted_drug();
+        d.charting.as_mut().unwrap().restores = Some("44444444-4444-7444-8444-444444444444");
+        assert!(medication_assertion_body(&d)
+            .as_object()
+            .unwrap()
+            .contains_key("restores"));
+        let v = stripped_body(&set_aside(&d));
+        assert!(!v.as_object().unwrap().contains_key("restores"), "{v}");
     }
 
     #[test]

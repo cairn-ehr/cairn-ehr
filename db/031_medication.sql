@@ -69,6 +69,8 @@ BEGIN
         PERFORM cairn_check_medication_charting(p);
         -- source_detail / why ("From:" and the rationale) are judged in db/079.
         PERFORM cairn_check_medication_source_note(b);
+        -- restores (a restore of a set-aside version, slice 2b) is judged in db/080.
+        PERFORM cairn_check_medication_restores(b);
     END IF;
     -- The cessation verb carries only medication_id (+ optional stopped/reason) — done.
 END;

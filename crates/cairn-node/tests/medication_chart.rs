@@ -87,6 +87,7 @@ fn combination<'a>(parts: &'a [Component<'a>], against: &'a [OverrideRef<'a>]) -
             reason: "no alternative in the remote clinic",
             against,
         }),
+        ..Charting::default()
     }
 }
 
