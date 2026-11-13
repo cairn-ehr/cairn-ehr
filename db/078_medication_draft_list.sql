@@ -39,8 +39,9 @@
 --     given against are the ones seen when it was GIVEN (see the save door).
 --   * PROVENANCE IS CONTENT (batch charting slice 2a): the line's source ("From:" category and
 --     detail), its "why" and its set-aside mark (the companion line it is a version of) are
---     things the signature will vouch for, so changing any of them clears a hand tick and a
---     veto here in the door, exactly as changed words do. A set-aside line is never hand-ticked
+--     things the signature will vouch for, so changing any of them clears a hand tick here in
+--     the door, exactly as changed words do. It never clears a veto (ruling R15): an untick is
+--     about the drug, and only the drug's words clear it. A set-aside line is never hand-ticked
 --     (it is signed as a version, not by tick). Clearing the mark through the save door leaves
 --     the line HELD (ruling R1): a version the clinician thought wrong must never silently
 --     become default-ticked. Deleting a companion clears the mark of its versions the same way.
@@ -199,6 +200,7 @@ DECLARE
     v_writer  text := cairn_vault_staff_id(p_writer);
     v_row     medication_draft_line%ROWTYPE;
     v_changed boolean;
+    v_drug_changed boolean;
     v_unmarked boolean;
     v_hand    boolean := coalesce(p_hand_ticked, false) AND p_set_aside_of IS NULL;
     v_now     timestamptz;
@@ -225,11 +227,14 @@ BEGIN
         IF v_row.terminal_id IS DISTINCT FROM p_terminal THEN RETURN 'moved'; END IF;
         IF v_row.writer IS DISTINCT FROM v_writer THEN RETURN 'not-yours'; END IF;
         -- A tick vouches for THIS content; changed content voids it, whatever the caller sent.
-        v_changed := v_row.line_text IS DISTINCT FROM p_text
+        -- A veto (held) covers the DRUG only (ruling R15): a new source or why voids a hand tick
+        -- but never the clinician's untick; only the drug's words clear that.
+        v_drug_changed := v_row.line_text IS DISTINCT FROM p_text
                   OR v_row.parts IS DISTINCT FROM coalesce(p_parts, '[]'::jsonb)
                   OR v_row.charted_as IS DISTINCT FROM p_charted_as
                   OR v_row.typed_drug IS DISTINCT FROM coalesce(p_typed_drug, '')
-                  OR v_row.directions IS DISTINCT FROM coalesce(p_directions, '')
+                  OR v_row.directions IS DISTINCT FROM coalesce(p_directions, '');
+        v_changed := v_drug_changed
                   OR v_row.info_source IS DISTINCT FROM p_info_source
                   OR v_row.source_detail IS DISTINCT FROM p_source_detail
                   OR v_row.why IS DISTINCT FROM p_why
@@ -250,7 +255,7 @@ BEGIN
                    ELSE coalesce(p_ticked_against, '[]'::jsonb) END,
                finished = coalesce(p_finished, false), saved_at = v_now,
                held = v_unmarked
-                   OR (coalesce(p_held, false) AND NOT v_changed AND NOT v_hand)
+                   OR (coalesce(p_held, false) AND NOT v_drug_changed AND NOT v_hand)
          WHERE line_id = p_line;
         RETURN 'saved';
     END IF;

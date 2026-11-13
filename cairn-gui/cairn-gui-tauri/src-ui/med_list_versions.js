@@ -10,7 +10,8 @@
 // (ruling R9). What it guards is the screen and the round trip: the line's four own fields
 // (`info_source`, `source_detail`, `why`, `set_aside_of`) ride in `line.content` (med_list.js's
 // `contentOf`), so every save sends all four back — the door clears one left out — and a change
-// to one is drawn as the door counts it: a content change, the hand tick gone (`setOwn`).
+// to one is drawn as the door counts it: the hand tick gone, the untick kept (`setOwn`); and a
+// read brings the line's own fields back even while it is typed (`takeOwn`, ruling R18).
 //
 // Classic script, loaded after med_list.js and med_list_sign.js, sharing med_list.js's state
 // (`medList`, `medLines`, `medSigning`, `medEditingLine`, `medLineNotes`, `medListRevision`) and
@@ -30,6 +31,8 @@ const WHICH_LINE = "Version of which line?";
 const OTHER_VERSIONS = " other version(s)";
 /** Ruling R14, near Sign: "Sign also records {count} set-aside version(s), as not current". */
 const SIGN_ALSO = ["Sign also records ", " set-aside version(s), as not current"];
+/** The four fields a line holds of its own, sent back on every save (med_list.js's `contentOf`). */
+const OWN_FIELDS = ["info_source", "source_detail", "why", "set_aside_of"];
 /** No preset chosen: the press's default stands (list), or the stored category (a line). */
 const NO_PRESET = "not set";
 /**
@@ -80,7 +83,7 @@ function drawListVersions() {
   const from = (medList && medList.from) || {};
   if (document.activeElement !== preset) preset.value = from.preset || "";
   if (document.activeElement !== detail) detail.value = from.detail || "";
-  const count = medLines.filter(isSetAside).length;
+  const count = medList ? medList.versionsRecorded : 0; // Rust's, by Sign's grouping (R16)
   setMessage(el("med-list-versions-note"), count > 0 ? SIGN_ALSO[0] + count + SIGN_ALSO[1] : "");
 }
 
@@ -93,6 +96,9 @@ async function saveFrom() {
   if (ownBlocked()) return;
   const patient = medList.patient;
   const writer = medList.writer; // whose list it is: a who's-here switch during the flush ends it
+  // Read now: a list read landing during the flush redraws these controls from the old "From:".
+  const preset = el("med-list-from-preset").value || null;
+  const detail = el("med-list-from-detail").value.trim() || null;
   await flushMedLines();
   if (!ownsTheList(writer) || patient !== renderedPatient) return;
   const revision = ++medListRevision;
@@ -100,8 +106,8 @@ async function saveFrom() {
     const fresh = await invoke("med_list_from_save", {
       patientId: patient,
       charts: renderedCharts,
-      preset: el("med-list-from-preset").value || null,
-      detail: el("med-list-from-detail").value.trim() || null,
+      preset: preset,
+      detail: detail,
       writer: writer,
     });
     if (revision === medListRevision && patient === renderedPatient) drawMedRead(fresh, patient);
@@ -115,16 +121,17 @@ async function saveFrom() {
 /** A line's own controls, made once on its row (never re-made, so focus stays put). */
 function versionControls(line) {
   const r = line.row;
-  const preset = cell("select", "", { "aria-label": "From: this line's source" });
+  const preset = cell("select", "", { class: "med-list-own-preset" });
   presetOptions(preset);
-  const detail = cell("input", "", { type: "text", autocomplete: "off", "aria-label": "From: the document or person" });
-  const why = cell("input", "", { type: "text", autocomplete: "off", "aria-label": WHY_LABEL });
+  const detail = cell("input", "", { type: "text", autocomplete: "off", class: "med-list-own-detail" });
+  const why = cell("input", "", { type: "text", autocomplete: "off", class: "med-list-own-why" });
   const fromLabel = cell("label", FROM_LABEL + " ");
   fromLabel.append(preset);
   const box = cell("details", "", { class: "med-list-why" });
-  box.append(cell("summary", WHY_LABEL), fromLabel, detail, why);
+  const summary = cell("summary", WHY_LABEL);
+  box.append(summary, fromLabel, detail, why);
   const own = {
-    box, preset, detail, why,
+    box, summary, preset, detail, why,
     source: cell("p", "", { class: "med-list-source" }),
     setAside: cell("button", SET_ASIDE, { type: "button", class: "med-list-set-aside", "aria-pressed": "false" }),
     which: cell("p", "", { class: "med-list-which" }),
@@ -138,15 +145,20 @@ function versionControls(line) {
   return own;
 }
 
-/** The preset a line's stored source IS (its label as the detail, of its category), or "". */
+/** The preset a line's stored source shows as: the label it was stamped with (its label as the
+ *  detail, of its category), else the first label of its category; "" only with no category
+ *  the presets know (ruling R19: never "not set" beside a stored source). */
 function presetOf(content) {
-  return Object.keys(FROM_PRESETS).find((label) => label === content.source_detail && FROM_PRESETS[label] === content.info_source) || "";
+  const labels = Object.keys(FROM_PRESETS);
+  const exact = labels.find((label) => label === content.source_detail && FROM_PRESETS[label] === content.info_source);
+  return exact || labels.find((label) => FROM_PRESETS[label] === content.info_source) || "";
 }
 
-/** What the line says of its source and why, without being opened ("" when it names neither). */
+/** What the line says of its source and why, without being opened ("" when it names neither):
+ *  the detail, or the preset's label — never a bare category word ("external-record"). */
 function sourceWords(content) {
   const words = [];
-  const source = content.source_detail || content.info_source;
+  const source = content.source_detail || presetOf(content);
   if (source) words.push(FROM_LABEL + " " + source);
   if (content.why) words.push(WHY_LABEL + ": " + content.why);
   return words.join(" · ");
@@ -167,6 +179,13 @@ function drawLineVersions(line) {
   const marks = saved ? line.view.companions : [];
   const words = saved ? line.view.companion_words : [];
   setMessage(own.source, sourceWords(line.content));
+  // Named for their line, as its tick and Remove are (ruling R19).
+  const text = line.snapshot ? line.snapshot.text : line.content.line_text;
+  own.setAside.setAttribute("aria-label", SET_ASIDE + ": " + text);
+  own.summary.setAttribute("aria-label", WHY_LABEL + ": " + text);
+  own.preset.setAttribute("aria-label", "From, for " + text);
+  own.detail.setAttribute("aria-label", "The document or person, for " + text);
+  own.why.setAttribute("aria-label", WHY_LABEL + ", for " + text);
   const preset = presetOf(line.content);
   const detail = line.content.source_detail && line.content.source_detail !== preset ? line.content.source_detail : "";
   if (document.activeElement !== own.preset) own.preset.value = preset;
@@ -179,6 +198,7 @@ function drawLineVersions(line) {
   own.which.hidden = !(line.picking && !aside && marks.length > 1);
   r.tick.hidden = aside;
   if (aside) r.reasonRow.hidden = true;
+  if (aside) r.kind.textContent = SET_ASIDE_MARK + ": "; // never "Already taking: " (review B)
   if (aside) setMessage(r.state, SET_ASIDE_MARK);
 }
 
@@ -230,17 +250,31 @@ function ownChanged(line, fields) {
 
 /**
  * Apply `fields` (any of the four) to the line. The door counts it a content change: the hand
- * tick and the veto go — but a line whose mark went away is HELD (ruling R1) — so the line is
- * drawn unticked until the node reads it again.
+ * tick goes, but never the clinician's untick (ruling R15: that is about the drug), and a line
+ * whose mark went away is HELD (ruling R1). The line is drawn unticked until it is read again.
  */
 function setOwn(line, fields) {
   Object.assign(line.content, fields);
   line.handTicked = false;
-  line.held = fields.set_aside_of === null;
+  if (fields.set_aside_of === null) line.held = true;
   line.tickPending = true;
   line.picking = false;
   medLineNotes.delete(line.id);
   line.version += 1;
+  line.ownVersion = { ...line.ownVersion }; // which version last changed each field (`takeOwn`)
+  for (const field of Object.keys(fields)) line.ownVersion[field] = line.version;
+}
+
+/**
+ * A read of the line (`v`; med_list.js's `mergeLine`): its own fields as the node holds them —
+ * the source "From:" stamped on it included — even while it is being typed, except a field
+ * changed here since the last save the node took (ruling R18). Without this an open line's next
+ * autosave would send the stamp back as cleared, and the door would clear it.
+ */
+function takeOwn(line, v) {
+  for (const field of OWN_FIELDS) {
+    if (!((line.ownVersion || {})[field] > line.savedVersion)) line.content[field] = v[field];
+  }
 }
 
 /**

@@ -91,6 +91,16 @@ pub(crate) async fn fresh_read(
     .map_err(|e| chart_read_failed(db.explain(e)))
 }
 
+/// The terminal holding the list when it is not this one (`terminal`; `None` while the id is not
+/// yet read: then no line is this terminal's). Pure.
+pub(crate) fn elsewhere(judged: &[Judged], terminal: Option<&str>) -> Option<String> {
+    judged
+        .iter()
+        .map(|j| &j.line.terminal_id)
+        .find(|t| Some(t.as_str()) != terminal)
+        .cloned()
+}
+
 /// The chart's CURRENT single-drug lines as `(moiety code, canonically spelled; the line's name
 /// as the list shows it)`: what a draft line duplicates. A coding-conflicted group names no
 /// moiety (`med_lines`' rule). Pure.

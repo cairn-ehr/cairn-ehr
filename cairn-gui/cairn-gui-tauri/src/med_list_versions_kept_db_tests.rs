@@ -151,6 +151,10 @@ async fn a_charted_line_shows_its_versions_even_once_stopped() {
     assert_eq!(save_as(&state, chart, v, Some("bea")).await, "saved");
     let list = read(&state, chart).await;
     assert_eq!(
+        list.versions_recorded, 1,
+        "beside a current charted line: Sign records it"
+    );
+    assert_eq!(
         shown(&list, &v_id).companion_words,
         ["charted: metoprolol 50mg bd"],
         "the pick names the charted line by its drug and directions"
@@ -186,4 +190,43 @@ async fn a_charted_line_shows_its_versions_even_once_stopped() {
     .await
     .unwrap();
     one(&versions_shown(&state, chart).await, "ceased");
+}
+
+/// Ruling R16: the count near Sign names only the versions Sign would record — beside a TICKED
+/// list line — never one whose companion is unticked (Sign keeps that one in the list).
+#[tokio::test]
+async fn the_sign_line_counts_only_versions_sign_will_record() {
+    let Some((_guard, _owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let mut a = arg(
+        ("metoprolol", "50mg bd"),
+        pick("metoprolol", METOPROLOL),
+        true,
+    );
+    let a_id = a.line_id.clone();
+    assert_eq!(
+        save_as(&state, chart, a.clone(), Some("bea")).await,
+        "saved"
+    );
+    let mut v = arg(
+        ("metoprolol", "25mg bd"),
+        pick("metoprolol", METOPROLOL),
+        false,
+    );
+    v.set_aside_of = Some(format!("line:{a_id}"));
+    assert_eq!(save_as(&state, chart, v, Some("bea")).await, "saved");
+    let view = read(&state, chart).await;
+    assert!(shown(&view, &a_id).ticked);
+    assert_eq!(view.versions_recorded, 1, "its line is ticked");
+    a.hand_ticked = false;
+    a.held = true;
+    assert_eq!(save_as(&state, chart, a, Some("bea")).await, "saved");
+    let view = read(&state, chart).await;
+    assert!(!shown(&view, &a_id).ticked);
+    assert_eq!(
+        view.versions_recorded, 0,
+        "its line is unticked: Sign keeps it"
+    );
 }

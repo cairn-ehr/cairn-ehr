@@ -16,7 +16,7 @@
 //
 // Classic script, loaded after med_chart.js (the one line editor, `MedLineEditor`, and its
 // `splitLine`, `learnWords`, `isDirectionWord`, `drawReadBack`, `drawMarks`, `LINE_NOT_CHECKED`,
-// `closeMedLine`, `medEditorSnapshot`, `focusPress`), before med_list_sign.js and
+// `closeMedLine`, `medEditorSnapshot`, `focusPress`, `lineContent`), before med_list_sign.js and
 // med_list_versions.js (`drawLineVersions`, `drawListVersions`, `signsAtSign`,
 // `unmarkVersionsOf`), and before whos_here.js (whose `showClaim` calls `medListClaimChanged`).
 // It shares main.js's `el`, `cell`, `setMessage`, `say`, `invoke`,
@@ -204,7 +204,7 @@ async function readMedDraft() {
  * updated IN PLACE, so the line being typed keeps its focus.
  */
 function drawMedRead(fresh, patient) {
-  medList = { patient: patient, writer: fresh.writer, writerName: fresh.writer_name, elsewhere: fresh.elsewhere, from: fresh.from };
+  medList = { patient: patient, writer: fresh.writer, writerName: fresh.writer_name, elsewhere: fresh.elsewhere, from: fresh.from, versionsRecorded: fresh.versions_recorded };
   const byId = new Map(medLines.map((line) => [line.id, line]));
   const next = fresh.lines.filter((v) => !medRemoving.has(v.line_id)).map((v) => mergeLine(byId.get(v.line_id), v, fresh, patient));
   for (const line of medLines) if (!line.stored && !next.includes(line)) next.push(line);
@@ -229,6 +229,7 @@ function mergeLine(line, v, fresh, patient) {
     line.finished = v.finished;
     line.tickPending = false;
   }
+  takeOwn(line, v); // its own source, why and mark, even while typed (med_list_versions.js, R18)
   return line;
 }
 
@@ -433,19 +434,12 @@ function queueSave(line) {
   return medSaveQueue;
 }
 
-/** The editor's words split as Sign will chart them: the parts with their picks, the directions. */
-async function lineContent(chartedAs, snap) {
-  await learnWords(snap.text);
-  const split = splitLine(snap.text, isDirectionWord, snap.held.map((held) => held.text));
-  const coding = (part) => (snap.held.find((held) => held.text === part) || { coding: null }).coding;
-  return { charted_as: chartedAs, line_text: snap.text, typed_drug: split.typedDrug, directions: split.directions, parts: split.parts.map((part) => ({ term: part, coding: coding(part) })) };
-}
-
 /** One save. Resolves true when the node holds the line as sent (or nothing was new). */
 async function sendLine(line, sent) {
   if (line.removed || sent.version <= line.savedVersion) return true;
   const snap = line.snapshot;
-  const content = snap ? { ...line.content, ...(await lineContent(line.content.charted_as, snap)) } : line.content;
+  const words = snap ? await lineContent(line.content.charted_as, snap) : null;
+  const content = words ? { ...line.content, ...words } : line.content; // read after the await (review C)
   if (snap && line.snapshot === snap) {
     line.content = content;
     line.snapshot = null;

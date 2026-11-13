@@ -144,7 +144,7 @@ async fn a_source_or_why_edit_clears_a_hand_tick_in_the_door() {
             row_of(&w, chart, l).await.0,
             "the tick stands on unchanged content"
         );
-        // A veto stands too, on a fresh line, until a provenance edit.
+        // A veto stands too, on a fresh line, and a provenance edit keeps it (ruling R15).
         let h = Uuid::now_v7();
         save_v(&w, h, chart, "a", false, true, base_x).await;
         assert!(row_of(&w, chart, h).await.1);
@@ -154,8 +154,8 @@ async fn a_source_or_why_edit_clears_a_hand_tick_in_the_door() {
         let (ticked, ..) = row_of(&w, chart, l).await;
         assert!(!ticked, "{edit:?} must clear the tick in the door");
         assert!(
-            !row_of(&w, chart, h).await.1,
-            "{edit:?} must clear the veto"
+            row_of(&w, chart, h).await.1,
+            "{edit:?} must keep the veto (ruling R15)"
         );
     }
 }
@@ -386,4 +386,35 @@ async fn the_from_row_refuses_an_unknown_preset() {
     )
     .await
     .expect("an unset preset is allowed");
+}
+
+/// Controller ruling R15: a change of the line's source or why is not a change of the DRUG, so it
+/// clears a hand tick (the tick vouched for the old provenance) but never the clinician's untick:
+/// an unticked line stays unticked when a why is added. Only the drug words clear a veto.
+#[tokio::test]
+async fn a_why_edit_keeps_an_untick() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_o, w, chart) = fixture(&base).await;
+    let l = Uuid::now_v7();
+    save_v(&w, l, chart, "a", false, true, [None; 4]).await;
+    assert!(row_of(&w, chart, l).await.1, "the untick is stored");
+    for edit in [
+        [None, None, Some("packet 25 mg"), None],
+        [
+            Some("external-record"),
+            Some("GP letter"),
+            Some("packet 25 mg"),
+            None,
+        ],
+    ] {
+        assert_eq!(save_v(&w, l, chart, "a", false, true, edit).await, "saved");
+        assert!(row_of(&w, chart, l).await.1, "{edit:?} keeps the untick");
+    }
+    // The drug words still clear it (their own content: the veto covered the old drug).
+    save_v(&w, l, chart, "b", false, true, [None; 4]).await;
+    assert!(!row_of(&w, chart, l).await.1, "new words clear the untick");
 }

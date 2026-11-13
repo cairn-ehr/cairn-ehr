@@ -84,6 +84,17 @@ fn from_sets_the_next_lines_source() {
     // The save: lines first, then "From:" under the read writer, the answer drawn.
     let save = js_fn(VERSIONS_JS, "saveFrom");
     let flushed = position(save, "await flushMedLines();");
+    // The picks are read BEFORE the flush: a read landing during it redraws the controls.
+    for read in [
+        "const preset = el(\"med-list-from-preset\").value || null;",
+        "const detail = el(\"med-list-from-detail\").value.trim() || null;",
+    ] {
+        assert!(position(save, read) < flushed, "{read}: {save}");
+    }
+    assert!(
+        save.contains("preset: preset,") && save.contains("detail: detail,"),
+        "{save}"
+    );
     let sent = position(save, "invoke(\"med_list_from_save\", {");
     assert!(flushed < sent, "{save}");
     assert!(
@@ -123,7 +134,8 @@ fn the_why_field_is_closed_until_opened() {
     let make = js_fn(VERSIONS_JS, "versionControls");
     for step in [
         "const box = cell(\"details\", \"\", { class: \"med-list-why\" });",
-        "box.append(cell(\"summary\", WHY_LABEL), fromLabel, detail, why);",
+        "const summary = cell(\"summary\", WHY_LABEL);",
+        "box.append(summary, fromLabel, detail, why);",
         "why.addEventListener(\"input\", () => ownChanged(line, { why: why.value }));",
         "r.li.append(own.source, own.setAside, own.which, box);",
     ] {
@@ -234,11 +246,22 @@ fn a_set_aside_line_has_no_tick_and_reads_not_current() {
         press.contains("if (isSetAside(line)) ownChanged(line, { set_aside_of: null });"),
         "{press}"
     );
+    // Ruling R15: a source or why edit never clears the untick (the door keeps it too).
+    assert!(!js_fn(VERSIONS_JS, "setOwn").contains("line.held = false"));
+    // Review B: a set-aside line never opens with the press's words ("Already taking: …").
+    assert!(
+        draw.contains("if (aside) r.kind.textContent = SET_ASIDE_MARK + \": \";"),
+        "{draw}"
+    );
+    assert!(
+        position(line, "r.kind.textContent = MED_PRESS_WORDS")
+            < position(line, "drawLineVersions(line);")
+    );
     let set = js_fn(VERSIONS_JS, "setOwn");
     for step in [
         "Object.assign(line.content, fields);",
         "line.handTicked = false;",
-        "line.held = fields.set_aside_of === null;",
+        "if (fields.set_aside_of === null) line.held = true;",
         "line.tickPending = true;",
         "line.version += 1;",
     ] {
@@ -334,10 +357,17 @@ fn an_autosave_echoes_the_lines_source_why_and_mark() {
         assert!(content.contains(field), "{field}: {content}");
     }
     let send = js_fn(LIST_JS, "sendLine");
-    assert!(
-        send.contains("{ ...line.content, ...(await lineContent(line.content.charted_as, snap)) }"),
-        "{send}"
+    // Review C: the words are split FIRST; line.content is read after the await, so a source,
+    // why or mark changed meanwhile is not undone by the write-back.
+    let split = position(
+        send,
+        "const words = snap ? await lineContent(line.content.charted_as, snap) : null;",
     );
+    let spread = position(
+        send,
+        "const content = words ? { ...line.content, ...words } : line.content;",
+    );
+    assert!(split < spread, "{send}");
     assert!(
         send.contains("line: { line_id: line.id, ...content,"),
         "{send}"
@@ -347,7 +377,8 @@ fn an_autosave_echoes_the_lines_source_why_and_mark() {
 }
 
 /// Ruling R14: a Sign records the set-aside versions too (beside charted lines, with nothing
-/// ticked), so the pane says so near Sign whenever the list holds one.
+/// ticked), so the pane says so near Sign. Ruling R16: the count is Rust's (`versions_recorded`,
+/// Sign's own grouping), never counted here.
 #[test]
 fn sign_says_it_also_records_set_aside_versions() {
     in_the_pane("med-list-versions-note");
@@ -363,11 +394,81 @@ fn sign_says_it_also_records_set_aside_versions() {
         format!("{}{}{}", pieces[0], 2, pieces[1]),
         "Sign also records 2 set-aside version(s), as not current"
     );
+    assert!(js_fn(LIST_JS, "drawMedRead").contains("versionsRecorded: fresh.versions_recorded"));
+    assert!(!VERSIONS_JS.contains("filter(isSetAside).length"));
     let draw = js_fn(VERSIONS_JS, "drawListVersions");
     for step in [
-        "const count = medLines.filter(isSetAside).length;",
+        "const count = medList ? medList.versionsRecorded : 0;",
         "setMessage(el(\"med-list-versions-note\"), count > 0 ? SIGN_ALSO[0] + count + SIGN_ALSO[1] : \"\");",
     ] {
         assert!(draw.contains(step), "{step}: {draw}");
     }
+}
+
+/// Ruling R18: the source "From:" stamps on a new line reaches the line even while it is still
+/// being typed, so the open line's next autosave sends it back and the door never clears it. A
+/// read refreshes the four own fields regardless of the editor (`takeOwn`), except a field changed
+/// here since the last save the node took (`ownVersion` against `savedVersion`). Also walked
+/// headlessly: type, pause, the first save stamps, the second save carries the stamp (report).
+#[test]
+fn a_stamped_source_survives_the_next_autosave_of_an_open_line() {
+    let merge = js_fn(LIST_JS, "mergeLine");
+    let guarded = position(merge, "if (!pending(line) && medEditingLine !== line) {");
+    let take = position(merge, "takeOwn(line, v);");
+    assert!(take > guarded, "{merge}");
+    // Outside the editing guard: its block closes before the call.
+    assert!(merge[guarded..take].contains("\n  }\n"), "{merge}");
+    let own = js_fn(VERSIONS_JS, "takeOwn");
+    for step in [
+        "for (const field of OWN_FIELDS) {",
+        "if (!((line.ownVersion || {})[field] > line.savedVersion)) line.content[field] = v[field];",
+    ] {
+        assert!(own.contains(step), "{step}: {own}");
+    }
+    let start = position(VERSIONS_JS, "const OWN_FIELDS =");
+    let decl = &VERSIONS_JS[start..start + position(&VERSIONS_JS[start..], ";\n")];
+    let fields: Vec<&str> = decl.split('"').skip(1).step_by(2).collect();
+    assert_eq!(
+        fields,
+        ["info_source", "source_detail", "why", "set_aside_of"]
+    );
+    let set = js_fn(VERSIONS_JS, "setOwn");
+    assert!(
+        position(set, "line.version += 1;")
+            < position(
+                set,
+                "for (const field of Object.keys(fields)) line.ownVersion[field] = line.version;"
+            ),
+        "{set}"
+    );
+}
+
+/// Ruling R19: the line's own controls are named for their line (as "Remove: …" is), and the
+/// line's detail box has a name distinct from the list-level one. Its preset pick shows the stored
+/// category, never "not set" beside a stored source, and the source is shown as a preset label or
+/// the detail, never a raw category word.
+#[test]
+fn the_lines_own_controls_are_named_and_show_the_stored_source() {
+    let draw = js_fn(VERSIONS_JS, "drawLineVersions");
+    for step in [
+        "own.setAside.setAttribute(\"aria-label\", SET_ASIDE + \": \" + text);",
+        "own.summary.setAttribute(\"aria-label\", WHY_LABEL + \": \" + text);",
+        "own.preset.setAttribute(\"aria-label\", \"From, for \" + text);",
+        "own.detail.setAttribute(\"aria-label\", \"The document or person, for \" + text);",
+        "own.why.setAttribute(\"aria-label\", WHY_LABEL + \", for \" + text);",
+    ] {
+        assert!(draw.contains(step), "{step}: {draw}");
+    }
+    assert!(INDEX_HTML.contains("aria-label=\"From: the document or person\""));
+    let preset = js_fn(VERSIONS_JS, "presetOf");
+    assert!(
+        preset.contains("|| labels.find((label) => FROM_PRESETS[label] === content.info_source)"),
+        "{preset}"
+    );
+    let words = js_fn(VERSIONS_JS, "sourceWords");
+    assert!(
+        words.contains("const source = content.source_detail || presetOf(content);"),
+        "{words}"
+    );
+    assert!(!words.contains("content.info_source"), "{words}");
 }

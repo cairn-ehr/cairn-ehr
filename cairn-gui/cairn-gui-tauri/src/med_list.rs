@@ -28,9 +28,11 @@ use crate::med_chart::{press, view, LineCheckView, PartArg};
 use crate::med_line_sign::{fresh_check, parts_before_the_key, the_line};
 use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
-    already_on_the_list, fresh_read, judge, tick_holds, Judged,
+    already_on_the_list, elsewhere, fresh_read, judge, tick_holds, Judged,
 };
-use crate::med_list_versions::{companion_words, companions_of, given, stamp_new_line, FromView};
+use crate::med_list_versions::{
+    companion_words, companions_of, given, stamp_new_line, versions_recorded, FromView,
+};
 use crate::notes::terminal_of;
 use crate::state::AppState;
 use crate::whos_here::Claim;
@@ -102,6 +104,10 @@ pub struct MedListView {
     pub lines: Vec<ListLineView>,
     /// The writer's "From:" for this chart (`None`: never set).
     pub from: Option<FromView>,
+    /// How many set-aside versions a Sign of the lines ticked NOW would record (ruling R16): each
+    /// beside a ticked list line or a current charted line, by the grouping Sign itself uses
+    /// (`med_list_versions::versions_recorded`). The pane says so near Sign.
+    pub versions_recorded: usize,
 }
 
 /// One line as the pane draws it: what was saved (the [`LineArg`] fields), and what was derived
@@ -222,11 +228,13 @@ pub async fn med_list_read_impl(
     let same_set = charts.is_none_or(|c| check_displayed_set(&fresh.set, c).is_ok());
     let judged = judge(state, fresh, same_set, writer.is_some()).await;
     let terminal = state.terminal_id.get().map(String::as_str);
+    let lines = lines_view(&judged, &charted, &words, terminal);
     Ok(MedListView {
         writer,
         writer_name,
         elsewhere: elsewhere(&judged, terminal),
-        lines: lines_view(&judged, &charted, &words, terminal),
+        versions_recorded: versions_recorded(&judged, &lines, &charted, terminal),
+        lines,
         from,
     })
 }
@@ -379,16 +387,6 @@ pub async fn med_list_take_impl(
             .map_err(|e| node_failure(&db.explain(e)))?;
     }
     med_list_read_impl(state, patient_id, None).await
-}
-
-/// The terminal holding the list when it is not this one (`terminal`; `None` while the id is not
-/// yet read: then no line is this terminal's). Pure.
-pub(crate) fn elsewhere(judged: &[Judged], terminal: Option<&str>) -> Option<String> {
-    judged
-        .iter()
-        .map(|j| &j.line.terminal_id)
-        .find(|t| Some(t.as_str()) != terminal)
-        .cloned()
 }
 
 /// Every judged line as the pane draws it, each line held by `terminal` with the lines it could

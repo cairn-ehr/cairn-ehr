@@ -92,6 +92,7 @@ fn every_field_read_is_one_rust_sends() {
         elsewhere: None,
         lines: vec![],
         from: None,
+        versions_recorded: 0,
     };
     let line = serde_json::to_value(line_view()).unwrap();
     for (binding, sent) in [

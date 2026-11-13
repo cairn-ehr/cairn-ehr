@@ -23,7 +23,7 @@ use crate::link::judgement_view::refused;
 use crate::med_chart::press;
 use crate::med_chart_write::charted_input;
 use crate::med_line_sign::single_coding;
-use crate::med_list::{med_list_read_impl, Judged, MedListView, FIXTURE};
+use crate::med_list::{med_list_read_impl, Judged, ListLineView, MedListView, FIXTURE};
 use crate::med_list_sign::outcome;
 use crate::state::AppState;
 use crate::write_failure::{node_cannot_write, node_failure};
@@ -356,6 +356,27 @@ pub(crate) fn plan_versions<'a>(
         }
     }
     plan
+}
+
+/// How many versions a Sign of the lines drawn ticked NOW (`lines`, as the pane draws them)
+/// would record: those [`plan_versions`] signs with a ticked line or alone beside a charted one
+/// (ruling R16) — the grouping Sign itself uses, so the count near Sign never names a version
+/// Sign would keep. None while this terminal's id is not read (no line is this terminal's).
+/// Pure.
+pub(crate) fn versions_recorded(
+    judged: &[Judged],
+    lines: &[ListLineView],
+    charted: &[(Uuid, String)],
+    terminal: Option<&str>,
+) -> usize {
+    let Some(terminal) = terminal else { return 0 };
+    let ticked: BTreeSet<Uuid> = lines
+        .iter()
+        .filter(|l| l.ticked)
+        .filter_map(|l| l.line_id.parse().ok())
+        .collect();
+    let plan = plan_versions(judged, &ticked, charted, terminal);
+    plan.with.values().map(Vec::len).sum::<usize>() + plan.alone.len()
 }
 
 /// The source note a line signs: its source detail and why, each only when not blank; `None`
