@@ -216,6 +216,7 @@ function renderRow(row) {
     rows.push(note);
   }
   rows.push(...allergyRows(row)); // marks and notes under the line (allergy_tags.js)
+  rows.push(...versionRows(row)); // its set-aside versions, collapsed (med_list_versions.js)
   return rows;
 }
 

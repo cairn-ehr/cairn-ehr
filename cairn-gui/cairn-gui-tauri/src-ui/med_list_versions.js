@@ -1,0 +1,278 @@
+// Batch charting slice 2a on the medication list (design §3.1, §3.5): "From:" above the list;
+// each line's own source and "Why" (closed until opened); "Set aside", with its "Version of
+// which line?" pick, and the set-aside line itself; and, on the charted list, each line's
+// set-aside versions collapsed under it (`versionRows`, called by main.js's `renderRow`).
+//
+// What this file decides: nothing clinical. Which lines a line may be set aside beside
+// (`companions`), how the pick names them (`companion_words`), what "From:" stamps on a new line,
+// and every collapsed version's words are Rust's (med_list.rs, med_list_versions.rs,
+// chart_versions.rs); at Sign each version's companion is re-derived from the STORED mark
+// (ruling R9). What it guards is the screen and the round trip: the line's four own fields
+// (`info_source`, `source_detail`, `why`, `set_aside_of`) ride in `line.content` (med_list.js's
+// `contentOf`), so every save sends all four back — the door clears one left out — and a change
+// to one is drawn as the door counts it: a content change, the hand tick gone (`setOwn`).
+//
+// Classic script, loaded after med_list.js and med_list_sign.js, sharing med_list.js's state
+// (`medList`, `medLines`, `medSigning`, `medEditingLine`, `medLineNotes`, `medListRevision`) and
+// functions (`drawnTicked`, `flushMedLines`, `touch`, `queueSave`, `drawLine`, `drawMedRead`),
+// med_list_sign.js's `ownsTheList`,
+// main.js's `el`, `cell`, `setMessage`, `invoke`, `renderedPatient`, `renderedCharts`, and
+// funnel.js's `failureText` — all read inside functions, after every script loaded.
+"use strict";
+
+const FROM_LABEL = "From:";
+const WHY_LABEL = "Why";
+const SET_ASIDE = "Set aside";
+const SET_ASIDE_MARK = "set aside — not current";
+/** The pick, shown only with two or more candidate lines. */
+const WHICH_LINE = "Version of which line?";
+/** Under a charted line: "{n} other version(s)". */
+const OTHER_VERSIONS = " other version(s)";
+/** Ruling R14, near Sign: "Sign also records {count} set-aside version(s), as not current". */
+const SIGN_ALSO = ["Sign also records ", " set-aside version(s), as not current"];
+/** No preset chosen: the press's default stands (list), or the stored category (a line). */
+const NO_PRESET = "not set";
+/**
+ * The "From:" presets and the info_source category each stands for (the maintainer's table,
+ * spec §3.1). The list's "From:" sends the LABEL (Rust maps it, `stamp`); a line's own pick sends
+ * the category. Pinned against Rust's `info_source_of` by the webview tests, so they cannot drift.
+ */
+const FROM_PRESETS = {
+  "Patient": "patient-reported",
+  "Carer / family": "patient-reported",
+  "GP letter": "external-record",
+  "Pharmacy": "external-record",
+  "Packets / Webster pack seen": "clinician-observed",
+  "Other": "unknown",
+};
+
+/** The line is set aside: a version, never a line to chart — no tick, and not current. */
+function isSetAside(line) {
+  return Boolean(line.content.set_aside_of);
+}
+
+/** Whether Sign records something for the line: its tick, or — set aside beside a CHARTED
+ *  line — the version alone (one beside a list line goes in with that line's tick). Sign
+ *  enables on it. */
+function signsAtSign(line) {
+  return drawnTicked(line) || (line.content.set_aside_of || "").startsWith("med:");
+}
+
+/** The list's or a line's own controls may not change now (a Sign in flight, or the list is
+ *  another terminal's). */
+function ownBlocked() {
+  return medSigning || medList === null || medList.elsewhere !== null;
+}
+
+/** Fill a preset pick: "not set", then the six labels. */
+function presetOptions(select) {
+  const labels = Object.keys(FROM_PRESETS).map((label) => cell("option", label, { value: label }));
+  select.replaceChildren(cell("option", NO_PRESET, { value: "" }), ...labels);
+}
+
+/** "From:" and the R14 line near Sign, drawn with the list (med_list.js's `drawMedList`). */
+function drawListVersions() {
+  el("med-list-from").hidden = medList === null;
+  const preset = el("med-list-from-preset");
+  const detail = el("med-list-from-detail");
+  preset.disabled = ownBlocked();
+  detail.disabled = ownBlocked();
+  const from = (medList && medList.from) || {};
+  if (document.activeElement !== preset) preset.value = from.preset || "";
+  if (document.activeElement !== detail) detail.value = from.detail || "";
+  const count = medLines.filter(isSetAside).length;
+  setMessage(el("med-list-versions-note"), count > 0 ? SIGN_ALSO[0] + count + SIGN_ALSO[1] : "");
+}
+
+/**
+ * "From:" changed: every line typed before it is saved first (so it never stamps them, ruling
+ * R12), then "From:" is saved under the writer the list was READ under, over the charts on
+ * screen, and the list Rust answers is drawn (lines saved after it take it, Rust's `stamp`).
+ */
+async function saveFrom() {
+  if (ownBlocked()) return;
+  const patient = medList.patient;
+  const writer = medList.writer; // whose list it is: a who's-here switch during the flush ends it
+  await flushMedLines();
+  if (!ownsTheList(writer) || patient !== renderedPatient) return;
+  const revision = ++medListRevision;
+  try {
+    const fresh = await invoke("med_list_from_save", {
+      patientId: patient,
+      charts: renderedCharts,
+      preset: el("med-list-from-preset").value || null,
+      detail: el("med-list-from-detail").value.trim() || null,
+      writer: writer,
+    });
+    if (revision === medListRevision && patient === renderedPatient) drawMedRead(fresh, patient);
+  } catch (failure) {
+    if (patient === renderedPatient && ownsTheList(writer)) {
+      setMessage(el("med-list-status"), failureText(failure));
+    }
+  }
+}
+
+/** A line's own controls, made once on its row (never re-made, so focus stays put). */
+function versionControls(line) {
+  const r = line.row;
+  const preset = cell("select", "", { "aria-label": "From: this line's source" });
+  presetOptions(preset);
+  const detail = cell("input", "", { type: "text", autocomplete: "off", "aria-label": "From: the document or person" });
+  const why = cell("input", "", { type: "text", autocomplete: "off", "aria-label": WHY_LABEL });
+  const fromLabel = cell("label", FROM_LABEL + " ");
+  fromLabel.append(preset);
+  const box = cell("details", "", { class: "med-list-why" });
+  box.append(cell("summary", WHY_LABEL), fromLabel, detail, why);
+  const own = {
+    box, preset, detail, why,
+    source: cell("p", "", { class: "med-list-source" }),
+    setAside: cell("button", SET_ASIDE, { type: "button", class: "med-list-set-aside", "aria-pressed": "false" }),
+    which: cell("p", "", { class: "med-list-which" }),
+    whichKey: null, // the candidates the pick's buttons were made for
+  };
+  preset.addEventListener("change", () => sourceChosen(line));
+  detail.addEventListener("input", () => sourceChosen(line));
+  why.addEventListener("input", () => ownChanged(line, { why: why.value }));
+  own.setAside.addEventListener("click", () => pressSetAside(line));
+  r.li.append(own.source, own.setAside, own.which, box);
+  return own;
+}
+
+/** The preset a line's stored source IS (its label as the detail, of its category), or "". */
+function presetOf(content) {
+  return Object.keys(FROM_PRESETS).find((label) => label === content.source_detail && FROM_PRESETS[label] === content.info_source) || "";
+}
+
+/** What the line says of its source and why, without being opened ("" when it names neither). */
+function sourceWords(content) {
+  const words = [];
+  const source = content.source_detail || content.info_source;
+  if (source) words.push(FROM_LABEL + " " + source);
+  if (content.why) words.push(WHY_LABEL + ": " + content.why);
+  return words.join(" · ");
+}
+
+/**
+ * Fill the line's own controls (med_list.js's `drawLine` calls it last): its source and why,
+ * "Set aside" — offered only beside a companion, or to undo — and the pick. A set-aside line
+ * has no tick and no reason, and reads `SET_ASIDE_MARK` where the tick's words were.
+ */
+function drawLineVersions(line) {
+  const r = line.row;
+  if (!r.own) r.own = versionControls(line);
+  const own = r.own;
+  const aside = isSetAside(line);
+  // Rust's candidates are for the SAVED words: none while the line is typed (as its offers).
+  const saved = line.view && medEditingLine !== line;
+  const marks = saved ? line.view.companions : [];
+  const words = saved ? line.view.companion_words : [];
+  setMessage(own.source, sourceWords(line.content));
+  const preset = presetOf(line.content);
+  const detail = line.content.source_detail && line.content.source_detail !== preset ? line.content.source_detail : "";
+  if (document.activeElement !== own.preset) own.preset.value = preset;
+  if (document.activeElement !== own.detail) own.detail.value = detail;
+  if (document.activeElement !== own.why) own.why.value = line.content.why || "";
+  for (const control of [own.preset, own.detail, own.why, own.setAside]) control.disabled = ownBlocked();
+  own.setAside.hidden = !(aside || marks.length > 0);
+  own.setAside.setAttribute("aria-pressed", String(aside));
+  drawWhich(line, marks, words);
+  own.which.hidden = !(line.picking && !aside && marks.length > 1);
+  r.tick.hidden = aside;
+  if (aside) r.reasonRow.hidden = true;
+  if (aside) setMessage(r.state, SET_ASIDE_MARK);
+}
+
+/** The pick's buttons, one per candidate in Rust's words, re-made only when the candidates change
+ *  (so a button keeps its focus while the list is drawn again). */
+function drawWhich(line, marks, words) {
+  const r = line.row;
+  const key = marks.join(" ");
+  if (r.own.whichKey === key) return;
+  r.own.whichKey = key;
+  const buttons = marks.map((mark, i) => {
+    const button = cell("button", words[i] || mark, { type: "button" });
+    button.addEventListener("click", () => ownChanged(line, { set_aside_of: mark }));
+    return button;
+  });
+  r.own.which.replaceChildren(cell("span", WHICH_LINE + " "), ...buttons);
+}
+
+/** "Set aside": on a set-aside line it undoes the mark (an ordinary line, held: ruling R1); else
+ *  one candidate is taken, and with more the pick asks which (never a dialog). */
+function pressSetAside(line) {
+  if (ownBlocked()) return;
+  const marks = line.view ? line.view.companions : [];
+  if (isSetAside(line)) ownChanged(line, { set_aside_of: null });
+  else if (marks.length === 1) ownChanged(line, { set_aside_of: marks[0] });
+  else if (marks.length > 1) {
+    line.picking = !line.picking;
+    drawLine(line);
+  }
+}
+
+/** The line's own "From:" changed: a preset sends its category, the free text (or, when blank,
+ *  the label, as Rust's `stamp`) the detail; with no preset the stored category stays. */
+function sourceChosen(line) {
+  const r = line.row;
+  const label = r.own.preset.value;
+  const text = r.own.detail.value.trim();
+  const fields = { source_detail: text || label || null };
+  if (label) fields.info_source = FROM_PRESETS[label];
+  ownChanged(line, fields);
+}
+
+/** A change on the line's own controls: applied (`setOwn`), drawn, saved a second later. */
+function ownChanged(line, fields) {
+  if (ownBlocked()) return;
+  setOwn(line, fields);
+  touch(line);
+}
+
+/**
+ * Apply `fields` (any of the four) to the line. The door counts it a content change: the hand
+ * tick and the veto go — but a line whose mark went away is HELD (ruling R1) — so the line is
+ * drawn unticked until the node reads it again.
+ */
+function setOwn(line, fields) {
+  Object.assign(line.content, fields);
+  line.handTicked = false;
+  line.held = fields.set_aside_of === null;
+  line.tickPending = true;
+  line.picking = false;
+  medLineNotes.delete(line.id);
+  line.version += 1;
+}
+
+/**
+ * A line was removed (med_list.js's `removeMedLine`): each version marked beside it is an
+ * ordinary, held line again — as the delete door leaves it (Review Focus 3) — so no mark names
+ * a line that is gone, even on a version whose own change has not reached the node yet.
+ */
+function unmarkVersionsOf(gone) {
+  for (const line of medLines) {
+    if (line === gone || line.content.set_aside_of !== "line:" + gone.id) continue;
+    setOwn(line, { set_aside_of: null });
+    void queueSave(line);
+  }
+}
+
+/** A charted line's set-aside versions (Rust's `versions`, worded there), collapsed under it in
+ *  one closed `<details>`: "{n} other version(s)", then each version. None: no row. */
+function versionRows(row) {
+  if (row.versions.length === 0) return [];
+  const tr = document.createElement("tr");
+  tr.setAttribute("data-versions", "true");
+  const td = document.createElement("td");
+  td.colSpan = 5;
+  const box = cell("details", "", { class: "med-versions" });
+  const list = document.createElement("ul");
+  list.append(...row.versions.map((version) => cell("li", version.line)));
+  box.append(cell("summary", row.versions.length + OTHER_VERSIONS), list);
+  td.append(box);
+  tr.append(td);
+  return [tr];
+}
+
+presetOptions(el("med-list-from-preset"));
+el("med-list-from-preset").addEventListener("change", () => void saveFrom());
+el("med-list-from-detail").addEventListener("change", () => void saveFrom());

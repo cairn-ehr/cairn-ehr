@@ -412,3 +412,54 @@ fn the_dose_cell_reads_the_dose_and_the_directions() {
     assert_eq!(cell(None, None), "dose not recorded");
     assert_eq!(cell(None, Some(" ")), "dose not recorded");
 }
+
+/// Batch charting slice 2a: a version is shown under the line it was set aside beside, joined on
+/// the line's member thread (`alternative_to`), and never under another line, though it be the
+/// same drug (regular and PRN oxycodone). Its words are the Global Constraints' copy.
+#[test]
+fn versions_join_under_their_companion_only() {
+    use crate::row_view::{version_line, versions_under, VersionView};
+    use crate::test_rows::uid;
+    let regular = row(
+        1,
+        MedicationStatus::Active,
+        vec![
+            member(10, VouchState::Absent),
+            member(11, VouchState::Absent),
+        ],
+    );
+    let prn = row(
+        2,
+        MedicationStatus::Ceased,
+        vec![member(20, VouchState::Absent)],
+    );
+    let line = |s: &str| {
+        (
+            s.to_string(),
+            VersionView {
+                line: s.to_string(),
+            },
+        )
+    };
+    let (a, b, c) = (line("a"), line("b"), line("c"));
+    let versions = [
+        (uid(11), a.0),
+        (uid(20), b.0),
+        (uid(11), c.0),
+        (uid(99), "x".into()),
+    ];
+    assert_eq!(versions_under(&regular, &versions), [a.1, c.1]);
+    assert_eq!(
+        versions_under(&prn, &versions),
+        [b.1],
+        "a stopped line keeps its own"
+    );
+    assert_eq!(
+        version_line("GP letter", "metoprolol 25 mg (external-record)", None),
+        "GP letter: metoprolol 25 mg (external-record) — set aside, not current"
+    );
+    assert_eq!(
+        version_line("Pharmacy", "metoprolol 25 mg", Some("packet 25 mg")),
+        "Pharmacy: metoprolol 25 mg — set aside, not current — packet 25 mg"
+    );
+}

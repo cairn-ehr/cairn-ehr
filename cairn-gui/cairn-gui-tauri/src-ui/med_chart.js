@@ -406,6 +406,12 @@ function drawMarks(check, tag, list) {
   );
 }
 
+/** Focus the press that started `line`, so Enter adds the next line (never lost to the page;
+ *  med_list.js's `lineFinished`). */
+function focusPress(line) {
+  el("med-chart-buttons").querySelector(`[data-value="${line.content.charted_as}"]`).focus();
+}
+
 for (const button of el("med-chart-buttons").querySelectorAll("button")) {
   button.addEventListener("click", () => appendMedLine(button.dataset.value)); // med_list.js
 }

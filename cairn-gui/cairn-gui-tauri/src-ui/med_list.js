@@ -14,10 +14,12 @@
 // its line (`seen`), and a who's-here switch takes the last person's list off the screen before
 // anyone can type into it (`medListClaimChanged`).
 //
-// Classic script, loaded after med_chart.js and right before med_list_sign.js (the one line editor, `MedLineEditor`, and its
+// Classic script, loaded after med_chart.js (the one line editor, `MedLineEditor`, and its
 // `splitLine`, `learnWords`, `isDirectionWord`, `drawReadBack`, `drawMarks`, `LINE_NOT_CHECKED`,
-// `closeMedLine`, `medEditorSnapshot`) and before whos_here.js (whose `showClaim` calls
-// `medListClaimChanged`). It shares main.js's `el`, `cell`, `setMessage`, `say`, `invoke`,
+// `closeMedLine`, `medEditorSnapshot`, `focusPress`), before med_list_sign.js and
+// med_list_versions.js (`drawLineVersions`, `drawListVersions`, `signsAtSign`,
+// `unmarkVersionsOf`), and before whos_here.js (whose `showClaim` calls `medListClaimChanged`).
+// It shares main.js's `el`, `cell`, `setMessage`, `say`, `invoke`,
 // `renderedPatient`, `renderedCharts`, `displayedPatient`, `chartReadRevision`, `drawnRevision`,
 // `render`, `readMedList`, `refresh`; chart_stale.js's `listMarkedStale`, `sayAfterDraw`,
 // `behindTheRecord`; signer.js's `signerCredential`, `clearSigner`, `fixtureMode`; funnel.js's
@@ -83,9 +85,10 @@ function lineFrom(v, fresh, patient) {
   };
 }
 
-/** The saved words of a line view, as `med_list_save` takes them. */
+/** The saved words of a line view, as `med_list_save` takes them, and the line's own source, why
+ *  and set-aside mark (slice 2a): every save sends all four back, or the door clears them. */
 function contentOf(v) {
-  return { charted_as: v.charted_as, line_text: v.line_text, typed_drug: v.typed_drug, directions: v.directions, parts: v.parts };
+  return { charted_as: v.charted_as, line_text: v.line_text, typed_drug: v.typed_drug, directions: v.directions, parts: v.parts, info_source: v.info_source, source_detail: v.source_detail, why: v.why, set_aside_of: v.set_aside_of };
 }
 
 /** A new, empty line pressed as `chartedAs`, in the list on screen. */
@@ -201,7 +204,7 @@ async function readMedDraft() {
  * updated IN PLACE, so the line being typed keeps its focus.
  */
 function drawMedRead(fresh, patient) {
-  medList = { patient: patient, writer: fresh.writer, writerName: fresh.writer_name, elsewhere: fresh.elsewhere };
+  medList = { patient: patient, writer: fresh.writer, writerName: fresh.writer_name, elsewhere: fresh.elsewhere, from: fresh.from };
   const byId = new Map(medLines.map((line) => [line.id, line]));
   const next = fresh.lines.filter((v) => !medRemoving.has(v.line_id)).map((v) => mergeLine(byId.get(v.line_id), v, fresh, patient));
   for (const line of medLines) if (!line.stored && !next.includes(line)) next.push(line);
@@ -255,7 +258,8 @@ function drawMedList() {
   el("med-list-elsewhere-words").textContent = medList && medList.elsewhere ? MED_LIST_ELSEWHERE + medList.elsewhere : "";
   const sign = el("med-list-sign");
   sign.hidden = !any;
-  sign.disabled = medSigning || !any || medList.elsewhere !== null || !medLines.some(drawnTicked);
+  sign.disabled = medSigning || !any || medList.elsewhere !== null || !medLines.some(signsAtSign);
+  drawListVersions(); // "From:", and what Sign records beside the ticks (med_list_versions.js)
   for (const button of el("med-chart-buttons").querySelectorAll("button")) {
     button.disabled = medSigning || medList === null || medList.elsewhere !== null;
   }
@@ -324,6 +328,7 @@ function drawLine(line) {
   setMessage(r.state, words.join(" · "));
   setMessage(r.note, medLineNotes.get(line.id) || "");
   drawDelabelOffers(line); // med_list_delabel.js
+  drawLineVersions(line); // its source, Why, Set aside (med_list_versions.js)
 }
 
 /** A press: a new line at the end of the list, the editor in it. */
@@ -401,11 +406,6 @@ function lineFinished(line, byKey) {
   if (byKey) focusPress(line);
 }
 
-/** Focus the press that started `line`, so Enter adds the next line (never lost to the page). */
-function focusPress(line) {
-  el("med-chart-buttons").querySelector(`[data-value="${line.content.charted_as}"]`).focus();
-}
-
 /** The box, by hand: saved at once, vouching for the warnings drawn on the line NOW. An untick
  *  is stored as the clinician's veto (`held`), so a default tick never comes back by itself. */
 function tickMedLine(line, checked) {
@@ -445,7 +445,7 @@ async function lineContent(chartedAs, snap) {
 async function sendLine(line, sent) {
   if (line.removed || sent.version <= line.savedVersion) return true;
   const snap = line.snapshot;
-  const content = snap ? await lineContent(line.content.charted_as, snap) : line.content;
+  const content = snap ? { ...line.content, ...(await lineContent(line.content.charted_as, snap)) } : line.content;
   if (snap && line.snapshot === snap) {
     line.content = content;
     line.snapshot = null;
@@ -478,6 +478,7 @@ function removeMedLine(line) {
   line.removed = true;
   medRemoving.add(line.id);
   dropLine(line);
+  unmarkVersionsOf(line); // its versions, ordinary held lines again (med_list_versions.js)
   drawMedList();
   medSaveQueue = medSaveQueue.then(() => deleteLine(line));
 }

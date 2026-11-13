@@ -532,12 +532,20 @@
             <ul id="med-line-marks"></ul>
             <p id="med-line-status" class="allergy-field-error" role="alert" hidden></p>
           </div>
+          <!-- Batch charting slice 2a: "From:" is set once above the list; each line typed after it
+               takes it (a line can change its own). Options are med_list_versions.js's. -->
+          <p id="med-list-from" hidden>
+            <label for="med-list-from-preset">From:</label>
+            <select id="med-list-from-preset"></select>
+            <input id="med-list-from-detail" type="text" autocomplete="off" aria-label="From: the document or person" placeholder="the document or person (GP letter, dated Aug 2025)" />
+          </p>
           <p id="med-list-writer" hidden></p>
           <ol id="med-list" aria-label="Unsigned medication lines"></ol>
           <p id="med-list-elsewhere" hidden>
             <span id="med-list-elsewhere-words"></span>
             <button id="med-list-take" type="button">Continue here</button>
           </p>
+          <p id="med-list-versions-note" hidden></p>
           <button id="med-list-sign" type="button" hidden>Sign ticked lines</button>
           <p id="med-list-status" class="allergy-field-error" role="alert" hidden></p>
           <!-- Not a live region: the chart's own outcome line (#outcome) says it once (review M6). -->
@@ -644,6 +652,7 @@
     <script src="med_list.js"></script>
     <script src="med_list_delabel.js"></script>
     <script src="med_list_sign.js"></script>
+    <script src="med_list_versions.js"></script>
     <script src="allergies.js"></script>
     <script src="person_menu.js"></script>
     <script src="whos_here.js"></script>

@@ -10,7 +10,7 @@ use crate::link::judgement_view::refused;
 use crate::med_chart::PartArg;
 use crate::med_line_sign::{line_under, not_read, parts_before_the_key};
 use crate::med_list_delabel::{offers_for, DelabelOffer};
-use crate::med_list_versions::charted_companions;
+use crate::med_list_versions::{charted_companions, charted_words};
 use crate::state::AppState;
 use crate::write_failure::chart_read_failed;
 use cairn_medication_view::{ChartSet, MedicationRow};
@@ -40,7 +40,8 @@ pub fn already_on_the_list(line: &str) -> String {
 /// single-moiety lines as `(code, the line as the list reads it)` (the duplicate guard's "already
 /// on the chart"), the writer's lines, the OPENED chart's current lines a version may be set
 /// aside beside as `(medication_id, moiety code)` (`med_list_versions::charted_companions`), and
-/// the writer's "From:" as `(preset, detail)`.
+/// the writer's "From:" as `(preset, detail)`; and the opened chart's lines as the "Version of
+/// which line?" pick names them (`med_list_versions::charted_words`).
 pub(crate) struct Fresh {
     pub set: ChartSet,
     pub allergies: PatientAllergies,
@@ -48,6 +49,7 @@ pub(crate) struct Fresh {
     pub lines: Vec<DraftLine>,
     pub charted: Vec<(Uuid, String)>,
     pub from: Option<(Option<String>, Option<String>)>,
+    pub charted_words: Vec<(Uuid, String)>,
 }
 
 /// [`Fresh`], read in ONE snapshot, so a line is never judged against allergies or a chart from
@@ -66,6 +68,7 @@ pub(crate) async fn fresh_read(
             lines: vec![],
             charted: vec![],
             from: None,
+            charted_words: vec![],
         });
     };
     let mut db = db.lock().await?;
@@ -77,6 +80,7 @@ pub(crate) async fn fresh_read(
         Ok(Fresh {
             current: current_lines(&list.rows),
             charted: charted_companions(&list.rows, patient),
+            charted_words: charted_words(&list.rows, patient),
             from,
             set: list.charts,
             allergies,

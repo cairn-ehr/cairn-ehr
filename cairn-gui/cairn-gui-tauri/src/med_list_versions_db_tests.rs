@@ -110,6 +110,10 @@ async fn one_sign_charts_the_line_and_its_version_together() {
     let view = read(&state, chart).await;
     let shown_v = shown(&view, &v_id);
     assert_eq!(shown_v.companions, [line_mark(&a.to_string())]);
+    assert_eq!(
+        shown_v.companion_words,
+        ["on this list: metoprolol 50mg bd"]
+    );
     assert!(!shown_v.ticked, "a set-aside line is never ticked");
     assert!(
         shown(&view, &a.to_string()).companions.is_empty(),

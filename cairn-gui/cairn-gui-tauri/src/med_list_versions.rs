@@ -168,6 +168,47 @@ pub(crate) fn charted_companions(rows: &[MedicationRow], opened: Uuid) -> Vec<(U
         .collect()
 }
 
+/// Each of the OPENED chart's lines as the "Version of which line?" pick names it:
+/// `(medication_id, "{drug} {directions}")`, on the same thread [`charted_companions`] offers.
+/// Pure.
+pub(crate) fn charted_words(rows: &[MedicationRow], opened: Uuid) -> Vec<(Uuid, String)> {
+    rows.iter()
+        .filter_map(|r| {
+            let thread = r.members.iter().find(|m| m.patient_id == opened)?;
+            let words = format!("{} {}", r.display_name(), r.sig.as_deref().unwrap_or(""));
+            Some((thread.medication_id, words.trim().to_string()))
+        })
+        .collect()
+}
+
+/// The words the pick shows for each of `marks` (as [`companions_of`] gives them): a list line
+/// by its words as typed (`lines`), a charted line by its [`charted_words`]. A mark naming
+/// neither is shown as itself, never as nothing. Pure.
+pub(crate) fn companion_words(
+    marks: &[String],
+    lines: &[DraftLine],
+    charted: &[(Uuid, String)],
+) -> Vec<String> {
+    let words = |mark: &String| -> Option<String> {
+        let (kind, id) = mark.split_once(':')?;
+        let id: Uuid = id.parse().ok()?;
+        match kind {
+            "line" => lines
+                .iter()
+                .find(|l| l.line_id == id)
+                .map(|l| format!("on this list: {}", l.line_text)),
+            _ => charted
+                .iter()
+                .find(|(m, _)| *m == id)
+                .map(|(_, w)| format!("charted: {w}")),
+        }
+    };
+    marks
+        .iter()
+        .map(|m| words(m).unwrap_or_else(|| m.clone()))
+        .collect()
+}
+
 /// `charted` as `version_holds` and `companion_candidates` take it. Pure.
 fn as_current(charted: &[(Uuid, String)]) -> Vec<(Uuid, &str)> {
     charted.iter().map(|(id, c)| (*id, c.as_str())).collect()

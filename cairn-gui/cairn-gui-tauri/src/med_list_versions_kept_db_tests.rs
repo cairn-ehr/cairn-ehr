@@ -101,3 +101,89 @@ async fn a_line_on_another_terminal_is_never_offered_as_a_companion() {
         );
     }
 }
+
+/// Each charted line's set-aside versions, as the chart pane draws them under it.
+async fn versions_shown(state: &AppState, chart: Uuid) -> Vec<(String, Vec<String>)> {
+    let pane = crate::commands::med_list_impl(state, &chart.to_string(), None)
+        .await
+        .unwrap();
+    pane.list
+        .rows
+        .iter()
+        .map(|r| {
+            let lines = r.versions.iter().map(|v| v.line.clone()).collect();
+            (r.status_label.clone(), lines)
+        })
+        .collect()
+}
+
+/// A version signed beside a charted line is shown collapsed under that line, worded in Rust,
+/// and stays readable under it once the line is stopped (design §3.3; Task 5 carry).
+#[tokio::test]
+async fn a_charted_line_shows_its_versions_even_once_stopped() {
+    let Some((_guard, owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let a = save(
+        &state,
+        chart,
+        ("metoprolol", "50mg bd"),
+        pick("metoprolol", METOPROLOL),
+        true,
+    )
+    .await;
+    done(
+        sign(&state, chart, &[a.to_string()], credential("bea"))
+            .await
+            .unwrap(),
+    );
+    let med = statements(&owner, chart).await.remove(0).0;
+    let mut v = arg(
+        ("metoprolol", "25mg bd"),
+        pick("metoprolol", METOPROLOL),
+        false,
+    );
+    v.source_detail = Some("GP letter".into());
+    v.why = Some("packet 25 mg".into());
+    v.set_aside_of = Some(format!("med:{med}"));
+    let v_id = v.line_id.clone();
+    assert_eq!(save_as(&state, chart, v, Some("bea")).await, "saved");
+    let list = read(&state, chart).await;
+    assert_eq!(
+        shown(&list, &v_id).companion_words,
+        ["charted: metoprolol 50mg bd"],
+        "the pick names the charted line by its drug and directions"
+    );
+    let (outcome, ..) = done(sign(&state, chart, &[], credential("bea")).await.unwrap());
+    assert!(outcome.contains("1 version(s) set aside"), "{outcome}");
+    let one = |shown: &[(String, Vec<String>)], status: &str| {
+        assert_eq!(
+            shown.len(),
+            1,
+            "the version is no line of its own: {shown:?}"
+        );
+        assert_eq!(shown[0].0, status);
+        let [line] = shown[0].1.as_slice() else {
+            panic!("one version under the line: {shown:?}")
+        };
+        assert!(line.starts_with("GP letter: metoprolol"), "{line}");
+        assert!(
+            line.ends_with(" — set aside, not current — packet 25 mg"),
+            "{line}"
+        );
+    };
+    one(&versions_shown(&state, chart).await, "current");
+    let patient = chart.to_string();
+    cease_impl(
+        &state,
+        &patient,
+        vec![patient.clone()],
+        &med,
+        "trial over",
+        credential("bea"),
+    )
+    .await
+    .unwrap();
+    one(&versions_shown(&state, chart).await, "ceased");
+}

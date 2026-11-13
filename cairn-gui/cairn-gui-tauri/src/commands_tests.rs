@@ -403,6 +403,10 @@ fn every_command_the_webview_calls_is_registered() {
             "med_list_sign.js",
             include_str!("../src-ui/med_list_sign.js"),
         ),
+        (
+            "med_list_versions.js",
+            include_str!("../src-ui/med_list_versions.js"),
+        ),
         ("allergies.js", include_str!("../src-ui/allergies.js")),
         ("person_menu.js", include_str!("../src-ui/person_menu.js")),
         ("whos_here.js", include_str!("../src-ui/whos_here.js")),

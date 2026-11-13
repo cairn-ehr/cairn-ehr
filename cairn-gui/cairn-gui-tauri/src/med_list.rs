@@ -30,7 +30,7 @@ use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
     already_on_the_list, fresh_read, judge, tick_holds, Judged,
 };
-use crate::med_list_versions::{companions_of, given, stamp_new_line, FromView};
+use crate::med_list_versions::{companion_words, companions_of, given, stamp_new_line, FromView};
 use crate::notes::terminal_of;
 use crate::state::AppState;
 use crate::whos_here::Claim;
@@ -142,6 +142,9 @@ pub struct ListLineView {
     /// The lines this one could be set aside beside, as marks (`line:<id>` / `med:<id>`): empty
     /// means no "Set aside" button (`med_list_versions::companions_of`).
     pub companions: Vec<String>,
+    /// Each of `companions` as the "Version of which line?" pick names it, in the same order
+    /// (`med_list_versions::companion_words`).
+    pub companion_words: Vec<String>,
 }
 
 /// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …).
@@ -215,6 +218,7 @@ pub async fn med_list_read_impl(
         .take()
         .map(|(preset, detail)| FromView { preset, detail });
     let charted = std::mem::take(&mut fresh.charted);
+    let words = std::mem::take(&mut fresh.charted_words);
     let same_set = charts.is_none_or(|c| check_displayed_set(&fresh.set, c).is_ok());
     let judged = judge(state, fresh, same_set, writer.is_some()).await;
     let terminal = state.terminal_id.get().map(String::as_str);
@@ -222,7 +226,7 @@ pub async fn med_list_read_impl(
         writer,
         writer_name,
         elsewhere: elsewhere(&judged, terminal),
-        lines: lines_view(&judged, &charted, terminal),
+        lines: lines_view(&judged, &charted, &words, terminal),
         from,
     })
 }
@@ -389,23 +393,29 @@ pub(crate) fn elsewhere(judged: &[Judged], terminal: Option<&str>) -> Option<Str
 
 /// Every judged line as the pane draws it, each line held by `terminal` with the lines it could
 /// be set aside beside: `terminal`'s own lines and `charted`, the opened chart's current lines
-/// (`med_list_judge::Fresh`). Never another terminal's, whose lines this terminal's Sign does
-/// not plan (`plan_versions`, ruling R13); a line held elsewhere is offered none. Pure.
+/// (`med_list_judge::Fresh`), each named as `words` names it. Never another terminal's, whose
+/// lines this terminal's Sign does not plan (`plan_versions`, ruling R13); a line held
+/// elsewhere is offered none. Pure.
 fn lines_view(
     judged: &[Judged],
     charted: &[(Uuid, String)],
+    words: &[(Uuid, String)],
     terminal: Option<&str>,
 ) -> Vec<ListLineView> {
     let here = |j: &&Judged| Some(j.line.terminal_id.as_str()) == terminal;
     let lines: Vec<DraftLine> = judged.iter().filter(here).map(|j| j.line.clone()).collect();
     judged
         .iter()
-        .map(|j| ListLineView {
-            companions: match here(&j) {
+        .map(|j| {
+            let companions = match here(&j) {
                 true => companions_of(&j.line, &lines, charted),
                 false => vec![],
-            },
-            ..line_view(j)
+            };
+            ListLineView {
+                companion_words: companion_words(&companions, &lines, words),
+                companions,
+                ..line_view(j)
+            }
         })
         .collect()
 }
@@ -446,6 +456,7 @@ pub(crate) fn line_view(j: &Judged) -> ListLineView {
         why: l.why.clone(),
         set_aside_of: l.set_aside_of.clone(),
         companions: vec![],
+        companion_words: vec![],
     }
 }
 

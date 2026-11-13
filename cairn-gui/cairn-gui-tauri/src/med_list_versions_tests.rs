@@ -174,3 +174,39 @@ fn charted_companions_are_the_opened_charts_current_lines_only() {
         vec![(Uuid::from_u128(1), Uuid::from_u128(0xA).to_string())]
     );
 }
+
+/// The "Version of which line?" pick names each candidate as the clinician knows it: a list line
+/// by its words, a charted line by its drug and directions — so regular and PRN oxycodone can be
+/// told apart (design §3.5).
+#[test]
+fn the_pick_names_each_candidate_line() {
+    let opened = Uuid::from_u128(0x0E);
+    let mut regular = row(1, 0xA, opened);
+    regular.coding_display = Some("oxycodone".into());
+    regular.sig = Some("10 mg bd".into());
+    let mut prn = row(2, 0xA, opened);
+    prn.coding_display = Some("oxycodone".into());
+    prn.sig = Some("5 mg q4h prn".into());
+    let words = charted_words(&[regular, prn], opened);
+    assert_eq!(
+        words,
+        [
+            (Uuid::from_u128(1), "oxycodone 10 mg bd".to_string()),
+            (Uuid::from_u128(2), "oxycodone 5 mg q4h prn".to_string()),
+        ]
+    );
+    let lines = [line(7, 0xA, None)];
+    let marks = [
+        format!("med:{}", Uuid::from_u128(2)),
+        format!("line:{}", Uuid::from_u128(7)),
+        format!("med:{}", Uuid::from_u128(9)),
+    ];
+    assert_eq!(
+        companion_words(&marks, &lines, &words),
+        [
+            "charted: oxycodone 5 mg q4h prn".to_string(),
+            "on this list: line 7".to_string(),
+            marks[2].clone(),
+        ]
+    );
+}

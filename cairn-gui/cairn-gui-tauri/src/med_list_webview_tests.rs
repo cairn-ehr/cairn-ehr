@@ -18,10 +18,12 @@ use crate::source_guard::{js_fn, position};
 use cairn_node::{allergy::check::LineCheck, medication::line::read_directions};
 use std::collections::BTreeSet;
 
-/// The list's two scripts as one text: med_list.js, and its Sign med_list_sign.js.
+/// The list's scripts as one text: med_list.js, its Sign med_list_sign.js, and its versions
+/// med_list_versions.js (batch charting slice 2a).
 pub(crate) const LIST_JS: &str = concat!(
     include_str!("../src-ui/med_list.js"),
-    include_str!("../src-ui/med_list_sign.js")
+    include_str!("../src-ui/med_list_sign.js"),
+    include_str!("../src-ui/med_list_versions.js")
 );
 const MED_JS: &str = include_str!("../src-ui/med_chart.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
@@ -76,6 +78,7 @@ fn line_view() -> ListLineView {
         why: None,
         set_aside_of: None,
         companions: vec![],
+        companion_words: vec![],
     }
 }
 
@@ -201,8 +204,8 @@ fn two_lines_then_one_sign() {
     assert!(js_fn(LIST_JS, "drawMedRead").contains("writer: fresh.writer,"));
     assert_eq!(
         LIST_JS.matches("writer: ").count(),
-        4,
-        "the list read, lineFrom, sendLine, deleteLine"
+        5,
+        "the list read, lineFrom, sendLine, deleteLine, med_list_versions.js's saveFrom"
     );
     // The one Sign: the ticks drawn at the press, then the flush, then the command.
     let sign = js_fn(LIST_JS, "signMedList");
