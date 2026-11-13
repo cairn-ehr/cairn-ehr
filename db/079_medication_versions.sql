@@ -71,9 +71,10 @@ COMMIT;
 -- and none of the readers of current lines (medication_statement, patient_medication*) ever see
 -- it. It hangs off a real thread by `alternative_to`, which a reader joins on.
 --
--- THE TWO TIERS (ADR-0056). STRUCTURAL rules — the shape of every key — refuse at BOTH doors.
+-- THE TWO TIERS (ADR-0056). STRUCTURAL rules — the shape of every key — refuse at BOTH doors, as
+-- do charted_as / warning_override / a §5.9 claim (below).
 -- The REFERENCE rules — "the companion thread is on this chart and still current", "the version
--- id is new", the schema tag, no §5.9 claim — refuse at the AUTHORING door only: a peer may send a
+-- id is new", the schema tag — refuse at the AUTHORING door only: a peer may send a
 -- version before its companion has synced (an ORPHAN, held and shown nowhere, because every reader
 -- joins on alternative_to), and a peer's signed words must never wedge sync. A companion that
 -- turns out to be on ANOTHER chart is not refused on remote apply but FLAGGED, exactly as a
@@ -115,8 +116,10 @@ BEGIN
        OR NOT cairn_twin_is_present(p #>> '{substance,term}') THEN
         RAISE EXCEPTION 'medication set-aside: substance.term must be a non-blank string';
     END IF;
-    IF jsonb_typeof(p -> 'info_source') IS DISTINCT FROM 'string' THEN
-        RAISE EXCEPTION 'medication set-aside: info_source must be a string';
+    -- Non-blank at both doors, exactly as a charted line's (db/031): a version from no source.
+    IF jsonb_typeof(p -> 'info_source') IS DISTINCT FROM 'string'
+       OR btrim(p ->> 'info_source') = '' THEN
+        RAISE EXCEPTION 'medication set-aside: info_source must be a non-blank string';
     END IF;
     -- Never charted, never overrode a warning: refused even as a JSON null.
     FOREACH k IN ARRAY ARRAY['charted_as', 'warning_override'] LOOP

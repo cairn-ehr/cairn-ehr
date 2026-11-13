@@ -180,6 +180,9 @@ async fn structural_shape_is_refused_at_both_doors() {
         ("alternative_to", "alternative_to", json!(7)),
         ("substance.term", "substance", json!({"term": "  "})),
         ("info_source", "info_source", json!(3)),
+        // Blank, as a charted line's is refused (db/031): a version from no source at all.
+        ("info_source", "info_source", json!("")),
+        ("info_source", "info_source", json!("  ")),
         ("source_detail", "source_detail", json!({"a": 1})),
         ("why", "why", json!(true)),
     ];
