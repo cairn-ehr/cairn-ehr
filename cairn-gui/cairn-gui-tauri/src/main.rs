@@ -59,16 +59,19 @@ mod med_list;
 mod med_list_claim_webview_tests;
 mod med_list_delabel;
 mod med_list_judge;
+mod med_list_restore;
 #[cfg(test)]
 mod med_list_review_webview_tests;
 mod med_list_sign;
 #[cfg(test)]
 mod med_list_source_webview_tests;
 mod med_list_versions;
+mod med_list_versions_sign;
 #[cfg(test)]
 mod med_list_versions_webview_tests;
 #[cfg(test)]
 mod med_list_webview_tests;
+mod med_version_check;
 #[cfg(test)]
 mod node_lock_explains_tests;
 mod notes;
@@ -222,6 +225,8 @@ fn main() -> anyhow::Result<()> {
             med_list::med_list_take,
             med_list_sign::med_list_sign,
             med_list_versions::med_list_from_save,
+            med_list_restore::med_list_restore_open,
+            med_version_check::med_version_check,
             allergy_overlays::allergy_challenge,
             allergy_overlays::allergy_retract,
             notes::note_list,
