@@ -137,8 +137,9 @@ ON CONFLICT (event_type) DO NOTHING;
 --    three the walking skeleton first shipped (code-review finding #2). The provenance-precise
 --    key differs per table: medication_statement / medication_coding / medication_cessation /
 --    medication_dose_correction / medication_reconciliation / medication_attestation /
---    medication_withhold / medication_withhold_release / medication_charting all carry the
---    PRODUCING event's content_address (db/031/032/033/034/059/077) so they scrub by
+--    medication_withhold / medication_withhold_release / medication_charting /
+--    medication_set_aside all carry the
+--    PRODUCING event's content_address (db/031/032/033/034/059/077/079) so they scrub by
 --    `content_address = v_ca`; the initial-dose seed row is keyed by the assert event's own
 --    id (db/032); and
 --    medication_group_member is a DERIVED table (recomputed from the standing reconciled
@@ -378,6 +379,11 @@ BEGIN
         END IF;
         IF to_regclass('public.clinical_allergy_retraction') IS NOT NULL THEN
             DELETE FROM clinical_allergy_retraction WHERE content_address = v_ca;
+        END IF;
+        -- A set-aside medication version (db/079): the drug a source reported and the clinician did
+        -- not believe is clinical plaintext, one row per event, keyed by this CA. Guarded the same way.
+        IF to_regclass('public.medication_set_aside') IS NOT NULL THEN
+            DELETE FROM medication_set_aside WHERE content_address = v_ca;
         END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;

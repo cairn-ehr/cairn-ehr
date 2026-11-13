@@ -585,6 +585,9 @@ BEGIN
         -- db/059 (#803): per-event tables, so every applied withhold or release resolves.
         UNION ALL SELECT medication_id, content_address FROM medication_withhold
         UNION ALL SELECT medication_id, content_address FROM medication_withhold_release
+        -- db/079: a set-aside version belongs to its companion's thread (alternative_to), so its
+        -- sensitivity scope is that thread's, never the whole chart's.
+        UNION ALL SELECT alternative_to, content_address FROM medication_set_aside
     ) t
     WHERE t.content_address = v_ca
     LIMIT 1;

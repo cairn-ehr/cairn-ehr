@@ -28,14 +28,14 @@ BEGIN;
 --    `identity.registration.asserted` → patient_chart_apply, the chart-birth
 --    projection registration took over.
 --    Kept in lockstep with the Rust mirror
---    (projection_registry.rs::registry_row_count_is_pinned, which asserts 38 on
+--    (projection_registry.rs::registry_row_count_is_pinned, which asserts 39 on
 --    the product-loader DB that never loads db/008).
 DO $$
 DECLARE n bigint;
 BEGIN
     SELECT count(*) INTO n FROM cairn_projection_apply;
-    IF n <> 40 THEN
-        RAISE EXCEPTION 'cairn_projection_apply: expected 40 rows on the sqltest DB, found %', n;
+    IF n <> 41 THEN
+        RAISE EXCEPTION 'cairn_projection_apply: expected 41 rows on the sqltest DB, found %', n;
     END IF;
 END $$;
 
