@@ -17,6 +17,8 @@
 --
 -- THE TWO TIERS (ADR-0056, the db/075 idiom). STRUCTURAL — a present key must be a JSON string
 -- (the projection reads it with `->>` and must never be handed an object) — refuses at BOTH doors.
+-- An explicit JSON null reads as ABSENT at both doors, as db/077 treats every optional key (a peer
+-- that emits nulls for absent optionals is not refused; `->>` reads it as SQL NULL).
 -- Everything else — non-blank, no control character — refuses at the AUTHORING door only
 -- (`cairn.remote_apply` <> 'on'): a peer's signed words must never wedge sync.
 BEGIN;
@@ -28,8 +30,8 @@ DECLARE
     k text;
 BEGIN
     FOREACH k IN ARRAY ARRAY['source_detail', 'why'] LOOP
-        -- ---- Structural: both doors. Absent is fine; a JSON null is NOT a string. ----
-        IF p ? k AND jsonb_typeof(p -> k) IS DISTINCT FROM 'string' THEN
+        -- ---- Structural: both doors. Absent and JSON null are fine (null = absent). ----
+        IF p ? k AND jsonb_typeof(p -> k) NOT IN ('string', 'null') THEN
             RAISE EXCEPTION 'medication assertion: % must be a string', k;
         END IF;
     END LOOP;
@@ -40,7 +42,8 @@ BEGIN
         RETURN;
     END IF;
     FOREACH k IN ARRAY ARRAY['source_detail', 'why'] LOOP
-        IF p ? k THEN
+        -- A JSON null is absent: skipped explicitly, not by relying on btrim(NULL).
+        IF p ? k AND jsonb_typeof(p -> k) = 'string' THEN
             IF btrim(p ->> k) = '' THEN
                 RAISE EXCEPTION 'medication assertion: % must not be blank (omit the key instead)', k;
             END IF;

@@ -90,6 +90,18 @@ async fn chart_line_with_note(
     kid: &str,
     note: SourceNote<'_>,
 ) -> (Uuid, Uuid) {
+    chart_line_with_payload(c, sk, kid, note, |_| {}).await
+}
+
+/// As `chart_line_with_note`, with `tweak` applied to the payload before sealing (to hand-shape
+/// a key the builder would never write, such as a JSON null).
+async fn chart_line_with_payload(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    note: SourceNote<'_>,
+    tweak: impl FnOnce(&mut Value),
+) -> (Uuid, Uuid) {
     let patient = Uuid::now_v7();
     common::submit_registration(c, sk, kid, patient, 0).await;
     let (event_id, med) = (Uuid::now_v7(), Uuid::now_v7());
@@ -113,6 +125,7 @@ async fn chart_line_with_note(
         charting: Some(Charting::default()),
     };
     body.payload = medication_assertion_body(&a);
+    tweak(&mut body.payload);
     body.plaintext_twin = Some(render_medication_twin(&a));
     seal_and_submit(c, sk, body)
         .await
@@ -181,13 +194,7 @@ async fn a_charted_line_with_source_and_why_projects_both() {
 async fn a_non_string_key_is_refused_at_both_doors() {
     rig!(c, _sk, _kid);
     for k in ["source_detail", "why"] {
-        for bad in [
-            json!(7),
-            json!(true),
-            json!(["x"]),
-            json!({"a": 1}),
-            json!(null),
-        ] {
+        for bad in [json!(7), json!(true), json!(["x"]), json!({"a": 1})] {
             for remote in [false, true] {
                 let e = floor(&mut c, &with_key(k, bad.clone()), remote)
                     .await
@@ -263,5 +270,28 @@ async fn a_reprojection_rebuilds_them() {
             Some("GP letter, 2026-03".into()),
             Some("started here for the febrile child".into())
         ))
+    );
+}
+
+#[tokio::test]
+async fn a_json_null_reads_as_absent_at_both_doors() {
+    rig!(c, sk, kid);
+    // db/077's rule: an explicit null is an absent optional, never a refusal.
+    for k in ["source_detail", "why"] {
+        for remote in [false, true] {
+            floor(&mut c, &with_key(k, json!(null)), remote)
+                .await
+                .unwrap_or_else(|e| panic!("{k}=null must pass (remote={remote}): {e}"));
+        }
+    }
+    // ...and it projects as NULL beside a present sibling.
+    let note = SourceNote {
+        source_detail: Some("GP letter"),
+        why: None,
+    };
+    let (med, _) = chart_line_with_payload(&c, &sk, &kid, note, |p| p["why"] = json!(null)).await;
+    assert_eq!(
+        note_row(&c, med).await,
+        Some((Some("GP letter".into()), None))
     );
 }
