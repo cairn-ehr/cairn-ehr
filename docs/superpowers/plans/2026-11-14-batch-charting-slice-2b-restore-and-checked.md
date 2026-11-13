@@ -293,15 +293,18 @@ pub enum Settlement { Checked { source: String, why: Option<String> },
                       Restored { line: Uuid /* the new thread */, replaced_line: String } }
 pub struct SettlementRow { pub version_id: Uuid, pub patient_id: Uuid, pub settlement: Settlement,
                            pub who: Option<String>, pub at: DateTime<Utc> }
-/// Every check and restore over a chart set, one query each, oldest first; joined on version_id AND patient_id,
+/// Every check and restore over a chart set, one query each, oldest first (restores from the `medication_restore`
+/// table, ruling R5 — never `medication_charting`); joined on version_id AND patient_id,
 /// so an orphan is never returned. `replaced_line` is the companion as `drug_line_twin` spells it, rebuilt from
 /// medication_statement + medication_charting (as `read_set_asides` does for a version).
 pub async fn read_settlements(client: &(impl GenericClient + Sync), charts: &[Uuid]) -> anyhow::Result<Vec<SettlementRow>>;
-pub struct VersionForRestore { pub alternative_to: Uuid, pub companion_current: bool,
+pub struct VersionForRestore { pub alternative_to: Uuid, pub companion_current: bool, pub standing: Vec<Uuid>,
   pub companion_charted_as: Option<String>, pub source: String, pub term: String,
   pub coding: Option<(String, String, String)>, pub formulation: Option<String>, pub dose_amount: Option<String>,
   pub dose_unit: Option<String>, pub sig: Option<String>, pub route: Option<String>, pub strength: Option<String> }
 /// One version of `patient`, for the restore press and for Sign. None: not on this chart (or gone).
+/// `standing`: the CURRENT lines of the companion's lineage (`cairn_medication_restore_lineage`, db/080, ruling
+/// R4) — what a restore must stop; the floor's commit check reads the SAME function.
 pub async fn version_for_restore(client: &(impl GenericClient + Sync), patient: Uuid, version: Uuid)
   -> anyhow::Result<Option<VersionForRestore>>;
 ```
