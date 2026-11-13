@@ -44,6 +44,8 @@ fn combo(parts: &[(&str, Option<Uuid>)]) -> ChartingRow {
             })
             .collect(),
         override_reason: None,
+        source_detail: None,
+        why: None,
     }
 }
 

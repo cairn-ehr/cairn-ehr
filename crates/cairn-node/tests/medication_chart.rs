@@ -315,6 +315,8 @@ async fn read_charting_reads_by_thread() {
                 ("clavulanic acid".into(), None),
             ],
             override_reason: Some("no alternative in the remote clinic".into()),
+            source_detail: None,
+            why: None,
         }
     );
     assert_eq!(
@@ -325,6 +327,8 @@ async fn read_charting_reads_by_thread() {
             strength: Some("500 mg".into()),
             components: vec![],
             override_reason: None,
+            source_detail: None,
+            why: None,
         }
     );
 }

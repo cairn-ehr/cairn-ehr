@@ -39,6 +39,13 @@ const WIDENED: &[(&str, &str)] = &[
     ("note_draft_spent", "discarded_by"),
     // Sign-in 3c-1: the note an addendum draft adds to, paired ALTER in db/065.
     ("note_draft", "addendum_to"),
+    // Batch charting slice 2a: a charted line's "From:" and "why", paired ALTERs in db/077.
+    ("medication_charting", "source_detail"),
+    ("medication_charting", "why"),
+    // Batch charting slice 1: draft-line columns added by paired ALTERs in db/078.
+    ("medication_draft_line", "typed_drug"),
+    ("medication_draft_line", "directions"),
+    ("medication_draft_line", "held"),
 ];
 
 #[tokio::test]

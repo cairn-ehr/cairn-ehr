@@ -498,6 +498,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "078_medication_draft_list",
         include_str!("../../../db/078_medication_draft_list.sql"),
     ),
+    // db/079 (batch charting slice 2a): the floor for a line's source_detail ("From:") and why.
+    (
+        "079_medication_versions",
+        include_str!("../../../db/079_medication_versions.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
