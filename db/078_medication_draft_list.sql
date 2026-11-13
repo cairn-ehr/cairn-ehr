@@ -149,11 +149,22 @@ CREATE TABLE IF NOT EXISTS medication_draft_line_deleted (
 CREATE TABLE IF NOT EXISTS medication_draft_from (
     patient_id uuid NOT NULL,
     writer     text,
-    preset     text,
+    -- The EXACT label of the window's "From:" list (ruling R6), or NULL; `info_source_of` maps it.
+    preset     text CHECK (preset IS NULL OR preset IN
+        ('Patient', 'Carer / family', 'GP letter', 'Pharmacy', 'Packets / Webster pack seen', 'Other')),
     detail     text,
     saved_at   timestamptz NOT NULL,
     UNIQUE NULLS NOT DISTINCT (patient_id, writer)
 );
+-- Paired with the CREATE above for a table made before the check (#207's rule).
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'medication_draft_from'::regclass
+                    AND conname = 'medication_draft_from_preset_check') THEN
+        ALTER TABLE medication_draft_from ADD CONSTRAINT medication_draft_from_preset_check
+            CHECK (preset IS NULL OR preset IN
+                ('Patient', 'Carer / family', 'GP letter', 'Pharmacy', 'Packets / Webster pack seen', 'Other')) NOT VALID;
+    END IF;
+END $$;
 
 REVOKE ALL ON medication_draft_line, medication_draft_line_deleted, medication_draft_from FROM PUBLIC;
 
@@ -322,6 +333,8 @@ BEGIN
     -- Versions of the removed line lose their mark and are HELD, with their tick gone and a
     -- fresh saved_at (a Sign that read the old row answers 'changed'): a dangling mark would
     -- never hold at Sign, and an unmarked line must not turn up default-ticked.
+    -- Sign must spend a line's set-aside versions BEFORE the line itself: spending the line first
+    -- unmarks and re-stamps them (Ruling R5), so their own spend would answer 'changed'.
     UPDATE medication_draft_line
        SET set_aside_of = NULL, held = true, hand_ticked = false, ticked_against = '[]'::jsonb,
            saved_at = clock_timestamp()

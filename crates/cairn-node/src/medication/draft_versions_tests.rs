@@ -127,3 +127,18 @@ fn other_is_unknown() {
     assert_eq!(info_source_of(None), None);
     assert_eq!(info_source_of(Some("Hearsay")), None);
 }
+
+/// The labels db/078's `medication_draft_from_preset_check` accepts; keep in step with the SQL.
+#[test]
+fn every_stored_preset_label_maps_to_a_category() {
+    for label in [
+        "Patient",
+        "Carer / family",
+        "GP letter",
+        "Pharmacy",
+        "Packets / Webster pack seen",
+        "Other",
+    ] {
+        assert!(info_source_of(Some(label)).is_some(), "{label}");
+    }
+}
