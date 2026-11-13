@@ -12,9 +12,7 @@ use crate::set_aside_kit::*;
 use cairn_event::medication::Charting;
 use cairn_event::{sign, EventBody, SigningKey};
 use cairn_node::db;
-use cairn_node::medication::{
-    build_cease_body, build_charted_body, read_charting, CeaseMedicationInput,
-};
+use cairn_node::medication::{build_cease_body, build_charted_body, CeaseMedicationInput};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -104,37 +102,54 @@ pub async fn submit_with(
     bodies: Vec<EventBody>,
     immediate: bool,
 ) -> Result<(), String> {
+    let sealed: Vec<Sealed> = bodies.into_iter().map(|b| seal_sign(b, sk)).collect();
+    submit_sealed(c, &sealed, immediate).await
+}
+
+/// A sealed, signed event ready for the strict door: (signed bytes, its DEK).
+pub type Sealed = (Vec<u8>, Vec<u8>);
+
+/// Seal a CLEAR body as the node write path does, and sign it. Pure apart from the generated
+/// DEK (never a literal). Kept apart from the submit so a test can submit the SAME bytes twice.
+pub fn seal_sign(mut body: EventBody, sk: &SigningKey) -> Sealed {
+    let twin = body.plaintext_twin.take().unwrap();
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id).unwrap();
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+    let signed = sign(&body, sk).unwrap();
+    (signed.signed_bytes.to_vec(), dek.as_bytes().to_vec())
+}
+
+/// Submit already-sealed events through the strict door in ONE transaction, then commit.
+pub async fn submit_sealed(
+    c: &mut Client,
+    sealed: &[Sealed],
+    immediate: bool,
+) -> Result<(), String> {
     let tx = c.transaction().await.unwrap();
     if immediate {
         tx.batch_execute("SET CONSTRAINTS ALL IMMEDIATE")
             .await
             .unwrap();
     }
-    for mut body in bodies {
-        // Seal as seal_and_submit does (the DEK is generated, never a literal).
-        let twin = body.plaintext_twin.take().unwrap();
-        let (container, dek) =
-            cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id).unwrap();
-        body.payload = container;
-        body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
-        let signed = sign(&body, sk).unwrap();
-        tx.execute(
-            "SELECT submit_event($1, NULL, NULL, $2)",
-            &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
-        )
-        .await
-        .map_err(|e| db_msg(&e))?;
+    for (bytes, dek) in sealed {
+        tx.execute("SELECT submit_event($1, NULL, NULL, $2)", &[bytes, dek])
+            .await
+            .map_err(|e| db_msg(&e))?;
     }
     tx.commit().await.map_err(|e| db_msg(&e))
 }
 
-/// The projected `restores` of thread `med` (None = no row, or no restore).
+/// The version thread `med` restores, as `medication_restore` projects it (None = no row).
 pub async fn projected_restores(c: &Client, med: Uuid) -> Option<Uuid> {
-    read_charting(c, &[med])
-        .await
-        .unwrap()
-        .remove(&med)
-        .and_then(|r| r.restores)
+    c.query_opt(
+        "SELECT version_id::text FROM medication_restore WHERE medication_id = $1::text::uuid",
+        &[&med.to_string()],
+    )
+    .await
+    .unwrap()
+    .map(|r| r.get::<_, String>(0).parse().unwrap())
 }
 
 pub async fn pending_rows(c: &Client) -> i64 {

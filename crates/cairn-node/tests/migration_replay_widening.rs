@@ -42,8 +42,6 @@ const WIDENED: &[(&str, &str)] = &[
     // Batch charting slice 2a: a charted line's "From:" and "why", paired ALTERs in db/077.
     ("medication_charting", "source_detail"),
     ("medication_charting", "why"),
-    // Batch charting slice 2b: the version a restore line restores, paired ALTER in db/077.
-    ("medication_charting", "restores"),
     // Batch charting slice 1: draft-line columns added by paired ALTERs in db/078.
     ("medication_draft_line", "typed_drug"),
     ("medication_draft_line", "directions"),

@@ -220,7 +220,7 @@ async fn a_reprojection_rebuilds_restores() {
     submit_together(&mut c, &sk, vec![stop, line])
         .await
         .expect("committed");
-    c.batch_execute("TRUNCATE medication_charting")
+    c.batch_execute("TRUNCATE medication_restore")
         .await
         .unwrap();
     assert_eq!(projected_restores(&c, new_med).await, None);
@@ -234,4 +234,33 @@ async fn a_reprojection_rebuilds_restores() {
     .unwrap();
     assert_eq!(projected_restores(&c, new_med).await, Some(version));
     assert_eq!(pending_rows(&c).await, 0);
+}
+
+#[tokio::test]
+async fn a_shred_removes_the_restore_row() {
+    rig!(c, sk, kid);
+    let (p, med, version) = chart_with_version(&mut c, &sk, &kid).await;
+    let stop = stop_body(&c, &kid, p, med).await;
+    let (line, new_med) = restore_body(&c, &kid, p, version).await;
+    let ev: Uuid = line.event_id.parse().unwrap();
+    submit_together(&mut c, &sk, vec![stop, line])
+        .await
+        .expect("committed");
+    assert_eq!(projected_restores(&c, new_med).await, Some(version));
+    cairn_node::shred::shred_event(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        ev,
+        "retention ceiling",
+        None,
+    )
+    .await
+    .expect("shred");
+    assert_eq!(
+        projected_restores(&c, new_med).await,
+        None,
+        "scrubbed by content address"
+    );
 }

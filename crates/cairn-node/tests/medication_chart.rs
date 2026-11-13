@@ -319,7 +319,6 @@ async fn read_charting_reads_by_thread() {
             override_reason: Some("no alternative in the remote clinic".into()),
             source_detail: None,
             why: None,
-            restores: None,
         }
     );
     assert_eq!(
@@ -332,7 +331,6 @@ async fn read_charting_reads_by_thread() {
             override_reason: None,
             source_detail: None,
             why: None,
-            restores: None,
         }
     );
 }
