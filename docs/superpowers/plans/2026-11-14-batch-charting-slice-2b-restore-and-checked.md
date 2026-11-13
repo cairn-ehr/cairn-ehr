@@ -45,10 +45,10 @@ versions (spec §6 risk 3: countable, no menu group this slice).
 - **The companion is stopped only if it is current on Sign's fresh read**; a stopped companion's restore emits no
   cessation (spec §3.3). Its versions then no longer count as unsettled, and both buttons stay offered.
 - **The restored line inherits the companion's `charted_as`** (`medication_charting.charted_as`); a companion with
-  none (charted before slice 1a) gives `pre-existing` **[plan decision]**. The reviewer may change it.
+  none (charted before slice 1a) gives `pre-existing` **[maintainer, 2026-11-14]**. The reviewer may change it.
 - **A restore line with no source of its own signs `unknown`**, never the press default — the maintainer's ruling for
   a version (ADR-0102 item 4) applied to its sibling: the press says who reported a line being charted, nothing
-  about who corroborated a version **[plan decision; ask the maintainer at review]**. "From:" never stamps a restore
+  about who corroborated a version **[maintainer, 2026-11-14]**. "From:" never stamps a restore
   line (it is created stored, so `stamp_new_line` never sees it as new).
 - **Buttons only on the OPENED chart's versions** (spec §2 non-goal: never a linked chart's, never a doubted link's).
   A restored version shows no buttons; a checked one keeps both ("it locks nothing", spec §3.4).
