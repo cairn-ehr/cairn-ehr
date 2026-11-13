@@ -103,17 +103,50 @@ async fn a_restore_line_is_added_with_its_version() {
     assert_eq!(mark, None);
     assert_eq!((held, hand, finished), (false, false, true));
     assert_eq!(text, "oxycodone 5 mg qid");
-    // Same answers as the save door's new-row branch: a second terminal, a deleted id, no chart.
-    let other = Uuid::now_v7();
+    // Same answers as the save door's new-row branch: no chart, an unknown writer, a deleted id.
     assert_eq!(
-        restore_add(&w, other, Uuid::now_v7(), version).await,
+        restore_add(&w, Uuid::now_v7(), Uuid::now_v7(), version).await,
         "no-chart"
     );
+    let nobody: String = w
+        .query_one(
+            "SELECT cairn_med_draft_restore_add($1::text::uuid, $2::text::uuid, 'pc-1', 'nobody', \
+                    $3::text::uuid, 'pre-existing', 'x', '[]'::text::jsonb, 'x', '')",
+            &[
+                &Uuid::now_v7().to_string(),
+                &chart.to_string(),
+                &version.to_string(),
+            ],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(nobody, "no-such-writer");
+    let tombstoned = Uuid::now_v7();
+    owner
+        .execute(
+            "INSERT INTO medication_draft_line_deleted (line_id, deleted_at) VALUES ($1::text::uuid, now())",
+            &[&tombstoned.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(restore_add(&w, tombstoned, chart, version).await, "deleted");
+    // A retry is idempotent from the same terminal and 'moved' from another (or after a Take).
     assert_eq!(
         restore_add(&w, line, chart, version).await,
         "saved",
         "a retry is idempotent"
     );
+    let moved: String = w
+        .query_one(
+            "SELECT cairn_med_draft_restore_add($1::text::uuid, $2::text::uuid, 'pc-2', 'notewriter', \
+                    $3::text::uuid, 'pre-existing', 'x', '[]'::text::jsonb, 'x', '')",
+            &[&line.to_string(), &chart.to_string(), &version.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(moved, "moved");
     assert_eq!(
         w.query_one(
             "SELECT count(*) FROM cairn_med_draft_lines($1::text::uuid, 'notewriter')",

@@ -45,12 +45,11 @@
 --     (it is signed as a version, not by tick). Clearing the mark through the save door leaves
 --     the line HELD (ruling R1): a version the clinician thought wrong must never silently
 --     become default-ticked. Deleting a companion clears the mark of its versions the same way.
---   * A RESTORE LINE (batch charting slice 2b) is a list line pre-filled from a set-aside version
---     (`restores` = that version's id): signing it will replace the line the version lost to. It is
---     added ONLY through cairn_med_draft_restore_add, which checks the version belongs to this
---     chart. The save door has no `restores` parameter, so an edit keeps it and a plain line can
---     never become one; and a restore line is never itself a set-aside version (the save door
---     forces its mark to NULL). Deleting one is the same unaudited, tombstoned delete as any line.
+--   * A RESTORE LINE (slice 2b) is pre-filled from a set-aside version (`restores` = its id);
+--     signing it replaces the line the version lost to. Added ONLY by cairn_med_draft_restore_add
+--     (which checks the version is this chart's); the save door has no `restores` parameter, so an
+--     edit keeps it and a plain line never becomes one, and it forces a restore line's set-aside
+--     mark to NULL. Deleting one is an ordinary unaudited, tombstoned delete.
 --   * Lines hold the RAW text as typed; the doors store and return it byte-for-byte.
 --
 -- Replay-safe: this file re-runs on every schema replay.
@@ -94,8 +93,7 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
     -- this line is a version of. NULL = not set aside.
     set_aside_of   text CHECK (set_aside_of IS NULL OR set_aside_of ~
         '^(line|med):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
-    -- Slice 2b: the set-aside version (medication_set_aside.version_id) this line restores.
-    restores       uuid
+    restores       uuid  -- slice 2b: the set-aside version (its version_id) this line restores
 );
 -- Paired with the CREATE above for a table made before these columns (#207's rule).
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS typed_drug text NOT NULL DEFAULT '';
@@ -181,9 +179,32 @@ END $$;
 
 REVOKE ALL ON medication_draft_line, medication_draft_line_deleted, medication_draft_from FROM PUBLIC;
 
+-- The save and restore doors' shared preamble (so they cannot drift): NULL args raise, then
+-- 'no-such-writer', the list's lock, 'deleted' (no resurrecting a tombstone). NULL = go on.
+CREATE OR REPLACE FUNCTION cairn_med_draft_gate(
+    p_door text, p_line uuid, p_patient uuid, p_terminal text, p_writer text)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+    v_writer text := cairn_vault_staff_id(p_writer);
+BEGIN
+    IF p_line IS NULL OR p_patient IS NULL OR p_terminal IS NULL THEN
+        RAISE EXCEPTION '% needs a line, a patient and a terminal', p_door;
+    END IF;
+    IF v_writer IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM vault_member m
+         WHERE m.staff_id = v_writer AND cairn_vault_purpose_allowed(m.role, false, 'clinical')) THEN
+        RETURN 'no-such-writer';
+    END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended(
+        'med_draft:' || p_patient::text || ':' || coalesce(v_writer, ''), 0));
+    IF EXISTS (SELECT 1 FROM medication_draft_line_deleted WHERE line_id = p_line) THEN RETURN 'deleted'; END IF;
+    RETURN NULL;
+END;
+$$;
+
 -- Save (insert or update) one line. Answers 'saved' | 'moved' | 'elsewhere' | 'no-chart' |
--- 'no-such-writer' | 'not-yours' | 'deleted'; every answer but 'saved' wrote nothing. NULL line, patient or
--- terminal is a caller bug and raises (`<> NULL` is NULL and would slip past the guards).
+-- 'no-such-writer' | 'not-yours' | 'deleted'; every answer but 'saved' wrote nothing. A NULL line,
+-- patient or terminal raises (see cairn_med_draft_gate).
 --
 -- THE TICK'S REFS: p_ticked_against (the warnings on the line) is taken ONLY when a tick is
 -- GIVEN (no tick stored, p_hand_ticked true). While a stored tick stands and the content is
@@ -210,6 +231,7 @@ CREATE OR REPLACE FUNCTION cairn_med_draft_line_save(
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_writer  text := cairn_vault_staff_id(p_writer);
+    v_gate    text;
     v_row     medication_draft_line%ROWTYPE;
     v_changed boolean;
     v_drug_changed boolean;
@@ -217,21 +239,8 @@ DECLARE
     v_hand    boolean;
     v_now     timestamptz;
 BEGIN
-    IF p_line IS NULL OR p_patient IS NULL OR p_terminal IS NULL THEN
-        RAISE EXCEPTION 'cairn_med_draft_line_save needs a line, a patient and a terminal';
-    END IF;
-    IF v_writer IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM vault_member m
-         WHERE m.staff_id = v_writer AND cairn_vault_purpose_allowed(m.role, false, 'clinical')) THEN
-        RETURN 'no-such-writer';
-    END IF;
-    -- One lock per (chart, writer) list: serialises seq assignment and edits to the same list.
-    PERFORM pg_advisory_xact_lock(hashtextextended(
-        'med_draft:' || p_patient::text || ':' || coalesce(v_writer, ''), 0));
-    -- A deleted id never comes back (a late autosave must not resurrect it).
-    IF EXISTS (SELECT 1 FROM medication_draft_line_deleted WHERE line_id = p_line) THEN
-        RETURN 'deleted';
-    END IF;
+    v_gate := cairn_med_draft_gate('cairn_med_draft_line_save', p_line, p_patient, p_terminal, p_writer);
+    IF v_gate IS NOT NULL THEN RETURN v_gate; END IF;
     v_now := clock_timestamp();
     SELECT * INTO v_row FROM medication_draft_line WHERE line_id = p_line FOR UPDATE;
     IF FOUND THEN
@@ -321,55 +330,37 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
      ORDER BY l.seq;
 $$;
 
--- Add a RESTORE line (slice 2b): a NEW list line pre-filled from set-aside version p_version,
--- which will replace the line that version lost to when signed. It answers exactly as the save
--- door's new-row branch does ('saved' | 'no-chart' | 'no-such-writer' | 'deleted'), plus
--- 'no-such-version' when medication_set_aside holds no such version for THIS chart (a version of
--- another chart, or none, is refused and nothing is written). A retry of the same line for the
--- same version answers 'saved' and changes nothing; an id already used by any other line is a
--- caller bug and raises. The line starts finished, unticked and unheld: the clinician's tick (or
--- the default tick) is for them to give on the pre-filled words.
+-- Add a RESTORE line (slice 2b): a NEW line pre-filled from set-aside version p_version; answers
+-- as the save door's new-row branch plus 'no-such-version' (not this chart's). A retry of the same
+-- line+version answers 'saved' ('moved' from another terminal); any other used id raises. Starts
+-- finished, unticked, unheld.
 CREATE OR REPLACE FUNCTION cairn_med_draft_restore_add(
     p_line uuid, p_patient uuid, p_terminal text, p_writer text, p_version uuid,
     p_charted_as text, p_text text, p_parts jsonb, p_typed_drug text, p_directions text)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_writer text := cairn_vault_staff_id(p_writer);
-    v_now    timestamptz;
+    v_gate   text;
+    v_row    medication_draft_line%ROWTYPE;
 BEGIN
-    IF p_line IS NULL OR p_patient IS NULL OR p_terminal IS NULL OR p_version IS NULL THEN
-        RAISE EXCEPTION 'cairn_med_draft_restore_add needs a line, a patient, a terminal and a version';
+    v_gate := cairn_med_draft_gate('cairn_med_draft_restore_add', p_line, p_patient, p_terminal, p_writer);
+    IF v_gate IS NOT NULL THEN RETURN v_gate; END IF;
+    SELECT * INTO v_row FROM medication_draft_line WHERE line_id = p_line;
+    IF FOUND THEN
+        IF (v_row.patient_id, v_row.writer, v_row.restores) IS DISTINCT FROM (p_patient, v_writer, p_version) THEN
+            RAISE EXCEPTION 'cairn_med_draft_restore_add: line % already exists', p_line;
+        END IF;
+        RETURN CASE WHEN v_row.terminal_id = p_terminal THEN 'saved' ELSE 'moved' END;
     END IF;
-    IF v_writer IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM vault_member m
-         WHERE m.staff_id = v_writer AND cairn_vault_purpose_allowed(m.role, false, 'clinical')) THEN
-        RETURN 'no-such-writer';
-    END IF;
-    PERFORM pg_advisory_xact_lock(hashtextextended(
-        'med_draft:' || p_patient::text || ':' || coalesce(v_writer, ''), 0));
-    IF EXISTS (SELECT 1 FROM medication_draft_line_deleted WHERE line_id = p_line) THEN
-        RETURN 'deleted';
-    END IF;
-    IF EXISTS (SELECT 1 FROM medication_draft_line l WHERE l.line_id = p_line
-                  AND l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM v_writer
-                  AND l.restores = p_version) THEN
-        RETURN 'saved';
-    END IF;
-    IF EXISTS (SELECT 1 FROM medication_draft_line WHERE line_id = p_line) THEN
-        RAISE EXCEPTION 'cairn_med_draft_restore_add: line % already exists', p_line;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM event_log WHERE patient_id = p_patient) THEN
-        RETURN 'no-chart';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM medication_set_aside s
-                    WHERE s.version_id = p_version AND s.patient_id = p_patient) THEN
+    IF NOT EXISTS (SELECT 1 FROM event_log WHERE patient_id = p_patient) THEN RETURN 'no-chart'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM medication_set_aside
+                    WHERE version_id = p_version AND patient_id = p_patient) THEN
         RETURN 'no-such-version';
     END IF;
-    v_now := clock_timestamp();
     INSERT INTO medication_draft_line (line_id, patient_id, writer, terminal_id, seq, charted_as,
         line_text, parts, finished, created_at, saved_at, typed_drug, directions, restores)
     SELECT p_line, p_patient, v_writer, p_terminal, coalesce(max(l.seq), 0) + 1, p_charted_as,
-           p_text, coalesce(p_parts, '[]'::jsonb), true, v_now, v_now,
+           p_text, coalesce(p_parts, '[]'::jsonb), true, clock_timestamp(), clock_timestamp(),
            coalesce(p_typed_drug, ''), coalesce(p_directions, ''), p_version
       FROM medication_draft_line l
      WHERE l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM v_writer;
@@ -494,11 +485,13 @@ REVOKE EXECUTE ON FUNCTION
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer(),
     cairn_med_draft_from_save(uuid, text, text, text), cairn_med_draft_from(uuid, text),
-    cairn_med_draft_restore_add(uuid, uuid, text, text, uuid, text, text, jsonb, text, text) FROM PUBLIC;
+    cairn_med_draft_restore_add(uuid, uuid, text, text, uuid, text, text, jsonb, text, text),
+    cairn_med_draft_gate(text, uuid, uuid, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean,
                               text, text, boolean, text, text, text, text),
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer(),
     cairn_med_draft_from_save(uuid, text, text, text), cairn_med_draft_from(uuid, text),
-    cairn_med_draft_restore_add(uuid, uuid, text, text, uuid, text, text, jsonb, text, text) TO cairn_window;
+    cairn_med_draft_restore_add(uuid, uuid, text, text, uuid, text, text, jsonb, text, text),
+    cairn_med_draft_gate(text, uuid, uuid, text, text) TO cairn_window;
