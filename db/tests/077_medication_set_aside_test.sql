@@ -77,6 +77,7 @@ BEGIN
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"alternative_to":7}'), 'alternative_to');
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"substance":{"term":"  "}}'), 'substance.term');
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"info_source":3}'), 'info_source');
+        PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"info_source":"  "}'), 'info_source');
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"charted_as":"brand"}'), 'charted_as');
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"warning_override":{"reason":"x"}}'), 'warning_override');
         PERFORM pg_temp.refuses(pg_temp.v(pg_temp.live(), '{"why":true}'), 'why');

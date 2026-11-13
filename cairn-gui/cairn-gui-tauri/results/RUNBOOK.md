@@ -3275,12 +3275,13 @@ Name a clinician in who's here (`dr-a`) before typing any line.
       is gone. A line you had unticked stays unticked.
 - [ ] With *GP letter* in "From:", type a new line and keep typing through two pauses of about a second (two saves
       before the list is read again). Open its source: still *GP letter*. Sign it and check
-      `SELECT info_source, source_detail FROM medication_charting` shows `external-record`, `GP letter`.
+      `SELECT s.info_source, c.source_detail FROM medication_statement s JOIN medication_charting c
+      USING (medication_id)` shows `external-record`, `GP letter`.
 - [ ] A line's own *From:* set back to "not set": its source and detail are cleared. A line with no source of its own
       (no "From:" set when it was typed, and none chosen) signs with its press's default: *Start* `clinician-observed`,
-      *Already taking* `patient-reported`. **A set-aside version with no source of its own does too**: its twin reads
-      "clinician-observed reported …" for a *Start* line. Check `info_source` in `medication_statement` and
-      `medication_set_aside`.
+      *Already taking* `patient-reported`. **A set-aside version with no source of its own does NOT**: it signs
+      `unknown`, whichever button it was pressed with, and its twin reads "unknown reported …". Check `info_source` in
+      `medication_statement` and `medication_set_aside`.
 - [ ] Sign every line of the list: "From:" is cleared with the last line (it lives only while you have a line on the
       chart), so the next admission's lines are not stamped with today's source. While any line of yours remains,
       "From:" stays.
@@ -3299,9 +3300,12 @@ Name a clinician in who's here (`dr-a`) before typing any line.
       aside`. Both lines left the list.
       `psql "$CONN" -c "SELECT term, dose_amount, info_source, source_detail, why FROM medication_set_aside"` shows the
       20 mg line; `SELECT term, dose_amount FROM medication_statement WHERE patient_id = '$V1'` shows only the 40 mg line.
-- [ ] On `$V2`, with atorvastatin already charted, type an atorvastatin line, *Set aside*: the pick names "charted:
-      atorvastatin …". Tick nothing. The list reads "Sign also records 1 set-aside version(s)". *Sign ticked lines*:
-      the version is signed alone.
+- [ ] On `$V2`, with atorvastatin already charted, type an atorvastatin line, *Set aside*: with the charted line the
+      only candidate, no pick is asked; the line reads "set aside — not current". Tick nothing. The list reads "Sign
+      also records 1 set-aside version(s)". *Sign ticked lines*: the version is signed alone.
+- [ ] Set a line aside, reopen it and change its dose, wait two seconds (it saves, unfinished) and quit the window
+      while the line is still open. Reopen the chart: the version reads "unfinished", the "Sign also records" count
+      does not include it, and a Sign keeps it, saying "version kept: it is not finished".
 - [ ] A version whose companion is not ticked: set a line aside beside a second list line, untick the second, Sign.
       The version stays in the list and says "its line was not charted".
 - [ ] A version kept while its companion IS charted: set a line aside, then edit its companion to another drug and tick

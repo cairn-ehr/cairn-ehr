@@ -44,6 +44,10 @@ use uuid::Uuid;
 /// Why a version stays in the list when its companion line was not charted (Global Constraints).
 pub const VERSION_KEPT: &str = "its line was not charted";
 
+/// Why a version still being typed stays in the list: a version has no tick, so this is the
+/// guard an unfinished line's never-default tick is for it (a half-typed figure is never signed).
+pub const VERSION_UNFINISHED: &str = "it is not finished";
+
 /// A kept version whose companion line WAS charted: its spend unmarked and held it (R24, db/078).
 pub const VERSION_UNMARKED: &str = "no longer set aside: its line was charted; set it aside again";
 
@@ -238,8 +242,8 @@ pub(crate) fn companions_of(
 /// Sort the set-aside lines of `lines` for Sign, each by its STORED mark on this read: those
 /// whose companion is in `ticked` (the lines about to be signed) go with it (`companion →
 /// versions`, list order); those beside a charted current line sign alone (`(version,
-/// medication_id)`); the rest are kept with why (companion not ticked, or the mark no longer
-/// holds: gone, or another drug now). Pure.
+/// medication_id)`); the rest are kept with why (the version is not finished, its companion is
+/// not ticked, or the mark no longer holds: gone, or another drug now). Pure.
 #[allow(clippy::type_complexity)]
 pub(crate) fn group_versions(
     lines: &[DraftLine],
@@ -253,6 +257,10 @@ pub(crate) fn group_versions(
     let mut with = BTreeMap::<Uuid, Vec<Uuid>>::new();
     let (mut alone, mut kept) = (vec![], vec![]);
     for v in lines.iter().filter(|l| l.set_aside_of.is_some()) {
+        if !v.finished {
+            kept.push((v.line_id, VERSION_UNFINISHED));
+            continue;
+        }
         match version_holds(v, lines, current) {
             Ok(Companion::Draft(c)) if ticked.contains(&c) => {
                 with.entry(c).or_default().push(v.line_id)
@@ -423,7 +431,10 @@ pub(crate) fn list_input<'a>(
 
 /// What a version signs, rebuilt from its STORED row: the drug fields exactly as a charted line
 /// spells them ([`list_input`]), with its route and strength, but no start, no press, no
-/// override and no safety claim (a version is never current). Pure.
+/// override and no safety claim (a version is never current). Its source is the line's own
+/// (stamped by "From:" or chosen), else `unknown`: never the press's default, which names who
+/// reported a CHARTED line and says nothing about a figure the clinician set aside (ADR-0102
+/// item 4, principle 4). Pure.
 pub(crate) fn version_to_sign(v: &Judged) -> Result<VersionToSign<'_>, ErrorView> {
     let (term, parts) = v.signable.as_ref().map_err(Clone::clone)?;
     let i = list_input(
@@ -444,7 +455,7 @@ pub(crate) fn version_to_sign(v: &Judged) -> Result<VersionToSign<'_>, ErrorView
             dose_amount: i.dose_amount,
             dose_unit: i.dose_unit,
             sig: i.sig,
-            info_source: i.info_source,
+            info_source: v.line.info_source.as_deref().unwrap_or("unknown"),
             started: None,
             started_precision: None,
             safety: None,

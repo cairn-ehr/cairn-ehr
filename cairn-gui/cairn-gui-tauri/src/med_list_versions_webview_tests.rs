@@ -81,9 +81,16 @@ fn from_sets_the_next_lines_source() {
             "{pair:?}"
         );
     }
-    // The save: lines first, then "From:" under the read writer, the answer drawn.
+    // The save: lines first, then "From:" under the read writer, the answer drawn. Both are
+    // queued AT ONCE, in the save queue: a line typed after the change waits behind it, so its
+    // first save reads the new "From:" (ruling R12).
     let save = js_fn(VERSIONS_JS, "saveFrom");
-    let flushed = position(save, "await flushMedLines();");
+    let flushed = position(save, "const flushed = flushMedLines();");
+    let queued = position(
+        save,
+        "medSaveQueue = medSaveQueue.then(() => sendFrom(patient, writer, preset, detail, flushed));",
+    );
+    assert!(flushed < queued, "{save}");
     // The picks are read BEFORE the flush: a read landing during it redraws the controls.
     for read in [
         "const preset = el(\"med-list-from-preset\").value || null;",
@@ -91,16 +98,21 @@ fn from_sets_the_next_lines_source() {
     ] {
         assert!(position(save, read) < flushed, "{read}: {save}");
     }
+    let save = js_fn(VERSIONS_JS, "sendFrom");
     assert!(
         save.contains("preset: preset,") && save.contains("detail: detail,"),
         "{save}"
     );
     let sent = position(save, "invoke(\"med_list_from_save\", {");
-    assert!(flushed < sent, "{save}");
+    // A line typed before the change that did not save would be stamped on its retry as new:
+    // the change waits for it, worded, and sends nothing.
+    let unsaved = position(save, "if (!(await flushed).every(Boolean)) {");
+    assert!(unsaved < sent, "{save}");
+    assert!(position(save, "setMessage(el(\"med-list-status\"), FROM_WAITS);") < sent);
     assert!(
         position(
             save,
-            "if (!ownsTheList(writer) || patient !== renderedPatient) return;"
+            "if (!ownsTheList(writer) || patient !== renderedPatient) return true;"
         ) < sent
     );
     for arg in [
@@ -267,12 +279,14 @@ fn a_set_aside_line_has_no_tick_and_reads_not_current() {
     ] {
         assert!(set.contains(step), "{step}: {set}");
     }
-    // A set-aside line beside a CHARTED line signs alone, so it enables Sign; it is never ticked.
+    // A FINISHED set-aside line beside a CHARTED line signs alone, so it enables Sign; it is
+    // never ticked. An unfinished one is kept at Sign (`VERSION_UNFINISHED`), so it enables
+    // nothing.
     assert!(js_fn(LIST_JS, "drawMedList").contains("!medLines.some(signsAtSign)"));
     let signs = js_fn(VERSIONS_JS, "signsAtSign");
     assert!(
         signs.contains(
-            "drawnTicked(line) || (line.content.set_aside_of || \"\").startsWith(\"med:\")"
+            "drawnTicked(line) || (line.finished && (line.content.set_aside_of || \"\").startsWith(\"med:\"))"
         ),
         "{signs}"
     );
@@ -471,4 +485,19 @@ fn the_lines_own_controls_are_named_and_show_the_stored_source() {
         "{words}"
     );
     assert!(!words.contains("content.info_source"), "{words}");
+}
+
+/// A failed versions read is worded above the list, as the allergy read's failure is: its line
+/// sits above the table, after the hidden warnings section (an empty section is hidden, this
+/// line must not be), drawn from `pane.versions_error` and taken down with the drawn list.
+#[test]
+fn a_failed_versions_read_is_worded_above_the_list() {
+    let line = position(INDEX_HTML, "id=\"versions-not-read\"");
+    assert!(line < position(INDEX_HTML, "<table id=\"med-table\">"));
+    assert!(line > position(INDEX_HTML, "<p id=\"chart-elsewhere\" hidden></p>"));
+    assert!(js_fn(MAIN_JS, "drawList")
+        .contains("setMessage(el(\"versions-not-read\"), pane.versions_error)"));
+    assert!(
+        js_fn(MAIN_JS, "clearDrawnList").contains("setMessage(el(\"versions-not-read\"), \"\")")
+    );
 }

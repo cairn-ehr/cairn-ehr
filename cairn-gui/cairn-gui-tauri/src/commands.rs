@@ -98,7 +98,11 @@ pub async fn med_list_impl(
     // leaves lines "not checked".
     let allergy = crate::allergy_check::med_list_check(state, patient, &list).await;
     let mut pane = chart_pane(&list, patient, members, links, dups, change, allergy);
-    crate::chart_versions::attach_versions(&mut pane.list.rows, &list.rows, &versions);
+    // NOT `?` either: a failed versions read is worded above the list (`VERSIONS_NOT_READ`).
+    match versions {
+        Ok(v) => crate::chart_versions::attach_versions(&mut pane.list.rows, &list.rows, &v),
+        Err(why) => pane.versions_error = Some(why),
+    }
     Ok(pane)
 }
 

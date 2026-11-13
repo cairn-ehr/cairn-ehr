@@ -35,6 +35,8 @@ const SIGN_ALSO = ["Sign also records ", " set-aside version(s), as not current"
 const OWN_FIELDS = ["info_source", "source_detail", "why", "set_aside_of"];
 /** No preset chosen: the press's default stands (list), or the stored category (a line). */
 const NO_PRESET = "not set";
+/** "From:" was not changed: a line typed before it is not saved yet (`sendFrom`). */
+const FROM_WAITS = "From: not changed: a line above is not saved yet; set From: again once it is";
 /**
  * The "From:" presets and the info_source category each stands for (the maintainer's table,
  * spec §3.1). The list's "From:" sends the LABEL (Rust maps it, `stamp`); a line's own pick sends
@@ -54,11 +56,11 @@ function isSetAside(line) {
   return Boolean(line.content.set_aside_of);
 }
 
-/** Whether Sign records something for the line: its tick, or — set aside beside a CHARTED
- *  line — the version alone (one beside a list line goes in with that line's tick). Sign
- *  enables on it. */
+/** Whether Sign records something for the line: its tick, or — finished and set aside beside
+ *  a CHARTED line — the version alone (one beside a list line goes in with that line's tick;
+ *  an unfinished one is kept, Rust's `VERSION_UNFINISHED`). Sign enables on it. */
 function signsAtSign(line) {
-  return drawnTicked(line) || (line.content.set_aside_of || "").startsWith("med:");
+  return drawnTicked(line) || (line.finished && (line.content.set_aside_of || "").startsWith("med:"));
 }
 
 /** The list's or a line's own controls may not change now (a Sign in flight, or the list is
@@ -91,16 +93,30 @@ function drawListVersions() {
  * "From:" changed: every line typed before it is saved first (so it never stamps them, ruling
  * R12), then "From:" is saved under the writer the list was READ under, over the charts on
  * screen, and the list Rust answers is drawn (lines saved after it take it, Rust's `stamp`).
+ * Both are queued NOW, in the save queue: a line typed after the change waits behind the
+ * "From:" save, so its first save reads the new "From:", even on a slow link.
  */
-async function saveFrom() {
+function saveFrom() {
   if (ownBlocked()) return;
   const patient = medList.patient;
   const writer = medList.writer; // whose list it is: a who's-here switch during the flush ends it
   // Read now: a list read landing during the flush redraws these controls from the old "From:".
   const preset = el("med-list-from-preset").value || null;
   const detail = el("med-list-from-detail").value.trim() || null;
-  await flushMedLines();
-  if (!ownsTheList(writer) || patient !== renderedPatient) return;
+  const flushed = flushMedLines();
+  medSaveQueue = medSaveQueue.then(() => sendFrom(patient, writer, preset, detail, flushed));
+}
+
+/** The "From:" save, run in the save queue after `flushed` (the lines typed before it). Resolves
+ *  true when nothing more is owed, false when the change was not saved (said in the status). */
+async function sendFrom(patient, writer, preset, detail, flushed) {
+  // A line typed before the change that did not save would be stamped on its retry as a NEW
+  // line (R12 broken): the change waits until it saves, and says so.
+  if (!(await flushed).every(Boolean)) {
+    if (patient === renderedPatient && ownsTheList(writer)) setMessage(el("med-list-status"), FROM_WAITS);
+    return false;
+  }
+  if (!ownsTheList(writer) || patient !== renderedPatient) return true;
   const revision = ++medListRevision;
   try {
     const fresh = await invoke("med_list_from_save", {
@@ -111,10 +127,12 @@ async function saveFrom() {
       writer: writer,
     });
     if (revision === medListRevision && patient === renderedPatient) drawMedRead(fresh, patient);
+    return true;
   } catch (failure) {
     if (patient === renderedPatient && ownsTheList(writer)) {
       setMessage(el("med-list-status"), failureText(failure));
     }
+    return false;
   }
 }
 

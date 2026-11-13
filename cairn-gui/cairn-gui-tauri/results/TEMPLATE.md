@@ -892,7 +892,8 @@ Steps: a version on paper *N* = 1 act → observed \_\_ presses and \_\_ Signs.
 | A version beside a charted line signs alone, with nothing ticked; the count near Sign says so | | |
 | A version whose line was not charted stays and says why | | |
 | A version kept while its line WAS charted says "no longer set aside …", unticked | | |
-| Two saves before a read keep "From:"'s source; "not set" clears a line's source; a line with none signs its press's default | | |
+| An unfinished version is kept ("it is not finished") and not counted near Sign | | |
+| Two saves before a read keep "From:"'s source; "not set" clears a line's source; a line with none signs its press's default, a version with none signs `unknown` | | |
 | "From:" is cleared with your last line on the chart (after Sign), kept while one remains | | |
 | A charted line shows "{n} other version(s)", closed; a stopped line still shows them | | |
 | The real Tauri IPC: `med_list_from_save` and the four fields on `med_list_save` answer | | |

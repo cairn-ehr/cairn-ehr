@@ -121,7 +121,7 @@ fn row<'a>(rows: &'a [MedListRowView], primary: &str) -> &'a MedListRowView {
 }
 
 /// Drop the failed-read seam's role and every grant it holds here, if it exists.
-async fn drop_minus(owner: &Client) {
+pub(crate) async fn drop_minus(owner: &Client) {
     owner
         .batch_execute(&format!(
             "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{MINUS}') THEN \
@@ -133,7 +133,7 @@ async fn drop_minus(owner: &Client) {
 
 /// The window's state, reconnected as a role holding every table, column, function and schema
 /// grant the window's role holds (its own and inherited) EXCEPT on the object named `except`.
-async fn window_without(owner: &Client, state: &mut AppState, except: &str) {
+pub(crate) async fn window_without(owner: &Client, state: &mut AppState, except: &str) {
     drop_minus(owner).await;
     owner
         .batch_execute(&format!(

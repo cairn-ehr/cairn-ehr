@@ -230,3 +230,44 @@ async fn the_sign_line_counts_only_versions_sign_will_record() {
         "its line is unticked: Sign keeps it"
     );
 }
+
+/// A failed read of the set-aside versions never hides the medication list (availability over
+/// consistency, as every other secondary read of the pane): the list opens with its current
+/// line, and the pane says the versions were not read, so "no version shown" is never mistaken
+/// for "no version exists".
+#[tokio::test]
+async fn med_list_draws_when_the_versions_read_fails() {
+    use crate::allergy_check::db_tests::{drop_minus, window_without};
+    let Some((_guard, owner, mut state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let a = save(
+        &state,
+        chart,
+        ("metoprolol", "50mg bd"),
+        pick("metoprolol", METOPROLOL),
+        true,
+    )
+    .await;
+    done(
+        sign(&state, chart, &[a.to_string()], credential("bea"))
+            .await
+            .unwrap(),
+    );
+    let patient = chart.to_string();
+    let control = crate::commands::med_list_impl(&state, &patient, None)
+        .await
+        .unwrap();
+    assert_eq!(control.versions_error, None, "control");
+
+    window_without(&owner, &mut state, "medication_set_aside").await;
+    let pane = crate::commands::med_list_impl(&state, &patient, None).await;
+    drop_minus(&owner).await;
+    let pane = pane.expect("the medication list still opens");
+    assert_eq!(
+        pane.versions_error.as_deref(),
+        Some(crate::chart_versions::VERSIONS_NOT_READ)
+    );
+    assert_eq!(pane.list.rows.len(), 1, "the current line is still shown");
+}

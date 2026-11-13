@@ -48,12 +48,24 @@ pub async fn version_body(
     alt: Uuid,
     tweak: impl FnOnce(&mut Value),
 ) -> EventBody {
-    let d = drug();
+    version_body_of(c, kid, patient, version, alt, &drug(), tweak).await
+}
+
+/// [`version_body`] of the drug `d` (its twin rendered from `d`, as the window's is).
+pub async fn version_body_of(
+    c: &Client,
+    kid: &str,
+    patient: Uuid,
+    version: Uuid,
+    alt: Uuid,
+    d: &MedicationAssertion<'_>,
+    tweak: impl FnOnce(&mut Value),
+) -> EventBody {
     let (v, a) = (version.to_string(), alt.to_string());
     let s = MedicationSetAside {
         version_id: &v,
         alternative_to: &a,
-        drug: &d,
+        drug: d,
     };
     let mut payload = set_aside_body(&s);
     tweak(&mut payload);

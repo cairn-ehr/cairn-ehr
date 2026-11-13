@@ -207,7 +207,7 @@ fn two_lines_then_one_sign() {
     assert_eq!(
         LIST_JS.matches("writer: ").count(),
         5,
-        "the list read, lineFrom, sendLine, deleteLine, med_list_versions.js's saveFrom"
+        "the list read, lineFrom, sendLine, deleteLine, med_list_versions.js's sendFrom"
     );
     // The one Sign: the ticks drawn at the press, then the flush, then the command.
     let sign = js_fn(LIST_JS, "signMedList");

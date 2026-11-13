@@ -20,10 +20,12 @@
 A clinician taking a medication history meets two sources that disagree: the GP's letter says atorvastatin 40 mg, the
 packet the patient brought says 20 mg. On paper the clinician writes the line they believe, and beside it, crossed
 but legible, the other figure and where it came from. The record must be able to say the same: the line believed, the
-version not believed, who said it, and why the clinician chose. Two gaps in slices 1a and 1b stood in the way.
-A line could carry only the category `info_source` ("patient-reported"), never "the GP letter of 3 March" and never a
-reason. And a version that was not believed had nowhere to go: charted as a line it would be a current medication
-that the allergy check, the duplicate check and every reader would treat as taken.
+version not believed, who said it, and why the clinician chose. Two gaps in charting slice 1a
+([ADR-0099](0099-charting-a-medication.md)) and batch charting slice 1
+([ADR-0100](0100-charting-a-list-under-one-signature.md)) stood in the way. A line could carry only the category
+`info_source` ("patient-reported"), never "the GP letter of 3 March" and never a reason. And a version that was not
+believed had nowhere to go: charted as a line it would be a current medication that the allergy check, the duplicate
+check and every reader would treat as taken.
 
 The builder split the design (§7) into two slices. Slice 2a, this one, writes and shows the version. Slice 2b
 restores a version and lets a reviewer mark one "checked: not current".
@@ -52,15 +54,18 @@ restores a version and lets a reviewer mark one "checked: not current".
 4. **"From:" stamps only a NEW line**: a line with no stored row yet and no source of its own. A line
    typed before "From:" keeps whatever it stored, none included, so a typo fix never signs a provenance nobody gave
    and never costs the line its hand tick. A line may name its own source, which "From:" never overwrites. With no
-   "From:" set, nothing is stamped and slice 1a's press default stands.
+   "From:" set, nothing is stamped and slice 1a's press default stands for a charted line. A set-aside version with no
+   source of its own signs `unknown`, never the press default: the press says who reported a line charted as current,
+   and nothing about a figure the clinician set aside (principle 4; `version_to_sign`).
 5. **The preset is stored with the writer.** `medication_draft_from` holds one row per (chart, writer), a NULL writer
    being its own bucket, so the next line starts with it after a crash. It stores the exact label with a `CHECK` on
    the six, so `info_source_of` can never silently miss a stored label; renaming a label is not an in-place edit: the
    constraint reaches an existing table only through a guarded block that adds it when absent, so it must be dropped
    and re-added, and `info_source_of` and the window's preset list changed with it. The row is working state like the
    lines: never exported, never backed up. The delete door drops it with the writer's last line on the chart, and
-   every Sign spends through that door, so a completed Sign resets "From:". Not yet guaranteed: a "From:" set with no
-   line ever added is never dropped (#1090).
+   every Sign spends through that door, so a Sign that empties the writer's list resets "From:"; one that leaves a line
+   behind (unticked, or a version kept) keeps it. Not yet guaranteed: a "From:" set with no line ever added is never
+   dropped (#1090).
 
 ### The set-aside version: its own type, never a flag
 
@@ -120,21 +125,25 @@ restores a version and lets a reviewer mark one "checked: not current".
     unmarks its versions, with a fresh `saved_at`), leaves the line unticked with its tick gone: a version the
     clinician believed wrong must never become default-ticked. A companion's spend at Sign is such a delete, so it
     also unmarks and holds each of its versions kept for their own reason (a blank part, or the companion now another
-    drug); the outcome then says "{drug line} — no longer set aside: its line was charted; set it aside again", never
-    "version kept", which is said only of a version whose companion was not charted.
+    drug); the outcome then says "{the line as typed} — no longer set aside: its line was charted; set it aside
+    again", never "version kept", which is said only of a version whose companion was not charted.
 17. **A version signs only in or after its companion.** At Sign `plan_versions` derives every version's companion
     from the STORED mark on the fresh read, never from the webview, and `version_holds` re-checks it. A
     version beside a ticked list line goes in that line's one transaction (`chart_draft_line`: the companion's event
     first, then each version's, because `alternative_to` needs the companion's thread). A version beside a charted
     current line signs alone, with its spend, in its own transaction (`set_aside_draft_line`), after every ticked
     line, even when nothing is ticked. Any other version stays in the list with its line saying why ("its line was
-    not charted", or the companion is gone, stopped, or now another drug).
+    not charted", or the companion is gone, stopped, or now another drug). A version not yet finished is kept ("it is
+    not finished") wherever its companion is: a version has no tick, so this is the guard an unfinished line's
+    never-default tick is for a line, and a half-typed figure is never signed.
 18. **The spends run the other way round**: every version's draft row is spent before its companion's,
     because the delete door unmarks and re-stamps the versions of a line it deletes, and a version spent after that
     would answer `changed` and roll everything back.
-19. **A version's refusal rolls back its companion.** The floor refusing a version (a companion stopped since the
-    read) abandons the shared transaction: the companion is reported not charted with the version's reason and both
-    stay in the list. A lost commit is reported not known for the companion and its versions together.
+19. **A version's refusal rolls back its companion.** The floor refusing a version signed with its list companion
+    (a control character in its why, say, [#1091](https://github.com/cairn-ehr/cairn-ehr/issues/1091)) abandons the
+    shared transaction: the companion is reported not charted and both stay in the list. A version signed alone
+    beside a charted line stopped since the read is refused alone and kept, saying why. A lost commit is reported not
+    known for the companion and its versions together.
 20. **Sign says it records versions.** Near Sign the list reads "Sign also records {n} set-aside version(s), as not
     current" when it will, because a Sign with nothing ticked still signs a version beside a charted line. The count
     comes from the same grouping Sign uses, so it never names a version Sign would keep.
@@ -147,7 +156,10 @@ restores a version and lets a reviewer mark one "checked: not current".
     line and a version differing only in route reads differently from its companion. That twin carries the
     `info_source` word in parentheses and, when the coding's display differs from the term, the display in square
     brackets, so the line reads e.g. "GP letter: Lipitor 25 mg (external-record) [atorvastatin] — set aside, not
-    current". The versions of a since-stopped line stay shown under it.
+    current". The versions of a since-stopped line stay shown under it. A failed read of the versions never hides the
+    list: it is worded above the lines ("Set-aside versions could not be read: none is shown under the lines"), so
+    an empty space under a line is never mistaken for none set aside. A version whose companion is in no row of the
+    list is not shown ([#1089](https://github.com/cairn-ehr/cairn-ehr/issues/1089)).
 22. **Soft policy.** Which lines may be set aside, the pick ("Version of which line?" when two or more qualify), the
     copy and the collapse live in the window. The type, its refusals and the projection are the floor and the same
     for every client.
@@ -161,7 +173,14 @@ restores a version and lets a reviewer mark one "checked: not current".
   "From:" live on the node that typed them. The signed version does cross.
 - **Only single-part coded lines can be versions.** An uncoded line or a combination cannot be set aside.
 - **A peer's orphan is invisible until its companion arrives.** It is held, not lost, and shown nowhere meanwhile.
-- **A line typed before "From:" is not stamped**; its source is set by hand.
+- **A line typed before "From:" is not stamped**; its source is set by hand. A "From:" change waits, saying so,
+  while a line typed before it has not saved.
+- **The draft door is not the Sign floor.** It stores a control character in a source or why that the floor then
+  refuses at Sign ([#1091](https://github.com/cairn-ehr/cairn-ehr/issues/1091)), and a version's refusal at Sign is
+  worded against its companion line ([#1092](https://github.com/cairn-ehr/cairn-ehr/issues/1092)). The "From:" door
+  checks less than the line door ([#1094](https://github.com/cairn-ehr/cairn-ehr/issues/1094)).
+- **A peer version that opens malformed is skipped without a trace**
+  ([#1093](https://github.com/cairn-ehr/cairn-ehr/issues/1093)).
 - **The figures are owed by a human.** Every stopwatch figure, the real window's WebKit and VoiceOver, and the DB-gated
   window tests (which CI does not run, #905) are measured per RUNBOOK §33.
 

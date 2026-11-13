@@ -48,10 +48,10 @@ Every batch charting slice 1 rule below still holds; a version's spend is slice 
   line's hand tick); guess `info_source` from the free text. Pins: `med_list_source_db_tests.rs::editing_a_line_typed_before_from_keeps_its_own_source_and_tick`,
   `from_sets_each_new_lines_source_and_a_line_can_change_its_own`, `draft_versions_tests.rs::each_preset_maps_to_its_category`,
   `every_stored_preset_label_maps_to_a_category`, `medication_draft_list_versions_store.rs::the_from_row_refuses_an_unknown_preset`.
-- **The delete door drops "From:" with the writer's last line on the chart**, so a completed Sign resets it (a "From:"
-  set with no line ever added is not dropped yet, #1090). **Tempting wrong fix:** keep it "for convenience" (Monday's "Packets seen"
-  silently stamps Friday's lines). Pins: `medication_draft_list_versions_store.rs::the_last_line_leaving_resets_from`,
-  `from_survives_while_a_line_remains`.
+- **The delete door drops "From:" with the writer's last line on the chart**, so a Sign that empties the writer's list
+  resets it, and one that leaves a line behind keeps it (a "From:" set with no line ever added is not dropped yet,
+  #1090). **Tempting wrong fix:** keep it "for convenience" (Monday's "Packets seen" silently stamps Friday's lines).
+  Pins: `medication_draft_list_versions_store.rs::the_last_line_leaving_resets_from`, `from_survives_while_a_line_remains`.
 - **A version signs only in or after its companion**, and its companion is re-derived from the STORED mark on the fresh
   read, never taken from the webview. A version beside a ticked list line goes in that line's one transaction; beside a
   charted current line it signs alone; any other stays with its reason. A version's floor refusal rolls the companion
@@ -59,10 +59,22 @@ Every batch charting slice 1 rule below still holds; a version's spend is slice 
   refuses a VERSION whose companion is not projected); trust `set_aside_of` from the webview; let a version go in when its
   companion was refused (a version in the record beside nothing). Pins: `med_list_versions_db_tests.rs::one_sign_charts_the_line_and_its_version_together`,
   `a_webview_naming_another_companion_cannot_move_a_version`, `a_refused_companion_keeps_its_versions_unsigned`,
-  `medication_set_aside_sign.rs::a_version_spend_that_fails_rolls_back_the_companion_too`.
+  `medication_set_aside_sign.rs::a_version_refused_by_the_floor_rolls_back_the_companion_too`,
+  `a_version_spend_that_fails_rolls_back_the_companion_too`.
 - **Sign spends every version's draft row BEFORE its companion's** (events still go companion first): the delete door
   unmarks and re-stamps a deleted line's versions. **Tempting wrong fix:** spend in event order (each version's spend
   answers `changed` and the whole Sign rolls back). Pin: `medication_set_aside_sign.rs::a_line_and_its_version_commit_together_and_leave_the_list`.
+- **A version signs only when finished, and with its own source or `unknown`.** An unfinished version is kept ("it is
+  not finished"), beside a list line or a charted one; a version with no source of its own signs `unknown`, never the
+  press default. **Tempting wrong fixes:** let a version through because it has no tick to withhold (a half-typed
+  figure, frozen); give it the press's default like a line (the clinician named as the source of a figure they set
+  aside). Pins: `med_list_versions_tests.rs::an_unfinished_version_is_kept_not_signed`,
+  `a_version_with_no_source_signs_unknown_not_the_press_default`.
+- **A failed versions read never hides the list.** It runs under a savepoint in the chart's snapshot and is worded above
+  the lines (`VERSIONS_NOT_READ`). **Tempting wrong fixes:** `?` it (the pane fails to open over a list of drugs the
+  clinician disbelieved); turn it into an empty list (no version shown reads as none set aside). Pins:
+  `med_list_versions_kept_db_tests.rs::med_list_draws_when_the_versions_read_fails`,
+  `med_list_versions_webview_tests.rs::a_failed_versions_read_is_worded_above_the_list`.
 - **Provenance edits clear a hand tick IN THE DOOR but never an untick**; a set-aside line is never ticked; unmarking
   leaves the line held. **Tempting wrong fixes:** clear `held` on any change (adding a "why" to an unticked line would
   re-derive the default tick and the line would tick itself); let an unmarked version fall back to the default tick

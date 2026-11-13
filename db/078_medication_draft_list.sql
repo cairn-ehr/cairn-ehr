@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
     set_aside_of   text CHECK (set_aside_of IS NULL OR set_aside_of ~
         '^(line|med):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 );
--- Paired with the CREATE above for a table made before the two columns (#207's rule).
+-- Paired with the CREATE above for a table made before these columns (#207's rule).
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS typed_drug text NOT NULL DEFAULT '';
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS directions text NOT NULL DEFAULT '';
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS held boolean NOT NULL DEFAULT false;
@@ -147,8 +147,9 @@ CREATE TABLE IF NOT EXISTS medication_draft_line_deleted (
 -- The writer's "From:" row for one chart (slice 2a): the category preset and detail they last
 -- chose, kept so the next line they add starts with it. One row per (chart, writer); a NULL
 -- writer is its own bucket (NULLS NOT DISTINCT). Like the lines, never exported or backed up.
--- The delete door drops it with the writer's last line here, so a completed Sign resets it;
--- a "From:" set with no line ever added is never dropped (#1090).
+-- The delete door drops it with the writer's last line here, so a Sign that empties the list
+-- resets it (one leaving a line behind keeps it); a "From:" set with no line ever added is
+-- never dropped (#1090).
 CREATE TABLE IF NOT EXISTS medication_draft_from (
     patient_id uuid NOT NULL,
     writer     text,

@@ -48,6 +48,18 @@ async fn save_v(
 }
 
 /// One stored line's (hand_ticked, held, info_source, source_detail, why, set_aside_of), read by door.
+/// The line's `saved_at`, as the list read hands it to a Sign.
+async fn saved_at(c: &Client, chart: Uuid, line: Uuid) -> String {
+    c.query_one(
+        "SELECT saved_at::text FROM cairn_med_draft_lines($2::text::uuid, 'notewriter') \
+         WHERE line_id = $1::text::uuid",
+        &[&line.to_string(), &chart.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
 async fn row_of(
     c: &Client,
     chart: Uuid,
@@ -258,6 +270,7 @@ async fn deleting_a_companion_clears_its_versions_marks() {
         ],
     )
     .await;
+    let before = saved_at(&w, chart, v).await;
     let del: String = w
         .query_one("SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', (SELECT s.saved_at FROM cairn_med_draft_lines($2::text::uuid, 'notewriter') s WHERE s.line_id = $1::text::uuid))", &[&x.to_string(), &chart.to_string()])
         .await
@@ -266,6 +279,13 @@ async fn deleting_a_companion_clears_its_versions_marks() {
     assert_eq!(del, "deleted");
     let r = row_of(&w, chart, v).await;
     assert_eq!((r.1, r.5), (true, None), "the version is unmarked and held");
+    // Re-stamped: a Sign holding the read from before the unmark spends it only by answering
+    // "changed", never as the version it no longer is (ADR-0102 item 16).
+    assert_ne!(
+        saved_at(&w, chart, v).await,
+        before,
+        "the unmarked version's saved_at moved"
+    );
     assert!(
         row_of(&w, chart, other).await.5.is_some(),
         "an unrelated mark is untouched"

@@ -417,4 +417,4 @@ mod tests;
 
 #[cfg(test)]
 #[path = "allergy_check_db_tests.rs"]
-mod db_tests;
+pub(crate) mod db_tests;

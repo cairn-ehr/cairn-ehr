@@ -84,8 +84,8 @@ pub fn med_list_not_yours(name: &str) -> String {
 
 /// What Sign answers. `changed`: nothing was signed, and `lines` (ids) lost their ticks. `done`:
 /// the lines were tried — `charted` of `of` went in; `not_charted` is `(line id, reason)`;
-/// `unknown` the line ids whose outcome is NOT known (one line and its versions: the loop stops
-/// there); kept versions are in `not_charted` too;
+/// `unknown` the line ids whose outcome is NOT known (one line and its versions, or one version
+/// signed alone: the loop stops there); kept versions are in `not_charted` too;
 /// `outcome` the words for all of it; `pane` the medication list and `list` this list, read again
 /// (`None` when that read failed — the lines that went in are in the record either way).
 // The `Done` variant is the larger by the pane it carries; one value per Sign, never stored.

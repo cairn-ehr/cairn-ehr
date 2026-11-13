@@ -1,4 +1,4 @@
--- 079_medication_versions.sql — batch charting slice 2a/2b: "From:", the "why", and (later in this
+-- 079_medication_versions.sql — batch charting slice 2a: "From:", the "why", and (later in this
 -- file) the set-aside version of a medication line. Canonical home: data-model §3.3.
 --
 -- §1 (this section) is the FLOOR for two optional free-text keys on a

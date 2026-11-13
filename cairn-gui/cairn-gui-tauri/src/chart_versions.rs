@@ -14,19 +14,36 @@ use cairn_medication_view::{MedicationRow, PatientMedicationList};
 use cairn_node::medication::set_aside_read::{read_set_asides, SetAsideRow};
 use uuid::Uuid;
 
+/// Above the medication list when the set-aside versions could not be read: the current lines
+/// still show, and "no version under a line" must never read as "none was set aside".
+pub const VERSIONS_NOT_READ: &str =
+    "Set-aside versions could not be read: none is shown under the lines";
+
 /// The chart (as [`read_chart_of`]) and the set-aside versions over its chart set, from ONE
-/// snapshot. Fixture mode has no versions.
+/// snapshot. Fixture mode has no versions. A failed versions read is
+/// `Err(`[`VERSIONS_NOT_READ`]`)` beside a list that still opens (availability over
+/// consistency, as every other secondary read of the pane): it runs under a savepoint, so its
+/// failure aborts only itself, never the snapshot the list was read in.
 pub(crate) async fn read_chart_and_versions(
     state: &AppState,
     patient: Uuid,
-) -> anyhow::Result<(PatientMedicationList, Vec<SetAsideRow>)> {
+) -> anyhow::Result<(PatientMedicationList, Result<Vec<SetAsideRow>, String>)> {
     let Some(db) = state.db.as_ref() else {
-        return Ok((read_chart_of(state, patient).await?, vec![]));
+        return Ok((read_chart_of(state, patient).await?, Ok(vec![])));
     };
     let mut db = db.lock().await?;
     cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
         let list = cairn_node::medication::read::list_patient_medications(tx, patient).await?;
-        let versions = read_set_asides(tx, list.charts.members()).await?;
+        tx.batch_execute("SAVEPOINT set_aside_read").await?;
+        let versions = match read_set_asides(tx, list.charts.members()).await {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                eprintln!("the set-aside versions could not be read: {e:#}");
+                tx.batch_execute("ROLLBACK TO SAVEPOINT set_aside_read")
+                    .await?;
+                Err(VERSIONS_NOT_READ.to_string())
+            }
+        };
         Ok((list, versions))
     })
     .await

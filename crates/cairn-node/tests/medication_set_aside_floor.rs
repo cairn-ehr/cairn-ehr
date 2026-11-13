@@ -54,6 +54,53 @@ async fn a_set_aside_beside_a_current_line_projects_its_fields() {
     assert_eq!(text(9).as_deref(), Some("packet says 25 mg"));
 }
 
+/// A version moiety-coded with a route and strength (every version the window signs is single-
+/// part moiety-coded, ADR-0102 item 13) projects its coded drug, so the chart can show
+/// "[atorvastatin]" under the line; and it resolves to its COMPANION's thread (item 12), so a
+/// sensitivity grade on that thread covers the version's body too, never leaving it ungraded.
+#[tokio::test]
+async fn a_coded_version_projects_its_drug_and_is_its_companions_thread() {
+    rig!(c, sk, kid);
+    let (p, med) = chart_with_one_med(&mut c, &sk, &kid).await;
+    let moiety = Uuid::now_v7().to_string();
+    let d = cairn_event::medication::MedicationAssertion {
+        coding: Some(cairn_event::medication::SubstanceCoding {
+            system: cairn_node::allergy::check::MOIETY_SYSTEM,
+            code: &moiety,
+            display: "atorvastatin",
+        }),
+        charting: Some(cairn_event::medication::Charting {
+            route: Some("po"),
+            strength: Some("40 mg"),
+            ..Default::default()
+        }),
+        ..drug()
+    };
+    let body = version_body_of(&c, &kid, p, Uuid::now_v7(), med, &d, |_| {}).await;
+    let ev = body.event_id.clone();
+    seal_and_submit(&c, &sk, body).await.expect("admitted");
+    let r = c
+        .query_one(
+            "SELECT coding_system, coding_code, coding_display, route, strength, \
+                    t_recorded IS NOT NULL, cairn_event_thread(event_id)::text \
+               FROM medication_set_aside WHERE event_id = $1::text::uuid",
+            &[&ev],
+        )
+        .await
+        .expect("one projected row");
+    let text = |i| r.get::<_, Option<String>>(i);
+    assert_eq!(
+        text(0).as_deref(),
+        Some(cairn_node::allergy::check::MOIETY_SYSTEM)
+    );
+    assert_eq!(text(1).as_deref(), Some(moiety.as_str()));
+    assert_eq!(text(2).as_deref(), Some("atorvastatin"));
+    assert_eq!(text(3).as_deref(), Some("po"));
+    assert_eq!(text(4).as_deref(), Some("40 mg"));
+    assert!(r.get::<_, bool>(5), "t_recorded projected");
+    assert_eq!(text(6), Some(med.to_string()), "the companion's thread");
+}
+
 #[tokio::test]
 async fn a_set_aside_is_never_a_current_medication() {
     rig!(c, sk, kid);
@@ -232,6 +279,11 @@ async fn an_object_route_strength_or_components_is_refused_at_both_doors() {
             "substance",
             json!({"term": "x", "strength": {"a": 1}}),
         ),
+        (
+            "components",
+            "substance",
+            json!({"term": "x", "components": {"a": 1}}),
+        ),
     ] {
         let mut p = ok.clone();
         p[key] = bad;
@@ -257,6 +309,22 @@ async fn a_companion_on_another_chart_or_unknown_is_refused_at_the_authoring_doo
         .await
         .expect_err("an unknown companion is refused");
     assert!(e.contains("alternative_to"), "{e}");
+}
+
+/// A version is judged by the charted line's coding check (db/079 calls db/041's): a coding that
+/// names a drug GROUP is refused at the authoring door and admitted from a peer (ADR-0056).
+#[tokio::test]
+async fn a_group_coded_version_is_refused_at_the_authoring_door() {
+    rig!(c, _sk, _kid);
+    let (v, a) = (Uuid::now_v7().to_string(), Uuid::now_v7().to_string());
+    let p = json!({"version_id": v, "alternative_to": a, "info_source": "external-record",
+                   "substance": {"term": "statins", "coding": {"system": "drugref-class",
+                   "code": Uuid::now_v7().to_string(), "display": "statins"}}});
+    let e = floor(&mut c, &floor_body(p.clone()), false)
+        .await
+        .expect_err("a group coding is refused here");
+    assert!(e.contains("drugref-class"), "{e}");
+    floor(&mut c, &floor_body(p), true).await.unwrap();
 }
 
 #[tokio::test]

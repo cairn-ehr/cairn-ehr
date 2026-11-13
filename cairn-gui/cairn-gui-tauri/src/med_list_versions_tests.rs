@@ -115,6 +115,31 @@ fn group_versions_sends_a_charted_companions_versions_alone() {
     assert_eq!(kept.len(), 1);
 }
 
+/// A version still being typed (never finished) signs neither with its ticked companion nor
+/// alone: it would freeze a half-typed figure no source gave, and a version has no tick to guard
+/// it the way an unfinished line's default tick does.
+#[test]
+fn an_unfinished_version_is_kept_not_signed() {
+    let med = Uuid::from_u128(0x99);
+    let code = Uuid::from_u128(0xA).to_string();
+    let mut beside_draft = line(2, 0xA, of_line(1));
+    beside_draft.finished = false;
+    let mut beside_charted = line(3, 0xA, Some(format!("med:{med}")));
+    beside_charted.finished = false;
+    let lines = [line(1, 0xA, None), beside_draft, beside_charted];
+    let ticked = BTreeSet::from([Uuid::from_u128(1)]);
+    let (with, alone, kept) = group_versions(&lines, &ticked, &[(med, code.as_str())]);
+    assert!(with.is_empty(), "{with:?}");
+    assert!(alone.is_empty(), "{alone:?}");
+    assert_eq!(
+        kept,
+        vec![
+            (Uuid::from_u128(2), VERSION_UNFINISHED),
+            (Uuid::from_u128(3), VERSION_UNFINISHED),
+        ]
+    );
+}
+
 /// "From:" stamps its category and names the document; a blank detail names the preset; unset
 /// (or a label not in the list) stamps nothing, so the press's default stands.
 #[test]
@@ -175,6 +200,33 @@ fn charted_companions_are_the_opened_charts_current_lines_only() {
     );
 }
 
+/// A line whose coding conflicts, a wrong-chart hazard, and one coded under another system (or
+/// to a code that is not a uuid) are never offered: Sign would sign a version into a thread the
+/// floor checks only for being on this chart.
+#[test]
+fn a_conflicted_hazard_or_non_moiety_line_is_never_a_companion() {
+    let opened = Uuid::from_u128(0x0E);
+    let mut conflict = row(1, 0xA, opened);
+    conflict.coding_conflict = true;
+    let mut hazard = row(2, 0xA, opened);
+    hazard.cross_patient = true;
+    let mut other_system = row(3, 0xA, opened);
+    other_system.coding_system = Some("drugref-class".into());
+    let mut not_a_uuid = row(4, 0xA, opened);
+    not_a_uuid.coding_code = Some("not-a-uuid".into());
+    let rows = [
+        conflict,
+        hazard,
+        other_system,
+        not_a_uuid,
+        row(5, 0xA, opened),
+    ];
+    assert_eq!(
+        charted_companions(&rows, opened),
+        vec![(Uuid::from_u128(5), Uuid::from_u128(0xA).to_string())]
+    );
+}
+
 /// The "Version of which line?" pick names each candidate as the clinician knows it: a list line
 /// by its words, a charted line by its drug and directions — so regular and PRN oxycodone can be
 /// told apart (design §3.5).
@@ -208,5 +260,42 @@ fn the_pick_names_each_candidate_line() {
             "on this list: line 7".to_string(),
             marks[2].clone(),
         ]
+    );
+}
+
+/// A version judged from `line` as Sign rebuilds it (signable as typed, nothing read).
+fn judged_version(line: DraftLine) -> Judged {
+    Judged {
+        signable: Ok((line.typed_drug.clone(), vec![])),
+        line,
+        parts: vec![],
+        read: cairn_node::medication::line::Directions::default(),
+        check: cairn_node::allergy::check::LineCheck::default(),
+        duplicate: false,
+        duplicate_of: None,
+        default_ticked: false,
+        offers: vec![],
+    }
+}
+
+/// A version nobody named a source for signs `unknown`, never the press's default: a version was
+/// never charted, so "Start" (clinician-observed) or "Already taking" (patient-reported) says
+/// nothing about who reported the figure the clinician set aside (principle 4, ADR-0102 item 4).
+/// A source the line carries ("From:" stamped, or its own) still signs as given.
+#[test]
+fn a_version_with_no_source_signs_unknown_not_the_press_default() {
+    for press in ["started-here", "pre-existing"] {
+        let mut l = line(2, 0xA, of_line(1));
+        l.charted_as = press.into();
+        let j = judged_version(l);
+        let v = version_to_sign(&j).expect("signable");
+        assert_eq!(v.drug.info_source, "unknown", "{press}");
+    }
+    let mut l = line(2, 0xA, of_line(1));
+    l.info_source = Some("external-record".into());
+    let j = judged_version(l);
+    assert_eq!(
+        version_to_sign(&j).unwrap().drug.info_source,
+        "external-record"
     );
 }

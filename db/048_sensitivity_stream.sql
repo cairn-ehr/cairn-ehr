@@ -458,14 +458,14 @@ BEGIN
     -- WHY FOUR to_regclass PROBES AND NOT ONE: the UNION below spans EIGHT tables from FOUR
     -- migration files (medication_statement/medication_cessation/medication_coding from db/031;
     -- medication_dose_event/medication_dose_correction from db/032; medication_withhold/
-    -- medication_withhold_release from db/059; medication_set_aside from db/079). Checking only medication_statement silently
-    -- assumed the other seven always arrive with it. No shipped loader ever lists one of
-    -- 031/032/059 without the others (cairn-node loads all three; cairn-sync loads none) — but
-    -- the loop that replays db/*.sql is not one atomic transaction, so a loader that crashes
-    -- mid-replay between 031 and 059 is a real (if narrow) window in which
-    -- medication_statement exists and medication_withhold does not. Checking one
-    -- representative table PER SOURCE FILE (031, 032, 059, 079) costs nothing and closes that
-    -- window instead of assuming it shut.
+    -- medication_withhold_release from db/059; medication_set_aside from db/079). Checking
+    -- only medication_statement silently assumed the other seven always arrive with it. No
+    -- shipped loader ever lists one of 031/032/059/079 without the others (cairn-node loads all
+    -- four; cairn-sync loads none) — but the loop that replays db/*.sql is not one atomic
+    -- transaction, so a loader that crashes mid-replay between 031 and 059 is a real (if
+    -- narrow) window in which medication_statement exists and medication_withhold does not.
+    -- Checking one representative table PER SOURCE FILE (031, 032, 059, 079) costs nothing and
+    -- closes that window instead of assuming it shut.
     IF to_regclass('public.medication_statement') IS NULL
        OR to_regclass('public.medication_dose_event') IS NULL
        OR to_regclass('public.medication_withhold') IS NULL
@@ -1068,6 +1068,10 @@ GRANT SELECT ON sensitivity_withdrawal_worklist TO cairn_agent;
 -- clear shadow is deliberately not readable by the runtime role, and this must not widen
 -- that. It returns a COUNT, never a body, so it discloses only how much this node cannot
 -- see, which is precisely the fact the operator is owed.
+--
+-- Set-aside versions (db/079, `clinical.medication-set-aside.asserted`) match the LIKE and are
+-- counted, deliberately: a version this node cannot open is one no line shows under it, so the
+-- list is incomplete in the same way, and the count errs toward saying so.
 --
 -- pg_temp LAST (#426): reads event_log and event_clear UNQUALIFIED, and a blinded read
 -- here would return zero — rendering as "custody is complete", the reassuring answer.
