@@ -135,6 +135,7 @@ pub fn build_charted_body(
         dose_amount: input.dose_amount,
         dose_unit: input.dose_unit,
         sig: input.sig,
+        source_note: None,
         info_source: input.info_source,
         started: input.started,
         started_precision: input.started_precision,

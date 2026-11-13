@@ -222,6 +222,7 @@ async fn assert_medication_is_unchanged() {
         dose_amount: i.dose_amount,
         dose_unit: i.dose_unit,
         sig: i.sig,
+        source_note: None,
         info_source: i.info_source,
         started: i.started,
         started_precision: i.started_precision,
