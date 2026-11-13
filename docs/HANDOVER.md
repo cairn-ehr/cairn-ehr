@@ -148,9 +148,9 @@
 >   ([ADR-0101](spec/decisions/0101-the-same-drug-delabel-offer.md), spec v0.103, `db/075` in place; closed #1053 +
 >   #1054): a list line whose moiety code equals a live drug allergy's offers that allergy's de-label (code equality
 >   only); the press opens the De-label row pre-filled and signs nothing; a de-label may code the tolerated drug. Open:
->   **#1084** · **#1085** · **#1087**; owed **RUNBOOK §32**. **For the maintainer to confirm (asked 2026-11-12 and
->   2026-11-13, unanswered):** the de-label row pre-fills today's date only on an *Already taking* line; on a *Start*
->   line the date stays empty ("not known"), since "tolerated today" would be untrue there.
+>   **#1084** · **#1085** · **#1087**; owed **RUNBOOK §32**. **Confirmed by the maintainer 2026-11-13:** the de-label row
+>   pre-fills today's date only on an *Already taking* line; on a *Start* line the date stays empty ("not known"),
+>   since "tolerated today" would be untrue there.
 > - **Batch-charting slice 2a — "From:", the "why", the set-aside version — BUILT 2026-11-13 on draft PR
 >   [#1088](https://github.com/cairn-ehr/cairn-ehr/pull/1088)** (design
 >   [`superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md`](superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md),
