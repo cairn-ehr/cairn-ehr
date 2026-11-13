@@ -74,8 +74,10 @@ fn parse_mark(mark: &str) -> Option<Companion> {
 }
 
 /// At Sign: `Ok(companion)` while `line.set_aside_of` still names a candidate, `Err(reason)`
-/// otherwise (not set aside, a malformed mark, or the companion is gone, set aside itself, or
-/// now another drug).
+/// otherwise, each worded for what happened (ruling R13; the window shows it as "version kept:
+/// {reason}"): not set aside, a malformed mark, a charted companion no longer current (stopped,
+/// or not on this read), a list companion no longer on the list (removed, or set aside itself),
+/// or a companion still there but now another drug. A gone line is never called another drug.
 pub fn version_holds(
     line: &DraftLine,
     draft: &[DraftLine],
@@ -83,10 +85,20 @@ pub fn version_holds(
 ) -> Result<Companion, &'static str> {
     let mark = line.set_aside_of.as_deref().ok_or("not set aside")?;
     let named = parse_mark(mark).ok_or("the set-aside mark is not a line")?;
-    companion_candidates(line, draft, current)
-        .contains(&named)
-        .then_some(named)
-        .ok_or("the line it was set aside beside is no longer the same drug")
+    if companion_candidates(line, draft, current).contains(&named) {
+        return Ok(named);
+    }
+    let still_there = match named {
+        Companion::Draft(id) => draft
+            .iter()
+            .any(|d| d.line_id == id && d.set_aside_of.is_none()),
+        Companion::Charted(id) => current.iter().any(|(m, _)| *m == id),
+    };
+    Err(match (still_there, named) {
+        (true, _) => "the line it was set aside beside is no longer the same drug",
+        (false, Companion::Draft(_)) => "its line is no longer on the list",
+        (false, Companion::Charted(_)) => "its line is no longer current",
+    })
 }
 
 /// The wire category of a "From:" preset label; `None` for no preset or one not in the list.

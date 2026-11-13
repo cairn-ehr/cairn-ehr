@@ -289,6 +289,10 @@ pub async fn med_list_sign_impl(
 /// the STORED rows, then write their events and spend their draft rows in one transaction
 /// (`chart_draft_line`). `list` is the list's identity: `(chart, terminal, writer)`. Answers how
 /// many versions went in with it.
+///
+/// A version's FLOOR refusal rolls back its companion's whole transaction: the version and its
+/// line are one decision (design §3.3, ADR-0060 decision 7's scoping), so the companion is
+/// reported not charted with the version's reason, and both stay in the list.
 #[allow(clippy::too_many_arguments)] // the list, the line, its verdict, its versions, the signer
 async fn sign_line(
     state: &AppState,

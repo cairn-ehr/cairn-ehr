@@ -3,7 +3,7 @@
 //! signed into the line's event; a save that sends the line back as drawn keeps them and its
 //! tick. Beside `med_list_versions_db_tests.rs` (whose helpers these share) to keep each file
 //! under 500 lines. Run locally on `CAIRN_TEST_PG` (#905: CI never runs these).
-use super::db_tests::{arg, bea_list, done, read, save, save_as, sign};
+use super::db_tests::{arg, bea_list, done, here, read, save, save_as, sign};
 use super::versions_db_tests::{shown, statements};
 use super::*;
 use crate::med_list_versions::med_list_from_save_impl;
@@ -34,8 +34,10 @@ async fn from_sets_each_new_lines_source_and_a_line_can_change_its_own() {
     let view = med_list_from_save_impl(
         &state,
         &patient,
+        std::slice::from_ref(&patient),
         Some("GP letter".into()),
         Some("dated Aug 2025".into()),
+        Some("bea"),
     )
     .await
     .unwrap();
@@ -185,4 +187,88 @@ async fn a_save_that_does_not_touch_the_source_keeps_it_and_the_tick() {
     assert!(after.hand_ticked && after.ticked, "the tick stands");
     assert_eq!(after.source_detail.as_deref(), Some("GP letter"));
     assert_eq!(after.why.as_deref(), Some("as the letter says"));
+}
+
+/// Ruling R2: "From:" picked on Bea's list, landing after who's here switched to Sue, files under
+/// Bea, whose list was read; Sue's list gets no source she never chose.
+#[tokio::test]
+async fn a_from_save_after_a_switch_files_under_the_read_writer() {
+    let Some((_guard, owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let writer = read(&state, chart).await.writer;
+    assert_eq!(writer.as_deref(), Some("bea"));
+    here(&state, "sue", "Dr Sue").await;
+    let patient = chart.to_string();
+    med_list_from_save_impl(
+        &state,
+        &patient,
+        std::slice::from_ref(&patient),
+        Some("GP letter".into()),
+        None,
+        writer.as_deref(),
+    )
+    .await
+    .unwrap();
+    let filed: Vec<(Option<String>, Option<String>)> = owner
+        .query(
+            "SELECT writer, preset FROM medication_draft_from WHERE patient_id = $1::text::uuid",
+            &[&patient],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    assert_eq!(filed, [(Some("bea".into()), Some("GP letter".into()))]);
+    assert_eq!(read(&state, chart).await.from, None, "never Sue's");
+}
+
+/// Ruling R12: "From:" stamps only a line typed after it. A line typed before it, saved again
+/// (as drawn, then with a typo fixed), keeps its own empty source, and the unchanged save keeps
+/// its hand tick: it never signs a provenance nobody gave.
+#[tokio::test]
+async fn editing_a_line_typed_before_from_keeps_its_own_source_and_tick() {
+    let Some((_guard, _owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let mut line = arg(("metfromin", "500mg bd"), vec![], true);
+    let id = line.line_id.clone();
+    assert_eq!(
+        save_as(&state, chart, line.clone(), Some("bea")).await,
+        "saved"
+    );
+    let patient = chart.to_string();
+    med_list_from_save_impl(
+        &state,
+        &patient,
+        std::slice::from_ref(&patient),
+        Some("GP letter".into()),
+        None,
+        Some("bea"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        save_as(&state, chart, line.clone(), Some("bea")).await,
+        "saved"
+    );
+    let v = read(&state, chart).await;
+    let drawn = shown(&v, &id);
+    assert_eq!(
+        (drawn.info_source.as_deref(), drawn.source_detail.as_deref()),
+        (None, None)
+    );
+    assert!(drawn.hand_ticked && drawn.ticked, "the tick stands");
+    line.typed_drug = "metformin".into();
+    line.line_text = "metformin 500mg bd".into();
+    assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
+    let v = read(&state, chart).await;
+    assert_eq!(
+        shown(&v, &id).source_detail,
+        None,
+        "a typo fix stamps nothing"
+    );
 }

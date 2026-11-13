@@ -14,7 +14,7 @@ use crate::notes::review::db_tests::credential;
 use tokio_postgres::Client;
 
 /// A metoprolol-family moiety, and another drug (atenolol) for an edited companion.
-const METOPROLOL: u128 = 0x3E70_0001;
+pub(super) const METOPROLOL: u128 = 0x3E70_0001;
 const ATENOLOL: u128 = 0xA7E0_0002;
 
 /// A finished Already-taking line set aside beside `mark`, as a source reported it.

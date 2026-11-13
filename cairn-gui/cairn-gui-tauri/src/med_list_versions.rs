@@ -3,10 +3,11 @@
 //!
 //! - **"From:"** ([`med_list_from_save`]) is set once above the list: a preset LABEL (`GP letter`,
 //!   …) and a free-text detail, stored per (chart, writer) by db/078 so it survives a crash. Each
-//!   line SAVED after it, carrying no source of its own, is stamped with it ([`stamp`]): the
-//!   preset's category goes to `info_source`, the free text (or, when blank, the preset's label)
-//!   to `source_detail`. The category is never guessed from the text. A line may name its own
-//!   source instead, and keeps it. Unset, nothing is stamped and the press's default stands
+//!   NEW line saved after it (no stored row yet; ruling R12), carrying no source of its own, is
+//!   stamped with it ([`stamp`]): the preset's category goes to `info_source`, the free text (or,
+//!   when blank, the preset's label) to `source_detail`. The category is never guessed from the
+//!   text. A line typed before "From:" keeps what it stored, none included. A line may name its
+//!   own source instead, and keeps it. Unset, nothing is stamped and the press's default stands
 //!   (`med_chart_write::charted_input`: Start is the clinician's, Already taking the patient's).
 //! - **A line's source and why** are signed into its event ([`list_input`]): the two keys of
 //!   cairn-event's `SourceNote`, never one merged text.
@@ -22,7 +23,7 @@ use crate::link::judgement_view::refused;
 use crate::med_chart::press;
 use crate::med_chart_write::charted_input;
 use crate::med_line_sign::single_coding;
-use crate::med_list::{claim_writer, med_list_read_impl, Judged, MedListView, FIXTURE};
+use crate::med_list::{med_list_read_impl, Judged, MedListView, FIXTURE};
 use crate::med_list_sign::outcome;
 use crate::state::AppState;
 use crate::write_failure::{node_cannot_write, node_failure};
@@ -54,25 +55,38 @@ pub struct FromView {
 pub async fn med_list_from_save(
     state: tauri::State<'_, AppState>,
     patient_id: String,
+    charts: Vec<String>,
     preset: Option<String>,
     detail: Option<String>,
+    writer: Option<String>,
 ) -> Result<MedListView, ErrorView> {
-    med_list_from_save_impl(&state, &patient_id, preset, detail).await
+    med_list_from_save_impl(
+        &state,
+        &patient_id,
+        &charts,
+        preset,
+        detail,
+        writer.as_deref(),
+    )
+    .await
 }
 
-/// Save "From:" for whoever who's here names (a discrete pick, not a debounced save), then read
-/// the list again. db/078 holds the preset to its six labels (ruling R6).
+/// Save "From:" under `writer`, the writer the list was READ under (`MedListView::writer`, ruling
+/// R2: a pick landing after a who's-here switch still names the person whose list it was), then
+/// read the list again over `charts`, the set on screen (as `med_list_read`). db/078 holds the
+/// preset to its six labels (ruling R6).
 pub async fn med_list_from_save_impl(
     state: &AppState,
     patient_id: &str,
+    charts: &[String],
     preset: Option<String>,
     detail: Option<String>,
+    writer: Option<&str>,
 ) -> Result<MedListView, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     if state.is_mock() {
         return Err(refused(FIXTURE));
     }
-    let (writer, _) = claim_writer(state).await;
     let (preset, detail) = (given(preset), given(detail));
     {
         let db = state
@@ -81,17 +95,11 @@ pub async fn med_list_from_save_impl(
             .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
             .await?;
-        draft::save_draft_from(
-            &*db,
-            patient,
-            writer.as_deref(),
-            preset.as_deref(),
-            detail.as_deref(),
-        )
-        .await
-        .map_err(|e| node_failure(&db.explain(e)))?;
+        draft::save_draft_from(&*db, patient, writer, preset.as_deref(), detail.as_deref())
+            .await
+            .map_err(|e| node_failure(&db.explain(e)))?;
     }
-    med_list_read_impl(state, patient_id, None).await
+    med_list_read_impl(state, patient_id, Some(charts)).await
 }
 
 /// A typed value, or `None` when blank: the floor refuses a blank source or why. Pure.
@@ -112,6 +120,35 @@ pub(crate) fn stamp(from: &FromView) -> Option<(&'static str, String)> {
         .filter(|d| !d.is_empty())
         .unwrap_or(preset);
     Some((category, detail.to_string()))
+}
+
+/// Stamp "From:" ([`stamp`]) on `row` when it is a NEW line (no stored row yet under `writer` on
+/// `patient`) carrying no source of its own; read under the same writer the save is filed under.
+/// A line typed before "From:" keeps what it stored, none included (ruling R12): an edit to it
+/// never signs a provenance nobody gave, nor loses its hand tick to one.
+pub(crate) async fn stamp_new_line(
+    db: &(impl tokio_postgres::GenericClient + Sync),
+    patient: Uuid,
+    writer: Option<&str>,
+    row: &mut DraftLine,
+) -> anyhow::Result<()> {
+    if row.info_source.is_some() || row.source_detail.is_some() {
+        return Ok(());
+    }
+    let stored = draft::read_draft_lines(db, patient, writer).await?;
+    if stored.iter().any(|l| l.line_id == row.line_id) {
+        return Ok(());
+    }
+    let from = draft::read_draft_from(db, patient, writer).await?;
+    if let Some((category, detail)) = from
+        .map(|(preset, detail)| FromView { preset, detail })
+        .as_ref()
+        .and_then(stamp)
+    {
+        row.info_source = Some(category.into());
+        row.source_detail = Some(detail);
+    }
+    Ok(())
 }
 
 /// The OPENED chart's current lines a version may be set aside beside, as `(medication_id,

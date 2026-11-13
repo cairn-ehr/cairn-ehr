@@ -99,13 +99,35 @@ fn a_version_holds_while_its_companion_is_still_a_candidate() {
 fn an_edited_companion_of_another_drug_no_longer_holds() {
     let a = oxy(1, Some(format!("line:{}", u(2))));
     let b = line(2, coded(MOIETY_SYSTEM, "morphine"), None);
-    assert!(version_holds(&a, &[a.clone(), b], &[]).is_err());
-    // A charted companion that is gone from the current list, or a line not set aside, or a
-    // mark that is not an id, never holds either.
+    assert_eq!(
+        version_holds(&a, &[a.clone(), b], &[]),
+        Err("the line it was set aside beside is no longer the same drug")
+    );
+    // A charted line recoded to another drug reads the same.
     let a = oxy(1, Some(format!("med:{}", u(90))));
-    assert!(version_holds(&a, std::slice::from_ref(&a), &[]).is_err());
+    assert_eq!(
+        version_holds(&a, std::slice::from_ref(&a), &[(u(90), "morphine")]),
+        Err("the line it was set aside beside is no longer the same drug")
+    );
+    // A line not set aside, or a mark that is not an id, never holds either.
     assert!(version_holds(&oxy(1, None), &[], &[]).is_err());
     assert!(version_holds(&oxy(1, Some("line:nonsense".into())), &[], &[]).is_err());
+}
+
+/// Ruling R13: a companion that is GONE is never worded as another drug. A charted line stopped
+/// (no longer in `current`) is no longer current; a list line removed is no longer on the list.
+#[test]
+fn a_gone_companion_says_it_is_gone_not_another_drug() {
+    let a = oxy(1, Some(format!("med:{}", u(90))));
+    assert_eq!(
+        version_holds(&a, std::slice::from_ref(&a), &[]),
+        Err("its line is no longer current")
+    );
+    let a = oxy(1, Some(format!("line:{}", u(2))));
+    assert_eq!(
+        version_holds(&a, std::slice::from_ref(&a), &[]),
+        Err("its line is no longer on the list")
+    );
 }
 
 #[test]

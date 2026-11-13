@@ -30,7 +30,7 @@ use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
     already_on_the_list, fresh_read, judge, tick_holds, Judged,
 };
-use crate::med_list_versions::{companions_of, given, stamp, FromView};
+use crate::med_list_versions::{companions_of, given, stamp_new_line, FromView};
 use crate::notes::terminal_of;
 use crate::state::AppState;
 use crate::whos_here::Claim;
@@ -222,7 +222,7 @@ pub async fn med_list_read_impl(
         writer,
         writer_name,
         elsewhere: elsewhere(&judged, terminal),
-        lines: lines_view(&judged, &charted),
+        lines: lines_view(&judged, &charted, terminal),
         from,
     })
 }
@@ -278,21 +278,10 @@ pub async fn med_list_save_impl(
         .ok_or_else(|| node_cannot_write("no database connection"))?
         .lock()
         .await?;
-    // A line with no source of its own takes "From:", read under the same writer (module doc of
-    // `med_list_versions`).
-    if row.info_source.is_none() && row.source_detail.is_none() {
-        let from = draft::read_draft_from(&*db, patient, writer)
-            .await
-            .map_err(|e| node_failure(&db.explain(e)))?;
-        if let Some((category, detail)) = from
-            .map(|(preset, detail)| FromView { preset, detail })
-            .as_ref()
-            .and_then(stamp)
-        {
-            row.info_source = Some(category.into());
-            row.source_detail = Some(detail);
-        }
-    }
+    // A NEW line with no source of its own takes "From:" (ruling R12, `med_list_versions`).
+    stamp_new_line(&*db, patient, writer, &mut row)
+        .await
+        .map_err(|e| node_failure(&db.explain(e)))?;
     let answer = draft::save_draft_line(&*db, patient, writer, &row)
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
@@ -398,14 +387,24 @@ pub(crate) fn elsewhere(judged: &[Judged], terminal: Option<&str>) -> Option<Str
         .cloned()
 }
 
-/// Every judged line as the pane draws it, each with the lines it could be set aside beside
-/// (`charted`: the opened chart's current lines, `med_list_judge::Fresh`). Pure.
-fn lines_view(judged: &[Judged], charted: &[(Uuid, String)]) -> Vec<ListLineView> {
-    let lines: Vec<DraftLine> = judged.iter().map(|j| j.line.clone()).collect();
+/// Every judged line as the pane draws it, each line held by `terminal` with the lines it could
+/// be set aside beside: `terminal`'s own lines and `charted`, the opened chart's current lines
+/// (`med_list_judge::Fresh`). Never another terminal's, whose lines this terminal's Sign does
+/// not plan (`plan_versions`, ruling R13); a line held elsewhere is offered none. Pure.
+fn lines_view(
+    judged: &[Judged],
+    charted: &[(Uuid, String)],
+    terminal: Option<&str>,
+) -> Vec<ListLineView> {
+    let here = |j: &&Judged| Some(j.line.terminal_id.as_str()) == terminal;
+    let lines: Vec<DraftLine> = judged.iter().filter(here).map(|j| j.line.clone()).collect();
     judged
         .iter()
         .map(|j| ListLineView {
-            companions: companions_of(&j.line, &lines, charted),
+            companions: match here(&j) {
+                true => companions_of(&j.line, &lines, charted),
+                false => vec![],
+            },
             ..line_view(j)
         })
         .collect()
@@ -477,3 +476,7 @@ mod versions_db_tests;
 #[cfg(test)]
 #[path = "med_list_source_db_tests.rs"]
 mod source_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_versions_kept_db_tests.rs"]
+mod versions_kept_db_tests;
