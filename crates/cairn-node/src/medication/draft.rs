@@ -41,6 +41,15 @@ pub struct DraftLine {
     /// stored so the line never comes back ticked. Cleared by the door when the words change or
     /// a hand tick is given.
     pub held: bool,
+    /// The line's "From:" category (`patient-reported`, `clinician-observed`, `external-record`,
+    /// `unknown`) and the free-text detail after it; `None` = not given.
+    pub info_source: Option<String>,
+    pub source_detail: Option<String>,
+    /// Why the clinician is charting it, as typed.
+    pub why: Option<String>,
+    /// `line:<uuid>` (a draft line) or `med:<uuid>` (a charted medication) this line is a
+    /// version of; `None` = not set aside. See `draft_versions`.
+    pub set_aside_of: Option<String>,
 }
 
 /// `[{"source": "...", "ref": "<uuid>"}]` to pairs, or `None` when ANY element is malformed.
@@ -69,7 +78,8 @@ pub async fn read_draft_lines(
     let rows = client
         .query(
             "SELECT line_id::text, terminal_id, seq, charted_as, line_text, parts::text, reason, \
-                    hand_ticked, ticked_against::text, finished, saved_at::text, typed_drug, directions, held \
+                    hand_ticked, ticked_against::text, finished, saved_at::text, typed_drug, directions, held, \
+                    info_source, source_detail, why, set_aside_of \
                FROM cairn_med_draft_lines($1::text::uuid, $2)",
             &[&patient.to_string(), &writer],
         )
@@ -98,6 +108,10 @@ pub async fn read_draft_lines(
                 typed_drug: r.try_get(11)?,
                 directions: r.try_get(12)?,
                 held: r.try_get(13)?,
+                info_source: r.try_get(14)?,
+                source_detail: r.try_get(15)?,
+                why: r.try_get(16)?,
+                set_aside_of: r.try_get(17)?,
             })
         })
         .collect()
@@ -123,7 +137,7 @@ pub async fn save_draft_line(
     let row = client
         .query_one(
             "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, $3, $4, $5, $6, \
-                    $7::text::jsonb, $8, $9, $10::text::jsonb, $11, $12, $13, $14)",
+                    $7::text::jsonb, $8, $9, $10::text::jsonb, $11, $12, $13, $14, $15, $16, $17, $18)",
             &[
                 &line.line_id.to_string(),
                 &patient.to_string(),
@@ -139,6 +153,10 @@ pub async fn save_draft_line(
                 &line.typed_drug,
                 &line.directions,
                 &line.held,
+                &line.info_source,
+                &line.source_detail,
+                &line.why,
+                &line.set_aside_of,
             ],
         )
         .await

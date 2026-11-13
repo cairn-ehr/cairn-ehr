@@ -152,7 +152,11 @@ pub(crate) async fn judge(
         false => ListStatus::NotYetAsked,
     };
     let duplicates: Vec<(bool, Option<String>)> = {
-        let codes: Vec<Option<&str>> = decoded.iter().map(|(_, _, s)| moiety_of(s)).collect();
+        let codes: Vec<Option<&str>> = decoded
+            .iter()
+            // A set-aside version is signed beside its companion, so it never counts as a duplicate.
+            .map(|(l, _, s)| l.set_aside_of.is_none().then(|| moiety_of(s)).flatten())
+            .collect();
         let texts: Vec<&str> = decoded
             .iter()
             .map(|(l, _, _)| l.line_text.as_str())
@@ -193,6 +197,7 @@ pub(crate) async fn judge(
                 drug_allergies: &status,
                 duplicate,
                 named_writer,
+                set_aside: line.set_aside_of.is_some(),
             });
             let offers = match (&signable, use_allergies) {
                 (Ok((_, p)), true) => offers_for(&resolved, &fresh.allergies.doubted_charts, p),

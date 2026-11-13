@@ -46,6 +46,11 @@ const WIDENED: &[(&str, &str)] = &[
     ("medication_draft_line", "typed_drug"),
     ("medication_draft_line", "directions"),
     ("medication_draft_line", "held"),
+    // Batch charting slice 2a: a draft line's source, why and set-aside mark, paired ALTERs in db/078.
+    ("medication_draft_line", "info_source"),
+    ("medication_draft_line", "source_detail"),
+    ("medication_draft_line", "why"),
+    ("medication_draft_line", "set_aside_of"),
 ];
 
 #[tokio::test]

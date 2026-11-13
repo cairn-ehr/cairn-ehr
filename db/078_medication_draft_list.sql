@@ -37,6 +37,13 @@
 --     charted-as, the drug as typed or the directions changed, the tick is cleared HERE, in the
 --     door, so a raw-SQL client cannot keep a stale tick on edited text. The warnings it was
 --     given against are the ones seen when it was GIVEN (see the save door).
+--   * PROVENANCE IS CONTENT (batch charting slice 2a): the line's source ("From:" category and
+--     detail), its "why" and its set-aside mark (the companion line it is a version of) are
+--     things the signature will vouch for, so changing any of them clears a hand tick and a
+--     veto here in the door, exactly as changed words do. A set-aside line is never hand-ticked
+--     (it is signed as a version, not by tick). Clearing the mark through the save door leaves
+--     the line HELD (ruling R1): a version the clinician thought wrong must never silently
+--     become default-ticked. Deleting a companion clears the mark of its versions the same way.
 --   * Lines hold the RAW text as typed; the doors store and return it byte-for-byte.
 --
 -- Replay-safe: this file re-runs on every schema replay.
@@ -70,12 +77,27 @@ CREATE TABLE IF NOT EXISTS medication_draft_line (
     -- The clinician's veto (Task 6 review C1): a line the default tick would give, unticked by
     -- hand. Stored, so a closed chart, a re-lock or a restart never brings it back ticked. It
     -- covers the words it was given against: changed words or a hand tick clear it (the door).
-    held           boolean NOT NULL DEFAULT false
+    held           boolean NOT NULL DEFAULT false,
+    -- Slice 2a: the line's "From:" category, free-text detail, and "why" (all NULL = not given).
+    info_source    text CHECK (info_source IS NULL OR info_source IN
+                       ('patient-reported', 'clinician-observed', 'external-record', 'unknown')),
+    source_detail  text,
+    why            text,
+    -- 'line:<uuid>' (another draft line) or 'med:<uuid>' (a charted medication): the companion
+    -- this line is a version of. NULL = not set aside.
+    set_aside_of   text CHECK (set_aside_of IS NULL OR set_aside_of ~
+        '^(line|med):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 );
 -- Paired with the CREATE above for a table made before the two columns (#207's rule).
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS typed_drug text NOT NULL DEFAULT '';
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS directions text NOT NULL DEFAULT '';
 ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS held boolean NOT NULL DEFAULT false;
+ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS info_source text CHECK (info_source IS NULL
+    OR info_source IN ('patient-reported', 'clinician-observed', 'external-record', 'unknown'));
+ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS source_detail text;
+ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS why text;
+ALTER TABLE medication_draft_line ADD COLUMN IF NOT EXISTS set_aside_of text CHECK (set_aside_of IS NULL
+    OR set_aside_of ~ '^(line|med):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
 CREATE INDEX IF NOT EXISTS medication_draft_line_owner_idx
     ON medication_draft_line (patient_id, writer, seq);
 
@@ -121,7 +143,19 @@ CREATE TABLE IF NOT EXISTS medication_draft_line_deleted (
     deleted_at timestamptz NOT NULL
 );
 
-REVOKE ALL ON medication_draft_line, medication_draft_line_deleted FROM PUBLIC;
+-- The writer's "From:" row for one chart (slice 2a): the category preset and detail they last
+-- chose, kept so the next line they add starts with it. One row per (chart, writer); a NULL
+-- writer is its own bucket (NULLS NOT DISTINCT). Like the lines, never exported or backed up.
+CREATE TABLE IF NOT EXISTS medication_draft_from (
+    patient_id uuid NOT NULL,
+    writer     text,
+    preset     text,
+    detail     text,
+    saved_at   timestamptz NOT NULL,
+    UNIQUE NULLS NOT DISTINCT (patient_id, writer)
+);
+
+REVOKE ALL ON medication_draft_line, medication_draft_line_deleted, medication_draft_from FROM PUBLIC;
 
 -- Save (insert or update) one line. Answers 'saved' | 'moved' | 'elsewhere' | 'no-chart' |
 -- 'no-such-writer' | 'not-yours' | 'deleted'; every answer but 'saved' wrote nothing. NULL line, patient or
@@ -138,16 +172,24 @@ DROP FUNCTION IF EXISTS cairn_med_draft_line_save(
     uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean);
 DROP FUNCTION IF EXISTS cairn_med_draft_line_save(
     uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean, text, text);
--- `p_held` defaults to false, so a caller that never vetoes need not name it.
+DROP FUNCTION IF EXISTS cairn_med_draft_line_save(
+    uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean, text, text, boolean);
+-- `p_held` and the four slice-2a provenance params default, so a caller that never vetoes or
+-- names a source need not pass them (a save that omits them CLEARS a stored source: the
+-- caller owns the whole line, as it owns the words).
 CREATE OR REPLACE FUNCTION cairn_med_draft_line_save(
     p_line uuid, p_patient uuid, p_terminal text, p_writer text, p_charted_as text,
     p_text text, p_parts jsonb, p_reason text, p_hand_ticked boolean, p_ticked_against jsonb,
-    p_finished boolean, p_typed_drug text, p_directions text, p_held boolean DEFAULT false)
+    p_finished boolean, p_typed_drug text, p_directions text, p_held boolean DEFAULT false,
+    p_info_source text DEFAULT NULL, p_source_detail text DEFAULT NULL, p_why text DEFAULT NULL,
+    p_set_aside_of text DEFAULT NULL)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_writer  text := cairn_vault_staff_id(p_writer);
     v_row     medication_draft_line%ROWTYPE;
     v_changed boolean;
+    v_unmarked boolean;
+    v_hand    boolean := coalesce(p_hand_ticked, false) AND p_set_aside_of IS NULL;
     v_now     timestamptz;
 BEGIN
     IF p_line IS NULL OR p_patient IS NULL OR p_terminal IS NULL THEN
@@ -176,19 +218,28 @@ BEGIN
                   OR v_row.parts IS DISTINCT FROM coalesce(p_parts, '[]'::jsonb)
                   OR v_row.charted_as IS DISTINCT FROM p_charted_as
                   OR v_row.typed_drug IS DISTINCT FROM coalesce(p_typed_drug, '')
-                  OR v_row.directions IS DISTINCT FROM coalesce(p_directions, '');
+                  OR v_row.directions IS DISTINCT FROM coalesce(p_directions, '')
+                  OR v_row.info_source IS DISTINCT FROM p_info_source
+                  OR v_row.source_detail IS DISTINCT FROM p_source_detail
+                  OR v_row.why IS DISTINCT FROM p_why
+                  OR v_row.set_aside_of IS DISTINCT FROM p_set_aside_of;
+        -- R1: the mark went away through this door; the line is held, whatever the caller sent.
+        v_unmarked := v_row.set_aside_of IS NOT NULL AND p_set_aside_of IS NULL;
         UPDATE medication_draft_line
            SET charted_as = p_charted_as, line_text = p_text,
                parts = coalesce(p_parts, '[]'::jsonb), reason = p_reason,
                typed_drug = coalesce(p_typed_drug, ''), directions = coalesce(p_directions, ''),
-               hand_ticked = coalesce(p_hand_ticked, false) AND NOT v_changed,
+               info_source = p_info_source, source_detail = p_source_detail, why = p_why,
+               set_aside_of = p_set_aside_of,
+               hand_ticked = v_hand AND NOT v_changed,
                -- Refs only with a standing tick; a tick already standing keeps its own (header).
                ticked_against = CASE
-                   WHEN v_changed OR NOT coalesce(p_hand_ticked, false) THEN '[]'::jsonb
+                   WHEN v_changed OR NOT v_hand THEN '[]'::jsonb
                    WHEN v_row.hand_ticked THEN v_row.ticked_against
                    ELSE coalesce(p_ticked_against, '[]'::jsonb) END,
                finished = coalesce(p_finished, false), saved_at = v_now,
-               held = coalesce(p_held, false) AND NOT v_changed AND NOT coalesce(p_hand_ticked, false)
+               held = v_unmarked
+                   OR (coalesce(p_held, false) AND NOT v_changed AND NOT v_hand)
          WHERE line_id = p_line;
         RETURN 'saved';
     END IF;
@@ -197,15 +248,16 @@ BEGIN
     END IF;
     INSERT INTO medication_draft_line (line_id, patient_id, writer, terminal_id, seq, charted_as,
         line_text, parts, reason, hand_ticked, ticked_against, finished, created_at, saved_at,
-        typed_drug, directions, held)
+        typed_drug, directions, held, info_source, source_detail, why, set_aside_of)
     SELECT p_line, p_patient, v_writer, p_terminal,
            coalesce(max(l.seq), 0) + 1, p_charted_as, p_text, coalesce(p_parts, '[]'::jsonb),
-           p_reason, coalesce(p_hand_ticked, false),
-           CASE WHEN coalesce(p_hand_ticked, false) THEN coalesce(p_ticked_against, '[]'::jsonb)
+           p_reason, v_hand,
+           CASE WHEN v_hand THEN coalesce(p_ticked_against, '[]'::jsonb)
                 ELSE '[]'::jsonb END,
            coalesce(p_finished, false), v_now, v_now,
            coalesce(p_typed_drug, ''), coalesce(p_directions, ''),
-           coalesce(p_held, false) AND NOT coalesce(p_hand_ticked, false)
+           coalesce(p_held, false) AND NOT v_hand,
+           p_info_source, p_source_detail, p_why, p_set_aside_of
       FROM medication_draft_line l
      WHERE l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM v_writer;
     RETURN 'saved';
@@ -217,7 +269,7 @@ $$;
 -- before typed_drug/directions were returned is dropped first (only then: no drop per replay).
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cairn_med_draft_lines'
-                AND NOT ('held' = ANY (proargnames))) THEN
+                AND NOT ('set_aside_of' = ANY (proargnames))) THEN
         DROP FUNCTION cairn_med_draft_lines(uuid, text);
     END IF;
 END $$;
@@ -225,11 +277,11 @@ CREATE OR REPLACE FUNCTION cairn_med_draft_lines(p_patient uuid, p_writer text)
 RETURNS TABLE(line_id uuid, terminal_id text, seq int, charted_as text, line_text text,
               parts jsonb, reason text, hand_ticked boolean, ticked_against jsonb,
               finished boolean, saved_at timestamptz, typed_drug text, directions text,
-              held boolean)
+              held boolean, info_source text, source_detail text, why text, set_aside_of text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT l.line_id, l.terminal_id, l.seq, l.charted_as, l.line_text, l.parts, l.reason,
            l.hand_ticked, l.ticked_against, l.finished, l.saved_at, l.typed_drug, l.directions,
-           l.held
+           l.held, l.info_source, l.source_detail, l.why, l.set_aside_of
       FROM medication_draft_line l
      WHERE l.patient_id = p_patient AND l.writer IS NOT DISTINCT FROM cairn_vault_staff_id(p_writer)
      ORDER BY l.seq;
@@ -267,6 +319,14 @@ BEGIN
     DELETE FROM medication_draft_line WHERE line_id = p_line;
     INSERT INTO medication_draft_line_deleted (line_id, deleted_at)
     VALUES (p_line, clock_timestamp()) ON CONFLICT DO NOTHING;
+    -- Versions of the removed line lose their mark and are HELD, with their tick gone and a
+    -- fresh saved_at (a Sign that read the old row answers 'changed'): a dangling mark would
+    -- never hold at Sign, and an unmarked line must not turn up default-ticked.
+    UPDATE medication_draft_line
+       SET set_aside_of = NULL, held = true, hand_ticked = false, ticked_against = '[]'::jsonb,
+           saved_at = clock_timestamp()
+     WHERE patient_id = v_row.patient_id AND writer IS NOT DISTINCT FROM v_row.writer
+       AND set_aside_of = 'line:' || p_line::text;
     RETURN 'deleted';
 END;
 $$;
@@ -305,13 +365,38 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
      ORDER BY 4 DESC, 1, 2;
 $$;
 
+-- The "From:" row doors. Save replaces the writer's row for the chart; read answers zero or one row.
+CREATE OR REPLACE FUNCTION cairn_med_draft_from_save(
+    p_patient uuid, p_writer text, p_preset text, p_detail text)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF p_patient IS NULL THEN
+        RAISE EXCEPTION 'cairn_med_draft_from_save needs a patient';
+    END IF;
+    INSERT INTO medication_draft_from (patient_id, writer, preset, detail, saved_at)
+    VALUES (p_patient, cairn_vault_staff_id(p_writer), p_preset, p_detail, clock_timestamp())
+    ON CONFLICT (patient_id, writer)
+    DO UPDATE SET preset = EXCLUDED.preset, detail = EXCLUDED.detail, saved_at = EXCLUDED.saved_at;
+    RETURN 'saved';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION cairn_med_draft_from(p_patient uuid, p_writer text)
+RETURNS TABLE(preset text, detail text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT f.preset, f.detail FROM medication_draft_from f
+     WHERE f.patient_id = p_patient AND f.writer IS NOT DISTINCT FROM cairn_vault_staff_id(p_writer);
+$$;
+
 REVOKE EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean,
-                              text, text, boolean),
+                              text, text, boolean, text, text, text, text),
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
-    cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() FROM PUBLIC;
+    cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer(),
+    cairn_med_draft_from_save(uuid, text, text, text), cairn_med_draft_from(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
     cairn_med_draft_line_save(uuid, uuid, text, text, text, text, jsonb, text, boolean, jsonb, boolean,
-                              text, text, boolean),
+                              text, text, boolean, text, text, text, text),
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
-    cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer() TO cairn_window;
+    cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer(),
+    cairn_med_draft_from_save(uuid, text, text, text), cairn_med_draft_from(uuid, text) TO cairn_window;

@@ -13,6 +13,7 @@ mod coding;
 mod dose;
 pub mod draft;
 pub mod draft_tick;
+pub mod draft_versions;
 pub mod elsewhere;
 mod hazard;
 // Public for the CLI's benefit, same as `read` and `signoff`: `main.rs`'s `MedicationList`

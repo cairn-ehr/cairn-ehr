@@ -238,6 +238,10 @@ pub async fn med_list_save_impl(
         typed_drug: line.typed_drug,
         directions: line.directions,
         held: line.held,
+        info_source: None,
+        source_detail: None,
+        why: None,
+        set_aside_of: None,
     };
     let db = state
         .db

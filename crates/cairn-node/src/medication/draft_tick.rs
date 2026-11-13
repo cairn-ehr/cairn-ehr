@@ -30,6 +30,9 @@ pub struct TickFacts<'a> {
     /// The list has a named writer; a NULL-writer list is hand-ticked only, because a default
     /// tick would put a name on a decision nobody with that name made.
     pub named_writer: bool,
+    /// The line is a set-aside version of a companion (batch charting slice 2a): it is signed
+    /// by the clinician's choice to set it aside, never by the default tick.
+    pub set_aside: bool,
 }
 
 /// Whether a line starts ticked. Every clause is a reason to withhold; all must be clear.
@@ -40,6 +43,7 @@ pub fn default_tick(f: &TickFacts) -> bool {
     // "As needed" and "once, now" are complete directions without a frequency word.
     let directions_read = d.frequency.is_some() || d.prn || d.stat;
     f.named_writer
+        && !f.set_aside
         && f.finished
         && f.all_parts_coded
         && d.form.is_some()
