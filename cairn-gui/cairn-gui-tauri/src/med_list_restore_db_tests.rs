@@ -8,7 +8,8 @@ use super::versions_db_tests::{shown, statements, METOPROLOL};
 use super::*;
 use crate::allergies::allergy_none_impl;
 use crate::med_list_restore::{
-    med_list_restore_open_impl, RestoreOpened, LIST_ELSEWHERE, RESTORE_VERSION_GONE, VERSION_GONE,
+    med_list_restore_open_impl, RestoreOpened, LIST_ELSEWHERE, RESTORE_VERSION_GONE,
+    SAME_LINE_RESTORED, VERSION_GONE,
 };
 use crate::notes::review::db_tests::credential;
 use tokio_postgres::Client;
@@ -336,6 +337,12 @@ async fn a_restore_whose_version_is_gone_is_kept() {
         )
         .await
         .unwrap();
+    let gone = read(&state, chart).await;
+    assert_eq!(
+        shown(&gone, &opened.line_id).restores_words.as_deref(),
+        Some(RESTORE_VERSION_GONE),
+        "the line says so before Sign"
+    );
     let (outcome, charted, of, not_charted, _) = done(
         sign(
             &state,
@@ -359,5 +366,88 @@ async fn a_restore_whose_version_is_gone_is_kept() {
     assert_eq!(
         left(&owner, chart).await,
         [opened.line_id.parse::<Uuid>().unwrap()]
+    );
+}
+
+/// Ruling R9 (a): two hand-ticked restores of one line in one Sign: the first charts, the second
+/// is refused before the key in words (never the floor's commit text) and stays in the list.
+#[tokio::test]
+async fn two_hand_ticked_restores_of_one_line_refuse_the_second_legibly() {
+    let Some((_guard, owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let (companion, versions) =
+        charted_with_versions(&state, &owner, chart, &["25mg tab bd", "75mg tab bd"]).await;
+    let first = restore(&state, chart, &[chart], versions[0]).await.unwrap();
+    let second = restore(&state, chart, &[chart], versions[1]).await.unwrap();
+    for id in [&first.line_id, &second.line_id] {
+        let line = hand_ticked(shown(&second.list, id));
+        assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
+    }
+    let ids = [first.line_id.clone(), second.line_id.clone()];
+    let (outcome, charted, of, not_charted, _) =
+        done(sign(&state, chart, &ids, credential("bea")).await.unwrap());
+    assert_eq!((charted, of), (1, 2), "{outcome}");
+    assert_eq!(
+        not_charted,
+        [(second.line_id.clone(), SAME_LINE_RESTORED.to_string())]
+    );
+    assert_eq!(
+        stop_reason(&owner, companion).await,
+        Some(Some("replaced by the GP letter version".into()))
+    );
+    assert_eq!(
+        left(&owner, chart).await,
+        [second.line_id.parse::<Uuid>().unwrap()]
+    );
+}
+
+/// Ruling R9 (b): once a restore is charted, a second restore of the same line (which would stop
+/// it) is never default-ticked, though it duplicates nothing; ticked by hand, it stops the first.
+#[tokio::test]
+async fn a_restore_replacing_a_charted_restore_is_never_default_ticked() {
+    let Some((_guard, owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    allergies_known(&state, chart).await;
+    let (_, versions) =
+        charted_with_versions(&state, &owner, chart, &["25mg tab bd", "75mg tab bd"]).await;
+    let first = restore(&state, chart, &[chart], versions[0]).await.unwrap();
+    let (outcome, charted, _, _, _) = done(
+        sign(&state, chart, &ticked(&first.list), credential("bea"))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(charted, 1, "{outcome}");
+    let second = restore(&state, chart, &[chart], versions[1]).await.unwrap();
+    let line = shown(&second.list, &second.line_id);
+    assert!(!line.duplicate, "{:?}", line.duplicate_of);
+    assert!(!line.default_ticked && !line.ticked);
+    let line = hand_ticked(line);
+    assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
+    let (outcome, charted, _, _, _) = done(
+        sign(
+            &state,
+            chart,
+            std::slice::from_ref(&second.line_id),
+            credential("bea"),
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(charted, 1, "{outcome}");
+    let first_thread: String = owner
+        .query_one(
+            "SELECT medication_id::text FROM medication_restore WHERE version_id = $1::text::uuid",
+            &[&versions[0].to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        stop_reason(&owner, first_thread.parse().unwrap()).await,
+        Some(Some("replaced by the GP letter version".into()))
     );
 }

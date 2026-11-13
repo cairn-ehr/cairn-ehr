@@ -14,6 +14,7 @@ fn version(sig: Option<&str>) -> VersionForRestore {
         alternative_to: Uuid::from_u128(COMPANION),
         companion_current: true,
         standing: vec![Uuid::from_u128(COMPANION)],
+        standing_restored: vec![],
         companion_charted_as: Some("started-here".into()),
         source: "GP letter".into(),
         term: "metoprolol".into(),
@@ -172,4 +173,71 @@ fn the_restore_line_inherits_the_companions_charted_as() {
         ..v
     };
     assert_eq!(restore_charted_as(&old), "pre-existing");
+}
+
+/// Ruling R9 (a): among the ticked lines in Sign order, a restore of a version whose companion an
+/// EARLIER ticked restore line also replaces is refused alone, legibly; the first is not.
+#[test]
+fn a_later_restore_of_the_same_line_is_refused() {
+    let mut versions = Versions::new();
+    versions.insert(Uuid::from_u128(VERSION), version(None));
+    versions.insert(Uuid::from_u128(0x7F), version(None));
+    let first = line(Some(VERSION), None);
+    let mut second = line(Some(0x7F), None);
+    second.line_id = Uuid::from_u128(0x12);
+    assert_eq!(restore_holds(&first, [], &versions), Ok(()));
+    assert_eq!(
+        restore_holds(&second, [&first], &versions),
+        Err(SAME_LINE_RESTORED)
+    );
+    assert_eq!(
+        SAME_LINE_RESTORED,
+        "another line restoring a version of the same line is signed first; sign this one after it"
+    );
+    let ordinary = line(None, None);
+    assert_eq!(restore_holds(&ordinary, [&first], &versions), Ok(()));
+    let mut other = version(None);
+    other.alternative_to = Uuid::from_u128(0xC1);
+    versions.insert(Uuid::from_u128(0x7F), other);
+    assert_eq!(restore_holds(&second, [&first], &versions), Ok(()));
+    assert_eq!(
+        restore_holds(&line(Some(0x99), None), [], &versions),
+        Err(RESTORE_VERSION_GONE)
+    );
+}
+
+/// Ruling R9 (b): a restore replacing a line that is itself a restore is never default-ticked;
+/// one replacing the original line may be.
+#[test]
+fn a_restore_replacing_a_restore_withholds_the_default_tick() {
+    let mut versions = Versions::new();
+    versions.insert(Uuid::from_u128(VERSION), version(None));
+    let restoring = line(Some(VERSION), None);
+    assert!(!replaces_a_restore(&restoring, &versions));
+    let replaced = VersionForRestore {
+        standing: vec![Uuid::from_u128(0xB1)],
+        standing_restored: vec![Uuid::from_u128(0xB1)],
+        ..version(None)
+    };
+    versions.insert(Uuid::from_u128(VERSION), replaced);
+    assert!(replaces_a_restore(&restoring, &versions));
+    assert!(!replaces_a_restore(&line(None, None), &versions));
+}
+
+/// The restore door's words are never shown raw.
+#[test]
+fn a_refused_add_is_said_in_words() {
+    for word in [
+        "elsewhere",
+        "moved",
+        "no-such-writer",
+        "deleted",
+        "no-chart",
+        "surprise",
+    ] {
+        let said = not_added(word);
+        assert!(!said.contains(word), "{word}: {said}");
+        assert!(said.starts_with("The line was not added"), "{said}");
+    }
+    assert_eq!(not_added("no-such-version"), VERSION_GONE);
 }

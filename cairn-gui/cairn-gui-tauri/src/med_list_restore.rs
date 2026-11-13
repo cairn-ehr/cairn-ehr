@@ -16,7 +16,7 @@
 //! - [`restore_source`]: a restore line with no source of its own signs `unknown`.
 //!
 //! On the list, a restore line is judged a duplicate against the chart WITHOUT the lines it will
-//! stop ([`besides`], Review Focus 2), but still against every other line, list lines included
+//! stop ([`current_besides_stops`], Review Focus 2), but still against every other line, list lines included
 //! (two restores of one companion duplicate each other, Review Focus 3).
 use crate::allergy_check::CodingArg;
 use crate::funnel::view::ErrorView;
@@ -48,6 +48,10 @@ pub const RESTORE_VERSION_GONE: &str = "the version it restores can no longer be
 /// The list is held by another terminal: the pane's own words for it (`med_list.js`'s
 /// `MED_LIST_ELSEWHERE`), followed by that terminal.
 pub const LIST_ELSEWHERE: &str = "These lines are open on another terminal: ";
+
+/// Ruling R9 (a): a ticked restore line whose companion an earlier ticked restore line replaces.
+pub const SAME_LINE_RESTORED: &str =
+    "another line restoring a version of the same line is signed first; sign this one after it";
 
 /// The opened chart's versions the list's restore lines name, by version id (a version not on
 /// it is absent).
@@ -124,10 +128,8 @@ pub async fn med_list_restore_open_impl(
         )
         .await
         .map_err(failed)?;
-        match answer.as_str() {
-            "saved" => {}
-            "no-such-version" => return Err(refused(VERSION_GONE)),
-            other => return Err(refused(format!("The line was not added: {other}"))),
+        if answer != "saved" {
+            return Err(refused(not_added(&answer)));
         }
     }
     Ok(RestoreOpened {
@@ -251,7 +253,7 @@ pub(crate) async fn read_versions(
 /// will stop (Review Focus 2). A row that also holds a thread it will NOT stop stays: that thread
 /// is still current after Sign, so it is still a duplicate (a false duplicate costs a hand tick;
 /// a missed one could chart the drug twice). Pure.
-pub(crate) fn besides(
+pub(crate) fn current_besides_stops(
     rows: &[MedicationRow],
     lines: &[DraftLine],
     versions: &Versions,
@@ -273,11 +275,60 @@ pub(crate) fn besides(
 }
 
 /// Mark each restore line of `lines` (the pane's, in `judged`'s order) with the version it
-/// restores ([`restores_words`]); a version no longer readable leaves no mark (Sign refuses it).
+/// restores ([`restores_words`]); one whose version no longer reads says so
+/// ([`RESTORE_VERSION_GONE`]) before Sign refuses it.
 pub(crate) fn mark_restores(lines: &mut [ListLineView], judged: &[Judged], versions: &Versions) {
     for (view, j) in lines.iter_mut().zip(judged) {
-        view.restores_words = version_of(&j.line, versions).map(|v| restores_words(&v.source));
+        view.restores_words = j
+            .line
+            .restores
+            .map(|_| match version_of(&j.line, versions) {
+                Some(v) => restores_words(&v.source),
+                None => RESTORE_VERSION_GONE.to_string(),
+            });
     }
+}
+
+/// The restore door's refusal as the clinician reads it, never its raw word. Pure.
+pub(crate) fn not_added(answer: &str) -> String {
+    let why = match answer {
+        "no-such-version" => return VERSION_GONE.into(),
+        "elsewhere" | "moved" => "the list is open on another terminal; read it again",
+        "no-such-writer" => "the person named is not a clinical member here",
+        "deleted" => "that line was removed; press again",
+        "no-chart" => "this chart is not on this node",
+        _ => "the list refused it; read it again",
+    };
+    format!("The line was not added: {why}")
+}
+
+/// Ruling R9 (a): a ticked line's restore, judged before the key in Sign order. `Ok` for an
+/// ordinary line or a restore that may sign; [`RESTORE_VERSION_GONE`] when its version is not on
+/// the opened chart; [`SAME_LINE_RESTORED`] when an `earlier` ticked restore line replaces the
+/// same companion (its stops were read before that one charts, so the floor would refuse it at
+/// commit in its own words). Pure.
+pub(crate) fn restore_holds<'a>(
+    line: &DraftLine,
+    earlier: impl IntoIterator<Item = &'a DraftLine>,
+    versions: &Versions,
+) -> Result<(), &'static str> {
+    if line.restores.is_none() {
+        return Ok(());
+    }
+    let v = version_of(line, versions).ok_or(RESTORE_VERSION_GONE)?;
+    let same = |e: &DraftLine| {
+        version_of(e, versions).is_some_and(|w| w.alternative_to == v.alternative_to)
+    };
+    match earlier.into_iter().any(same) {
+        true => Err(SAME_LINE_RESTORED),
+        false => Ok(()),
+    }
+}
+
+/// Ruling R9 (b): whether `line` restores a version whose companion was already replaced by a
+/// restore line (one of `standing` carries a restore). Pure.
+pub(crate) fn replaces_a_restore(line: &DraftLine, versions: &Versions) -> bool {
+    version_of(line, versions).is_some_and(|v| !v.standing_restored.is_empty())
 }
 
 #[cfg(test)]

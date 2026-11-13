@@ -11,7 +11,7 @@ use crate::med_chart::PartArg;
 use crate::med_line_sign::{fresh_check, line_under, not_read, parts_before_the_key, the_line};
 use crate::med_list::{LineArg, WarningRef};
 use crate::med_list_delabel::{offers_for, DelabelOffer};
-use crate::med_list_restore::{besides, read_versions, Versions};
+use crate::med_list_restore::{current_besides_stops, read_versions, replaces_a_restore, Versions};
 use crate::med_list_versions::{charted_companions, charted_words};
 use crate::state::AppState;
 use crate::write_failure::chart_read_failed;
@@ -44,7 +44,7 @@ pub fn already_on_the_list(line: &str) -> String {
 /// the writer's "From:" as `(preset, detail)`; and the opened chart's lines as the "Version of
 /// which line?" pick names them (`med_list_versions::charted_words`). Slice 2b: the versions the
 /// restore lines name, on the opened chart (`med_list_restore::read_versions`), and each restore
-/// line's own `current`, without the lines it will stop (`med_list_restore::besides`).
+/// line's own `current`, without the lines it will stop (`med_list_restore::current_besides_stops`).
 pub(crate) struct Fresh {
     pub set: ChartSet,
     pub allergies: PatientAllergies,
@@ -89,7 +89,7 @@ pub(crate) async fn fresh_read(
             current: current_lines(&list.rows),
             charted: charted_companions(&list.rows, patient),
             charted_words: charted_words(&list.rows, patient),
-            beside: besides(&list.rows, &lines, &versions),
+            beside: current_besides_stops(&list.rows, &lines, &versions),
             versions,
             from,
             set: list.charts,
@@ -231,7 +231,9 @@ pub(crate) async fn judge(
                 duplicate,
                 named_writer,
                 set_aside: line.set_aside_of.is_some(),
-            });
+            })
+            // Replacing a restore that was just charted must be a deliberate act (ruling R9).
+            && !replaces_a_restore(&line, &fresh.versions);
             let offers = match (&signable, use_allergies) {
                 (Ok((_, p)), true) => offers_for(&resolved, &fresh.allergies.doubted_charts, p),
                 _ => vec![],
@@ -351,4 +353,34 @@ pub(crate) async fn warnings_now(
         .await
         .map(|check| check.against)
         .unwrap_or_default()
+}
+
+/// Clear the hand tick of each line in `lines` that has one, through the save door (the same
+/// content with `hand_ticked = false`): a tick that no longer holds must not survive to the next
+/// press. A default tick is derived, never stored, so there is nothing to clear. A failure is
+/// logged: the next Sign re-derives the tick and refuses it again.
+pub(crate) async fn untick(
+    state: &AppState,
+    patient: Uuid,
+    writer: Option<&str>,
+    lines: &[&Judged],
+) {
+    let Some(db) = state.db.as_ref() else { return };
+    let db = match db.lock().await {
+        Ok(db) => db,
+        Err(e) => return eprintln!("the changed lines' ticks were not cleared: {e}"),
+    };
+    for j in lines.iter().filter(|j| j.line.hand_ticked) {
+        let mut line = j.line.clone();
+        line.hand_ticked = false;
+        line.ticked_against.clear();
+        match draft::save_draft_line(&*db, patient, writer, &line).await {
+            Ok(a) if a == "saved" => {}
+            Ok(a) => eprintln!("a changed line's tick was not cleared: the list answered {a}"),
+            Err(e) => eprintln!(
+                "a changed line's tick was not cleared: {}",
+                cairn_gui_live::cause_of(&db.explain(e))
+            ),
+        }
+    }
 }

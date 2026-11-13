@@ -96,6 +96,11 @@ async fn a_second_restore_stops_the_first_restores_line() {
         .unwrap();
     assert!(!read.companion_current);
     assert_eq!(read.standing, [l1]);
+    assert_eq!(
+        read.standing_restored,
+        [l1],
+        "what stands is itself a restore"
+    );
     let l2 = restore(&mut r, v2, &read.standing).await.unwrap().value.0;
     assert!(
         stop_reason(&r.c, l1).await.is_some(),
@@ -335,6 +340,10 @@ async fn version_for_restore_carries_the_companions_charted_as_and_currency() {
     assert_eq!(read.alternative_to, x);
     assert!(read.companion_current);
     assert_eq!(read.standing, [x]);
+    assert!(
+        read.standing_restored.is_empty(),
+        "the original line is no restore"
+    );
     assert_eq!(read.companion_charted_as.as_deref(), Some("pre-existing"));
     assert_eq!(read.source, "GP letter");
     assert_eq!(read.term, "Lipitor");

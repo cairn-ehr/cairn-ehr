@@ -28,7 +28,7 @@ async fn checks(owner: &Client, chart: Uuid) -> Vec<(String, Option<String>, Opt
 /// A check names its "From:" (the preset's category, its label as the detail) and why, signs one
 /// event, and answers with the pane read again; the check reads back under the version.
 #[tokio::test]
-async fn a_check_signs_and_the_pane_shows_it() {
+async fn a_check_signs_and_reads_back() {
     let Some((_guard, owner, state, chart)) = bea_list().await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

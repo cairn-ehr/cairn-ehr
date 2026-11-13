@@ -230,7 +230,7 @@ pub async fn med_list_read_impl(
         .map(|(preset, detail)| FromView { preset, detail });
     let charted = std::mem::take(&mut fresh.charted);
     let words = std::mem::take(&mut fresh.charted_words);
-    let versions = std::mem::take(&mut fresh.versions);
+    let versions = fresh.versions.clone();
     let same_set = charts.is_none_or(|c| check_displayed_set(&fresh.set, c).is_ok());
     let judged = judge(state, fresh, same_set, writer.is_some()).await;
     let terminal = state.terminal_id.get().map(String::as_str);

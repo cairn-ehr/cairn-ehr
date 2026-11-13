@@ -47,7 +47,9 @@ use crate::med_line_sign::{charting, components, override_refs, single_coding};
 use crate::med_list::{
     claim_writer, fresh_read, judge, med_list_read_impl, tick_holds, Judged, MedListView,
 };
-use crate::med_list_restore::{replaced_by, restore_source, restore_to_sign, version_of, Versions};
+use crate::med_list_judge::untick;
+use crate::med_list_restore::{replaced_by, restore_holds, restore_source, restore_to_sign};
+use crate::med_list_restore::{version_of, Versions};
 use crate::med_list_versions::{
     list_input, outcome_words, plan_versions, sign_alone, version_to_sign, VERSION_KEPT,
 };
@@ -147,7 +149,7 @@ pub async fn med_list_sign_impl(
     let mut fresh = fresh_read(state, patient, writer.as_deref()).await?;
     check_displayed_set(&fresh.set, &charts).map_err(ChartSetError::into_view)?;
     let charted_lines = std::mem::take(&mut fresh.charted);
-    let restores = std::mem::take(&mut fresh.versions);
+    let restores = fresh.versions.clone();
     let judged = judge(state, fresh, true, writer.is_some()).await;
     let chosen = ticked_lines(&judged, ticked, &terminal)?;
     // 4. Every tick still holds, or nothing is signed.
@@ -161,9 +163,9 @@ pub async fn med_list_sign_impl(
     }
     // Slice 1a's per-line checks, decided before the key so a Sign that could chart nothing never
     // asks for a passphrase; a failing line is skipped, the others sign.
-    let verdicts: Vec<_> = chosen
-        .iter()
-        .map(|j| (*j, line_verdict(j, &restores)))
+    // A restore line is judged against the ticked lines before it (ruling R9).
+    let verdicts: Vec<_> = (0..chosen.len())
+        .map(|i| (chosen[i], line_verdict(chosen[i], &chosen[..i], &restores)))
         .collect();
     let mut not_charted: Vec<(String, String)> = verdicts
         .iter()
@@ -407,12 +409,14 @@ pub(crate) fn ticked_lines<'a>(
 }
 
 /// Slice 1a's per-line checks on a holding line: its press, what it signs, and the reason a
-/// Start line with an allergy mark needs; a restore line's version still readable (2b). Pure.
+/// Start line with an allergy mark needs; a restore line's own (`restore_holds`, 2b). Pure.
 fn line_verdict<'a>(
     j: &'a Judged,
+    earlier: &[&Judged],
     restores: &Versions,
 ) -> Result<(ChartedAs, Option<&'a str>), ErrorView> {
-    restore_to_sign(&j.line, version_of(&j.line, restores), "").map_err(refused)?;
+    let earlier = earlier.iter().map(|e| &e.line);
+    restore_holds(&j.line, earlier, restores).map_err(refused)?;
     let charted_as = press(&j.line.charted_as)?;
     j.signable.as_ref().map_err(Clone::clone)?;
     let reason = override_before_the_key(charted_as, &j.check, j.line.reason.as_deref())?;
@@ -444,31 +448,6 @@ pub(crate) fn outcome(charted: usize, of: usize, lines: &[String]) -> String {
 /// One line not charted, as the outcome names it. Pure.
 pub(crate) fn not_charted_line(drug_line: &str, reason: &str) -> String {
     format!("{drug_line} — not charted: {reason}")
-}
-
-/// Clear the hand tick of each line in `lines` that has one, through the save door (the same
-/// content with `hand_ticked = false`): a tick that no longer holds must not survive to the next
-/// press. A default tick is derived, never stored, so there is nothing to clear. A failure is
-/// logged: the next Sign re-derives the tick and refuses it again.
-async fn untick(state: &AppState, patient: Uuid, writer: Option<&str>, lines: &[&Judged]) {
-    let Some(db) = state.db.as_ref() else { return };
-    let db = match db.lock().await {
-        Ok(db) => db,
-        Err(e) => return eprintln!("the changed lines' ticks were not cleared: {e}"),
-    };
-    for j in lines.iter().filter(|j| j.line.hand_ticked) {
-        let mut line = j.line.clone();
-        line.hand_ticked = false;
-        line.ticked_against.clear();
-        match draft::save_draft_line(&*db, patient, writer, &line).await {
-            Ok(a) if a == "saved" => {}
-            Ok(a) => eprintln!("a changed line's tick was not cleared: the list answered {a}"),
-            Err(e) => eprintln!(
-                "a changed line's tick was not cleared: {}",
-                cairn_gui_live::cause_of(&db.explain(e))
-            ),
-        }
-    }
 }
 
 /// `raw` as the vault normalises a staff id (the rule is SQL's alone, R7).

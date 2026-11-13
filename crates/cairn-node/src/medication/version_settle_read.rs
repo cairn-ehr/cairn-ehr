@@ -184,6 +184,9 @@ pub struct VersionForRestore {
     /// The CURRENT lines of the companion's restore lineage (db/080 ruling R4): what a restore
     /// must stop. The companion itself when current, else the restore lines that replaced it.
     pub standing: Vec<Uuid>,
+    /// The members of `standing` that are themselves restore lines (a `medication_restore` row):
+    /// a restore replacing one of these replaces a restore, not the original line.
+    pub standing_restored: Vec<Uuid>,
     /// The companion's `charted_as` word; `None` = charted before slice 1a.
     pub companion_charted_as: Option<String>,
     /// Who reported the version: its `source_detail`, else its `info_source` word.
@@ -217,7 +220,12 @@ pub async fn version_for_restore(
                            ORDER BY 1), \
                     ch.charted_as, COALESCE(a.source_detail, a.info_source), a.term, \
                     a.coding_system, a.coding_code, a.coding_display, a.formulation, a.dose_amount, \
-                    a.dose_unit, a.sig, a.route, a.strength \
+                    a.dose_unit, a.sig, a.route, a.strength, \
+                    ARRAY(SELECT l::text FROM cairn_medication_restore_lineage(a.alternative_to, a.patient_id) l \
+                           WHERE EXISTS (SELECT 1 FROM medication_statement m WHERE m.medication_id = l) \
+                             AND NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = l) \
+                             AND EXISTS (SELECT 1 FROM medication_restore r WHERE r.medication_id = l) \
+                           ORDER BY 1) \
                FROM medication_set_aside a \
                JOIN medication_statement m \
                  ON m.medication_id = a.alternative_to AND m.patient_id = a.patient_id \
@@ -230,6 +238,10 @@ pub async fn version_for_restore(
         .context("reading the set-aside version to restore")?;
     let Some(r) = row else { return Ok(None) };
     let text = |i: usize| r.try_get::<_, Option<String>>(i);
+    let ids = |i: usize| -> anyhow::Result<Vec<Uuid>> {
+        let v: Vec<String> = r.try_get(i)?;
+        Ok(v.iter().map(|s| s.parse()).collect::<Result<_, _>>()?)
+    };
     let coding = match (text(6)?, text(7)?, text(8)?) {
         (Some(s), Some(c), Some(d)) => Some((s, c, d)),
         _ => None,
@@ -237,11 +249,8 @@ pub async fn version_for_restore(
     Ok(Some(VersionForRestore {
         alternative_to: r.try_get::<_, String>(0)?.parse()?,
         companion_current: r.try_get(1)?,
-        standing: r
-            .try_get::<_, Vec<String>>(2)?
-            .iter()
-            .map(|s| s.parse())
-            .collect::<Result<_, _>>()?,
+        standing: ids(2)?,
+        standing_restored: ids(15)?,
         companion_charted_as: text(3)?,
         source: r.try_get(4)?,
         term: r.try_get(5)?,
