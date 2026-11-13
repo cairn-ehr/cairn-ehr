@@ -951,6 +951,7 @@ pub async fn submit_medication_with_raw_safety(
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     // `safety: None` — no PRECISE claim under the seal. Irrelevant to this scenario:
     // `cairn_check_safety_signal` and the new overclaim check both read only the CLEAR
@@ -1074,6 +1075,7 @@ async fn build_raw_safety_medication(
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let body = cairn_node::medication::build_assert_body(
         event_id,

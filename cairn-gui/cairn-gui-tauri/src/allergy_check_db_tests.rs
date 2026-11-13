@@ -88,6 +88,7 @@ async fn medication(owner: &mut Client, state: &AppState, chart: Uuid, term: &st
         info_source: "patient",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     assert_medication(
         owner,

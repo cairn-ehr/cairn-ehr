@@ -55,6 +55,7 @@ fn input() -> AssertMedicationInput<'static> {
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     }
 }
 

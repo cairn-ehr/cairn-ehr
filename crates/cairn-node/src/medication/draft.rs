@@ -165,6 +165,41 @@ pub async fn save_draft_line(
     Ok(row.try_get(0)?)
 }
 
+/// Save the writer's "From:" for `patient` (slice 2a): the preset LABEL (db/078 holds it to the
+/// six labels, ruling R6) and the free-text detail, replacing what was there. The door's word.
+pub async fn save_draft_from(
+    client: &(impl GenericClient + Sync),
+    patient: Uuid,
+    writer: Option<&str>,
+    preset: Option<&str>,
+    detail: Option<&str>,
+) -> anyhow::Result<String> {
+    let row = client
+        .query_one(
+            "SELECT cairn_med_draft_from_save($1::text::uuid, $2, $3, $4)",
+            &[&patient.to_string(), &writer, &preset, &detail],
+        )
+        .await
+        .context("saving the medication list's From:")?;
+    Ok(row.try_get(0)?)
+}
+
+/// The writer's "From:" for `patient` as `(preset, detail)`, or `None` when never set.
+pub async fn read_draft_from(
+    client: &(impl GenericClient + Sync),
+    patient: Uuid,
+    writer: Option<&str>,
+) -> anyhow::Result<Option<(Option<String>, Option<String>)>> {
+    let row = client
+        .query_opt(
+            "SELECT preset, detail FROM cairn_med_draft_from($1::text::uuid, $2)",
+            &[&patient.to_string(), &writer],
+        )
+        .await
+        .context("reading the medication list's From:")?;
+    row.map(|r| Ok((r.try_get(0)?, r.try_get(1)?))).transpose()
+}
+
 /// Delete one line the clinician removed, as last read at `saved_at`: the door's word ('deleted',
 /// 'gone', 'moved', 'elsewhere', 'not-yours', 'changed'). No record is kept (design §9 Q3).
 pub async fn delete_draft_line(

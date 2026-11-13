@@ -30,6 +30,7 @@ use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
     already_on_the_list, fresh_read, judge, tick_holds, Judged,
 };
+use crate::med_list_versions::{companions_of, given, stamp, FromView};
 use crate::notes::terminal_of;
 use crate::state::AppState;
 use crate::whos_here::Claim;
@@ -40,7 +41,7 @@ use cairn_node::medication::line::Directions;
 use uuid::Uuid;
 
 /// What a write in fixture mode answers (as the note pane's).
-const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
+pub(crate) const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
 
 /// One line as the webview saves it. `line_text` is the whole line as typed; `typed_drug` and
 /// `directions` are the window's split of it (only the window can split it as typed); `parts`
@@ -66,6 +67,17 @@ pub struct LineArg {
     /// given.
     #[serde(default)]
     pub held: bool,
+    /// The line's own source and why, and its set-aside mark, as the line holds them (slice 2a,
+    /// `med_list_versions.rs`). Send all four back on every save: the door reads a missing one
+    /// as cleared, and clearing is a content change (it clears a hand tick).
+    #[serde(default)]
+    pub info_source: Option<String>,
+    #[serde(default)]
+    pub source_detail: Option<String>,
+    #[serde(default)]
+    pub why: Option<String>,
+    #[serde(default)]
+    pub set_aside_of: Option<String>,
 }
 
 /// One warning a line carries, as the wire's override names it: `{"source": "allergy", "ref":
@@ -88,6 +100,8 @@ pub struct MedListView {
     pub writer_name: Option<String>,
     pub elsewhere: Option<String>,
     pub lines: Vec<ListLineView>,
+    /// The writer's "From:" for this chart (`None`: never set).
+    pub from: Option<FromView>,
 }
 
 /// One line as the pane draws it: what was saved (the [`LineArg`] fields), and what was derived
@@ -120,6 +134,14 @@ pub struct ListLineView {
     pub against: Vec<WarningRef>,
     /// The same-drug de-label offers this line may show (empty when none).
     pub delabel_offers: Vec<DelabelOffer>,
+    /// As stored ([`LineArg`]'s four).
+    pub info_source: Option<String>,
+    pub source_detail: Option<String>,
+    pub why: Option<String>,
+    pub set_aside_of: Option<String>,
+    /// The lines this one could be set aside beside, as marks (`line:<id>` / `med:<id>`): empty
+    /// means no "Set aside" button (`med_list_versions::companions_of`).
+    pub companions: Vec<String>,
 }
 
 /// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …).
@@ -187,7 +209,12 @@ pub async fn med_list_read_impl(
 ) -> Result<MedListView, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let (writer, writer_name) = claim_writer(state).await;
-    let fresh = fresh_read(state, patient, writer.as_deref()).await?;
+    let mut fresh = fresh_read(state, patient, writer.as_deref()).await?;
+    let from = fresh
+        .from
+        .take()
+        .map(|(preset, detail)| FromView { preset, detail });
+    let charted = std::mem::take(&mut fresh.charted);
     let same_set = charts.is_none_or(|c| check_displayed_set(&fresh.set, c).is_ok());
     let judged = judge(state, fresh, same_set, writer.is_some()).await;
     let terminal = state.terminal_id.get().map(String::as_str);
@@ -195,7 +222,8 @@ pub async fn med_list_read_impl(
         writer,
         writer_name,
         elsewhere: elsewhere(&judged, terminal),
-        lines: judged.iter().map(line_view).collect(),
+        lines: lines_view(&judged, &charted),
+        from,
     })
 }
 
@@ -223,7 +251,7 @@ pub async fn med_list_save_impl(
         ),
         false => vec![],
     };
-    let row = DraftLine {
+    let mut row = DraftLine {
         line_id,
         terminal_id: terminal,
         seq: 0,
@@ -238,10 +266,11 @@ pub async fn med_list_save_impl(
         typed_drug: line.typed_drug,
         directions: line.directions,
         held: line.held,
-        info_source: None,
-        source_detail: None,
-        why: None,
-        set_aside_of: None,
+        // All four, always: the door reads an omitted one as cleared (a content change).
+        info_source: given(line.info_source),
+        source_detail: given(line.source_detail),
+        why: given(line.why),
+        set_aside_of: given(line.set_aside_of),
     };
     let db = state
         .db
@@ -249,6 +278,21 @@ pub async fn med_list_save_impl(
         .ok_or_else(|| node_cannot_write("no database connection"))?
         .lock()
         .await?;
+    // A line with no source of its own takes "From:", read under the same writer (module doc of
+    // `med_list_versions`).
+    if row.info_source.is_none() && row.source_detail.is_none() {
+        let from = draft::read_draft_from(&*db, patient, writer)
+            .await
+            .map_err(|e| node_failure(&db.explain(e)))?;
+        if let Some((category, detail)) = from
+            .map(|(preset, detail)| FromView { preset, detail })
+            .as_ref()
+            .and_then(stamp)
+        {
+            row.info_source = Some(category.into());
+            row.source_detail = Some(detail);
+        }
+    }
     let answer = draft::save_draft_line(&*db, patient, writer, &row)
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
@@ -354,7 +398,20 @@ pub(crate) fn elsewhere(judged: &[Judged], terminal: Option<&str>) -> Option<Str
         .cloned()
 }
 
-/// One judged line as the pane draws it. Pure.
+/// Every judged line as the pane draws it, each with the lines it could be set aside beside
+/// (`charted`: the opened chart's current lines, `med_list_judge::Fresh`). Pure.
+fn lines_view(judged: &[Judged], charted: &[(Uuid, String)]) -> Vec<ListLineView> {
+    let lines: Vec<DraftLine> = judged.iter().map(|j| j.line.clone()).collect();
+    judged
+        .iter()
+        .map(|j| ListLineView {
+            companions: companions_of(&j.line, &lines, charted),
+            ..line_view(j)
+        })
+        .collect()
+}
+
+/// One judged line as the pane draws it (no companions: [`lines_view`] adds them). Pure.
 pub(crate) fn line_view(j: &Judged) -> ListLineView {
     let l = &j.line;
     ListLineView {
@@ -385,6 +442,11 @@ pub(crate) fn line_view(j: &Judged) -> ListLineView {
             })
             .collect(),
         delabel_offers: j.offers.clone(),
+        info_source: l.info_source.clone(),
+        source_detail: l.source_detail.clone(),
+        why: l.why.clone(),
+        set_aside_of: l.set_aside_of.clone(),
+        companions: vec![],
     }
 }
 
@@ -407,3 +469,11 @@ mod held_db_tests;
 #[cfg(test)]
 #[path = "med_list_delabel_db_tests.rs"]
 mod delabel_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_versions_db_tests.rs"]
+mod versions_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_source_db_tests.rs"]
+mod source_db_tests;

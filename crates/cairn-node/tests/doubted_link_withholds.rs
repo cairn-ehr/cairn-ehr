@@ -61,6 +61,7 @@ async fn assert_one(c: &mut Client, sk: &SigningKey, kid: &str, patient: Uuid, t
             info_source: "patient",
             started: None,
             started_precision: None,
+            source_note: None,
         },
         None,
         None,

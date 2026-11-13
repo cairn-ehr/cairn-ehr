@@ -26,7 +26,9 @@ pub(super) async fn here(state: &AppState, staff: &str, name: &str) {
 pub(super) async fn bea_list() -> Option<(tokio_postgres::Client, Client, AppState, Uuid)> {
     let (guard, owner, state, chart, _) = supervised_note().await?;
     owner
-        .batch_execute("TRUNCATE medication_draft_line, medication_draft_line_deleted")
+        .batch_execute(
+            "TRUNCATE medication_draft_line, medication_draft_line_deleted, medication_draft_from",
+        )
         .await
         .unwrap();
     here(&state, "bea", "Dr Bea").await;
@@ -63,6 +65,10 @@ pub(super) fn arg(
         finished: true,
         seen: vec![],
         held: false,
+        info_source: None,
+        source_detail: None,
+        why: None,
+        set_aside_of: None,
     }
 }
 

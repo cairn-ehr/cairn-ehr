@@ -4,7 +4,7 @@
 //! Two shapes, one rule (a line's event and its spend are ONE transaction, durable-rules
 //! BATCH CHARTING SLICE 1):
 //! - the companion is a DRAFT line: `draft::chart_draft_line` signs the companion and every
-//!   version of it in its own single transaction, using [`prepare_version`] and [`spend_row`];
+//!   version of it in its own single transaction, using `prepare_version` and `spend_row`;
 //! - the companion is already CHARTED: [`set_aside_draft_line`] signs the version alone.
 //!
 //! A set-aside carries NO safety claim (the floor refuses one at both doors), so the §5.9 class

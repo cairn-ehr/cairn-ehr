@@ -61,6 +61,7 @@ pub(crate) fn charted_input<'a>(
         },
         started: start.then_some(today),
         started_precision: start.then_some("day"),
+        source_note: None,
     }
 }
 

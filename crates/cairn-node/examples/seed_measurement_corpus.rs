@@ -216,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
                 info_source: "patient",
                 started: None,
                 started_precision: None,
+                source_note: None,
             };
             assert_medication(
                 &mut db,

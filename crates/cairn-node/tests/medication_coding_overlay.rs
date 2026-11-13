@@ -552,6 +552,7 @@ async fn assert_uncoded(c: &mut Client, sk: &SigningKey, kid: &str, patient: Uui
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     cairn_node::medication::assert_medication(c, sk, kid, "test-node", patient, &input, None, None)
         .await
@@ -867,6 +868,7 @@ fn coded_input(
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     }
 }
 

@@ -113,6 +113,7 @@ fn sample_assert(term: &'static str) -> AssertMedicationInput<'static> {
         info_source: "patient-reported",
         started: Some("2024"),
         started_precision: Some("year"),
+        source_note: None,
     }
 }
 

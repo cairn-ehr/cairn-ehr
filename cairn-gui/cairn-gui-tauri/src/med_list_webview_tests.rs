@@ -71,6 +71,11 @@ fn line_view() -> ListLineView {
             reference: "r".into(),
         }],
         delabel_offers: vec![],
+        info_source: None,
+        source_detail: None,
+        why: None,
+        set_aside_of: None,
+        companions: vec![],
     }
 }
 
@@ -83,6 +88,7 @@ fn every_field_read_is_one_rust_sends() {
         writer_name: None,
         elsewhere: None,
         lines: vec![],
+        from: None,
     };
     let line = serde_json::to_value(line_view()).unwrap();
     for (binding, sent) in [

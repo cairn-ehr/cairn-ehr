@@ -148,6 +148,7 @@ fn coded(term: &'static str, code: &'static str) -> AssertMedicationInput<'stati
         info_source: "patient",
         started: None,
         started_precision: None,
+        source_note: None,
     }
 }
 
@@ -257,6 +258,7 @@ async fn the_coding_overlay_emits_a_signal_and_a_thread_grade_coarsens_it() {
             info_source: "patient",
             started: None,
             started_precision: None,
+            source_note: None,
         },
         None,
         None,
@@ -392,6 +394,7 @@ async fn a_grade_on_another_thread_of_the_same_chart_does_not_coarsen_this_one()
             info_source: "patient",
             started: None,
             started_precision: None,
+            source_note: None,
         },
         None,
         None,
@@ -674,6 +677,7 @@ async fn an_uncoded_medication_emits_no_signal_at_all() {
             info_source: "patient",
             started: None,
             started_precision: None,
+            source_note: None,
         },
         None,
         None,
