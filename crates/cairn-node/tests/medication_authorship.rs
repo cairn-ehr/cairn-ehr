@@ -99,6 +99,7 @@ async fn human_authored_medication_is_signed_by_the_human_node_keeps_custody() {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let author = AuthorParams {
         human_sk: &human_sk,
@@ -188,6 +189,7 @@ async fn human_authored_cessation_is_signed_by_the_human() {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let med_id = assert_medication(
         &mut c,
@@ -337,6 +339,7 @@ async fn device_additive_assert_still_valid_with_no_author() {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     // No author, no attest -> device-additive: node signs, recorded-only. Must succeed.
     let med_id = assert_medication(
@@ -385,6 +388,7 @@ async fn human_author_owns_suppression_rights() {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let med_id = assert_medication(
         &mut c,
@@ -485,6 +489,7 @@ async fn author_and_attest_compose_with_different_humans_on_reconcile() {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     // Two device-additive threads for the same drug — the duplicate the reconcile fuses.
     let mut threads = Vec::new();

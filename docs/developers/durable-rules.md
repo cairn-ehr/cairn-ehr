@@ -10,6 +10,95 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ BATCH CHARTING SLICE 2a — FROM:, THE WHY, AND THE SET-ASIDE VERSION (ADR-0102, db/079, db/078 + db/048 + db/037 + db/077 + db/031 in place) — do not undo**
+(pins: `crates/cairn-node/tests/{medication_set_aside_floor,medication_set_aside_peer,medication_set_aside_sign,medication_source_note_floor,medication_draft_list_versions_store}.rs`,
+`crates/cairn-node/src/medication/{draft_versions_tests,draft_tick_tests}.rs`,
+`cairn-gui/cairn-gui-tauri/src/{med_list_versions,med_list_versions_db,med_list_versions_kept_db,med_list_source_db,med_list_versions_webview}_tests.rs`).
+Every batch charting slice 1 rule below still holds; a version's spend is slice 1's spend.
+- **A set-aside version is its OWN type, never a flag on the assertion.** `clinical.medication-set-aside.asserted`
+  has no thread, lives in `medication_set_aside`, and no reader of current lines sees it. **Tempting wrong fixes:**
+  add `set_aside: true` to `clinical.medication.asserted` (every reader of current lines would have to remember to
+  filter it, and one that forgot would show an unbelieved dose as taken); give it a `medication_id` "so it can be
+  stopped later". Pins: `medication_set_aside_floor.rs::a_set_aside_is_never_a_current_medication`,
+  `a_set_aside_beside_a_current_line_projects_its_fields`.
+- **The floor refuses `charted_as`, `warning_override` and `safety` on a version at BOTH doors.** `safety` is the
+  reason it is not authoring-only: `cairn_patient_safety` reports any event whose envelope carries one. **Tempting
+  wrong fixes:** refuse them at the authoring door only, "so a peer's newer field never wedges sync" (a peer's
+  version with a safety claim becomes a live signal on the chart); let the builder emit `safety` for a version of a
+  drug the patient is allergic to. Pins: `medication_set_aside_floor.rs::charted_as_or_warning_override_is_refused_at_both_doors`,
+  `a_safety_claim_is_refused_at_both_doors`, `medication_set_aside_peer.rs::a_peers_set_aside_with_a_safety_claim_is_not_admitted_and_raises_no_signal`.
+- **A reference is an authoring-door rule; a shape is a both-doors rule.** The companion on this chart and current, the
+  schema tag and a fresh `version_id` refuse at the authoring door only, so a peer's version that beats its companion
+  across the wire (an orphan) is admitted; one whose companion is on another chart is flagged, not refused. **Tempting
+  wrong fixes:** refuse an unknown `alternative_to` at the remote door (the peer's event is penned and sync wedges);
+  join the companion by `alternative_to` alone. Pins: `medication_set_aside_peer.rs::the_remote_door_admits_an_orphan_and_no_reader_shows_it`,
+  `a_remote_companion_on_another_chart_is_flagged_not_refused`,
+  `medication_set_aside_floor.rs::a_companion_on_another_chart_or_unknown_is_refused_at_the_authoring_door`.
+- **Readers join on `alternative_to` AND filter on `patient_id`**, so an orphan shows nowhere and a flagged version
+  never shows on another chart. **Tempting wrong fixes:** list `medication_set_aside` by chart alone ("it is the
+  chart's own table": an orphan would show as a line with no companion); key anything on `version_id` (not unique at
+  the remote door). Pins: `medication_set_aside_sign.rs::read_set_asides_joins_only_present_companions`,
+  `read_set_asides_never_shows_another_charts_version`.
+- **`source_detail` and `why` are two keys, never one note, and a JSON null reads as absent at both doors.** **Tempting
+  wrong fixes:** merge them into one "note" to save a box (a provenance read as a rationale); refuse a null at the
+  remote door (a peer that emits nulls is penned). Pins: `medication_source_note_floor.rs::a_json_null_reads_as_absent_at_both_doors`,
+  `a_non_string_key_is_refused_at_both_doors`, `a_blank_or_control_char_is_refused_at_the_authoring_door_only`.
+- **"From:" stamps only a NEW line, and its category comes from the preset's label, never from the typed text.**
+  **Tempting wrong fixes:** stamp every re-save of a source-less line (a typo fix fabricates a provenance and drops the
+  line's hand tick); guess `info_source` from the free text. Pins: `med_list_source_db_tests.rs::editing_a_line_typed_before_from_keeps_its_own_source_and_tick`,
+  `from_sets_each_new_lines_source_and_a_line_can_change_its_own`, `draft_versions_tests.rs::each_preset_maps_to_its_category`,
+  `every_stored_preset_label_maps_to_a_category`, `medication_draft_list_versions_store.rs::the_from_row_refuses_an_unknown_preset`.
+- **The delete door drops "From:" with the writer's last line on the chart**, so a Sign that empties the writer's list
+  resets it, and one that leaves a line behind keeps it (a "From:" set with no line ever added is not dropped yet,
+  #1090). **Tempting wrong fix:** keep it "for convenience" (Monday's "Packets seen" silently stamps Friday's lines).
+  Pins: `medication_draft_list_versions_store.rs::the_last_line_leaving_resets_from`, `from_survives_while_a_line_remains`.
+- **A version signs only in or after its companion**, and its companion is re-derived from the STORED mark on the fresh
+  read, never taken from the webview. A version beside a ticked list line goes in that line's one transaction; beside a
+  charted current line it signs alone; any other stays with its reason. A version's floor refusal rolls the companion
+  back with it. **Tempting wrong fixes:** sign the version in its own transaction before its companion (the floor
+  refuses a VERSION whose companion is not projected); trust `set_aside_of` from the webview; let a version go in when its
+  companion was refused (a version in the record beside nothing). Pins: `med_list_versions_db_tests.rs::one_sign_charts_the_line_and_its_version_together`,
+  `a_webview_naming_another_companion_cannot_move_a_version`, `a_refused_companion_keeps_its_versions_unsigned`,
+  `medication_set_aside_sign.rs::a_version_refused_by_the_floor_rolls_back_the_companion_too`,
+  `a_version_spend_that_fails_rolls_back_the_companion_too`.
+- **Sign spends every version's draft row BEFORE its companion's** (events still go companion first): the delete door
+  unmarks and re-stamps a deleted line's versions. **Tempting wrong fix:** spend in event order (each version's spend
+  answers `changed` and the whole Sign rolls back). Pin: `medication_set_aside_sign.rs::a_line_and_its_version_commit_together_and_leave_the_list`.
+- **A version signs only when finished, and with its own source or `unknown`.** An unfinished version is kept ("it is
+  not finished"), beside a list line or a charted one; a version with no source of its own signs `unknown`, never the
+  press default. **Tempting wrong fixes:** let a version through because it has no tick to withhold (a half-typed
+  figure, frozen); give it the press's default like a line (the clinician named as the source of a figure they set
+  aside). Pins: `med_list_versions_tests.rs::an_unfinished_version_is_kept_not_signed`,
+  `a_version_with_no_source_signs_unknown_not_the_press_default`.
+- **A failed versions read never hides the list.** It runs under a savepoint in the chart's snapshot and is worded above
+  the lines (`VERSIONS_NOT_READ`). **Tempting wrong fixes:** `?` it (the pane fails to open over a list of drugs the
+  clinician disbelieved); turn it into an empty list (no version shown reads as none set aside). Pins:
+  `med_list_versions_kept_db_tests.rs::med_list_draws_when_the_versions_read_fails`,
+  `med_list_versions_webview_tests.rs::a_failed_versions_read_is_worded_above_the_list`.
+- **Provenance edits clear a hand tick IN THE DOOR but never an untick**; a set-aside line is never ticked; unmarking
+  leaves the line held. **Tempting wrong fixes:** clear `held` on any change (adding a "why" to an unticked line would
+  re-derive the default tick and the line would tick itself); let an unmarked version fall back to the default tick
+  (a version the clinician believed wrong is signed as current). Pins: `medication_draft_list_versions_store.rs::a_source_or_why_edit_clears_a_hand_tick_in_the_door`,
+  `a_why_edit_keeps_an_untick`, `a_set_aside_line_is_never_hand_ticked`, `clearing_a_set_aside_mark_leaves_the_line_held`,
+  `deleting_a_companion_clears_its_versions_marks`, `draft_tick_tests.rs::a_set_aside_line_is_never_default_ticked`.
+- **The collapsed drug line is `drug_line_twin`'s**, rebuilt from the projected columns (one spelling of a drug line),
+  and a stopped line keeps showing its versions. **Tempting wrong fixes:** a second hand-written drug-line format in
+  the reader (a route-only disagreement reads identical to its companion); hide a stopped line's versions. Pins:
+  `medication_set_aside_sign.rs::a_version_differing_only_by_route_reads_differently`,
+  `med_list_versions_kept_db_tests.rs::a_charted_line_shows_its_versions_even_once_stopped`.
+- **The window echoes the line's four own fields on every save and the count near Sign is Sign's own.** The door clears
+  an omitted field, so a save without them wipes a stamped source; "Sign also records {n} set-aside version(s)" is
+  computed from the grouping Sign uses. **Tempting wrong fixes:** let a read skip the line being typed (the stamped
+  source is lost on the next autosave); count every set-aside line (over-claims a version Sign would keep). Pins:
+  `med_list_versions_webview_tests.rs::a_stamped_source_survives_the_next_autosave_of_an_open_line`,
+  `an_autosave_echoes_the_lines_source_why_and_mark`, `med_list_versions_kept_db_tests.rs::the_sign_line_counts_only_versions_sign_will_record`.
+- **The save that stamps "From:" answers the stamp, and the window takes it from that answer** (ruling R23), not only
+  from a later read: a read is not awaited, so a second save before it lands would send no source and the door would
+  clear the stamp. **Tempting wrong fix:** rely on the re-read alone. Pins: `med_list_source_db_tests.rs::the_save_that_stamps_from_answers_the_stamp`,
+  `med_list_source_webview_tests.rs::a_stamp_reaches_the_line_with_its_save_answer`.
+- **A version kept while its companion WAS charted says "no longer set aside"**, never "version kept" (ruling R24): the
+  companion's spend unmarked and held it. Pin: `med_list_versions_db_tests.rs::an_edited_companion_refuses_its_version_per_line`.
+
 **⇒ CHARTING SLICE 1b — THE SAME-DRUG DE-LABEL OFFER (ADR-0101, db/075 in place, no new file) — do not undo**
 (pins: `crates/cairn-node/src/allergy/delabel_offer_tests.rs`, `crates/cairn-node/tests/allergy_overlay_floor.rs`,
 `cairn-gui/cairn-gui-tauri/src/{med_list_delabel_tests,med_list_delabel_db_tests,delabel_webview_tests,allergy_overlays_coded_tests}.rs`,

@@ -26,18 +26,26 @@
 //! have landed: it is reported NOT known and the loop STOPS, so the lines after it stay in the
 //! list, ticked, each reported [`NOT_TRIED`], and the re-read list is the truth (Review Focus 4).
 //!
+//! A set-aside version (slice 2a, `med_list_versions.rs`) goes in its ticked companion's
+//! transaction, after it; one beside an already-charted line signs alone, after every ticked
+//! line; one whose companion is not charted (unticked, refused, not tried) stays in the list, its
+//! line saying why. Each version's companion comes from its STORED mark on the fresh read (ruling
+//! R9). A lost commit covers the companion's versions too: they are reported NOT known with it.
+//!
 //! The webview's word is never trusted: the lines signed are rebuilt from the stored rows, and
-//! every tick, check and duplicate is re-derived here.
+//! every tick, check, duplicate and version's companion is re-derived here.
 use crate::allergies::{failure_named, local_today, on_screen_and_writable};
 use crate::chart_set::{check_displayed_set, ChartPane, ChartSetError};
 use crate::commands::{med_list_impl, record_timing};
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::{override_before_the_key, press, UNKNOWN_LEAD};
-use crate::med_chart_write::charted_input;
 use crate::med_line_sign::{charting, components, override_refs, single_coding};
 use crate::med_list::{
     claim_writer, fresh_read, judge, med_list_read_impl, tick_holds, Judged, MedListView,
+};
+use crate::med_list_versions::{
+    list_input, outcome_words, plan_versions, sign_alone, version_to_sign, VERSION_KEPT,
 };
 use crate::notes::terminal_of;
 use crate::signer::Credential;
@@ -46,6 +54,7 @@ use crate::write_failure::{key_locked, node_cannot_write};
 use cairn_event::medication::ChartedAs;
 use cairn_node::medication::draft::{self, SpendRefused};
 use cairn_node::medication::AuthorParams;
+use std::collections::BTreeSet;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -75,7 +84,8 @@ pub fn med_list_not_yours(name: &str) -> String {
 
 /// What Sign answers. `changed`: nothing was signed, and `lines` (ids) lost their ticks. `done`:
 /// the lines were tried — `charted` of `of` went in; `not_charted` is `(line id, reason)`;
-/// `unknown` the line ids whose outcome is NOT known (at most one: the loop stops there);
+/// `unknown` the line ids whose outcome is NOT known (one line and its versions, or one version
+/// signed alone: the loop stops there); kept versions are in `not_charted` too;
 /// `outcome` the words for all of it; `pane` the medication list and `list` this list, read again
 /// (`None` when that read failed — the lines that went in are in the record either way).
 // The `Done` variant is the larger by the pane it carries; one value per Sign, never stored.
@@ -130,8 +140,9 @@ pub async fn med_list_sign_impl(
         writer_matches(theirs.as_deref(), ours.as_deref(), &name)?;
     }
     // 3. The fresh read, over the set on screen.
-    let fresh = fresh_read(state, patient, writer.as_deref()).await?;
+    let mut fresh = fresh_read(state, patient, writer.as_deref()).await?;
     check_displayed_set(&fresh.set, &charts).map_err(ChartSetError::into_view)?;
+    let charted_lines = std::mem::take(&mut fresh.charted);
     let judged = judge(state, fresh, true, writer.is_some()).await;
     let chosen = ticked_lines(&judged, ticked, &terminal)?;
     // 4. Every tick still holds, or nothing is signed.
@@ -167,8 +178,13 @@ pub async fn med_list_sign_impl(
         .iter()
         .filter_map(|(j, v)| v.as_ref().ok().map(|v| (*j, *v)))
         .collect();
+    // Each set-aside version, by its stored mark on this read (ruling R9): with a line about to be
+    // signed, alone beside a charted one, or kept (`med_list_versions`).
+    let signing: BTreeSet<Uuid> = to_sign.iter().map(|(j, _)| j.line.line_id).collect();
+    let mut plan = plan_versions(&judged, &signing, &charted_lines, &terminal);
+    let mut versions = 0;
     let started = Instant::now();
-    if !to_sign.is_empty() {
+    if !to_sign.is_empty() || !plan.alone.is_empty() {
         let node_sk = state
             .node_sk
             .as_ref()
@@ -190,29 +206,64 @@ pub async fn med_list_sign_impl(
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
+        let list = (patient, terminal.as_str(), writer.as_deref());
+        let mut stopped = false;
         let mut lines = to_sign.into_iter();
         while let Some((j, (charted_as, reason))) = lines.next() {
-            let list = (patient, terminal.as_str(), writer.as_deref());
-            let signed = sign_line(state, node_sk, list, j, charted_as, reason, &author).await;
-            match signed.map_err(|e| line_failure(&e)) {
-                Ok(()) => charted += 1,
+            let with = plan.with.remove(&j.line.line_id).unwrap_or_default();
+            let signed = sign_line(state, node_sk, list, j, charted_as, reason, &with, &author);
+            match signed.await.map_err(|e| line_failure(&e)) {
+                Ok(n) => {
+                    plan.charted(j.line.line_id);
+                    (charted, versions) = (charted + 1, versions + n);
+                }
                 Err(LineFailure::Unknown(text)) => {
-                    // It may have landed: never try the rest on a guess (Review Focus 4). Each
-                    // line left is named, so none is silently missing from the outcome (I3).
-                    unknown.push(j.line.line_id.to_string());
-                    words.push(format!("{} — {text}", j.line.line_text));
+                    // It may have landed, and its versions with it (one transaction): never try
+                    // the rest on a guess (Review Focus 4). Each line left is named, so none is
+                    // silently missing from the outcome (I3).
+                    for l in std::iter::once(j).chain(with) {
+                        unknown.push(l.line.line_id.to_string());
+                        words.push(format!("{} — {text}", l.line.line_text));
+                    }
                     for (rest, _) in lines.by_ref() {
                         words.push(not_charted_line(&rest.line.line_text, NOT_TRIED));
                         not_charted.push((rest.line.line_id.to_string(), NOT_TRIED.into()));
+                        for v in plan.with.remove(&rest.line.line_id).unwrap_or_default() {
+                            plan.keep(v, VERSION_KEPT);
+                        }
                     }
+                    stopped = true;
                 }
                 Err(LineFailure::NotCharted(text)) => {
                     words.push(not_charted_line(&j.line.line_text, &text));
                     not_charted.push((j.line.line_id.to_string(), text));
+                    with.into_iter().for_each(|v| plan.keep(v, VERSION_KEPT));
                 }
             }
         }
+        // Then each version beside a line already charted, alone, unless a lost commit stopped
+        // the Sign above.
+        for (v, med) in std::mem::take(&mut plan.alone) {
+            if stopped {
+                plan.keep(v, NOT_TRIED);
+                continue;
+            }
+            match sign_alone(state, node_sk, list, v, med, &author)
+                .await
+                .map_err(|e| line_failure(&e))
+            {
+                Ok(()) => versions += 1,
+                Err(LineFailure::Unknown(text)) => {
+                    unknown.push(v.line.line_id.to_string());
+                    words.push(format!("{} — {text}", v.line.line_text));
+                    stopped = true;
+                }
+                Err(LineFailure::NotCharted(text)) => plan.keep(v, &text),
+            }
+        }
     }
+    not_charted.extend(plan.not_charted());
+    words.extend(plan.kept_lines());
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
     record_timing(state, "medication-chart", charted, elapsed_ms).await;
     let pane = med_list_impl(state, &patient.to_string(), Some(charts.clone()))
@@ -224,7 +275,10 @@ pub async fn med_list_sign_impl(
         .map_err(|e| eprintln!("the medication draft list was not read again: {}", e.text))
         .ok();
     Ok(MedListSigned::Done {
-        outcome: outcome(charted, chosen.len(), &words),
+        outcome: std::iter::once(outcome_words(charted, chosen.len(), versions, &[]))
+            .chain(words)
+            .collect::<Vec<_>>()
+            .join("\n"),
         charted,
         of: chosen.len(),
         not_charted,
@@ -234,9 +288,15 @@ pub async fn med_list_sign_impl(
     })
 }
 
-/// Sign one line that passed its checks: rebuild what it signs from the STORED row, then write
-/// its event and spend its draft row in one transaction (`chart_draft_line`).
-/// `list` is the list's identity: `(chart, terminal, writer)`.
+/// Sign one line that passed its checks: rebuild what it signs (and each of its `versions`) from
+/// the STORED rows, then write their events and spend their draft rows in one transaction
+/// (`chart_draft_line`). `list` is the list's identity: `(chart, terminal, writer)`. Answers how
+/// many versions went in with it.
+///
+/// A version's FLOOR refusal rolls back its companion's whole transaction: the version and its
+/// line are one decision (design §3.3, ADR-0060 decision 7's scoping), so the companion is
+/// reported not charted with the version's reason, and both stay in the list.
+#[allow(clippy::too_many_arguments)] // the list, the line, its verdict, its versions, the signer
 async fn sign_line(
     state: &AppState,
     node_sk: &cairn_event::SigningKey,
@@ -244,8 +304,9 @@ async fn sign_line(
     j: &Judged,
     charted_as: ChartedAs,
     reason: Option<&str>,
+    versions: &[&Judged],
     author: &AuthorParams<'_>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let (term, parts) = j
         .signable
         .as_ref()
@@ -254,14 +315,12 @@ async fn sign_line(
     let against = override_refs(&ids);
     let today = local_today().to_string();
     let components = components(parts);
-    let input = charted_input(
-        term,
-        single_coding(parts),
-        &j.read,
-        &j.line.directions,
-        charted_as,
-        &today,
-    );
+    let input = list_input(j, term, single_coding(parts), charted_as, &today);
+    let versions = versions
+        .iter()
+        .map(|v| version_to_sign(v))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("{}", e.text))?;
     let charting = charting(charted_as, &j.read, &components, reason, &against);
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let mut db = state
@@ -283,9 +342,10 @@ async fn sign_line(
         &input,
         &charting,
         author,
+        &versions,
     )
     .await
-    .map(|_| ())
+    .map(|c| c.value.1.len())
     .map_err(|e| db.explain(e))
 }
 

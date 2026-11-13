@@ -23,6 +23,7 @@ fn tick(
         drug_allergies: &a,
         duplicate: false,
         named_writer: true,
+        set_aside: false,
     })
 }
 
@@ -92,6 +93,7 @@ fn a_duplicate_withholds_the_tick() {
         drug_allergies: &ListStatus::Entries,
         duplicate: true,
         named_writer: true,
+        set_aside: false,
     };
     assert!(!default_tick(&f));
     assert!(default_tick(&TickFacts {
@@ -111,6 +113,7 @@ fn a_list_with_no_named_writer_is_never_default_ticked() {
         drug_allergies: &ListStatus::Entries,
         duplicate: false,
         named_writer: false,
+        set_aside: false,
     };
     assert!(!default_tick(&f));
 }
@@ -166,4 +169,24 @@ fn duplicates_count_the_chart_and_the_list() {
 #[test]
 fn combinations_and_uncoded_never_group() {
     assert!(duplicate_codes(&[None, None, Some("a")], &["q"]).is_empty());
+}
+
+#[test]
+fn a_set_aside_line_is_never_default_ticked() {
+    let (d, c) = (read_directions("500 mg cap tds"), LineCheck::default());
+    let f = TickFacts {
+        finished: true,
+        all_parts_coded: true,
+        directions: &d,
+        check: &c,
+        drug_allergies: &ListStatus::Entries,
+        duplicate: false,
+        named_writer: true,
+        set_aside: true,
+    };
+    assert!(!default_tick(&f));
+    assert!(default_tick(&TickFacts {
+        set_aside: false,
+        ..f
+    }));
 }

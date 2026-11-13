@@ -216,6 +216,7 @@ function renderRow(row) {
     rows.push(note);
   }
   rows.push(...allergyRows(row)); // marks and notes under the line (allergy_tags.js)
+  rows.push(...versionRows(row)); // its set-aside versions, collapsed (med_list_versions.js)
   return rows;
 }
 
@@ -250,6 +251,7 @@ function drawList(pane, patient) {
   setMessage(el("record-links-error"), pane.links_error);
   renderWarnings(view);
   setMessage(el("allergy-check-failed"), pane.allergy_check_failed); // above the list
+  setMessage(el("versions-not-read"), pane.versions_error); // likewise (chart_versions.rs)
 
   const body = el("med-rows");
   const typed = typedReasons();
@@ -305,6 +307,7 @@ function clearDrawnList() {
   el("med-rows").replaceChildren();
   setMessage(el("chart-unshown"), "");
   setMessage(el("allergy-check-failed"), "");
+  setMessage(el("versions-not-read"), "");
   setMessage(el("chart-stale"), "");
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");

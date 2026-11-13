@@ -9,9 +9,12 @@ use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::PartArg;
 use crate::med_line_sign::{line_under, not_read, parts_before_the_key};
+use crate::med_list::WarningRef;
 use crate::med_list_delabel::{offers_for, DelabelOffer};
+use crate::med_list_versions::{charted_companions, charted_words};
 use crate::state::AppState;
 use crate::write_failure::chart_read_failed;
+use cairn_event::medication::ALLERGY_SOURCE;
 use cairn_medication_view::{ChartSet, MedicationRow};
 use cairn_node::allergy::check::LineCheck;
 use cairn_node::allergy::read::PatientAllergies;
@@ -37,12 +40,18 @@ pub fn already_on_the_list(line: &str) -> String {
 
 /// What one snapshot gives the list: the chart set, its allergies, the chart's current
 /// single-moiety lines as `(code, the line as the list reads it)` (the duplicate guard's "already
-/// on the chart"), and the writer's lines.
+/// on the chart"), the writer's lines, the OPENED chart's current lines a version may be set
+/// aside beside as `(medication_id, moiety code)` (`med_list_versions::charted_companions`), and
+/// the writer's "From:" as `(preset, detail)`; and the opened chart's lines as the "Version of
+/// which line?" pick names them (`med_list_versions::charted_words`).
 pub(crate) struct Fresh {
     pub set: ChartSet,
     pub allergies: PatientAllergies,
     pub current: Vec<(String, String)>,
     pub lines: Vec<DraftLine>,
+    pub charted: Vec<(Uuid, String)>,
+    pub from: Option<(Option<String>, Option<String>)>,
+    pub charted_words: Vec<(Uuid, String)>,
 }
 
 /// [`Fresh`], read in ONE snapshot, so a line is never judged against allergies or a chart from
@@ -59,6 +68,9 @@ pub(crate) async fn fresh_read(
             allergies,
             current: vec![],
             lines: vec![],
+            charted: vec![],
+            from: None,
+            charted_words: vec![],
         });
     };
     let mut db = db.lock().await?;
@@ -66,8 +78,12 @@ pub(crate) async fn fresh_read(
         let list = cairn_node::medication::read::list_patient_medications(tx, patient).await?;
         let allergies = cairn_node::allergy::read::list_patient_allergies(tx, patient).await?;
         let lines = draft::read_draft_lines(tx, patient, writer).await?;
+        let from = draft::read_draft_from(tx, patient, writer).await?;
         Ok(Fresh {
             current: current_lines(&list.rows),
+            charted: charted_companions(&list.rows, patient),
+            charted_words: charted_words(&list.rows, patient),
+            from,
             set: list.charts,
             allergies,
             lines,
@@ -75,6 +91,16 @@ pub(crate) async fn fresh_read(
     })
     .await
     .map_err(|e| chart_read_failed(db.explain(e)))
+}
+
+/// The terminal holding the list when it is not this one (`terminal`; `None` while the id is not
+/// yet read: then no line is this terminal's). Pure.
+pub(crate) fn elsewhere(judged: &[Judged], terminal: Option<&str>) -> Option<String> {
+    judged
+        .iter()
+        .map(|j| &j.line.terminal_id)
+        .find(|t| Some(t.as_str()) != terminal)
+        .cloned()
 }
 
 /// The chart's CURRENT single-drug lines as `(moiety code, canonically spelled; the line's name
@@ -152,7 +178,11 @@ pub(crate) async fn judge(
         false => ListStatus::NotYetAsked,
     };
     let duplicates: Vec<(bool, Option<String>)> = {
-        let codes: Vec<Option<&str>> = decoded.iter().map(|(_, _, s)| moiety_of(s)).collect();
+        let codes: Vec<Option<&str>> = decoded
+            .iter()
+            // A set-aside version is signed beside its companion, so it never counts as a duplicate.
+            .map(|(l, _, s)| l.set_aside_of.is_none().then(|| moiety_of(s)).flatten())
+            .collect();
         let texts: Vec<&str> = decoded
             .iter()
             .map(|(l, _, _)| l.line_text.as_str())
@@ -193,6 +223,7 @@ pub(crate) async fn judge(
                 drug_allergies: &status,
                 duplicate,
                 named_writer,
+                set_aside: line.set_aside_of.is_some(),
             });
             let offers = match (&signable, use_allergies) {
                 (Ok((_, p)), true) => offers_for(&resolved, &fresh.allergies.doubted_charts, p),
@@ -282,4 +313,17 @@ pub(crate) fn tick_holds(j: &Judged) -> bool {
         true => hand_tick_holds(&j.check, &j.line.ticked_against),
         false => j.default_ticked && !j.line.held,
     }
+}
+
+/// What a hand tick vouches for (ruling R1): the warnings BOTH found now and drawn on the line
+/// when it was ticked (`seen`). One found but never drawn was never seen, so it is left out, and
+/// the tick fails at Sign; one drawn but gone now needs no vouching. Pure.
+pub(crate) fn vouched(now: &[Uuid], seen: &[WarningRef]) -> Vec<(String, Uuid)> {
+    now.iter()
+        .filter(|id| {
+            seen.iter()
+                .any(|w| w.source == ALLERGY_SOURCE && w.reference.parse() == Ok(**id))
+        })
+        .map(|id| (ALLERGY_SOURCE.to_string(), *id))
+        .collect()
 }

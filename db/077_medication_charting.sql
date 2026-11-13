@@ -198,12 +198,18 @@ CREATE TABLE IF NOT EXISTS medication_charting (
     components       JSONB,
     override_reason  TEXT,
     override_against JSONB,
+    source_detail    TEXT,
+    why              TEXT,
     hlc_wall         BIGINT  NOT NULL,
     hlc_counter      INTEGER NOT NULL,
     origin           TEXT    NOT NULL,
     content_address  BYTEA   NOT NULL,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+-- Paired with the CREATE above for a table made before the two columns (#207's rule): where the
+-- claim came from, and why it was charted this way (free text, db/079 is their floor).
+ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS source_detail text;
+ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS why text;
 GRANT SELECT ON medication_charting TO cairn_agent;
 -- One-off for a dev database that loaded an earlier draft of this unmerged file, when the
 -- column was UUID[] and the payload key had its earlier allergy-only name. Guarded on the
@@ -256,14 +262,16 @@ BEGIN
     -- `->>` already reads a JSON null as SQL NULL, so the text keys need no NULLIF.
     IF p ->> 'charted_as' IS NULL AND p ->> 'route' IS NULL
        AND p #>> '{substance,strength}' IS NULL AND v_comp IS NULL
-       AND p #>> '{warning_override,reason}' IS NULL AND v_against IS NULL THEN
+       AND p #>> '{warning_override,reason}' IS NULL AND v_against IS NULL
+       AND p ->> 'source_detail' IS NULL AND p ->> 'why' IS NULL THEN
         RETURN;
     END IF;
     v_med := (p ->> 'medication_id')::uuid;
 
     INSERT INTO medication_charting
         (medication_id, patient_id, charted_as, route, strength, components,
-         override_reason, override_against, hlc_wall, hlc_counter, origin, content_address)
+         override_reason, override_against, source_detail, why,
+         hlc_wall, hlc_counter, origin, content_address)
     VALUES (
         v_med,
         COALESCE(cairn_medication_thread_patient(v_med), e.patient_id),
@@ -273,6 +281,8 @@ BEGIN
         v_comp,
         p #>> '{warning_override,reason}',
         v_against,
+        p ->> 'source_detail',
+        p ->> 'why',
         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET
         patient_id       = EXCLUDED.patient_id,
@@ -282,6 +292,8 @@ BEGIN
         components       = EXCLUDED.components,
         override_reason  = EXCLUDED.override_reason,
         override_against = EXCLUDED.override_against,
+        source_detail    = EXCLUDED.source_detail,
+        why              = EXCLUDED.why,
         hlc_wall         = EXCLUDED.hlc_wall,
         hlc_counter      = EXCLUDED.hlc_counter,
         origin           = EXCLUDED.origin,

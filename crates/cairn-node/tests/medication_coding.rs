@@ -141,6 +141,7 @@ fn coded_input(term: &'static str, code: &'static str) -> AssertMedicationInput<
         info_source: "patient-reported",
         started: Some("2024"),
         started_precision: Some("year"),
+        source_note: None,
     }
 }
 
@@ -456,6 +457,7 @@ async fn an_opaque_format_system_is_accepted_and_projects() {
         info_source: "patient-reported",
         started: Some("2024"),
         started_precision: Some("year"),
+        source_note: None,
     };
     let patient = Uuid::now_v7();
     // #345: a chart must be registered before anything is recorded about it.

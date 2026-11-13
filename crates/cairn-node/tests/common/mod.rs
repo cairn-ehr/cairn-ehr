@@ -951,6 +951,7 @@ pub async fn submit_medication_with_raw_safety(
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     // `safety: None` — no PRECISE claim under the seal. Irrelevant to this scenario:
     // `cairn_check_safety_signal` and the new overclaim check both read only the CLEAR
@@ -1074,6 +1075,7 @@ async fn build_raw_safety_medication(
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let body = cairn_node::medication::build_assert_body(
         event_id,
@@ -1277,7 +1279,7 @@ pub const NOTE_AUTHOR: &str = "Dr Ada Notewriter";
 pub async fn note_setup(c: &Client) -> (SigningKey, String, SigningKey, String, Uuid) {
     c.batch_execute(
         "TRUNCATE clinical_note, clinical_note_discard, clinical_note_attestation, note_draft, note_draft_spent, note_policy, vault_member, \
-         medication_draft_line, patient_link, person_member, link_veto_flag CASCADE",
+         medication_draft_line, medication_draft_from, patient_link, person_member, link_veto_flag CASCADE",
     )
     .await
     .unwrap();

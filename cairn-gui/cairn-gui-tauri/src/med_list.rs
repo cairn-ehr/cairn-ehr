@@ -28,7 +28,10 @@ use crate::med_chart::{press, view, LineCheckView, PartArg};
 use crate::med_line_sign::{fresh_check, parts_before_the_key, the_line};
 use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
-    already_on_the_list, fresh_read, judge, tick_holds, Judged,
+    already_on_the_list, elsewhere, fresh_read, judge, tick_holds, vouched, Judged,
+};
+use crate::med_list_versions::{
+    companion_words, companions_of, given, stamp_new_line, versions_recorded, FromView,
 };
 use crate::notes::terminal_of;
 use crate::state::AppState;
@@ -40,7 +43,7 @@ use cairn_node::medication::line::Directions;
 use uuid::Uuid;
 
 /// What a write in fixture mode answers (as the note pane's).
-const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
+pub(crate) const FIXTURE: &str = "fixture mode: this window is showing mock data and cannot write";
 
 /// One line as the webview saves it. `line_text` is the whole line as typed; `typed_drug` and
 /// `directions` are the window's split of it (only the window can split it as typed); `parts`
@@ -66,6 +69,17 @@ pub struct LineArg {
     /// given.
     #[serde(default)]
     pub held: bool,
+    /// The line's own source and why, and its set-aside mark, as the line holds them (slice 2a,
+    /// `med_list_versions.rs`). Send all four back on every save: the door reads a missing one
+    /// as cleared, and clearing is a content change (it clears a hand tick).
+    #[serde(default)]
+    pub info_source: Option<String>,
+    #[serde(default)]
+    pub source_detail: Option<String>,
+    #[serde(default)]
+    pub why: Option<String>,
+    #[serde(default)]
+    pub set_aside_of: Option<String>,
 }
 
 /// One warning a line carries, as the wire's override names it: `{"source": "allergy", "ref":
@@ -88,6 +102,12 @@ pub struct MedListView {
     pub writer_name: Option<String>,
     pub elsewhere: Option<String>,
     pub lines: Vec<ListLineView>,
+    /// The writer's "From:" for this chart (`None`: never set).
+    pub from: Option<FromView>,
+    /// How many set-aside versions a Sign of the lines ticked NOW would record (ruling R16): each
+    /// beside a ticked list line or a current charted line, by the grouping Sign itself uses
+    /// (`med_list_versions::versions_recorded`). The pane says so near Sign.
+    pub versions_recorded: usize,
 }
 
 /// One line as the pane draws it: what was saved (the [`LineArg`] fields), and what was derived
@@ -120,12 +140,26 @@ pub struct ListLineView {
     pub against: Vec<WarningRef>,
     /// The same-drug de-label offers this line may show (empty when none).
     pub delabel_offers: Vec<DelabelOffer>,
+    /// As stored ([`LineArg`]'s four).
+    pub info_source: Option<String>,
+    pub source_detail: Option<String>,
+    pub why: Option<String>,
+    pub set_aside_of: Option<String>,
+    /// The lines this one could be set aside beside, as marks (`line:<id>` / `med:<id>`): empty
+    /// means no "Set aside" button (`med_list_versions::companions_of`).
+    pub companions: Vec<String>,
+    /// Each of `companions` as the "Version of which line?" pick names it, in the same order
+    /// (`med_list_versions::companion_words`).
+    pub companion_words: Vec<String>,
 }
 
-/// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …).
-#[derive(Debug, serde::Serialize)]
+/// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …), and
+/// the source "From:" stamped on the line by THIS save (both `None` when none was; ruling R23).
+#[derive(Debug, Default, serde::Serialize)]
 pub struct SaveAnswer {
     pub answer: String,
+    pub info_source: Option<String>,
+    pub source_detail: Option<String>,
 }
 
 #[tauri::command]
@@ -187,15 +221,24 @@ pub async fn med_list_read_impl(
 ) -> Result<MedListView, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let (writer, writer_name) = claim_writer(state).await;
-    let fresh = fresh_read(state, patient, writer.as_deref()).await?;
+    let mut fresh = fresh_read(state, patient, writer.as_deref()).await?;
+    let from = fresh
+        .from
+        .take()
+        .map(|(preset, detail)| FromView { preset, detail });
+    let charted = std::mem::take(&mut fresh.charted);
+    let words = std::mem::take(&mut fresh.charted_words);
     let same_set = charts.is_none_or(|c| check_displayed_set(&fresh.set, c).is_ok());
     let judged = judge(state, fresh, same_set, writer.is_some()).await;
     let terminal = state.terminal_id.get().map(String::as_str);
+    let lines = lines_view(&judged, &charted, &words, terminal);
     Ok(MedListView {
         writer,
         writer_name,
         elsewhere: elsewhere(&judged, terminal),
-        lines: judged.iter().map(line_view).collect(),
+        versions_recorded: versions_recorded(&judged, &lines, &charted, terminal),
+        lines,
+        from,
     })
 }
 
@@ -223,7 +266,7 @@ pub async fn med_list_save_impl(
         ),
         false => vec![],
     };
-    let row = DraftLine {
+    let mut row = DraftLine {
         line_id,
         terminal_id: terminal,
         seq: 0,
@@ -238,6 +281,11 @@ pub async fn med_list_save_impl(
         typed_drug: line.typed_drug,
         directions: line.directions,
         held: line.held,
+        // All four, always: the door reads an omitted one as cleared (a content change).
+        info_source: given(line.info_source),
+        source_detail: given(line.source_detail),
+        why: given(line.why),
+        set_aside_of: given(line.set_aside_of),
     };
     let db = state
         .db
@@ -245,10 +293,22 @@ pub async fn med_list_save_impl(
         .ok_or_else(|| node_cannot_write("no database connection"))?
         .lock()
         .await?;
+    // A NEW line with no source of its own takes "From:" (ruling R12, `med_list_versions`).
+    let stamped = stamp_new_line(&*db, patient, writer, &mut row)
+        .await
+        .map_err(|e| node_failure(&db.explain(e)))?;
     let answer = draft::save_draft_line(&*db, patient, writer, &row)
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
-    Ok(SaveAnswer { answer })
+    let (info_source, source_detail) = match stamped && answer == "saved" {
+        true => (row.info_source, row.source_detail),
+        false => (None, None),
+    };
+    Ok(SaveAnswer {
+        answer,
+        info_source,
+        source_detail,
+    })
 }
 
 /// The warnings on `line` now: a fresh check over the set on screen. Any failure is none, which
@@ -267,19 +327,6 @@ async fn warnings_now(
         .await
         .map(|check| check.against)
         .unwrap_or_default()
-}
-
-/// What a hand tick vouches for (ruling R1): the warnings BOTH found now and drawn on the line
-/// when it was ticked (`seen`). One found but never drawn was never seen, so it is left out, and
-/// the tick fails at Sign; one drawn but gone now needs no vouching. Pure.
-pub(crate) fn vouched(now: &[Uuid], seen: &[WarningRef]) -> Vec<(String, Uuid)> {
-    now.iter()
-        .filter(|id| {
-            seen.iter()
-                .any(|w| w.source == ALLERGY_SOURCE && w.reference.parse() == Ok(**id))
-        })
-        .map(|id| (ALLERGY_SOURCE.to_string(), *id))
-        .collect()
 }
 
 /// Remove one of the writer's lines, whatever it last saved (the clinician pressed remove on it).
@@ -307,12 +354,16 @@ pub async fn med_list_delete_impl(
     let Some(found) = lines.iter().find(|l| l.line_id == line) else {
         return Ok(SaveAnswer {
             answer: "gone".into(),
+            ..SaveAnswer::default()
         });
     };
     let answer = draft::delete_draft_line(&*db, line, patient, terminal, writer, &found.saved_at)
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
-    Ok(SaveAnswer { answer })
+    Ok(SaveAnswer {
+        answer,
+        ..SaveAnswer::default()
+    })
 }
 
 /// "Continue here": move the writer's list to this terminal, then read it.
@@ -340,17 +391,36 @@ pub async fn med_list_take_impl(
     med_list_read_impl(state, patient_id, None).await
 }
 
-/// The terminal holding the list when it is not this one (`terminal`; `None` while the id is not
-/// yet read: then no line is this terminal's). Pure.
-pub(crate) fn elsewhere(judged: &[Judged], terminal: Option<&str>) -> Option<String> {
+/// Every judged line as the pane draws it, each line held by `terminal` with the lines it could
+/// be set aside beside: `terminal`'s own lines and `charted`, the opened chart's current lines
+/// (`med_list_judge::Fresh`), each named as `words` names it. Never another terminal's, whose
+/// lines this terminal's Sign does not plan (`plan_versions`, ruling R13); a line held
+/// elsewhere is offered none. Pure.
+fn lines_view(
+    judged: &[Judged],
+    charted: &[(Uuid, String)],
+    words: &[(Uuid, String)],
+    terminal: Option<&str>,
+) -> Vec<ListLineView> {
+    let here = |j: &&Judged| Some(j.line.terminal_id.as_str()) == terminal;
+    let lines: Vec<DraftLine> = judged.iter().filter(here).map(|j| j.line.clone()).collect();
     judged
         .iter()
-        .map(|j| &j.line.terminal_id)
-        .find(|t| Some(t.as_str()) != terminal)
-        .cloned()
+        .map(|j| {
+            let companions = match here(&j) {
+                true => companions_of(&j.line, &lines, charted),
+                false => vec![],
+            };
+            ListLineView {
+                companion_words: companion_words(&companions, &lines, words),
+                companions,
+                ..line_view(j)
+            }
+        })
+        .collect()
 }
 
-/// One judged line as the pane draws it. Pure.
+/// One judged line as the pane draws it (no companions: [`lines_view`] adds them). Pure.
 pub(crate) fn line_view(j: &Judged) -> ListLineView {
     let l = &j.line;
     ListLineView {
@@ -381,6 +451,12 @@ pub(crate) fn line_view(j: &Judged) -> ListLineView {
             })
             .collect(),
         delabel_offers: j.offers.clone(),
+        info_source: l.info_source.clone(),
+        source_detail: l.source_detail.clone(),
+        why: l.why.clone(),
+        set_aside_of: l.set_aside_of.clone(),
+        companions: vec![],
+        companion_words: vec![],
     }
 }
 
@@ -403,3 +479,15 @@ mod held_db_tests;
 #[cfg(test)]
 #[path = "med_list_delabel_db_tests.rs"]
 mod delabel_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_versions_db_tests.rs"]
+mod versions_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_source_db_tests.rs"]
+mod source_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_versions_kept_db_tests.rs"]
+mod versions_kept_db_tests;

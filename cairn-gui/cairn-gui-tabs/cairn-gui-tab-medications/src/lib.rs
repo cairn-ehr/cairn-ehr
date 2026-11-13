@@ -12,6 +12,7 @@ mod test_rows;
 pub mod view;
 
 pub use hold_view::HoldView;
+pub use row_view::{version_line, versions_under, VersionView};
 pub use view::{build_view, MedListRowView, MedListView};
 
 use cairn_gui_tab::context::Context;

@@ -129,6 +129,7 @@ async fn a_vault_key_signs_an_event_the_floor_accepts() {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let author = AuthorParams {
         human_sk: &key,

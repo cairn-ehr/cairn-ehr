@@ -762,6 +762,7 @@ fn med_input(term: &'static str) -> AssertMedicationInput<'static> {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     }
 }
 

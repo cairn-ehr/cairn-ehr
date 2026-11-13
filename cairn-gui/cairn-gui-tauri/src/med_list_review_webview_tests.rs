@@ -151,5 +151,6 @@ fn enter_on_an_empty_line_keeps_the_focus_on_the_press() {
     let focus = dropped + position(&finished[dropped..], "if (byKey) focusPress(line);");
     let gone = dropped + position(&finished[dropped..], "return;");
     assert!(focus < gone, "{finished}");
-    assert!(js_fn(LIST_JS, "focusPress").contains(".focus();"));
+    // focusPress moved to med_chart.js, beside the presses it focuses (slice 2a, file size).
+    assert!(js_fn(include_str!("../src-ui/med_chart.js"), "focusPress").contains(".focus();"));
 }

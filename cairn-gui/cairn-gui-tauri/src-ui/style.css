@@ -625,3 +625,32 @@ li > button.allergy-write {
 #med-list-outcome {
   white-space: pre-line;
 }
+
+/* ---- Batch charting slice 2a: "From:", a line's Why, Set aside, versions (med_list_versions.js) ---- */
+
+#med-list-from {
+  margin: 0.4rem 0;
+}
+
+/* A line's source and why, read without opening its Why. */
+.med-list-source {
+  margin: 0.1rem 0;
+}
+
+.med-list-which {
+  margin: 0.2rem 0;
+}
+
+.med-list-which button {
+  margin-right: 0.4rem;
+}
+
+.med-list-why summary,
+.med-versions summary {
+  cursor: pointer;
+}
+
+/* A version is never current: muted, under its line. */
+.med-versions {
+  color: var(--muted);
+}

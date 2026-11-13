@@ -5289,6 +5289,7 @@ async fn run() -> anyhow::Result<()> {
                 info_source: &info_source,
                 started: started.as_deref(),
                 started_precision: started_precision.as_deref(),
+                source_note: None,
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);

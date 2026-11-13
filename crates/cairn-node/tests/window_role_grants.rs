@@ -325,6 +325,7 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
             info_source: "patient",
             started: None,
             started_precision: None,
+            source_note: None,
         },
         None,
         None,

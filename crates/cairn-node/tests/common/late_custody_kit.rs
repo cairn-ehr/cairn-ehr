@@ -100,6 +100,7 @@ pub fn sealed_assert(
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let hlc = Hlc {
         wall,

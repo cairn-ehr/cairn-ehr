@@ -65,7 +65,8 @@ pub async fn med_list_impl(
     let patient = state.displayed_patient(patient_id).await?;
     // The node resolves the chart SET itself; `list.charts` is what the view hands the webview
     // to send back with every write.
-    let list = read_chart_of(state, patient)
+    // The set-aside versions come from the same snapshot, to show under their lines (slice 2a).
+    let (list, versions) = crate::chart_versions::read_chart_and_versions(state, patient)
         .await
         .map_err(|e| format!("{e:#}"))?;
     // NOT `?`: a failed read of the member identities must never hide the medication list
@@ -96,9 +97,13 @@ pub async fn med_list_impl(
     // an unread allergy list is a worded line above the list, an absent or failing drug list
     // leaves lines "not checked".
     let allergy = crate::allergy_check::med_list_check(state, patient, &list).await;
-    Ok(chart_pane(
-        &list, patient, members, links, dups, change, allergy,
-    ))
+    let mut pane = chart_pane(&list, patient, members, links, dups, change, allergy);
+    // NOT `?` either: a failed versions read is worded above the list (`VERSIONS_NOT_READ`).
+    match versions {
+        Ok(v) => crate::chart_versions::attach_versions(&mut pane.list.rows, &list.rows, &v),
+        Err(why) => pane.versions_error = Some(why),
+    }
+    Ok(pane)
 }
 
 /// Whether a signing key is held for the next act, and for whom.

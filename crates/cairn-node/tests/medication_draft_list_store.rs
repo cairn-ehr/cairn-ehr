@@ -58,7 +58,7 @@ async fn fixture(base: &str) -> (Client, Client, Uuid) {
     let (owner, window) = owner_and_window(base).await;
     let (_, _, _, _, chart) = note_setup(&owner).await;
     owner
-        .batch_execute("TRUNCATE medication_draft_line")
+        .batch_execute("TRUNCATE medication_draft_line, medication_draft_from")
         .await
         .unwrap();
     (owner, window, chart)

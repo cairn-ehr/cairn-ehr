@@ -13,6 +13,8 @@ mod coding;
 mod dose;
 pub mod draft;
 pub mod draft_tick;
+pub mod draft_versions;
+pub mod draft_versions_sign;
 pub mod elsewhere;
 mod hazard;
 // Public for the CLI's benefit, same as `read` and `signoff`: `main.rs`'s `MedicationList`
@@ -22,6 +24,7 @@ pub mod line;
 pub mod list_text;
 pub mod read;
 mod reconciliation;
+pub mod set_aside_read;
 // Public since ADR-0066 decision 6: `ensure_unwrap_key` stopped being a side effect and
 // became a REFUSAL — an unprovisioned node cannot write a sealed body. That refusal is a
 // safety guarantee, so `unwrap_key_provisioning.rs` has to be able to name the function

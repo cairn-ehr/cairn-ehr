@@ -2,7 +2,7 @@
 //! Device-additive: signed by the node/clinician key with a `recorded`
 //! contributor and NO responsibility attestation (mirrors identify.rs).
 use cairn_event::medication::{
-    medication_assertion_body, render_medication_twin, Charting, MedicationAssertion,
+    medication_assertion_body, render_medication_twin, Charting, MedicationAssertion, SourceNote,
 };
 // Re-exported (not just used internally): a caller building `coding_from_parts`'/
 // `AssertMedicationInput::coding`'s value needs to name this type too (final-review
@@ -27,6 +27,9 @@ pub struct AssertMedicationInput<'a> {
     pub info_source: &'a str,
     pub started: Option<&'a str>,
     pub started_precision: Option<&'a str>,
+    /// Where exactly the claim came from and why it was charted (batch charting slice 2a):
+    /// `None` writes neither key, so the event is byte-identical to one built before them.
+    pub source_note: Option<SourceNote<'a>>,
 }
 
 /// Advisory Rust-side guard mirroring the DB floor: refuse a blank term with a
@@ -135,6 +138,7 @@ pub fn build_charted_body(
         dose_amount: input.dose_amount,
         dose_unit: input.dose_unit,
         sig: input.sig,
+        source_note: input.source_note,
         info_source: input.info_source,
         started: input.started,
         started_precision: input.started_precision,

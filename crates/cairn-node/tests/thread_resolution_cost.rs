@@ -3,7 +3,8 @@
 //! # The shape of the problem
 //!
 //! `cairn_event_thread` resolves one event to its medication thread by `UNION ALL` over its
-//! projection tables (five at #385, seven since db/059 added the two withhold tables, #803),
+//! projection tables (five at #385, seven since db/059 added the two withhold tables, #803,
+//! eight since db/079 added the set-aside versions),
 //! filtered on `content_address`. None of the five indexed that column then, so every call
 //! was five sequential scans — and `cairn_effective_sensitivity` calls it once per
 //! thread through a `LATERAL`, making a chart report *O(threads on chart × every medication
@@ -20,7 +21,7 @@
 //!
 //! # What is asserted here, and what is deliberately not
 //!
-//! **Asserted:** the seven indexes exist (leading-column, valid, on the `public` table); the
+//! **Asserted:** the eight indexes exist (leading-column, valid, on the `public` table); the
 //! type short-circuit genuinely fires; and the predicate it keys on still answers "might have
 //! a thread" for every medication event type — which since #385 is not merely a precondition
 //! for the optimisation but the guard standing between a §10b list edit and silent protection
@@ -45,9 +46,9 @@ use common::{
 };
 use uuid::Uuid;
 
-/// The seven tables `cairn_event_thread`'s `UNION ALL` reads, in its order. Kept as data so
+/// The eight tables `cairn_event_thread`'s `UNION ALL` reads, in its order. Kept as data so
 /// the index guard names the offender rather than failing on an anonymous count.
-const THREAD_PROJECTIONS: [&str; 7] = [
+const THREAD_PROJECTIONS: [&str; 8] = [
     "medication_statement",
     "medication_cessation",
     "medication_coding",
@@ -55,11 +56,12 @@ const THREAD_PROJECTIONS: [&str; 7] = [
     "medication_dose_correction",
     "medication_withhold",
     "medication_withhold_release",
+    "medication_set_aside",
 ];
 
-/// Every medication event type that writes one of those seven tables. The short-circuit is
+/// Every medication event type that writes one of those eight tables. The short-circuit is
 /// safe only while `cairn_event_type_has_no_thread` answers FALSE for all of them.
-const MEDICATION_EVENT_TYPES: [&str; 8] = [
+const MEDICATION_EVENT_TYPES: [&str; 9] = [
     "clinical.medication.asserted",
     "clinical.medication-cessation.asserted",
     "clinical.medication-coding.asserted",
@@ -68,9 +70,10 @@ const MEDICATION_EVENT_TYPES: [&str; 8] = [
     "clinical.medication-dose-correction.asserted",
     "clinical.medication-withhold.asserted",
     "clinical.medication-withhold-release.asserted",
+    "clinical.medication-set-aside.asserted",
 ];
 
-/// The `content_address` lookup the seven-way UNION performs must be index-backed on each arm.
+/// The `content_address` lookup the eight-way UNION performs must be index-backed on each arm.
 ///
 /// Asserted against `pg_index` rather than against the migration text: an index dropped by a
 /// later migration, or never created because its `CREATE INDEX` sat behind a guard that did
@@ -139,7 +142,7 @@ async fn every_medication_thread_projection_indexes_content_address() {
 /// medication projection row carries its exact content address**.
 ///
 /// The decoy row is what makes this a real test rather than a restatement. Without the
-/// short-circuit `cairn_event_thread` would scan the seven tables, find the seeded address and
+/// short-circuit `cairn_event_thread` would scan the eight tables, find the seeded address and
 /// return that `medication_id`; with it, the function never looks. Delete the short-circuit
 /// and this test fails — which is the only way to pin an optimisation whose whole point is
 /// that it changes no answer in normal use.
@@ -260,7 +263,7 @@ async fn a_thread_free_event_type_never_reaches_the_medication_scans() {
 /// predicate. The short-circuit removed that independence, so this test and
 /// `sensitivity_ladder.rs::f5a_*` are what remain.
 ///
-/// KNOWN LIMIT: `MEDICATION_EVENT_TYPES` is hand-maintained, so a NINTH medication verb is
+/// KNOWN LIMIT: `MEDICATION_EVENT_TYPES` is hand-maintained, so a TENTH medication verb is
 /// unguarded until someone adds it here — the mirror-pair hazard `common/mod.rs` warns about,
 /// tracked in #441.
 #[tokio::test]
@@ -282,7 +285,7 @@ async fn no_medication_event_type_is_classified_thread_free() {
             .get(0);
         assert!(
             !has_no_thread,
-            "{event_type} writes one of the seven thread projections, so classifying it \
+            "{event_type} writes one of the eight thread projections, so classifying it \
              thread-free would make cairn_event_thread return NULL for every event on every \
              medication thread (#385)"
         );

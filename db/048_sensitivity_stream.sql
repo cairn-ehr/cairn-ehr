@@ -455,20 +455,21 @@ BEGIN
     -- see medication threads cannot resolve one, which is the SAME state as holding no
     -- custody. Section 11's conservative bound then applies. Safe direction by construction.
     --
-    -- WHY THREE to_regclass PROBES AND NOT ONE: the UNION below spans SEVEN tables from THREE
+    -- WHY FOUR to_regclass PROBES AND NOT ONE: the UNION below spans EIGHT tables from FOUR
     -- migration files (medication_statement/medication_cessation/medication_coding from db/031;
     -- medication_dose_event/medication_dose_correction from db/032; medication_withhold/
-    -- medication_withhold_release from db/059). Checking only medication_statement silently
-    -- assumed the other six always arrive with it. No shipped loader ever lists one of
-    -- 031/032/059 without the others (cairn-node loads all three; cairn-sync loads none) — but
-    -- the loop that replays db/*.sql is not one atomic transaction, so a loader that crashes
-    -- mid-replay between 031 and 059 is a real (if narrow) window in which
-    -- medication_statement exists and medication_withhold does not. Checking one
-    -- representative table PER SOURCE FILE (031, 032, 059) costs nothing and closes that
-    -- window instead of assuming it shut.
+    -- medication_withhold_release from db/059; medication_set_aside from db/079). Checking
+    -- only medication_statement silently assumed the other seven always arrive with it. No
+    -- shipped loader ever lists one of 031/032/059/079 without the others (cairn-node loads all
+    -- four; cairn-sync loads none) — but the loop that replays db/*.sql is not one atomic
+    -- transaction, so a loader that crashes mid-replay between 031 and 059 is a real (if
+    -- narrow) window in which medication_statement exists and medication_withhold does not.
+    -- Checking one representative table PER SOURCE FILE (031, 032, 059, 079) costs nothing and
+    -- closes that window instead of assuming it shut.
     IF to_regclass('public.medication_statement') IS NULL
        OR to_regclass('public.medication_dose_event') IS NULL
-       OR to_regclass('public.medication_withhold') IS NULL THEN
+       OR to_regclass('public.medication_withhold') IS NULL
+       OR to_regclass('public.medication_set_aside') IS NULL THEN
         RETURN NULL;
     END IF;
 
@@ -481,12 +482,12 @@ BEGIN
 
     -- #385: a type section 10b has POSITIVELY confirmed to be thread-free (note.%,
     -- demographic.%, identity.%, patient.%, sensitivity.%, erasure.%) cannot be WRITTEN into
-    -- any of the seven medication projections below, because only the medication apply
+    -- any of the eight medication projections below, because only the medication apply
     -- functions write them and only ever under their own triggering event's address. So the
-    -- seven scans can only ever return nothing — and the chart-wide reading in
+    -- eight scans can only ever return nothing — and the chart-wide reading in
     -- `chart_sensitivity` resolves off the chart's registration event whenever one is on file
     -- (it has an explicit no-registration arm — see sensitivity/report.rs — which does not
-    -- reach here at all), i.e. the common path paid for all seven, per chart, every time.
+    -- reach here at all), i.e. the common path paid for all eight, per chart, every time.
     --
     -- BEHAVIOUR-NEUTRAL FOR THE LIST AS IT STANDS: every type in it already answered NULL, so
     -- this returns the same NULL sooner. The neutrality is worth stating because a reader will
@@ -522,7 +523,7 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- The seven medication-thread projection tables from db/031, db/032 and db/059, unioned on their
+    -- The eight medication-thread projection tables from db/031, db/032, db/059 and db/079, unioned on their
     -- shared (medication_id, content_address) shape. NOTE: db/032's dose-point table is named
     -- medication_dose_event (not medication_dose) — checked against the actual db/032
     -- CREATE TABLE rather than assumed, since a wrong name here would bind at first
@@ -531,13 +532,13 @@ BEGIN
     --
     -- NOT "every medication-thread projection table": db/034's medication_attestation also
     -- carries both medication_id and content_address (PRIMARY KEY (event_id), so genuinely
-    -- per-event) and is deliberately absent. Adding it would need a FOURTH to_regclass probe,
+    -- per-event) and is deliberately absent. Adding it would need a FIFTH to_regclass probe,
     -- since db/034 is outside cairn-sync's subset too. The omission is safe by construction —
     -- an attestation's event type is clinical.%, so it fails cairn_event_type_has_no_thread and
     -- takes the conservative bound instead, which over-protects.
     --
     -- WHAT THIS RESOLVES, AND WHAT IT DOES NOT — stated plainly so the comment cannot be
-    -- read as promising more than it does. FOUR of these seven tables are one-row-per-key
+    -- read as promising more than it does. FOUR of these eight tables are one-row-per-key
     -- upserts carrying only the CURRENT WINNING event's content_address:
     --   * medication_statement, medication_cessation, medication_coding —
     --     `PRIMARY KEY (medication_id)` with `ON CONFLICT (medication_id) DO UPDATE` apply
@@ -585,6 +586,9 @@ BEGIN
         -- db/059 (#803): per-event tables, so every applied withhold or release resolves.
         UNION ALL SELECT medication_id, content_address FROM medication_withhold
         UNION ALL SELECT medication_id, content_address FROM medication_withhold_release
+        -- db/079: a set-aside version belongs to its companion's thread (alternative_to), so its
+        -- sensitivity scope is that thread's, never the whole chart's.
+        UNION ALL SELECT alternative_to, content_address FROM medication_set_aside
     ) t
     WHERE t.content_address = v_ca
     LIMIT 1;
@@ -1064,6 +1068,10 @@ GRANT SELECT ON sensitivity_withdrawal_worklist TO cairn_agent;
 -- clear shadow is deliberately not readable by the runtime role, and this must not widen
 -- that. It returns a COUNT, never a body, so it discloses only how much this node cannot
 -- see, which is precisely the fact the operator is owed.
+--
+-- Set-aside versions (db/079, `clinical.medication-set-aside.asserted`) match the LIKE and are
+-- counted, deliberately: a version this node cannot open is one no line shows under it, so the
+-- list is incomplete in the same way, and the count errs toward saying so.
 --
 -- pg_temp LAST (#426): reads event_log and event_clear UNQUALIFIED, and a blinded read
 -- here would return zero — rendering as "custody is complete", the reassuring answer.

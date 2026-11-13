@@ -267,6 +267,9 @@ pub struct ChartPane {
     /// Set when the allergy list could not be read, so no line was checked against it
     /// (`allergy_check::ALLERGIES_NOT_READ`); the window draws it above the list.
     pub allergy_check_failed: Option<String>,
+    /// Set when the set-aside versions could not be read (`chart_versions::VERSIONS_NOT_READ`),
+    /// so none is drawn under its line; the window draws it above the list.
+    pub versions_error: Option<String>,
 }
 
 /// The row sentence on a hazard line whose Withhold and Stop [`chart_pane`] did not draw (#841):
@@ -377,6 +380,7 @@ pub fn chart_pane(
         duplicates,
         set_change,
         allergy_check_failed,
+        versions_error: None,
     }
 }
 

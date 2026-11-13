@@ -318,6 +318,7 @@ async fn medication_event(owner: &mut Client, k: &Keys, chart: Uuid) -> Uuid {
         info_source: "patient",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     cairn_node::medication::assert_medication(
         owner,

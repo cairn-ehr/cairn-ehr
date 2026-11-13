@@ -5,6 +5,7 @@
 use serde_json::{json, Value};
 
 use super::charting::{charting_twin_parts, insert_charting, Charting};
+use super::source_note::{insert_source_note, source_note_twin, SourceNote};
 
 /// A drug-identity coding claim, captured at coding time (ADR-0059).
 ///
@@ -34,7 +35,9 @@ pub struct SubstanceCoding<'a> {
 
 /// A medication statement (the "start" verb). `term` is the one mandatory
 /// clinical field (may be vague, e.g. "little white pill"); every `Option`
-/// field is omitted from the payload when `None`.
+/// field is omitted from the payload when `None`. `Debug` so a set-aside version holding one
+/// can be printed in a test failure (as `SubstanceCoding`).
+#[derive(Debug)]
 pub struct MedicationAssertion<'a> {
     /// Immortal thread id the caller mints; a later cessation references it.
     pub medication_id: &'a str,
@@ -71,6 +74,9 @@ pub struct MedicationAssertion<'a> {
     /// `charting.rs`). `None` and an all-absent `Charting` both write the payload exactly
     /// as an assertion did before charting existed (principle 11).
     pub charting: Option<Charting<'a>>,
+    /// Where a line came from (`source_detail`) and why it was charted (`why`) — see
+    /// `source_note.rs`. `None` writes the payload exactly as before (principle 11).
+    pub source_note: Option<SourceNote<'a>>,
 }
 
 /// Build the `clinical.medication.asserted` payload. Mirrors the demographics
@@ -135,12 +141,25 @@ pub fn medication_assertion_body(a: &MedicationAssertion) -> Value {
     if let Some(s) = a.safety {
         obj.insert("safety".into(), crate::safety::precise_safety_body(&s));
     }
+    if let Some(n) = &a.source_note {
+        insert_source_note(obj, n);
+    }
     p
 }
 
 /// The §3.13/§3.3 legibility twin for a medication statement — a mechanically
 /// derived, honest one-line rendering. Non-empty because `term` is non-empty.
 pub fn render_medication_twin(a: &MedicationAssertion) -> String {
+    let mut s = drug_line_twin(a);
+    if let Some(n) = &a.source_note {
+        s.push_str(&source_note_twin(n)); // { — from …}{ — why: …}
+    }
+    s
+}
+
+/// The drug itself as one line — everything in the twin except the source note. The set-aside
+/// twin reuses it so a version of a drug is spelled exactly as a charted line is.
+pub fn drug_line_twin(a: &MedicationAssertion) -> String {
     let parts = a
         .charting
         .as_ref()
@@ -204,6 +223,7 @@ mod tests {
             started_precision: Some("year"),
             safety: None,
             charting: None,
+            source_note: None,
         }
     }
 
@@ -266,6 +286,7 @@ mod tests {
             started_precision: None,
             safety: None,
             charting: None,
+            source_note: None,
         };
         let v = medication_assertion_body(&a);
         let subst = v["substance"].as_object().unwrap();
@@ -351,6 +372,7 @@ mod tests {
             started_precision: None,
             safety: None,
             charting: None,
+            source_note: None,
         };
         let s = render_medication_twin(&a);
         assert!(s.starts_with("little white pill"));

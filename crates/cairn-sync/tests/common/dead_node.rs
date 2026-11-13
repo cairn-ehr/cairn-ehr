@@ -205,6 +205,7 @@ pub async fn author_sealed_record(c: &mut Client, sk: &SigningKey, kid: &str) ->
         info_source: "patient-reported",
         started: Some("2026"),
         started_precision: Some("year"),
+        source_note: None,
     };
     assert_medication(c, sk, kid, "dead-node", patient, &input, None, None)
         .await

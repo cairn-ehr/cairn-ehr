@@ -406,6 +406,21 @@ function drawMarks(check, tag, list) {
   );
 }
 
+/** The editor's words split as Sign will chart them: the parts with their picks, the directions
+ *  (med_list.js's `sendLine`). */
+async function lineContent(chartedAs, snap) {
+  await learnWords(snap.text);
+  const split = splitLine(snap.text, isDirectionWord, snap.held.map((held) => held.text));
+  const coding = (part) => (snap.held.find((held) => held.text === part) || { coding: null }).coding;
+  return { charted_as: chartedAs, line_text: snap.text, typed_drug: split.typedDrug, directions: split.directions, parts: split.parts.map((part) => ({ term: part, coding: coding(part) })) };
+}
+
+/** Focus the press that started `line`, so Enter adds the next line (never lost to the page;
+ *  med_list.js's `lineFinished`). */
+function focusPress(line) {
+  el("med-chart-buttons").querySelector(`[data-value="${line.content.charted_as}"]`).focus();
+}
+
 for (const button of el("med-chart-buttons").querySelectorAll("button")) {
   button.addEventListener("click", () => appendMedLine(button.dataset.value)); // med_list.js
 }

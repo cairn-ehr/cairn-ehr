@@ -686,6 +686,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         info_source: "patient-reported",
         started: Some("2023"),
         started_precision: Some("year"),
+        source_note: None,
     };
     let med1 = assert_medication(
         &mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None, None,
@@ -1065,6 +1066,7 @@ async fn refused_apply_pens_the_bytes_and_recovers_without_loss() {
             info_source: "patient-reported",
             started: Some("2023"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,
@@ -1564,6 +1566,7 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
         info_source: "patient-reported",
         started: Some("2023"),
         started_precision: Some("year"),
+        source_note: None,
     };
     let med = assert_medication(
         &mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None, None,
@@ -1946,6 +1949,7 @@ async fn an_unadmitted_puller_replicates_events_but_gains_no_custody() {
             info_source: "patient-reported",
             started: Some("2023"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,
@@ -2092,6 +2096,7 @@ async fn a_revoked_peer_is_told_it_was_revoked_not_told_to_re_pair() {
             info_source: "patient-reported",
             started: Some("2024"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,
@@ -2208,6 +2213,7 @@ async fn an_admitted_peer_recovers_the_bodies_it_pulled_without_custody() {
             info_source: "patient-reported",
             started: Some("2025"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,
@@ -2308,6 +2314,7 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
         info_source: "patient-reported",
         started: Some("2023"),
         started_precision: Some("year"),
+        source_note: None,
     };
     // Two sealed threads on ONE chart. `victim` will be shredded; `survivor` must not be
     // touched — its content_address is different, and the scrub is content_address-precise.
@@ -2438,6 +2445,7 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
         info_source: "patient-reported",
         started: Some("2023"),
         started_precision: Some("year"),
+        source_note: None,
     };
     let med = assert_medication(
         &mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None, None,
@@ -2644,6 +2652,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
             info_source: "patient-reported",
             started: Some("2023"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,
@@ -2685,6 +2694,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
             info_source: "patient-reported",
             started: Some("2024"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,
@@ -2874,6 +2884,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
             info_source: "patient-reported",
             started: Some("2023"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,
@@ -2905,6 +2916,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
             info_source: "patient-reported",
             started: Some("2024"),
             started_precision: Some("year"),
+            source_note: None,
         },
         None,
         None,

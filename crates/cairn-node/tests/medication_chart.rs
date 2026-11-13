@@ -55,6 +55,7 @@ fn input() -> AssertMedicationInput<'static> {
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     }
 }
 
@@ -222,6 +223,7 @@ async fn assert_medication_is_unchanged() {
         dose_amount: i.dose_amount,
         dose_unit: i.dose_unit,
         sig: i.sig,
+        source_note: None,
         info_source: i.info_source,
         started: i.started,
         started_precision: i.started_precision,
@@ -314,6 +316,8 @@ async fn read_charting_reads_by_thread() {
                 ("clavulanic acid".into(), None),
             ],
             override_reason: Some("no alternative in the remote clinic".into()),
+            source_detail: None,
+            why: None,
         }
     );
     assert_eq!(
@@ -324,6 +328,8 @@ async fn read_charting_reads_by_thread() {
             strength: Some("500 mg".into()),
             components: vec![],
             override_reason: None,
+            source_detail: None,
+            why: None,
         }
     );
 }

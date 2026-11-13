@@ -45,6 +45,7 @@ fn input() -> AssertMedicationInput<'static> {
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     }
 }
 
@@ -70,6 +71,7 @@ async fn charted_body(
         dose_amount: i.dose_amount,
         dose_unit: i.dose_unit,
         sig: i.sig,
+        source_note: None,
         info_source: i.info_source,
         started: i.started,
         started_precision: i.started_precision,

@@ -118,6 +118,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         duplicates: crate::duplicates::view::DuplicateSection::checked_none_open(),
         set_change: None,
         allergy_check_failed: None,
+        versions_error: None,
     })
     .unwrap();
     let member_json = serde_json::to_value(&member).unwrap();
@@ -402,6 +403,10 @@ fn every_command_the_webview_calls_is_registered() {
         (
             "med_list_sign.js",
             include_str!("../src-ui/med_list_sign.js"),
+        ),
+        (
+            "med_list_versions.js",
+            include_str!("../src-ui/med_list_versions.js"),
         ),
         ("allergies.js", include_str!("../src-ui/allergies.js")),
         ("person_menu.js", include_str!("../src-ui/person_menu.js")),

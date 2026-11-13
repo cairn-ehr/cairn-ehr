@@ -67,6 +67,8 @@ BEGIN
         -- The charting keys (charted_as, route, strength, components, warning_override)
         -- are judged in db/077, for the same generation-bump reason.
         PERFORM cairn_check_medication_charting(p);
+        -- source_detail / why ("From:" and the rationale) are judged in db/079.
+        PERFORM cairn_check_medication_source_note(b);
     END IF;
     -- The cessation verb carries only medication_id (+ optional stopped/reason) — done.
 END;

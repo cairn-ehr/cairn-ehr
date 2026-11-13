@@ -134,6 +134,7 @@ async fn the_in_db_floor_refuses_a_sealed_write_with_no_registered_unwrap_key() 
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let body = cairn_node::medication::build_assert_body(
         event_id,

@@ -27,6 +27,7 @@ fn input() -> AssertMedicationInput<'static> {
         info_source: "clinician-observed",
         started: None,
         started_precision: None,
+        source_note: None,
     }
 }
 
@@ -90,8 +91,13 @@ async fn sign(
         &input(),
         &Charting::default(),
         &author,
+        &[],
     )
     .await
+    .map(|c| cairn_node::db_diagnosis::Committed {
+        value: c.value.0,
+        event_id: c.event_id,
+    })
 }
 
 #[tokio::test]

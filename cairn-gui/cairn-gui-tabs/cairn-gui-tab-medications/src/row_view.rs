@@ -85,6 +85,16 @@ pub struct MedListRowView {
     /// The small "not checked" tag: some live allergy could not be verified against this line
     /// (never set beside a mark). Filled as `allergy_marks`.
     pub allergy_unverified: bool,
+    /// The set-aside versions beside this line (batch charting slice 2a), each worded in Rust
+    /// ([`version_line`]); the window draws them collapsed under the line. Empty here: only the
+    /// window, which reads them, fills it ([`versions_under`]).
+    pub versions: Vec<VersionView>,
+}
+
+/// One set-aside version as the line shows it, collapsed: never a current medication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VersionView {
+    pub line: String,
 }
 
 /// Shown instead of a blank cell. Principle 4: an unrecorded dose is a recordable state,
@@ -162,7 +172,29 @@ pub(crate) fn build_row(
         allergy_marks: vec![],
         allergy_notes: vec![],
         allergy_unverified: false,
+        versions: vec![],
     }
+}
+
+/// One collapsed version (Global Constraints' copy): `"{source}: {drug line} — set aside, not
+/// current"`, then `" — {why}"` when a why was given. `drug_line` is the set-aside's own twin
+/// spelling (`drug_line_twin`, ruling R11), used as is. Pure.
+pub fn version_line(source: &str, drug_line: &str, why: Option<&str>) -> String {
+    let line = format!("{source}: {drug_line} — set aside, not current");
+    match why {
+        Some(why) => format!("{line} — {why}"),
+        None => line,
+    }
+}
+
+/// The versions `versions` (`(alternative_to, its line)`) set aside beside one of `row`'s member
+/// threads, in the order given — never another line's, though it be the same drug. Pure.
+pub fn versions_under(row: &MedicationRow, versions: &[(Uuid, String)]) -> Vec<VersionView> {
+    versions
+        .iter()
+        .filter(|(to, _)| row.members.iter().any(|m| m.medication_id == *to))
+        .map(|(_, line)| VersionView { line: line.clone() })
+        .collect()
 }
 
 /// A linked row whose `source_charts` came back empty — reachable only through the race

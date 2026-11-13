@@ -19,10 +19,13 @@ pub mod charting;
 pub mod coding;
 pub mod dose;
 pub mod reconciliation;
+pub mod set_aside;
+pub mod source_note;
 pub mod withhold;
 
 pub use assert::{
-    medication_assertion_body, render_medication_twin, MedicationAssertion, SubstanceCoding,
+    drug_line_twin, medication_assertion_body, render_medication_twin, MedicationAssertion,
+    SubstanceCoding,
 };
 pub use attestation::{
     medication_attestation_body, render_medication_attestation_twin, MedicationAttestation,
@@ -47,6 +50,11 @@ pub use reconciliation::{
     reconciliation_body, render_reconciliation_twin, render_separation_twin, separation_body,
     ReconciliationAssertion,
 };
+pub use set_aside::{
+    render_set_aside_twin, set_aside_body, MedicationSetAside, SET_ASIDE_EVENT_TYPE,
+    SET_ASIDE_SCHEMA,
+};
+pub use source_note::{insert_source_note, source_note_twin, SourceNote};
 pub use withhold::{
     medication_withhold_body, medication_withhold_release_body,
     render_medication_withhold_release_twin, render_medication_withhold_twin, HoldUntil,

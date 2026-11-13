@@ -54,6 +54,7 @@ async fn assert_drug(
             info_source: "patient",
             started: None,
             started_precision: None,
+            source_note: None,
         },
         None,
         None,

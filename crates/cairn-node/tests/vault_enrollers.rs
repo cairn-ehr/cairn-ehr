@@ -63,6 +63,7 @@ async fn a_superuser_grants_and_an_enroller_enrols() {
         info_source: "patient-reported",
         started: None,
         started_precision: None,
+        source_note: None,
     };
     let kid = kid_of(ANURSE);
     let author = AuthorParams {

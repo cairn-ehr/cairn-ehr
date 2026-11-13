@@ -18,10 +18,12 @@ use crate::source_guard::{js_fn, position};
 use cairn_node::{allergy::check::LineCheck, medication::line::read_directions};
 use std::collections::BTreeSet;
 
-/// The list's two scripts as one text: med_list.js, and its Sign med_list_sign.js.
+/// The list's scripts as one text: med_list.js, its Sign med_list_sign.js, and its versions
+/// med_list_versions.js (batch charting slice 2a).
 pub(crate) const LIST_JS: &str = concat!(
     include_str!("../src-ui/med_list.js"),
-    include_str!("../src-ui/med_list_sign.js")
+    include_str!("../src-ui/med_list_sign.js"),
+    include_str!("../src-ui/med_list_versions.js")
 );
 const MED_JS: &str = include_str!("../src-ui/med_chart.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
@@ -71,6 +73,12 @@ fn line_view() -> ListLineView {
             reference: "r".into(),
         }],
         delabel_offers: vec![],
+        info_source: None,
+        source_detail: None,
+        why: None,
+        set_aside_of: None,
+        companions: vec![],
+        companion_words: vec![],
     }
 }
 
@@ -83,6 +91,8 @@ fn every_field_read_is_one_rust_sends() {
         writer_name: None,
         elsewhere: None,
         lines: vec![],
+        from: None,
+        versions_recorded: 0,
     };
     let line = serde_json::to_value(line_view()).unwrap();
     for (binding, sent) in [
@@ -97,6 +107,7 @@ fn every_field_read_is_one_rust_sends() {
             "door",
             keys_of(&[serde_json::to_value(SaveAnswer {
                 answer: "saved".into(),
+                ..SaveAnswer::default()
             })
             .unwrap()]),
         ),
@@ -195,8 +206,8 @@ fn two_lines_then_one_sign() {
     assert!(js_fn(LIST_JS, "drawMedRead").contains("writer: fresh.writer,"));
     assert_eq!(
         LIST_JS.matches("writer: ").count(),
-        4,
-        "the list read, lineFrom, sendLine, deleteLine"
+        5,
+        "the list read, lineFrom, sendLine, deleteLine, med_list_versions.js's sendFrom"
     );
     // The one Sign: the ticks drawn at the press, then the flush, then the command.
     let sign = js_fn(LIST_JS, "signMedList");
@@ -412,41 +423,6 @@ fn a_partial_outcome_names_each_line_not_charted() {
     // The window never words a line's reason: they are Rust's.
     for rust in ["not charted:", "not tried:", "NOT known"] {
         assert!(!LIST_JS.contains(rust), "{rust} is Rust's word");
-    }
-}
-
-/// A list held at another terminal is drawn read-only with "Continue here" (`med_list_take`),
-/// which moves it here and draws what it answers.
-#[test]
-fn another_terminal_offers_continue_here() {
-    let s = section();
-    assert!(
-        s.contains("<button id=\"med-list-take\" type=\"button\">Continue here</button>"),
-        "{s}"
-    );
-    in_the_pane("med-list-elsewhere");
-    assert!(position(s, "id=\"med-list-elsewhere\"") < position(s, "id=\"med-list-take\""));
-    let pane = js_fn(LIST_JS, "drawMedList");
-    assert!(
-        pane.contains("el(\"med-list-elsewhere\").hidden = !(medList && medList.elsewhere);"),
-        "{pane}"
-    );
-    let take = js_fn(LIST_JS, "continueMedListHere");
-    assert!(
-        take.contains("invoke(\"med_list_take\", { patientId: patient })"),
-        "{take}"
-    );
-    assert!(take.contains("drawMedRead(fresh, patient);"), "{take}");
-    // Held elsewhere, nothing on the line acts.
-    let draw = js_fn(LIST_JS, "drawLine");
-    assert!(
-        draw.contains(
-            "const blocked = medSigning || medList === null || medList.elsewhere !== null;"
-        ),
-        "{draw}"
-    );
-    for control in ["r.text.disabled = blocked;", "r.remove.disabled = blocked;"] {
-        assert!(draw.contains(control), "{control}: {draw}");
     }
 }
 
