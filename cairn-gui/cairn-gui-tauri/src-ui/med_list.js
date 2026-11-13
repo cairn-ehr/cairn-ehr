@@ -454,6 +454,7 @@ async function sendLine(line, sent) {
     if (door.answer === "saved") {
       line.stored = true;
       line.savedVersion = Math.max(line.savedVersion, sent.version);
+      takeStamp(line, door, sent); // "From:" stamped by this save (med_list_versions.js, ruling R23)
     } else {
       setMessage(el("med-list-status"), NOT_SAVED + " (the list answered " + door.answer + ")");
     }

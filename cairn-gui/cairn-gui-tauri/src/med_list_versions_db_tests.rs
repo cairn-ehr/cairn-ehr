@@ -194,7 +194,8 @@ async fn a_refused_companion_keeps_its_versions_unsigned() {
 }
 
 /// Review Focus 2: the companion is edited to another drug after "Set aside" (metoprolol →
-/// atenolol) and ticked again: it is charted, and the version is refused for its own line.
+/// atenolol) and ticked again: it is charted, and the version is refused for its own line. The
+/// companion's spend unmarks and holds it (ruling R24), so the outcome never says "version kept".
 #[tokio::test]
 async fn an_edited_companion_refuses_its_version_per_line() {
     let Some((_guard, owner, state, chart)) = bea_list().await else {
@@ -231,12 +232,16 @@ async fn an_edited_companion_refuses_its_version_per_line() {
     assert_eq!((charted, of), (1, 1), "{outcome}");
     assert!(
         outcome.contains(
-            "metoprolol 25mg bd — version kept: the line it was set aside beside is no longer the same drug"
+            "metoprolol 25mg bd — no longer set aside: its line was charted; set it aside again"
         ),
         "{outcome}"
     );
+    assert!(!outcome.contains("version kept"), "{outcome}");
     assert!(set_asides(&owner, chart).await.is_empty());
     assert_eq!(left(&owner, chart).await, [v_id]);
+    let view = read(&state, chart).await;
+    let kept = shown(&view, &v_id.to_string());
+    assert_eq!((kept.set_aside_of.as_deref(), kept.held), (None, true));
 }
 
 /// Ruling R9: the version's companion is the one its STORED mark names. Ticking the other line of

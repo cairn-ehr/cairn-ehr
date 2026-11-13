@@ -107,6 +107,7 @@ fn every_field_read_is_one_rust_sends() {
             "door",
             keys_of(&[serde_json::to_value(SaveAnswer {
                 answer: "saved".into(),
+                ..SaveAnswer::default()
             })
             .unwrap()]),
         ),
@@ -422,41 +423,6 @@ fn a_partial_outcome_names_each_line_not_charted() {
     // The window never words a line's reason: they are Rust's.
     for rust in ["not charted:", "not tried:", "NOT known"] {
         assert!(!LIST_JS.contains(rust), "{rust} is Rust's word");
-    }
-}
-
-/// A list held at another terminal is drawn read-only with "Continue here" (`med_list_take`),
-/// which moves it here and draws what it answers.
-#[test]
-fn another_terminal_offers_continue_here() {
-    let s = section();
-    assert!(
-        s.contains("<button id=\"med-list-take\" type=\"button\">Continue here</button>"),
-        "{s}"
-    );
-    in_the_pane("med-list-elsewhere");
-    assert!(position(s, "id=\"med-list-elsewhere\"") < position(s, "id=\"med-list-take\""));
-    let pane = js_fn(LIST_JS, "drawMedList");
-    assert!(
-        pane.contains("el(\"med-list-elsewhere\").hidden = !(medList && medList.elsewhere);"),
-        "{pane}"
-    );
-    let take = js_fn(LIST_JS, "continueMedListHere");
-    assert!(
-        take.contains("invoke(\"med_list_take\", { patientId: patient })"),
-        "{take}"
-    );
-    assert!(take.contains("drawMedRead(fresh, patient);"), "{take}");
-    // Held elsewhere, nothing on the line acts.
-    let draw = js_fn(LIST_JS, "drawLine");
-    assert!(
-        draw.contains(
-            "const blocked = medSigning || medList === null || medList.elsewhere !== null;"
-        ),
-        "{draw}"
-    );
-    for control in ["r.text.disabled = blocked;", "r.remove.disabled = blocked;"] {
-        assert!(draw.contains(control), "{control}: {draw}");
     }
 }
 

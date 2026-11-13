@@ -1,7 +1,9 @@
 //! Batch charting slice 1, Task 6 (split from `med_list_webview_tests.rs`, same rig): the
 //! medication list and who's here — a switch never lets one person type into another's list —
-//! and the person menu's "meds:" row landing on the visible list.
-use crate::med_list_webview_tests::LIST_JS;
+//! and the person menu's "meds:" row landing on the visible list; and a list held at another
+//! terminal (moved here from `med_list_webview_tests.rs` for its size cap).
+use crate::med_chart_webview_tests::section;
+use crate::med_list_webview_tests::{in_the_pane, LIST_JS};
 use crate::source_guard::{js_fn, position};
 
 const MED_JS: &str = include_str!("../src-ui/med_chart.js");
@@ -75,4 +77,39 @@ fn a_meds_menu_row_lands_on_the_visible_list() {
         .contains("if (renderedPatient !== null && !fixtureMode) void readMedDraft();"));
     assert!(js_fn(MED_JS, "syncMedChart")
         .contains("el(\"med-chart\").hidden = renderedPatient === null || fixtureMode;"));
+}
+
+/// A list held at another terminal is drawn read-only with "Continue here" (`med_list_take`),
+/// which moves it here and draws what it answers.
+#[test]
+fn another_terminal_offers_continue_here() {
+    let s = section();
+    assert!(
+        s.contains("<button id=\"med-list-take\" type=\"button\">Continue here</button>"),
+        "{s}"
+    );
+    in_the_pane("med-list-elsewhere");
+    assert!(position(s, "id=\"med-list-elsewhere\"") < position(s, "id=\"med-list-take\""));
+    let pane = js_fn(LIST_JS, "drawMedList");
+    assert!(
+        pane.contains("el(\"med-list-elsewhere\").hidden = !(medList && medList.elsewhere);"),
+        "{pane}"
+    );
+    let take = js_fn(LIST_JS, "continueMedListHere");
+    assert!(
+        take.contains("invoke(\"med_list_take\", { patientId: patient })"),
+        "{take}"
+    );
+    assert!(take.contains("drawMedRead(fresh, patient);"), "{take}");
+    // Held elsewhere, nothing on the line acts.
+    let draw = js_fn(LIST_JS, "drawLine");
+    assert!(
+        draw.contains(
+            "const blocked = medSigning || medList === null || medList.elsewhere !== null;"
+        ),
+        "{draw}"
+    );
+    for control in ["r.text.disabled = blocked;", "r.remove.disabled = blocked;"] {
+        assert!(draw.contains(control), "{control}: {draw}");
+    }
 }

@@ -272,3 +272,44 @@ async fn editing_a_line_typed_before_from_keeps_its_own_source_and_tick() {
         "a typo fix stamps nothing"
     );
 }
+
+/// Ruling R23: the save that stamps "From:" on a new line says so in its answer, so the window can
+/// carry the stamp on the line's next save even before a re-read lands (else that save would send
+/// no source, and the door would clear the stamp). A save that stamped nothing answers no source.
+#[tokio::test]
+async fn the_save_that_stamps_from_answers_the_stamp() {
+    let Some((_guard, _owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let patient = chart.to_string();
+    let charts = std::slice::from_ref(&patient);
+    med_list_from_save_impl(
+        &state,
+        &patient,
+        charts,
+        Some("GP letter".into()),
+        None,
+        Some("bea"),
+    )
+    .await
+    .unwrap();
+    let line = arg(("metformin", "500mg bd"), vec![], false);
+    let again = line.clone();
+    let first = med_list_save_impl(&state, &patient, charts, line, Some("bea"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            first.answer.as_str(),
+            first.info_source.as_deref(),
+            first.source_detail.as_deref()
+        ),
+        ("saved", Some("external-record"), Some("GP letter"))
+    );
+    // The same line again, still sent with no source (the read has not landed): stored, so no stamp.
+    let second = med_list_save_impl(&state, &patient, charts, again, Some("bea"))
+        .await
+        .unwrap();
+    assert_eq!((second.info_source, second.source_detail), (None, None));
+}

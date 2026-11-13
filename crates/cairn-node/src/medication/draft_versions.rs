@@ -76,8 +76,9 @@ fn parse_mark(mark: &str) -> Option<Companion> {
 /// At Sign: `Ok(companion)` while `line.set_aside_of` still names a candidate, `Err(reason)`
 /// otherwise, each worded for what happened (ruling R13; the window shows it as "version kept:
 /// {reason}"): not set aside, a malformed mark, a charted companion no longer current (stopped,
-/// or not on this read), a list companion no longer on the list (removed, or set aside itself),
-/// or a companion still there but now another drug. A gone line is never called another drug.
+/// or not on this read), a list companion no longer on the list (removed) or itself set aside (a
+/// chained mark), or a companion still there but now another drug. A gone line is never called
+/// another drug, nor a line still on the list gone.
 pub fn version_holds(
     line: &DraftLine,
     draft: &[DraftLine],
@@ -91,13 +92,17 @@ pub fn version_holds(
     let still_there = match named {
         Companion::Draft(id) => draft
             .iter()
-            .any(|d| d.line_id == id && d.set_aside_of.is_none()),
-        Companion::Charted(id) => current.iter().any(|(m, _)| *m == id),
+            .find(|d| d.line_id == id)
+            .map(|d| d.set_aside_of.is_none()),
+        Companion::Charted(id) => current.iter().any(|(m, _)| *m == id).then_some(true),
     };
+    // Some(true): the line is there and not set aside; Some(false): a list line there but itself
+    // set aside (a chained mark); None: gone.
     Err(match (still_there, named) {
-        (true, _) => "the line it was set aside beside is no longer the same drug",
-        (false, Companion::Draft(_)) => "its line is no longer on the list",
-        (false, Companion::Charted(_)) => "its line is no longer current",
+        (Some(true), _) => "the line it was set aside beside is no longer the same drug",
+        (Some(false), _) => "its line is itself set aside",
+        (None, Companion::Draft(_)) => "its line is no longer on the list",
+        (None, Companion::Charted(_)) => "its line is no longer current",
     })
 }
 

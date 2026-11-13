@@ -55,9 +55,12 @@ restores a version and lets a reviewer mark one "checked: not current".
    "From:" set, nothing is stamped and slice 1a's press default stands.
 5. **The preset is stored with the writer.** `medication_draft_from` holds one row per (chart, writer), a NULL writer
    being its own bucket, so the next line starts with it after a crash. It stores the exact label with a `CHECK` on
-   the six, so `info_source_of` can never silently miss a stored label; renaming a label is not
-   an in-place edit: the constraint reaches an existing table only through a guarded block that adds it when absent, so
-   it must be dropped and re-added, and `info_source_of` and the window's preset list changed with it. The row is working state like the lines: never exported, never backed up.
+   the six, so `info_source_of` can never silently miss a stored label; renaming a label is not an in-place edit: the
+   constraint reaches an existing table only through a guarded block that adds it when absent, so it must be dropped
+   and re-added, and `info_source_of` and the window's preset list changed with it. The row is working state like the
+   lines: never exported, never backed up. It lives only while the writer has a line on the chart: the delete door
+   drops it with their last line, and every Sign spends through that door, so a completed Sign resets "From:" and a
+   "From:" given at one admission never stamps the next one's lines.
 
 ### The set-aside version: its own type, never a flag
 
@@ -105,14 +108,20 @@ restores a version and lets a reviewer mark one "checked: not current".
     aside — not current" where the tick's words were.
 15. **Provenance edits are content changes, in the door.** A change to a line's source, why or mark clears a hand
     tick, because the signature vouches for them. It does NOT clear a stored untick (`held`): only the drug's words
-    do, otherwise adding a "why" to a line the clinician had unticked would re-derive the default tick
-    and the line would tick itself. The save door treats an omitted parameter as null, so the window sends all four
-    own fields on every save; and a read brings back the line's own fields even while it is being typed, unless a
-    local edit changed that field since the last send, which keeps a stamped source from being wiped by
-    the next autosave.
-16. **Unmarking leaves the line held**. Removing the mark through the save door, or deleting a companion
-    (which unmarks its versions, with a fresh `saved_at`), leaves the line unticked with its tick gone: a version the
-    clinician believed wrong must never become default-ticked.
+    do, otherwise adding a "why" to a line the clinician had unticked would re-derive the default tick and the line
+    would tick itself. The save door treats an omitted parameter as null, so the window sends all four own fields on
+    every save; and a read brings back the line's own fields even while it is being typed, unless a local edit changed
+    that field since the last send. The save that stamps "From:" answers the stamp, and the window puts it on the line
+    as soon as that save answers `saved`, unless the clinician changed the line's source after the save was sent; so
+    the line's next save carries the stamp whether or not a read has landed in between, and an autosave never clears a
+    stamp the clinician did not take off. Picking "not set" for a line's own source clears its category and detail, so
+    a stale stamp can be taken off; the press's default then stands at Sign.
+16. **Unmarking leaves the line held**. Removing the mark through the save door, or deleting a companion (which
+    unmarks its versions, with a fresh `saved_at`), leaves the line unticked with its tick gone: a version the
+    clinician believed wrong must never become default-ticked. A companion's spend at Sign is such a delete, so it
+    also unmarks and holds each of its versions kept for their own reason (a blank part, or the companion now another
+    drug); the outcome then says "{drug line} — no longer set aside: its line was charted; set it aside again", never
+    "version kept", which is said only of a version whose companion was not charted.
 17. **A version signs only in or after its companion.** At Sign `plan_versions` derives every version's companion
     from the STORED mark on the fresh read, never from the webview, and `version_holds` re-checks it. A
     version beside a ticked list line goes in that line's one transaction (`chart_draft_line`: the companion's event
@@ -134,12 +143,11 @@ restores a version and lets a reviewer mark one "checked: not current".
 
 21. **A charted line shows its versions collapsed under it**, one closed `<details>`, "{n} other version(s)", read in
     the same snapshot as the chart. A line is `{source}: {drug line} — set aside, not current`, then ` — {why}` when
-    given. The drug line is `drug_line_twin`'s, rebuilt from the projected columns, so there is one
-    spelling of a drug line and a version differing only in route reads differently from its companion. That twin
-    carries the `info_source` word in parentheses and, when the coding's display differs from the term, the display in
-    square brackets, so the line reads e.g. "GP letter: Lipitor 25 mg (external-record) [atorvastatin] — set aside, not
-    current". The versions of a since-stopped line stay shown
-    under it.
+    given. The drug line is `drug_line_twin`'s, rebuilt from the projected columns, so there is one spelling of a drug
+    line and a version differing only in route reads differently from its companion. That twin carries the
+    `info_source` word in parentheses and, when the coding's display differs from the term, the display in square
+    brackets, so the line reads e.g. "GP letter: Lipitor 25 mg (external-record) [atorvastatin] — set aside, not
+    current". The versions of a since-stopped line stay shown under it.
 22. **Soft policy.** Which lines may be set aside, the pick ("Version of which line?" when two or more qualify), the
     copy and the collapse live in the window. The type, its refusals and the projection are the floor and the same
     for every client.

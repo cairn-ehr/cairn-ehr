@@ -44,6 +44,9 @@ use uuid::Uuid;
 /// Why a version stays in the list when its companion line was not charted (Global Constraints).
 pub const VERSION_KEPT: &str = "its line was not charted";
 
+/// A kept version whose companion line WAS charted: its spend unmarked and held it (R24, db/078).
+pub const VERSION_UNMARKED: &str = "no longer set aside: its line was charted; set it aside again";
+
 /// The writer's "From:" as the pane draws it: the preset label and the free text.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FromView {
@@ -125,19 +128,20 @@ pub(crate) fn stamp(from: &FromView) -> Option<(&'static str, String)> {
 /// Stamp "From:" ([`stamp`]) on `row` when it is a NEW line (no stored row yet under `writer` on
 /// `patient`) carrying no source of its own; read under the same writer the save is filed under.
 /// A line typed before "From:" keeps what it stored, none included (ruling R12): an edit to it
-/// never signs a provenance nobody gave, nor loses its hand tick to one.
+/// never signs a provenance nobody gave, nor loses its hand tick to one. Answers whether it
+/// stamped, so the save can hand the stamp back to the window (ruling R23).
 pub(crate) async fn stamp_new_line(
     db: &(impl tokio_postgres::GenericClient + Sync),
     patient: Uuid,
     writer: Option<&str>,
     row: &mut DraftLine,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     if row.info_source.is_some() || row.source_detail.is_some() {
-        return Ok(());
+        return Ok(false);
     }
     let stored = draft::read_draft_lines(db, patient, writer).await?;
     if stored.iter().any(|l| l.line_id == row.line_id) {
-        return Ok(());
+        return Ok(false);
     }
     let from = draft::read_draft_from(db, patient, writer).await?;
     if let Some((category, detail)) = from
@@ -147,8 +151,9 @@ pub(crate) async fn stamp_new_line(
     {
         row.info_source = Some(category.into());
         row.source_detail = Some(detail);
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 /// The OPENED chart's current lines a version may be set aside beside, as `(medication_id,
@@ -285,32 +290,39 @@ fn kept_line(line: &str, why: &str) -> String {
 }
 
 /// The versions of one Sign, judged on its fresh read: `with` each ticked companion, `alone`
-/// beside a charted line, and `kept` as `(line id, line as typed, why)`.
+/// beside a charted line, and `kept` as `(line id, line as typed, what it says, its stored mark)`.
 #[derive(Default)]
 pub(crate) struct VersionPlan<'a> {
     pub with: BTreeMap<Uuid, Vec<&'a Judged>>,
     pub alone: Vec<(&'a Judged, Uuid)>,
-    pub kept: Vec<(String, String, String)>,
+    pub kept: Vec<(String, String, String, Option<String>)>,
 }
 
 impl VersionPlan<'_> {
     /// Keep `v` in the list, saying why.
     pub fn keep(&mut self, v: &Judged, why: &str) {
-        let l = &v.line;
+        let (l, words) = (&v.line, format!("version kept: {why}"));
+        let mark = l.set_aside_of.clone();
         self.kept
-            .push((l.line_id.to_string(), l.line_text.clone(), why.to_string()));
+            .push((l.line_id.to_string(), l.line_text.clone(), words, mark));
     }
 
-    /// The kept versions as `not_charted` names them: `(line id, "version kept: why")`.
+    /// `line` was charted: each version kept with its mark on it says [`VERSION_UNMARKED`].
+    pub fn charted(&mut self, line: Uuid) {
+        let mark = format!("line:{line}");
+        for k in self.kept.iter_mut().filter(|k| k.3.as_ref() == Some(&mark)) {
+            k.2 = VERSION_UNMARKED.into();
+        }
+    }
+
+    /// The kept versions as `not_charted` names them: `(line id, what it says)`.
     pub fn not_charted(&self) -> impl Iterator<Item = (String, String)> + '_ {
-        self.kept
-            .iter()
-            .map(|(id, _, why)| (id.clone(), format!("version kept: {why}")))
+        self.kept.iter().map(|k| (k.0.clone(), k.2.clone()))
     }
 
     /// The outcome's lines for the kept versions ([`outcome_words`]'s spelling).
     pub fn kept_lines(&self) -> impl Iterator<Item = String> + '_ {
-        self.kept.iter().map(|(_, line, why)| kept_line(line, why))
+        self.kept.iter().map(|k| format!("{} — {}", k.1, k.2))
     }
 }
 

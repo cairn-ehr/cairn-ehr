@@ -147,6 +147,8 @@ CREATE TABLE IF NOT EXISTS medication_draft_line_deleted (
 -- The writer's "From:" row for one chart (slice 2a): the category preset and detail they last
 -- chose, kept so the next line they add starts with it. One row per (chart, writer); a NULL
 -- writer is its own bucket (NULLS NOT DISTINCT). Like the lines, never exported or backed up.
+-- It lives only as long as the writer has a line here: the delete door drops it with the last
+-- (ruling R22), so a "From:" given at one admission never stamps the next one's lines.
 CREATE TABLE IF NOT EXISTS medication_draft_from (
     patient_id uuid NOT NULL,
     writer     text,
@@ -345,6 +347,14 @@ BEGIN
            saved_at = clock_timestamp()
      WHERE patient_id = v_row.patient_id AND writer IS NOT DISTINCT FROM v_row.writer
        AND set_aside_of = 'line:' || p_line::text;
+    -- Ruling R22: the writer's LAST line on this chart has left (every Sign spends through this
+    -- door), so their "From:" row goes too. A "From:" given at Monday's admission must not
+    -- silently stamp a source onto Friday's new lines; while any line remains, it stays.
+    IF NOT EXISTS (SELECT 1 FROM medication_draft_line
+                    WHERE patient_id = v_row.patient_id AND writer IS NOT DISTINCT FROM v_row.writer) THEN
+        DELETE FROM medication_draft_from
+         WHERE patient_id = v_row.patient_id AND writer IS NOT DISTINCT FROM v_row.writer;
+    END IF;
     RETURN 'deleted';
 END;
 $$;

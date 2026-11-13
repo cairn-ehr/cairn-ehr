@@ -215,6 +215,42 @@ async fn a_version_spend_that_fails_rolls_back_the_companion_too() {
     );
 }
 
+/// Review T5 (ADR-0102 item 19): the FLOOR refusing a version inside `chart_draft_line` (here a
+/// blank `substance.term`, which the set-aside floor refuses at both doors) abandons the shared
+/// transaction: the companion's event, already submitted in it, is rolled back too — no event,
+/// no current line, no version — and both draft rows remain, so the clinician sees both again.
+#[tokio::test]
+async fn a_version_refused_by_the_floor_rolls_back_the_companion_too() {
+    db_test!(base);
+    let mut r = rig(&base).await;
+    let (comp, ver) = (Uuid::now_v7(), Uuid::now_v7());
+    let comp_at = save(&r, comp, None).await;
+    let ver_at = save(&r, ver, Some(format!("line:{comp}"))).await;
+    let (events, statements) = (
+        count(&r.c, "event_log").await,
+        count(&r.c, "medication_statement").await,
+    );
+    let mut drug = old_drug();
+    drug.term = "   ";
+    let v = VersionToSign {
+        line: ver,
+        saved_at: &ver_at,
+        drug,
+    };
+    let err = chart(&mut r, comp, &comp_at, &[v]).await.unwrap_err();
+    assert!(format!("{err:#}").contains("substance.term"), "{err:#}");
+    assert_eq!(count(&r.c, "event_log").await, events, "no event at all");
+    assert_eq!(count(&r.c, "medication_statement").await, statements);
+    assert_eq!(count(&r.c, "medication_set_aside").await, 0);
+    let left: Vec<Uuid> = read_draft_lines(&r.c, r.chart, Some("notewriter"))
+        .await
+        .unwrap()
+        .iter()
+        .map(|l| l.line_id)
+        .collect();
+    assert_eq!(left, [comp, ver], "both draft rows remain");
+}
+
 /// Chart a companion on its own; returns its thread.
 async fn charted(r: &mut Rig) -> Uuid {
     let comp = Uuid::now_v7();

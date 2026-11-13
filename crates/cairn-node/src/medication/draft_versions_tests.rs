@@ -164,3 +164,15 @@ fn every_stored_preset_label_maps_to_a_category() {
         assert!(info_source_of(Some(label)).is_some(), "{label}");
     }
 }
+
+/// Review M2: a chained mark (A a version of B, where B is itself set aside) names a line that IS
+/// on the list, so it is never worded "no longer on the list": B is itself set aside.
+#[test]
+fn a_chained_mark_says_its_line_is_itself_set_aside() {
+    let a = oxy(1, Some(format!("line:{}", u(2))));
+    let b = oxy(2, Some(format!("med:{}", u(90))));
+    assert_eq!(
+        version_holds(&a, &[a.clone(), b], &[]),
+        Err("its line is itself set aside")
+    );
+}

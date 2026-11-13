@@ -35,7 +35,9 @@ pub struct SubstanceCoding<'a> {
 
 /// A medication statement (the "start" verb). `term` is the one mandatory
 /// clinical field (may be vague, e.g. "little white pill"); every `Option`
-/// field is omitted from the payload when `None`.
+/// field is omitted from the payload when `None`. `Debug` so a set-aside version holding one
+/// can be printed in a test failure (as `SubstanceCoding`).
+#[derive(Debug)]
 pub struct MedicationAssertion<'a> {
     /// Immortal thread id the caller mints; a later cessation references it.
     pub medication_id: &'a str,

@@ -9,10 +9,12 @@ use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::PartArg;
 use crate::med_line_sign::{line_under, not_read, parts_before_the_key};
+use crate::med_list::WarningRef;
 use crate::med_list_delabel::{offers_for, DelabelOffer};
 use crate::med_list_versions::{charted_companions, charted_words};
 use crate::state::AppState;
 use crate::write_failure::chart_read_failed;
+use cairn_event::medication::ALLERGY_SOURCE;
 use cairn_medication_view::{ChartSet, MedicationRow};
 use cairn_node::allergy::check::LineCheck;
 use cairn_node::allergy::read::PatientAllergies;
@@ -311,4 +313,17 @@ pub(crate) fn tick_holds(j: &Judged) -> bool {
         true => hand_tick_holds(&j.check, &j.line.ticked_against),
         false => j.default_ticked && !j.line.held,
     }
+}
+
+/// What a hand tick vouches for (ruling R1): the warnings BOTH found now and drawn on the line
+/// when it was ticked (`seen`). One found but never drawn was never seen, so it is left out, and
+/// the tick fails at Sign; one drawn but gone now needs no vouching. Pure.
+pub(crate) fn vouched(now: &[Uuid], seen: &[WarningRef]) -> Vec<(String, Uuid)> {
+    now.iter()
+        .filter(|id| {
+            seen.iter()
+                .any(|w| w.source == ALLERGY_SOURCE && w.reference.parse() == Ok(**id))
+        })
+        .map(|id| (ALLERGY_SOURCE.to_string(), *id))
+        .collect()
 }

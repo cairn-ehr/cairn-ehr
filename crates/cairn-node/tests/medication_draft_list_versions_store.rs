@@ -418,3 +418,82 @@ async fn a_why_edit_keeps_an_untick() {
     save_v(&w, l, chart, "b", false, true, [None; 4]).await;
     assert!(!row_of(&w, chart, l).await.1, "new words clear the untick");
 }
+
+/// Delete one line through the door, spending the saved_at it currently has (as Sign does).
+async fn delete_line(c: &Client, chart: Uuid, line: Uuid) -> String {
+    c.query_one("SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', (SELECT s.saved_at FROM cairn_med_draft_lines($2::text::uuid, 'notewriter') s WHERE s.line_id = $1::text::uuid))", &[&line.to_string(), &chart.to_string()])
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// How many "From:" rows (0 or 1) the writer has for the chart.
+async fn from_rows(c: &Client, chart: Uuid, who: &str) -> usize {
+    c.query(
+        "SELECT 1 FROM cairn_med_draft_from($1::text::uuid, $2)",
+        &[&chart.to_string(), &who],
+    )
+    .await
+    .unwrap()
+    .len()
+}
+
+/// Ruling R22: "From: Packets seen" given at Monday's admission must not silently stamp Friday's new
+/// lines. Every Sign spends its lines through the delete door, so when the writer's LAST line on the
+/// chart leaves, the door drops their "From:" row too (another writer's row is theirs, untouched).
+#[tokio::test]
+async fn the_last_line_leaving_resets_from() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_o, w, chart) = fixture(&base).await;
+    let l = Uuid::now_v7();
+    save_v(&w, l, chart, "a", false, false, [None; 4]).await;
+    for who in ["notewriter", "nurse-b"] {
+        w.query_one(
+            "SELECT cairn_med_draft_from_save($1::text::uuid, $2, 'Packets / Webster pack seen', NULL)",
+            &[&chart.to_string(), &who],
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(delete_line(&w, chart, l).await, "deleted");
+    assert_eq!(
+        from_rows(&w, chart, "notewriter").await,
+        0,
+        "From: is reset"
+    );
+    assert_eq!(
+        from_rows(&w, chart, "nurse-b").await,
+        1,
+        "another writer's row stays"
+    );
+}
+
+/// ...and while a line of the writer's remains on the chart, their "From:" row stays.
+#[tokio::test]
+async fn from_survives_while_a_line_remains() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (_o, w, chart) = fixture(&base).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    save_v(&w, a, chart, "a", false, false, [None; 4]).await;
+    save_v(&w, b, chart, "b", false, false, [None; 4]).await;
+    w.query_one(
+        "SELECT cairn_med_draft_from_save($1::text::uuid, 'notewriter', 'GP letter', 'Dr X')",
+        &[&chart.to_string()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(delete_line(&w, chart, a).await, "deleted");
+    assert_eq!(
+        from_rows(&w, chart, "notewriter").await,
+        1,
+        "a line remains: From: stays"
+    );
+}

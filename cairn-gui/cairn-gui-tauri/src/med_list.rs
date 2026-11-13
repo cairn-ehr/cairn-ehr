@@ -28,7 +28,7 @@ use crate::med_chart::{press, view, LineCheckView, PartArg};
 use crate::med_line_sign::{fresh_check, parts_before_the_key, the_line};
 use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
-    already_on_the_list, elsewhere, fresh_read, judge, tick_holds, Judged,
+    already_on_the_list, elsewhere, fresh_read, judge, tick_holds, vouched, Judged,
 };
 use crate::med_list_versions::{
     companion_words, companions_of, given, stamp_new_line, versions_recorded, FromView,
@@ -153,10 +153,13 @@ pub struct ListLineView {
     pub companion_words: Vec<String>,
 }
 
-/// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …).
-#[derive(Debug, serde::Serialize)]
+/// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …), and
+/// the source "From:" stamped on the line by THIS save (both `None` when none was; ruling R23).
+#[derive(Debug, Default, serde::Serialize)]
 pub struct SaveAnswer {
     pub answer: String,
+    pub info_source: Option<String>,
+    pub source_detail: Option<String>,
 }
 
 #[tauri::command]
@@ -291,13 +294,21 @@ pub async fn med_list_save_impl(
         .lock()
         .await?;
     // A NEW line with no source of its own takes "From:" (ruling R12, `med_list_versions`).
-    stamp_new_line(&*db, patient, writer, &mut row)
+    let stamped = stamp_new_line(&*db, patient, writer, &mut row)
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
     let answer = draft::save_draft_line(&*db, patient, writer, &row)
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
-    Ok(SaveAnswer { answer })
+    let (info_source, source_detail) = match stamped && answer == "saved" {
+        true => (row.info_source, row.source_detail),
+        false => (None, None),
+    };
+    Ok(SaveAnswer {
+        answer,
+        info_source,
+        source_detail,
+    })
 }
 
 /// The warnings on `line` now: a fresh check over the set on screen. Any failure is none, which
@@ -316,19 +327,6 @@ async fn warnings_now(
         .await
         .map(|check| check.against)
         .unwrap_or_default()
-}
-
-/// What a hand tick vouches for (ruling R1): the warnings BOTH found now and drawn on the line
-/// when it was ticked (`seen`). One found but never drawn was never seen, so it is left out, and
-/// the tick fails at Sign; one drawn but gone now needs no vouching. Pure.
-pub(crate) fn vouched(now: &[Uuid], seen: &[WarningRef]) -> Vec<(String, Uuid)> {
-    now.iter()
-        .filter(|id| {
-            seen.iter()
-                .any(|w| w.source == ALLERGY_SOURCE && w.reference.parse() == Ok(**id))
-        })
-        .map(|id| (ALLERGY_SOURCE.to_string(), *id))
-        .collect()
 }
 
 /// Remove one of the writer's lines, whatever it last saved (the clinician pressed remove on it).
@@ -356,12 +354,16 @@ pub async fn med_list_delete_impl(
     let Some(found) = lines.iter().find(|l| l.line_id == line) else {
         return Ok(SaveAnswer {
             answer: "gone".into(),
+            ..SaveAnswer::default()
         });
     };
     let answer = draft::delete_draft_line(&*db, line, patient, terminal, writer, &found.saved_at)
         .await
         .map_err(|e| node_failure(&db.explain(e)))?;
-    Ok(SaveAnswer { answer })
+    Ok(SaveAnswer {
+        answer,
+        ..SaveAnswer::default()
+    })
 }
 
 /// "Continue here": move the writer's list to this terminal, then read it.

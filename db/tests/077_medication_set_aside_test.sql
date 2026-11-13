@@ -9,7 +9,7 @@
 -- refuses at the AUTHORING door only; the same body is ADMITTED at the remote door
 -- (`cairn.remote_apply = 'on'`) so an orphan version, whose companion has not synced, never
 -- wedges sync. Each rule is pinned by message fragment, so a refusal for the wrong reason fails
--- too. The Rust suite (crates/cairn-node/tests/medication_set_aside_floor.rs) drives the real
+-- too. The Rust suites (crates/cairn-node/tests/medication_set_aside_{floor,peer}.rs) drive the real
 -- seal -> sign -> submit path, the shred and the reprojection.
 --
 -- The floor is called DIRECTLY (as the schema owner) with hand-built bodies; the companion

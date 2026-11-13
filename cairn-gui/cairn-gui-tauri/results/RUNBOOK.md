@@ -3273,6 +3273,17 @@ Name a clinician in who's here (`dr-a`) before typing any line.
       *Pharmacy*.
 - [ ] Open a line's *Why*, type `packet says 20 mg`, leave it. The line is saved, and if it was ticked by hand the tick
       is gone. A line you had unticked stays unticked.
+- [ ] With *GP letter* in "From:", type a new line and keep typing through two pauses of about a second (two saves
+      before the list is read again). Open its source: still *GP letter*. Sign it and check
+      `SELECT info_source, source_detail FROM medication_charting` shows `external-record`, `GP letter`.
+- [ ] A line's own *From:* set back to "not set": its source and detail are cleared. A line with no source of its own
+      (no "From:" set when it was typed, and none chosen) signs with its press's default: *Start* `clinician-observed`,
+      *Already taking* `patient-reported`. **A set-aside version with no source of its own does too**: its twin reads
+      "clinician-observed reported …" for a *Start* line. Check `info_source` in `medication_statement` and
+      `medication_set_aside`.
+- [ ] Sign every line of the list: "From:" is cleared with the last line (it lives only while you have a line on the
+      chart), so the next admission's lines are not stamped with today's source. While any line of yours remains,
+      "From:" stays.
 
 **Measurement 2: set a version aside.**
 
@@ -3293,6 +3304,9 @@ Name a clinician in who's here (`dr-a`) before typing any line.
       the version is signed alone.
 - [ ] A version whose companion is not ticked: set a line aside beside a second list line, untick the second, Sign.
       The version stays in the list and says "its line was not charted".
+- [ ] A version kept while its companion IS charted: set a line aside, then edit its companion to another drug and tick
+      it. Sign charts the companion; the version stays in the list as an ordinary unticked line and says "no longer set
+      aside: its line was charted; set it aside again", never "version kept".
 - [ ] Remove the companion line from the list: its version is an ordinary line, unticked.
 - [ ] A companion stopped in a second window after the version was marked: Sign refuses it ("its line is no longer
       current") and the version stays in the list.
@@ -3326,11 +3340,11 @@ window: `med_list_from_save` (`patientId`, `charts`, `preset`, `detail`, `writer
 
 **What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
 WebKit need the window and a human. The rest was run as follows:
-- **The floor and the projection:** `medication_set_aside_floor.rs`, `medication_source_note_floor.rs` (DB-gated).
+- **The floor and the projection:** `medication_set_aside_floor.rs`, `medication_set_aside_peer.rs`, `medication_source_note_floor.rs` (DB-gated).
 - **The draft store and the signing:** `medication_draft_list_versions_store.rs`, `medication_set_aside_sign.rs`
   (DB-gated); `medication/draft_versions_tests.rs` (pure).
 - **The window's commands:** `cairn-gui-tauri`'s `med_list_versions_tests.rs` (pure) and `med_list_versions_db_tests.rs`,
   `med_list_versions_kept_db_tests.rs`, `med_list_source_db_tests.rs` (DB-gated; CI never runs those, #905).
-- **The webview:** `med_list_versions_webview_tests.rs`.
+- **The webview:** `med_list_versions_webview_tests.rs`, `med_list_source_webview_tests.rs`.
 
 `TEMPLATE.md` carries a matching block (*"From:", the why, and a set-aside version*).

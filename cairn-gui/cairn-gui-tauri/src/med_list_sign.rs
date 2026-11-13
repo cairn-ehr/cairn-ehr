@@ -213,7 +213,10 @@ pub async fn med_list_sign_impl(
             let with = plan.with.remove(&j.line.line_id).unwrap_or_default();
             let signed = sign_line(state, node_sk, list, j, charted_as, reason, &with, &author);
             match signed.await.map_err(|e| line_failure(&e)) {
-                Ok(n) => (charted, versions) = (charted + 1, versions + n),
+                Ok(n) => {
+                    plan.charted(j.line.line_id);
+                    (charted, versions) = (charted + 1, versions + n);
+                }
                 Err(LineFailure::Unknown(text)) => {
                     // It may have landed, and its versions with it (one transaction): never try
                     // the rest on a guess (Review Focus 4). Each line left is named, so none is

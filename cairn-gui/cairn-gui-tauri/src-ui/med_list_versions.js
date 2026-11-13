@@ -137,8 +137,8 @@ function versionControls(line) {
     which: cell("p", "", { class: "med-list-which" }),
     whichKey: null, // the candidates the pick's buttons were made for
   };
-  preset.addEventListener("change", () => sourceChosen(line));
-  detail.addEventListener("input", () => sourceChosen(line));
+  preset.addEventListener("change", () => sourceChosen(line, true));
+  detail.addEventListener("input", () => sourceChosen(line, false));
   why.addEventListener("input", () => ownChanged(line, { why: why.value }));
   own.setAside.addEventListener("click", () => pressSetAside(line));
   r.li.append(own.source, own.setAside, own.which, box);
@@ -230,15 +230,16 @@ function pressSetAside(line) {
   }
 }
 
-/** The line's own "From:" changed: a preset sends its category, the free text (or, when blank,
- *  the label, as Rust's `stamp`) the detail; with no preset the stored category stays. */
-function sourceChosen(line) {
+/** The line's own "From:" changed (`picked`: the preset list, not the free text). A preset sends
+ *  its category and the detail: the free text or, when blank, the label (as Rust's `stamp`).
+ *  "Not set" PICKED clears the whole source, the box too (review M3: a stale stamp must come
+ *  off; the press's default then stands at Sign); text typed under "not set" is a bare detail. */
+function sourceChosen(line, picked) {
   const r = line.row;
   const label = r.own.preset.value;
+  if (!label && picked) r.own.detail.value = "";
   const text = r.own.detail.value.trim();
-  const fields = { source_detail: text || label || null };
-  if (label) fields.info_source = FROM_PRESETS[label];
-  ownChanged(line, fields);
+  ownChanged(line, { info_source: FROM_PRESETS[label] || null, source_detail: text || label || null });
 }
 
 /** A change on the line's own controls: applied (`setOwn`), drawn, saved a second later. */
@@ -275,6 +276,20 @@ function takeOwn(line, v) {
   for (const field of OWN_FIELDS) {
     if (!((line.ownVersion || {})[field] > line.savedVersion)) line.content[field] = v[field];
   }
+}
+
+/**
+ * A save answered `saved` with the source "From:" stamped on the line by it (Rust's `SaveAnswer`,
+ * ruling R23): it goes on the line at once, so the line's next save carries it even when no read
+ * lands between the two (else that save would send no source, and the door would clear it). A
+ * source changed here after this save was sent is the clinician's newer choice, and stays.
+ */
+function takeStamp(line, door, sent) {
+  if (!door.info_source) return;
+  const own = line.ownVersion || {};
+  if (own.info_source > sent.version || own.source_detail > sent.version) return;
+  line.content.info_source = door.info_source;
+  line.content.source_detail = door.source_detail;
 }
 
 /**

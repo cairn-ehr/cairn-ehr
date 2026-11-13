@@ -12,10 +12,14 @@ use serde_json::{json, Value};
 
 use super::assert::{drug_line_twin, medication_assertion_body, MedicationAssertion};
 
+/// The event type of a set-aside version: its own type, never a flag on the ordinary assertion
+/// (ADR-0102 item 6), so no reader of current lines can forget to filter it out.
 pub const SET_ASIDE_EVENT_TYPE: &str = "clinical.medication-set-aside.asserted";
+/// The payload's schema tag (`db/079` §2 holds the floor that checks it), class `additive`.
 pub const SET_ASIDE_SCHEMA: &str = "clinical.medication-set-aside/1";
 
 /// A version of a drug set aside as an alternative to the thread `alternative_to`.
+#[derive(Debug)]
 pub struct MedicationSetAside<'a> {
     pub version_id: &'a str,
     pub alternative_to: &'a str,
@@ -162,6 +166,24 @@ mod tests {
             ..Default::default()
         });
         d
+    }
+
+    /// Review T1: the strip removes a `safety` key the assertion body DOES carry (so the test
+    /// would fail if the strip forgot it), and the version is printable for a test failure.
+    #[test]
+    fn a_set_aside_body_never_carries_safety() {
+        let mut d = drug(None);
+        d.safety = Some(crate::safety::PreciseSafety {
+            class: "statin",
+            severity: "low",
+        });
+        assert!(medication_assertion_body(&d)
+            .as_object()
+            .unwrap()
+            .contains_key("safety"));
+        let v = stripped_body(&set_aside(&d));
+        assert!(!v.as_object().unwrap().contains_key("safety"), "{v}");
+        assert!(format!("{:?}", set_aside(&d)).contains("alternative_to"));
     }
 
     #[test]
