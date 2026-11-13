@@ -42,8 +42,13 @@ versions (spec §6 risk 3: countable, no menu group this slice).
   read); a set-aside version is never current.
 - **A restore is a stop + a new line, never an edit of the version** (ADR-0102 Consequences). The floor does NOT
   compare the new line's drug fields with the version's (the reviewer may edit: "right drug, dose changed since").
-- **The companion is stopped only if it is current on Sign's fresh read**; a stopped companion's restore emits no
-  cessation (spec §3.3). Its versions then no longer count as unsettled, and both buttons stay offered.
+- **A restore stops the line that currently stands for the companion** **[ruling R3, 2026-11-14, Task 2 review]**:
+  the companion itself if it is current on Sign's fresh read, else every current line that restored a version of
+  the same companion (a second restore replaces the first). A companion stopped for another reason with no current
+  replacement: no cessation (spec §3.3). The floor holds it at commit: neither the companion nor any OTHER current
+  line restoring a version of it may stay current. Spec §3.3's "a restore then emits no cessation" for a companion
+  "already replaced by another version's restore" is superseded: it left two current lines. Versions of a stopped
+  companion no longer count as unsettled, and both buttons stay offered.
 - **The restored line inherits the companion's `charted_as`** (`medication_charting.charted_as`); a companion with
   none (charted before slice 1a) gives `pre-existing` **[maintainer, 2026-11-14]**. The reviewer may change it.
 - **A restore line with no source of its own signs `unknown`**, never the press default — the maintainer's ruling for
@@ -274,8 +279,8 @@ pub fn replaced_by_restores(draft: &[DraftLine], versions: &[SetAsideRow]) -> Ve
 ```rust
 /// A restore line's extra at Sign: the version it restores, and — when the companion is current on the fresh
 /// read — the companion to stop and the cessation's reason.
-pub struct RestoreToSign<'a> { pub version_id: Uuid, pub stop: Option<(Uuid, &'a str)> }
-/// chart_draft_line(…, versions, restore: Option<&RestoreToSign<'_>>): when Some, the companion's cessation
+pub struct RestoreToSign<'a> { pub version_id: Uuid, pub stop: Vec<(Uuid, &'a str)> }  // ruling R3: 0..n lines
+/// chart_draft_line(…, versions, restore: Option<&RestoreToSign<'_>>): when Some, one cessation per `stop` entry
 /// (build_cease_body, `reason`, no stop date) is submitted FIRST, then the line with `charting.restores` set from
 /// `restore.version_id` (ONE source of truth: a caller's own `charting.restores` must be None), then the spends.
 pub struct VersionCheck<'a> { pub version_id: Uuid, pub info_source: &'a str, pub source_note: Option<SourceNote<'a>> }
@@ -304,6 +309,7 @@ pub async fn version_for_restore(client: &(impl GenericClient + Sync), patient: 
 - [ ] **Step 1: Failing DB tests** (`medication_version_settle.rs`):
   - `a_restore_stops_its_companion_and_charts_the_line_in_one_transaction`
   - `a_restore_of_a_stopped_companions_version_emits_no_stop`
+  - `a_second_restore_stops_the_first_restores_line` (ruling R3)
   - `a_failed_spend_rolls_back_the_stop_too`
   - `a_companion_stopped_since_the_read_still_leaves_one_current_line` (Review Focus 5)
   - `check_version_signs_one_event`, `check_version_refuses_another_charts_version`
@@ -335,8 +341,9 @@ pub struct RestoreOpened { pub list: MedListView, pub line_id: String }   // the
 /// The prefill: typed_drug = term (+ " " + strength), directions = [amount unit] [route] [sig], line_text = both
 /// joined, parts = one part with the version's coding. Pure.
 pub(crate) fn restore_prefill(v: &VersionForRestore) -> (String, String, String, serde_json::Value);
-/// At Sign, from the STORED row on the fresh read: Ok(None) for an ordinary line; Ok(Some) with `stop` only when
-/// the companion is current; Err(RESTORE_VERSION_GONE) when the version is not on the opened chart.
+/// At Sign, from the STORED row on the fresh read: Ok(None) for an ordinary line; Ok(Some) whose `stop` is the
+/// companion when current, else each current line restoring a version of it (ruling R3);
+/// Err(RESTORE_VERSION_GONE) when the version is not on the opened chart.
 pub(crate) fn restore_to_sign<'a>(line: &DraftLine, version: Option<&'a VersionForRestore>, reason: &'a str)
   -> Result<Option<RestoreToSign<'a>>, &'static str>;
 #[tauri::command] pub async fn med_version_check(state, patient_id: String, charts: Vec<String>, version_id: String,
