@@ -724,6 +724,8 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/medication/sealed_submit.rs",
     // draft.rs: chart_draft_line submits an event and spends its draft row in one transaction.
     "crates/cairn-node/src/medication/draft.rs",
+    // draft_versions_sign.rs: set_aside_draft_line signs one version and spends its row.
+    "crates/cairn-node/src/medication/draft_versions_sign.rs",
     "crates/cairn-node/src/medication/reconciliation.rs",
     "crates/cairn-node/src/medication/attestation.rs",
     "crates/cairn-node/src/identify.rs",

@@ -283,6 +283,7 @@ async fn sign_line(
         &input,
         &charting,
         author,
+        &[], // Task 6 wires versions
     )
     .await
     .map(|_| ())

@@ -8,6 +8,7 @@
 //! vault the two things the list's Sign checks its writer by ([`staff_id`], [`writer_key`]).
 use super::assert::AssertMedicationInput;
 use super::charting::chart_body;
+use super::draft_versions_sign::{prepare_version, spend_row, submit, VersionToSign};
 use super::sealed_submit::{prepare_sealed, AuthorParams, Prepared};
 use anyhow::Context;
 use cairn_event::medication::Charting;
@@ -269,14 +270,22 @@ pub async fn writer_drafts(
         .collect()
 }
 
-/// Chart one draft line: submit its event and delete its draft row in ONE transaction, so the
-/// line leaves the list exactly when it enters the record. The delete must answer `'deleted'`,
-/// else the transaction rolls back (the line moved, went, or was SAVED AGAIN since the caller
-/// read it at `saved_at`: the caller re-reads).
+/// Chart one draft line, and any versions set aside beside it: submit their events and delete
+/// their draft rows in ONE transaction, so each line leaves the list exactly when it enters the
+/// record. Every delete must answer `'deleted'`, else the transaction rolls back (the line moved,
+/// went, or was SAVED AGAIN since the caller read it at `saved_at`: the caller re-reads).
 ///
-/// FLOW: build and seal the body (`chart_body` + `prepare_sealed`, nothing written) → open a
-/// transaction → `submit_event` → delete the draft row → commit. A lost commit is marked
+/// FLOW: build and seal the companion (`chart_body` + `prepare_sealed`) and each version
+/// (`prepare_version`, `alternative_to` = the companion's new `medication_id`), nothing written →
+/// open a transaction → `submit_event` the companion FIRST, then each version (the floor wants the
+/// companion projected and current) → spend every VERSION's row, then the companion's → commit.
+///
+/// The spends go the other way round (ruling R5): db/078's delete door, deleting a line, unmarks
+/// and re-stamps every version still naming it, so spending the companion first would make each
+/// version's spend answer `changed` and roll everything back. A lost commit is marked
 /// outcome-unknown (#814) exactly as `seal_sign_submit`'s attested arm does.
+///
+/// Returns the companion's thread and the versions' ids; `event_id` is the companion's.
 #[allow(clippy::too_many_arguments)] // signer + node context + the line's identity + its content
 pub async fn chart_draft_line(
     client: &mut tokio_postgres::Client,
@@ -291,7 +300,8 @@ pub async fn chart_draft_line(
     input: &AssertMedicationInput<'_>,
     charting: &Charting<'_>,
     author: &AuthorParams<'_>,
-) -> anyhow::Result<crate::db_diagnosis::Committed<Uuid>> {
+    versions: &[VersionToSign<'_>],
+) -> anyhow::Result<crate::db_diagnosis::Committed<(Uuid, Vec<Uuid>)>> {
     let (body, medication_id) =
         chart_body(client, node_kid, node_origin, patient, input, charting).await?;
     let Prepared {
@@ -299,6 +309,22 @@ pub async fn chart_draft_line(
         signed_bytes,
         dek,
     } = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
+    let mut prepared_versions = Vec::with_capacity(versions.len());
+    for v in versions {
+        prepared_versions.push(
+            prepare_version(
+                client,
+                node_sk,
+                node_kid,
+                node_origin,
+                patient,
+                v,
+                medication_id,
+                author,
+            )
+            .await?,
+        );
+    }
 
     let tx = client.transaction().await?;
     tx.execute(
@@ -306,23 +332,22 @@ pub async fn chart_draft_line(
         &[&signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await?;
-    let answer: String = tx
-        .query_one(
-            "SELECT cairn_med_draft_line_delete($1::text::uuid, $2::text::uuid, $3, $4, $5::text::timestamptz)",
-            &[&line.to_string(), &patient.to_string(), &terminal, &writer, &saved_at],
-        )
-        .await
-        .context("spending the draft line (nothing was written)")?
-        .get(0);
-    if answer != "deleted" {
-        // Returning drops `tx`, which rolls back: nothing is written, and the clear error stays.
-        return Err(SpendRefused(answer).into());
+    for (p, _) in &prepared_versions {
+        submit(&tx, p).await?;
     }
+    // Versions' rows first, the companion's last (ruling R5, above).
+    for v in versions {
+        spend_row(&tx, v.line, patient, terminal, writer, v.saved_at).await?;
+    }
+    spend_row(&tx, line, patient, terminal, writer, saved_at).await?;
     tx.commit()
         .await
         .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
     Ok(crate::db_diagnosis::Committed {
-        value: medication_id,
+        value: (
+            medication_id,
+            prepared_versions.iter().map(|(_, id)| *id).collect(),
+        ),
         event_id,
     })
 }
