@@ -230,6 +230,7 @@ nav:
       - ADR-0099 · Charting a medication: spec/decisions/0099-charting-a-medication.md
       - ADR-0100 · Charting a list under one signature: spec/decisions/0100-charting-a-list-under-one-signature.md
       - ADR-0101 · The same-drug de-label offer: spec/decisions/0101-the-same-drug-delabel-offer.md
+      - ADR-0102 · Set-aside versions, and the source of a line: spec/decisions/0102-set-aside-versions-and-the-source-of-a-line.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

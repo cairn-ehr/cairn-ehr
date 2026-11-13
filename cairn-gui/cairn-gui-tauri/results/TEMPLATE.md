@@ -868,6 +868,41 @@ click: yes / no.
 | "Coded as: …" read when it appears or goes | | |
 | No dialog | | |
 
+## "From:", the why, and a set-aside version (batch charting slice 2a, runbook §33)
+
+`SCHEMA_GENERATION` 79 and `provision-window-role` re-run? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| "From:" chosen → drawn kept | held | | | | ≤ 3 s | |
+| *Set aside* → the line drawn "set aside — not current" | held | | | | ≤ 2 s | |
+| *Sign ticked lines* over 10 lines with 2 versions → outcome | held | | | | ≤ 3 s | |
+| The same Sign, credential typed | shared | | | | — (record) | |
+| Reading a version next morning: presses | | | | | 2 | |
+
+Steps: a version on paper *N* = 1 act → observed \_\_ presses and \_\_ Signs.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| "From:" survives closing the chart; the next line takes it, the line already typed does not | | |
+| A line's own *From:* and *Why* are saved; a *Why* clears a hand tick, not an untick | | |
+| *Set aside* appears only beside a coded line of the same drug; two candidates ask "Version of which line?" | | |
+| A set-aside line has no tick; undoing it leaves an unticked ordinary line | | |
+| Sign records the version with its ticked line (`medication_set_aside` row, one current line) | | |
+| A version beside a charted line signs alone, with nothing ticked; the count near Sign says so | | |
+| A version whose line was not charted stays and says why | | |
+| A charted line shows "{n} other version(s)", closed; a stopped line still shows them | | |
+| The real Tauri IPC: `med_list_from_save` and the four fields on `med_list_save` answer | | |
+| WebKit (the real window): "From:", the line's controls, the pick, the collapsed versions | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| "From:", each line's controls and *Set aside* read with their line | | |
+| The pick reachable by Tab; each choice names its line | | |
+| "set aside — not current" and "Sign also records …" read | | |
+| "{n} other version(s)" opens by keyboard | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

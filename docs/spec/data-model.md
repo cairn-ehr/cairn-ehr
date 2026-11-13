@@ -83,6 +83,15 @@ was asked; any line may be ticked by hand. One Sign releases the key once and ch
 longer holds on the fresh read at Sign (a warning that arrived after it) refuses the whole Sign before the key, so
 nothing is signed.
 
+A list line may carry where its claim came from (`source_detail`, set once for the lines after it by the list's
+"From:") and why it was charted this way (`why`): two optional keys, never one merged note, so a provenance is never
+read as a rationale. A version a source reported and the clinician did not believe is signed as its own
+`clinical.medication-set-aside.asserted` event, an alternative to a real thread (`alternative_to`), and is never a
+current medication: no reader of current lines sees it, it raises no warning and carries no safety claim, and a charted
+line shows its versions collapsed beneath it. A version is signed only in the transaction of its companion line or
+beside a charted current one; a peer's version that arrives before its companion is held and shown nowhere
+([ADR-0102](decisions/0102-set-aside-versions-and-the-source-of-a-line.md)).
+
 The allergies row above is built as two born-sealed, additive event types: one entry
 (`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose
 "not known" is a recorded answer, and the source) and a "none known" **statement** (`clinical.allergy-none.asserted`,

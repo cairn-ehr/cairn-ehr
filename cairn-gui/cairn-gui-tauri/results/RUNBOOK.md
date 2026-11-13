@@ -3213,3 +3213,124 @@ WebKit need the window and a human. The rest was run as follows:
 - **The webview:** `delabel_webview_tests.rs`.
 
 `TEMPLATE.md` carries a matching block (*The same-drug de-label offer*).
+
+## 33. "From:", the why, and a set-aside version (batch charting slice 2a, ADR-0102)
+
+The slice's gestures:
+- **"From:".** Above the medication list: a choice of *Patient*, *Carer / family*, *GP letter*, *Pharmacy*, *Packets /
+  Webster pack seen* or *Other*, and a free-text box beside it. Each line **typed after** it takes it: the choice
+  becomes the line's source category and the text (or, when empty, the choice's own words) says where it came from. A
+  line typed before "From:" keeps what it had. Each line also has its own *From:* choice and a *Why* box, closed until
+  opened.
+- **Set aside.** A list line of the same coded drug as another list line, or as a medication already charted on this
+  chart, shows *Set aside*. Pressed, the line reads "set aside — not current", has no tick, and is signed as a version of
+  that line, not as a medication. With two such lines the pick asks "Version of which line?". Pressed again, it is an
+  ordinary line, unticked.
+- **Sign** records every version beside a ticked line in that line's own transaction; one beside a line already charted
+  signs by itself, even when nothing is ticked. The list says "Sign also records {n} set-aside version(s), as not
+  current" while it will. A version whose line was not charted stays in the list and says why.
+- **Next morning.** A charted line shows "{n} other version(s)" under it, closed; opened, each reads
+  `{source}: {drug line} — set aside, not current`, then `— {why}`.
+
+Paper counterpart: the line believed written out, the other figure beside it crossed through with where it came from
+and why it was not believed. **Live only**: a `--mock` window has no list.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Setting "From:" for the lines after it | the choice made | it is drawn kept | **≤ 3 s** |
+| Setting a line aside | the press of *Set aside* | the line drawn "set aside — not current" | **≤ 2 s** |
+| Sign over a 10-line list with 2 versions | the press of *Sign ticked lines* | the outcome drawn | **≤ 3 s** (slice 1's budget, M3 Max) |
+| Reading a version the next morning | opening the chart | the version's line read | **2 presses** (open the chart, open "{n} other version(s)") |
+
+The budgets are with the key held (`--key-hold-seconds 900`); repeat the Sign on a shared terminal and record both.
+Steps: a version on paper *N* = 1 act (the second figure written beside, with its source) → forced *M* = 1 signature (a
+line and its version are two events in one transaction) → target *K* = 1 press of *Set aside* + the list's one Sign;
+"From:" is *K* = 1 choice for every line after it. **A figure outside its budget, or an `M > N`, is the finding: file an
+issue, and never adjust the budget.**
+
+**Setup.** As section 31, but build this checkout and re-run section 0's `provision-window-role`, because the build
+moves `SCHEMA_GENERATION` to 79. Then:
+
+```bash
+V1=$(achart "Version Home" 1981-01-01)     # "No known drug allergies" recorded
+V2=$(achart "Version Charted" 1982-02-02)  # "No known drug allergies" recorded; atorvastatin already charted and signed
+for c in "$V1" "$V2"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+```
+
+Name a clinician in who's here (`dr-a`) before typing any line.
+
+**Measurement 1: "From:".**
+
+- [ ] On `$V1`, choose *GP letter* in "From:" and type `letter of 3 March`. *Already taking*, `atorv`, choose it,
+      ` tab 40mg nocte`, Enter. Open the line's source: *GP letter*, `letter of 3 March`. Close the chart and open it
+      again: "From:" is still set.
+- [ ] Choose *Patient* in "From:", leaving the text empty. Type a second line: its source reads *Patient*. The first
+      line is unchanged.
+- [ ] Clear "From:" (the first choice), then edit one word of the first line: its source is not changed by it.
+- [ ] Type a line, then choose *Pharmacy* in "From:": the line already typed keeps its source; the next line takes
+      *Pharmacy*.
+- [ ] Open a line's *Why*, type `packet says 20 mg`, leave it. The line is saved, and if it was ticked by hand the tick
+      is gone. A line you had unticked stays unticked.
+
+**Measurement 2: set a version aside.**
+
+- [ ] On `$V1`, type a second atorvastatin line, `atorv`, ` tab 20mg nocte`, and a third, ` tab 30mg nocte`. *Set aside*
+      appears on all three. Pressing it on the 20 mg line asks "Version of which line?", naming the 40 mg and the 30 mg
+      lines; choose the 40 mg line. The 20 mg line reads "set aside — not current", with no tick and no reason box.
+      Remove the 30 mg line.
+- [ ] Press *Set aside* on the set-aside line again: it is an ordinary line, **unticked** (even if the default tick
+      would give it).
+- [ ] An uncoded line (typed, no pick) and a combination show no *Set aside*.
+- [ ] Set the 20 mg line aside again, tick the 40 mg line. The list reads "Sign also records 1 set-aside version(s), as
+      not current". *Sign ticked lines*: one passphrase on a shared terminal, then `Charted 1 of 1; 1 version(s) set
+      aside`. Both lines left the list.
+      `psql "$CONN" -c "SELECT term, dose_amount, info_source, source_detail, why FROM medication_set_aside"` shows the
+      20 mg line; `SELECT term, dose_amount FROM medication_statement WHERE patient_id = '$V1'` shows only the 40 mg line.
+- [ ] On `$V2`, with atorvastatin already charted, type an atorvastatin line, *Set aside*: the pick names "charted:
+      atorvastatin …". Tick nothing. The list reads "Sign also records 1 set-aside version(s)". *Sign ticked lines*:
+      the version is signed alone.
+- [ ] A version whose companion is not ticked: set a line aside beside a second list line, untick the second, Sign.
+      The version stays in the list and says "its line was not charted".
+- [ ] Remove the companion line from the list: its version is an ordinary line, unticked.
+- [ ] A companion stopped in a second window after the version was marked: Sign refuses it ("its line is no longer
+      current") and the version stays in the list.
+
+**Measurement 3: read it next morning.**
+
+- [ ] Close and reopen `$V1`: the 40 mg line shows "1 other version(s)", closed. Open it: `{source}: atorvastatin 20 mg
+      … (…) — set aside, not current` and the why when given. The current-medication count and the allergy check do not
+      see it.
+- [ ] Stop the 40 mg line: the version is still shown under it.
+
+**Measurement 4: the timings (five runs each, held key, then shared terminal).**
+
+- [ ] "From:" chosen to drawn (≤ 3 s); *Set aside* to the line drawn set aside (≤ 2 s).
+- [ ] A 10-line list with 2 versions: *Sign ticked lines* to the outcome (≤ 3 s).
+- [ ] The write halves: `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind = 'medication-chart'"`.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] "From:", each line's *From:*, its detail and *Why* are read with their line ("From, for {line}", "Why, for
+      {line}"); *Set aside* is read "Set aside: {line}" with its pressed state.
+- [ ] The pick "Version of which line?" is reachable by Tab; each choice names its line.
+- [ ] "set aside — not current" is read with its line; "Sign also records …" is read near Sign.
+- [ ] "{n} other version(s)" opens with Enter or Space and each version is read.
+- [ ] No dialog at any point.
+
+**WebKit and the real Tauri IPC.** The webview was walked headlessly with a stubbed `invoke`. Walk the list in the real
+window: `med_list_from_save` (`patientId`, `charts`, `preset`, `detail`, `writer`), and `med_list_save`'s `line` now carrying
+`info_source`, `source_detail`, `why` and `set_aside_of` on every save. A name Tauri cannot map fails the call with an
+"invalid args" error.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
+WebKit need the window and a human. The rest was run as follows:
+- **The floor and the projection:** `medication_set_aside_floor.rs`, `medication_source_note_floor.rs` (DB-gated).
+- **The draft store and the signing:** `medication_draft_list_versions_store.rs`, `medication_set_aside_sign.rs`
+  (DB-gated); `medication/draft_versions_tests.rs` (pure).
+- **The window's commands:** `cairn-gui-tauri`'s `med_list_versions_tests.rs` (pure) and `med_list_versions_db_tests.rs`,
+  `med_list_versions_kept_db_tests.rs`, `med_list_source_db_tests.rs` (DB-gated; CI never runs those, #905).
+- **The webview:** `med_list_versions_webview_tests.rs`.
+
+`TEMPLATE.md` carries a matching block (*"From:", the why, and a set-aside version*).
