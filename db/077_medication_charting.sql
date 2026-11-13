@@ -210,6 +210,8 @@ CREATE TABLE IF NOT EXISTS medication_charting (
 -- claim came from, and why it was charted this way (free text, db/079 is their floor).
 ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS source_detail text;
 ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS why text;
+-- Slice 2b, the same rule: the set-aside version this line restores (db/080 is its floor).
+ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS restores uuid;
 GRANT SELECT ON medication_charting TO cairn_agent;
 -- One-off for a dev database that loaded an earlier draft of this unmerged file, when the
 -- column was UUID[] and the payload key had its earlier allergy-only name. Guarded on the
@@ -253,8 +255,14 @@ DECLARE
     v_med     uuid;
     v_comp    jsonb;
     v_against jsonb;
+    v_restores uuid;
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
+    -- Cast only a valid uuid: a sealed peer body admitted without custody never met the floor,
+    -- and a raise here would fail its late-custody heal (db/079's applier reasoning).
+    IF pg_input_is_valid(p ->> 'restores', 'uuid') THEN
+        v_restores := (p ->> 'restores')::uuid;
+    END IF;
     v_comp := NULLIF(p #> '{substance,components}', 'null'::jsonb);
     IF jsonb_typeof(p #> '{warning_override,against}') = 'array' THEN
         v_against := p #> '{warning_override,against}';
@@ -263,14 +271,14 @@ BEGIN
     IF p ->> 'charted_as' IS NULL AND p ->> 'route' IS NULL
        AND p #>> '{substance,strength}' IS NULL AND v_comp IS NULL
        AND p #>> '{warning_override,reason}' IS NULL AND v_against IS NULL
-       AND p ->> 'source_detail' IS NULL AND p ->> 'why' IS NULL THEN
+       AND p ->> 'source_detail' IS NULL AND p ->> 'why' IS NULL AND v_restores IS NULL THEN
         RETURN;
     END IF;
     v_med := (p ->> 'medication_id')::uuid;
 
     INSERT INTO medication_charting
         (medication_id, patient_id, charted_as, route, strength, components,
-         override_reason, override_against, source_detail, why,
+         override_reason, override_against, source_detail, why, restores,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
         v_med,
@@ -283,6 +291,7 @@ BEGIN
         v_against,
         p ->> 'source_detail',
         p ->> 'why',
+        v_restores,
         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET
         patient_id       = EXCLUDED.patient_id,
@@ -294,6 +303,7 @@ BEGIN
         override_against = EXCLUDED.override_against,
         source_detail    = EXCLUDED.source_detail,
         why              = EXCLUDED.why,
+        restores         = EXCLUDED.restores,
         hlc_wall         = EXCLUDED.hlc_wall,
         hlc_counter      = EXCLUDED.hlc_counter,
         origin           = EXCLUDED.origin,

@@ -136,6 +136,8 @@ pub struct ChartingRow {
     pub source_detail: Option<String>,
     /// Free text: why the line was charted this way, when the clinician said.
     pub why: Option<String>,
+    /// The set-aside version this line restores (slice 2b), when it is a restore.
+    pub restores: Option<Uuid>,
 }
 
 /// The components of a signed combination (`substance.components`). Pure. Both doors refuse an
@@ -167,7 +169,7 @@ pub async fn read_charting(
     let rows = tx
         .query(
             "SELECT medication_id::text, charted_as, route, strength, components::text, \
-                    override_reason, source_detail, why \
+                    override_reason, source_detail, why, restores::text \
                FROM medication_charting WHERE medication_id = ANY($1::text[]::uuid[])",
             &[&ids],
         )
@@ -190,6 +192,10 @@ pub async fn read_charting(
                     override_reason: r.try_get(5)?,
                     source_detail: r.try_get(6)?,
                     why: r.try_get(7)?,
+                    restores: r
+                        .try_get::<_, Option<String>>(8)?
+                        .map(|u| u.parse())
+                        .transpose()?,
                 },
             ))
         })

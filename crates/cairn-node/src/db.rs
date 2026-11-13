@@ -503,6 +503,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "079_medication_versions",
         include_str!("../../../db/079_medication_versions.sql"),
     ),
+    // db/080 (batch charting slice 2b): settling a set-aside version — the restore's floor.
+    (
+        "080_medication_version_settle",
+        include_str!("../../../db/080_medication_version_settle.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

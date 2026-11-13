@@ -46,6 +46,7 @@ fn combo(parts: &[(&str, Option<Uuid>)]) -> ChartingRow {
         override_reason: None,
         source_detail: None,
         why: None,
+        restores: None,
     }
 }
 
