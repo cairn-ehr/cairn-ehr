@@ -155,7 +155,7 @@
 >   own act. A de-label may code the tolerated drug (authoring door: `drugref-moiety` only; the row's drugs-only pick
 >   drops on any edit). The charting design's group comment and shared transaction were dropped (maintainer). Open:
 >   **#1084** (an additive comment on an allergy line, a new act) · **#1085** (flag a live allergy whose drug matches a
->   coded tolerance) · **#1087** (a failed drug search reads as "no matches", both picks; from the final check). Owed by a human: **RUNBOOK §32**. **For the maintainer to confirm:** the de-label row pre-fills
+>   coded tolerance) · **#1087** (a failed drug search reads as "no matches", both picks; from the final check). Owed by a human: **RUNBOOK §32**. **For the maintainer to confirm (asked again 2026-11-13, unanswered):** the de-label row pre-fills
 >   today only on an *Already taking* line; on a *Start* line the date stays empty ("not known"), since "tolerated
 >   today" would be untrue there (controller ruling from the final review; the design's "date = today" was a designer's call).
 >
@@ -207,8 +207,10 @@
 >    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Now: batch-charting slice 2** — its wire
 >    design is written ([`superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md`](superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md),
 >    brainstormed + builder-checked 2026-11-13; "From:" presets, the set-aside type, an editable restore, a new
->    "checked: not current" act); **once the maintainer approves the document, plan it** (likely 2a wire + list, 2b
->    restore + checked); then **slice 3** (the warning threshold as administrator policy, lowerable only). Charting **1b** (the same-drug de-label
+>    "checked: not current" act); design APPROVED 2026-11-13; **slice 2a planned**
+>    ([`superpowers/plans/2026-11-13-batch-charting-slice-2a-from-and-set-aside.md`](superpowers/plans/2026-11-13-batch-charting-slice-2a-from-and-set-aside.md),
+>    9 tasks, `db/079`, ADR-0102 owed) on draft PR #1088 — **build it next**; 2b (restore + "checked") is planned after
+>    2a merges; then **slice 3** (the warning threshold as administrator policy, lowerable only). Charting **1b** (the same-drug de-label
 >    offer) MERGED in PR #1086 (the bullet above). Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.

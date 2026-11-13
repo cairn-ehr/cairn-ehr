@@ -2,8 +2,7 @@
 
 - **Date:** 2026-11-13
 - **Status:** brainstormed with the maintainer 2026-11-13 (the playback approved: "nothing wrong — proceed");
-  builder-checked and its two questions answered the same day (§9); **awaiting the maintainer's approval of this
-  document**
+  builder-checked and its two questions answered the same day (§9); **approved by the maintainer 2026-11-13**
 - **Extends:** [`2026-11-11-batch-charting-1072-design.md`](2026-11-11-batch-charting-1072-design.md) §3.4 and §4
   (approved 2026-11-11). Everything there stands; this document fixes the wire shapes that design left to the
   builder and adds one act (§3.4 below) the parent did not have.
