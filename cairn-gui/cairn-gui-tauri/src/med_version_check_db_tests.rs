@@ -47,7 +47,18 @@ async fn a_check_signs_and_reads_back() {
     )
     .await
     .unwrap();
-    assert!(written.pane.is_some(), "{}", written.outcome);
+    // The pane Rust read again shows it under the version (Task 7): who, when, from, why; the
+    // version keeps both buttons (a check locks nothing) and is no longer to check.
+    let pane = written.pane.as_ref().expect("the pane read again");
+    let version = &pane.list.rows[0].versions[0];
+    assert_eq!(version.version_id, versions[0].to_string());
+    assert_eq!(version.settled.len(), 1, "{version:?}");
+    assert!(version.settled[0].starts_with("checked by "), "{version:?}");
+    assert!(
+        version.settled[0].ends_with(": not current — from GP letter — old packet"),
+        "{version:?}"
+    );
+    assert!(version.can_settle && !version.open && !version.restored);
     assert_eq!(
         checks(&owner, chart).await,
         [(

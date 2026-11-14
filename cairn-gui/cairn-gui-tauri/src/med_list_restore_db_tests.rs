@@ -252,6 +252,25 @@ async fn one_sign_stops_the_companion_and_charts_the_restore() {
         left(&owner, chart).await.is_empty(),
         "the line left the list"
     );
+    // The pane (Task 7): the stopped line's version reads "restored by …" and offers no button;
+    // the new line says what it replaced (the companion, ruling R7).
+    let pane = crate::commands::med_list_impl(&state, &chart.to_string(), None)
+        .await
+        .unwrap();
+    let rows = &pane.list.rows;
+    let stopped = rows.iter().find(|r| !r.current).expect("the stopped line");
+    let version = &stopped.versions[0];
+    assert!(version.restored && !version.can_settle && !version.open);
+    assert!(
+        version.settled[0].starts_with("restored by "),
+        "{version:?}"
+    );
+    let restored = rows.iter().find(|r| r.current).expect("the restored line");
+    assert_eq!(restored.replaced.len(), 1, "{restored:?}");
+    assert!(
+        restored.replaced[0].starts_with("replaced: metoprolol"),
+        "{restored:?}"
+    );
 }
 
 /// Review Focus 2: the restore line is not a duplicate of the line it will stop, so it keeps

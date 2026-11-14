@@ -654,3 +654,33 @@ li > button.allergy-write {
 .med-versions {
   color: var(--muted);
 }
+
+/* Slice 2b: how a version was settled, a line of its own under the version's words; its two
+   buttons and its check row beside it. "replaced:" under a restore's line reads as a flag does. */
+.med-version-settled {
+  display: block;
+  margin-left: 1rem;
+}
+
+.med-version-act {
+  margin: 0.2rem 0.4rem 0.2rem 0;
+}
+
+.med-version-said {
+  margin: 0.2rem 0;
+}
+
+.med-version-check {
+  margin: 0.3rem 0 0.3rem 1rem;
+}
+
+.med-version-check label,
+.med-version-check input,
+.med-version-check button {
+  margin-right: 0.4rem;
+}
+
+tr[data-replaced="true"] td {
+  color: var(--muted);
+  font-style: italic;
+}

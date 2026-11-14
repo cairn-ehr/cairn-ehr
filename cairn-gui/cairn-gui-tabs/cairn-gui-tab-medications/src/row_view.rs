@@ -10,14 +10,17 @@
 //! comes in as `targets`, the set `view::build_view` computed with ONE call to the shared
 //! `sign_off_targets` rule — the rule the node's orchestrator uses — so the badge on a row and
 //! the count on the button can never disagree (see the `view` module doc).
-use crate::hold_view::{cessation_detail, hold_view, stopped_record_detail, HoldView};
+use crate::hold_view::{
+    cessation_detail, hold_view, local_instant, stopped_record_detail, HoldView,
+};
 use cairn_medication_view::{
     short_kid, withheld_reasons, MedicationRow, MedicationStatus, VouchState,
     SEPARATION_INSTRUCTION,
 };
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use serde::Serialize;
 use std::collections::HashSet;
+use std::fmt::Display;
 use uuid::Uuid;
 
 /// One rendered drug line.
@@ -89,12 +92,45 @@ pub struct MedListRowView {
     /// ([`version_line`]); the window draws them collapsed under the line. Empty here: only the
     /// window, which reads them, fills it ([`versions_under`]).
     pub versions: Vec<VersionView>,
+    /// On a line that restored a set-aside version (slice 2b): the line it replaced, worded
+    /// ([`settle_words`]'s `Replaced`), so the stopped line is never silently gone. Filled by the
+    /// window, as `versions`.
+    pub replaced: Vec<String>,
 }
 
 /// One set-aside version as the line shows it, collapsed: never a current medication.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VersionView {
     pub line: String,
+    /// The version's id: what "Use this version instead" and "Checked: not current" send.
+    pub version_id: String,
+    /// How it was settled, oldest first, each in [`settle_words`]' words; empty = never settled.
+    pub settled: Vec<String>,
+    /// Still to check: never checked nor restored, beside a CURRENT line ([`versions_under`]).
+    /// The summary's "{u} to check" counts these; it is a Rust answer, never a JS count of words.
+    pub open: bool,
+    /// The two buttons are offered: the version is on the OPENED chart (never a linked chart's,
+    /// spec §2) and not restored. A checked version keeps them: a check locks nothing.
+    pub can_settle: bool,
+    /// A restore line was charted from this version.
+    pub restored: bool,
+}
+
+/// `{who}` when the signer's name cannot be read as a person's (Global Constraints' copy).
+pub const SIGNER_NOT_KNOWN: &str = "signer not known";
+
+/// What one settle line says (slice 2b): a check or a restore of a version, or — under the new
+/// line — the line a restore replaced, with its twin spelling.
+#[derive(Debug, Clone, Copy)]
+pub enum SettleLine<'a> {
+    Checked {
+        source: &'a str,
+        why: Option<&'a str>,
+    },
+    Restored,
+    Replaced {
+        line: &'a str,
+    },
 }
 
 /// Shown instead of a blank cell. Principle 4: an unrecorded dose is a recordable state,
@@ -173,6 +209,7 @@ pub(crate) fn build_row(
         allergy_notes: vec![],
         allergy_unverified: false,
         versions: vec![],
+        replaced: vec![],
     }
 }
 
@@ -187,13 +224,54 @@ pub fn version_line(source: &str, drug_line: &str, why: Option<&str>) -> String 
     }
 }
 
-/// The versions `versions` (`(alternative_to, its line)`) set aside beside one of `row`'s member
-/// threads, in the order given — never another line's, though it be the same drug. Pure.
-pub fn versions_under(row: &MedicationRow, versions: &[(Uuid, String)]) -> Vec<VersionView> {
-    versions
+/// One settle line (Global Constraints' copy), signed by `who` (`None`: [`SIGNER_NOT_KNOWN`]) at
+/// `at`, shown in `now`'s zone as the holds are (`local_instant`). Pure.
+pub fn settle_words<Tz: TimeZone>(
+    line: SettleLine<'_>,
+    who: Option<&str>,
+    at: &DateTime<Utc>,
+    now: &DateTime<Tz>,
+) -> String
+where
+    Tz::Offset: Display,
+{
+    let who = who.unwrap_or(SIGNER_NOT_KNOWN);
+    let when = local_instant(&at.to_rfc3339(), now);
+    match line {
+        SettleLine::Checked { source, why } => {
+            let said = format!("checked by {who}, {when}: not current — from {source}");
+            match why {
+                Some(why) => format!("{said} — {why}"),
+                None => said,
+            }
+        }
+        SettleLine::Restored => format!("restored by {who}, {when}"),
+        SettleLine::Replaced { line } => format!("replaced: {line} — {who}, {when}"),
+    }
+}
+
+/// The items `(thread, item)` whose thread is one of `row`'s member threads, in the order given:
+/// a version under the line it was set aside beside, a "replaced:" under the restore's own line —
+/// never another line's, though it be the same drug. Pure.
+pub fn under_line<T: Clone>(row: &MedicationRow, items: &[(Uuid, T)]) -> Vec<T> {
+    items
         .iter()
         .filter(|(to, _)| row.members.iter().any(|m| m.medication_id == *to))
-        .map(|(_, line)| VersionView { line: line.clone() })
+        .map(|(_, item)| item.clone())
+        .collect()
+}
+
+/// The versions (`(alternative_to, its view)`) under `row` ([`under_line`]), each `open` only
+/// when nothing settled it and the line is current: a stopped line's versions have nothing left
+/// to compete with (ruling R3), so they are not "to check", though they keep their buttons. Pure.
+pub fn versions_under(row: &MedicationRow, versions: &[(Uuid, VersionView)]) -> Vec<VersionView> {
+    let current = row.status == MedicationStatus::Active;
+    under_line(row, versions)
+        .into_iter()
+        .map(|v| VersionView {
+            open: current && !v.restored && v.settled.is_empty(),
+            ..v
+        })
         .collect()
 }
 
@@ -329,3 +407,7 @@ fn flags(row: &MedicationRow) -> Vec<String> {
 #[cfg(test)]
 #[path = "row_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "row_view_versions_tests.rs"]
+mod versions_tests;

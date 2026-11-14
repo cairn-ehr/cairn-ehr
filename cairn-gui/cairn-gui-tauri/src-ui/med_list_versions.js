@@ -1,7 +1,9 @@
 // Batch charting slice 2a on the medication list (design §3.1, §3.5): "From:" above the list;
 // each line's own source and "Why" (closed until opened); "Set aside", with its "Version of
 // which line?" pick, and the set-aside line itself; and, on the charted list, each line's
-// set-aside versions collapsed under it (`versionRows`, called by main.js's `renderRow`).
+// set-aside versions collapsed under it (`versionRows`, called by main.js's `renderRow`), each
+// with how it was settled and — slice 2b — its two buttons (med_versions_settle.js's
+// `settleControls`); and a restore line's mark (`restores_words`).
 //
 // What this file decides: nothing clinical. Which lines a line may be set aside beside
 // (`companions`), how the pick names them (`companion_words`), what "From:" stamps on a new line,
@@ -29,6 +31,8 @@ const SET_ASIDE_MARK = "set aside — not current";
 const WHICH_LINE = "Version of which line?";
 /** Under a charted line: "{n} other version(s)". */
 const OTHER_VERSIONS = " other version(s)";
+/** Then, while Rust counts any version still open (slice 2b): ", {u} to check". */
+const TO_CHECK = [", ", " to check"];
 /** Ruling R14, near Sign: "Sign also records {count} set-aside version(s), as not current". */
 const SIGN_ALSO = ["Sign also records ", " set-aside version(s), as not current"];
 /** The four fields a line holds of its own, sent back on every save (med_list.js's `contentOf`). */
@@ -87,6 +91,7 @@ function drawListVersions() {
   if (document.activeElement !== detail) detail.value = from.detail || "";
   const count = medList ? medList.versionsRecorded : 0; // Rust's, by Sign's grouping (R16)
   setMessage(el("med-list-versions-note"), count > 0 ? SIGN_ALSO[0] + count + SIGN_ALSO[1] : "");
+  syncSettleButtons(); // the versions' own buttons, down while the list's are (med_versions_settle.js)
 }
 
 /**
@@ -151,6 +156,7 @@ function versionControls(line) {
   const own = {
     box, summary, preset, detail, why,
     source: cell("p", "", { class: "med-list-source" }),
+    restores: cell("p", "", { class: "med-list-restores" }),
     setAside: cell("button", SET_ASIDE, { type: "button", class: "med-list-set-aside", "aria-pressed": "false" }),
     which: cell("p", "", { class: "med-list-which" }),
     whichKey: null, // the candidates the pick's buttons were made for
@@ -159,7 +165,7 @@ function versionControls(line) {
   detail.addEventListener("input", () => sourceChosen(line, false));
   why.addEventListener("input", () => ownChanged(line, { why: why.value }));
   own.setAside.addEventListener("click", () => pressSetAside(line));
-  r.li.append(own.source, own.setAside, own.which, box);
+  r.li.append(own.source, own.restores, own.setAside, own.which, box);
   return own;
 }
 
@@ -197,6 +203,9 @@ function drawLineVersions(line) {
   const marks = saved ? line.view.companions : [];
   const words = saved ? line.view.companion_words : [];
   setMessage(own.source, sourceWords(line.content));
+  // A restore line's mark, Rust's words as given; kept while the line is typed (its view is down).
+  if (line.view) line.restoresWords = line.view.restores_words || "";
+  setMessage(own.restores, line.restoresWords || "");
   // Named for their line, as its tick and Remove are (ruling R19).
   const text = line.snapshot ? line.snapshot.text : line.content.line_text;
   own.setAside.setAttribute("aria-label", SET_ASIDE + ": " + text);
@@ -324,7 +333,8 @@ function unmarkVersionsOf(gone) {
 }
 
 /** A charted line's set-aside versions (Rust's `versions`, worded there), collapsed under it in
- *  one closed `<details>`: "{n} other version(s)", then each version. None: no row. */
+ *  one `<details>`, closed until the clinician opens it: "{n} other version(s)" (", {u} to check"
+ *  while Rust says any is `open`), then each version. None: no row. */
 function versionRows(row) {
   if (row.versions.length === 0) return [];
   const tr = document.createElement("tr");
@@ -332,12 +342,24 @@ function versionRows(row) {
   const td = document.createElement("td");
   td.colSpan = 5;
   const box = cell("details", "", { class: "med-versions" });
+  keepOpen(box, row.group_id); // open again after a redraw if it was (med_versions_settle.js)
   const list = document.createElement("ul");
-  list.append(...row.versions.map((version) => cell("li", version.line)));
-  box.append(cell("summary", row.versions.length + OTHER_VERSIONS), list);
+  list.append(...row.versions.map((version) => versionItem(version, row.group_id)));
+  const toCheck = row.versions.filter((version) => version.open).length;
+  const said = row.versions.length + OTHER_VERSIONS + (toCheck > 0 ? TO_CHECK[0] + toCheck + TO_CHECK[1] : "");
+  box.append(cell("summary", said), list);
   td.append(box);
   tr.append(td);
   return [tr];
+}
+
+/** One version: its line, then each settlement as a further line of the same `li` (Rust's words,
+ *  oldest first), then its buttons and its check row (med_versions_settle.js's hook). */
+function versionItem(version, groupId) {
+  const li = cell("li", version.line);
+  for (const words of version.settled) li.append(cell("span", words, { class: "med-version-settled" }));
+  li.append(...settleControls(version, groupId));
+  return li;
 }
 
 presetOptions(el("med-list-from-preset"));

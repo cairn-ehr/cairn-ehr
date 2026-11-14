@@ -11,7 +11,7 @@ use crate::commands::tests::fields_read_in;
 use crate::med_chart_webview_tests::not_hidden_by_css;
 use crate::med_list_webview_tests::{in_the_pane, LIST_JS};
 use crate::source_guard::{js_const, js_fn, position};
-use cairn_gui_tab_medications::{build_view, VersionView};
+use cairn_gui_tab_medications::build_view;
 use cairn_medication_view::fixtures::sample_chart;
 use cairn_node::medication::draft_versions::info_source_of;
 
@@ -149,7 +149,7 @@ fn the_why_field_is_closed_until_opened() {
         "const summary = cell(\"summary\", WHY_LABEL);",
         "box.append(summary, fromLabel, detail, why);",
         "why.addEventListener(\"input\", () => ownChanged(line, { why: why.value }));",
-        "r.li.append(own.source, own.setAside, own.which, box);",
+        "r.li.append(own.source, own.restores, own.setAside, own.which, box);",
     ] {
         assert!(make.contains(step), "{step}: {make}");
     }
@@ -307,16 +307,15 @@ fn a_charted_line_shows_its_versions_collapsed() {
     for step in [
         "if (row.versions.length === 0) return [];",
         "const box = cell(\"details\", \"\", { class: \"med-versions\" });",
-        "cell(\"summary\", row.versions.length + OTHER_VERSIONS)",
-        "row.versions.map((version) => cell(\"li\", version.line))",
+        "const said = row.versions.length + OTHER_VERSIONS",
+        "box.append(cell(\"summary\", said), list);",
         "td.colSpan = 5;",
     ] {
         assert!(rows.contains(step), "{step}: {rows}");
     }
     not_hidden_by_css(".med-versions");
     // Every field read off a charted row and its versions is one Rust sends.
-    let sent = serde_json::to_value(VersionView { line: "l".into() }).unwrap();
-    assert_eq!(sent, serde_json::json!({ "line": "l" }));
+    // The version fields read here are pinned with 2b's (med_versions_settle_webview_tests.rs).
     let row = &build_view(&sample_chart()).rows[0];
     let row = serde_json::to_value(row).unwrap();
     for field in fields_read_in(VERSIONS_JS, "row") {
@@ -324,7 +323,7 @@ fn a_charted_line_shows_its_versions_collapsed() {
     }
     assert_eq!(
         fields_read_in(VERSIONS_JS, "version"),
-        ["line".to_string()].into()
+        ["line", "open", "settled"].map(String::from).into()
     );
     // Loaded with the list's scripts, before any chart is drawn.
     assert!(
