@@ -29,8 +29,9 @@ pub struct MedicationSetAside<'a> {
 }
 
 /// The payload: the assertion's body minus `medication_id`, plus `version_id` and
-/// `alternative_to`. `charted_as` / `warning_override` / `restores` / `stat` / `safety` are stripped: a set-aside
-/// version was never charted, never overridden a warning, and asserts no safety claim.
+/// `alternative_to`. `charted_as` / `warning_override` / `restores` / `stat` / `safety` are
+/// stripped: a set-aside version was never charted, never overridden a warning, and asserts no
+/// safety claim.
 pub fn set_aside_body(s: &MedicationSetAside) -> Value {
     debug_assert!(
         s.drug.safety.is_none(),

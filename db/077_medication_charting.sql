@@ -271,6 +271,8 @@ DECLARE
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
     -- Only JSON true is a stat order; absent, null or a peer's odd value reads "not stat".
+    -- `stat` lives in this one-winner row, so a later charting overlay of the thread without
+    -- `stat` clears it (ADR-0105, "not guaranteed": it follows the overlay winner).
     v_stat := coalesce(p -> 'stat' = 'true'::jsonb, false);
     v_comp := NULLIF(p #> '{substance,components}', 'null'::jsonb);
     IF jsonb_typeof(p #> '{warning_override,against}') = 'array' THEN

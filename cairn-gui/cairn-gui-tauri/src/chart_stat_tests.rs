@@ -77,3 +77,37 @@ fn two_stat_orders_under_one_row_show_the_given_one_and_offer_no_given() {
     assert_eq!(stat.medication_id, Uuid::from_u128(50).to_string());
     assert!(stat.can_give);
 }
+
+/// Two standing gives (given at once from two terminals) each offer "Entered in error"; a
+/// screen-reader user must tell the two buttons apart, so each give carries its own words (time
+/// given and giver, `give_words`), which `med_stat.js` puts in its button's accessible name.
+#[test]
+fn two_standing_gives_strike_buttons_are_named_apart() {
+    let mut o = order(10, true);
+    let mut later = o.gives[0].clone();
+    later.event_id = Uuid::from_u128(971);
+    later.given_at += chrono::TimeDelta::minutes(10);
+    later.giver = Some("RN Cy".into());
+    o.gives.push(later);
+    let mut shown = build_view(&sample_chart()).rows;
+    attach_stat(
+        &mut shown,
+        &sample_chart().rows,
+        &[o],
+        Uuid::from_u128(1),
+        &Local::now(),
+    );
+    let stat = shown
+        .iter()
+        .find_map(|r| r.stat.as_ref())
+        .expect("a stat line");
+    let words: Vec<_> = stat.gives.iter().map(|g| g.words.as_str()).collect();
+    assert!(
+        words[0].starts_with("given ") && words[0].ends_with(" RN Bo"),
+        "{words:?}"
+    );
+    assert!(
+        words[1].ends_with(" RN Cy") && words[0] != words[1],
+        "{words:?}"
+    );
+}

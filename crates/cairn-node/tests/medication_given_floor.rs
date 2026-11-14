@@ -188,6 +188,32 @@ async fn completes_naming_another_threads_or_no_stop_is_refused_at_the_authoring
     }
 }
 
+/// `completes` must name a stop of this line recorded on THIS chart: a stop of the same thread
+/// under ANOTHER patient_id (a peer's re-homed stop, admitted with a flag at the remote door, in
+/// the same transaction so only the chart differs) is refused at the authoring door.
+#[tokio::test]
+async fn completes_naming_this_lines_stop_on_another_chart_is_refused() {
+    rig!(c, sk, kid);
+    let (p, med) = chart(&c, &sk, &kid, true).await;
+    let elsewhere = Uuid::now_v7();
+    let mut stop = stop_body(&c, kid.as_str(), elsewhere, med).await;
+    stop.hlc = peer_hlc(db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000);
+    let stop_id: Uuid = stop.event_id.parse().unwrap();
+    c.batch_execute("BEGIN").await.unwrap();
+    apply_remote(&c, &sk, &stop)
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("a peer's stop of this thread under another chart");
+    let e = submit(&c, &sk, given(&c, &kid, p, med, Some(stop_id)).await)
+        .await
+        .expect_err("a stop recorded under another chart");
+    c.batch_execute("ROLLBACK").await.unwrap();
+    assert!(
+        e.contains("is not a stop of this line on this chart"),
+        "{e}"
+    );
+}
+
 #[tokio::test]
 async fn completes_on_a_line_that_is_not_a_stat_order_is_refused() {
     rig!(c, sk, kid);
@@ -289,6 +315,14 @@ async fn a_safety_claim_or_a_charting_key_is_refused_at_both_doors() {
             (json!("nope"), "payload"),
             (with("medication_id", json!("nope")), "medication_id"),
             (with("medication_id", json!(7)), "medication_id"),
+            (
+                with("medication_id", Value::Null),
+                "medication_id must be a uuid string",
+            ),
+            (
+                json!({"completes": null}),
+                "medication_id must be a uuid string",
+            ),
             (with("completes", json!("nope")), "completes"),
             (with("completes", json!(3)), "completes"),
             (with("charted_as", json!("started-here")), "charted_as"),

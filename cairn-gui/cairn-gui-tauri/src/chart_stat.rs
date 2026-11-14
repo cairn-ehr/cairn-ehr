@@ -7,7 +7,8 @@
 //! the tab crate (`stat_words`). A failed read is only said above the list ([`STAT_NOT_READ`],
 //! `ChartPane::stat_error`): no line then claims to know whether it was given.
 use cairn_gui_tab_medications::{
-    stat_words, struck_words, under_line, GiveIn, GiveView, MedListRowView, StatView, StatWordsIn,
+    give_words, stat_words, struck_words, under_line, GiveIn, GiveView, MedListRowView, StatView,
+    StatWordsIn,
 };
 use cairn_medication_view::{MedicationRow, MedicationStatus};
 use cairn_node::medication::stat_read::{read_stat_orders, StatOrder};
@@ -20,27 +21,24 @@ use uuid::Uuid;
 pub const STAT_NOT_READ: &str = "Stat doses could not be read: no line shows whether it was given";
 
 /// Every stat order over `charts`, read inside the chart's snapshot `tx` under its OWN savepoint:
-/// a failure rolls back only this read, never the snapshot the list was read in, and answers
-/// `Err(`[`STAT_NOT_READ`]`)` beside a list that still opens (availability over consistency, as
-/// the set-aside versions read).
+/// a failed read rolls back only itself, never the snapshot the list was read in, and answers
+/// `Ok(Err(`[`STAT_NOT_READ`]`))` beside a list that still opens (availability over consistency,
+/// as the set-aside versions read). A failed SAVEPOINT or ROLLBACK TO is the snapshot itself
+/// failing, so it is the outer `Err`, as `chart_versions` propagates it: a pane is never drawn
+/// from a dead transaction.
 pub(crate) async fn read_stat(
     tx: &Transaction<'_>,
     charts: &[Uuid],
-) -> Result<Vec<StatOrder>, String> {
-    let read = async {
-        tx.batch_execute("SAVEPOINT stat_read").await?;
-        match read_stat_orders(tx, charts).await {
-            Ok(orders) => Ok(orders),
-            Err(e) => {
-                tx.batch_execute("ROLLBACK TO SAVEPOINT stat_read").await?;
-                Err(e)
-            }
+) -> anyhow::Result<Result<Vec<StatOrder>, String>> {
+    tx.batch_execute("SAVEPOINT stat_read").await?;
+    match read_stat_orders(tx, charts).await {
+        Ok(orders) => Ok(Ok(orders)),
+        Err(e) => {
+            eprintln!("the stat orders could not be read: {e:#}");
+            tx.batch_execute("ROLLBACK TO SAVEPOINT stat_read").await?;
+            Ok(Err(STAT_NOT_READ.to_string()))
         }
-    };
-    read.await.map_err(|e: anyhow::Error| {
-        eprintln!("the stat orders could not be read: {e:#}");
-        STAT_NOT_READ.to_string()
-    })
+    }
 }
 
 /// Put each stat order's line under the drug line that holds its thread (`under_line`, on the
@@ -114,10 +112,12 @@ fn stat_view(o: &StatOrder, opened: Uuid, now: &DateTime<Local>) -> StatView {
         gives: o
             .gives
             .iter()
-            .filter(|g| g.struck.is_none())
-            .map(|g| GiveView {
+            .zip(&words.gives)
+            .filter(|(g, _)| g.struck.is_none())
+            .map(|(g, words_in)| GiveView {
                 event_id: g.event_id.to_string(),
                 can_strike: own,
+                words: give_words(words_in, now),
             })
             .collect(),
     }

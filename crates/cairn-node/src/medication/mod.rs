@@ -36,9 +36,9 @@ pub mod signoff;
 // Public for the CLI and the window: every production list read runs in one snapshot (#864).
 pub mod snapshot;
 // Charting slice 2: give a stat dose / strike a given (stat_give) and read them back (stat_read).
-// Slice 2b: settle a set-aside version (restore / check), and read the settlements back.
 pub mod stat_give;
 pub mod stat_read;
+// Slice 2b: settle a set-aside version (restore / check), and read the settlements back.
 pub mod version_settle;
 pub mod version_settle_read;
 mod withhold;

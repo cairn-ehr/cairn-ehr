@@ -74,6 +74,19 @@ fn stat_of(shown: &[MedListRowView], thread: u128) -> &StatView {
     line_of(shown, thread).stat.as_ref().expect("a stat line")
 }
 
+/// `stat` has one standing give, RN Bo's (event 70), offered "Entered in error" when `strike`,
+/// and named by its words ("given {g} RN Bo").
+fn the_one_give_is(stat: &StatView, strike: bool) {
+    let want = Uuid::from_u128(70).to_string();
+    let ok = |g: &GiveView| g.event_id == want && g.can_strike == strike;
+    let named = |g: &GiveView| g.words.starts_with("given ") && g.words.ends_with(" RN Bo");
+    assert!(
+        matches!(&stat.gives[..], [g] if ok(g) && named(g)),
+        "{:?}",
+        stat.gives
+    );
+}
+
 /// No dialog stands anywhere in this script (principle 3).
 fn no_dialog() {
     for banned in ["confirm(", "alert(", "prompt(", "<dialog", "showModal"] {
@@ -149,7 +162,7 @@ fn a_waiting_stat_line_shows_given() {
     let button = js_fn(STAT_JS, "statButton");
     for step in [
         "\"data-settle\": \"stat\",",
-        "\"aria-label\": label + \": \" + row.primary,",
+        "\"aria-label\": label + \": \" + row.primary + (about ? \", \" + about : \"\"),",
         "button.disabled = settleBlocked(\"stat\");",
     ] {
         assert!(button.contains(step), "{step}: {button}");
@@ -177,13 +190,7 @@ fn a_linked_charts_stat_line_shows_no_button() {
     assert!(!stat_of(&waiting, 10).can_give);
     let given = pane(&[order(40, other, vec![give(70, None)])]);
     let stat = stat_of(&given, 40);
-    assert_eq!(
-        stat.gives,
-        [GiveView {
-            event_id: Uuid::from_u128(70).to_string(),
-            can_strike: false
-        }]
-    );
+    the_one_give_is(stat, false);
     let rows = js_fn(STAT_JS, "statRows");
     assert!(
         rows.contains("for (const give of stat.gives) {")
@@ -299,13 +306,7 @@ fn a_given_row_reads_given_and_offers_entered_in_error() {
         "{}",
         stat.line
     );
-    assert_eq!(
-        stat.gives,
-        [GiveView {
-            event_id: Uuid::from_u128(70).to_string(),
-            can_strike: true
-        }]
-    );
+    the_one_give_is(stat, true);
     let struck = Strike {
         who: Some("RN Di".into()),
         at: Utc::now(),
@@ -333,7 +334,7 @@ fn a_given_row_reads_given_and_offers_entered_in_error() {
     assert_eq!(js_const(STAT_JS, "STRIKE"), "Entered in error");
     let rows = js_fn(STAT_JS, "statRows");
     assert!(
-        rows.contains("td.append(statButton(STRIKE, row, (event) => openStat(\"strike\", stat, give, row, event.target)));"),
+        rows.contains("td.append(statButton(STRIKE, row, (event) => openStat(\"strike\", stat, give, row, event.target), give.words));"),
         "{rows}"
     );
     drawn_under_the_line();

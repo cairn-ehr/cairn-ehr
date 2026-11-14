@@ -383,6 +383,23 @@ async fn a_failed_stat_read_still_opens_the_list() {
     assert_eq!(pane.list.rows.len(), 1, "the current line is still shown");
 }
 
+/// A failed SAVEPOINT is the snapshot failing, not the stat read: it propagates (as
+/// `chart_versions`), never a pane from a dead transaction with only [`STAT_NOT_READ`] above it.
+#[tokio::test]
+async fn a_failed_savepoint_propagates_and_is_not_stat_not_read() {
+    let Some((_guard, mut owner, _state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let tx = owner.transaction().await.unwrap();
+    tx.batch_execute("SELECT 1/0")
+        .await
+        .expect_err("aborts the tx");
+    let e = crate::chart_stat::read_stat(&tx, &[chart]).await;
+    let e = e.expect_err("a SAVEPOINT in an aborted transaction propagates");
+    assert!(format!("{e:#}").contains("aborted"), "{e:#}");
+}
+
 /// Bea's key as the node-level acts below sign it: what reaches the chart from ANOTHER terminal
 /// or a peer, which this window would refuse to offer (a second give, a real stop on a given line).
 async fn bea(state: &AppState) -> (cairn_event::SigningKey, String) {

@@ -17,7 +17,9 @@ pub use row_view::{
     settle_words, under_line, version_line, versions_under, SettleLine, VersionView,
     SIGNER_NOT_KNOWN,
 };
-pub use stat_view::{stat_words, struck_words, GiveIn, GiveView, StatView, StatWordsIn};
+pub use stat_view::{
+    give_words, stat_words, struck_words, GiveIn, GiveView, StatView, StatWordsIn,
+};
 pub use view::{build_view, MedListRowView, MedListView};
 
 use cairn_gui_tab::context::Context;

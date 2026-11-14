@@ -84,7 +84,8 @@ fn a_strike_says_waiting_again_only_when_the_order_is_waiting_after_it() {
 }
 
 /// A give or strike that LANDED answers Ok even when the pane could not be read again: an error
-/// would offer a retry, and a retry gives the dose twice.
+/// would read as "not recorded" and offer a retry, the retry would only be refused as stale
+/// (`STAT_NOT_OPEN`), and the clinician would be left believing a dose they gave went unrecorded.
 #[test]
 fn a_landed_act_whose_reread_failed_still_answers_ok() {
     let said = landed("Given.", Err("the lock was lost".into()));

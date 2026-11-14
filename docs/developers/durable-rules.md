@@ -10,8 +10,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
-**⇒ CHARTING SLICE 2 — A STAT DOSE, ORDERED THEN GIVEN (ADR-0105, db/082; db/031 + db/037 + db/039 + db/048 +
-db/060 + db/077 + db/079 in place) — do not undo**
+**⇒ CHARTING SLICE 2 — A STAT DOSE, ORDERED THEN GIVEN (ADR-0105, db/082; db/005 + db/020 + db/031 + db/037 +
+db/039 + db/048 + db/060 + db/077 + db/079 + db/080 in place) — do not undo**
 (pins: in `crates/cairn-node/tests/`, `medication_given_floor.rs`, `medication_given_retraction_floor.rs`,
 `medication_given_retraction_race.rs`, `medication_stat_give.rs`; `db/tests/082_medication_given_test.sql`;
 `crates/cairn-event/src/medication/charting_tests.rs` and `given.rs`; in `cairn-gui/cairn-gui-tauri/src/`,

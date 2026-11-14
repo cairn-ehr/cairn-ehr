@@ -74,7 +74,7 @@ pub(crate) async fn read_chart_and_versions(
                 Err(VERSIONS_NOT_READ.to_string())
             }
         };
-        let stat = crate::chart_stat::read_stat(tx, charts).await;
+        let stat = crate::chart_stat::read_stat(tx, charts).await?;
         Ok((list, versions, stat))
     })
     .await

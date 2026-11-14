@@ -81,7 +81,7 @@ pub(crate) fn struck_outcome(waiting_again: bool) -> &'static str {
     }
 }
 
-/// What an act that LANDED answers: always an Ok (as `med_version_check::checked`): the pane
+/// What an act that LANDED answers (a give, a strike, a version checked): always an Ok: the pane
 /// read again, or a sentence saying it was signed and how to see it — never an error. An error
 /// would read as "not recorded" and be offered for retry; the retry would only be refused as
 /// stale (`STAT_NOT_OPEN`), and the clinician would be left believing a dose they gave went

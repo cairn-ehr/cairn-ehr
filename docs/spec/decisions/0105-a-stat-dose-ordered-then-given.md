@@ -51,7 +51,8 @@ The maintainer ruled on four questions (2026-11-14):
    JSON `true`; anything else is refused. The projection is a new column, `medication_charting.stat` (boolean, NOT
    NULL, default false, so every older row reads "not stat"). The floor does not compare the key with the `sig`.
 3. **A set-aside version never carries it.** `set_aside_body` strips it, and `db/079` refuses it at both doors even as
-   JSON null, as it refuses `charted_as`, `warning_override` and `restores`.
+   JSON null, as it refuses `charted_as`, `warning_override` and `restores`. So does `db/080` on a "checked: not
+   current" (in place).
 4. **The window signs it only on a pure one-off *Start* line (maintainer, Q2).** `med_stat::is_stat_order` is true
    when the press is *Start medication*, the directions read `stat`, and they carry no frequency and no `prn`.
    "1g iv stat then daily" is a regimen whose first dose is given now, and "prn stat" means "when needed"; neither may
@@ -245,9 +246,9 @@ The maintainer ruled on four questions (2026-11-14):
   initial, note) → *M* = 1 → *K* = 1 press + the optional why + Sign. Reading: *K* = 0, the words are on the row.
   Budget: ≤ 3 s from the press to a given recorded at now.
 - ADR-0099's limit (f) ends here; ADR-0099 itself is not edited, since ADRs are immutable.
-- `SCHEMA_GENERATION` moves 81 to 82 (`db/082` is a new file). The `db/031`, `db/037`, `db/039`, `db/048`, `db/060`,
-  `db/077` and `db/079` edits, and a comment in `db/005`, are in place and reach an existing database by the content
-  hash ([ADR-0080](0080-a-connect-replays-the-schema-only-when-it-changed.md)).
+- `SCHEMA_GENERATION` moves 81 to 82 (`db/082` is a new file). The `db/005`, `db/020`, `db/031`, `db/037`, `db/039`,
+  `db/048`, `db/060`, `db/077`, `db/079` and `db/080` edits are in place and reach an existing database by the
+  content hash ([ADR-0080](0080-a-connect-replays-the-schema-only-when-it-changed.md)).
 - The given is Cairn's first administration event. A future record reuses the type with `completes` null; a stat
   order's give stays paired to its stop by `completes`.
 - `completes` bound to a stop of the same transaction is the floor's first use of `xmin` to tie two events signed as

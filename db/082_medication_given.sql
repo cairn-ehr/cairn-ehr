@@ -264,7 +264,11 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --       check, the strike on `voids` after cairn_lock_shred_refold() — and whichever comes second
 --       waits, then reads the first's committed rows on its next statement (db/059's #855 idiom).
 --       Keyed per stop, so unrelated stops never wait. Lock order: shred-refold → per-stop, as in
---       a shred whose re-fold replays a stop. NOT taken inside cairn_reproject (db/039 marks it
+--       a shred whose re-fold replays a stop. One transaction takes them the other way round: one
+--       that applies stop Y and THEN any strike holds per-stop(Y) before that strike asks for
+--       shred-refold, so it can meet a concurrent strike of Y (holding shred-refold, waiting
+--       on per-stop(Y)) in a cycle. Postgres aborts one side with 40P01 — a retryable failure
+--       that wrote nothing, as in (a). NOT taken inside cairn_reproject (db/039 marks it
 --       with cairn.reprojecting): a rebuild replays every stop in one transaction and one lock per
 --       stop would exhaust max_locks_per_transaction (db/005's reason for keeping per-event locks
 --       out of heals). Pinned by medication_given_retraction_race.rs, both orders.

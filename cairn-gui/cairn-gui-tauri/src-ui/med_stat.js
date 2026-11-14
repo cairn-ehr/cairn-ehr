@@ -76,13 +76,15 @@ function localMinute(d) {
   return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) + "T" + two(d.getHours()) + ":" + two(d.getMinutes());
 }
 
-/** A button on `row`'s stat line, named for its drug, down while a Sign or a list act is. */
-function statButton(label, row, press) {
+/** A button on `row`'s stat line, named for its drug (and, for a give's "Entered in error",
+ *  `about`: that give's time and giver, so two gives' buttons are told apart), down while a Sign
+ *  or a list act is. */
+function statButton(label, row, press, about) {
   const button = cell("button", label, {
     type: "button",
     class: "med-stat-act",
     "data-settle": "stat",
-    "aria-label": label + ": " + row.primary,
+    "aria-label": label + ": " + row.primary + (about ? ", " + about : ""),
   });
   button.disabled = settleBlocked("stat");
   button.addEventListener("click", press);
@@ -104,7 +106,7 @@ function statRows(row) {
   if (stat.can_give) td.append(statButton(GIVE, row, (event) => openStat("give", stat, null, row, event.target)));
   for (const give of stat.gives) {
     if (!give.can_strike) continue;
-    td.append(statButton(STRIKE, row, (event) => openStat("strike", stat, give, row, event.target)));
+    td.append(statButton(STRIKE, row, (event) => openStat("strike", stat, give, row, event.target), give.words));
   }
   const said = cell("p", statSaid.get(stat.medication_id) || "", { class: "med-stat-said allergy-field-error", "data-stat-said": stat.medication_id });
   said.hidden = !statSaid.has(stat.medication_id);

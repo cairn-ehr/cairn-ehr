@@ -38,6 +38,8 @@ pub struct GiveView {
     pub event_id: String,
     /// "Entered in error" is offered: the give is on the OPENED chart (never a linked chart's).
     pub can_strike: bool,
+    /// [`give_words`]: names its "Entered in error" apart from another standing give's.
+    pub words: String,
 }
 
 /// A stat order, as its words need it (ruling R3).
@@ -92,7 +94,7 @@ where
         parts.push(format!("ordered {ordered}"));
     }
     for (i, g) in standing.iter().enumerate() {
-        let given = format!("given {} {}", when(&g.given_at, now), name(&g.giver));
+        let given = give_words(g, now);
         parts.push(if i + 1 == before {
             format!("{given}, before it was charted {ordered}")
         } else {
@@ -103,6 +105,14 @@ where
         parts.push("not yet given".into());
     }
     parts.join(" · ")
+}
+
+/// One give as the stat line says it: `"given {g} {giver}"`. Pure.
+pub fn give_words<Tz: TimeZone>(g: &GiveIn, now: &DateTime<Tz>) -> String
+where
+    Tz::Offset: Display,
+{
+    format!("given {} {}", when(&g.given_at, now), name(&g.giver))
 }
 
 /// One line per STRUCK give, oldest first (Global Constraints): `"given {g} {giver} — entered in
@@ -121,9 +131,8 @@ where
         .into_iter()
         .map(|(g, (who, at, why))| {
             let line = format!(
-                "given {} {} — entered in error by {}, {}",
-                when(&g.given_at, now),
-                name(&g.giver),
+                "{} — entered in error by {}, {}",
+                give_words(g, now),
                 name(who),
                 when(at, now)
             );
