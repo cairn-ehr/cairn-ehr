@@ -227,6 +227,18 @@ async fn read_stat_orders_names_orderer_and_giver_in_time_order() {
         .iter()
         .all(|g| g.giver.as_deref() == Some(NOTE_AUTHOR)));
     assert!(o.gives.iter().all(|g| g.completes));
+    // The time given is the one the clinician named (30 and 5 minutes ago), not the time of signing.
+    let ago = |g: &cairn_node::medication::stat_read::Give| (Utc::now() - g.given_at).num_seconds();
+    assert!(
+        (ago(&o.gives[0]) - 30 * 60).abs() < 120,
+        "early give at {}s ago",
+        ago(&o.gives[0])
+    );
+    assert!(
+        (ago(&o.gives[1]) - 5 * 60).abs() < 120,
+        "late give at {}s ago",
+        ago(&o.gives[1])
+    );
     // Another chart's read never sees it.
     assert!(read_stat_orders(&r.c, &[Uuid::now_v7()])
         .await
@@ -271,4 +283,40 @@ async fn waiting_is_true_until_a_standing_give() {
     assert!(!read(&r).await.waiting(), "given");
     r.strike(r.chart, g, None).await.unwrap();
     assert!(read(&r).await.waiting(), "the give was struck");
+}
+
+/// An orphan or another chart's row is never returned or attached: both joins carry the chart.
+#[tokio::test]
+async fn rows_of_another_chart_are_never_joined() {
+    db_test!(base);
+    let mut r = rig(&base).await;
+    let med = r.order(r.chart, true, true).await;
+    let g = r.give(r.chart, med, 5).await.unwrap().value;
+    let other = Uuid::now_v7();
+    submit_registration(&r.c, &r.nsk, &r.nkid, other, 0).await;
+    // A charting row for a NEW thread on `other` whose statement sits on r.chart (a peer's mismatch),
+    // and a copy of the give filed under `other`.
+    let m2 = Uuid::now_v7().to_string();
+    r.c.batch_execute(&format!(
+        "CREATE TEMP TABLE s AS SELECT * FROM medication_statement WHERE medication_id = '{med}'; \
+         UPDATE s SET medication_id = '{m2}'; INSERT INTO medication_statement SELECT * FROM s; \
+         CREATE TEMP TABLE ch AS SELECT * FROM medication_charting WHERE medication_id = '{med}'; \
+         UPDATE ch SET medication_id = '{m2}', patient_id = '{other}'; INSERT INTO medication_charting SELECT * FROM ch; \
+         CREATE TEMP TABLE gv AS SELECT * FROM medication_given WHERE event_id = '{g}'; \
+         UPDATE gv SET patient_id = '{other}', content_address = '\\x00'::bytea; INSERT INTO medication_given SELECT * FROM gv;"
+    ))
+    .await
+    .unwrap();
+    let orders = read_stat_orders(&r.c, &[r.chart, other]).await.unwrap();
+    assert_eq!(
+        orders.len(),
+        1,
+        "the mismatched charting row is not an order"
+    );
+    assert_eq!(orders[0].medication_id, med);
+    assert_eq!(
+        orders[0].gives.len(),
+        1,
+        "the other chart's give is not attached"
+    );
 }
