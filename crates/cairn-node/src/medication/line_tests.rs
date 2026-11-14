@@ -93,7 +93,12 @@ fn term_to_sign_keeps_what_was_typed_unless_unfinished() {
 fn term_to_sign_completes_to_the_matched_name() {
     let (epi, adr) = (Some("epinephrine"), Some("adrenaline"));
     assert_eq!(term_to_sign("adren", epi, adr), "adrenaline");
-    assert_eq!(term_to_sign("Adrenaline", epi, adr), "adrenaline");
+    // The clinician's own capitals are kept when they typed the whole name (final review M2).
+    assert_eq!(term_to_sign("Adrenaline", epi, adr), "Adrenaline");
+    assert_eq!(
+        term_to_sign("5-FU", Some("fluorouracil"), Some("5-fu")),
+        "5-FU"
+    );
     assert_eq!(term_to_sign(" adren ", epi, adr), "adrenaline");
     // The door named the alias, so "epi" was not what found it: the clinician's words stay.
     assert_eq!(term_to_sign("epi", epi, adr), "epi");

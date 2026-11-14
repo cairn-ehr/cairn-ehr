@@ -32,6 +32,15 @@ the tab crate's `row_view_tests.rs`).
   would then sign "adren". `matched` must ride with a draft line's saved parts for the same reason (a reopened line
   signs after a restart). Pins: `term_to_sign_completes_to_the_matched_name`,
   `a_picked_alias_signs_the_matched_name`.
+- **Of one drug's names, the match prefers a name the typed text STARTS before the shorter one** (db/076 §1c's
+  `ORDER BY`). **Tempting wrong fix:** "shortest name first is simpler". "adren" would then take the racemate's
+  "Racemic Adrenaline", which `term_to_sign` cannot complete to, and Sign would record the unfinished "adren". Only
+  UNII names are lower-cased; a MeSH name keeps its case ("5-FU"). Pin:
+  `alias_names_find_the_drug_and_say_which_name_matched`.
+- **The by-name allergy check reads a drug-coded allergen's drug name as well as its term** (`check.rs` `pair`).
+  **Tempting wrong fix:** "the term is the allergen's name". An allergy typed "adrenaline" (now findable) and coded
+  to epinephrine would then leave an uncoded "epinephrine" line "not checked". Pin:
+  `a_coded_allergens_drug_name_marks_an_uncoded_line`.
 - **The allergy bracket keys on `drugref-moiety` only** (`allergen_name`). A group-coded entry keeps its words, and the
   by-name check still reads `term`. **Tempting wrong fix:** bracket every coded entry ("Penicillins (allergy group)
   (penicillin)"), or feed `allergen_name` to the check (the brackets would then stop a by-name match). Pin:

@@ -266,6 +266,8 @@ pub fn term_to_sign(
 ) -> String {
     let typed = typed.trim();
     match picked_matched.or(picked_display) {
+        // The whole name typed, in the clinician's own case ("5-FU", "Adrenaline"): their words.
+        Some(p) if p.to_lowercase() == typed.to_lowercase() => typed.to_string(),
         Some(p) if p.to_lowercase().starts_with(&typed.to_lowercase()) => p.to_string(),
         _ => typed.to_string(),
     }

@@ -105,6 +105,24 @@ fn a_picked_alias_signs_the_matched_name() {
     assert_eq!(parts[0].coding.as_ref().unwrap().display, "epinephrine");
 }
 
+/// Final review M5: a draft line's parts are saved as `PartArg` JSON (`med_list.rs`) and read back
+/// at Sign (`med_list_judge.rs`), so `matched` must survive the round trip — or a reopened
+/// "adren" line signs "adren" — and must be absent (not `null`) when there is none.
+#[test]
+fn a_saved_part_keeps_its_matched_name() {
+    let mut coding = coded(Uuid::from_u128(0xE91), "epinephrine");
+    coding.as_mut().unwrap().matched = Some("adrenaline".into());
+    let saved = serde_json::to_value(vec![part("adren", coding)]).unwrap();
+    let back: Vec<PartArg> = serde_json::from_value(saved).unwrap();
+    assert_eq!(
+        back[0].coding.as_ref().unwrap().matched.as_deref(),
+        Some("adrenaline")
+    );
+    let plain =
+        serde_json::to_value(part("amox", coded(Uuid::from_u128(1), "amoxicillin"))).unwrap();
+    assert!(plain["coding"].get("matched").is_none(), "{plain}");
+}
+
 /// Ruling R22: a combination signs its parts' signed terms joined " + " — "amox + clav" with
 /// both picked is "amoxicillin + clavulanic acid", the generic names the record displays — and
 /// an unpicked part keeps its typed words. The check reads every part under the signed term AND

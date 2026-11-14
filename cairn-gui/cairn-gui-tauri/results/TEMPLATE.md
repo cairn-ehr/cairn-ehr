@@ -1029,14 +1029,14 @@ Steps: on paper *N* = 1 act → observed \_\_ picks and \_\_ Signs.
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
-| *adren* lists "adrenaline → epinephrine" in both picks | | |
-| The list reads "epinephrine (adrenaline)"; the signed term is `adrenaline` | | |
-| `adren` left unfinished at the pick signs `adrenaline` | | |
+| *adren* lists "Adrenaline → epinephrine" in both picks (rank: record, #1122) | | |
+| The list reads "epinephrine (adrenaline)"; the signed term is `adrenaline` (own case kept) | | |
+| `adren` left unfinished at the pick signs `Adrenaline` | | |
 | *cefalexin* lists both cephalexin rows | | |
-| A batch line saved and reopened still signs `adrenaline` | | |
-| An allergy by *ligno*: field "lignocaine", strip and line "lidocaine (lignocaine)" | | |
+| A batch line saved and reopened still signs `Adrenaline` | | |
+| An allergy by *ligno*: field "Lignocaine", strip and line "lidocaine (Lignocaine)" | | |
 | A group-coded allergy keeps its words, no bracket | | |
-| `lidocaine` charted against it: tagged **Allergy** | | |
+| `lidocaine` charted against it, coded and uncoded: tagged **Allergy** both times | | |
 | `drugref_allergy` back in place: *adren* finds nothing, *amox* still finds amoxicillin | | |
 
 | Accessibility check | Verdict | Notes |

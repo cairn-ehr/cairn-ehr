@@ -13,7 +13,8 @@
 -- The rows are the names `drugref_synonyms` (a real drugref on :5532) holds for these moieties:
 --   mesh_synonym   Adrenaline → epinephrine, Lignocaine → lidocaine, Amoxycillin → amoxicillin
 --                  (amoxicillin is ALSO found by its display name: listed once), Cefalexin →
---                  cephalexin
+--                  cephalexin, and Racemic Adrenaline + "Adrenaline, Racemic Mixture" → the
+--                  racemate epinephrine,(+/-)- (two names of one drug, only one starting "adren")
 --   unii_official  ACETAMINOPHEN → paracetamol, CEFALEXIN → cephalexin anhydrous (so "cefalexin"
 --                  names TWO moieties: the pick lists both)
 -- Every uuid is computed (md5 of a label), never written out (house rule 6). amoxicillin is
@@ -21,7 +22,7 @@
 INSERT INTO drugref.substance_moiety (moiety_uuid, display_name)
 SELECT md5('stub moiety ' || n)::uuid, n
   FROM unnest(ARRAY['epinephrine', 'lidocaine', 'paracetamol', 'cephalexin',
-                    'cephalexin anhydrous']) n;
+                    'cephalexin anhydrous', 'epinephrine,(+/-)-']) n;
 
 CREATE TABLE drugref.moiety_official_name (
     moiety_uuid uuid   NOT NULL REFERENCES drugref.substance_moiety(moiety_uuid),
@@ -44,7 +45,11 @@ INSERT INTO drugref.moiety_mesh_synonym (moiety_uuid, name, mesh_ui, ingest_run)
 VALUES (md5('stub moiety epinephrine')::uuid, 'Adrenaline', 'D004837', 1),
        (md5('stub moiety lidocaine')::uuid, 'Lignocaine', 'D008012', 1),
        (md5('stub moiety amoxicillin')::uuid, 'Amoxycillin', 'D000658', 1),
-       (md5('stub moiety cephalexin')::uuid, 'Cefalexin', 'D002506', 1);
+       (md5('stub moiety cephalexin')::uuid, 'Cefalexin', 'D002506', 1),
+       -- Two other names of ONE drug where "adren" starts only the LONGER one (final review I1):
+       -- the door must take the one the text starts, or Sign keeps the unfinished "adren".
+       (md5('stub moiety epinephrine,(+/-)-')::uuid, 'Racemic Adrenaline', 'D004837', 1),
+       (md5('stub moiety epinephrine,(+/-)-')::uuid, 'Adrenaline, Racemic Mixture', 'D004837', 1);
 
 -- drugref db/071 §3's view, verbatim.
 CREATE VIEW drugref.moiety_name AS

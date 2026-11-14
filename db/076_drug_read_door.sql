@@ -58,9 +58,9 @@
 --                                                          UNII official, MeSH synonym. Without
 --                                                          it the picks search display names.
 --
--- Replay-safe: CREATE OR REPLACE with fixed return shapes (and one guarded DROP, below, for the
--- facts door's changed shape). plpgsql plans its queries when they RUN, so these functions load
--- on a node with no drugref schema at all.
+-- Replay-safe: CREATE OR REPLACE with fixed return shapes (and a guarded DROP, below, before each
+-- door whose shape changed: the facts door and the two picks). plpgsql plans its queries when
+-- they RUN, so these functions load on a node with no drugref schema at all.
 BEGIN;
 
 -- 1. Is there a drugref this door can read? True only when the owner may use the schema, may
@@ -129,8 +129,9 @@ $$;
 --     * With the names (§1b): any name of the drug may match, at a word start. When several of a
 --       drug's names match ("amox" finds amoxicillin AND its synonym Amoxycillin), the display
 --       name wins, then the shorter name, then byte order — so a drug is listed ONCE.
---     * `matched` is the name that found it, lower-cased (UNII spells names in capitals), or NULL
---       when that was the display name (or the same word in another case). The window draws
+--     * `matched` is the name that found it, or NULL when that was the display name (or the same
+--       word in another case). A UNII official name is lower-cased (UNII spells every name in
+--       capitals); a MeSH name keeps its own case, which can carry meaning ("5-FU", "L-Dopa"). The window draws
 --       "adrenaline → epinephrine" from it. It is never signed: the coding stays drugref's
 --       display name (ADR-0059).
 --     * A name two drugs share ("cefalexin": a MeSH synonym of cephalexin, the UNII official
@@ -147,12 +148,19 @@ BEGIN
         RETURN QUERY
             SELECT DISTINCT ON (n.moiety_uuid) n.moiety_uuid, m.display_name,
                    CASE WHEN n.name_kind = 'display' OR lower(n.name) = lower(m.display_name)
-                        THEN NULL ELSE lower(n.name) END
+                             THEN NULL
+                        WHEN n.name_kind = 'unii_official' THEN lower(n.name)
+                        ELSE n.name END
               FROM drugref.moiety_name n
               JOIN drugref.substance_moiety m ON m.moiety_uuid = n.moiety_uuid
              -- A leading space makes "the start of the name" one more word start.
              WHERE (' ' || n.name) ILIKE ('% ' || p_pat || '%') ESCAPE '\'
-             ORDER BY n.moiety_uuid, (n.name_kind <> 'display'), length(n.name),
+             -- A name the text STARTS beats one where it starts a later word ("adren" takes
+             -- "Adrenaline, Racemic Mixture" over the shorter "Racemic Adrenaline"): Sign
+             -- completes the typed text only to a name it starts (term_to_sign), so the other
+             -- would sign the unfinished "adren" (final review I1).
+             ORDER BY n.moiety_uuid, (n.name_kind <> 'display'),
+                      NOT (n.name ILIKE (p_pat || '%') ESCAPE '\'), length(n.name),
                       lower(n.name) COLLATE "C";
     ELSE
         RETURN QUERY

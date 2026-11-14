@@ -413,13 +413,14 @@ BEGIN
     ASSERT cairn_drug_names_available() IS TRUE, 'the names view is readable';
     ASSERT (SELECT array_agg(display || '|' || coalesce(matched, '-'))
               FROM cairn_drug_search('adren', 20) WHERE system = 'drugref-moiety')
-           = ARRAY['epinephrine|adrenaline'], 'an alias names itself, lower-cased';
+           = ARRAY['epinephrine|Adrenaline', 'epinephrine,(+/-)-|Adrenaline, Racemic Mixture'],
+        'an alias names itself; of one drug''s names, the one the text starts (final review I1)';
     ASSERT (SELECT array_agg(display || '|' || coalesce(matched, '-'))
               FROM cairn_drug_medication_search('amox', 20)) = ARRAY['amoxicillin|-'],
         'one drug once, display first';
     ASSERT (SELECT array_agg(display || '|' || coalesce(matched, '-'))
               FROM cairn_drug_medication_search('cefalexin', 20))
-           = ARRAY['cephalexin|cefalexin', 'cephalexin anhydrous|cefalexin'],
+           = ARRAY['cephalexin|Cefalexin', 'cephalexin anhydrous|cefalexin'],
         'a shared name lists both drugs';
 END $$;
 ROLLBACK;

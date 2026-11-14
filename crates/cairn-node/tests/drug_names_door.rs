@@ -75,6 +75,14 @@ async fn med_pick(c: &impl GenericClient, text: &str) -> Vec<String> {
     .collect()
 }
 
+/// Replay every migration, as an upgrade's connect does: clear the stamp, then connect again.
+async fn replay(c: &Client) -> Client {
+    db::force_schema_replay(c).await.unwrap();
+    db::connect_and_load_schema(&common::cs().unwrap())
+        .await
+        .unwrap()
+}
+
 async fn names_available(c: &impl GenericClient) -> bool {
     c.query_one("SELECT cairn_drug_names_available()", &[])
         .await
@@ -90,14 +98,20 @@ async fn alias_names_find_the_drug_and_say_which_name_matched() {
     let tx = c.transaction().await.unwrap();
     load(&tx, true).await;
     assert!(names_available(&tx).await, "control: the view is readable");
-    assert_eq!(allergy_pick(&tx, "adren").await, ["epinephrine|adrenaline"]);
+    // MeSH's own capitals are kept (only UNII's are lower-cased, final review M2); the racemate's
+    // name is the one "adren" STARTS, never the shorter "Racemic Adrenaline" (final review I1).
+    let adren = [
+        "epinephrine|Adrenaline",
+        "epinephrine,(+/-)-|Adrenaline, Racemic Mixture",
+    ];
+    assert_eq!(allergy_pick(&tx, "adren").await, adren);
     assert_eq!(
         allergy_pick(&tx, "acetam").await,
         ["paracetamol|acetaminophen"],
         "UNII's capitals are lower-cased"
     );
-    assert_eq!(allergy_pick(&tx, "ligno").await, ["lidocaine|lignocaine"]);
-    assert_eq!(med_pick(&tx, "adren").await, ["epinephrine|adrenaline"]);
+    assert_eq!(allergy_pick(&tx, "ligno").await, ["lidocaine|Lignocaine"]);
+    assert_eq!(med_pick(&tx, "adren").await, adren);
     assert_eq!(
         med_pick(&tx, "ACETAMINOPHEN").await,
         ["paracetamol|acetaminophen"]
@@ -117,7 +131,7 @@ async fn one_moiety_is_listed_once_display_first() {
     assert_eq!(med_pick(&tx, "amox").await, ["amoxicillin|-"]);
     assert_eq!(
         med_pick(&tx, "amoxy").await,
-        ["amoxicillin|amoxycillin"],
+        ["amoxicillin|Amoxycillin"],
         "only the synonym matches: it is named"
     );
     tx.rollback().await.unwrap();
@@ -132,7 +146,7 @@ async fn a_shared_name_lists_every_moiety_it_names() {
     };
     let tx = c.transaction().await.unwrap();
     load(&tx, true).await;
-    let both = ["cephalexin|cefalexin", "cephalexin anhydrous|cefalexin"];
+    let both = ["cephalexin|Cefalexin", "cephalexin anhydrous|cefalexin"];
     assert_eq!(allergy_pick(&tx, "cefalexin").await, both);
     assert_eq!(med_pick(&tx, "cefalexin").await, both);
     tx.rollback().await.unwrap();
@@ -186,8 +200,8 @@ async fn an_unreadable_or_reshaped_name_view_is_ignored() {
     .await
     .unwrap();
     assert_eq!(
-        med_pick(&tx, "adren").await,
-        ["epinephrine|adrenaline"],
+        med_pick(&tx, "ligno").await,
+        ["lidocaine|Lignocaine"],
         "control: the probe owner reads the view"
     );
     tx.batch_execute(
@@ -264,8 +278,11 @@ async fn a_replay_converges() {
     let Some((_g, c)) = rig().await else {
         return;
     };
-    db::force_schema_replay(&c).await.unwrap();
-    db::force_schema_replay(&c).await.unwrap();
+    // force_schema_replay only clears the stamp: the replay is the NEXT connect's. Twice, so the
+    // second replay runs over an already converged node.
+    for _ in 0..2 {
+        replay(&c).await;
+    }
     for (f, shape) in [
         (
             "cairn_drug_search(text, integer)",
@@ -294,15 +311,15 @@ async fn the_node_reads_the_matched_name() {
     };
     let tx = c.transaction().await.unwrap();
     load(&tx, true).await;
-    let allergy = search_drugs(&tx, "adren").await.unwrap().unwrap();
-    let med = search_medication_drugs(&tx, "adren", 20)
+    let allergy = search_drugs(&tx, "ligno").await.unwrap().unwrap();
+    let med = search_medication_drugs(&tx, "ligno", 20)
         .await
         .unwrap()
         .unwrap();
     for (which, found) in [("allergy", allergy), ("medication", med)] {
         assert_eq!(found.len(), 1, "{which}");
-        assert_eq!(found[0].display, "epinephrine", "{which}");
-        assert_eq!(found[0].matched.as_deref(), Some("adrenaline"), "{which}");
+        assert_eq!(found[0].display, "lidocaine", "{which}");
+        assert_eq!(found[0].matched.as_deref(), Some("Lignocaine"), "{which}");
     }
     let amox = search_medication_drugs(&tx, "amox", 20)
         .await
@@ -310,4 +327,39 @@ async fn the_node_reads_the_matched_name() {
         .unwrap();
     assert_eq!(amox[0].matched, None, "a display match names no other name");
     tx.rollback().await.unwrap();
+}
+
+/// Final review M5: a node still holding a door's OLD three-column shape is moved to the new one
+/// by a replay (the guarded DROP really drops, and the door is granted to the window again).
+/// Committed, because db/076 runs its own transaction; the replay restores the converged shape.
+#[tokio::test]
+async fn a_replay_moves_an_old_shape_to_the_new_one() {
+    let Some((_g, c)) = rig().await else {
+        return;
+    };
+    c.batch_execute(
+        "DROP FUNCTION cairn_drug_search(text, integer);
+         CREATE FUNCTION cairn_drug_search(p_text text, p_limit int)
+         RETURNS TABLE(system text, code text, display text)
+         LANGUAGE sql STABLE AS $$ SELECT NULL::text, NULL::text, NULL::text WHERE false $$;",
+    )
+    .await
+    .unwrap();
+    let c = replay(&c).await;
+    let row = c
+        .query_one(
+            "SELECT pg_get_function_result('cairn_drug_search(text, integer)'::regprocedure), \
+                    has_function_privilege('cairn_window', 'cairn_drug_search(text, integer)', 'EXECUTE')",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        row.get::<_, String>(0),
+        "TABLE(system text, code text, display text, matched text)"
+    );
+    assert!(
+        row.get::<_, bool>(1),
+        "the re-created door is the window's again"
+    );
 }

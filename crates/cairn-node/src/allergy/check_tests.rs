@@ -115,6 +115,28 @@ fn same_name_marks_an_uncoded_line() {
     assert_eq!(got[&id(901)], want);
 }
 
+/// Charting slice 3 (final review I2): an allergy recorded by a local name and coded ("adrenaline",
+/// coded to epinephrine) marks a line typed by the drug list's name and never picked
+/// ("epinephrine", uncoded) — the coded display is a name of the allergen too. With no drug list.
+#[test]
+fn a_coded_allergens_drug_name_marks_an_uncoded_line() {
+    let mut row = coded(
+        entry(1, "drug", "adrenaline", "allergy", "rash", 1),
+        MOIETY_SYSTEM,
+        AMOX,
+    );
+    row.coding.as_mut().unwrap().display = "epinephrine".into();
+    let got = run(
+        &only(vec![row]),
+        &[med(900, "Epinephrine", None)],
+        &DrugFacts::Unavailable,
+    );
+    assert_eq!(
+        got[&id(900)],
+        marks(&[("Allergy recorded: adrenaline → rash", 1)])
+    );
+}
+
 #[test]
 fn a_same_drug_answer_marks_the_line() {
     let a = only(vec![amox("urticaria")]);

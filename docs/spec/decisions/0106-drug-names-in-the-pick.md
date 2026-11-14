@@ -45,12 +45,16 @@ search-only, and a name two moieties share is kept for both.
    objects.
 3. **One shared match.** `cairn_drug_moiety_matches(pattern)` (db/076 §1c) is the one place a typed text becomes
    drugs, for both picks. It returns one row per moiety, `(moiety_uuid, display, matched)`. With the names, any name
-   may match at a word start. When several of one drug's names match, the display name wins, then the shorter name,
-   then byte order, so a drug is listed once ("amox" lists amoxicillin, not also its synonym *Amoxycillin*). Without
+   may match at a word start. When several of one drug's names match, the display name wins, then a name the typed
+   text starts (so "adren" takes the racemate's "Adrenaline, Racemic Mixture", never the shorter "Racemic
+   Adrenaline", which Sign could not complete to; final review I1), then the shorter name, then byte order, so a drug
+   is listed once ("amox" lists amoxicillin, not also its synonym *Amoxycillin*). Without
    the names it is the display-name search the doors always did. It and the names check are revoked from PUBLIC
    and granted to no one: the window calls only the doors.
-4. **`matched` says which name found it, lower-cased.** It is NULL when the display name matched or the matched
-   name is the display in another case. Otherwise it is `lower(name)`, since UNII spells names in capitals. Both
+4. **`matched` says which name found it.** It is NULL when the display name matched or the matched name is the
+   display in another case. A UNII official name is lower-cased, since UNII spells every name in capitals; a MeSH
+   name keeps its own case, which can carry meaning ("5-FU", "L-Dopa"; final review M2), so the row reads
+   "Adrenaline → epinephrine". Both
    doors gained it as a trailing column, `cairn_drug_search → (system, code, display, matched)` and
    `cairn_drug_medication_search → (code, display, uses, matched)`, each dropped first by the file's
    guarded-`DROP` idiom when its old shape is found. Groups never carry one. Within a tier (allergy pick) or a use
@@ -60,7 +64,8 @@ search-only, and a name two moieties share is kept for both.
    A salt listed beside its base follows from drugref's ruling on #231 ("salt/base cross-matches stay").
 6. **The pick row reads "adrenaline → epinephrine" (maintainer, R2)** in all three drug picks: the allergy pick
    (`pickLabel`), the medication line (`medPickLabel`) and the de-label's tolerated drug (`delabel_pick.js`, which
-   reads the medication door). Choosing such a row writes the clinician's word into the field.
+   reads the medication door). In the allergy and de-label picks, choosing such a row writes that name into the
+   field; the medication line keeps the words as typed, and Sign completes them (decision 8).
 7. **`matched` is never signed.** The coding on the wire stays `{system, code, display}` with `display` the drug
    list's name (ADR-0059). In the window `matched` rides on `CodingArg` (`#[serde(default,
    skip_serializing_if)]`) only so Sign can complete the term, and with it in a draft line's saved parts. The
@@ -68,7 +73,8 @@ search-only, and a name two moieties share is kept for both.
    fields.
 8. **The term completes to the name that matched.** `term_to_sign(typed, display, matched)` compares the typed
    text with `matched` when there is one, else with the display. A typed prefix of it completes to it ("adren"
-   signs "adrenaline"); anything else stays as typed (a brand). Before this, "adren" picked as epinephrine would
+   signs "Adrenaline"); the whole name typed in the clinician's own case stays theirs ("5-FU"); anything else stays
+   as typed (a brand). Before this, "adren" picked as epinephrine would
    have signed the unfinished "adren". The allergy pick writes `matched || display` into the field on a choose.
 9. **The list shows the generic first, the clinician's word after it (maintainer, R3; #1073).** The pure
    `cairn_medication_view::shown_name(display, term)` gives "epinephrine (adrenaline)", and no bracket when the
@@ -78,7 +84,12 @@ search-only, and a name two moieties share is kept for both.
    for an entry coded to a drug (`drugref-moiety`) only. A group-coded entry keeps its words, since "Penicillins
    (allergy group) (penicillin)" adds nothing. Sorting stays on `display_name()`, which the bracket only follows,
    and the by-name allergy check still reads `term`. The CLI list is unchanged.
-10. **No wire change, no new db/ file.** db/076 is edited in place and replays by its content hash (ADR-0080).
+10. **The by-name allergy check also reads a drug-coded allergen's drug name** (final review I2). An allergy typed
+    "adrenaline" and coded to epinephrine marks an uncoded line typed "epinephrine", as an allergy typed
+    "epinephrine" always did. Before this slice the pick could not find "adren", so the clinician retried under
+    drugref's name, and that name was the term; now the local name is the term, and the coded display carries
+    drugref's (`check.rs` `pair`). Over-warning is the safe error. The bracketed text is never fed to the check.
+11. **No wire change, no new db/ file.** db/076 is edited in place and replays by its content hash (ADR-0080).
     `SCHEMA_GENERATION` stays 82.
 
 ## Consequences
@@ -96,6 +107,7 @@ search-only, and a name two moieties share is kept for both.
 - No brand → combination: *Augmentin* finds nothing until drugref has a source (drugref#244).
 - No PBS forms or strengths (#1081).
 - A synonym drugref lists for a salt shows the salt beside its base. The clinician chooses.
-- Whether a local name ranks above a longer display name with the same use count follows the ordering in
-  decision 4, not a judgement of which is likelier.
+- Two spellings of one drug that the typed text both starts sign the shorter ("frus" signs "Frusemid", not
+  "Frusemide"), and the ordering across drugs can put a local name below drugs found by their display name
+  ([#1122](https://github.com/cairn-ehr/cairn-ehr/issues/1122)).
 - RUNBOOK §37 (the human pass, with `drugref_synonyms` copied in) is owed.
