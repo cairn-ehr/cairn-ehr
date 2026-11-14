@@ -281,3 +281,24 @@ async fn a_replay_converges() {
         assert_eq!(got, shape, "{f}");
     }
 }
+
+/// Task 2: the node's own readers carry the matched name (by column NAME, not position).
+#[tokio::test]
+async fn the_node_reads_the_matched_name() {
+    use cairn_node::allergy::drug_facts::{search_drugs, search_medication_drugs};
+    let Some((_g, mut c)) = rig().await else {
+        return;
+    };
+    let tx = c.transaction().await.unwrap();
+    load(&tx, true).await;
+    let allergy = search_drugs(&tx, "adren").await.unwrap().unwrap();
+    let med = search_medication_drugs(&tx, "adren", 20).await.unwrap().unwrap();
+    for (which, found) in [("allergy", allergy), ("medication", med)] {
+        assert_eq!(found.len(), 1, "{which}");
+        assert_eq!(found[0].display, "epinephrine", "{which}");
+        assert_eq!(found[0].matched.as_deref(), Some("adrenaline"), "{which}");
+    }
+    let amox = search_medication_drugs(&tx, "amox", 20).await.unwrap().unwrap();
+    assert_eq!(amox[0].matched, None, "a display match names no other name");
+    tx.rollback().await.unwrap();
+}
