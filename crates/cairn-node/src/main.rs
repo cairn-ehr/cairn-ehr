@@ -2071,6 +2071,24 @@ enum Cmd {
         default: bool,
     },
 
+    /// Console-only: which findings count as a WARNING when a medication is charted (db/081,
+    /// ADR-0104). `allergy-hit` (the default) warns on an allergy hit only; `adverse-effect`
+    /// warns on a previous adverse effect too. No level switches allergy warnings off. Not in
+    /// any backup: after a restore the default is back, so set it again.
+    MedicationSetWarningThreshold {
+        /// The lowest finding that warns: allergy-hit or adverse-effect.
+        #[arg(
+            long,
+            required_unless_present = "default",
+            conflicts_with = "default",
+            value_parser = clap::builder::PossibleValuesParser::new(["allergy-hit", "adverse-effect"])
+        )]
+        level: Option<String>,
+        /// Back to the default, allergy-hit.
+        #[arg(long)]
+        default: bool,
+    },
+
     /// Console-only: record a supervision act with nobody to approve it (`--op` is one of
     /// link-supervisor, unlink-supervisor, require-cosign, lift-cosign, grant-assigner,
     /// withdraw-assigner). `--supervisor` is required for the two link ops and refused otherwise.
@@ -4989,6 +5007,33 @@ async fn run() -> anyhow::Result<()> {
             println!(
                 "a draft left untouched for {n} minutes{default} goes into the record unsigned"
             );
+        }
+        Cmd::MedicationSetWarningThreshold { level, default: _ } => {
+            // A site's policy is set at its own console, like the quarantine's (#899).
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            // NULL = the default (db/081).
+            db.execute(
+                "SELECT cairn_medication_set_warning_threshold($1)",
+                &[&level],
+            )
+            .await?;
+            // Read back what is now in force, so the line never states a level it assumed.
+            let now: String = db
+                .query_one("SELECT cairn_medication_warning_threshold()", &[])
+                .await?
+                .get(0);
+            let default = if level.is_none() {
+                " (the default)"
+            } else {
+                ""
+            };
+            match now.as_str() {
+                "adverse-effect" => println!(
+                    "allergy hits and previous adverse effects now count as warnings when charting{default}"
+                ),
+                _ => println!("only allergy hits count as warnings when charting{default}"),
+            }
         }
         Cmd::SupervisionSet {
             op,
