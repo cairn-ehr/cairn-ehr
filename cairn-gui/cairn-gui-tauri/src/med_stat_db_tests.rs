@@ -6,6 +6,7 @@
 use super::db_tests::{bea_list, done, pick, save, sign};
 use super::*;
 use crate::chart_stat::STAT_NOT_READ;
+use crate::funnel::view::{Recorded, Retry};
 use crate::med_chart::{med_chart_impl, ChartArg};
 use crate::med_stat::{med_stat_give_impl, med_stat_strike_impl, GIVE_GONE, STAT_NOT_OPEN};
 use crate::notes::review::db_tests::credential;
@@ -209,6 +210,8 @@ async fn give_signs_and_the_line_leaves_the_current_list() {
         .await
         .unwrap_err();
     assert_eq!(again.text, STAT_NOT_OPEN);
+    // Behind the record: the window re-reads by itself (and drops the stale Given).
+    assert_eq!(again.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(
         vault_attempts(&owner).await,
         before,
@@ -246,6 +249,7 @@ async fn give_on_a_line_stopped_since_is_refused_before_the_key() {
         .await
         .unwrap_err();
     assert_eq!(refused.text, STAT_NOT_OPEN);
+    assert_eq!(refused.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(
         vault_attempts(&owner).await,
         before,
@@ -347,6 +351,7 @@ async fn strike_on_a_given_struck_since_is_refused() {
     for target in [given, Uuid::now_v7()] {
         let refused = strike(&state, chart, target, None).await.unwrap_err();
         assert_eq!(refused.text, GIVE_GONE);
+        assert_eq!(refused.retry, Retry::AfterReread(Recorded::No), "{target}");
     }
     assert_eq!(
         vault_attempts(&owner).await,

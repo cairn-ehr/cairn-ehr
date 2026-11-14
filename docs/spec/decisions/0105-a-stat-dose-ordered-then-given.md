@@ -7,7 +7,7 @@
 - **Issues:** PR [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106). Design:
   `docs/superpowers/specs/2026-11-10-charting-a-medication-design.md` §3.6 and §10 Q3; plan
   `docs/superpowers/plans/2026-11-14-charting-slice-2-stat-ordered-then-given.md` (the maintainer's rulings Q1–Q4 of
-  2026-11-14, recorded below, and the build's rulings R6–R9). Ends ADR-0099's limit (f)
+  2026-11-14, recorded below, and the build's rulings R7–R9). Ends ADR-0099's limit (f)
   ([#1069](https://github.com/cairn-ehr/cairn-ehr/issues/1069)). Refs
   [#1107](https://github.com/cairn-ehr/cairn-ehr/issues/1107), [#1108](https://github.com/cairn-ehr/cairn-ehr/issues/1108),
   [#1109](https://github.com/cairn-ehr/cairn-ehr/issues/1109), [#1110](https://github.com/cairn-ehr/cairn-ehr/issues/1110),
@@ -90,11 +90,11 @@ The maintainer ruled on four questions (2026-11-14):
    other's stop standing, so the line stays stopped (pinned by
    `striking_one_of_two_gives_does_not_say_waiting_again`).
 10. **The projection is `medication_given`**: one row per given event, keyed by its content address, never overlaid,
-    with `given_at` the envelope's `t_effective` and `hlc_wall` its `t_recorded`. Its applier is insert-or-nothing
-    and `heal_safe`. It skips, never raises on, a shape it cannot represent or a given with no `t_effective`, which
-    a peer's sealed body admitted without custody may be. A peer's given that arrives before its line is held and
-    shown nowhere, because readers join it on `medication_id` AND `patient_id`. A shred scrubs the row by content
-    address (`db/037`), and its sensitivity resolves to its line's thread (`db/048`).
+    with `given_at` the envelope's `t_effective` and `hlc_wall` its `t_recorded`. Its applier is insert-or-nothing and
+    `heal_safe`. It skips, never raises on, a shape it cannot represent or a given with no `t_effective`, which any
+    given admitted at the remote door may be (the time rule is the authoring door's only). A peer's given that arrives
+    before its line is held and shown nowhere, because readers join it on `medication_id` AND `patient_id`. A shred
+    scrubs the row by content address (`db/037`), and its sensitivity resolves to its line's thread (`db/048`).
 
 ### The time given
 
@@ -156,8 +156,10 @@ The maintainer ruled on four questions (2026-11-14):
     rebuild of `clinical.medication-given-retraction`, of `clinical.medication-given` (which matches both new types)
     and of `clinical.medication-cessation`: none of them can truncate the stops and replay only one side. The last was
     already refused, because `medication_patient_conflict_flag` is fed from outside it too; the strike is now a second
-    reason. `clinical.medication-given.` (with the dot) rebuilds the given alone, and `clinical.medication` or `''`
-    rebuilds stops and strikes together, to the same rows.
+    reason. `clinical.medication-given.` (the given alone) is refused too: both new appliers call `db/031`'s shared
+    patient guard, as every per-thread verb does, so both feed `medication_patient_conflict_flag` and a peer's given
+    or strike filed under another chart than its thread's is flagged. `clinical.medication` or `''` rebuilds givens,
+    stops and strikes together, to the same rows.
 
 ### In the window
 

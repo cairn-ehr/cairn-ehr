@@ -161,6 +161,26 @@ async fn a_given_with_no_t_effective_is_refused_at_the_authoring_door() {
     assert!(e.contains("t_effective"), "{e}");
 }
 
+/// The time rule is the authoring door's only, so a PEER's given may arrive without one. It is
+/// admitted and held unprojected: the applier's skip (`given_at` is NOT NULL), never a raise,
+/// which would refuse the event and freeze the sync watermark on that peer (db/020).
+#[tokio::test]
+async fn a_peers_given_with_no_t_effective_is_admitted_unprojected() {
+    rig!(c, sk, kid);
+    let (p, med) = chart(&c, &sk, &kid, true).await;
+    let mut b = given(&c, &kid, p, med, None).await;
+    b.hlc = peer_hlc(db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000);
+    b.t_effective = None;
+    apply_remote(&c, &sk, &b)
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("a peer's given with no time given never wedges sync");
+    let id: Uuid = b.event_id.parse().unwrap();
+    let logged = "SELECT count(*) FROM event_log WHERE event_id = $1::text::uuid";
+    assert_eq!(count(&c, logged, id).await, 1, "admitted");
+    assert_eq!(count(&c, N, id).await, 0, "held unprojected");
+}
+
 #[tokio::test]
 async fn completes_naming_another_threads_or_no_stop_is_refused_at_the_authoring_door() {
     rig!(c, sk, kid);
@@ -376,7 +396,9 @@ async fn a_reprojection_rebuilds_it() {
     c.batch_execute("TRUNCATE medication_given").await.unwrap();
     assert_eq!(count(&c, N, g).await, 0);
     c.execute(
-        "SELECT count(*) FROM cairn_reproject('clinical.medication-given.', true, 'test')",
+        // Not 'clinical.medication-given.' alone: db/039 refuses it, the given type feeding the
+        // shared conflict-flag table (a_narrow_rebuild_of_the_retraction_type_keeps_every_stop).
+        "SELECT count(*) FROM cairn_reproject('clinical.medication', true, 'test')",
         &[],
     )
     .await

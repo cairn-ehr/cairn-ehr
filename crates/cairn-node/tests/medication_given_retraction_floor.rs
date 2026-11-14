@@ -196,7 +196,8 @@ async fn a_reprojection_keeps_a_struck_givens_line_current() {
 
 /// db/039 refuses a narrow rebuild whose tables another type also feeds: the retraction type
 /// lists medication_cessation, so rebuilding it alone would truncate every stop and replay only
-/// retractions. It must be refused, every stop intact.
+/// retractions. It must be refused, every stop intact. The given type alone (the trailing dot)
+/// is refused too: like every per-thread medication type it feeds the shared conflict-flag table.
 #[tokio::test]
 async fn a_narrow_rebuild_of_the_retraction_type_keeps_every_stop() {
     rig!(c, sk, kid);
@@ -206,6 +207,7 @@ async fn a_narrow_rebuild_of_the_retraction_type_keeps_every_stop() {
     for prefix in [
         "clinical.medication-given-retraction",
         "clinical.medication-given",
+        "clinical.medication-given.",
     ] {
         let e = c
             .execute(
@@ -340,6 +342,105 @@ async fn the_remote_door_admits_an_orphan_retraction() {
         1,
         "held"
     );
+}
+
+/// A peer's given or strike filed under ANOTHER chart than its thread's is admitted (a peer's
+/// signed words never wedge sync) but flagged on the conflict worklist, by db/031's one shared
+/// guard, exactly as every other per-thread verb's is (#192). Unflagged, the strike would void
+/// this chart's stop while this chart's stat read (keyed on its own patient) never shows it.
+#[tokio::test]
+async fn a_peers_given_or_strike_filed_under_another_chart_is_flagged() {
+    rig!(c, sk, kid);
+    let (p, med) = chart(&c, &sk, &kid, true).await;
+    let (stop, g) = give_stat(&c, &sk, &kid, p, med).await.unwrap();
+    let elsewhere = Uuid::now_v7();
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let mut peer_give = given(&c, &kid, elsewhere, med, None).await;
+    peer_give.hlc = peer_hlc(wall);
+    let peer_give = effective_at_wall(&c, peer_give).await;
+    let mut peer_strike = retraction(&c, &kid, elsewhere, med, g, Some(stop)).await;
+    peer_strike.hlc = peer_hlc(wall + 1);
+    for body in [&peer_give, &peer_strike] {
+        apply_remote(&c, &sk, body)
+            .await
+            .map_err(|e| db_msg(&e))
+            .expect("admitted at the remote door");
+    }
+    let flags = "SELECT count(*) FROM medication_patient_conflict_flag \
+                 WHERE medication_id = $1::text::uuid";
+    assert_eq!(count(&c, flags, med).await, 2, "each event flagged once");
+}
+
+/// A peer's strike reaches only its OWN thread: one whose `voids` names another line's stop
+/// leaves that line stopped, whichever of the two arrives first (the `medication_id` predicate
+/// on the strike's deletes and on cairn_medication_cessation_voided).
+#[tokio::test]
+async fn a_peers_strike_never_voids_another_lines_stop() {
+    rig!(c, sk, kid);
+    for stop_first in [true, false] {
+        let (p, stat) = chart(&c, &sk, &kid, true).await;
+        let other = line(&c, &sk, &kid, p, false).await;
+        let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+        let mut stop = stop_body(&c, &kid, p, other).await;
+        stop.hlc = peer_hlc(wall);
+        let stop_id: Uuid = stop.event_id.parse().unwrap();
+        let mut strike = retraction(&c, &kid, p, stat, Uuid::now_v7(), Some(stop_id)).await;
+        strike.hlc = peer_hlc(wall + 1);
+        let order = if stop_first {
+            [&stop, &strike]
+        } else {
+            [&strike, &stop]
+        };
+        for body in order {
+            apply_remote(&c, &sk, body)
+                .await
+                .map_err(|e| db_msg(&e))
+                .unwrap_or_else(|e| panic!("stop_first={stop_first}: {e}"));
+        }
+        assert!(
+            !is_current(&c, other).await,
+            "stop_first={stop_first}: the other line stays stopped"
+        );
+    }
+}
+
+/// Two gives of one stat dose (two terminals), both struck: a heal and a whole-medication
+/// rebuild re-fold the thread once per strike and the line reads current. With only one of two
+/// gives struck, the other give's stop still shows.
+#[tokio::test]
+async fn a_reprojection_with_two_struck_gives_of_one_line_converges() {
+    rig!(c, sk, kid);
+    let (p, both) = chart(&c, &sk, &kid, true).await;
+    for _ in 0..2 {
+        let (stop, g) = give_stat(&c, &sk, &kid, p, both).await.unwrap();
+        submit(&c, &sk, retraction(&c, &kid, p, both, g, Some(stop)).await)
+            .await
+            .unwrap();
+    }
+    let (p2, one) = chart(&c, &sk, &kid, true).await;
+    let (stop, g) = give_stat(&c, &sk, &kid, p2, one).await.unwrap();
+    give_stat(&c, &sk, &kid, p2, one).await.unwrap();
+    submit(&c, &sk, retraction(&c, &kid, p2, one, g, Some(stop)).await)
+        .await
+        .unwrap();
+    for (prefix, rebuild) in [("", false), ("clinical.medication", true)] {
+        c.execute(
+            "SELECT count(*) FROM cairn_reproject($1, $2, 'test')",
+            &[&prefix, &rebuild],
+        )
+        .await
+        .unwrap();
+        assert!(
+            is_current(&c, both).await,
+            "rebuild={rebuild}: both gives struck, the line reads current"
+        );
+        assert_eq!(count(&c, STAT_REASONS, both).await, 0, "rebuild={rebuild}");
+        assert!(
+            !is_current(&c, one).await,
+            "rebuild={rebuild}: one give still stands, the line reads stopped"
+        );
+        assert_eq!(count(&c, STAT_REASONS, one).await, 1, "rebuild={rebuild}");
+    }
 }
 
 #[tokio::test]

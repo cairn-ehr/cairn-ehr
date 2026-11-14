@@ -150,7 +150,8 @@ BEGIN
            = 'cairn_check_medication_given_retraction', 'the strike floor is registered';
     ASSERT (SELECT projection_tables FROM cairn_projection_apply
              WHERE apply_fn = 'medication_given_retraction_apply')
-           = ARRAY['medication_given_retraction', 'medication_cessation', 'medication_cessation_reason'],
+           = ARRAY['medication_given_retraction', 'medication_cessation', 'medication_cessation_reason',
+                   'medication_patient_conflict_flag'],
         'the strike is registered against every table it writes (db/039 narrow-rebuild refusal)';
     ASSERT position('cairn_medication_cessation_voided' IN
                     pg_get_functiondef('medication_cessation_apply(event_log)'::regprocedure)) > 0

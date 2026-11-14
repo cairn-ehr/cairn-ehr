@@ -131,7 +131,11 @@ pub async fn strike_given(
         )
         .await?;
     let Some(row) = row else {
-        anyhow::bail!("that given dose is not on this chart; nothing was written");
+        // The window's picture is behind the record (the give was shredded, or is another
+        // chart's): Stale, so it re-reads by itself rather than offer a retry of the same act.
+        return Err(crate::db_diagnosis::stale_picture_refusal(
+            "that given dose is not on this chart; nothing was written",
+        ));
     };
     let (mid, voids): (String, Option<String>) = (row.try_get(0)?, row.try_get(1)?);
     let target = given_event.to_string();

@@ -490,3 +490,34 @@ fn a_cleared_partial_time_signs_now() {
         "the time given is only partly typed — finish it, or clear it if the dose was given now"
     );
 }
+
+/// Finalcheck review: an open row whose act is no longer offered goes WITH its words, whether its
+/// line moved (given elsewhere, struck since) or was not drawn at all. Kept, a Given row hidden at
+/// 14:00 came back pre-filled "14:00" once the order was waiting again (its give struck at 16:00),
+/// and one press of Sign recorded a time nobody gave it.
+#[test]
+fn a_row_whose_act_went_is_dropped_with_its_words() {
+    let rows = js_fn(STAT_JS, "statRows");
+    let drawn = position(
+        rows,
+        "if (stillOffered(stat)) td.append(statRow(stat, row));",
+    );
+    let dropped = position(
+        rows,
+        "else if (statOpen && statOpen.medicationId === stat.medication_id) statOpen = null;",
+    );
+    assert!(drawn < dropped, "{rows}");
+    let undrawn = js_fn(STAT_JS, "dropUndrawnStat");
+    assert!(
+        undrawn.contains(
+            "if (statOpen && !rows.some((row) => row.stat && row.stat.medication_id === statOpen.medicationId)) statOpen = null;"
+        ),
+        "{undrawn}"
+    );
+    let draw = js_fn(MAIN_JS, "drawList");
+    assert!(
+        position(draw, "body.append(...renderRow(row));")
+            < position(draw, "dropUndrawnStat(view.rows);"),
+        "{draw}"
+    );
+}

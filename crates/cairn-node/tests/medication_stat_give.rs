@@ -11,6 +11,7 @@ mod medication_kit;
 use cairn_event::medication::{Charting, STAT_GIVEN_REASON};
 use cairn_event::SigningKey;
 use cairn_node::db;
+use cairn_node::db_diagnosis::{refusal_scope, RefusalScope};
 use cairn_node::medication::stat_give::{give_stat, strike_given};
 use cairn_node::medication::stat_read::read_stat_orders;
 use cairn_node::medication::{chart_medication, AuthorParams};
@@ -202,7 +203,13 @@ async fn strike_given_refuses_another_charts_given() {
     let other = Uuid::now_v7();
     submit_registration(&r.c, &r.nsk, &r.nkid, other, 0).await;
     let before = events(&r.c).await;
-    assert!(r.strike(other, g, None).await.is_err());
+    let err = r
+        .strike(other, g, None)
+        .await
+        .expect_err("another chart's given");
+    // A verdict about the screen being behind the record (the give is gone from this chart, or
+    // was never on it), so the window re-reads by itself — never an outage offering a retry now.
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Stale), "{err:#}");
     assert_eq!(events(&r.c).await, before, "no event was written");
     assert!(!given_kit::is_current(&r.c, med).await);
 }

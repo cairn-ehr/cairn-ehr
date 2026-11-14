@@ -3669,7 +3669,8 @@ Name a clinician in who's here (`dr-a`) for the orders, and a second (`rn-b`) fo
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only), on BOTH rows:
 
 - [ ] *Given* and each *Entered in error* are reachable by Tab and read with their drug line. Record whether two
-      *Entered in error* buttons on one line can be told apart by ear (they are labelled alike today).
+      *Entered in error* buttons on one line can be told apart by ear (their visible text is alike; each spoken
+      label names its drug, time given and giver, so two gives in the same minute by the same giver collide).
 - [ ] The Given row and the strike row are each read as a group named for their line; "Time given" and "Why
       (optional)" are read with their labels; the time field is operable from the keyboard alone.
 - [ ] The stat line, each struck line and the **given** status are read.

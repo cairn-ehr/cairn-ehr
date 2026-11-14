@@ -112,16 +112,25 @@ function statRows(row) {
   said.hidden = !statSaid.has(stat.medication_id);
   td.append(said);
   if (stillOffered(stat)) td.append(statRow(stat, row));
+  else if (statOpen && statOpen.medicationId === stat.medication_id) statOpen = null; // see stillOffered
   tr.append(td);
   return [tr];
 }
 
 /** Whether the open row belongs on `stat`, and its button is still offered there: a redraw after
- *  the line moved (given elsewhere, struck since) drops the row rather than keep a stale act. */
+ *  the line moved (given elsewhere, struck since) drops the row AND its words (`statRows`,
+ *  `dropUndrawnStat`), never keeping them for a later redraw. Kept, a Given row hidden at 14:00
+ *  would come back pre-filled "14:00" once the order was waiting again (its give struck at 16:00),
+ *  and one press would sign a time nobody gave it. */
 function stillOffered(stat) {
   if (!statOpen || statOpen.medicationId !== stat.medication_id) return false;
   if (statOpen.kind === "give") return stat.can_give;
   return stat.gives.some((give) => give.can_strike && give.event_id === statOpen.eventId);
+}
+
+/** After a list draw: an open row whose stat line was not drawn at all goes with its words. */
+function dropUndrawnStat(rows) {
+  if (statOpen && !rows.some((row) => row.stat && row.stat.medication_id === statOpen.medicationId)) statOpen = null;
 }
 
 /** Say `text` beside stat line `medicationId`, now and on every redraw until its next press. */

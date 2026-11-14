@@ -7,7 +7,7 @@
 //! keeps its own line under it.
 //!
 //! Kept apart from `row_view.rs` (which would pass 500 lines), and fed a plain owned input
-//! ([`StatWordsIn`], ruling R3): this crate does not depend on `cairn-node`, so the window maps
+//! ([`StatWordsIn`]): this crate does not depend on `cairn-node`, so the window maps
 //! each read `StatOrder` into it (`chart_stat::attach_stat`). Every function here is pure.
 use crate::hold_view::local_instant;
 use crate::row_view::SIGNER_NOT_KNOWN;
@@ -42,7 +42,7 @@ pub struct GiveView {
     pub words: String,
 }
 
-/// A stat order, as its words need it (ruling R3).
+/// A stat order, as its words need it.
 #[derive(Debug, Clone)]
 pub struct StatWordsIn {
     /// The order event's `t_recorded`.

@@ -172,8 +172,9 @@ CREATE INDEX IF NOT EXISTS medication_given_medication_idx ON medication_given (
 
 -- The applier reads the CLEAR payload (ADR-0052): NULL = no custody here, nothing to project (the
 -- late-custody path re-runs it). A shape it cannot represent — or a given with no time given,
--- which a peer's sealed body admitted without custody may be — is SKIPPED, never raised: a raise
--- would fail the late-custody heal. Insert-or-nothing, so arrival order never matters.
+-- which any given admitted at the remote door may be (the time rule is the authoring door's
+-- only) — is SKIPPED, never raised: a raise would refuse a peer's event and fail the late-custody
+-- heal. Insert-or-nothing, so arrival order never matters.
 CREATE OR REPLACE FUNCTION medication_given_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -188,6 +189,11 @@ BEGIN
                 OR NOT pg_input_is_valid(p ->> 'completes', 'uuid'))) THEN
         RETURN;
     END IF;
+    -- db/031's one shared guard for every per-thread verb (#192): a peer's given filed under
+    -- another chart than its thread's is flagged on the conflict worklist. Its raise is
+    -- unreachable at the authoring door, whose floor (§1) already refused another chart's line.
+    PERFORM cairn_guard_medication_patient(
+        (p ->> 'medication_id')::uuid, e.patient_id, e.content_address);
     INSERT INTO medication_given
         (content_address, event_id, patient_id, medication_id, completes, given_at, hlc_wall)
     VALUES (e.content_address, e.event_id, e.patient_id, (p ->> 'medication_id')::uuid,
@@ -200,7 +206,8 @@ REVOKE EXECUTE ON FUNCTION medication_given_apply(event_log) FROM PUBLIC;
 
 -- Register the applier (db/005, ADR-0057). heal_safe: insert-or-nothing per event. #214 idiom.
 INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
-    ('clinical.medication-given.asserted', 'medication_given_apply', ARRAY['medication_given'], 20, TRUE)
+    ('clinical.medication-given.asserted', 'medication_given_apply',
+     ARRAY['medication_given', 'medication_patient_conflict_flag'], 20, TRUE)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET
     projection_tables = EXCLUDED.projection_tables,
     run_order         = EXCLUDED.run_order,
@@ -276,10 +283,11 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --       also feeds. This type lists medication_cessation (it deletes from it), which the cessation
 --       type feeds, so a rebuild of 'clinical.medication-given-retraction' — or of
 --       'clinical.medication-given', which matches both new types — RAISES before any TRUNCATE:
---       it can never truncate the stops and replay only retractions. Pinned by
---       a_narrow_rebuild_of_the_retraction_type_keeps_every_stop. A rebuild of the given type
---       alone needs the trailing dot ('clinical.medication-given.'). 'clinical.medication' (or
---       '') rebuilds both stops and strikes: stops replay first (by type name) and every voided
+--       it can never truncate the stops and replay only retractions. So is a rebuild of the given
+--       type alone ('clinical.medication-given.'): like every per-thread medication type it feeds
+--       medication_patient_conflict_flag (db/031's shared guard). Pinned by
+--       a_narrow_rebuild_of_the_retraction_type_keeps_every_stop. 'clinical.medication' (or '')
+--       rebuilds givens, stops and strikes: stops replay first (by type name) and every voided
 --       one is inserted, then each strike deletes its stop and re-folds — the same rows.
 --   (c) A SHRED OF THE RETRACTION. db/037's scrub deletes its medication_given_retraction row
 --       (added there), then cairn_refold_after_shred replays every heal-safe type sharing a
@@ -290,9 +298,10 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --
 -- TRUST AT THE REMOTE DOOR. `voids` is checked against the given's `completes` at the authoring
 -- door only (ADR-0056): a peer's strike may arrive before its given. A peer's signed retraction is
--- therefore trusted for its own `voids`, which its origin's authoring door held to that rule. The
--- void is confined to the retraction's own thread (medication_id), so it can never void another
--- line's stop.
+-- therefore trusted for its own `voids`, which its origin's authoring door held to that rule
+-- (#1111). The void is confined to the retraction's own thread (medication_id), so it can never
+-- void another line's stop; a strike filed under another chart than its thread's is flagged by
+-- db/031's shared guard, as every per-thread verb's is.
 --
 -- THE TWO TIERS. Structural — the payload's shape, no §5.9 claim, no charting key — at BOTH doors.
 -- References — the schema tag, the target is a given of THIS line on THIS chart, `voids` is what
@@ -343,8 +352,9 @@ BEGIN
     IF b ->> 'schema_version' IS DISTINCT FROM 'clinical.medication-given-retraction/1' THEN
         RAISE EXCEPTION 'medication given retraction: schema_version must be clinical.medication-given-retraction/1, got %', b ->> 'schema_version';
     END IF;
-    -- The struck given is a projected given of THIS line on THIS chart (a given row exists only
-    -- once its stop and line checks passed, §1).
+    -- The struck given is a projected given of THIS line on THIS chart. Its row proves §1's stop
+    -- and line checks passed only for a given authored HERE: a peer's given was held to its own
+    -- origin's authoring door, which this node trusts (#1111).
     SELECT g.completes INTO v_completes
       FROM medication_given g
      WHERE g.event_id = (p ->> 'target')::uuid
@@ -433,6 +443,10 @@ BEGIN
         RETURN;
     END IF;
     v_med := (p ->> 'medication_id')::uuid;
+    -- The shared guard (#192), as for the given: a peer's strike filed under another chart than
+    -- its thread's is flagged. It still voids its thread's stop, as a cross-chart stop still
+    -- stops (db/031): flagged for a human, never auto-resolved.
+    PERFORM cairn_guard_medication_patient(v_med, e.patient_id, e.content_address);
     INSERT INTO medication_given_retraction
         (content_address, event_id, patient_id, medication_id, target, voids, text, hlc_wall)
     VALUES (e.content_address, e.event_id, e.patient_id, v_med, (p ->> 'target')::uuid,
@@ -463,12 +477,13 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION medication_given_retraction_apply(event_log) FROM PUBLIC;
 
--- Registered against all three tables it writes, so db/039's narrow rebuild and db/037's
+-- Registered against all four tables it writes, so db/039's narrow rebuild and db/037's
 -- re-fold both see that it feeds the stops (findings b and c). heal_safe: insert-or-nothing,
 -- and its delete is idempotent. #214 idiom.
 INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
     ('clinical.medication-given-retraction.asserted', 'medication_given_retraction_apply',
-     ARRAY['medication_given_retraction', 'medication_cessation', 'medication_cessation_reason'], 30, TRUE)
+     ARRAY['medication_given_retraction', 'medication_cessation', 'medication_cessation_reason',
+           'medication_patient_conflict_flag'], 30, TRUE)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET
     projection_tables = EXCLUDED.projection_tables,
     run_order         = EXCLUDED.run_order,

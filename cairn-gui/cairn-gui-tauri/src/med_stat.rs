@@ -17,7 +17,7 @@
 use crate::allergies::{failure_named, on_screen_and_writable};
 use crate::commands::med_list_impl;
 use crate::funnel::view::ErrorView;
-use crate::link::judgement_view::refused;
+use crate::link::judgement_view::{refused, stale};
 use crate::med_chart_write::MedChartWrite;
 use crate::med_list_versions::given;
 use crate::notes::time::{stated_time_from_local, year_the_record_holds};
@@ -148,7 +148,8 @@ pub async fn med_stat_give_impl(
             .await
             .map_err(|e| node_failure(&db.explain(e)))?;
         if !open {
-            return Err(refused(STAT_NOT_OPEN));
+            // The screen is behind the record (given or stopped elsewhere): re-read by itself.
+            return Err(stale(STAT_NOT_OPEN));
         }
     }
     let (human_sk, human_kid) = state
@@ -251,7 +252,7 @@ pub async fn med_stat_strike_impl(
                     .any(|g| g.event_id == given_id && g.struck.is_none())
             })
             .map(|o| o.medication_id)
-            .ok_or_else(|| refused(GIVE_GONE))?
+            .ok_or_else(|| stale(GIVE_GONE))? // struck or shredded since the draw
     };
     let why = given(why);
     let (human_sk, human_kid) = state

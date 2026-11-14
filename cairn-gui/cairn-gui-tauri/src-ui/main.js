@@ -263,6 +263,7 @@ function drawList(pane, patient) {
   for (const row of view.rows) {
     body.append(...renderRow(row));
   }
+  dropUndrawnStat(view.rows); // an open stat row whose line went (med_stat.js)
   restoreReasons(typed);
   rereadAtNextHoldChange(view.next_hold_change, patient); // a W starts and ends with the clock (holds.js)
 
