@@ -377,8 +377,8 @@ async fn chart_draft_line_with_no_restore_is_unchanged() {
     assert_eq!(count(&r.c, "medication_cessation").await, 0);
 }
 
-/// One source of truth for `restores`: a caller that sets it on `charting` AND passes a restore
-/// is refused before anything is written.
+/// One source of truth for `restores`: a caller that sets it on `charting` is refused before
+/// anything is written, whether or not it passes a restore.
 #[tokio::test]
 async fn a_restore_with_its_own_charting_restores_is_refused() {
     db_test!(base);
@@ -396,8 +396,15 @@ async fn a_restore_with_its_own_charting_restores_is_refused() {
         restores: Some(&vs),
         ..Charting::default()
     };
-    assert!(sign(&mut r, line, &at, &charting, Some(&rs)).await.is_err());
-    assert_eq!(count(&r.c, "event_log").await, before);
+    for restore in [Some(&rs), None] {
+        let refused = sign(&mut r, line, &at, &charting, restore).await;
+        assert!(
+            format!("{:#}", refused.as_ref().unwrap_err()).contains("comes from its RestoreToSign"),
+            "with a restore: {}: {refused:?}",
+            restore.is_some()
+        );
+        assert_eq!(count(&r.c, "event_log").await, before);
+    }
 }
 
 /// Ruling R10: the lineage is ROOTED. X charted; L1 restored v1 (X stopped); v3 set aside beside

@@ -374,7 +374,8 @@ pub async fn writer_drafts(
 /// A RESTORE line (`restore` Some, slice 2b) first stops every line in `restore.stop` (one
 /// cessation each, submitted FIRST so db/080's pairing check passes even IMMEDIATE), and the line
 /// carries `restores` = `restore.version_id`, the ONE source of it: a caller's own
-/// `charting.restores` is refused. A failed spend rolls the stops back with everything else.
+/// `charting.restores` is refused, with or without a restore. A failed spend rolls the stops back
+/// with everything else.
 ///
 /// Returns the companion's thread and the versions' ids; `event_id` is the companion's.
 #[allow(clippy::too_many_arguments)] // signer + node context + the line's identity + its content
@@ -395,8 +396,8 @@ pub async fn chart_draft_line(
     restore: Option<&RestoreToSign<'_>>,
 ) -> anyhow::Result<crate::db_diagnosis::Committed<(Uuid, Vec<Uuid>)>> {
     anyhow::ensure!(
-        restore.is_none() || charting.restores.is_none(),
-        "a restore line's `restores` comes from its RestoreToSign, never from its charting"
+        charting.restores.is_none(),
+        "a line's `restores` comes from its RestoreToSign, never from its charting"
     );
     let stops = match restore {
         Some(r) => {
@@ -415,7 +416,7 @@ pub async fn chart_draft_line(
     };
     let restores = restore.map(|r| r.version_id.to_string());
     let charting = Charting {
-        restores: restores.as_deref().or(charting.restores),
+        restores: restores.as_deref(),
         ..*charting
     };
     let (body, medication_id) =
