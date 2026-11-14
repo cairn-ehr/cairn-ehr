@@ -287,10 +287,10 @@ async fn read_settlements_names_the_signer_and_the_replaced_line() {
         .is_empty());
 }
 
-/// A check whose signer is not a person (here the node's own device key as the "author") is
-/// never credited to a name: `who` is None, and the window says "signer not known".
+/// A check whose signer is not a person (here an enrolled agent the registry names "scribe-bot")
+/// is never credited to that name: `who` is None, and the window says "signer not known".
 #[tokio::test]
-async fn an_unvouched_signer_reads_as_none() {
+async fn a_non_human_signer_is_never_named() {
     db_test!(base);
     let mut r = rig(&base).await;
     let x = charted(&mut r).await;
@@ -300,9 +300,24 @@ async fn an_unvouched_signer_reads_as_none() {
         info_source: "external-record",
         source_note: None,
     };
+    // An AGENT key the registry can name by its pinned handle: only `cairn_note_key_is_human`
+    // keeps that name off the check (ruling R6).
+    let (agent_sk, agent_kid) = cairn_event::generate_key().unwrap();
+    r.c.execute(
+        "SELECT enroll_actor('agent', '{\"handle\":\"scribe-bot\"}', $1)",
+        &[&agent_kid],
+    )
+    .await
+    .unwrap();
+    let named: Option<String> =
+        r.c.query_one("SELECT cairn_note_signer_name($1)", &[&agent_kid])
+            .await
+            .unwrap()
+            .get(0);
+    assert!(named.is_some(), "the registry can name the agent key");
     let device = AuthorParams {
-        human_sk: &r.nsk,
-        human_kid: &r.nkid,
+        human_sk: &agent_sk,
+        human_kid: &agent_kid,
     };
     check_version(
         &mut r.c,
