@@ -506,8 +506,11 @@ REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 -- Doors granting custody do NOT take this lock: a key arriving during a heal races nothing the heal
 -- can resurrect (custody-vs-shred is cairn_lock_custody's job).
 --
--- LOCK ORDER. A shred takes this lock BEFORE its per-event custody lock; the heal takes only this
--- one. No transaction takes a custody lock and then this one, so the two never form a cycle.
+-- LOCK ORDER. A shred takes this lock BEFORE its per-event custody lock. The heal takes this one
+-- first; inside it, a strike's re-fold (db/082 §2) can then take cairn_lock_shred_refold and
+-- sibling custody locks, so an owner-run heal can meet a door's strike in a 40P01 (retryable,
+-- writes nothing). No transaction takes a custody lock and then this one, so the two never form
+-- a cycle.
 CREATE OR REPLACE FUNCTION cairn_lock_erasure_heal(p_exclusive boolean)
 RETURNS void LANGUAGE plpgsql
 SET search_path = public, pg_temp

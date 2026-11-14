@@ -9,8 +9,9 @@
 use crate::common;
 use crate::medication_kit::*;
 use cairn_event::medication::{
-    given_body, render_given_twin, Charting, Given, GIVEN_EVENT_TYPE, GIVEN_SCHEMA,
-    STAT_GIVEN_REASON,
+    given_body, given_retraction_body, render_given_retraction_twin, render_given_twin, Charting,
+    Given, GivenRetraction, GIVEN_EVENT_TYPE, GIVEN_RETRACTION_EVENT_TYPE, GIVEN_RETRACTION_SCHEMA,
+    GIVEN_SCHEMA, STAT_GIVEN_REASON,
 };
 use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
@@ -123,4 +124,52 @@ pub async fn give_stat(
         .await
         .unwrap();
     r
+}
+
+/// A signed-ready retraction striking `target` on `patient`'s line `med`, voiding `voids`.
+pub async fn retraction(
+    c: &Client,
+    kid: &str,
+    patient: Uuid,
+    med: Uuid,
+    target: Uuid,
+    voids: Option<Uuid>,
+) -> EventBody {
+    let (m, t, v) = (
+        med.to_string(),
+        target.to_string(),
+        voids.map(|u| u.to_string()),
+    );
+    let r = GivenRetraction {
+        medication_id: &m,
+        target: &t,
+        voids: v.as_deref(),
+        text: Some("wrong patient"),
+    };
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: GIVEN_RETRACTION_EVENT_TYPE.into(),
+        schema_version: GIVEN_RETRACTION_SCHEMA.into(),
+        hlc: db::next_hlc(c, "test-node").await.unwrap(),
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: given_retraction_body(&r),
+        attachments: vec![],
+        plaintext_twin: Some(render_given_retraction_twin(&r)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
+    }
+}
+
+/// Whether the line `med` reads current (on patient_medication_current).
+pub async fn is_current(c: &Client, med: Uuid) -> bool {
+    let sql =
+        "SELECT count(*) FROM patient_medication_current WHERE medication_id = $1::text::uuid";
+    c.query_one(sql, &[&med.to_string()])
+        .await
+        .unwrap()
+        .get::<_, i64>(0)
+        == 1
 }

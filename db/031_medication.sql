@@ -439,7 +439,10 @@ BEGIN
         (p ->> 'medication_id')::uuid, e.patient_id, e.content_address);
     -- A stop voided by an "entered in error" strike of the give it paired with never wins
     -- (db/082 §2, defined there: plpgsql binds at execution). The strike's own applier removes
-    -- the row when the stop arrived first; this covers the stop arriving after the strike.
+    -- the row when the stop arrived first; this covers the stop arriving after the strike. The
+    -- lock first, so a strike being applied at this moment is waited for and then seen (db/082
+    -- finding a'); db/060's reason applier runs after this one in the same transaction.
+    PERFORM cairn_lock_medication_stop(e.event_id);
     IF cairn_medication_cessation_voided(e.event_id, (p ->> 'medication_id')::uuid) THEN
         RETURN;
     END IF;

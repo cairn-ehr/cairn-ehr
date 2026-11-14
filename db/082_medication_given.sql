@@ -246,11 +246,27 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --       seeing the uncommitted strike, re-upserts the voided stop on the row the strike just
 --       deleted (or the two deadlock on that row and a custody lock). With it, whichever comes
 --       second waits and then reads the first's committed rows. The lock is re-entrant, so inside
---       a shred's own re-fold it costs nothing, and a heal holds cairn_lock_erasure_heal
---       EXCLUSIVE, so no shred is open to contend. The door already holds its own custody lock
---       when it takes this (the inverse of a shred's order), but a shred never waits on an
---       uncommitted event's custody (it cannot see it); only a LATE key for a committed strike
---       can meet a shred in a cycle, which Postgres aborts with 40P01 (db/005's accepted shape).
+--       a shred's own re-fold it costs nothing. A heal holds cairn_lock_erasure_heal EXCLUSIVE,
+--       so no SHRED is open to contend with it; but a door's strike takes no erasure lock, so an
+--       owner-run `cairn-node reproject` can meet one: the heal's replay of a strike wants this
+--       lock while the door, holding it, waits on a stop row the heal upserted. Postgres aborts
+--       one side with 40P01, a retryable failure that wrote nothing. The door already holds its
+--       own custody lock when it takes this (the inverse of a shred's order), but a shred never
+--       waits on an uncommitted event's custody (it cannot see it); only a LATE key for a
+--       committed strike can meet a shred in a cycle, again 40P01 (db/005's accepted shape).
+--   (a') A STOP AND ITS STRIKE APPLIED AT ONCE (fix round 1). Two pulls run concurrently (one
+--       `cairn-sync pull` per peer): a hub can apply a peer's stop Y while another transaction
+--       applies the strike voiding Y. Under READ COMMITTED neither sees the other's uncommitted
+--       rows: Y's applier finds no strike and writes the winner row, the strike's delete finds no
+--       row, both commit, and the struck stat dose reads GIVEN (a missed dose) until a heal. So
+--       both take cairn_lock_medication_stop(Y) — the stop on its own event_id before its voided
+--       check, the strike on `voids` after cairn_lock_shred_refold() — and whichever comes second
+--       waits, then reads the first's committed rows on its next statement (db/059's #855 idiom).
+--       Keyed per stop, so unrelated stops never wait. Lock order: shred-refold → per-stop, as in
+--       a shred whose re-fold replays a stop. NOT taken inside cairn_reproject (db/039 marks it
+--       with cairn.reprojecting): a rebuild replays every stop in one transaction and one lock per
+--       stop would exhaust max_locks_per_transaction (db/005's reason for keeping per-event locks
+--       out of heals). Pinned by medication_given_retraction_race.rs, both orders.
 --   (b) A NARROW REBUILD. db/039 refuses to rebuild a prefix whose tables another type outside it
 --       also feeds. This type lists medication_cessation (it deletes from it), which the cessation
 --       type feeds, so a rebuild of 'clinical.medication-given-retraction' — or of
@@ -366,6 +382,22 @@ CREATE INDEX IF NOT EXISTS medication_given_retraction_target_idx ON medication_
 -- Every stop's apply asks cairn_medication_cessation_voided, so this one is on the hot path.
 CREATE INDEX IF NOT EXISTS medication_given_retraction_voids_idx ON medication_given_retraction (voids);
 
+-- Finding (a'): serialize one stop's apply with the strike that voids it. Doors only: inside a
+-- whole-log replay (cairn.reprojecting, set by db/039) it returns at once, so a rebuild never
+-- holds one lock per stop. Called by db/031's stop applier (late binding) and the strike below.
+CREATE OR REPLACE FUNCTION cairn_lock_medication_stop(p_stop uuid)
+RETURNS void LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF current_setting('cairn.reprojecting', true) = 'on' THEN
+        RETURN;
+    END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended('cairn.medication-stop:' || p_stop::text, 0));
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_lock_medication_stop(uuid) FROM PUBLIC;
+
 -- Is this stop voided by a strike of its own thread? Called by db/031's and db/060's appliers
 -- (plpgsql binds at execution, so the later file is no obstacle).
 CREATE OR REPLACE FUNCTION cairn_medication_cessation_voided(p_cessation uuid, p_med uuid)
@@ -404,8 +436,10 @@ BEGIN
     IF coalesce(jsonb_typeof(p -> 'voids'), 'null') = 'null' THEN
         RETURN;
     END IF;
-    -- Finding (a): serialize with shreds before touching the stop's rows.
+    -- Finding (a): serialize with shreds, then (a') with the stop's own apply, before reading
+    -- or touching the stop's rows. Each later statement reads a fresh snapshot.
     PERFORM cairn_lock_shred_refold();
+    PERFORM cairn_lock_medication_stop((p ->> 'voids')::uuid);
     SELECT content_address INTO v_ca FROM event_log WHERE event_id = (p ->> 'voids')::uuid;
     IF v_ca IS NULL THEN
         RETURN;   -- the stop has not arrived; its own applier will skip it (voided)

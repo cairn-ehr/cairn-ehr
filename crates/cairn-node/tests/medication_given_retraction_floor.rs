@@ -9,11 +9,8 @@
 //!
 //! DB-gated on `$CAIRN_TEST_PG` (a skipped run prints `skipped:`), serialized via
 //! `db::test_serial_guard` (inside `rig!`).
-use cairn_event::medication::{
-    given_retraction_body, render_given_retraction_twin, GivenRetraction,
-    GIVEN_RETRACTION_EVENT_TYPE, GIVEN_RETRACTION_SCHEMA,
-};
-use cairn_event::{EventBody, SigningKey};
+use cairn_event::medication::GIVEN_RETRACTION_SCHEMA;
+use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::{build_cease_body, CeaseMedicationInput};
 use cairn_node::shred::shred_event;
@@ -32,43 +29,6 @@ use given_kit::*;
 #[path = "common/set_aside_kit.rs"]
 mod set_aside_kit;
 use set_aside_kit::*;
-
-/// A signed-ready retraction striking `target` on `patient`'s line `med`, voiding `voids`.
-async fn retraction(
-    c: &Client,
-    kid: &str,
-    patient: Uuid,
-    med: Uuid,
-    target: Uuid,
-    voids: Option<Uuid>,
-) -> EventBody {
-    let (m, t, v) = (
-        med.to_string(),
-        target.to_string(),
-        voids.map(|u| u.to_string()),
-    );
-    let r = GivenRetraction {
-        medication_id: &m,
-        target: &t,
-        voids: v.as_deref(),
-        text: Some("wrong patient"),
-    };
-    EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: patient.to_string(),
-        event_type: GIVEN_RETRACTION_EVENT_TYPE.into(),
-        schema_version: GIVEN_RETRACTION_SCHEMA.into(),
-        hlc: db::next_hlc(c, "test-node").await.unwrap(),
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: given_retraction_body(&r),
-        attachments: vec![],
-        plaintext_twin: Some(render_given_retraction_twin(&r)),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-        safety: None,
-    }
-}
 
 /// A real stop of `med` (a clinician's decision, not a give's).
 async fn real_stop(c: &Client, sk: &SigningKey, kid: &str, p: Uuid, med: Uuid) -> Uuid {
@@ -95,12 +55,6 @@ async fn struck(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid, Uuid, Uu
         .await
         .expect("struck");
     (p, med, stop, g, r)
-}
-
-async fn is_current(c: &Client, med: Uuid) -> bool {
-    let sql =
-        "SELECT count(*) FROM patient_medication_current WHERE medication_id = $1::text::uuid";
-    count(c, sql, med).await == 1
 }
 
 /// The stop reason the line SHOWS (db/031's one winner), when it reads stopped.
