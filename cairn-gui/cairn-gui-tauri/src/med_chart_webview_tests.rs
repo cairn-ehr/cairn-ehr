@@ -17,7 +17,7 @@ use crate::source_guard::{js_fn, position};
 use cairn_node::allergy::check::LineCheck;
 use cairn_node::medication::line::read_directions;
 
-const MED_JS: &str = include_str!("../src-ui/med_chart.js");
+pub(crate) const MED_JS: &str = include_str!("../src-ui/med_chart.js");
 /// The list the editor is mounted in (batch charting slice 1): med_list.js and its Sign.
 const LIST_JS: &str = concat!(
     include_str!("../src-ui/med_list.js"),

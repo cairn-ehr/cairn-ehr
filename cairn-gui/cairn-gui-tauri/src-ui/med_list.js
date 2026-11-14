@@ -38,7 +38,7 @@ const MED_LIST_ELSEWHERE = "These lines are open on another terminal: ";
 const MED_LIST_NOT_REMOVED = "This line was not removed";
 const MED_PRESS_WORDS = { "started-here": "Start medication", "pre-existing": "Already taking" };
 /** A line's check while the editor shows its own: nothing drawn twice. */
-const NO_MARKS = { marks: [], notes: [], unverified: false };
+const NO_MARKS = { marks: [], warning_notes: [], notes: [], unverified: false };
 
 /** The list drawn: `{ patient, writer, writerName, elsewhere }`, or null while none is read. */
 let medList = null;

@@ -437,7 +437,7 @@ pub(crate) fn line_view(j: &Judged) -> ListLineView {
         unfinished: !l.finished,
         against: j
             .check
-            .against
+            .warned_against()
             .iter()
             .map(|id| WarningRef {
                 source: ALLERGY_SOURCE.into(),

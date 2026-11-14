@@ -27,7 +27,8 @@ use crate::state::AppState;
 use cairn_event::allergy::AllergenKind;
 use cairn_medication_view::{ChartSet, MedicationRow, MedicationStatus, PatientMedicationList};
 use cairn_node::allergy::check::{
-    check_medications, codes_to_ask, LineCheck, MedLine, GROUP_SYSTEM, MOIETY_SYSTEM,
+    check_medications, codes_to_ask, LineCheck, MedLine, WarningThreshold, GROUP_SYSTEM,
+    MOIETY_SYSTEM,
 };
 use cairn_node::allergy::drug_facts::{
     read_drug_facts, read_group_status, search_drugs, DrugFacts, DrugOption,
@@ -332,12 +333,41 @@ pub(crate) fn charting_or_unsure(
 
 /// Check `lines` against allergy rows `a`, asking the drug list on `c` (the rules of
 /// [`check_list`], which this is the body of; `med_chart` checks the line being charted with it).
+///
+/// This is the DRAFT path (a line being charted, a list line): each check is stamped with the
+/// site's warning threshold (db/081, ADR-0104), which decides what warns. The charted list
+/// ([`check_list`]) is never stamped, so it draws as ADR-0098 draws it (maintainer, Q2).
 pub(crate) async fn check_lines(
     c: Option<&impl GenericClient>,
     a: &PatientAllergies,
     lines: &[MedLine<'_>],
 ) -> HashMap<Uuid, LineCheck> {
-    check_lines_unsure(c, a, lines, false).await
+    let threshold = match c {
+        Some(c) => threshold_of(
+            c.query_one("SELECT cairn_medication_warning_threshold()", &[])
+                .await
+                .map(|r| r.get::<_, String>(0))
+                .map_err(anyhow::Error::from),
+        ),
+        None => threshold_of(Err(anyhow::anyhow!("no database connection"))),
+    };
+    let mut checks = check_lines_unsure(c, a, lines, false).await;
+    for check in checks.values_mut() {
+        check.threshold = threshold;
+    }
+    checks
+}
+
+/// The site's warning threshold from its read. A failed read over-warns (logged): a read that
+/// cannot say what the site decided must never quietly drop a warning. Pure but for the log.
+pub(crate) fn threshold_of(read: anyhow::Result<String>) -> WarningThreshold {
+    match read {
+        Ok(word) => WarningThreshold::parse(&word),
+        Err(e) => {
+            eprintln!("the warning threshold could not be read, so every finding warns: {e:#}");
+            WarningThreshold::AdverseEffect
+        }
+    }
 }
 
 /// [`check_lines`], with every unmarked current line "not checked" when `unsure` (something the

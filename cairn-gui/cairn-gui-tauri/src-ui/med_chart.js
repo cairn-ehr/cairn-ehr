@@ -25,7 +25,7 @@
 const MED_PICK_MIN_CHARS = 4; // design §3.1: "after 4–5 typed letters"
 const MED_NO_DRUG_LIST = "No drug list on this terminal: the medication is charted as typed";
 /** What the line reads while no check speaks for its words: "not checked", never an old verdict. */
-const LINE_NOT_CHECKED = { marks: [], notes: [], unverified: true };
+const LINE_NOT_CHECKED = { marks: [], warning_notes: [], notes: [], unverified: true };
 
 /** The button pressed ("started-here" | "pre-existing"), or null while the line is closed. */
 let medPress = null;
@@ -386,12 +386,18 @@ function drawCheck(check) {
   drawMarks(check, el("med-line-tag"), el("med-line-marks"));
 }
 
-/** Draw a check into `tag` and `list`: the loud tag and each mark, the muted notes, or `not
- *  checked`. Shared with med_list.js, which draws each saved line's check the same way. */
+/** Draw a check into `tag` and `list`: the loud tag and each mark, each note that warns at the
+ *  site's threshold (as loud, ADR-0104), the muted notes, or `not checked`. Shared with
+ *  med_list.js, which draws each saved line's check the same way. */
 function drawMarks(check, tag, list) {
   let shown = true;
   if (check.marks.length > 0) {
     tag.textContent = ALLERGY_TAG;
+    tag.className = "allergy-tag";
+  } else if (check.warning_notes.length > 0) {
+    // A warning that is not an allergy is never tagged "Allergy"; an allergy that could not be
+    // checked beside it is still said, so the loud tag never hides "not checked".
+    tag.textContent = check.unverified ? WARNING_TAG + " · " + NOT_CHECKED_TAG : WARNING_TAG;
     tag.className = "allergy-tag";
   } else if (check.unverified) {
     tag.textContent = NOT_CHECKED_TAG;
@@ -402,6 +408,7 @@ function drawMarks(check, tag, list) {
   tag.hidden = !shown;
   list.replaceChildren(
     ...check.marks.map((mark) => cell("li", mark, { class: "allergy-prominent" })),
+    ...check.warning_notes.map((note) => cell("li", note, { class: "allergy-prominent" })),
     ...check.notes.map((note) => cell("li", note, { class: "allergy-quiet" })),
   );
 }

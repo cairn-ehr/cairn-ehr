@@ -91,11 +91,13 @@ pub struct ChartArg {
     pub reason: Option<String>,
 }
 
-/// The line's check as the webview draws it: the loud `Allergy` marks, the muted notes, the
-/// small "not checked" tag, and whether a Start line needs a reason (it has a mark).
+/// The line's check as the webview draws it: the loud `Allergy` marks, the notes that warn at
+/// the site's threshold (drawn as loud, under a `Warning` tag, ADR-0104), the muted notes, the
+/// small "not checked" tag, and whether a Start line needs a reason (anything warns).
 #[derive(Debug, serde::Serialize)]
 pub struct LineCheckView {
     pub marks: Vec<String>,
+    pub warning_notes: Vec<String>,
     pub notes: Vec<String>,
     pub unverified: bool,
     pub reason_needed: bool,
@@ -212,8 +214,8 @@ pub async fn med_chart_impl(
     )
     .await?;
     let reason = override_before_the_key(charted_as, &check, line.reason.as_deref())?;
-    // The fresh check's allergy marks, each named by its allergy record's event id.
-    let ids: Vec<String> = check.against.iter().map(Uuid::to_string).collect();
+    // What the fresh check found warning, each named by its allergy record's event id.
+    let ids = override_ids(&check);
     let against = override_refs(&ids);
     let d = read_directions(&line.directions);
     let today = local_today().to_string();
@@ -290,9 +292,10 @@ pub(crate) fn press(w: &str) -> Result<ChartedAs, ErrorView> {
     }
 }
 
-/// The reason to sign as the warning override (an allergy source today), or the refusal. Only a Start line with an
-/// allergy mark needs one: an already-taking line records what the patient takes, a note or
-/// "not checked" is no listed allergy. A blank trimmed reason is [`NEEDS_A_REASON`]; a reason
+/// The reason to sign as the warning override (an allergy source today), or the refusal. Only a
+/// Start line with a warning at the site's threshold needs one (an allergy mark; a previous
+/// adverse effect too when the administrator lowered it, ADR-0104): an already-taking line
+/// records what the patient takes, a quiet note or "not checked" is no warning. A blank trimmed reason is [`NEEDS_A_REASON`]; a reason
 /// sent against a check that could not run is [`CHECK_DID_NOT_RUN`]. Pure.
 pub(crate) fn override_before_the_key<'a>(
     charted_as: ChartedAs,
@@ -303,7 +306,7 @@ pub(crate) fn override_before_the_key<'a>(
         return Ok(None);
     }
     let reason = reason.map(str::trim).filter(|r| !r.is_empty());
-    match (check.marks.is_empty(), reason) {
+    match (!check.warns(), reason) {
         // A reason the window sent for a mark this check could not confirm: never dropped.
         (true, Some(_)) if check.unverified => Err(refused(CHECK_DID_NOT_RUN)),
         (true, _) => Ok(None),
@@ -315,11 +318,18 @@ pub(crate) fn override_before_the_key<'a>(
 /// The check as the webview draws it. Pure.
 pub(crate) fn view(c: LineCheck) -> LineCheckView {
     LineCheckView {
-        reason_needed: !c.marks.is_empty(),
+        reason_needed: c.warns(),
+        warning_notes: c.warning_notes().to_vec(),
+        notes: c.quiet_notes().to_vec(),
         marks: c.marks,
-        notes: c.notes,
         unverified: c.unverified,
     }
+}
+
+/// The allergy records a signed override names (as text): every warning `c` found at its
+/// threshold, marks first. Pure.
+pub(crate) fn override_ids(c: &LineCheck) -> Vec<String> {
+    c.warned_against().iter().map(Uuid::to_string).collect()
 }
 
 #[cfg(test)]
@@ -329,3 +339,11 @@ mod tests;
 #[cfg(test)]
 #[path = "med_chart_db_tests.rs"]
 mod db_tests;
+
+#[cfg(test)]
+#[path = "med_chart_threshold_tests.rs"]
+mod threshold_tests;
+
+#[cfg(test)]
+#[path = "med_chart_threshold_db_tests.rs"]
+mod threshold_db_tests;

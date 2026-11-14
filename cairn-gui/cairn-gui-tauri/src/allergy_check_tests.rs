@@ -304,6 +304,7 @@ fn the_pane_carries_each_lines_check() {
                 against: vec![Uuid::from_u128(7)],
                 notes: vec!["Previous adverse effect: codeine → GI upset".into()],
                 unverified: false,
+                ..LineCheck::default()
             },
         ),
         (

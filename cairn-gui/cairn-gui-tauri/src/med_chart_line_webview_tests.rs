@@ -56,7 +56,9 @@ fn an_opened_line_closes_and_the_list_keeps_it() {
 /// an answer about the old words can never draw over it. A new pick does the same.
 #[test]
 fn a_changed_drug_part_reads_not_checked_until_its_check_answers() {
-    assert!(MED_JS.contains("const LINE_NOT_CHECKED = { marks: [], notes: [], unverified: true };"));
+    assert!(MED_JS.contains(
+        "const LINE_NOT_CHECKED = { marks: [], warning_notes: [], notes: [], unverified: true };"
+    ));
     let input = js_fn(MED_JS, "onMedLineInput");
     assert!(input.contains("if (drugChanged) recheck();"), "{input}");
     let recheck = js_fn(MED_JS, "recheck");
