@@ -10,6 +10,33 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ CHARTING SLICE 3 — DRUG NAMES IN THE PICK (ADR-0106, db/076 in place) — do not undo**
+(pins: `crates/cairn-node/tests/drug_names_door.rs`; `db/tests/076_drug_read_door_test.sql` §5; `cairn-node`'s
+`medication::line` tests and `allergy/names_tests.rs`; `cairn-medication-view`'s `display.rs` and `row.rs` tests; in
+`cairn-gui/cairn-gui-tauri/src/`, `med_chart_tests.rs`, `drug_pick_webview_tests.rs`, `med_chart_webview_tests.rs`;
+the tab crate's `row_view_tests.rs`).
+- **The names view is optional: never add `moiety_name` to `cairn_drug_available()`'s required objects.** Its own
+  check is `cairn_drug_names_available()`. **Tempting wrong fix:** "one availability check is simpler". Every drugref
+  older than drugref db/070 would then read "no drug list", and every medication line on such a node would read "not
+  checked". Pin: `without_names_the_doors_answer_as_before`.
+- **Both picks find drugs through the ONE match, `cairn_drug_moiety_matches`.** **Tempting wrong fix:** inline a names
+  join in one door. The two picks would then disagree about what "adren" finds, and the allergy check would code what
+  the medication pick could not chart. It and the names check are granted to no one. A test that hands the doors to a
+  probe owner must hand both helpers too.
+- **`matched` is never signed.** The coding on the wire is `{system, code, display}` built field by field
+  (`med_chart_write::substance`); the allergy pick holds only those three. **Tempting wrong fix:** serialize
+  `CodingArg` whole into the event "now that it has all the fields". That puts a non-wire key into a signed body
+  forever (principle 11).
+- **The term completes to the name that MATCHED, never to the display** (`term_to_sign(typed, display, matched)`).
+  **Tempting wrong fix:** drop the third argument, since "the display is the name". "adren" picked as epinephrine
+  would then sign "adren". `matched` must ride with a draft line's saved parts for the same reason (a reopened line
+  signs after a restart). Pins: `term_to_sign_completes_to_the_matched_name`,
+  `a_picked_alias_signs_the_matched_name`.
+- **The allergy bracket keys on `drugref-moiety` only** (`allergen_name`). A group-coded entry keeps its words, and the
+  by-name check still reads `term`. **Tempting wrong fix:** bracket every coded entry ("Penicillins (allergy group)
+  (penicillin)"), or feed `allergen_name` to the check (the brackets would then stop a by-name match). Pin:
+  `only_a_drug_code_with_another_name_is_bracketed`.
+
 **⇒ CHARTING SLICE 2 — A STAT DOSE, ORDERED THEN GIVEN (ADR-0105, db/082; db/005 + db/020 + db/031 + db/037 +
 db/039 + db/048 + db/060 + db/077 + db/079 + db/080 in place) — do not undo**
 (pins: in `crates/cairn-node/tests/`, `medication_given_floor.rs`, `medication_given_retraction_floor.rs`,
