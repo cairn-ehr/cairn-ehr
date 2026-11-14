@@ -3377,7 +3377,7 @@ the crossed-out figure as checked. **Live only**: a `--mock` window has no list.
 | Gesture | Start | Stop | Budget |
 |---|---|---|---|
 | Restore: the press to the line in the editor | the press of *Use this version instead* | the pre-filled line open in the editor | **≤ 2 s** |
-| Restore: its Sign | the press of *Sign ticked lines* | the outcome drawn | **≤ 3 s** (slice 1's Sign budget, M3 Max) |
+| Restore: its Sign | the press of *Sign ticked lines* | the outcome drawn | **≤ 3 s** (slice 1's Sign budget, not this plan's §1.2; M3 Max) |
 | Check: its Sign | the press of the check row's *Sign* | the version drawn "checked by …" | **≤ 3 s** (slice 1's Sign budget) |
 | Reading what was settled | the chart open | the settle line read | **1 press** (open "{n} other version(s)") |
 
@@ -3410,21 +3410,23 @@ Webster pack seen*), and Sign. Close the chart.
       the line editor is open on a new line pre-filled with the version's drug and `tab 20mg nocte` (≤ 2 s). The line
       is marked "restores the Packets / Webster pack seen version", reads *Already taking* (the companion's press),
       and has no source of its own: "From:" never stamps a restore line. Nothing was signed:
-      `psql "$CONN" -c "SELECT count(*) FROM medication_restore"` is 0.
+      `psql "$CONN" -c "SELECT count(*) FROM medication_restore WHERE patient_id = '$S1'"` is 0.
 - [ ] Change the dose to 25 mg, set the line's own *From:* to *GP letter*, `surgery, by phone`, and *Why* `dispensed
       25 mg since March`, and finish the line.
 - [ ] The restore line is ticked by default (it is not a duplicate of the 40 mg line it replaces). *Sign ticked
       lines* (≤ 3 s): `Charted 1 of 1`. The 40 mg line is stopped; the 25 mg line is current and reads
       "replaced: atorvastatin 40 mg … — {your name}, {when}" under it; the version reads "restored by {your name},
       {when}", with no buttons, and no longer counts "to check".
-- [ ] `psql "$CONN" -c "SELECT reason FROM medication_cessation"` shows `replaced by the Packets / Webster pack seen
-      version`; `SELECT version_id FROM medication_restore` shows the version; `SELECT count(*) FROM
-      medication_restore_pending` is 0.
+- [ ] `psql "$CONN" -c "SELECT reason FROM medication_cessation WHERE patient_id = '$S1'"` shows
+      `replaced by the Packets / Webster pack seen version`;
+      `SELECT version_id FROM medication_restore WHERE patient_id = '$S1'` shows the version;
+      `SELECT count(*) FROM medication_restore_pending` is 0.
 - [ ] A restore line with no *From:* of its own signs `unknown`: repeat on a fresh version, clear the line's source,
       Sign, and check `info_source` in `medication_statement`.
-- [ ] On a fresh chart set up as above with TWO versions beside the line, restore both: both restore lines read as duplicates of each other and
-      neither is ticked. Tick both by hand and Sign: the first charts; the second is not charted, saying "another
-      line restoring a version of the same line is signed first; sign this one after it", and stays in the list.
+- [ ] On a fresh chart set up as above with TWO versions beside the line, restore both: both restore lines read as
+      duplicates of each other and neither is ticked. Tick both by hand and Sign: the first charts; the second is not
+      charted, saying "another line restoring a version of the same line is signed first; sign this one after it",
+      and stays in the list.
 - [ ] A version set aside beside the restored 25 mg line, then restored: its line is **not** ticked by default
       (it replaces a restore). Tick it by hand and Sign: the 25 mg line is stopped, one atorvastatin line is current.
 - [ ] On a fresh chart, stop the 40 mg line for another reason: its version keeps its buttons and "to check" no
@@ -3440,7 +3442,8 @@ Webster pack seen*), and Sign. Close the chart.
 - [ ] Start the stopwatch, press the row's *Sign* (one passphrase on a shared terminal): stop when the version reads
       "checked by {your name}, {when}: not current — from dispensing history — dispensed 40 mg only" (≤ 3 s). Its
       buttons stay; the summary no longer says "to check". The 40 mg line is unchanged.
-- [ ] `psql "$CONN" -c "SELECT info_source, source_detail, why FROM medication_set_aside_checked"` shows
+- [ ] The check's row, `psql "$CONN" -c`
+      `"SELECT info_source, source_detail, why FROM medication_set_aside_checked WHERE patient_id = '$S2'"`, shows
       `external-record`, `dispensing history`, `dispensed 40 mg only`.
 - [ ] Check it again with no *From:* choice and the detail `ward pharmacist`: a second "checked by" line, oldest first;
       the row's `info_source` is `unknown`, the detail kept.
@@ -3451,7 +3454,8 @@ Webster pack seen*), and Sign. Close the chart.
 **Measurement 3: the timings (five runs each, held key, then shared terminal).**
 
 - [ ] The restore press to the editor open (≤ 2 s); the restore's Sign (≤ 3 s); the check row's Sign (≤ 3 s).
-- [ ] The restore's write half: `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind = 'medication-chart'"`.
+- [ ] The restore's write half:
+      `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind = 'medication-chart'"`.
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 

@@ -95,11 +95,12 @@ beside a charted current one; a peer's version that arrives before its companion
 A reviewer settles a version in one signed act, either way. **Restoring** it is never an edit of the version: it
 stops whatever line now stands for its companion (the companion, or a line that replaced it by an earlier restore),
 and charts a new line carrying the optional key `restores` (the version's id), in one transaction. The floor holds
-the pairing at commit, so no client can leave two current lines, and it finds what stands through one function the
-window reads too. It does not compare the new line's drug with the version's, so the reviewer may edit the dose.
-**"Checked: not current"** is its own event type, `clinical.medication-set-aside-checked.asserted`, whose type is the
-verdict. It locks nothing and is never a current line. Under the line, a version reads who checked or restored it and
-when, and the new line reads what it replaced ([ADR-0103](decisions/0103-settling-a-set-aside-version.md)).
+the pairing at commit, so no client of the authoring door can sign a restore that leaves two current lines, and it
+finds what stands through one function the window reads too. It does not compare the new line's drug with the
+version's, so the reviewer may edit the dose. **"Checked: not current"** is its own event type,
+`clinical.medication-set-aside-checked.asserted`, whose type is the verdict. It locks nothing and is never a current
+line. Under the line, a version reads who checked or restored it and when, and the new line reads what it replaced
+([ADR-0103](decisions/0103-settling-a-set-aside-version.md)).
 
 The allergies row above is built as two born-sealed, additive event types: one entry
 (`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose

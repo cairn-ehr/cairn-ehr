@@ -8,7 +8,7 @@
   the "checked" type) and its continuation PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098) (the list,
   the node, the window and these docs). Design:
   `docs/superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md` §3.3 and §3.4, amended by
-  the build's rulings R3–R10 (recorded below). Refs
+  the build's rulings R1, R3–R10 and R11 (recorded below; R2 was superseded by R5). Refs
   [#1097](https://github.com/cairn-ehr/cairn-ehr/issues/1097) (an erased link in a restore chain).
 - **Builds on:** [ADR-0102](0102-set-aside-versions-and-the-source-of-a-line.md) (the set-aside version, "From:", the
   two source keys; its Consequences required a restore to be a stop and a new line) ·
@@ -42,9 +42,9 @@ Ruling R3 replaced it (decision 2).
    gains ` · restores a set-aside version`, after the warning-override clause (twin = wire). The version event is
    never touched (principle 2).
 2. **A restore stops whatever stands for the companion** (ruling R3). That is the companion itself when it is current,
-   or else whichever line now stands in its place: a line that restored one of its versions, a line that restored a
-   version of THAT line, and so on. A companion stopped for another reason, with nothing current in its place, needs
-   no cessation. This supersedes the design's §3.3 sentence quoted above.
+   or else whatever is current anywhere in the companion's rooted restore tree (decision 3): a line that restored one
+   of its versions, a line that restored a version of THAT line, and so on. A companion stopped for another reason,
+   with nothing current in its tree, needs no cessation. This supersedes the design's §3.3 sentence quoted above.
 3. **What stands is ONE SQL function, read by the floor and by the window alike** (rulings R4 and R10):
    `cairn_medication_restore_lineage(companion, patient)` (`db/080` §1). It walks UP first, from a restore line to the
    companion of the version it restored, to the original line, then returns the whole tree below it, following
@@ -63,10 +63,10 @@ Ruling R3 replaced it (decision 2).
 5. **The pairing is checked at COMMIT.** A `DEFERRABLE INITIALLY DEFERRED` constraint trigger on the pending table runs
    once per row: unless the restore's own thread has a cessation, no other member of the lineage may be current
    (projected in `medication_statement` with no `medication_cessation` row). Otherwise the whole transaction fails and
-   every write in it rolls back; a raw-SQL client cannot sign a restore that leaves two current lines. The row is then
-   deleted, so the table is empty outside a transaction. The stop and the line may be submitted in either order. A
-   client that sets the constraint `IMMEDIATE` only makes the check stricter: the stop must then come first. Two
-   restores of one companion in one transaction commit when only the last one stands.
+   every write in it rolls back; no client of the authoring door, raw SQL included, can sign a restore that leaves two
+   current lines. The row is then deleted, so the table is empty outside a transaction. The stop and the line may be
+   submitted in either order. A client that sets the constraint `IMMEDIATE` only makes the check stricter: the stop
+   must then come first. Two restores of one companion in one transaction commit when only one of them stands.
 6. **The commit check never reads the `cairn.remote_apply` setting.** Only the authoring door owes the pairing, but
    the strict door sets that setting to `''` for its own duration only, and at COMMIT it reads whatever the transaction
    last set (`cairn_reproject` leaves it `'on'`). The pending row's existence is the record that the restore came
@@ -75,7 +75,8 @@ Ruling R3 replaced it (decision 2).
 7. **The remote door checks structure only.** A peer's restore that arrives before its version has synced is
    admitted and projected. A reprojection, a late-custody heal and a shred re-fold run the appliers only, never a
    check, so none of them writes a pending row. A re-submit of an event already in the log is `db/005`'s silent no-op
-   and is judged no further.
+   and is judged no further. A set-aside version carrying `restores` is refused at both doors (`db/079`, even as JSON
+   null): a version restores nothing.
 8. **The floor does not compare the new line's drug with the version's.** The reviewer may edit the line ("right
    drug, but the dose has changed since"), and the floor cannot tell an edit from a different drug.
 9. **`restores` has its own projection, `medication_restore`** (ruling R5): one row per restore event, keyed by the
@@ -116,9 +117,10 @@ Ruling R3 replaced it (decision 2).
     §2), and a list held on another terminal. The webview then opens the one editor on the new line.
 15. **The prefill** (ruling R8) is the version's term as the drug, one part with the version's coding, and the
     version's `sig` as the directions, with its dose and route put in front only when the `sig` does not already say
-    them (doubled, they would read as two doses). The line's `charted_as` is the companion's; a companion charted
-    before slice 1a, with none, gives `pre-existing` (the maintainer's ruling). This window has no control that
-    changes a list line's press.
+    them (doubled, they would read as two doses). The line's `charted_as` is `started-here` when the companion was
+    started here; anything else gives `pre-existing`: a companion charted before slice 1a, with none (the
+    maintainer's ruling), and `unknown` or any word a peer sent (ruling R11), because a list line takes only the two
+    presses. This window has no control that changes a list line's press.
 16. **A restore line never takes "From:" or the press default.** "From:" stamps only a line with no stored row
     (ADR-0102 decision 4), and a restore line is stored by its press, so it is never stamped. A restore line with no
     source category of its own signs `unknown`, never the press default (the maintainer's ruling): the press says
@@ -126,9 +128,9 @@ Ruling R3 replaced it (decision 2).
     "From:" and "why" for what the call found.
 17. **A restore line is not a duplicate of the lines it will stop.** It is judged against the chart without the rows
     made wholly of its `standing` lines, but still against every other current line and every other list line, so
-    two restores of one companion duplicate each other and neither is default-ticked. A restore whose `standing`
-    holds a restore line is never default-ticked (ruling R9 b): replacing a restore charted earlier must be
-    deliberate.
+    two restores of one drug (the same moiety code, or the same text) duplicate each other and neither is
+    default-ticked; ruling R9 a catches the rest at Sign (decision 18). A restore whose `standing` holds a restore
+    line is never default-ticked (ruling R9 b): replacing a restore charted earlier must be deliberate.
 18. **Sign re-derives the restore from the STORED row on the fresh read**, never from the webview. Each restore
     line's version is read on the OPENED chart with what stands for it. Two per-line refusals come before the key:
     `RESTORE_VERSION_GONE` ("the version it restores can no longer be read"), and, for a later ticked restore of the
@@ -185,9 +187,9 @@ Ruling R3 replaced it (decision 2).
 - **A line carrying `restores` twice joins two trees.** The authoring door admits `restores` only on a new thread, but
   a peer's re-assertion of a restore line naming a second version gives that line two parents. The lineage then spans
   both trees, and a restore in either must stop the current line of the other.
-- **A version whose companion was charted `unknown` cannot be restored from this window.** The window never writes
-  `unknown`, but the wire admits it. The prefill inherits it, `db/078`'s `CHECK` on the draft line refuses it, and the
-  press fails as a node failure, not in the clinician's words.
+- **A receiving node may briefly show none current, or two.** There the stop and the restore are separate events,
+  and the remote door checks structure only. When the stop arrives first (the usual order: the stops take their HLCs
+  first) the drug briefly shows no current line; when the restore arrives first, two. Both settle when both arrive.
 - **Drafts do not cross nodes** ([#963](https://github.com/cairn-ehr/cairn-ehr/issues/963)): a restore line lives on
   the node that pressed it. The signed restore and check do cross.
 - **The figures are owed by a human.** Every stopwatch figure, the real window's WebKit and VoiceOver are measured

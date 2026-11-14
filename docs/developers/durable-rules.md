@@ -10,10 +10,13 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
-**⇒ BATCH CHARTING SLICE 2b — THE RESTORE AND "CHECKED: NOT CURRENT" (ADR-0103, db/080, db/078 + db/079 + db/048 + db/037 + db/031 in place) — do not undo**
-(pins: `crates/cairn-node/tests/{medication_restore_floor,medication_restore_replaces,medication_version_checked_floor,medication_version_settle,medication_draft_list_restore_store}.rs`,
-`crates/cairn-event/src/medication/charting_tests.rs`,
-`cairn-gui/cairn-gui-tauri/src/{med_list_restore,med_list_restore_db,med_list_restore_chain_db,med_version_check_db,med_versions_settle_webview}_tests.rs`).
+**⇒ BATCH CHARTING SLICE 2b — THE RESTORE AND "CHECKED: NOT CURRENT" (ADR-0103, db/080, db/078 + db/079 +
+db/048 + db/037 + db/031 in place) — do not undo**
+(pins: in `crates/cairn-node/tests/`, `medication_restore_floor.rs`, `medication_restore_replaces.rs`,
+`medication_version_checked_floor.rs`, `medication_version_settle.rs`, `medication_draft_list_restore_store.rs`;
+`crates/cairn-event/src/medication/charting_tests.rs`; in `cairn-gui/cairn-gui-tauri/src/`,
+`med_list_restore_tests.rs`, `med_list_restore_db_tests.rs`, `med_list_restore_chain_db_tests.rs`,
+`med_version_check_db_tests.rs`, `med_versions_settle_webview_tests.rs`).
 Every slice 2a and slice 1 rule below still holds; a restore line is a list line, and its spend is slice 1's spend.
 - **A restore's pairing is checked at COMMIT, from a pending row, never from the `cairn.remote_apply` setting.** The
   authoring-door branch of `cairn_check_medication_restores` writes a `medication_restore_pending` row (with the
@@ -22,7 +25,8 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   `cairn_reproject` leaves it `'on'`, which would waive the check); make the trigger `IMMEDIATE` (the stop and the line
   may be submitted in either order); write the pending row from an applier (a re-fold would owe a pairing it already
   settled). Pins: `medication_restore_floor.rs::a_restore_without_the_companions_stop_fails_at_commit`,
-  `the_pending_table_is_empty_after_commit`, `a_reprojection_rebuilds_restores`, `the_remote_door_admits_an_orphan_restore`,
+  `the_pending_table_is_empty_after_commit`, `a_reprojection_rebuilds_restores`,
+  `the_remote_door_admits_an_orphan_restore`,
   `medication_restore_replaces.rs::set_constraints_immediate_needs_the_stop_first`,
   `an_idempotent_resubmit_of_a_restore_is_a_no_op`.
 - **A restore stops WHATEVER stands for the companion, and what stands is ONE rooted function shared by the floor and
@@ -33,20 +37,35 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   aside beside a restore line misses its sibling, R10); compute `standing` in Rust "to save a round trip" (the window
   and the floor drift apart). Pins: `medication_restore_replaces.rs::a_second_restore_stops_the_first_restores_line`,
   `a_chain_of_restores_is_followed_to_the_line_that_stands`,
-  `two_restores_of_one_companion_in_one_transaction_commit_when_one_stands`,
-  `medication_version_settle.rs::a_restore_of_a_version_set_aside_beside_a_restore_line_is_checked_against_the_whole_lineage`,
+  `two_restores_of_one_companion_in_one_transaction_commit_when_one_stands`, `medication_version_settle.rs`'s
+  `a_restore_of_a_version_set_aside_beside_a_restore_line_is_checked_against_the_whole_lineage` and
   `a_companion_stopped_since_the_read_still_leaves_one_current_line`,
   `med_list_restore_chain_db_tests.rs::a_chain_restore_and_a_sibling_restore_refuse_the_second_legibly`.
 - **`restores` lives in its own table, `medication_restore`**, one row per restore EVENT, keyed by content address,
   insert-or-nothing (ruling R5). **Tempting wrong fix:** a `restores` column on `medication_charting` "beside the other
   charting fields" (one HLC-winner row per thread: a sealed restore that heals late loses to a newer re-assertion, and a
-  shred keyed by the producing event can miss it). Pins: `medication_restore_replaces.rs::a_restore_projects_whatever_order_it_arrives_in`,
+  shred keyed by the producing event can miss it). Pins:
+  `medication_restore_replaces.rs::a_restore_projects_whatever_order_it_arrives_in`,
   `medication_restore_floor.rs::a_shred_removes_the_restore_row`, `a_reprojection_rebuilds_restores`.
+- **`restores` has ONE source.** Only `cairn_med_draft_restore_add` sets a draft line's `restores`; the save door has no
+  `p_restores`; `chart_draft_line` refuses a caller's own `charting.restores` (`draft.rs`), so the key signed is always
+  the stored line's version. **Tempting wrong fix:** add `p_restores` to the save door, or let a caller pass
+  `charting.restores`, "for symmetry" (a typo-fix save, or any caller, could turn a plain line into a restore that
+  stops the patient's current line). Pins:
+  `medication_draft_list_restore_store.rs::a_save_never_clears_or_sets_restores`,
+  `medication_version_settle.rs::a_restore_with_its_own_charting_restores_is_refused`.
 - **"Checked: not current" is its own type with no verdict field**, never a medication line, and it locks nothing.
   **Tempting wrong fixes:** a `verdict: bool` (one flag to get backwards; the opposite outcome is a restore); refuse a
-  second check, or a restore of a checked version. Pins: `medication_version_checked_floor.rs::a_check_is_never_a_current_medication`,
+  second check, or a restore of a checked version. Pins:
+  `medication_version_checked_floor.rs::a_check_is_never_a_current_medication`,
   `two_checks_of_one_version_both_project`, `current_line_keys_and_a_safety_claim_are_refused_at_both_doors`,
   `med_versions_settle_webview_tests.rs::a_checked_version_shows_who_and_keeps_both_buttons`.
+- **`{who}` in "checked by", "restored by" and "replaced:" is a person or nobody** (ruling R6): the vouched attester,
+  else the envelope signer, named only when `cairn_note_key_is_human` holds for that key, else "signer not known".
+  **Tempting wrong fix:** swap in a plain `cairn_note_signer_name(e.signer_key_id)` "to show a name more often" (a
+  device or agent key would read as the person who checked or restored). Pin:
+  `medication_version_settle.rs::an_unvouched_signer_reads_as_none`; the non-human-key pin lands in the slice's final
+  wave.
 - **A restore line never takes a press default or a "From:" stamp.** It is created stored by
   `cairn_med_draft_restore_add`, so `stamp_new_line` never sees it as new, and with no source category of its own it
   signs `unknown` (`restore_source`). **Tempting wrong fixes:** let the restore door stamp "From:" "for speed" (the
@@ -55,9 +74,9 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   `med_list_restore_tests.rs::a_restore_line_with_no_source_signs_unknown`,
   `med_list_restore_db_tests.rs::restore_open_adds_a_prefilled_line_with_its_mark`.
 - **A restore line is not a duplicate of the lines it will stop**, but still of every other current line and list
-  line (`current_besides_stops`). **Tempting wrong fixes:** judge it against the whole chart (it is never default-ticked,
-  and the morning act costs an extra hand tick); exempt it from the duplicate check altogether (it charts the drug twice
-  beside another current line, and two restores of one line both default-tick). Pins:
+  line (`current_besides_stops`). **Tempting wrong fixes:** judge it against the whole chart (it is never
+  default-ticked, and the morning act costs an extra hand tick); exempt it from the duplicate check altogether (it
+  charts the drug twice beside another current line, and two restores of one line both default-tick). Pins:
   `med_list_restore_db_tests.rs::a_restore_line_is_not_a_duplicate_of_its_companion_but_is_of_another`,
   `two_restores_of_one_line_duplicate_each_other`.
 - **A restore replacing a restore is never default-ticked, and a second ticked restore of one lineage is refused per
