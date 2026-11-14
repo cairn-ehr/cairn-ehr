@@ -994,15 +994,15 @@ Steps: a give on paper *N* = 1 act → observed \_\_ presses and \_\_ Signs; a s
 |---|---|---|
 | `ceftriaxone 1g iv stat` on *Start* signs `stat`; "stat · ordered … · not yet given", current | | |
 | `1g iv stat then daily`, `1g iv prn stat`, *Already taking* `1g iv stat`: no stat line | | |
-| Given: the row pre-filled with now; signs nothing until its Sign; "Given."; the row reads **given** | | |
+| Given: the row pre-filled with now; a redraw keeps it; *Cancel* signs nothing (focus: record) | | |
+| Given's Sign: "Given."; the row reads **given** | | |
 | One cessation (`stat dose given`) and one given with `completes`; the line leaves the current list | | |
-| An earlier time reads "given …, before it was charted …", in that order, not refused | | |
 | A later time: "The time given cannot be later than now", nothing signed | | |
 | A partial time refused; still refused after a redraw (R9 words); cleared key by key, given at now | | |
+| On a fresh order, an earlier time reads "given …, before it was charted …", in that order, not refused | | |
 | Entered in error: its own struck line, the line current again, "waiting to be given again" | | |
 | A stale Given and a stale strike refused in words, nothing written | | |
 | A linked chart's stat line: no buttons | | |
-| *Cancel* signs nothing; a redraw keeps the typed row | | |
 | The real Tauri IPC: `med_stat_give` and `med_stat_strike` answer | | |
 | WebKit (the real window): both rows, the time field | | |
 

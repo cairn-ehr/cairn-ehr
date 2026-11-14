@@ -132,11 +132,12 @@ The maintainer ruled on four questions (2026-11-14):
     strike's own thread (`medication_id`), so it can never void another line's stop.
 17. **Both arrival orders end in the same rows.** A stop that arrives after its strike is never projected:
     `db/031`'s `medication_cessation_apply` and `db/060`'s reason applier (both edited in place) ask
-    `cairn_medication_cessation_voided` first. A stop that arrived first is removed by the strike's applier, which
-    deletes the stop's reason rows and its `medication_cessation` row. **Only when that delete removed the thread's
-    winning row** does it re-fold the thread through `cairn_refold_after_shred` (`db/037`, #863), so a real stop of the
-    same line wins again, or none does and the line reads current. The plan had the re-fold run unconditionally; the
-    build found that it recursed without end, because the re-fold replays the thread's strikes, this one included.
+    `cairn_medication_cessation_voided` before writing the stop's row. A stop that arrived first is removed by the
+    strike's applier, which deletes the stop's reason rows and its `medication_cessation` row. **Only when that
+    delete removed the thread's winning row** does it re-fold the thread through `cairn_refold_after_shred`
+    (`db/037`, #863), so a real stop of the same line wins again, or none does and the line reads current. The plan
+    had the re-fold run unconditionally; the build found that it recursed without end, because the re-fold replays
+    the thread's strikes, this one included.
 18. **A stop and its strike applied at once serialize per stop.** Pulls may run at once, one per peer. Without a
     lock, a hub applying a peer's stop while another transaction applies the strike voiding it would have each miss
     the other's uncommitted rows, and the struck stat dose would read given. Both appliers take
@@ -171,8 +172,9 @@ The maintainer ruled on four questions (2026-11-14):
     otherwise "Entered in error.". A second standing give, or a real stop, keeps the line stopped, and a false
     "waiting again" invites a second dose. A failed read after the strike also says "Entered in error.".
 23. **An act that landed always answers Ok.** When the pane cannot be read again, the outcome reads "Signed — but the
-    medication list could not be read again (…). Use “Read this chart again”.": an error would be offered for retry,
-    and a retried Given gives the dose twice.
+    medication list could not be read again (…). Use “Read this chart again”.". An error would read as "not
+    recorded" and be offered for retry. The retry would only be refused as stale (`STAT_NOT_OPEN`), and the
+    clinician would be left believing a dose they gave went unrecorded.
 
 ### Reading it back (maintainer, Q3)
 
@@ -213,7 +215,7 @@ The maintainer ruled on four questions (2026-11-14):
   faulty peer's `voids` naming a real stop of the same line is obeyed. Confining the void to `"stat dose given"`
   stops was rejected: it would tie currency to a free-text reason.
 - **An older node keeps a struck stat dose stopped.** A node built before this slice holds the strike
-  uninterpreted, so on it the line reads "stopped: stat dose given" after the strike too, for as long as it runs the
+  uninterpreted, so on it the line reads "Stopped: stat dose given" after the strike too, for as long as it runs the
   older schema.
 - **One stat line per row** ([#1107](https://github.com/cairn-ehr/cairn-ehr/issues/1107)): decision 28.
 - **`stat`, `ordered {o}` and the orderer follow the charting row's overlay winner.** `medication_charting` keeps one

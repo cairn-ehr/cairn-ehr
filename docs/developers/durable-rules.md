@@ -44,10 +44,12 @@ Every slice 1a, 2a, 2b and 3 rule below still holds; a stat order is a charted l
   doors do not yet pin the setting (ADR-0105, "not guaranteed").
 - **A narrow rebuild of `clinical.medication-given-retraction`, of `clinical.medication-given` or of
   `clinical.medication-cessation` is refused** (`db/039`), because the strike's applier is registered against
-  `medication_cessation` and `medication_cessation_reason`. **Tempting wrong fix:** drop those two tables from the
-  strike's registration "because it only deletes from them" (a narrow rebuild would then truncate the stops and replay
-  only one side, and `db/037`'s re-fold would stop seeing that the strike feeds the stops). Rebuild the given alone
-  with `clinical.medication-given.` (the dot). Pin: `a_narrow_rebuild_of_the_retraction_type_keeps_every_stop`.
+  `medication_cessation` and `medication_cessation_reason` (`clinical.medication-cessation` was already refused on
+  `medication_patient_conflict_flag`; the strike is a second reason). **Tempting wrong fix:** drop those two tables
+  from the strike's registration "because it only deletes from them" (a narrow rebuild would then truncate the stops
+  and replay only one side, and `db/037`'s re-fold would stop seeing that the strike feeds the stops). Rebuild the
+  given alone with `clinical.medication-given.` (the dot). Pin:
+  `a_narrow_rebuild_of_the_retraction_type_keeps_every_stop`.
 - **`stat` is signed only on a pure one-off *Start* line** (`med_stat::is_stat_order`: *Start medication*, the
   directions read `stat`, no frequency, no `prn`), from `med_line_sign::charting`, so both Sign paths agree, and it is
   written only as `true`. **Tempting wrong fixes:** sign it whenever the `sig` says "stat" ("1g iv stat then daily"

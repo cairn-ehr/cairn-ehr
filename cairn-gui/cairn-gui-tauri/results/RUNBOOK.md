@@ -3602,8 +3602,9 @@ because the build moves `SCHEMA_GENERATION` to 82. Then:
 
 ```bash
 G1=$(achart "Stat Given" 1987-07-07)     # "No known drug allergies" recorded
-G2=$(achart "Stat Before" 1988-08-08)    # "No known drug allergies" recorded
-for c in "$G1" "$G2"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+G2=$(achart "Stat Refused" 1988-08-08)   # "No known drug allergies" recorded
+G3=$(achart "Stat Before" 1989-09-09)    # "No known drug allergies" recorded
+for c in "$G1" "$G2" "$G3"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
 ```
 
 Name a clinician in who's here (`dr-a`) for the orders, and a second (`rn-b`) for the gives.
@@ -3615,29 +3616,30 @@ Name a clinician in who's here (`dr-a`) for the orders, and a second (`rn-b`) fo
       `psql "$CONN" -c "SELECT stat FROM medication_charting WHERE patient_id = '$G1'"` reads `t`.
 - [ ] Not stat orders (chart each, read it, then stop it): `1g iv stat then daily`, `1g iv prn stat`, and *Already
       taking* `1g iv stat`. None shows a stat line or *Given*; `stat` reads `f` for each.
-- [ ] Switch who's here to `rn-b`. Start the stopwatch, press *Given*: the row opens with "Time given" holding now.
-      Press its *Sign* (one passphrase on a shared terminal): stop when the row reads **given** and the stat line
-      reads "stat · ordered {o} Dr A … · given {g} RN B …" (≤ 3 s). The outcome reads "Given."; *Given* is gone,
+- [ ] Switch who's here to `rn-b`. Press *Given*: the row opens with "Time given" holding now. Read the chart again
+      while the row is open: the row is redrawn as it was. *Cancel* closes it with nothing signed; record where focus
+      lands.
+- [ ] Start the stopwatch, press *Given*, then the row's *Sign* (one passphrase on a shared terminal): stop when the
+      row reads **given** and the stat line reads "stat · ordered {o} Dr A … · given {g} RN B …" (≤ 3 s). The outcome reads "Given."; *Given* is gone,
       *Entered in error* is beside the give.
 - [ ] The two events, one transaction, read with `psql "$CONN" -c`:
-      `"SELECT reason FROM medication_cessation WHERE patient_id = '$G1'"` reads `stat dose given`;
-      `"SELECT completes IS NOT NULL, given_at FROM medication_given WHERE patient_id = '$G1'"` reads `t` and the
-      time given; the ceftriaxone line is no longer in `patient_medication_current`.
-- [ ] *Cancel* on an open Given row closes it with nothing signed; record where focus lands. A redraw while the row
-      is open (the chart read again) keeps what was typed.
+      `"SELECT reason FROM medication_cessation WHERE patient_id = '$G1' AND reason = 'stat dose given'"` reads one
+      row; `"SELECT completes IS NOT NULL, given_at FROM medication_given WHERE patient_id = '$G1'"` reads `t` and
+      the time given; the ceftriaxone line is no longer in `patient_medication_current`.
 
 **Measurement 2: the time given.**
 
-- [ ] On `$G2`, chart `ceftriaxone 1g iv stat` as `dr-a`. As `rn-b`, press *Given* and set "Time given" to ten
+- [ ] On `$G2`, chart `ceftriaxone 1g iv stat` as `dr-a`. As `rn-b`, press *Given*. Type a time later than now (past
+      the field's maximum): *Sign* is refused beside the line, "The time given cannot be later than now", and nothing
+      is signed.
+- [ ] Still on `$G2`'s open row, a partly typed time (the date only, no hour): *Sign* is refused beside the line ("the
+      time given is only partly typed — finish it, or clear it if the dose was given now"). Read the chart again while
+      the partial is in the field, then press *Sign*: still refused, "The time given was lost while it was being typed
+      — type it again, or press Cancel and Given for now". Clear the field key by key and Sign: given at now.
+- [ ] Record what a VoiceOver user hears for each refusal (it is not a live region, #1112).
+- [ ] On `$G3`, chart `ceftriaxone 1g iv stat` as `dr-a`. As `rn-b`, press *Given* and set "Time given" to ten
       minutes before the order was charted. Sign: the stat line reads "stat · given {g} RN B …, before it was charted
       {o} Dr A …", in that order. Nothing was refused and nothing was reordered.
-- [ ] A time later than now (type it, past the field's maximum): *Sign* is refused beside the line, "The time given
-      cannot be later than now", and nothing is signed.
-- [ ] A partly typed time (the date only, no hour): *Sign* is refused beside the line ("the time given is only partly
-      typed — finish it, or clear it if the dose was given now"). Read the chart again while the partial is in the
-      field, then press *Sign*: still refused, "The time given was lost while it was being typed — type it again, or
-      press Cancel and Given for now". Clear the field key by key and Sign: given at now.
-- [ ] Record what a VoiceOver user hears for each refusal (it is not a live region, #1112).
 
 **Measurement 3: entered in error, and a stale press.**
 
@@ -3645,8 +3647,9 @@ Name a clinician in who's here (`dr-a`) for the orders, and a second (`rn-b`) fo
       gains its own line "given {g} RN B … — entered in error by Dr A …, {when} — wrong patient", the line is current
       and reads "· not yet given" again, and the outcome reads "Entered in error: the stat dose is waiting to be given
       again." *Given* is back.
-- [ ] `psql "$CONN" -c "SELECT count(*) FROM medication_cessation WHERE patient_id = '$G1'"` is 0;
-      `SELECT voids IS NOT NULL, text FROM medication_given_retraction WHERE patient_id = '$G1'` reads `t`,
+- [ ] With `psql "$CONN" -c`:
+      `"SELECT count(*) FROM medication_cessation WHERE patient_id = '$G1' AND reason = 'stat dose given'"` is 0;
+      `"SELECT voids IS NOT NULL, text FROM medication_given_retraction WHERE patient_id = '$G1'"` reads `t`,
       `wrong patient`.
 - [ ] Nothing to walk, but know it: a strike beside a second standing give or a real stop of the same line says
       only "Entered in error." and the line stays stopped. This window offers neither state (it refuses a second
