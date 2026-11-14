@@ -15,7 +15,8 @@
 // (`medSigning`, through med_versions_settle.js's `settleBlocked` — the buttons carry
 // `data-settle="stat"`, so `syncSettleButtons` re-decides them on every list draw); a row signs
 // nothing until its own Sign; a partly typed time is refused here, because it reaches this script
-// as an EMPTY value and Rust reads empty as now (`pressStatSign`); and a refusal is said beside
+// as an EMPTY value and Rust reads empty as now (`pressStatSign`), even after a redraw has rebuilt
+// its field empty (`keep`); and a refusal is said beside
 // the line, never only in a status bar. No dialog.
 //
 // The table is drawn again on every chart read, so what must outlive a redraw lives here, not in
@@ -154,12 +155,19 @@ function closeStat(form) {
   if (back) back.focus();
 }
 
-/** Keep what the open row's field holds. A partly typed `datetime-local` has value "" and
- *  `validity.badInput`: kept as null, never as "" (which Rust reads as now). */
-function keep(field) {
+/**
+ * Keep what the open row's field holds. A partly typed `datetime-local` has value "" and
+ * `validity.badInput`: kept as null, never as "" (which Rust reads as now). A null outlives a
+ * redraw: the rebuilt field is an ordinary EMPTY one, with no `badInput` to tell it from a
+ * cleared field, so only a real edit of it (`edited`: its `input` or `change`) may replace the
+ * null. A keyup, a blur or the press itself never turns it into "" — the half-typed time would
+ * otherwise sign as now, a time nobody gave.
+ */
+function keep(field, edited) {
   if (!statOpen) return; // a field removed with its row may still report a blur
-  if (statOpen.kind === "give") statOpen.time = field.validity.badInput ? null : field.value;
-  else statOpen.why = field.value;
+  if (statOpen.kind !== "give") return void (statOpen.why = field.value);
+  if (field.validity.badInput) statOpen.time = null;
+  else if (edited || statOpen.time !== null) statOpen.time = field.value;
 }
 
 /** The open row from `statOpen`'s words: "Time given" (a `datetime-local`, `max` now) or "Why
@@ -170,7 +178,10 @@ function statRow(stat, row) {
   const form = cell("div", "", { class: "med-stat-row", role: "group", "aria-label": (give ? GIVE : STRIKE) + ": " + row.primary });
   const field = cell("input", "", give ? { type: "datetime-local", max: localMinute(new Date()) } : { type: "text", autocomplete: "off" });
   field.value = give ? words.time || "" : words.why;
-  for (const type of ["input", "change", "keyup", "blur"]) field.addEventListener(type, () => keep(field));
+  // A partly typed datetime-local fires no `input`, so keyup and blur keep it too — but only an
+  // edit may replace a partial kept from before a redraw (`keep`).
+  for (const type of ["input", "change"]) field.addEventListener(type, () => keep(field, true));
+  for (const type of ["keyup", "blur"]) field.addEventListener(type, () => keep(field, false));
   const label = cell("label", (give ? GIVE_TIME_LABEL : STRIKE_WHY_LABEL) + " ");
   label.append(field);
   const sign = statButton(STAT_SIGN, row, () => pressStatSign(stat, field));
@@ -188,7 +199,7 @@ function statRow(stat, row) {
 function pressStatSign(stat, field) {
   if (signInFlight() || settleBlocked("stat")) return;
   const words = statOpen;
-  keep(field);
+  keep(field, false);
   if (words.kind === "give" && words.time === null) return sayStat(stat.medication_id, PARTLY_TYPED_GIVEN);
   medListSignInFlight = true;
   medListSigning = signStat(stat, words)

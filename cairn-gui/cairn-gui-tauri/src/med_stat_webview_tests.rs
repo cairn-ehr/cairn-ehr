@@ -253,12 +253,12 @@ fn the_give_row_prefills_now_and_signs() {
 
 /// Review Focus 4: a partly typed time (a date, no hour) reaches JS as an EMPTY value with
 /// `validity.badInput`, and Rust reads empty as NOW — so the press is refused here, in words
-/// beside the line, and nothing is invoked. A partial typed before a redraw (`keep` stores `null`)
-/// is refused the same way, never rebuilt as the pre-filled now.
+/// beside the line, and nothing is invoked. A partial kept across a redraw, whose rebuilt field
+/// is empty with no `badInput`, is `a_partly_typed_time_survives_a_redraw_refused`'s.
 #[test]
 fn a_partly_typed_time_is_refused_and_signs_nothing() {
     let press = js_fn(STAT_JS, "pressStatSign");
-    let kept = position(press, "keep(field);");
+    let kept = position(press, "keep(field, false);");
     let refused = position(
         press,
         "if (words.kind === \"give\" && words.time === null) return sayStat(stat.medication_id, PARTLY_TYPED_GIVEN);",
@@ -267,15 +267,17 @@ fn a_partly_typed_time_is_refused_and_signs_nothing() {
     assert!(kept < refused && refused < signed, "{press}");
     let keep = js_fn(STAT_JS, "keep");
     assert!(
-        keep.contains("statOpen.time = field.validity.badInput ? null : field.value;"),
+        keep.contains("if (field.validity.badInput) statOpen.time = null;"),
         "{keep}"
     );
     // Kept on every way a partial can be typed: a partly typed datetime-local fires no `input`.
     let row = js_fn(STAT_JS, "statRow");
-    assert!(
-        row.contains("for (const type of [\"input\", \"change\", \"keyup\", \"blur\"]) field.addEventListener(type, () => keep(field));"),
-        "{row}"
-    );
+    for type_ in ["[\"input\", \"change\"]", "[\"keyup\", \"blur\"]"] {
+        assert!(
+            row.contains(&format!("for (const type of {type_})")),
+            "{type_}: {row}"
+        );
+    }
     assert_eq!(
         js_const(STAT_JS, "PARTLY_TYPED_GIVEN"),
         "the time given is only partly typed — finish it, or clear it if the dose was given now"
@@ -421,4 +423,32 @@ fn every_field_read_is_one_rust_sends() {
             "give.{field} is not sent: {give}"
         );
     }
+}
+
+/// Review finding 1: a partly typed time survives a REDRAW refused. The rebuilt field is an
+/// ordinary empty one (no `badInput`), so only `statOpen.time === null` remembers the partial: a
+/// keyup, a blur or the press itself never turns that null into "" (which Rust reads as NOW); only
+/// a real edit of the field (`input`, `change`) replaces it.
+#[test]
+fn a_partly_typed_time_survives_a_redraw_refused() {
+    let keep = js_fn(STAT_JS, "keep");
+    for step in [
+        "if (!statOpen) return;",
+        "if (statOpen.kind !== \"give\") return void (statOpen.why = field.value);",
+        "if (field.validity.badInput) statOpen.time = null;",
+        "else if (edited || statOpen.time !== null) statOpen.time = field.value;",
+    ] {
+        assert!(keep.contains(step), "{step}: {keep}");
+    }
+    let row = js_fn(STAT_JS, "statRow");
+    for step in [
+        "field.value = give ? words.time || \"\" : words.why;",
+        "for (const type of [\"input\", \"change\"]) field.addEventListener(type, () => keep(field, true));",
+        "for (const type of [\"keyup\", \"blur\"]) field.addEventListener(type, () => keep(field, false));",
+    ] {
+        assert!(row.contains(step), "{step}: {row}");
+    }
+    let press = js_fn(STAT_JS, "pressStatSign");
+    assert!(press.contains("keep(field, false);"), "{press}");
+    assert!(!press.contains("keep(field, true)"), "{press}");
 }

@@ -61,14 +61,24 @@ pub(crate) fn attach_stat(
         .map(|o| (o.medication_id, stat_view(o, opened, now)))
         .collect();
     for (shown, row) in shown.iter_mut().zip(rows) {
-        // shortcut: a reconciled group holding two stat orders shows the first read only; give
-        // the row a list of stat lines if such groups ever reach a chart.
-        let Some(mut stat) = under_line(row, &views).into_iter().next() else {
+        // shortcut: a row holding several stat orders (reconciled duplicates, ADR-0047: the same
+        // order charted at two terminals) shows ONE — the one with a standing give if any, else
+        // the first read — and offers Given only when NO order under it has a standing give:
+        // Rust re-derives "waiting" per thread, so a Given on the waiting twin would give the dose
+        // twice. Follow-up issue: "a row holding several stat orders shows one".
+        let under = under_line(row, &views);
+        let given = under.iter().any(|s| !s.gives.is_empty());
+        let Some(mut stat) = under
+            .iter()
+            .find(|s| !s.gives.is_empty())
+            .or(under.first())
+            .cloned()
+        else {
             continue;
         };
         let current = row.status == MedicationStatus::Active;
         // A stopped line cannot be given (Rust refuses it: `STAT_NOT_OPEN`), so no button.
-        stat.can_give &= current;
+        stat.can_give &= current && !given;
         if !current && !stat.gives.is_empty() {
             shown.status_label = "given".into();
         }
@@ -112,3 +122,7 @@ fn stat_view(o: &StatOrder, opened: Uuid, now: &DateTime<Local>) -> StatView {
             .collect(),
     }
 }
+
+#[cfg(test)]
+#[path = "chart_stat_tests.rs"]
+mod tests;
