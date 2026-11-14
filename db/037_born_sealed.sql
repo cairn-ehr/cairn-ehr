@@ -138,8 +138,8 @@ ON CONFLICT (event_type) DO NOTHING;
 --    key differs per table: medication_statement / medication_coding / medication_cessation /
 --    medication_dose_correction / medication_reconciliation / medication_attestation /
 --    medication_withhold / medication_withhold_release / medication_charting /
---    medication_set_aside / medication_restore all carry the
---    PRODUCING event's content_address (db/031/032/033/034/059/077/079/080) so they scrub by
+--    medication_set_aside / medication_restore / medication_given(_retraction) all carry the
+--    PRODUCING event's content_address (db/031/032/033/034/059/077/079/080/082) so they scrub by
 --    `content_address = v_ca`; the initial-dose seed row is keyed by the assert event's own
 --    id (db/032); and
 --    medication_group_member is a DERIVED table (recomputed from the standing reconciled
@@ -390,9 +390,15 @@ BEGIN
         IF to_regclass('public.medication_restore') IS NOT NULL THEN
             DELETE FROM medication_restore WHERE content_address = v_ca;
         END IF;
-        -- A "checked: not current" (db/080 §2): the checker's note, one row per event. Guarded the same way.
+        -- A "checked: not current" (db/080 §2: the checker's note), a given dose (db/082 §1:
+        -- which line, and when) and its strike (§2: the why), one row per event. Guarded the
+        -- same way; db/082 creates both of its tables, so one guard covers the pair.
         IF to_regclass('public.medication_set_aside_checked') IS NOT NULL THEN
             DELETE FROM medication_set_aside_checked WHERE content_address = v_ca;
+        END IF;
+        IF to_regclass('public.medication_given') IS NOT NULL THEN
+            DELETE FROM medication_given WHERE content_address = v_ca;
+            DELETE FROM medication_given_retraction WHERE content_address = v_ca;
         END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;

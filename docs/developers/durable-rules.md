@@ -10,6 +10,76 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ CHARTING SLICE 2 — A STAT DOSE, ORDERED THEN GIVEN (ADR-0105, db/082; db/005 + db/020 + db/031 + db/037 +
+db/039 + db/048 + db/060 + db/077 + db/079 + db/080 in place) — do not undo**
+(pins: in `crates/cairn-node/tests/`, `medication_given_floor.rs`, `medication_given_retraction_floor.rs`,
+`medication_given_retraction_race.rs`, `medication_stat_give.rs`; `db/tests/082_medication_given_test.sql`;
+`crates/cairn-event/src/medication/charting_tests.rs` and `given.rs`; in `cairn-gui/cairn-gui-tauri/src/`,
+`med_stat_tests.rs`, `med_stat_db_tests.rs`, `med_stat_webview_tests.rs`, `chart_stat_tests.rs`; the tab crate's
+`stat_view_tests.rs`).
+Every slice 1a, 2a, 2b and 3 rule below still holds; a stat order is a charted line.
+- **A given's stop and the given are signed in ONE transaction, the stop first**, and `completes` must name a stop of
+  this line inserted by that same transaction (`xmin = pg_current_xact_id()`). **Tempting wrong fixes:** wrap the
+  stop's submit in a savepoint "so a failed stop is legible" (the subtransaction stamps its own id and the given is
+  refused); let `completes` name any stop of the thread "so a give can complete a stop made earlier" (a later strike
+  would then void someone's real stop, and the line would read current again); mark a given line "not current" in a
+  new column instead of stopping it (every reader of current lines would have to learn it, and an older node never
+  would). Pins: `completes_naming_a_stop_from_an_earlier_transaction_is_refused`,
+  `give_stat_stops_the_line_and_records_the_given_in_one_transaction`, `a_failed_given_rolls_back_the_stop_too`.
+- **The void keys on the retraction's own `voids`, never on the given row.** `cairn_medication_cessation_voided` reads
+  `medication_given_retraction` alone. **Tempting wrong fix:** join the strike to `medication_given` to find the stop
+  "so `voids` is redundant" (shredding the given would then bring the stop back, and the struck dose would read given:
+  a missed dose). Pins: `shredding_the_given_keeps_the_line_current`, `shredding_the_retraction_stops_the_line_again`,
+  `shredding_the_paired_stop_leaves_the_line_current`, `a_struck_given_leaves_a_real_stop_standing`.
+- **The strike re-folds the thread only when its delete removed the winning row** (`IF FOUND`). **Tempting wrong
+  fix:** re-fold unconditionally "to be safe" (the re-fold replays the thread's strikes, this one included, and
+  recurses until the stack overflows). Pins: `every_arrival_order_converges`,
+  `a_reprojection_keeps_a_struck_givens_line_current`.
+- **A stop and the strike voiding it serialize on `cairn_lock_medication_stop`, in both appliers, and the lock is a
+  no-op while `cairn.reprojecting` is `'on'`, which both doors pin off for their own call** (a function-level
+  `SET cairn.reprojecting = ''` on `submit_event` and `apply_remote_event`, as #602 pinned `cairn.remote_apply`).
+  **Tempting wrong fixes:** drop the lock "because the strike already takes `cairn_lock_shred_refold`" (a hub
+  applying a peer's stop and another pull's strike at once commits the struck dose as given); take it inside
+  `cairn_reproject` too (a rebuild would hold one lock per stop and exhaust `max_locks_per_transaction`); move the
+  doors' pin into the body as `set_config` (it would leave the marker cleared in the caller's transaction after the
+  call, as `db/005`'s #602 note explains); route `cairn_reproject` through a door
+  (the pin would then take one lock per stop in the rebuild). Pins:
+  `a_strike_applied_while_its_stop_is_uncommitted_still_voids_it`,
+  `a_stop_applied_while_its_strike_is_uncommitted_never_wins`, `a_rebuild_takes_no_per_stop_lock`,
+  `a_raised_reprojecting_marker_does_not_skip_the_lock_at_either_door`.
+- **A narrow rebuild of `clinical.medication-given-retraction`, of `clinical.medication-given` or of
+  `clinical.medication-cessation` is refused** (`db/039`), because the strike's applier is registered against
+  `medication_cessation` and `medication_cessation_reason` (`clinical.medication-cessation` was already refused on
+  `medication_patient_conflict_flag`; the strike is a second reason). **Tempting wrong fix:** drop those two tables
+  from the strike's registration "because it only deletes from them" (a narrow rebuild would then truncate the stops
+  and replay only one side, and `db/037`'s re-fold would stop seeing that the strike feeds the stops). Rebuild the
+  given alone with `clinical.medication-given.` (the dot). Pin:
+  `a_narrow_rebuild_of_the_retraction_type_keeps_every_stop`.
+- **`stat` is signed only on a pure one-off *Start* line** (`med_stat::is_stat_order`: *Start medication*, the
+  directions read `stat`, no frequency, no `prn`), from `med_line_sign::charting`, so both Sign paths agree, and it is
+  written only as `true`. **Tempting wrong fixes:** sign it whenever the `sig` says "stat" ("1g iv stat then daily"
+  would leave the list at its first dose; so would "prn stat"); write `"stat": false` on other lines (every
+  assertion would change its bytes, principle 11). Pins: `ceftriaxone_1g_iv_stat_is_a_stat_order`,
+  `stat_then_daily_and_prn_stat_are_not`, `an_already_taking_stat_is_not`,
+  `an_assertion_without_stat_is_byte_identical`.
+- **The window refuses a time given later than now, and a partly typed one, before the key.** The floor admits a
+  forward `t_effective` with a ceiling flag, so the window is the only refusal. A partial reaches the script as `""`,
+  which Rust reads as now, so the script keeps it as `null` across redraws. **Tempting wrong fix:** treat any empty
+  field as now (a time lost to a redraw would sign as now, a time nobody gave). Pins: `a_later_time_is_refused`,
+  `a_partly_typed_time_survives_a_redraw_refused`, `a_cleared_partial_time_signs_now`.
+- **The strike's words come from the state AFTER it** (R7), and **a row with several stat orders offers Given only
+  when none has a standing give** (R8). **Tempting wrong fix:** say "waiting to be given again" from the struck give's
+  own `completes` (a second give or a real stop keeps the line stopped, and the words would invite a second dose).
+  Pins: `striking_one_of_two_gives_does_not_say_waiting_again`,
+  `striking_a_give_beside_a_real_stop_does_not_say_waiting_again`,
+  `two_stat_orders_under_one_row_show_the_given_one_and_offer_no_given`.
+- **"Before it was charted" compares the time given with the MINUTE the order was charted**, and is said once, on the
+  last give before it (`stat_view::stat_words`). The time given is stated to the minute; the order's `t_recorded` is
+  to the millisecond. **Tempting wrong fix:** compare the two instants as they are "for precision" (an untouched
+  Given in the order's own minute would read "given 13:22, before it was charted 13:22:41", a precise untruth). Pins:
+  `a_give_in_the_orders_own_minute_is_not_before_it`, `before_it_was_charted_is_said_once`.
+- **Known limits, not bugs to patch in place:** #1107–#1112 (ADR-0105, "What is not guaranteed").
+
 **⇒ BATCH CHARTING SLICE 3 — THE WARNING THRESHOLD (ADR-0104, db/081) — do not undo**
 (pins: `db/tests/081_medication_warning_policy_test.sql`; `crates/cairn-node/tests/cli_medication_warning_threshold.rs`;
 `crates/cairn-node/src/allergy/check_threshold_tests.rs`, `crates/cairn-node/src/medication/draft_tick_tests.rs`; in

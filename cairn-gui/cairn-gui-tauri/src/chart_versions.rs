@@ -26,23 +26,33 @@ use uuid::Uuid;
 /// The set-aside versions over a chart set and how each was settled, read together.
 pub(crate) type VersionsRead = (Vec<SetAsideRow>, Vec<SettlementRow>);
 
+/// The stat orders over a chart set, or `chart_stat::STAT_NOT_READ`.
+pub(crate) type StatRead = Result<Vec<cairn_node::medication::stat_read::StatOrder>, String>;
+
 /// Above the medication list when the set-aside versions could not be read: the current lines
 /// still show, and "no version under a line" must never read as "none was set aside".
 pub const VERSIONS_NOT_READ: &str =
     "Set-aside versions could not be read: none is shown under the lines";
 
 /// The chart (as [`read_chart_of`]) and the set-aside versions over its chart set with their
-/// settlements, from ONE snapshot. Fixture mode has no versions. A failed versions read is
-/// `Err(`[`VERSIONS_NOT_READ`]`)` beside a list that still opens (availability over
-/// consistency, as every other secondary read of the pane): it runs under a savepoint, so its
-/// failure aborts only itself, never the snapshot the list was read in. The settlements share
-/// it: a version must never show as unsettled because only its settlements failed to read.
+/// settlements, and the stat orders over it (`chart_stat::read_stat`, its own savepoint and
+/// its own failure), from ONE snapshot. Fixture mode has no versions and no stat orders. A
+/// failed versions read is `Err(`[`VERSIONS_NOT_READ`]`)` beside a list that still opens
+/// (availability over consistency, as every other secondary read of the pane): it runs under a
+/// savepoint, so its failure aborts only itself, never the snapshot the list was read in. The
+/// settlements share it: a version must never show as unsettled because only its settlements
+/// failed to read.
 pub(crate) async fn read_chart_and_versions(
     state: &AppState,
     patient: Uuid,
-) -> anyhow::Result<(PatientMedicationList, Result<VersionsRead, String>)> {
+) -> anyhow::Result<(
+    PatientMedicationList,
+    Result<VersionsRead, String>,
+    StatRead,
+)> {
     let Some(db) = state.db.as_ref() else {
-        return Ok((read_chart_of(state, patient).await?, Ok((vec![], vec![]))));
+        let list = read_chart_of(state, patient).await?;
+        return Ok((list, Ok((vec![], vec![])), Ok(vec![])));
     };
     let mut db = db.lock().await?;
     cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
@@ -64,7 +74,8 @@ pub(crate) async fn read_chart_and_versions(
                 Err(VERSIONS_NOT_READ.to_string())
             }
         };
-        Ok((list, versions))
+        let stat = crate::chart_stat::read_stat(tx, charts).await?;
+        Ok((list, versions, stat))
     })
     .await
     .map_err(|e| db.explain(e))

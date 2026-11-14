@@ -30,6 +30,7 @@ mod allergy_overlays;
 mod allergy_overlays_webview_tests;
 mod allergy_pane;
 mod chart_set;
+mod chart_stat;
 mod chart_versions;
 #[cfg(test)]
 mod chart_view_webview_tests;
@@ -71,6 +72,9 @@ mod med_list_versions_sign;
 mod med_list_versions_webview_tests;
 #[cfg(test)]
 mod med_list_webview_tests;
+mod med_stat;
+#[cfg(test)]
+mod med_stat_webview_tests;
 mod med_version_check;
 #[cfg(test)]
 mod med_versions_settle_webview_tests;
@@ -229,6 +233,8 @@ fn main() -> anyhow::Result<()> {
             med_list_versions::med_list_from_save,
             med_list_restore::med_list_restore_open,
             med_version_check::med_version_check,
+            med_stat::med_stat_give,
+            med_stat::med_stat_strike,
             allergy_overlays::allergy_challenge,
             allergy_overlays::allergy_retract,
             notes::note_list,

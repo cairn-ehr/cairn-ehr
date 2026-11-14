@@ -110,6 +110,18 @@ adverse effect warns too. No setting switches allergy warnings off. A warning wi
 the same whatever the threshold. The setting is in no backup, so a restore returns the default
 ([ADR-0104](decisions/0104-the-warning-threshold.md)).
 
+A **stat dose** is charted as an ordinary *Start* line whose directions read `stat`, with no frequency and no `prn`,
+and the window signs it with the optional key `stat` (JSON `true`, else absent). Giving it is one signed act of two
+events in one transaction: a cessation of the line ("stat dose given") and then a given,
+`clinical.medication-given.asserted`, whose `t_effective` is the time given and whose `completes` names that stop. So
+a given stat dose leaves the current list for every reader, and the given type stays general for a future
+administration record. A time given earlier than the minute the order was charted is signed and shown "before it was
+charted", never refused. A given recorded in error is struck by its own event, which voids exactly the stop its give
+made (by the stop's id on the strike, never through the given), so the order is waiting again unless another standing
+give or a real stop of the line remains. The row keeps its place and reads "given": under it, the order and each
+standing give in time order, and each struck give on a line of its own, each with who signed it
+([ADR-0105](decisions/0105-a-stat-dose-ordered-then-given.md)).
+
 The allergies row above is built as two born-sealed, additive event types: one entry
 (`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose
 "not known" is a recorded answer, and the source) and a "none known" **statement** (`clinical.allergy-none.asserted`,

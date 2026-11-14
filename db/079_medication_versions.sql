@@ -72,7 +72,7 @@ COMMIT;
 -- it. It hangs off a real thread by `alternative_to`, which a reader joins on.
 --
 -- THE TWO TIERS (ADR-0056). STRUCTURAL rules — the shape of every key — refuse at BOTH doors, as
--- do charted_as / warning_override / restores / a §5.9 claim (below).
+-- do charted_as / warning_override / restores / stat / a §5.9 claim (below).
 -- The REFERENCE rules — "the companion thread is on this chart and still current", "the version
 -- id is new", the schema tag — refuse at the AUTHORING door only: a peer may send a
 -- version before its companion has synced (an ORPHAN, held and shown nowhere, because every reader
@@ -80,10 +80,10 @@ COMMIT;
 -- turns out to be on ANOTHER chart is not refused on remote apply but FLAGGED, exactly as a
 -- cessation's is (cairn_guard_medication_patient, db/031).
 --
--- WHY charted_as / warning_override / restores ARE REFUSED. A set-aside version was never
--- charted, never overrode a warning and restores nothing (a restore is a charted line, db/080),
--- so no writer produces those keys; refusing them at both doors wedges no peer, and it stops a
--- version posing as a charted line.
+-- WHY charted_as / warning_override / restores / stat ARE REFUSED. A set-aside version was never
+-- charted, never overrode a warning, restores nothing (a restore is a charted line, db/080) and
+-- was never ordered stat (db/082), so no writer produces those keys; refusing them at both doors
+-- wedges no peer, and it stops a version posing as a charted line.
 --
 -- THE §5.9 CLAIM. There is no per-type safety rule in db/049: the signal is a field on the
 -- envelope that db/020 writes into event_log.safety for EVERY type, and cairn_patient_safety
@@ -122,9 +122,9 @@ BEGIN
        OR btrim(p ->> 'info_source') = '' THEN
         RAISE EXCEPTION 'medication set-aside: info_source must be a non-blank string';
     END IF;
-    -- Never charted, never overrode a warning, never restores another version (slice 2b):
-    -- refused even as a JSON null.
-    FOREACH k IN ARRAY ARRAY['charted_as', 'warning_override', 'restores'] LOOP
+    -- Never charted, never overrode a warning, never restores another version (slice 2b), never
+    -- ordered stat (slice 2): refused even as a JSON null.
+    FOREACH k IN ARRAY ARRAY['charted_as', 'warning_override', 'restores', 'stat'] LOOP
         IF p ? k THEN
             RAISE EXCEPTION 'medication set-aside: % must be absent (a set-aside version was never charted)', k;
         END IF;

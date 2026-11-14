@@ -160,7 +160,8 @@ function renderRow(row) {
   // Marked in the DOM, not only by colour: colour alone is invisible to a screen reader
   // and to a colour-blind clinician. The text says it too — see the signature cell.
   if (row.will_be_signed) tr.setAttribute("data-will-sign", "true");
-  if (row.status_label === "ceased") tr.setAttribute("data-ceased", "true");
+  // A given stat line is stopped too (its order is done): struck as a ceased line is (med_stat.js).
+  if (row.status_label === "ceased" || row.status_label === "given") tr.setAttribute("data-ceased", "true");
   if (row.status_label === "withheld") tr.setAttribute("data-withheld", "true");
 
   tr.append(
@@ -205,6 +206,7 @@ function renderRow(row) {
   tr.append(action);
 
   const rows = [tr];
+  rows.push(...statRows(row)); // a stat order's line, right under its drug line (med_stat.js)
   for (const flag of row.flags) {
     // A flag is a claim about THIS line, so it rides directly under it, spanning the row.
     const note = document.createElement("tr");
@@ -253,6 +255,7 @@ function drawList(pane, patient) {
   renderWarnings(view);
   setMessage(el("allergy-check-failed"), pane.allergy_check_failed); // above the list
   setMessage(el("versions-not-read"), pane.versions_error); // likewise (chart_versions.rs)
+  statNotRead(pane.stat_error); // and the stat orders' (chart_stat.rs, med_stat.js)
 
   const body = el("med-rows");
   const typed = typedReasons();
@@ -309,6 +312,7 @@ function clearDrawnList() {
   setMessage(el("chart-unshown"), "");
   setMessage(el("allergy-check-failed"), "");
   setMessage(el("versions-not-read"), "");
+  statNotRead("");
   setMessage(el("chart-stale"), "");
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
@@ -335,6 +339,7 @@ function clearChart() {
   clearMedList(); // its unsigned medication lines, their pending saves queued (med_list.js)
   clearMedChart(); // the medication line editor (med_chart.js)
   clearSettle(); // a version's open check row and the words beside it (med_versions_settle.js)
+  clearStat(); // a stat line's open row and the words beside it (med_stat.js)
   clearDrawnList();
   const button = el("sign-off");
   button.disabled = true;

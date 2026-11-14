@@ -222,7 +222,9 @@ pub(crate) fn components(parts: &[PartArg]) -> Vec<Component<'_>> {
 }
 
 /// The charting fields the line signs: the press, the route and strength read from the
-/// directions, the components, and the warning override when a reason was required. Pure.
+/// directions, the components, the warning override when a reason was required, and `stat` when
+/// the line is a stat ORDER (`med_stat::is_stat_order`) — set here, so both Sign paths sign it.
+/// Pure.
 pub(crate) fn charting<'a>(
     charted_as: ChartedAs,
     d: &'a Directions,
@@ -237,5 +239,6 @@ pub(crate) fn charting<'a>(
         components,
         warning_override: reason.map(|reason| WarningOverride { reason, against }),
         restores: None,
+        stat: crate::med_stat::is_stat_order(charted_as, d),
     }
 }

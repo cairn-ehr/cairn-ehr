@@ -91,6 +91,9 @@ BEGIN
     -- cairn_lock_erasure_heal has both interleavings). Held to COMMIT, like every xact lock.
     PERFORM cairn_lock_erasure_heal(true);
     PERFORM set_config('cairn.remote_apply', 'on', true);  -- true = SET LOCAL
+    -- Tells per-event door locks (db/082's cairn_lock_medication_stop) that this is a whole-log
+    -- replay: one lock per event would exhaust max_locks_per_transaction. Cleared at the end.
+    PERFORM set_config('cairn.reprojecting', 'on', true);
 
     -- p_prefix is used un-escaped in every LIKE below, so a literal '_'/'%' in it
     -- acts as a wildcard. Accepted deliberately (2026-07-21 final review): event
@@ -179,6 +182,7 @@ BEGIN
         RETURN NEXT;
     END LOOP;
 
+    PERFORM set_config('cairn.reprojecting', '', true);
     INSERT INTO reproject_log (prefix, rebuild, source, events_seen, elapsed_ms, skipped_fns)
     VALUES (p_prefix, p_rebuild, p_source, v_total,
             (extract(epoch FROM clock_timestamp() - v_started) * 1000)::bigint,

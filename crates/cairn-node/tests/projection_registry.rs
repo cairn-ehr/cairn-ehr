@@ -49,7 +49,8 @@ async fn dispatcher_is_the_only_event_log_insert_trigger() {
 /// `clinical_allergy_challenge_apply` and `clinical_allergy_retraction_apply` = 37, + db/077's
 /// charting row `medication_charting_apply` = 38, + db/079's set-aside row `medication_set_aside_apply` = 39,
 /// + db/080's restore row `medication_restore_apply` = 40, + db/080 §2's check row
-/// `medication_set_aside_checked_apply` = 41.
+/// `medication_set_aside_checked_apply` = 41, + db/082's given row `medication_given_apply` = 42,
+/// + db/082 §2's strike row `medication_given_retraction_apply` = 43.
 /// A new projection slice bumps this AND db/tests/039_projection_registry_test.sql
 /// (the #212 two-places discipline; a missed bump fails CI, not drifts).
 #[tokio::test]
@@ -68,7 +69,7 @@ async fn registry_row_count_is_pinned() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 41, "cairn_projection_apply row count drifted");
+    assert_eq!(n, 43, "cairn_projection_apply row count drifted");
 }
 
 /// A registry row naming an apply fn that does not exist with the (event_log)

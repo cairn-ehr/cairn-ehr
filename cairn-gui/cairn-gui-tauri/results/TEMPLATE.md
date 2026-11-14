@@ -973,3 +973,43 @@ Steps: a restore on paper *N* = 2 acts → observed \_\_ presses and \_\_ Signs;
 | A hand tick from before the lowering does not hold at Sign | | |
 | VoiceOver reads the tag and the note; keyboard reaches Reason | | |
 | A restore returns the threshold to `allergy-hit` (#1102) | | |
+
+## A stat dose, ordered then given (charting slice 2, runbook §36)
+
+`SCHEMA_GENERATION` 82 and `provision-window-role` re-run? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| *Given* → *Sign* at now → the row drawn **given** | held | | | | ≤ 3 s | |
+| The same, credential typed | shared | | | | — (record) | |
+| *Given* at an earlier time (the edit included) | held | | | | — (record) | |
+| *Entered in error* → *Sign* → the line current, "not yet given" | held | | | | ≤ 3 s | |
+| The same, credential typed | shared | | | | — (record) | |
+| Reading whether it was given: clicks | | | | | 0 | |
+
+Steps: a give on paper *N* = 1 act → observed \_\_ presses and \_\_ Signs; a strike on paper *N* = 1 act → observed
+\_\_ presses and \_\_ Signs.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| `ceftriaxone 1g iv stat` on *Start* signs `stat`; "stat · ordered … · not yet given", current | | |
+| `1g iv stat then daily`, `1g iv prn stat`, *Already taking* `1g iv stat`: no stat line | | |
+| Given: the row pre-filled with now; a redraw keeps it; *Cancel* signs nothing (focus: record) | | |
+| Given's Sign: "Given."; the row reads **given** | | |
+| One cessation (`stat dose given`) and one given with `completes`; the line leaves the current list | | |
+| A later time: "The time given cannot be later than now", nothing signed | | |
+| A partial time refused; still refused after a redraw (R9 words); cleared key by key, given at now | | |
+| On a fresh order, an earlier time reads "given …, before it was charted …", in that order, not refused | | |
+| Entered in error: its own struck line, the line current again, "waiting to be given again" | | |
+| A stale Given and a stale strike refused in words, nothing written | | |
+| A linked chart's stat line: no buttons | | |
+| The real Tauri IPC: `med_stat_give` and `med_stat_strike` answer | | |
+| WebKit (the real window): both rows, the time field | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| *Given* and each *Entered in error* reachable by Tab, read with their line; two strike buttons told apart? | | |
+| Both rows read as groups; "Time given" and "Why (optional)" read; the time field keyboard-operable | | |
+| The stat line, the struck lines and **given** read | | |
+| A refusal read (not a live region, #1112); focus after a Sign; Escape (not built: record) | | |
+| No dialog | | |
