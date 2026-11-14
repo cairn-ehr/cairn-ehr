@@ -275,6 +275,7 @@ fn judged_version(line: DraftLine) -> Judged {
         duplicate: false,
         duplicate_of: None,
         default_ticked: false,
+        restore_tick_holds: true,
         offers: vec![],
     }
 }

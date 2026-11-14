@@ -12,7 +12,8 @@ use crate::med_line_sign::{fresh_check, line_under, not_read, parts_before_the_k
 use crate::med_list::{LineArg, WarningRef};
 use crate::med_list_delabel::{offers_for, DelabelOffer};
 use crate::med_list_restore::{
-    current_besides_stops, read_versions, replaces_a_restore, restores_a_stopped_line, Versions,
+    current_besides_stops, read_versions, restore_tick_holds, restore_withholds_default_tick,
+    Versions,
 };
 use crate::med_list_versions::{charted_companions, charted_words};
 use crate::state::AppState;
@@ -165,6 +166,9 @@ pub(crate) struct Judged {
     /// The line it duplicates, as the clinician reads it ([`duplicate_of`]).
     pub duplicate_of: Option<String>,
     pub default_ticked: bool,
+    /// A hand tick's restore still holds: it vouched for exactly what stands for the restore's
+    /// companion now (`restore_tick_holds`; `true` for an ordinary line).
+    pub restore_tick_holds: bool,
     /// The same-drug de-label offers ([`offers_for`]); empty unless the allergies were read over
     /// the set on screen and the line is signable.
     pub offers: Vec<DelabelOffer>,
@@ -235,10 +239,10 @@ pub(crate) async fn judge(
                 named_writer,
                 set_aside: line.set_aside_of.is_some(),
             })
-            // Replacing a restore that was just charted must be a deliberate act (ruling R9).
-            && !replaces_a_restore(&line, &fresh.versions)
-            // Chart-held rule: another source's stop since the press is never silently undone (R12).
-            && !restores_a_stopped_line(&line, &fresh.versions);
+            // Replacing a restore just charted must be deliberate (R9b); another source's stop since
+            // the press is never silently undone (R12, the chart-held rule).
+            && !restore_withholds_default_tick(&line, &fresh.versions);
+            let restore_tick_holds = restore_tick_holds(&line, &fresh.versions);
             let offers = match (&signable, use_allergies) {
                 (Ok((_, p)), true) => offers_for(&resolved, &fresh.allergies.doubted_charts, p),
                 _ => vec![],
@@ -252,6 +256,7 @@ pub(crate) async fn judge(
                 duplicate,
                 duplicate_of,
                 default_ticked,
+                restore_tick_holds,
                 offers,
             }
         })
@@ -319,12 +324,13 @@ fn not_checked() -> LineCheck {
 
 /// Whether a line's tick holds on this read: a default tick by its own derivation unless the
 /// clinician vetoed it (`held`, review C1), a hand tick while every warning found now is one it
-/// was given against (`hand_tick_holds`). The view shows
+/// was given against (`hand_tick_holds`) and, on a restore line, while what it stops is what it
+/// was given against (`restore_tick_holds`). The view shows
 /// a tick only while it holds (review M1), and the Sign refuses the whole Sign when a ticked line's
 /// does not (`med_list_sign.rs`, step 4). The reason rules are per-line, at Sign (ruling R3). Pure.
 pub(crate) fn tick_holds(j: &Judged) -> bool {
     match j.line.hand_ticked {
-        true => hand_tick_holds(&j.check, &j.line.ticked_against),
+        true => hand_tick_holds(&j.check, &j.line.ticked_against) && j.restore_tick_holds,
         false => j.default_ticked && !j.line.held,
     }
 }

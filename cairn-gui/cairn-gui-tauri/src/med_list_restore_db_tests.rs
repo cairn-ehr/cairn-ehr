@@ -140,7 +140,10 @@ async fn restore_open_adds_a_prefilled_line_with_its_mark() {
     };
     let (_, versions) = charted_with_versions(&state, &owner, chart, &["25mg tab bd"]).await;
     let opened = restore(&state, chart, &[chart], versions[0]).await.unwrap();
-    let line = shown(&opened.list, &opened.line_id);
+    let line = shown(
+        opened.list.as_ref().expect("the list read again"),
+        &opened.line_id,
+    );
     assert_eq!(line.typed_drug, "metoprolol");
     assert_eq!(line.directions, "25mg tab bd");
     assert_eq!(line.line_text, "metoprolol 25mg tab bd");
@@ -223,11 +226,19 @@ async fn one_sign_stops_the_companion_and_charts_the_restore() {
     let (companion, versions) =
         charted_with_versions(&state, &owner, chart, &["25mg tab bd"]).await;
     let opened = restore(&state, chart, &[chart], versions[0]).await.unwrap();
-    assert_eq!(ticked(&opened.list), std::slice::from_ref(&opened.line_id));
+    assert_eq!(
+        ticked(opened.list.as_ref().expect("the list read again")),
+        std::slice::from_ref(&opened.line_id)
+    );
     let (outcome, charted, of, not_charted, _) = done(
-        sign(&state, chart, &ticked(&opened.list), credential("bea"))
-            .await
-            .unwrap(),
+        sign(
+            &state,
+            chart,
+            &ticked(opened.list.as_ref().expect("the list read again")),
+            credential("bea"),
+        )
+        .await
+        .unwrap(),
     );
     assert_eq!((charted, of), (1, 1), "{outcome}");
     assert!(not_charted.is_empty());
@@ -284,7 +295,10 @@ async fn a_restore_line_is_not_a_duplicate_of_its_companion_but_is_of_another() 
     allergies_known(&state, chart).await;
     let (_, versions) = charted_with_versions(&state, &owner, chart, &["25mg tab bd"]).await;
     let opened = restore(&state, chart, &[chart], versions[0]).await.unwrap();
-    let line = shown(&opened.list, &opened.line_id);
+    let line = shown(
+        opened.list.as_ref().expect("the list read again"),
+        &opened.line_id,
+    );
     assert!(
         !line.duplicate && line.default_ticked,
         "{:?}",
@@ -324,18 +338,22 @@ async fn two_restores_of_one_line_duplicate_each_other() {
         charted_with_versions(&state, &owner, chart, &["25mg tab bd", "75mg tab bd"]).await;
     let first = restore(&state, chart, &[chart], versions[0]).await.unwrap();
     assert!(
-        shown(&first.list, &first.line_id).default_ticked,
+        shown(
+            first.list.as_ref().expect("the list read again"),
+            &first.line_id
+        )
+        .default_ticked,
         "one alone"
     );
     let second = restore(&state, chart, &[chart], versions[1]).await.unwrap();
     for id in [&first.line_id, &second.line_id] {
-        let line = shown(&second.list, id);
+        let line = shown(second.list.as_ref().expect("the list read again"), id);
         assert!(
             line.duplicate && !line.default_ticked && !line.ticked,
             "{id}"
         );
     }
-    assert!(ticked(&second.list).is_empty());
+    assert!(ticked(second.list.as_ref().expect("the list read again")).is_empty());
 }
 
 /// Review Focus 4: the version is gone by Sign: the restore line is refused alone with the
@@ -349,7 +367,10 @@ async fn a_restore_whose_version_is_gone_is_kept() {
     let (companion, versions) =
         charted_with_versions(&state, &owner, chart, &["25mg tab bd"]).await;
     let opened = restore(&state, chart, &[chart], versions[0]).await.unwrap();
-    let line = hand_ticked(shown(&opened.list, &opened.line_id));
+    let line = hand_ticked(shown(
+        opened.list.as_ref().expect("the list read again"),
+        &opened.line_id,
+    ));
     assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
     // The version is no longer readable on this chart (as a shred leaves it).
     owner

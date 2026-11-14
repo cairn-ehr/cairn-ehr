@@ -27,6 +27,8 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   settled). Pins: `medication_restore_floor.rs::a_restore_without_the_companions_stop_fails_at_commit`,
   `the_pending_table_is_empty_after_commit`, `a_reprojection_rebuilds_restores`,
   `the_remote_door_admits_an_orphan_restore`,
+  `the_commit_check_ignores_remote_apply_set_after_the_restore`,
+  `a_version_id_shared_by_two_companions_owes_a_stop_of_each`,
   `medication_restore_replaces.rs::set_constraints_immediate_needs_the_stop_first`,
   `an_idempotent_resubmit_of_a_restore_is_a_no_op`.
 - **A restore stops WHATEVER stands for the companion, and what stands is ONE rooted function shared by the floor and
@@ -35,7 +37,9 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   emit no cessation when it is "already replaced" (the earlier restore's line stays current: two current lines, ruling
   R3); follow one hop (a chain of restores is missed, R4); walk only DOWN from the companion (a restore of a version set
   aside beside a restore line misses its sibling, R10); compute `standing` in Rust "to save a round trip" (the window
-  and the floor drift apart). Pins: `medication_restore_replaces.rs::a_second_restore_stops_the_first_restores_line`,
+  and the floor drift apart); `UNION ALL` in either walk (a cycle a peer forges never ends, on the write path and the
+  read path). Pins: `medication_restore_floor.rs::a_forged_restore_cycle_still_ends`,
+  `medication_restore_replaces.rs::a_second_restore_stops_the_first_restores_line`,
   `a_chain_of_restores_is_followed_to_the_line_that_stands`,
   `two_restores_of_one_companion_in_one_transaction_commit_when_one_stands`, `medication_version_settle.rs`'s
   `a_restore_of_a_version_set_aside_beside_a_restore_line_is_checked_against_the_whole_lineage` and
@@ -53,6 +57,7 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   or let a caller pass `charting.restores`, "for symmetry" (a typo-fix save, or any caller, could turn a plain line
   into a restore that stops the patient's current line). Pins:
   `medication_draft_list_restore_store.rs::a_save_never_clears_or_sets_restores`,
+  `restore_add_on_a_used_line_id_raises_unless_it_is_a_retry`, `a_stale_mark_on_a_restore_line_keeps_its_hand_tick`,
   `medication_version_settle.rs::a_restore_with_its_own_charting_restores_is_refused`.
 - **"Checked: not current" is its own type with no verdict field**, never a medication line, and it locks nothing.
   **Tempting wrong fixes:** a `verdict: bool` (one flag to get backwards; the opposite outcome is a restore); refuse a
@@ -76,6 +81,7 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   line (`current_besides_stops`). **Tempting wrong fixes:** judge it against the whole chart (it is never
   default-ticked, and the morning act costs an extra hand tick); exempt it from the duplicate check altogether (it
   charts the drug twice beside another current line, and two restores of one line both default-tick). Pins:
+  `med_list_restore_tests.rs::a_restore_is_judged_without_only_the_rows_it_wholly_stops`,
   `med_list_restore_db_tests.rs::a_restore_line_is_not_a_duplicate_of_its_companion_but_is_of_another`,
   `two_restores_of_one_line_duplicate_each_other`.
 - **A restore replacing a restore is never default-ticked, and a second ticked restore of one lineage is refused per
@@ -86,11 +92,20 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   `med_list_restore_chain_db_tests.rs::a_restore_replacing_a_charted_restore_is_never_default_ticked`,
   `two_hand_ticked_restores_of_one_line_refuse_the_second_legibly`.
 - **A restore line with nothing standing is never default-ticked** (ruling R12): its line was stopped since the press,
-  and its mark adds "— its line has since been stopped"; a hand tick signs it as a deliberate restart. **Tempting wrong
-  fix:** default-tick it because it "stops nothing, so it is harmless" (a colleague's stop for myalgia is silently
-  undone: the chart-held rule). Pins:
+  and its mark adds "— its line has since been stopped"; nor is one whose version no longer reads
+  (`restore_withholds_default_tick`). **Tempting wrong fix:** default-tick it because it "stops nothing, so it is
+  harmless" (a colleague's stop for myalgia is silently undone: the chart-held rule). Pins:
   `med_list_restore_tests.rs::a_restore_whose_line_was_stopped_since_withholds_the_tick_and_says_so`,
+  `the_default_tick_is_withheld_from_a_restore_sign_would_not_take_as_seen`,
   `med_list_restore_chain_db_tests.rs::a_restore_whose_line_was_stopped_since_is_never_default_ticked`.
+- **A HAND tick on a restore line vouches for what stood for its companion as drawn** (the maintainer's ruling at the
+  final check): the line's `against` carries `restore-of` (its version) and one `restore-stands` per standing line, the
+  tick stores them beside its allergy refs, and `restore_tick_holds` keeps the tick at Sign only while the fresh
+  `standing` is exactly that set. A tick given after the "since been stopped" mark vouches for the empty set: a
+  deliberate restart. **Tempting wrong fixes:** withhold only the default tick (a tick given before a colleague's stop
+  or restore silently restarts the drug or replaces their restore); refuse every hand tick on such a line (the
+  deliberate restart becomes impossible). Pin:
+  `med_list_restore_tests.rs::a_restore_hand_tick_holds_only_over_the_standing_it_was_given_against`.
 
 **⇒ BATCH CHARTING SLICE 2a — FROM:, THE WHY, AND THE SET-ASIDE VERSION (ADR-0102, db/079, db/078 + db/048 + db/037 + db/077 + db/031 in place) — do not undo**
 (pins: `crates/cairn-node/tests/{medication_set_aside_floor,medication_set_aside_peer,medication_set_aside_sign,medication_source_note_floor,medication_draft_list_versions_store}.rs`,

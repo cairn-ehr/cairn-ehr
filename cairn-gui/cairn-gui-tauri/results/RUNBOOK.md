@@ -3434,6 +3434,9 @@ Webster pack seen*), and Sign. Close the chart.
       is **not** ticked by default. Tick it by hand and Sign: it stops nothing and charts its line.
 - [ ] Restore a version, then stop the 40 mg line from the chart before signing: on the re-read the restore line
       gains "— its line has since been stopped" and loses its tick.
+- [ ] Restore a version and tick it **by hand**; then, from another terminal, stop the 40 mg line. Sign: nothing
+      is charted and the restore line comes back unticked with "— its line has since been stopped" (the tick was
+      given against the line that stood). Tick it again and Sign: it stops nothing and charts its line.
 - [ ] A linked chart's version (open a chart linked to `$S1`): no buttons.
 - [ ] With the list open on another terminal ("These lines are open on another terminal: …"), *Use this version
       instead* is down and nothing can be added.

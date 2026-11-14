@@ -5,7 +5,8 @@
 //!
 //! It runs `allergy_overlays.rs`'s steps in their order (`allergy_retract_impl`): the chart on
 //! screen, its set and fixture mode (`on_screen_and_writable`); the version must still be on a
-//! FRESH read of the OPENED chart (never a linked chart's, spec §2: [`VERSION_GONE`]); only then
+//! FRESH read of the OPENED chart (never a linked chart's, spec §2: [`VERSION_GONE`]) and not
+//! restored since (`VERSION_RESTORED`, as the pane offers neither act on it); only then
 //! the key, ONCE, the one event (`check_version`), and the medication pane read again. The check
 //! row signs nothing until this command, and nothing here asks for confirmation.
 use crate::allergies::{failure_named, on_screen_and_writable};
@@ -13,7 +14,7 @@ use crate::commands::med_list_impl;
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart_write::MedChartWrite;
-use crate::med_list_restore::VERSION_GONE;
+use crate::med_list_restore::{not_restored, VERSION_GONE};
 use crate::med_list_versions::{given, stamp, FromView};
 use crate::signer::Credential;
 use crate::state::{AppState, Now};
@@ -75,10 +76,11 @@ pub async fn med_version_check_impl(
             .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
             .await?;
-        version_for_restore(&*db, patient, version)
+        let v = version_for_restore(&*db, patient, version)
             .await
             .map_err(|e| node_failure(&db.explain(e)))?
             .ok_or_else(|| refused(VERSION_GONE))?;
+        not_restored(&v).map_err(refused)?;
     }
     let (info_source, source_detail) = check_source(preset, detail);
     let why = given(why);
@@ -158,5 +160,41 @@ pub(crate) fn checked(reread: Result<crate::chart_set::ChartPane, String>) -> Me
             ),
             pane: None,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ruling R1: a known preset gives its category; with none, the source is `unknown` and the
+    /// detail is kept as typed, never a category guessed from it.
+    #[test]
+    fn from_maps_a_preset_and_never_guesses_one() {
+        assert_eq!(
+            check_source(Some("Packets / Webster pack seen".into()), None),
+            (
+                "clinician-observed",
+                Some("Packets / Webster pack seen".into())
+            )
+        );
+        assert_eq!(
+            check_source(None, Some("rang the pharmacy".into())),
+            ("unknown", Some("rang the pharmacy".into()))
+        );
+        assert_eq!(check_source(None, Some("  ".into())), ("unknown", None));
+    }
+
+    /// A check that landed answers Ok even when the pane could not be read again: an error would
+    /// offer a retry, and a retry records the check twice.
+    #[test]
+    fn a_landed_check_whose_reread_failed_still_answers_ok() {
+        let said = checked(Err("the lock was lost".into()));
+        assert!(said.pane.is_none());
+        assert!(
+            said.outcome.starts_with("Signed") && said.outcome.contains("the lock was lost"),
+            "{}",
+            said.outcome
+        );
     }
 }

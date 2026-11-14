@@ -283,6 +283,12 @@ fn restore_opens_the_prefilled_line_in_the_editor() {
         "sayBeside(version.version_id, failureText(failure));",
     );
     let drawn = position(press, "drawMedRead(opened.list, patient);");
+    // An add that landed with no list read again is said beside the version, never drawn.
+    let unread = position(
+        press,
+        "if (!opened.list) return sayBeside(version.version_id, opened.said);",
+    );
+    assert!(unread < drawn, "{press}");
     let found = position(
         press,
         "const line = medLines.find((l) => l.id === opened.line_id);",

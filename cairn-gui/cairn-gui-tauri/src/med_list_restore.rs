@@ -17,13 +17,15 @@
 //!
 //! On the list, a restore line is judged a duplicate against the chart WITHOUT the lines it will
 //! stop ([`current_besides_stops`], Review Focus 2), but still against every other line, list
-//! lines included (two restores of one companion duplicate each other, Review Focus 3).
+//! lines included (two moiety-coded restores of one drug duplicate each other, Review Focus 3).
 use crate::allergy_check::CodingArg;
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::PartArg;
 use crate::med_list::FIXTURE;
-use crate::med_list::{claim_writer, med_list_read_impl, Judged, ListLineView, MedListView};
+use crate::med_list::{
+    claim_writer, med_list_read_impl, Judged, ListLineView, MedListView, WarningRef,
+};
 use crate::med_list_judge::current_lines;
 use crate::notes::terminal_of;
 use crate::state::AppState;
@@ -34,13 +36,24 @@ use cairn_node::medication::line::read_directions;
 use cairn_node::medication::version_settle::RestoreToSign;
 use cairn_node::medication::version_settle_read::version_for_restore;
 pub(crate) use cairn_node::medication::version_settle_read::VersionForRestore;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 /// The press or the check named a version that is not on the opened chart's read (gone since the
 /// pane was drawn, or a linked chart's: spec §2 offers neither).
 pub const VERSION_GONE: &str = "That version is no longer on this chart; read it again";
+
+/// The press or the check named a version restored since the pane was drawn: the pane offers
+/// neither settle act on a restored version (`can_settle`), so a stale pane's press is refused.
+pub const VERSION_RESTORED: &str = "That version was restored since; read the chart again";
+
+/// The source of a restore line's marker ref in its `against` / `ticked_against`: the version it
+/// restores ([`restore_seen`]).
+pub(crate) const RESTORE_OF: &str = "restore-of";
+
+/// The source of each ref naming a line that stood for the companion when the line was drawn.
+pub(crate) const RESTORE_STANDS: &str = "restore-stands";
 
 /// A restore line's per-line Sign refusal: its version is no longer on the opened chart.
 pub const RESTORE_VERSION_GONE: &str = "the version it restores can no longer be read";
@@ -49,7 +62,8 @@ pub const RESTORE_VERSION_GONE: &str = "the version it restores can no longer be
 /// `MED_LIST_ELSEWHERE`), followed by that terminal.
 pub const LIST_ELSEWHERE: &str = "These lines are open on another terminal: ";
 
-/// Ruling R9 (a): a ticked restore line whose companion an earlier ticked restore line replaces.
+/// Ruling R9 (a): a ticked restore line whose lineage an earlier ticked restore line replaces
+/// (the same companion, or a line both would stop: [`restore_holds`], ruling R10).
 /// Its words say what signing it later does (ruling R13).
 pub const SAME_LINE_RESTORED: &str =
     "another restore of the same line is signed first; signed after it, this one replaces it";
@@ -58,11 +72,14 @@ pub const SAME_LINE_RESTORED: &str =
 /// it is absent).
 pub(crate) type Versions = BTreeMap<Uuid, VersionForRestore>;
 
-/// What the press answers: the list read again, and the new line, for the editor to open on.
+/// What the press answers once the line was added: the list read again, and the new line, for
+/// the editor to open on; or, when the list could not be read again, no list and `said`.
 #[derive(Debug, serde::Serialize)]
 pub struct RestoreOpened {
-    pub list: MedListView,
+    pub list: Option<MedListView>,
     pub line_id: String,
+    /// Why there is no list: the line was added, the read after it failed.
+    pub said: Option<String>,
 }
 
 #[tauri::command]
@@ -110,6 +127,7 @@ pub async fn med_list_restore_open_impl(
             .await
             .map_err(failed)?
             .ok_or_else(|| refused(VERSION_GONE))?;
+        not_restored(&v).map_err(refused)?;
         let (typed_drug, directions, line_text, parts) = restore_prefill(&v);
         let content = RestoreContent {
             charted_as: restore_charted_as(&v),
@@ -133,10 +151,40 @@ pub async fn med_list_restore_open_impl(
             return Err(refused(not_added(&answer)));
         }
     }
-    Ok(RestoreOpened {
-        list: med_list_read_impl(state, patient_id, Some(&charts)).await?,
-        line_id: line.to_string(),
-    })
+    let reread = med_list_read_impl(state, patient_id, Some(&charts)).await;
+    Ok(restore_opened(reread, line))
+}
+
+/// What an add that LANDED answers: always an Ok (as `med_version_check::checked`) — the list
+/// read again, or words saying the line was added and how to see it. Never an error: the window
+/// would offer the press again, and a second press adds a second line (a fresh line id). Pure.
+pub(crate) fn restore_opened(reread: Result<MedListView, ErrorView>, line: Uuid) -> RestoreOpened {
+    let line_id = line.to_string();
+    match reread {
+        Ok(list) => RestoreOpened {
+            list: Some(list),
+            line_id,
+            said: None,
+        },
+        Err(e) => RestoreOpened {
+            list: None,
+            line_id,
+            said: Some(format!(
+                "The line was added, but the list could not be read again ({}). \
+                 Use “Read this chart again”.",
+                e.text
+            )),
+        },
+    }
+}
+
+/// A press (restore or check) on a version restored since the pane was drawn is refused
+/// ([`VERSION_RESTORED`]), as the pane would not offer it. Pure.
+pub(crate) fn not_restored(v: &VersionForRestore) -> Result<(), &'static str> {
+    match v.restored {
+        true => Err(VERSION_RESTORED),
+        false => Ok(()),
+    }
 }
 
 /// The restore line's prefill `(typed_drug, directions, line_text, parts)`, read back by Sign
@@ -287,9 +335,11 @@ pub(crate) fn current_besides_stops(
 
 /// Mark each restore line of `lines` (the pane's, in `judged`'s order) with the version it
 /// restores ([`restores_words`]); one whose version no longer reads says so
-/// ([`RESTORE_VERSION_GONE`]) before Sign refuses it.
+/// ([`RESTORE_VERSION_GONE`]) before Sign refuses it. Its `against` gains what a hand tick on it
+/// vouches for ([`restore_seen`]).
 pub(crate) fn mark_restores(lines: &mut [ListLineView], judged: &[Judged], versions: &Versions) {
     for (view, j) in lines.iter_mut().zip(judged) {
+        view.against.extend(restore_seen(&j.line, versions));
         view.restores_words = j
             .line
             .restores
@@ -351,6 +401,66 @@ pub(crate) fn replaces_a_restore(line: &DraftLine, versions: &Versions) -> bool 
 /// stands for its companion on the fresh read), so its Sign would restart a stopped drug. Pure.
 pub(crate) fn restores_a_stopped_line(line: &DraftLine, versions: &Versions) -> bool {
     version_of(line, versions).is_some_and(|v| v.standing.is_empty())
+}
+
+/// Whether a restore line is never default-ticked on this read: it replaces a restore (R9b),
+/// restores a stopped line (R12), or its version no longer reads (Sign refuses it,
+/// [`RESTORE_VERSION_GONE`]). Pure.
+pub(crate) fn restore_withholds_default_tick(line: &DraftLine, versions: &Versions) -> bool {
+    line.restores.is_some()
+        && (version_of(line, versions).is_none()
+            || replaces_a_restore(line, versions)
+            || restores_a_stopped_line(line, versions))
+}
+
+/// What a restore line's hand tick vouches for, drawn into its `against` and sent back as `seen`
+/// when ticked (as its allergy marks are): the version it restores ([`RESTORE_OF`]), then each
+/// line standing for its companion as drawn ([`RESTORE_STANDS`]). Empty for an ordinary line or
+/// one whose version no longer reads. Pure.
+pub(crate) fn restore_seen(line: &DraftLine, versions: &Versions) -> Vec<WarningRef> {
+    let (Some(id), Some(v)) = (line.restores, version_of(line, versions)) else {
+        return vec![];
+    };
+    let r = |source: &str, id: &Uuid| WarningRef {
+        source: source.into(),
+        reference: id.to_string(),
+    };
+    std::iter::once(r(RESTORE_OF, &id))
+        .chain(v.standing.iter().map(|s| r(RESTORE_STANDS, s)))
+        .collect()
+}
+
+/// The restore refs of a hand tick's `seen`, as the door stores them (`ticked_against`). Allergy
+/// refs are `vouched`'s; a ref that is not a uuid vouches for nothing. Pure.
+pub(crate) fn restore_vouched(seen: &[WarningRef]) -> Vec<(String, Uuid)> {
+    seen.iter()
+        .filter(|w| w.source == RESTORE_OF || w.source == RESTORE_STANDS)
+        .filter_map(|w| Some((w.source.clone(), w.reference.parse().ok()?)))
+        .collect()
+}
+
+/// Whether a HAND tick on `line` still holds for its restore (R9b, R12, the chart-held rule): it
+/// vouched for this version and for exactly the lines standing for its companion on the fresh
+/// read. A colleague's stop or restore since the tick changes that set, so the tick fails and
+/// Sign hands the line back unticked, never signing a stop or restart its clinician did not see.
+/// A tick given after the "since been stopped" mark vouched for the empty set: a deliberate
+/// restart. An ordinary line holds here, and so does one whose version is gone: Sign refuses
+/// that line alone ([`RESTORE_VERSION_GONE`], decision 18), never the whole Sign. Pure.
+pub(crate) fn restore_tick_holds(line: &DraftLine, versions: &Versions) -> bool {
+    let Some(id) = line.restores else {
+        return true;
+    };
+    let Some(v) = version_of(line, versions) else {
+        return true;
+    };
+    let vouched = &line.ticked_against;
+    let marked = vouched.iter().any(|(s, r)| s == RESTORE_OF && *r == id);
+    let stood: BTreeSet<Uuid> = vouched
+        .iter()
+        .filter(|(s, _)| s == RESTORE_STANDS)
+        .map(|(_, r)| *r)
+        .collect();
+    marked && stood == v.standing.iter().copied().collect()
 }
 
 #[cfg(test)]

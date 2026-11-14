@@ -5,6 +5,7 @@
 //! `med_list_restore_db_tests.rs`, whose fixture and helpers these share (moved verbatim out of
 //! it for its 500-line cap). Run locally on `CAIRN_TEST_PG` (#905).
 use super::*;
+use crate::med_list_sign::MedListSigned;
 
 /// Ruling R9 (a): two hand-ticked restores of one line in one Sign: the first charts, the second
 /// is refused before the key in words (never the floor's commit text) and stays in the list.
@@ -19,7 +20,10 @@ async fn two_hand_ticked_restores_of_one_line_refuse_the_second_legibly() {
     let first = restore(&state, chart, &[chart], versions[0]).await.unwrap();
     let second = restore(&state, chart, &[chart], versions[1]).await.unwrap();
     for id in [&first.line_id, &second.line_id] {
-        let line = hand_ticked(shown(&second.list, id));
+        let line = hand_ticked(shown(
+            second.list.as_ref().expect("the list read again"),
+            id,
+        ));
         assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
     }
     let ids = [first.line_id.clone(), second.line_id.clone()];
@@ -53,13 +57,21 @@ async fn a_restore_replacing_a_charted_restore_is_never_default_ticked() {
         charted_with_versions(&state, &owner, chart, &["25mg tab bd", "75mg tab bd"]).await;
     let first = restore(&state, chart, &[chart], versions[0]).await.unwrap();
     let (outcome, charted, _, _, _) = done(
-        sign(&state, chart, &ticked(&first.list), credential("bea"))
-            .await
-            .unwrap(),
+        sign(
+            &state,
+            chart,
+            &ticked(first.list.as_ref().expect("the list read again")),
+            credential("bea"),
+        )
+        .await
+        .unwrap(),
     );
     assert_eq!(charted, 1, "{outcome}");
     let second = restore(&state, chart, &[chart], versions[1]).await.unwrap();
-    let line = shown(&second.list, &second.line_id);
+    let line = shown(
+        second.list.as_ref().expect("the list read again"),
+        &second.line_id,
+    );
     assert!(!line.duplicate, "{:?}", line.duplicate_of);
     assert!(!line.default_ticked && !line.ticked);
     let line = hand_ticked(line);
@@ -101,7 +113,10 @@ async fn a_chain_restore_and_a_sibling_restore_refuse_the_second_legibly() {
     let (companion, versions) =
         charted_with_versions(&state, &owner, chart, &["25mg tab bd", "75mg tab bd"]).await;
     let first = restore(&state, chart, &[chart], versions[0]).await.unwrap();
-    let line = hand_ticked(shown(&first.list, &first.line_id));
+    let line = hand_ticked(shown(
+        first.list.as_ref().expect("the list read again"),
+        &first.line_id,
+    ));
     assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
     let ids = std::slice::from_ref(&first.line_id);
     let (outcome, charted, _, _, _) =
@@ -139,7 +154,7 @@ async fn a_chain_restore_and_a_sibling_restore_refuse_the_second_legibly() {
     let sibling = restore(&state, chart, &[chart], versions[1]).await.unwrap();
     let chain = restore(&state, chart, &[chart], v3).await.unwrap();
     for id in [&sibling.line_id, &chain.line_id] {
-        let line = hand_ticked(shown(&chain.list, id));
+        let line = hand_ticked(shown(chain.list.as_ref().expect("the list read again"), id));
         assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
     }
     let ids = [sibling.line_id.clone(), chain.line_id.clone()];
@@ -175,7 +190,13 @@ async fn a_restore_whose_line_was_stopped_since_is_never_default_ticked() {
     let (companion, versions) =
         charted_with_versions(&state, &owner, chart, &["25mg tab bd"]).await;
     let opened = restore(&state, chart, &[chart], versions[0]).await.unwrap();
-    assert!(shown(&opened.list, &opened.line_id).default_ticked);
+    assert!(
+        shown(
+            opened.list.as_ref().expect("the list read again"),
+            &opened.line_id
+        )
+        .default_ticked
+    );
     let patient = chart.to_string();
     crate::commands::cease_impl(
         &state,
@@ -216,4 +237,60 @@ async fn a_restore_whose_line_was_stopped_since_is_never_default_ticked() {
         .get(0);
     assert_eq!(stops, 1, "the restore stopped nothing");
     assert!(left(&owner, chart).await.is_empty(), "it charted");
+}
+
+/// The chart-held rule for a HAND tick (the maintainer's ruling at the final check): a restore
+/// line ticked by hand BEFORE a colleague stops its line is handed back unticked at Sign, nothing
+/// signed — the tick vouched for the line that stood. Ticked again with the mark drawn, it charts
+/// as a deliberate restart.
+#[tokio::test]
+async fn a_hand_tick_given_before_the_line_was_stopped_does_not_sign() {
+    let Some((_guard, owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    allergies_known(&state, chart).await;
+    let (companion, versions) =
+        charted_with_versions(&state, &owner, chart, &["25mg tab bd"]).await;
+    let opened = restore(&state, chart, &[chart], versions[0]).await.unwrap();
+    let drawn = shown(
+        opened.list.as_ref().expect("the list read again"),
+        &opened.line_id,
+    );
+    assert_eq!(
+        save_as(&state, chart, hand_ticked(drawn), Some("bea")).await,
+        "saved"
+    );
+    let patient = chart.to_string();
+    crate::commands::cease_impl(
+        &state,
+        &patient,
+        vec![patient.clone()],
+        &companion.to_string(),
+        "myalgia, CK 5000",
+        credential("bea"),
+    )
+    .await
+    .unwrap();
+    let ids = std::slice::from_ref(&opened.line_id);
+    match sign(&state, chart, ids, credential("bea")).await.unwrap() {
+        MedListSigned::Changed { lines, .. } => assert_eq!(lines, ids),
+        other => panic!("expected Changed, got {other:?}"),
+    }
+    assert_eq!(left(&owner, chart).await.len(), 1, "nothing was charted");
+    let view = read(&state, chart).await;
+    let line = shown(&view, &opened.line_id);
+    assert!(!line.ticked, "{line:?}");
+    assert_eq!(
+        save_as(&state, chart, hand_ticked(line), Some("bea")).await,
+        "saved"
+    );
+    let (outcome, charted, _, _, _) =
+        done(sign(&state, chart, ids, credential("bea")).await.unwrap());
+    assert_eq!(charted, 1, "{outcome}");
+    assert_eq!(
+        stop_reason(&owner, companion).await,
+        Some(Some("myalgia, CK 5000".into())),
+        "the colleague's stop stands"
+    );
 }

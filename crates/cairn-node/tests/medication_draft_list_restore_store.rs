@@ -274,3 +274,95 @@ async fn deleting_a_restore_line_leaves_no_record() {
         .get(0);
     assert_eq!(n, 1);
 }
+
+/// The restore door's retry branch: an existing line id is a retry ONLY when it is the same
+/// chart, writer and version. Any other use of the id RAISES (a caller bug, not a word the window
+/// shows): a different version, a different writer (the NULL writer's bucket here), a different
+/// chart — and a plain, non-restore line's id, whose `restores` is NULL. Nothing is rewritten.
+#[tokio::test]
+async fn restore_add_on_a_used_line_id_raises_unless_it_is_a_retry() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, w, chart) = fixture(&base).await;
+    let (version, other_version, line, plain) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    seed_version(&owner, chart, version).await;
+    seed_version(&owner, chart, other_version).await;
+    assert_eq!(restore_add(&w, line, chart, version).await, "saved");
+    assert_eq!(
+        save_over(&w, plain, chart, "paracetamol", None).await,
+        "saved"
+    );
+    // (line, writer, chart, version)
+    let misuses = [
+        (line, Some("notewriter"), chart, other_version),
+        (line, None, chart, version),
+        (line, Some("notewriter"), Uuid::now_v7(), version),
+        (plain, Some("notewriter"), chart, version),
+    ];
+    for (id, writer, on, v) in misuses {
+        let err = w
+            .query_one(
+                "SELECT cairn_med_draft_restore_add($1::text::uuid, $2::text::uuid, 'pc-1', $3, \
+                        $4::text::uuid, 'pre-existing', 'x', '[]'::text::jsonb, 'x', '')",
+                &[&id.to_string(), &on.to_string(), &writer, &v.to_string()],
+            )
+            .await
+            .expect_err("a used line id is not a new restore line");
+        let msg = common::db_msg(&err);
+        assert!(msg.contains("already exists"), "{writer:?} {msg}");
+    }
+    let (restores, ..) = stored(&w, chart, line).await.unwrap();
+    assert_eq!(
+        restores,
+        Some(version.to_string()),
+        "the restore line is unchanged"
+    );
+    assert_eq!(
+        stored(&w, chart, plain).await.unwrap().0,
+        None,
+        "the plain line too"
+    );
+}
+
+/// The save door drops a stale `set_aside_of` on a restore line BEFORE it reads the tick
+/// (`v_hand` is computed after `p_set_aside_of := NULL`). A window still holding a mark from
+/// before the line became a restore must not silently lose the clinician's hand tick: saved
+/// with the line's own content, a tick and a mark, the line stays ticked and unmarked.
+#[tokio::test]
+async fn a_stale_mark_on_a_restore_line_keeps_its_hand_tick() {
+    let Some(base) = common::cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let (owner, w, chart) = fixture(&base).await;
+    let (version, line) = (Uuid::now_v7(), Uuid::now_v7());
+    seed_version(&owner, chart, version).await;
+    restore_add(&w, line, chart, version).await;
+    let mark = format!("line:{}", Uuid::now_v7());
+    // The same content restore_add stored, so no change voids the tick.
+    let answer: String = w
+        .query_one(
+            "SELECT cairn_med_draft_line_save($1::text::uuid, $2::text::uuid, 'pc-1', 'notewriter', \
+                    'pre-existing', 'oxycodone 5 mg qid', \
+                    '[{\"term\":\"oxycodone\",\"coding\":null}]'::text::jsonb, NULL, true, \
+                    '[]'::text::jsonb, true, 'oxycodone', '5 mg qid', false, NULL, NULL, NULL, $3)",
+            &[&line.to_string(), &chart.to_string(), &mark],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(answer, "saved");
+    let (restores, set_aside, _, hand, ..) = stored(&w, chart, line).await.unwrap();
+    assert_eq!(restores, Some(version.to_string()));
+    assert_eq!(set_aside, None, "the stale mark is dropped");
+    assert!(hand, "the hand tick survives the stale mark");
+}

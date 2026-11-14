@@ -184,19 +184,6 @@ fn restoring(mut l: DraftLine, v: u128) -> DraftLine {
     l
 }
 
-/// A version row naming only what the rule reads: its id and the companion it lost to.
-fn version(id: u128, alt: u128) -> SetAsideRow {
-    SetAsideRow {
-        version_id: u(id),
-        alternative_to: u(alt),
-        patient_id: u(0),
-        drug_line: String::new(),
-        source: String::new(),
-        why: None,
-        t_recorded: chrono::DateTime::UNIX_EPOCH,
-    }
-}
-
 #[test]
 fn a_restore_line_has_no_set_aside_candidates() {
     let restore = restoring(oxy(1, None), 90);
@@ -208,25 +195,4 @@ fn a_restore_line_has_no_set_aside_candidates() {
         vec![Companion::Draft(u(1))],
         "a restore line may still be a companion (the rule only bars it from being a version)"
     );
-}
-
-#[test]
-fn replaced_by_restores_names_each_lines_companion() {
-    let draft = [
-        restoring(oxy(1, None), 90),
-        restoring(oxy(2, None), 91),
-        oxy(3, None),
-    ];
-    let versions = [version(90, 500), version(91, 501), version(92, 502)];
-    assert_eq!(
-        replaced_by_restores(&draft, &versions),
-        vec![(u(1), u(500)), (u(2), u(501))]
-    );
-}
-
-#[test]
-fn a_restore_naming_an_unknown_version_replaces_nothing() {
-    let draft = [restoring(oxy(1, None), 99)];
-    assert!(replaced_by_restores(&draft, &[version(90, 500)]).is_empty());
-    assert!(replaced_by_restores(&draft, &[]).is_empty());
 }

@@ -2,6 +2,7 @@
 //! refusal when the version is gone, and the source and press it signs. No database; the
 //! DB-gated walks are `med_list_restore_db_tests.rs`.
 use super::*;
+use cairn_event::medication::ALLERGY_SOURCE;
 use cairn_node::allergy::check::MOIETY_SYSTEM;
 use cairn_node::medication::line::read_directions;
 
@@ -29,6 +30,7 @@ fn version(sig: Option<&str>) -> VersionForRestore {
         sig: sig.map(Into::into),
         route: Some("po".into()),
         strength: None,
+        restored: false,
     }
 }
 
@@ -317,4 +319,183 @@ fn a_restore_whose_line_was_stopped_since_withholds_the_tick_and_says_so() {
     assert!(restores_a_stopped_line(&restoring, &versions));
     assert!(!restores_a_stopped_line(&line(None, None), &versions));
     assert!(!restores_a_stopped_line(&line(Some(0x99), None), &versions));
+}
+
+/// A restore line's hand tick vouches for what stood for its companion when it was ticked (the
+/// refs drawn in its `against`, sent back as `seen`): it holds at Sign while the fresh standing
+/// is exactly that set, and fails (so Sign hands it back unticked) once a colleague's stop or
+/// restore changed it, never signing a stop or restart the clinician did not see. A tick given
+/// AFTER the "since been stopped" mark vouches for the empty set, and is a deliberate restart.
+#[test]
+fn a_restore_hand_tick_holds_only_over_the_standing_it_was_given_against() {
+    let mut versions = Versions::new();
+    versions.insert(Uuid::from_u128(VERSION), version(None));
+    let mut restoring = line(Some(VERSION), None);
+    restoring.hand_ticked = true;
+    let drawn = restore_seen(&restoring, &versions);
+    assert_eq!(
+        drawn.len(),
+        2,
+        "the version and its one standing line: {drawn:?}"
+    );
+    restoring.ticked_against = restore_vouched(&drawn);
+    assert!(restore_tick_holds(&restoring, &versions));
+
+    // A colleague stops the companion: nothing stands, so the tick no longer holds.
+    let stopped = VersionForRestore {
+        companion_current: false,
+        standing: vec![],
+        ..version(None)
+    };
+    versions.insert(Uuid::from_u128(VERSION), stopped.clone());
+    assert!(!restore_tick_holds(&restoring, &versions));
+
+    // A colleague restores a sibling version: a restore line stands now instead.
+    let replaced = VersionForRestore {
+        standing: vec![Uuid::from_u128(0xB1)],
+        standing_restored: vec![Uuid::from_u128(0xB1)],
+        ..version(None)
+    };
+    versions.insert(Uuid::from_u128(VERSION), replaced);
+    assert!(!restore_tick_holds(&restoring, &versions));
+
+    // Ticked again with the mark drawn: a deliberate restart holds.
+    versions.insert(Uuid::from_u128(VERSION), stopped);
+    restoring.ticked_against = restore_vouched(&restore_seen(&restoring, &versions));
+    assert!(restore_tick_holds(&restoring, &versions));
+
+    // A tick that vouched for nothing of the restore (no marker) never holds. The version gone,
+    // and an ordinary line, are not this rule's business: Sign refuses the first line alone.
+    restoring.ticked_against = vec![];
+    assert!(!restore_tick_holds(&restoring, &versions));
+    assert!(restore_tick_holds(&restoring, &Versions::new()));
+    assert!(restore_tick_holds(&line(None, None), &versions));
+}
+
+/// Only the restore's own refs are kept from `seen`: allergy refs are `vouched`'s, and a ref
+/// that is not a uuid is dropped (it vouches for nothing).
+#[test]
+fn restore_vouched_keeps_only_the_restore_refs() {
+    let seen = vec![
+        WarningRef {
+            source: ALLERGY_SOURCE.into(),
+            reference: Uuid::from_u128(1).to_string(),
+        },
+        WarningRef {
+            source: RESTORE_OF.into(),
+            reference: Uuid::from_u128(2).to_string(),
+        },
+        WarningRef {
+            source: RESTORE_STANDS.into(),
+            reference: "not-a-uuid".into(),
+        },
+    ];
+    assert_eq!(
+        restore_vouched(&seen),
+        vec![(RESTORE_OF.to_string(), Uuid::from_u128(2))]
+    );
+}
+
+/// The default tick is withheld from a restore line that replaces a restore (R9b), restores a
+/// stopped line (R12), or whose version no longer reads (Sign would refuse it); an ordinary line
+/// and a plain restore are not withheld.
+#[test]
+fn the_default_tick_is_withheld_from_a_restore_sign_would_not_take_as_seen() {
+    let mut versions = Versions::new();
+    versions.insert(Uuid::from_u128(VERSION), version(None));
+    let restoring = line(Some(VERSION), None);
+    assert!(!restore_withholds_default_tick(&restoring, &versions));
+    assert!(!restore_withholds_default_tick(
+        &line(None, None),
+        &versions
+    ));
+    assert!(restore_withholds_default_tick(&restoring, &Versions::new()));
+    let stopped = VersionForRestore {
+        standing: vec![],
+        ..version(None)
+    };
+    versions.insert(Uuid::from_u128(VERSION), stopped);
+    assert!(restore_withholds_default_tick(&restoring, &versions));
+    let replaced = VersionForRestore {
+        standing: vec![Uuid::from_u128(0xB1)],
+        standing_restored: vec![Uuid::from_u128(0xB1)],
+        ..version(None)
+    };
+    versions.insert(Uuid::from_u128(VERSION), replaced);
+    assert!(restore_withholds_default_tick(&restoring, &versions));
+}
+
+/// A press on a version restored since the pane was drawn is refused in words (the pane offers
+/// neither settle act on a restored version); one not restored is not.
+#[test]
+fn a_version_restored_since_is_refused() {
+    assert_eq!(not_restored(&version(None)), Ok(()));
+    let restored = VersionForRestore {
+        restored: true,
+        ..version(None)
+    };
+    assert_eq!(not_restored(&restored), Err(VERSION_RESTORED));
+}
+
+/// An add that landed answers Ok even when the list could not be read again: an error would
+/// offer the press again, and a second press adds a second line.
+#[test]
+fn a_landed_add_whose_reread_failed_still_answers_ok() {
+    let line_id = Uuid::from_u128(5);
+    let opened = restore_opened(Err(refused("the lock was lost")), line_id);
+    assert!(opened.list.is_none());
+    assert_eq!(opened.line_id, line_id.to_string());
+    let said = opened.said.expect("words for the failed read");
+    assert!(
+        said.contains("was added") && said.contains("the lock was lost"),
+        "{said}"
+    );
+}
+
+/// Review Focus 2: a restore line is judged against the chart without the rows made WHOLLY of
+/// what it will stop; a row that also holds a thread it will not stop stays (still current after
+/// Sign), and so does a row with no members.
+#[test]
+fn a_restore_is_judged_without_only_the_rows_it_wholly_stops() {
+    use cairn_medication_view::fixtures::sample_chart;
+    use cairn_medication_view::{MedicationStatus, MemberVouch};
+    let row = |code: u128, members: &[u128]| {
+        let mut r = sample_chart().rows[0].clone();
+        r.status = MedicationStatus::Active;
+        r.coding_system = Some(MOIETY_SYSTEM.into());
+        r.coding_code = Some(Uuid::from_u128(code).to_string());
+        r.coding_conflict = false;
+        let vouch = r.members[0].clone();
+        r.members = members
+            .iter()
+            .map(|m| MemberVouch {
+                medication_id: Uuid::from_u128(*m),
+                ..vouch.clone()
+            })
+            .collect();
+        r
+    };
+    let rows = [
+        row(1, &[COMPANION]),
+        row(2, &[COMPANION, 0xD1]),
+        row(3, &[]),
+    ];
+    let mut versions = Versions::new();
+    versions.insert(Uuid::from_u128(VERSION), version(None));
+    let restoring = line(Some(VERSION), None);
+    let kept = current_besides_stops(&rows, &[restoring.clone(), line(None, None)], &versions);
+    let codes: Vec<String> = kept[&restoring.line_id]
+        .iter()
+        .map(|(c, _)| c.clone())
+        .collect();
+    assert_eq!(
+        codes,
+        [2, 3].map(|c| Uuid::from_u128(c).to_string()),
+        "only the row wholly stopped is left out"
+    );
+    assert_eq!(
+        kept.len(),
+        1,
+        "an ordinary line is judged against the whole chart"
+    );
 }

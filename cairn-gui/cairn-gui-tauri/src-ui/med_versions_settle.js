@@ -113,7 +113,8 @@ function pressed(version, groupId) {
  * "Use this version instead": Rust adds a restore line pre-filled from the version to who's
  * here's list (`med_list_restore_open`); its answer, the list read again, is drawn, and the ONE
  * editor opens on the new line so the reviewer can change what has changed since. Nothing is
- * signed here: the list's Sign stops what stands and charts the line, in one transaction.
+ * signed here: the list's Sign stops what stands and charts the line, in one transaction. An
+ * add whose list could not be read again answers no list and words (`said`) to show instead.
  */
 async function pressRestore(version, groupId) {
   if (settleBlocked("restore")) return;
@@ -137,6 +138,9 @@ async function pressRestore(version, groupId) {
     drawMedList();
   }
   if (revision !== medListRevision || patient !== renderedPatient) return;
+  // Added, but the list could not be read again: say so, never a refusal (a second press would
+  // add a second line).
+  if (!opened.list) return sayBeside(version.version_id, opened.said);
   drawMedRead(opened.list, patient);
   const line = medLines.find((l) => l.id === opened.line_id);
   if (line) editMedLine(line);

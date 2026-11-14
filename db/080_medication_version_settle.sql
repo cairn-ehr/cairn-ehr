@@ -160,10 +160,10 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 -- `up` is itself reached down from the root), and still gives an answer when a forged cycle has
 -- no root. UNION, not UNION ALL, in both walks, so a cycle a peer could construct still ends.
 -- The ONE answer to "what stands for this companion": the COMMIT trigger below demands that no
--- current member but the restore itself survive, and the window (Task 5's node read) lists the
--- current members as what a restore must stop. STABLE; SECURITY DEFINER with a pinned
--- search_path and qualified tables so the window's role gets the answer without needing more
--- than EXECUTE, and no caller can shadow a table with a TEMP one.
+-- current member but the restore itself survive, and the window (cairn-node's
+-- `version_for_restore`) lists the current members as what a restore must stop. STABLE; SECURITY
+-- DEFINER with a pinned search_path and qualified tables so the window's role gets the answer
+-- without needing more than EXECUTE, and no caller can shadow a table with a TEMP one.
 CREATE OR REPLACE FUNCTION cairn_medication_restore_lineage(p_companion uuid, p_patient uuid)
 RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     WITH RECURSIVE up(medication_id) AS (

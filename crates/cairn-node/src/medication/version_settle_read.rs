@@ -93,7 +93,7 @@ fn drug_line(r: &tokio_postgres::Row, first: usize) -> anyhow::Result<String> {
 /// Every check and restore over `charts`, oldest first (checks, then restores, merged by time).
 /// Restores come from `medication_restore` (ruling R5); `replaced_line` is the version's
 /// companion rebuilt from `medication_statement` + `medication_charting`, as `read_set_asides`
-/// rebuilds a version. The companion's coding is not projected on the statement, so it is
+/// rebuilds a version. The companion's coding (`medication_coding`) is not joined here, so it is
 /// spelled without one.
 pub async fn read_settlements(
     client: &(impl GenericClient + Sync),
@@ -181,8 +181,10 @@ pub struct VersionForRestore {
     pub alternative_to: Uuid,
     /// The companion is in the record with no stop.
     pub companion_current: bool,
-    /// The CURRENT lines of the companion's restore lineage (db/080 ruling R4): what a restore
-    /// must stop. The companion itself when current, else the restore lines that replaced it.
+    /// The CURRENT lines of the companion's rooted restore lineage (db/080, rulings R4 + R10):
+    /// what a restore must stop — any current line in the tree under the companion's original
+    /// line, so the companion itself, a restore that replaced it, or a sibling restore of the
+    /// original.
     pub standing: Vec<Uuid>,
     /// The members of `standing` that are themselves restore lines (a `medication_restore` row):
     /// a restore replacing one of these replaces a restore, not the original line.
@@ -200,6 +202,9 @@ pub struct VersionForRestore {
     pub sig: Option<String>,
     pub route: Option<String>,
     pub strength: Option<String>,
+    /// The version was restored already (a `medication_restore` row names it): the pane offers
+    /// neither settle act on it, so a press from a stale pane is refused.
+    pub restored: bool,
 }
 
 /// One version of `patient`, for the restore press and for Sign. `None`: not on this chart, its
@@ -218,7 +223,9 @@ pub async fn version_for_restore(
                     st.standing, \
                     ch.charted_as, COALESCE(a.source_detail, a.info_source), a.term, \
                     a.coding_system, a.coding_code, a.coding_display, a.formulation, a.dose_amount, \
-                    a.dose_unit, a.sig, a.route, a.strength, st.restored \
+                    a.dose_unit, a.sig, a.route, a.strength, st.restored, \
+                    EXISTS (SELECT 1 FROM medication_restore r \
+                             WHERE r.version_id = a.version_id AND r.patient_id = a.patient_id) \
                FROM medication_set_aside a \
                JOIN medication_statement m \
                  ON m.medication_id = a.alternative_to AND m.patient_id = a.patient_id \
@@ -261,5 +268,6 @@ pub async fn version_for_restore(
         sig: text(12)?,
         route: text(13)?,
         strength: text(14)?,
+        restored: r.try_get(16)?,
     }))
 }

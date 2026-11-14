@@ -29,7 +29,7 @@ use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
     already_on_the_list, elsewhere, fresh_read, judge, tick_holds, vouched, warnings_now, Judged,
 };
-use crate::med_list_restore::mark_restores;
+use crate::med_list_restore::{mark_restores, restore_vouched};
 use crate::med_list_versions::{
     companion_words, companions_of, given, stamp_new_line, versions_recorded, FromView,
 };
@@ -136,7 +136,8 @@ pub struct ListLineView {
     /// The stored veto ([`LineArg::held`]).
     pub held: bool,
     pub unfinished: bool,
-    /// The warnings drawn on the line now (its check's allergy marks), for [`LineArg::seen`].
+    /// The warnings drawn on the line now (its check's allergy marks, and on a restore line what
+    /// stands for its companion: `restore_seen`), for [`LineArg::seen`].
     pub against: Vec<WarningRef>,
     /// The same-drug de-label offers this line may show (empty when none).
     pub delabel_offers: Vec<DelabelOffer>,
@@ -263,11 +264,16 @@ pub async fn med_list_save_impl(
     let line_id: Uuid = line.line_id.parse().map_err(|_| refused("not a line id"))?;
     press(&line.charted_as)?;
     // The door keeps the refs of the moment a tick was GIVEN; a later save's are ignored there.
+    // A restore line's tick also vouches for what stood for its companion as drawn (`restore_seen`).
     let ticked_against = match line.hand_ticked {
-        true => vouched(
-            &warnings_now(state, patient, charts, &line).await,
-            &line.seen,
-        ),
+        true => {
+            let mut refs = vouched(
+                &warnings_now(state, patient, charts, &line).await,
+                &line.seen,
+            );
+            refs.extend(restore_vouched(&line.seen));
+            refs
+        }
         false => vec![],
     };
     let mut row = DraftLine {

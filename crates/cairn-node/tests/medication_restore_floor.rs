@@ -264,3 +264,172 @@ async fn a_shred_removes_the_restore_row() {
         "scrubbed by content address"
     );
 }
+
+/// ADR-0103 decision 6: the COMMIT check never reads `cairn.remote_apply`. The strict door's ''
+/// is gone by COMMIT, and the setting then reads whatever the transaction set last — so a check
+/// that read it would let a restore with no stop through once anything left it 'on'. Two ways
+/// to leave it 'on' after the restore is submitted: set it by hand, and run a reprojection
+/// (db/039 sets it for its lenient re-fold). Either way the pending row, not the setting, says
+/// "this restore came through the authoring door", and the COMMIT still refuses.
+#[tokio::test]
+async fn the_commit_check_ignores_remote_apply_set_after_the_restore() {
+    rig!(c, sk, kid);
+    let (p, _med, version) = chart_with_version(&mut c, &sk, &kid).await;
+    for reproject in [false, true] {
+        let (line, _) = restore_body(&c, &kid, p, version).await;
+        let (bytes, dek) = seal_sign(line, &sk);
+        let tx = c.transaction().await.unwrap();
+        tx.execute("SELECT submit_event($1, NULL, NULL, $2)", &[&bytes, &dek])
+            .await
+            .map_err(|e| db_msg(&e))
+            .expect("the restore with no stop is admitted at submit (the check is deferred)");
+        if reproject {
+            tx.execute(
+                "SELECT count(*) FROM cairn_reproject('clinical.medication.asserted', false, 'test')",
+                &[],
+            )
+            .await
+            .unwrap();
+        } else {
+            tx.execute("SELECT set_config('cairn.remote_apply', 'on', true)", &[])
+                .await
+                .unwrap();
+        }
+        // The premise: at COMMIT the setting really does read 'on'.
+        let setting: String = tx
+            .query_one("SELECT current_setting('cairn.remote_apply', true)", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(setting, "on", "reproject = {reproject}");
+        let err = tx
+            .commit()
+            .await
+            .map_err(|e| db_msg(&e))
+            .expect_err("a later remote_apply = 'on' does not excuse the missing stop");
+        assert!(
+            err.contains("a restore must stop the line it replaces in the same transaction"),
+            "reproject = {reproject}: {err}"
+        );
+    }
+    assert_eq!(pending_rows(&c).await, 0);
+}
+
+/// `cairn_medication_restore_lineage` on (`companion`, `patient`), as text, sorted.
+async fn lineage(
+    c: &impl tokio_postgres::GenericClient,
+    companion: Uuid,
+    patient: Uuid,
+) -> Vec<String> {
+    let mut ids: Vec<String> = c
+        .query(
+            "SELECT l::text FROM cairn_medication_restore_lineage($1::text::uuid, $2::text::uuid) AS l",
+            &[&companion.to_string(), &patient.to_string()],
+        )
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("the lineage walk ends")
+        .into_iter()
+        .map(|r| r.get(0))
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The lineage walks use UNION, so a cycle — which no authoring door can build, but which forged
+/// or peer-crafted projection rows could — still ends instead of hanging every restore on the
+/// chart. Forged as owner, in a transaction rolled back after: lines A and B each restore a
+/// version set aside beside the other (a two-cycle through BOTH the upward and the downward
+/// walk), and line X restores a version set aside beside itself. A 2-second statement timeout
+/// turns a runaway walk into a failure instead of a hung suite.
+#[tokio::test]
+async fn a_forged_restore_cycle_still_ends() {
+    rig!(c, sk, kid);
+    let _ = (&sk, &kid);
+    let (p, a, b, x) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    let tx = c.transaction().await.unwrap();
+    tx.batch_execute("SET LOCAL statement_timeout = '2s'")
+        .await
+        .unwrap();
+    // (the version's companion, the line that restores it)
+    for (beside, restored_by) in [(a, b), (b, a), (x, x)] {
+        let version = Uuid::now_v7().to_string();
+        tx.execute(
+            "INSERT INTO medication_set_aside (content_address, event_id, patient_id, version_id, \
+                 alternative_to, term, info_source, t_recorded) \
+             VALUES (uuid_send(gen_random_uuid()), gen_random_uuid(), $1::text::uuid, \
+                 $2::text::uuid, $3::text::uuid, 'atorvastatin', 'patient-reported', now())",
+            &[&p.to_string(), &version, &beside.to_string()],
+        )
+        .await
+        .unwrap();
+        tx.execute(
+            "INSERT INTO medication_restore (content_address, event_id, patient_id, medication_id, \
+                 version_id) \
+             VALUES (uuid_send(gen_random_uuid()), gen_random_uuid(), $1::text::uuid, \
+                 $2::text::uuid, $3::text::uuid)",
+            &[&p.to_string(), &restored_by.to_string(), &version],
+        )
+        .await
+        .unwrap();
+    }
+    let mut both = vec![a.to_string(), b.to_string()];
+    both.sort();
+    assert_eq!(lineage(&tx, a, p).await, both);
+    assert_eq!(lineage(&tx, b, p).await, both);
+    assert_eq!(lineage(&tx, x, p).await, vec![x.to_string()]);
+    tx.rollback().await.unwrap();
+}
+
+/// A peer may send two versions sharing one version_id beside two different lines (db/079's
+/// "version_id already exists" is an authoring-door rule). A restore of that version then owes
+/// a stop of EACH companion: the pending table keys on (event, companion), one row per
+/// companion. Stopping only one leaves the other current beside the restore, so COMMIT refuses;
+/// stopping both commits.
+#[tokio::test]
+async fn a_version_id_shared_by_two_companions_owes_a_stop_of_each() {
+    rig!(c, sk, kid);
+    let (p, med, version) = chart_with_version(&mut c, &sk, &kid).await;
+    let other = add_med(&mut c, &sk, &kid, p).await;
+    let wall = db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000;
+    let mut twin = version_body(&c, &kid, p, version, other, |_| {}).await;
+    twin.hlc = peer_hlc(wall);
+    apply_remote(&c, &sk, &twin)
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("the sync door admits a peer's version reusing the version_id");
+    let rows = "SELECT count(*) FROM medication_set_aside WHERE version_id = $1::text::uuid";
+    assert_eq!(
+        count(&c, rows, version).await,
+        2,
+        "two companions, one version_id"
+    );
+
+    let (line, _) = restore_body(&c, &kid, p, version).await;
+    let stop = stop_body(&c, &kid, p, med).await;
+    let err = submit_together(&mut c, &sk, vec![line, stop])
+        .await
+        .expect_err("the second companion is still current");
+    assert!(
+        err.contains("a restore must stop the line it replaces in the same transaction")
+            && err.contains(&format!("still stands for line {other}")),
+        "{err}"
+    );
+    assert_eq!(pending_rows(&c).await, 0);
+
+    let (line, new_med) = restore_body(&c, &kid, p, version).await;
+    let events = vec![
+        line,
+        stop_body(&c, &kid, p, med).await,
+        stop_body(&c, &kid, p, other).await,
+    ];
+    submit_together(&mut c, &sk, events)
+        .await
+        .expect("a restore that stops both companions commits");
+    assert_eq!(projected_restores(&c, new_med).await, Some(version));
+}

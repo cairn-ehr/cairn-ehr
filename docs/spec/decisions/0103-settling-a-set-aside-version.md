@@ -129,13 +129,17 @@ Ruling R3 replaced it (decision 2).
     "From:" and "why" for what the call found.
 17. **A restore line is not a duplicate of the lines it will stop.** It is judged against the chart without the rows
     made wholly of its `standing` lines, but still against every other current line and every other list line, so
-    two restores of one drug (the same moiety code, or the same text) duplicate each other and neither is
-    default-ticked; ruling R9 a catches the rest at Sign (decision 18). A restore whose `standing` holds a restore
-    line is never default-ticked (ruling R9 b): replacing a restore charted earlier must be deliberate. Nor is a
-    restore whose `standing` is empty (ruling R12): its line was stopped since the press, by another source, and Sign
-    would restart a stopped drug without a word (the chart-held rule). Its mark reads
-    `restores the {source} version — its line has since been stopped`, and a hand tick still signs it, as a
-    deliberate restart.
+    two restores of one drug (the same moiety code; uncoded lines never duplicate) duplicate each other and neither
+    is default-ticked; ruling R9 a catches the rest at Sign (decision 18). A restore whose `standing` holds a
+    restore line is never default-ticked (ruling R9 b): replacing a restore charted earlier must be deliberate. Nor
+    is a restore whose `standing` is empty (ruling R12): its line was stopped since the press, by another source, and
+    Sign would restart a stopped drug without a word (the chart-held rule). Its mark reads
+    `restores the {source} version — its line has since been stopped`. Nor is a restore whose version no longer
+    reads, which Sign refuses. A hand tick on a restore line vouches for what stood for its companion as drawn when
+    it was ticked (the version and each `standing` line, kept beside its allergy refs in `ticked_against`), and holds
+    at Sign only while the fresh `standing` is exactly that set. So a tick given before a colleague's stop or restore
+    fails at Sign and the line comes back unticked, while a tick given after the mark (vouching for an empty
+    `standing`) signs, as a deliberate restart.
 18. **Sign re-derives the restore from the STORED row on the fresh read**, never from the webview. Each restore
     line's version is read on the OPENED chart with what stands for it. Two per-line refusals come before the key:
     `RESTORE_VERSION_GONE` ("the version it restores can no longer be read"), and, for a later ticked restore of the
@@ -161,11 +165,12 @@ Ruling R3 replaced it (decision 2).
     version never shows as unsettled because only its settlements failed to read. A check shows only for a version
     on its own chart beside a companion present there. A restore is read from `medication_restore` and joined to its
     version's companion on the same chart.
-21. **The words.** Under the version: `checked by {who}, {when}: not current — from {source}`, then ` — {why}`, one
-    line per check, oldest first; or `restored by {who}, {when}`. Under the new line, `replaced: {old drug line} —
-    {who}, {when}`, the companion spelled by `drug_line_twin` without its coding, which the statement does not
-    project. The summary reads `{n} other version(s)`, then `, {u} to check` when `u > 0`; a version is to check when
-    nothing settled it and its line is current. `{when}` is the tab crate's `local_instant`.
+21. **The words.** Under the version: `checked by {who}, {when}: not current — from {source}`, then ` — {why}`, one line
+    per check, oldest first; or `restored by {who}, {when}`. Under the new line,
+    `replaced: {old drug line} — {who}, {when}`, the companion spelled by `drug_line_twin` without its coding, which
+    this read does not join (`medication_coding`). The summary reads `{n} other version(s)`, then `, {u} to check`
+    when `u > 0`; a version is to check when nothing settled it and its line is current. `{when}` is the tab crate's
+    `local_instant`.
 22. **`{who}` is a person or nobody** (ruling R6): the vouched attester when there is one (`db/065`), else the
     envelope signer, which is the human under ADR-0053. It is named only when the registry enrolled that key for a
     human (`cairn_note_key_is_human`), else it reads `signer not known`: a device or agent key is never read as the
@@ -199,18 +204,18 @@ Ruling R3 replaced it (decision 2).
   and the remote door checks structure only. When the stop arrives first (the usual order: the stops take their HLCs
   first) the drug briefly shows no current line; when the restore arrives first, two. For one restore, both settle
   when both arrive; the next bullet is when they do not.
-- **Restores made apart can leave two current lines for good.** Two offline nodes that each restore a different
-  version of one line each stop it and each chart their own line; after sync, both lines are current. So are two
-  lines when a node restores a version while a peer's restore line of the same line is ahead of its version: the
-  lineage walks `medication_restore` through `medication_set_aside`, cannot reach the peer's line, and stops nothing
-  for it. The floor cannot prevent either (availability over consistency: each node signed what it could see). They
-  surface only where the two lines share a duplicate key (`patient_medication_reconciliation_flag`, `db/031` §9: the
-  coding pair, else the term). Separately, shredding a restore line's only assertion leaves its companion stopped,
-  reading "replaced by the … version", with no replacement on the chart.
-- **A colleague's stop can lose its reason to a restore's.** A stop of the companion that lands between Sign's fresh
-  read and its commit is overwritten in `medication_cessation` (one row per thread) by the restore's own stop, when
-  that stop holds the later HLC. The log keeps both cessations, but the chart then reads "replaced by the … version"
-  rather than the colleague's reason.
+- **Restores made apart can leave two current lines for good.** Two offline nodes that each restore a different version
+  of one line each stop it and each chart their own line; after sync, both lines are current. So are two lines when a
+  node restores a version while a peer's restore line of the same line is ahead of its version: the lineage walks
+  `medication_restore` through `medication_set_aside`, cannot reach the peer's line, and stops nothing for it. The floor
+  cannot prevent either (availability over consistency: each node signed what it could see). They surface only where the
+  two lines share a duplicate key (`patient_medication_reconciliation_flag`, as `db/033` redefines it: the coding pair,
+  else the term). Separately, shredding a restore line's only assertion leaves its companion stopped, reading "replaced
+  by the … version", with no replacement on the chart.
+- **A colleague's stop can lose the shown reason to a restore's.** A stop of the companion that lands between Sign's
+  fresh read and its commit is overwritten in `medication_cessation` (one row per thread) by the restore's own stop,
+  when that stop holds the later HLC. The log keeps both cessations, and the colleague's reason is still listed
+  beside the line as another reason (`db/060`), but the reason the line shows first is "replaced by the … version".
 - **Drafts do not cross nodes** ([#963](https://github.com/cairn-ehr/cairn-ehr/issues/963)): a restore line lives on
   the node that pressed it. The signed restore and check do cross.
 - **The figures are owed by a human.** Every stopwatch figure, the real window's WebKit and VoiceOver are measured
