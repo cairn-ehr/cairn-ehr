@@ -1,6 +1,7 @@
-//! DB-gated walks for rulings R9 and R10 (`med_list_restore::restore_holds`, the judge's
-//! `replaces_a_restore`): two restores of one lineage in one Sign, the second refused before the
-//! key in words; a restore replacing a charted restore never default-ticked. Nested under
+//! DB-gated walks for rulings R9, R10 and R12 (`med_list_restore::restore_holds`, the judge's
+//! `replaces_a_restore` and `restores_a_stopped_line`): two restores of one lineage in one Sign,
+//! the second refused before the key in words; a restore replacing a charted restore, or one
+//! whose line was stopped since the press, never default-ticked. Nested under
 //! `med_list_restore_db_tests.rs`, whose fixture and helpers these share (moved verbatim out of
 //! it for its 500-line cap). Run locally on `CAIRN_TEST_PG` (#905).
 use super::*;
@@ -158,4 +159,61 @@ async fn a_chain_restore_and_a_sibling_restore_refuse_the_second_legibly() {
         stop_reason(&owner, l1.parse().unwrap()).await.is_some(),
         "the sibling stopped L1"
     );
+}
+
+/// Ruling R12 (the chart-held rule): the companion is stopped by a separate cessation after the
+/// press (myalgia, CK 5000). On the re-read the restore line is never default-ticked and its mark
+/// says the line was stopped; ticked by hand, Sign charts it as a deliberate restart, stopping
+/// nothing, and the colleague's reason stands.
+#[tokio::test]
+async fn a_restore_whose_line_was_stopped_since_is_never_default_ticked() {
+    let Some((_guard, owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    allergies_known(&state, chart).await;
+    let (companion, versions) =
+        charted_with_versions(&state, &owner, chart, &["25mg tab bd"]).await;
+    let opened = restore(&state, chart, &[chart], versions[0]).await.unwrap();
+    assert!(shown(&opened.list, &opened.line_id).default_ticked);
+    let patient = chart.to_string();
+    crate::commands::cease_impl(
+        &state,
+        &patient,
+        vec![patient.clone()],
+        &companion.to_string(),
+        "myalgia, CK 5000",
+        credential("bea"),
+    )
+    .await
+    .unwrap();
+    let view = read(&state, chart).await;
+    let line = shown(&view, &opened.line_id);
+    assert!(!line.default_ticked && !line.ticked, "{line:?}");
+    assert_eq!(
+        line.restores_words.as_deref(),
+        Some("restores the GP letter version — its line has since been stopped")
+    );
+    let line = hand_ticked(line);
+    assert_eq!(save_as(&state, chart, line, Some("bea")).await, "saved");
+    let ids = std::slice::from_ref(&opened.line_id);
+    let (outcome, charted, _, not_charted, _) =
+        done(sign(&state, chart, ids, credential("bea")).await.unwrap());
+    assert_eq!(charted, 1, "{outcome}");
+    assert!(not_charted.is_empty());
+    assert_eq!(
+        stop_reason(&owner, companion).await,
+        Some(Some("myalgia, CK 5000".into())),
+        "the colleague's stop stands"
+    );
+    let stops: i64 = owner
+        .query_one(
+            "SELECT count(*) FROM medication_cessation WHERE patient_id = $1::text::uuid",
+            &[&patient],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(stops, 1, "the restore stopped nothing");
+    assert!(left(&owner, chart).await.is_empty(), "it charted");
 }

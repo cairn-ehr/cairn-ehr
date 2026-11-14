@@ -11,7 +11,9 @@ use crate::med_chart::PartArg;
 use crate::med_line_sign::{fresh_check, line_under, not_read, parts_before_the_key, the_line};
 use crate::med_list::{LineArg, WarningRef};
 use crate::med_list_delabel::{offers_for, DelabelOffer};
-use crate::med_list_restore::{current_besides_stops, read_versions, replaces_a_restore, Versions};
+use crate::med_list_restore::{
+    current_besides_stops, read_versions, replaces_a_restore, restores_a_stopped_line, Versions,
+};
 use crate::med_list_versions::{charted_companions, charted_words};
 use crate::state::AppState;
 use crate::write_failure::chart_read_failed;
@@ -234,7 +236,9 @@ pub(crate) async fn judge(
                 set_aside: line.set_aside_of.is_some(),
             })
             // Replacing a restore that was just charted must be a deliberate act (ruling R9).
-            && !replaces_a_restore(&line, &fresh.versions);
+            && !replaces_a_restore(&line, &fresh.versions)
+            // Chart-held rule: another source's stop since the press is never silently undone (R12).
+            && !restores_a_stopped_line(&line, &fresh.versions);
             let offers = match (&signable, use_allergies) {
                 (Ok((_, p)), true) => offers_for(&resolved, &fresh.allergies.doubted_charts, p),
                 _ => vec![],

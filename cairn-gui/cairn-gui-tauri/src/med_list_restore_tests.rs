@@ -205,7 +205,7 @@ fn a_later_restore_of_the_same_line_is_refused() {
     );
     assert_eq!(
         SAME_LINE_RESTORED,
-        "another line restoring a version of the same line is signed first; sign this one after it"
+        "another restore of the same line is signed first; signed after it, this one replaces it"
     );
     let ordinary = line(None, None);
     assert_eq!(restore_holds(&ordinary, [&first], &versions), Ok(()));
@@ -290,4 +290,31 @@ fn restores_of_one_lineage_conflict_through_what_they_stop() {
         under(0xC2, vec![Uuid::from_u128(0xC2)]),
     );
     assert_eq!(restore_holds(&chain, [&sibling], &versions), Ok(()));
+}
+
+/// Ruling R12: a restore whose line was stopped since the press (nothing stands for its
+/// companion) is never default-ticked, and its mark says so; one whose line stands is neither.
+#[test]
+fn a_restore_whose_line_was_stopped_since_withholds_the_tick_and_says_so() {
+    let mut versions = Versions::new();
+    versions.insert(Uuid::from_u128(VERSION), version(None));
+    let restoring = line(Some(VERSION), None);
+    assert!(!restores_a_stopped_line(&restoring, &versions));
+    assert_eq!(
+        restores_words(&versions[&Uuid::from_u128(VERSION)]),
+        "restores the GP letter version"
+    );
+    let stopped = VersionForRestore {
+        companion_current: false,
+        standing: vec![],
+        ..version(None)
+    };
+    assert_eq!(
+        restores_words(&stopped),
+        "restores the GP letter version — its line has since been stopped"
+    );
+    versions.insert(Uuid::from_u128(VERSION), stopped);
+    assert!(restores_a_stopped_line(&restoring, &versions));
+    assert!(!restores_a_stopped_line(&line(None, None), &versions));
+    assert!(!restores_a_stopped_line(&line(Some(0x99), None), &versions));
 }

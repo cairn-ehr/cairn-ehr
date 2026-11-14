@@ -50,8 +50,9 @@ pub const RESTORE_VERSION_GONE: &str = "the version it restores can no longer be
 pub const LIST_ELSEWHERE: &str = "These lines are open on another terminal: ";
 
 /// Ruling R9 (a): a ticked restore line whose companion an earlier ticked restore line replaces.
+/// Its words say what signing it later does (ruling R13).
 pub const SAME_LINE_RESTORED: &str =
-    "another line restoring a version of the same line is signed first; sign this one after it";
+    "another restore of the same line is signed first; signed after it, this one replaces it";
 
 /// The opened chart's versions the list's restore lines name, by version id (a version not on
 /// it is absent).
@@ -195,9 +196,14 @@ pub(crate) fn replaced_by(source: &str) -> String {
     format!("replaced by the {source} version")
 }
 
-/// The mark a restore line carries on the list. Pure.
-pub(crate) fn restores_words(source: &str) -> String {
-    format!("restores the {source} version")
+/// The mark a restore line carries on the list, saying when its line was stopped since the press
+/// (nothing stands for its companion, ruling R12). Pure.
+pub(crate) fn restores_words(v: &VersionForRestore) -> String {
+    let since = match v.standing.is_empty() {
+        true => " — its line has since been stopped",
+        false => "",
+    };
+    format!("restores the {} version{since}", v.source)
 }
 
 /// The version `line` restores, if it is one of `versions` (the opened chart's fresh read).
@@ -288,7 +294,7 @@ pub(crate) fn mark_restores(lines: &mut [ListLineView], judged: &[Judged], versi
             .line
             .restores
             .map(|_| match version_of(&j.line, versions) {
-                Some(v) => restores_words(&v.source),
+                Some(v) => restores_words(v),
                 None => RESTORE_VERSION_GONE.to_string(),
             });
     }
@@ -339,6 +345,12 @@ pub(crate) fn restore_holds<'a>(
 /// restore line (one of `standing` carries a restore). Pure.
 pub(crate) fn replaces_a_restore(line: &DraftLine, versions: &Versions) -> bool {
     version_of(line, versions).is_some_and(|v| !v.standing_restored.is_empty())
+}
+
+/// Ruling R12: whether `line` restores a version whose line was stopped since the press (nothing
+/// stands for its companion on the fresh read), so its Sign would restart a stopped drug. Pure.
+pub(crate) fn restores_a_stopped_line(line: &DraftLine, versions: &Versions) -> bool {
+    version_of(line, versions).is_some_and(|v| v.standing.is_empty())
 }
 
 #[cfg(test)]

@@ -3425,12 +3425,15 @@ Webster pack seen*), and Sign. Close the chart.
       Sign, and check `info_source` in `medication_statement`.
 - [ ] On a fresh chart set up as above with TWO versions beside the line, restore both: both restore lines read as
       duplicates of each other and neither is ticked. Tick both by hand and Sign: the first charts; the second is not
-      charted, saying "another line restoring a version of the same line is signed first; sign this one after it",
+      charted, saying "another restore of the same line is signed first; signed after it, this one replaces it",
       and stays in the list.
 - [ ] A version set aside beside the restored 25 mg line, then restored: its line is **not** ticked by default
       (it replaces a restore). Tick it by hand and Sign: the 25 mg line is stopped, one atorvastatin line is current.
 - [ ] On a fresh chart, stop the 40 mg line for another reason: its version keeps its buttons and "to check" no
-      longer counts it; a restore of it stops nothing and charts its line.
+      longer counts it. Restore it: the line reads "restores the … version — its line has since been stopped" and
+      is **not** ticked by default. Tick it by hand and Sign: it stops nothing and charts its line.
+- [ ] Restore a version, then stop the 40 mg line from the chart before signing: on the re-read the restore line
+      gains "— its line has since been stopped" and loses its tick.
 - [ ] A linked chart's version (open a chart linked to `$S1`): no buttons.
 - [ ] With the list open on another terminal ("These lines are open on another terminal: …"), *Use this version
       instead* is down and nothing can be added.
