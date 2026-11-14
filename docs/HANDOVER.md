@@ -192,7 +192,7 @@
 >   never default-ticked (R9); a restore line whose line was stopped since is never default-ticked (R12). The rulings are in ADR-0103 and #1098's body — **the maintainer should read them**.
 >   Open: **#1097** (an erased middle link lets a later restore leave two current lines — a documented limit) · **#1099** (review residuals, all can-wait) · **#1100** (the restore prefill drops a version's separate strength).
 >   Owed by a human: **RUNBOOK §34**.
-> - **Batch-charting slice 3 — the warning threshold — built 2026-11-14 on PR
+> - **Batch-charting slice 3 — the warning threshold — MERGED 2026-11-14 in PR
 >   [#1101](https://github.com/cairn-ehr/cairn-ehr/pull/1101)** (plan
 >   [`superpowers/plans/2026-11-14-batch-charting-slice-3-warning-threshold.md`](superpowers/plans/2026-11-14-batch-charting-slice-3-warning-threshold.md),
 >   [ADR-0104](spec/decisions/0104-the-warning-threshold.md), spec **v0.106**, new `db/081`, `SCHEMA_GENERATION`
@@ -256,8 +256,13 @@
 >    medication in the window** (design APPROVED 2026-11-11, three PRs: the line + the check at charting; stat ordered →
 >    given; aliases + PBS forms as drugref supplies them). **Slice 1a MERGED in PR #1066** (the bullet above);
 >    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Batch-charting slice 2a MERGED** in PR #1088 (the bullet
->    above); **slice 2b** MERGED in PR #1098 (the bullet above); **slice 3** (the warning threshold, the bullet above) — **merge PR #1101** once CI is green. Charting **1b** (the same-drug de-label
->    offer) MERGED in PR #1086 (the bullet above). Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
+>    above); **slice 2b** MERGED in PR #1098 (the bullet above); **slice 3** (the warning threshold, the bullet above) MERGED in PR #1101. Charting **1b** (the same-drug de-label
+>    offer) MERGED in PR #1086 (the bullet above). **Next: charting slice 2** (stat ordered → given, #1069) — **PLANNED 2026-11-14**, plan
+>    [`superpowers/plans/2026-11-14-charting-slice-2-stat-ordered-then-given.md`](superpowers/plans/2026-11-14-charting-slice-2-stat-ordered-then-given.md)
+>    (draft PR on `plan/charting-slice-2-stat-given`). Maintainer rulings 2026-11-14: Q1 given = a stop + a given under
+>    one signature; Q2 `stat` only on a pure one-off Start line; Q3 the row reads "given", no new section; Q4 build
+>    "Entered in error" now (it voids the stop by naming it). Awaiting the maintainer's review of the plan and an
+>    execution method; then build it. Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
