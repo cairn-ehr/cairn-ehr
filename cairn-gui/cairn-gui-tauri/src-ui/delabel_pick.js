@@ -40,8 +40,10 @@ function wireDelabelPick(row) {
     list.hidden = true;
     hint.hidden = true;
   };
+  // A drug found by another name (charting slice 3, ADR-0106): the field takes the clinician's
+  // word, the coding stays the drug list's three fields.
   const choose = (option) => {
-    input.value = option.display;
+    input.value = option.matched || option.display;
     holdDelabelCoding(row, { system: option.system, code: option.code, display: option.display });
     close();
   };
@@ -57,7 +59,7 @@ function wireDelabelPick(row) {
         return;
       }
       list.replaceChildren(...answer.options.map((option) => {
-        const li = cell("li", option.display, { role: "option", tabindex: "0" });
+        const li = cell("li", option.matched ? option.matched + " → " + option.display : option.display, { role: "option", tabindex: "0" });
         li.addEventListener("click", () => choose(option));
         li.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(option); }

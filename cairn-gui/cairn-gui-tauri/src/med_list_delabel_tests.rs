@@ -35,6 +35,7 @@ fn part(term: &str, code: Option<u128>) -> PartArg {
     PartArg {
         term: term.into(),
         coding: code.map(|c| CodingArg {
+            matched: None,
             system: MOIETY_SYSTEM.into(),
             code: Uuid::from_u128(c).to_string(),
             display: term.into(),

@@ -98,7 +98,10 @@ async fn alias_names_find_the_drug_and_say_which_name_matched() {
     );
     assert_eq!(allergy_pick(&tx, "ligno").await, ["lidocaine|lignocaine"]);
     assert_eq!(med_pick(&tx, "adren").await, ["epinephrine|adrenaline"]);
-    assert_eq!(med_pick(&tx, "ACETAMINOPHEN").await, ["paracetamol|acetaminophen"]);
+    assert_eq!(
+        med_pick(&tx, "ACETAMINOPHEN").await,
+        ["paracetamol|acetaminophen"]
+    );
     tx.rollback().await.unwrap();
 }
 
@@ -239,7 +242,10 @@ async fn the_helper_is_not_the_windows() {
     let Some((_g, c)) = rig().await else {
         return;
     };
-    for f in ["cairn_drug_moiety_matches(text)", "cairn_drug_names_available()"] {
+    for f in [
+        "cairn_drug_moiety_matches(text)",
+        "cairn_drug_names_available()",
+    ] {
         let can: bool = c
             .query_one(
                 "SELECT has_function_privilege('cairn_window', $1, 'EXECUTE')",
@@ -271,10 +277,7 @@ async fn a_replay_converges() {
         ),
     ] {
         let got: String = c
-            .query_one(
-                "SELECT pg_get_function_result(to_regprocedure($1))",
-                &[&f],
-            )
+            .query_one("SELECT pg_get_function_result(to_regprocedure($1))", &[&f])
             .await
             .unwrap()
             .get(0);
@@ -292,13 +295,19 @@ async fn the_node_reads_the_matched_name() {
     let tx = c.transaction().await.unwrap();
     load(&tx, true).await;
     let allergy = search_drugs(&tx, "adren").await.unwrap().unwrap();
-    let med = search_medication_drugs(&tx, "adren", 20).await.unwrap().unwrap();
+    let med = search_medication_drugs(&tx, "adren", 20)
+        .await
+        .unwrap()
+        .unwrap();
     for (which, found) in [("allergy", allergy), ("medication", med)] {
         assert_eq!(found.len(), 1, "{which}");
         assert_eq!(found[0].display, "epinephrine", "{which}");
         assert_eq!(found[0].matched.as_deref(), Some("adrenaline"), "{which}");
     }
-    let amox = search_medication_drugs(&tx, "amox", 20).await.unwrap().unwrap();
+    let amox = search_medication_drugs(&tx, "amox", 20)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(amox[0].matched, None, "a display match names no other name");
     tx.rollback().await.unwrap();
 }

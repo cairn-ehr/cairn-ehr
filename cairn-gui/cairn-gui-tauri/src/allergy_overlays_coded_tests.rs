@@ -25,6 +25,7 @@ fn penicillin() -> EntryInput {
 /// The picked tolerated drug, its code spelled in capitals the way a webview may send it.
 fn amoxicillin() -> CodingArg {
     CodingArg {
+        matched: None,
         system: MOIETY_SYSTEM.into(),
         code: Uuid::from_u128(AMOX).to_string().to_uppercase(),
         display: " amoxicillin ".into(),

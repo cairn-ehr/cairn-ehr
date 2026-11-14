@@ -47,6 +47,7 @@ fn drug(term: &str) -> EntryInput {
 /// A pick, as the form sends it.
 fn picked(system: &str, code: impl ToString, display: &str) -> Option<CodingArg> {
     Some(CodingArg {
+        matched: None,
         system: system.into(),
         code: code.to_string(),
         display: display.into(),

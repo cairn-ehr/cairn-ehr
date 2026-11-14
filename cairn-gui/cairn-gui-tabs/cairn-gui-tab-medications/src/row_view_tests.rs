@@ -13,7 +13,11 @@ fn a_coded_drug_displays_its_coded_name_over_the_free_text_term() {
     r.term = "little white pill".into();
     r.coding_display = Some("metformin hydrochloride".into());
     let view = build_view(&chart(vec![r]));
-    assert_eq!(view.rows[0].primary, "metformin hydrochloride");
+    // Charting slice 3 (#1073): the generic first, the clinician's own word after it.
+    assert_eq!(
+        view.rows[0].primary,
+        "metformin hydrochloride (little white pill)"
+    );
 }
 
 /// Principle 4: a vague term is a legitimate recorded value, never blanked out.

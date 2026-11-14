@@ -535,6 +535,24 @@ mod tests {
         );
     }
 
+    /// Charting slice 3 (#1073, Review Focus 5): generic first, the signed term in brackets only
+    /// when the row is coded and the term is another word.
+    #[test]
+    fn shown_name_brackets_the_term_only_when_coded_and_different() {
+        assert_eq!(
+            row("adrenaline", Some("epinephrine")).shown_name(),
+            "epinephrine (adrenaline)"
+        );
+        assert_eq!(
+            row("Amoxicillin", Some("amoxicillin")).shown_name(),
+            "amoxicillin"
+        );
+        assert_eq!(
+            row("little white pill", None).shown_name(),
+            "little white pill"
+        );
+    }
+
     #[test]
     fn a_coded_row_displays_its_coded_name() {
         assert_eq!(

@@ -44,8 +44,10 @@ function holdPick(coding) {
 }
 
 /** The option's words in the list: a group says so, once — drugref's own group names already
- *  say "group" ("Penicillins (allergy group)", #1057), and those are left as they are. */
+ *  say "group" ("Penicillins (allergy group)", #1057), and those are left as they are. A drug
+ *  found by another name says which: "adrenaline → epinephrine" (charting slice 3, ADR-0106). */
 function pickLabel(option) {
+  if (option.matched) return option.matched + " → " + option.display;
   if (option.system !== GROUP_SYSTEM || /\bgroup\b/i.test(option.display)) return option.display;
   return option.display + " (group)";
 }
@@ -90,11 +92,12 @@ function activatePick(index) {
   [...el("allergy-pick").children].forEach((li, i) => li.setAttribute("aria-selected", String(i === index)));
 }
 
-/** Choose option `index`: the name becomes its display and the coding is held. */
+/** Choose option `index`: the name becomes the name that found it (the clinician's "adrenaline",
+ *  else the display) and the coding is held — its three signed fields only, never `matched`. */
 function choosePick(index) {
   const option = pickOptions[index];
   if (!option) return;
-  el("allergy-term").value = option.display;
+  el("allergy-term").value = option.matched || option.display;
   setHeldCoding({ system: option.system, code: option.code, display: option.display });
   closePick();
 }

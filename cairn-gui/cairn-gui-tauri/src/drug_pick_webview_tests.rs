@@ -260,3 +260,26 @@ fn a_held_coding_says_what_it_is_coded_as() {
         "the line is text, not a hover title"
     );
 }
+
+/// Charting slice 3 (ruling R2): a drug found by another name reads "adrenaline → epinephrine";
+/// choosing it writes the clinician's name into the field (so the term signed is theirs) and
+/// holds only the three coding fields `allergy_record` signs — never `matched`.
+#[test]
+fn a_drug_found_by_another_name_reads_name_arrow_drug() {
+    let label = js_fn(DRUG_PICK_JS, "pickLabel");
+    assert!(
+        label.contains("option.matched + \" → \" + option.display"),
+        "{label}"
+    );
+    let choose = js_fn(DRUG_PICK_JS, "choosePick");
+    assert!(
+        choose.contains("option.matched || option.display"),
+        "{choose}"
+    );
+    assert!(
+        choose.contains(
+            "setHeldCoding({ system: option.system, code: option.code, display: option.display })"
+        ),
+        "{choose}"
+    );
+}

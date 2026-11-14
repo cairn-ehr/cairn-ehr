@@ -49,6 +49,7 @@ async fn drug_allergy(
 /// An amoxicillin allergy coded to `moiety`; its record id.
 async fn amoxicillin_allergy(owner: &Client, state: &AppState, chart: Uuid, moiety: Uuid) -> Uuid {
     let coding = Some(CodingArg {
+        matched: None,
         system: MOIETY_SYSTEM.into(),
         code: moiety.to_string(),
         display: "amoxicillin".into(),
@@ -60,6 +61,7 @@ fn amox_part(moiety: Uuid) -> PartArg {
     PartArg {
         term: "amox".into(),
         coding: Some(CodingArg {
+            matched: None,
             system: MOIETY_SYSTEM.into(),
             code: moiety.to_string(),
             display: "amoxicillin".into(),
@@ -326,6 +328,7 @@ async fn med_chart_db_a_by_name_allergy_on_the_typed_drug_marks_the_check() {
     let pick = |term: &str, code: u128| PartArg {
         term: term.into(),
         coding: Some(CodingArg {
+            matched: None,
             system: MOIETY_SYSTEM.into(),
             code: Uuid::from_u128(code).to_string(),
             display: term.into(),

@@ -59,3 +59,45 @@ mod tests {
         assert_eq!(short_kid("fixture-clinician-b"), "fixture-");
     }
 }
+
+/// How a coded drug is shown: its listed (generic) name, plus the term the clinician signed in
+/// brackets when that is another word — "epinephrine (adrenaline)", "amoxicillin + clavulanic
+/// acid (Augmentin)" (charting design §3.3, #1073, ADR-0106). The same word in another case is
+/// no other word: "amoxicillin", never "amoxicillin (Amoxicillin)". Shared by the medication list
+/// and the allergy list, so both bracket alike. Pure.
+pub fn shown_name(display: &str, term: &str) -> String {
+    let term = term.trim();
+    if term.is_empty() || term.to_lowercase() == display.to_lowercase() {
+        display.to_string()
+    } else {
+        format!("{display} ({term})")
+    }
+}
+
+impl crate::row::MedicationRow {
+    /// The name a reader sees in the list's name cell: [`shown_name`] of the coded display and
+    /// the term when the row is coded, else the term as asserted. Sorting stays on
+    /// [`display_name`](crate::row::MedicationRow::display_name): the bracket only ever FOLLOWS
+    /// that name, so it never moves a row.
+    pub fn shown_name(&self) -> String {
+        match self.coding_display.as_deref() {
+            Some(display) => shown_name(display, &self.term),
+            None => self.display_name().to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod shown_name_tests {
+    use super::shown_name;
+
+    #[test]
+    fn shown_name_adds_the_typed_word_only_when_different() {
+        assert_eq!(
+            shown_name("amoxicillin + clavulanic acid", "Augmentin"),
+            "amoxicillin + clavulanic acid (Augmentin)"
+        );
+        assert_eq!(shown_name("amoxicillin", "Amoxicillin"), "amoxicillin");
+        assert_eq!(shown_name("amoxicillin", "  "), "amoxicillin");
+    }
+}

@@ -179,6 +179,7 @@ async fn fixture_mode_checks_quietly() {
 #[test]
 fn a_pick_on_a_non_drug_entry_is_refused() {
     let pick = CodingArg {
+        matched: None,
         system: MOIETY_SYSTEM.into(),
         code: Uuid::from_u128(0xA40C).to_string(),
         display: "amoxicillin".into(),
@@ -209,6 +210,7 @@ fn a_pick_on_a_non_drug_entry_is_refused() {
 fn a_pick_under_another_system_is_refused_before_the_key() {
     for system in [GROUP_SYSTEM, MOIETY_SYSTEM] {
         let pick = CodingArg {
+            matched: None,
             system: system.into(),
             code: Uuid::from_u128(0xA40C).to_string(),
             display: "amoxicillin".into(),
@@ -220,6 +222,7 @@ fn a_pick_under_another_system_is_refused_before_the_key() {
     }
     for system in ["drugref-product", "snomed", ""] {
         let pick = CodingArg {
+            matched: None,
             system: system.into(),
             code: Uuid::from_u128(0xA40C).to_string(),
             display: "amoxicillin".into(),
@@ -249,6 +252,7 @@ fn a_withheld_line_is_current() {
 fn a_picked_code_is_respelled_canonically_or_refused() {
     let id = Uuid::from_u128(0xC1A55);
     let arg = |code: String| CodingArg {
+        matched: None,
         system: GROUP_SYSTEM.into(),
         code,
         display: "Penicillins".into(),

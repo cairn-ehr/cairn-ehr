@@ -56,6 +56,13 @@ pub struct CodingArg {
     pub system: String,
     pub code: String,
     pub display: String,
+    /// The other name the drug list found this drug by ("adrenaline" for epinephrine), when it
+    /// was not its display name (charting slice 3, ADR-0106). It rides with the pick (and with a
+    /// draft line's saved parts) only so Sign can complete the typed term to it
+    /// (`term_to_sign`); it is NEVER signed — the event's coding is built from the three fields
+    /// above (`med_chart_write::substance`). Absent in older saved parts, which read as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched: Option<String>,
 }
 
 /// What the pick answers. `available: false` means there is no drug list to ask, and the form
@@ -103,6 +110,7 @@ pub(crate) fn drug_search_answer(found: Option<Vec<DrugOption>>) -> DrugSearch {
             .unwrap_or_default()
             .into_iter()
             .map(|o| CodingArg {
+                matched: o.matched,
                 system: o.system,
                 code: o.code,
                 display: o.display,

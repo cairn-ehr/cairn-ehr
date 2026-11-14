@@ -271,17 +271,6 @@ pub fn term_to_sign(
     }
 }
 
-/// How a picked drug is shown: its listed name, plus what the clinician typed when that
-/// differs ("amoxicillin + clavulanic acid (Augmentin)").
-pub fn shown_name(display: &str, term: &str) -> String {
-    let term = term.trim();
-    if term.is_empty() || term.to_lowercase() == display.to_lowercase() {
-        display.to_string()
-    } else {
-        format!("{display} ({term})")
-    }
-}
-
 #[cfg(test)]
 #[path = "line_tests.rs"]
 mod tests;

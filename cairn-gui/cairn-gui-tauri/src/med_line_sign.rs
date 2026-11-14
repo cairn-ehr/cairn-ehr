@@ -56,7 +56,11 @@ pub(crate) fn parts_before_the_key(
     for p in sent {
         let coding = p.coding.map(picked).transpose()?;
         let typed = if single { typed_drug } else { &p.term };
-        let term = term_to_sign(typed, coding.as_ref().map(|c| c.display.as_str()), None); // Task 3
+        let term = term_to_sign(
+            typed,
+            coding.as_ref().map(|c| c.display.as_str()),
+            coding.as_ref().and_then(|c| c.matched.as_deref()),
+        );
         if term.is_empty() {
             return Err(refused(NAME_IT));
         }

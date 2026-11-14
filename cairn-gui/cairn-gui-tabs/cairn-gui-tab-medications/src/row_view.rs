@@ -177,7 +177,8 @@ pub(crate) fn build_row(
     };
     MedListRowView {
         group_id: row.group_id.to_string(),
-        primary: row.display_name().to_string(),
+        // Generic first, the signed term in brackets when it is another word (#1073).
+        primary: row.shown_name(),
         dose_cell: dose_cell(dose.as_deref(), row.sig.as_deref().unwrap_or_default()),
         dose: dose.unwrap_or_else(|| DOSE_UNKNOWN.to_string()),
         formulation: row.formulation.clone().unwrap_or_default(),

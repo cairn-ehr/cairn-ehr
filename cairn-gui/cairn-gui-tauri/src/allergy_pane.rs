@@ -188,6 +188,7 @@ pub(crate) fn line_words(a: &PatientAllergies, event_id: Uuid) -> Option<LineWor
         onset_value: r.onset_value.clone(),
         source: r.source.clone(),
         coding: r.coding.as_ref().map(|c| crate::allergy_check::CodingArg {
+            matched: None,
             system: c.system.clone(),
             code: c.code.clone(),
             display: c.display.clone(),

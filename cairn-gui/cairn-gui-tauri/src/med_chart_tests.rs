@@ -14,6 +14,7 @@ fn on_screen() -> (AppState, String) {
 
 fn coded(code: impl ToString, display: &str) -> Option<CodingArg> {
     Some(CodingArg {
+        matched: None,
         system: MOIETY_SYSTEM.into(),
         code: code.to_string(),
         display: display.into(),
@@ -88,6 +89,20 @@ fn one_part_signs_the_finished_term_and_its_canonical_code() {
     ))
     .unwrap();
     assert_eq!(term, "Amoxil");
+}
+
+/// Charting slice 3 (Review Focus 4): a drug found by another name ("adren" finds epinephrine
+/// through "adrenaline") signs that name, never the unfinished "adren"; the coding stays the
+/// display's and carries the name only as the pick sent it.
+#[test]
+fn a_picked_alias_signs_the_matched_name() {
+    let epi = Uuid::from_u128(0xE91);
+    let mut coding = coded(epi, "epinephrine");
+    coding.as_mut().unwrap().matched = Some("adrenaline".into());
+    let (term, parts) =
+        before_key(&line(vec![part("adren", coding)], "adren", "started-here")).unwrap();
+    assert_eq!(term, "adrenaline");
+    assert_eq!(parts[0].coding.as_ref().unwrap().display, "epinephrine");
 }
 
 /// Ruling R22: a combination signs its parts' signed terms joined " + " — "amox + clav" with
