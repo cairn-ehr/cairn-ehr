@@ -202,6 +202,7 @@ fn an_adverse_effect_is_a_note_never_a_mark() {
         got[&id(900)],
         LineCheck {
             notes: vec!["Previous adverse effect: codeine → GI upset".into()],
+            adverse_against: vec![id(1)],
             ..LineCheck::default()
         }
     );
@@ -455,6 +456,7 @@ fn an_adverse_effect_matched_by_the_drug_list_is_a_note() {
         run(&a, &[med(900, "flucloxacillin", Some(FLUCLOX))], &f)[&id(900)],
         LineCheck {
             notes: vec!["Previous adverse effect: amoxicillin → rash".into()],
+            adverse_against: vec![id(1)],
             ..LineCheck::default()
         }
     );

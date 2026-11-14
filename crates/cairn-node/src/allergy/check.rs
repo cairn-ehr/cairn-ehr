@@ -76,10 +76,91 @@ pub struct LineCheck {
     /// One allergy record per mark, in mark order: the live head whose hit produced it (its
     /// `event_id`). What a warning override names, as its `allergy` refs (design §3.5).
     pub against: Vec<Uuid>,
-    /// Previous adverse effects that meet the line, worded.
+    /// Previous adverse effects that meet the line, worded — and, past them, any note that
+    /// names no record (the window's "the allergy list could not be read").
     pub notes: Vec<String>,
+    /// One allergy record per adverse-effect note: `adverse_against[i]` is the record `notes[i]`
+    /// came from, for every `i < adverse_against.len()`; the notes past that carry none. What a
+    /// warning override names when the site's threshold makes adverse effects warn (slice 3).
+    pub adverse_against: Vec<Uuid>,
     /// The small "not checked" tag.
     pub unverified: bool,
+    /// The site's warning threshold this check is judged at. Never set by
+    /// [`check_medications`] (it does not read policy): the window's draft path stamps it after
+    /// reading db/081, so a check left at the default judges as the default.
+    pub threshold: WarningThreshold,
+}
+
+/// The lowest finding that counts as a WARNING when a medication is charted (db/081,
+/// ADR-0104). A warning withholds a draft line's default tick, asks a Start line for a typed
+/// reason, and is named in the signed override. Highest level first; nothing sits above
+/// [`AllergyHit`](Self::AllergyHit), so no threshold switches allergy warnings off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WarningThreshold {
+    /// Only an allergy hit (a mark) warns — the default.
+    #[default]
+    AllergyHit,
+    /// A previous adverse effect (a note with its record) warns too.
+    AdverseEffect,
+}
+
+impl WarningThreshold {
+    /// The stored word. Any word but `allergy-hit` reads as the LOWEST level: a word from a
+    /// newer build, or a garbled read, must never quietly drop a warning (over-warning is the
+    /// safe error, as in the module doc).
+    pub fn parse(word: &str) -> WarningThreshold {
+        match word {
+            "allergy-hit" => WarningThreshold::AllergyHit,
+            _ => WarningThreshold::AdverseEffect,
+        }
+    }
+
+    /// The word db/081 stores.
+    pub fn as_word(self) -> &'static str {
+        match self {
+            WarningThreshold::AllergyHit => "allergy-hit",
+            WarningThreshold::AdverseEffect => "adverse-effect",
+        }
+    }
+}
+
+impl LineCheck {
+    /// The allergy records whose findings are warnings at this check's threshold: every mark's,
+    /// then (when adverse effects warn) every adverse-effect note's. What a hand tick must have
+    /// seen and what the override's `against` names, each as `{source: "allergy", ref}`.
+    pub fn warned_against(&self) -> Vec<Uuid> {
+        let mut out = self.against.clone();
+        if self.threshold == WarningThreshold::AdverseEffect {
+            out.extend(&self.adverse_against);
+        }
+        out
+    }
+
+    /// Whether anything on the line is a warning at this check's threshold.
+    pub fn warns(&self) -> bool {
+        !self.warned_against().is_empty()
+    }
+
+    /// The notes drawn as loud as a mark: the adverse-effect notes, when they warn.
+    pub fn warning_notes(&self) -> &[String] {
+        match self.threshold {
+            WarningThreshold::AdverseEffect => &self.notes[..self.warned_notes()],
+            WarningThreshold::AllergyHit => &[],
+        }
+    }
+
+    /// The notes drawn muted: every note that is not a warning.
+    pub fn quiet_notes(&self) -> &[String] {
+        match self.threshold {
+            WarningThreshold::AdverseEffect => &self.notes[self.warned_notes()..],
+            WarningThreshold::AllergyHit => &self.notes,
+        }
+    }
+
+    /// How many leading notes carry a record (bounded by `notes`, should the two ever differ).
+    fn warned_notes(&self) -> usize {
+        self.adverse_against.len().min(self.notes.len())
+    }
 }
 
 /// How one (allergy head, line) pair came out.
@@ -255,20 +336,22 @@ fn check_line(
         })
         .into_iter()
         .unzip();
-    let notes = per_allergen(&adverse, &adverse_pairs, |_, hit, worst| {
-        let reaction = reaction_phrase(&worst.category, worst.reaction_text.as_deref());
-        format!("Previous adverse effect: {} → {reaction}", hit.term)
-    })
-    .into_iter()
-    .map(|(words, _)| words)
-    .collect();
+    let (notes, adverse_against): (Vec<String>, Vec<Uuid>) =
+        per_allergen(&adverse, &adverse_pairs, |_, hit, worst| {
+            let reaction = reaction_phrase(&worst.category, worst.reaction_text.as_deref());
+            format!("Previous adverse effect: {} → {reaction}", hit.term)
+        })
+        .into_iter()
+        .unzip();
     let unverified =
         marks.is_empty() && (unread_records || allergy_pairs.contains(&Pair::Unverified));
     LineCheck {
         marks,
         against,
         notes,
+        adverse_against,
         unverified,
+        threshold: WarningThreshold::default(),
     }
 }
 
@@ -277,9 +360,12 @@ fn check_line(
 ///
 /// - A mark of `b` is kept unless its words are already there or its allergy record already has
 ///   a mark: one warning per allergy record, and `against` stays one record per mark.
-/// - Notes are unioned by their words.
+/// - Notes are unioned by their words; a note kept keeps its record beside it, and the notes
+///   with a record stay ahead of those without (`adverse_against`'s alignment rule), so a
+///   record never slides onto another note's words.
 /// - "Not checked" if either part was, but only while there is no mark (ADR-0098's invariant:
 ///   the loud tag already sends the clinician to the allergy list).
+/// - The threshold is `a`'s (the caller stamps it after merging).
 pub fn merge(a: LineCheck, b: LineCheck) -> LineCheck {
     let mut out = a;
     for (mark, head) in b.marks.into_iter().zip(b.against) {
@@ -288,11 +374,29 @@ pub fn merge(a: LineCheck, b: LineCheck) -> LineCheck {
             out.against.push(head);
         }
     }
-    for note in b.notes {
-        if !out.notes.contains(&note) {
-            out.notes.push(note);
+    // Split each side into (note, record) pairs and record-less notes, union, then rejoin.
+    let split = |notes: Vec<String>, records: Vec<Uuid>| {
+        let mut notes = notes.into_iter();
+        let paired: Vec<(String, Uuid)> = notes.by_ref().zip(records).collect();
+        (paired, notes.collect::<Vec<String>>())
+    };
+    let (mut paired, mut bare) = split(std::mem::take(&mut out.notes), out.adverse_against);
+    let (b_paired, b_bare) = split(b.notes, b.adverse_against);
+    let said = |w: &String, p: &[(String, Uuid)], n: &[String]| {
+        p.iter().any(|(x, _)| x == w) || n.contains(w)
+    };
+    for (note, record) in b_paired {
+        if !said(&note, &paired, &bare) {
+            paired.push((note, record));
         }
     }
+    for note in b_bare {
+        if !said(&note, &paired, &bare) {
+            bare.push(note);
+        }
+    }
+    (out.notes, out.adverse_against) = paired.into_iter().unzip();
+    out.notes.extend(bare);
     out.unverified = out.marks.is_empty() && (out.unverified || b.unverified);
     out
 }
@@ -376,3 +480,7 @@ mod unverified_tests;
 #[cfg(test)]
 #[path = "check_combination_tests.rs"]
 mod combination_tests;
+
+#[cfg(test)]
+#[path = "check_threshold_tests.rs"]
+mod threshold_tests;
