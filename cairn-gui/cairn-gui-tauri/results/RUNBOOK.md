@@ -3620,8 +3620,8 @@ Name a clinician in who's here (`dr-a`) for the orders, and a second (`rn-b`) fo
       while the row is open: the row is redrawn as it was. *Cancel* closes it with nothing signed; record where focus
       lands.
 - [ ] Start the stopwatch, press *Given*, then the row's *Sign* (one passphrase on a shared terminal): stop when the
-      row reads **given** and the stat line reads "stat · ordered {o} Dr A … · given {g} RN B …" (≤ 3 s). The outcome reads "Given."; *Given* is gone,
-      *Entered in error* is beside the give.
+      row reads **given** and the stat line reads "stat · ordered {o} Dr A … · given {g} RN B …" (≤ 3 s). The
+      outcome reads "Given."; *Given* is gone, *Entered in error* is beside the give.
 - [ ] The two events, one transaction, read with `psql "$CONN" -c`:
       `"SELECT reason FROM medication_cessation WHERE patient_id = '$G1' AND reason = 'stat dose given'"` reads one
       row; `"SELECT completes IS NOT NULL, given_at FROM medication_given WHERE patient_id = '$G1'"` reads `t` and
@@ -3639,7 +3639,8 @@ Name a clinician in who's here (`dr-a`) for the orders, and a second (`rn-b`) fo
 - [ ] Record what a VoiceOver user hears for each refusal (it is not a live region, #1112).
 - [ ] On `$G3`, chart `ceftriaxone 1g iv stat` as `dr-a`. As `rn-b`, press *Given* and set "Time given" to ten
       minutes before the order was charted. Sign: the stat line reads "stat · given {g} RN B …, before it was charted
-      {o} Dr A …", in that order. Nothing was refused and nothing was reordered.
+      {o} Dr A …", in that order. Nothing was refused and nothing was reordered. ("Before" is earlier than the minute
+      the order was charted: an untouched Given in the order's own minute reads after it.)
 
 **Measurement 3: entered in error, and a stale press.**
 

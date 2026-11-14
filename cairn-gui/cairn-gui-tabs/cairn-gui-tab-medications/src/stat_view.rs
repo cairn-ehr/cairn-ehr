@@ -11,7 +11,7 @@
 //! each read `StatOrder` into it (`chart_stat::attach_stat`). Every function here is pure.
 use crate::hold_view::local_instant;
 use crate::row_view::SIGNER_NOT_KNOWN;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, TimeZone, Utc};
 use serde::Serialize;
 use std::fmt::Display;
 
@@ -63,10 +63,10 @@ pub struct GiveIn {
 
 /// The stat line's words from the order and its STANDING gives, in time order (Global
 /// Constraints): `"stat · ordered {o} {orderer} · not yet given"`, or `"… · given {g} {giver}"`
-/// per standing give. A give EARLIER than the order was charted (a verbal order written up after
-/// the dose) reads `"given {g} {giver}, before it was charted {o} {orderer}"` in the order's place
-/// (§10 Q3: shown, never refused, never reordered). Struck gives are left to [`struck_words`]:
-/// the line says what stands. Pure.
+/// per standing give. A give EARLIER than the minute the order was charted (a verbal order
+/// written up after the dose) reads `"given {g} {giver}, before it was charted {o} {orderer}"` in
+/// the order's place, said once, on the last such give (§10 Q3: shown, never refused, never
+/// reordered). Struck gives are left to [`struck_words`]: the line says what stands. Pure.
 pub fn stat_words<Tz: TimeZone>(o: &StatWordsIn, now: &DateTime<Tz>) -> String
 where
     Tz::Offset: Display,
@@ -74,15 +74,26 @@ where
     let ordered = format!("{} {}", when(&o.ordered_at, now), name(&o.orderer));
     let mut standing: Vec<&GiveIn> = o.gives.iter().filter(|g| g.struck.is_none()).collect();
     standing.sort_by_key(|g| g.given_at);
+    // The time given is stated to the minute (the field pre-fills now with seconds 00) while the
+    // order's t_recorded is to the millisecond: a give in the order's own minute is not "before"
+    // it, or an untouched Given would read as a precise untruth (principle 4).
+    let charted_minute = o
+        .ordered_at
+        .duration_trunc(TimeDelta::minutes(1))
+        .unwrap_or(o.ordered_at);
+    let before = standing
+        .iter()
+        .take_while(|g| g.given_at < charted_minute)
+        .count();
     let mut parts = vec!["stat".to_string()];
-    // "ordered …" stands on its own only when no give came before it; otherwise each give
-    // before it carries it, as "before it was charted …".
-    if standing.first().is_none_or(|g| g.given_at >= o.ordered_at) {
+    // "ordered …" stands on its own only when no give came before it; otherwise the last give
+    // before it carries it, once, as "before it was charted …" (the order's place in time).
+    if before == 0 {
         parts.push(format!("ordered {ordered}"));
     }
-    for g in &standing {
+    for (i, g) in standing.iter().enumerate() {
         let given = format!("given {} {}", when(&g.given_at, now), name(&g.giver));
-        parts.push(if g.given_at < o.ordered_at {
+        parts.push(if i + 1 == before {
             format!("{given}, before it was charted {ordered}")
         } else {
             given

@@ -38,8 +38,9 @@
 -- could reach it), and the remote door never rejects on the ceiling. So this floor does not
 -- refuse a time given in the future either: the WINDOW refuses "later than now" before the key
 -- (GIVEN_LATER_THAN_NOW), and a raw-SQL client's forward-dated given lands with a ceiling flag.
--- A time given EARLIER than the order's t_recorded is legal (backdating is legal) and is shown,
--- worded "before it was charted" — never refused, never reordered (spec §10 Q3).
+-- A time given EARLIER than the order's t_recorded is legal (backdating is legal); one earlier than
+-- the minute the order was charted is shown worded "before it was charted" — never refused, never
+-- reordered (spec §10 Q3).
 --
 -- WHAT THIS FLOOR DOES NOT JUDGE: whether the line is current, or already given. The window
 -- re-reads both before the key (a stale press is refused there); a stat line given twice by two

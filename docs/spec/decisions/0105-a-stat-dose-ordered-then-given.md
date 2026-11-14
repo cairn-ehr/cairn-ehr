@@ -104,7 +104,8 @@ The maintainer ruled on four questions (2026-11-14):
     `max` is now. A raw-SQL client's forward-dated given lands with a ceiling flag.
 12. **An earlier time is signed, even one before the order was charted (spec §10 Q3).** A verbal order in resus,
     given 12:30 and charted 12:34, reads "given 12:30 …, before it was charted 12:34 …": shown, never refused and
-    never reordered (principle 4).
+    never reordered (principle 4). "Before" means earlier than the minute the order was charted: the time given is
+    stated to the minute, so a dose given untouched in the order's own minute reads after it, never before.
 13. **The field.** "Time given" is a `datetime-local` pre-filled with now when Given is pressed, and an empty field
     means now. A partly typed time is never signed as midnight or as now. Rust's parser refuses one in words. The
     webview refuses one before invoking, because it reaches the script as an empty value (`validity.badInput`), and
@@ -182,10 +183,11 @@ The maintainer ruled on four questions (2026-11-14):
     instead of `ceased` when the line is not current and a give stands, and the window styles it as a ceased row.
 25. **The stat line** sits under the drug line: `stat · ordered {o} {orderer} · not yet given`, or
     `stat · ordered {o} {orderer} · given {g} {giver}`, standing gives chained in time order, joined by ` · `. A give
-    earlier than the order's `t_recorded` reads `given {g} {giver}, before it was charted {o} {orderer}` in the
-    order's place. A struck give keeps its own line: `given {g} {giver} — entered in error by {who}, {when}`, then
-    ` — {why}`. `{o}` is the order's `t_recorded`, `{g}` the given's `t_effective` and `{when}` the strike's
-    `t_recorded`, each through the tab crate's `local_instant`.
+    earlier than the minute the order was charted (its `t_recorded` truncated to the minute) reads
+    `given {g} {giver}, before it was charted {o} {orderer}` in the order's place, said once, on the last such give.
+    A struck give keeps its own line: `given {g} {giver} — entered in error by {who}, {when}`, then ` — {why}`.
+    `{o}` is the order's `t_recorded`, `{g}` the given's `t_effective` and `{when}` the strike's `t_recorded`, each
+    through the tab crate's `local_instant`.
 26. **Names follow slice 2b's rule** (ADR-0103 decision 22): the vouched attester, else the envelope signer, named
     only when the registry enrolled that key for a human, else `signer not known`.
 27. **The read shares the chart's snapshot** under its own savepoint (`chart_stat::read_stat`), so a line is never

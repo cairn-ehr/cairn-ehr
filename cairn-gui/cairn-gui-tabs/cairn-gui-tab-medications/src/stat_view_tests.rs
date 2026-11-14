@@ -121,3 +121,34 @@ fn a_signer_not_known_is_said() {
         ["given 08:10 signer not known — entered in error by signer not known, 08:15"]
     );
 }
+
+/// The time given is stated to the minute (the field pre-fills `now` with seconds 00), so a give
+/// in the order's own minute is NOT before it: an order charted 08:00:41 and given, untouched,
+/// at 08:00 reads in time order, never "before it was charted" (principle 4: a precise untruth).
+#[test]
+fn a_give_in_the_orders_own_minute_is_not_before_it() {
+    let o = StatWordsIn {
+        ordered_at: at(8, 0) + chrono::TimeDelta::seconds(41),
+        ..order(vec![give(8, 0, "RN Bo")])
+    };
+    assert_eq!(
+        stat_words(&o, &now()),
+        "stat · ordered 08:00:41 Dr Ann Lee · given 08:00 RN Bo"
+    );
+}
+
+/// Two gives before the order say "before it was charted" once, on the later one (where the
+/// order sits in time); a give after the order chains after it.
+#[test]
+fn before_it_was_charted_is_said_once() {
+    let two_before = order(vec![give(7, 45, "RN Cy"), give(7, 30, "RN Bo")]);
+    assert_eq!(
+        stat_words(&two_before, &now()),
+        "stat · given 07:30 RN Bo · given 07:45 RN Cy, before it was charted 08:00 Dr Ann Lee"
+    );
+    let mixed = order(vec![give(8, 20, "RN Cy"), give(7, 45, "RN Bo")]);
+    assert_eq!(
+        stat_words(&mixed, &now()),
+        "stat · given 07:45 RN Bo, before it was charted 08:00 Dr Ann Lee · given 08:20 RN Cy"
+    );
+}
