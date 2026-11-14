@@ -71,10 +71,10 @@ pub(crate) fn given_time(text: Option<&str>, now: DateTime<Utc>) -> Result<DateT
     Ok(t)
 }
 
-/// What a strike that landed says: "waiting again" only when the struck give had stopped the
-/// order (`completes`); a give that stopped nothing leaves nothing to return. Pure.
-pub(crate) fn struck_outcome(stopped_the_order: bool) -> &'static str {
-    if stopped_the_order {
+/// What a strike that landed says: "waiting again" only when, read AFTER the strike, the order
+/// is waiting and its line is current (`waiting_here`); otherwise only "Entered in error.". Pure.
+pub(crate) fn struck_outcome(waiting_again: bool) -> &'static str {
+    if waiting_again {
         "Entered in error: the stat dose is waiting to be given again."
     } else {
         "Entered in error."
@@ -230,8 +230,8 @@ pub async fn med_stat_strike_impl(
 ) -> Result<MedChartWrite, ErrorView> {
     let patient = on_screen_and_writable(state, patient_id, &charts).await?;
     let given_id: Uuid = given_event.parse().map_err(|_| refused(GIVE_GONE))?;
-    // Whether the standing give stopped its order: what the outcome says (`struck_outcome`).
-    let stopped_the_order = {
+    // The order the standing give belongs to: read again after the strike (`struck_outcome`).
+    let medication = {
         let db = state
             .db
             .as_ref()
@@ -243,9 +243,12 @@ pub async fn med_stat_strike_impl(
             .map_err(|e| node_failure(&db.explain(e)))?;
         orders
             .iter()
-            .flat_map(|o| &o.gives)
-            .find(|g| g.event_id == given_id && g.struck.is_none())
-            .map(|g| g.completes)
+            .find(|o| {
+                o.gives
+                    .iter()
+                    .any(|g| g.event_id == given_id && g.struck.is_none())
+            })
+            .map(|o| o.medication_id)
             .ok_or_else(|| refused(GIVE_GONE))?
     };
     let why = given(why);
@@ -270,7 +273,7 @@ pub async fn med_stat_strike_impl(
             .lock()
             .await?;
         let origin = state.node_origin.as_str();
-        strike_given(
+        let struck = strike_given(
             &mut db,
             node_sk,
             &node_kid,
@@ -281,11 +284,24 @@ pub async fn med_stat_strike_impl(
             &author,
         )
         .await
-        .map_err(|e| db.explain(e))
+        .map_err(|e| db.explain(e));
+        // The words come from the state AFTER the strike, never from the struck give alone: a
+        // second standing give (two terminals, two offline peers) or a real stop keeps the line
+        // stopped, and a false "waiting to be given again" invites a second dose. A failed read
+        // here says only "Entered in error." — never an Err, since the strike has landed.
+        match struck {
+            Ok(_) => Ok(waiting_here(&db, patient, medication)
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("the stat order was not read again after the strike: {e:#}");
+                    false
+                })),
+            Err(e) => Err(e),
+        }
     };
-    signed.map_err(|e| failure_named(&e, STRIKE_LEAD))?;
+    let waiting_again = signed.map_err(|e| failure_named(&e, STRIKE_LEAD))?;
     let reread = med_list_impl(state, &patient.to_string(), Some(charts)).await;
-    Ok(landed(struck_outcome(stopped_the_order), reread))
+    Ok(landed(struck_outcome(waiting_again), reread))
 }
 
 #[cfg(test)]

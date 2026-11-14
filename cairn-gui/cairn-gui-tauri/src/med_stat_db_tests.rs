@@ -382,3 +382,99 @@ async fn a_failed_stat_read_still_opens_the_list() {
     assert_eq!(pane.versions_error, None, "the versions read is its own");
     assert_eq!(pane.list.rows.len(), 1, "the current line is still shown");
 }
+
+/// Bea's key as the node-level acts below sign it: what reaches the chart from ANOTHER terminal
+/// or a peer, which this window would refuse to offer (a second give, a real stop on a given line).
+async fn bea(state: &AppState) -> (cairn_event::SigningKey, String) {
+    state
+        .signer_for_act(None, crate::state::Now::read())
+        .await
+        .unwrap()
+}
+
+/// Two standing gives (given at once from two terminals): striking one leaves the other's stop
+/// standing, so the line stays stopped and the strike must NOT say "waiting to be given again" —
+/// that sentence would invite a real second dose.
+#[tokio::test]
+async fn striking_one_of_two_gives_does_not_say_waiting_again() {
+    let Some((_guard, mut owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let order = stat_line(&state, &owner, chart).await;
+    give(&state, chart, &[chart], order.medication_id, None)
+        .await
+        .unwrap();
+    let first = read_stat_orders(&owner, &[chart]).await.unwrap()[0].gives[0].event_id;
+    // The other terminal's give, signed before it saw this one.
+    let (sk, kid) = bea(&state).await;
+    let author = cairn_node::medication::AuthorParams {
+        human_sk: &sk,
+        human_kid: &kid,
+    };
+    let node_sk = state.node_sk.as_ref().unwrap();
+    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+    cairn_node::medication::stat_give::give_stat(
+        &mut owner,
+        node_sk,
+        &node_kid,
+        &state.node_origin,
+        chart,
+        order.medication_id,
+        chrono::Utc::now(),
+        &author,
+    )
+    .await
+    .unwrap();
+    let written = strike(&state, chart, first, None).await.unwrap();
+    assert_eq!(written.outcome, "Entered in error.");
+    assert!(!current(&owner, order.medication_id).await, "still stopped");
+    assert!(!read_stat_orders(&owner, &[chart]).await.unwrap()[0].waiting());
+}
+
+/// Review Focus 1: a real stop stands beside the give; striking the give leaves the line stopped,
+/// so the strike says only "Entered in error.".
+#[tokio::test]
+async fn striking_a_give_beside_a_real_stop_does_not_say_waiting_again() {
+    let Some((_guard, mut owner, state, chart)) = bea_list().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let order = stat_line(&state, &owner, chart).await;
+    give(&state, chart, &[chart], order.medication_id, None)
+        .await
+        .unwrap();
+    let given = read_stat_orders(&owner, &[chart]).await.unwrap()[0].gives[0].event_id;
+    // Another terminal's real stop of the same line.
+    let (sk, kid) = bea(&state).await;
+    let author = cairn_node::medication::AuthorParams {
+        human_sk: &sk,
+        human_kid: &kid,
+    };
+    let node_sk = state.node_sk.as_ref().unwrap();
+    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+    let stop = cairn_node::medication::CeaseMedicationInput {
+        stopped: None,
+        stopped_precision: None,
+        reason: Some("no longer indicated"),
+    };
+    cairn_node::medication::cease_medication(
+        &mut owner,
+        node_sk,
+        &node_kid,
+        &state.node_origin,
+        chart,
+        order.medication_id,
+        &stop,
+        Some(&author),
+        None,
+    )
+    .await
+    .unwrap();
+    let written = strike(&state, chart, given, None).await.unwrap();
+    assert_eq!(written.outcome, "Entered in error.");
+    assert!(
+        !current(&owner, order.medication_id).await,
+        "the real stop stands"
+    );
+}

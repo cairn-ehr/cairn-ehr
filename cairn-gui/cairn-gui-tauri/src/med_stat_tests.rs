@@ -73,9 +73,9 @@ fn a_partly_typed_time_is_refused_in_words() {
     }
 }
 
-/// What a strike says: "waiting again" only when the struck given had stopped the order.
+/// What a strike says: "waiting again" only when the order is waiting after it.
 #[test]
-fn a_strike_says_waiting_again_only_when_the_given_stopped_the_order() {
+fn a_strike_says_waiting_again_only_when_the_order_is_waiting_after_it() {
     assert_eq!(
         struck_outcome(true),
         "Entered in error: the stat dose is waiting to be given again."
