@@ -180,8 +180,8 @@
 >   [ADR-0103](spec/decisions/0103-settling-a-set-aside-version.md), spec **v0.105**, new `db/080` with db/031, db/037,
 >   db/048, db/078 and db/079 in place, `SCHEMA_GENERATION` **80**). Plan Tasks 1–3 (the wire, the restore
 >   floor, the checked type) **MERGED 2026-11-14 in PR [#1096](https://github.com/cairn-ehr/cairn-ehr/pull/1096)**;
->   Tasks 4–8 (the list's restore line, the node's signing and reads, the window commands, the pane, the docs) on
->   **PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098)**, each task reviewed, then a final whole-branch
+>   Tasks 4–8 (the list's restore line, the node's signing and reads, the window commands, the pane, the docs)
+>   **MERGED 2026-11-14 in PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098)**, each task reviewed, then a final whole-branch
 >   review and its one fix wave; CI is the full gate. **Final check (2026-11-14):** a HAND tick on a restore line
 >   now vouches for what stood for its companion as drawn and fails at Sign once a colleague's stop or restore
 >   changed it (the maintainer's ruling; ADR-0103 decision 17 amended) — before, only the default tick was withheld;
@@ -239,7 +239,7 @@
 >    medication in the window** (design APPROVED 2026-11-11, three PRs: the line + the check at charting; stat ordered →
 >    given; aliases + PBS forms as drugref supplies them). **Slice 1a MERGED in PR #1066** (the bullet above);
 >    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Batch-charting slice 2a MERGED** in PR #1088 (the bullet
->    above); **slice 2b** (the bullet above) — **merge PR #1098** once CI is green; then **slice 3** (the warning threshold as administrator policy, lowerable only). Charting **1b** (the same-drug de-label
+>    above); **slice 2b** MERGED in PR #1098 (the bullet above); **slice 3** (the warning threshold as administrator policy, lowerable only) is planned in [`superpowers/plans/2026-11-14-batch-charting-slice-3-warning-threshold.md`](superpowers/plans/2026-11-14-batch-charting-slice-3-warning-threshold.md) (maintainer rulings Q1–Q3 there) and in build on branch `plan/batch-charting-slice-3-warning-threshold`. Charting **1b** (the same-drug de-label
 >    offer) MERGED in PR #1086 (the bullet above). Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
