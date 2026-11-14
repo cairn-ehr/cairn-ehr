@@ -47,6 +47,10 @@ pub fn companion_candidates(
     draft: &[DraftLine],
     current: &[(Uuid, &str)],
 ) -> Vec<Companion> {
+    // A restore line is a line that REPLACES a companion, never a version of one.
+    if line.restores.is_some() {
+        return vec![];
+    }
     let Some(code) = moiety_of(line) else {
         return vec![];
     };

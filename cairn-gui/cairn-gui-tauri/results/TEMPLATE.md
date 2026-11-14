@@ -907,6 +907,48 @@ Steps: a version on paper *N* = 1 act → observed \_\_ presses and \_\_ Signs.
 | "{n} other version(s)" opens by keyboard | | |
 | No dialog | | |
 
+## Settling a set-aside version: the restore and "checked: not current" (batch charting slice 2b, runbook §34)
+
+`SCHEMA_GENERATION` 80 and `provision-window-role` re-run? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| *Use this version instead* → the pre-filled line open in the editor | held | | | | ≤ 2 s | |
+| The restore's *Sign ticked lines* → outcome | held | | | | ≤ 3 s | |
+| The same Sign, credential typed | shared | | | | — (record) | |
+| The check row's *Sign* → the version drawn "checked by …" | held | | | | ≤ 3 s | |
+| The same check, credential typed | shared | | | | — (record) | |
+| Reading what was settled: presses | | | | | 1 | |
+
+Steps: a restore on paper *N* = 2 acts → observed \_\_ presses and \_\_ Signs; a check on paper *N* = 1 act → observed
+\_\_ presses and \_\_ Signs.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| Each version of the opened chart shows both buttons; the summary says "{u} to check" | | |
+| The restore press signs nothing; the line is pre-filled, marked "restores the … version", the companion's press, no source of its own | | |
+| The restore line is ticked by default (not a duplicate of the line it replaces) | | |
+| Sign stops the old line ("replaced by the … version") and charts the new one in one transaction; one current line | | |
+| The new line reads "replaced: …"; the version reads "restored by …" and has no buttons | | |
+| A restore line with no source of its own signs `unknown` | | |
+| Two restores of one line: duplicates, neither ticked; both ticked → the second refused in words, kept | | |
+| A restore replacing a restore is never ticked by default; ticked by hand, one current line | | |
+| A stopped line's version: buttons kept, not "to check", its restore stops nothing | | |
+| A linked chart's version: no buttons; the list on another terminal: the restore button down | | |
+| The check row signs nothing until its Sign; signed, "checked by …" and both buttons kept | | |
+| A check with no *From:* choice signs `unknown`, the detail kept; a second check is shown too | | |
+| *Cancel* signs nothing, focus back on the button; a redraw keeps the typed row | | |
+| The real Tauri IPC: `med_list_restore_open` and `med_version_check` answer | | |
+| WebKit (the real window): the buttons, the check row, the editor opening on the restore line | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Each button read with its version; reachable by Tab | | |
+| The check row read as a group; its fields read with their version; Escape (not built: record) | | |
+| "restores the … version", the settle lines and "replaced: …" read | | |
+| A refusal read beside its version | | |
+| No dialog | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

@@ -36,6 +36,15 @@
 -- `restores` from version to line as far as it goes. The window lists what a restore must stop
 -- with the SAME function, so what the window offers and what the floor demands cannot drift.
 --
+-- WHY THE LINEAGE IS ROOTED (ruling R10). A version may be set aside beside a restore line, so a
+-- restore's companion need not be the original line: X charted; L1 restored v1 (X stopped); v3
+-- is set aside beside L1 while an older v2 is still beside X. Restoring v2 (A) stops L1; a later
+-- restore of v3 (B) has companion L1, whose closure DOWNWARD is only {L1, B} — A, its sibling
+-- under X, is not in it, and both would stand. So the function first walks UP, from a restore
+-- line to the companion of the version it restored, to the original line, and returns the whole
+-- tree below it. The floor's COMMIT check and the window's "what stands" read it alike, so a
+-- restore anywhere in the tree must stop whatever stands anywhere in it.
+--
 -- A DOCUMENTED LIMIT: AN ERASED LINK (#1097). The closure walks projected rows, so a shred that
 -- deletes one of them cuts the chain:
 --   (1) a shredded set-aside VERSION in the middle of a chain hides the whole subtree below it
@@ -143,18 +152,31 @@ ON CONFLICT (event_type, apply_fn) DO UPDATE SET
 WHERE (r.projection_tables, r.run_order, r.heal_safe)
       IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
--- The companion's RESTORE LINEAGE on one chart: the companion itself, plus every line whose
--- restore names a set-aside version whose alternative_to is already in the set, recursively
--- (header: why recursive). UNION, not UNION ALL, so a cycle a peer could construct still ends.
+-- The companion's RESTORE LINEAGE on one chart, ROOTED (header: why recursive, why rooted).
+-- `up`: the companion, and from each line that is a restore, the companion of the version it
+-- restored, up to the original line. `lineage`: everything in `up`, plus every line whose
+-- restore names a set-aside version whose alternative_to is already in the set, recursively.
+-- Walking down from every member of `up` gives exactly the tree below the root (each member of
+-- `up` is itself reached down from the root), and still gives an answer when a forged cycle has
+-- no root. UNION, not UNION ALL, in both walks, so a cycle a peer could construct still ends.
 -- The ONE answer to "what stands for this companion": the COMMIT trigger below demands that no
--- current member but the restore itself survive, and the window (Task 5's node read) lists the
--- current members as what a restore must stop. STABLE; SECURITY DEFINER with a pinned
--- search_path and qualified tables so the window's role gets the answer without needing more
--- than EXECUTE, and no caller can shadow a table with a TEMP one.
+-- current member but the restore itself survive, and the window (cairn-node's
+-- `version_for_restore`) lists the current members as what a restore must stop. STABLE; SECURITY
+-- DEFINER with a pinned search_path and qualified tables so the window's role gets the answer
+-- without needing more than EXECUTE, and no caller can shadow a table with a TEMP one.
 CREATE OR REPLACE FUNCTION cairn_medication_restore_lineage(p_companion uuid, p_patient uuid)
 RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    WITH RECURSIVE lineage(medication_id) AS (
+    WITH RECURSIVE up(medication_id) AS (
         SELECT p_companion
+        UNION
+        SELECT s.alternative_to
+          FROM up u
+          JOIN public.medication_restore r
+            ON r.medication_id = u.medication_id AND r.patient_id = p_patient
+          JOIN public.medication_set_aside s
+            ON s.version_id = r.version_id AND s.patient_id = p_patient
+    ), lineage(medication_id) AS (
+        SELECT medication_id FROM up
         UNION
         SELECT r.medication_id
           FROM lineage l
@@ -297,9 +319,10 @@ CREATE CONSTRAINT TRIGGER medication_restore_pairs
 
 -- §2. "Checked: not current" — a set-aside version looked at again and found still not current.
 -- Its own event type (ADR-0102 / spec §3.4): the type IS the verdict, so there is no flag to get
--- backwards; the opposite outcome is a restore (§1). Never a medication line, never a thread:
--- it is not in medication_statement, the active read or the safety projection. A second check of
--- the same version is admitted and shown. Modelled on db/079 §2's set-aside type.
+-- backwards; the opposite outcome is a restore (§1). Never a medication line, and it never starts
+-- a thread; it sits on its version's companion thread (db/048 §10). It is not in
+-- medication_statement, the active read or the safety projection. A second check of the same
+-- version is admitted and shown. Modelled on db/079 §2's set-aside type.
 
 INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
     ('clinical.medication-set-aside-checked.asserted', 'additive', FALSE)

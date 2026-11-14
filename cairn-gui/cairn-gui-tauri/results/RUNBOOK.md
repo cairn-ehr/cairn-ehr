@@ -3352,3 +3352,141 @@ WebKit need the window and a human. The rest was run as follows:
 - **The webview:** `med_list_versions_webview_tests.rs`, `med_list_source_webview_tests.rs`.
 
 `TEMPLATE.md` carries a matching block (*"From:", the why, and a set-aside version*).
+
+## 34. Settling a set-aside version: the restore and "checked: not current" (batch charting slice 2b, ADR-0103)
+
+The slice's gestures:
+- **Under a charted line**, each set-aside version of the opened chart shows two buttons, *Use this version instead*
+  and *Checked: not current*. The summary reads "{n} other version(s)", and ", {u} to check" while any version beside
+  a current line was never checked or restored.
+- **Use this version instead** signs nothing. It adds a line to your list, pre-filled from the version (its drug, and
+  its directions), marked "restores the {source} version", and opens it in the line editor. Edit what has changed
+  since, give the line its own *From:* and *Why* (what the call found), and *Sign ticked lines* charts it. The same
+  transaction stops the line it replaces, with the reason "replaced by the {source} version".
+- **Checked: not current** opens a row under the version: *From:*, the document or person, *Why*, *Sign* and
+  *Cancel*. The row signs nothing until its own *Sign*.
+- **Next look.** A checked version reads "checked by {who}, {when}: not current — from {source}" (and "— {why}") and
+  keeps both buttons. A restored version reads "restored by {who}, {when}" and has none. The new line reads
+  "replaced: {old drug line} — {who}, {when}" under it.
+
+Paper counterpart: next morning the reviewer rings the GP, rewrites the line ("confirmed with GP: 50 mg bd") or initials
+the crossed-out figure as checked. **Live only**: a `--mock` window has no list.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Restore: the press to the line in the editor | the press of *Use this version instead* | the pre-filled line open in the editor | **≤ 2 s** |
+| Restore: its Sign | the press of *Sign ticked lines* | the outcome drawn | **≤ 3 s** (slice 1's Sign budget, not this plan's §1.2; M3 Max) |
+| Check: its Sign | the press of the check row's *Sign* | the version drawn "checked by …" | **≤ 3 s** (slice 1's Sign budget) |
+| Reading what was settled | the chart open | the settle line read | **1 press** (open "{n} other version(s)") |
+
+The budgets are with the key held (`--key-hold-seconds 900`); repeat each Sign on a shared terminal and record both.
+Steps: a restore on paper *N* = 2 acts (rewrite the line, note the call) → forced *M* = 1 signed act (the stop and the
+new line under one key release, in one transaction) → target *K* = 1 press + the line's *From:* + *Why* + Sign (+ the
+edits when the dose changed). A check: *N* = 1 (initial the figure) → *M* = 1 → *K* = 1 press + *Why* + Sign. The
+restore's Sign is timed as **`medication-chart`** (section 5); **the check's write half is not timed** (it has no
+`ui_gesture_timing` kind), so its stopwatch figure is the only one. **A figure outside its budget, or an `M > N`, is
+the finding: file an issue, and never adjust the budget.**
+
+**Setup.** As section 33, but build this checkout and re-run section 0's `provision-window-role`, because the build
+moves `SCHEMA_GENERATION` to 80. Then:
+
+```bash
+S1=$(achart "Settle Restore" 1983-03-03)  # "No known drug allergies" recorded
+S2=$(achart "Settle Check" 1984-04-04)    # "No known drug allergies" recorded
+for c in "$S1" "$S2"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+```
+
+Name a clinician in who's here (`dr-a`). On each chart, as section 33's Measurement 2, chart atorvastatin
+` tab 40mg nocte` (*Already taking*) with a second line ` tab 20mg nocte` set aside beside it (*From:* *Packets /
+Webster pack seen*), and Sign. Close the chart.
+
+**Measurement 1: restore.**
+
+- [ ] Open `$S1`: the 40 mg line shows "1 other version(s), 1 to check", closed. Open it: the 20 mg version with
+      *Use this version instead* and *Checked: not current*.
+- [ ] Choose *Patient* in "From:" above the list. Start the stopwatch, press *Use this version instead*: stop when
+      the line editor is open on a new line pre-filled with the version's drug and `tab 20mg nocte` (≤ 2 s). The line
+      is marked "restores the Packets / Webster pack seen version", reads *Already taking* (the companion's press),
+      and has no source of its own: "From:" never stamps a restore line. Nothing was signed:
+      `psql "$CONN" -c "SELECT count(*) FROM medication_restore WHERE patient_id = '$S1'"` is 0.
+- [ ] Change the dose to 25 mg, set the line's own *From:* to *GP letter*, `surgery, by phone`, and *Why* `dispensed
+      25 mg since March`, and finish the line.
+- [ ] The restore line is ticked by default (it is not a duplicate of the 40 mg line it replaces). *Sign ticked
+      lines* (≤ 3 s): `Charted 1 of 1`. The 40 mg line is stopped; the 25 mg line is current and reads
+      "replaced: atorvastatin 40 mg … — {your name}, {when}" under it; the version reads "restored by {your name},
+      {when}", with no buttons, and no longer counts "to check".
+- [ ] `psql "$CONN" -c "SELECT reason FROM medication_cessation WHERE patient_id = '$S1'"` shows
+      `replaced by the Packets / Webster pack seen version`;
+      `SELECT version_id FROM medication_restore WHERE patient_id = '$S1'` shows the version;
+      `SELECT count(*) FROM medication_restore_pending` is 0.
+- [ ] A restore line with no *From:* of its own signs `unknown`: repeat on a fresh version, clear the line's source,
+      Sign, and check `info_source` in `medication_statement`.
+- [ ] On a fresh chart set up as above with TWO versions beside the line, restore both: both restore lines read as
+      duplicates of each other and neither is ticked. Tick both by hand and Sign: the first charts; the second is not
+      charted, saying "another restore of the same line is signed first; signed after it, this one replaces it",
+      and stays in the list.
+- [ ] A version set aside beside the restored 25 mg line, then restored: its line is **not** ticked by default
+      (it replaces a restore). Tick it by hand and Sign: the 25 mg line is stopped, one atorvastatin line is current.
+- [ ] On a fresh chart, stop the 40 mg line for another reason: its version keeps its buttons and "to check" no
+      longer counts it. Restore it: the line reads "restores the … version — its line has since been stopped" and
+      is **not** ticked by default. Tick it by hand and Sign: it stops nothing and charts its line.
+- [ ] Restore a version, then stop the 40 mg line from the chart before signing: on the re-read the restore line
+      gains "— its line has since been stopped" and loses its tick.
+- [ ] Restore a version and tick it **by hand**; then, from another terminal, stop the 40 mg line. Sign: nothing
+      is charted and the restore line comes back unticked with "— its line has since been stopped" (the tick was
+      given against the line that stood). Tick it again and Sign: it stops nothing and charts its line.
+- [ ] A linked chart's version (open a chart linked to `$S1`): no buttons.
+- [ ] With the list open on another terminal ("These lines are open on another terminal: …"), *Use this version
+      instead* is down and nothing can be added.
+
+**Measurement 2: checked, not current.**
+
+- [ ] Open `$S2`, open "1 other version(s), 1 to check", press *Checked: not current*: the row opens with focus on
+      *From:*. Choose *Pharmacy*, type `dispensing history`, *Why* `dispensed 40 mg only`.
+- [ ] Start the stopwatch, press the row's *Sign* (one passphrase on a shared terminal): stop when the version reads
+      "checked by {your name}, {when}: not current — from dispensing history — dispensed 40 mg only" (≤ 3 s). Its
+      buttons stay; the summary no longer says "to check". The 40 mg line is unchanged.
+- [ ] The check's row, `psql "$CONN" -c`
+      `"SELECT info_source, source_detail, why FROM medication_set_aside_checked WHERE patient_id = '$S2'"`, shows
+      `external-record`, `dispensing history`, `dispensed 40 mg only`.
+- [ ] Check it again with no *From:* choice and the detail `ward pharmacist`: a second "checked by" line, oldest first;
+      the row's `info_source` is `unknown`, the detail kept.
+- [ ] *Cancel* closes the row with nothing signed and focus back on *Checked: not current*. A redraw of the pane
+      while the row is open (a list line saving, or the chart read again) keeps what was typed.
+- [ ] A checked version can still be restored (Measurement 1's press): it then reads both lines.
+
+**Measurement 3: the timings (five runs each, held key, then shared terminal).**
+
+- [ ] The restore press to the editor open (≤ 2 s); the restore's Sign (≤ 3 s); the check row's Sign (≤ 3 s).
+- [ ] The restore's write half:
+      `psql "$CONN" -c "SELECT * FROM ui_gesture_timing WHERE gesture_kind = 'medication-chart'"`.
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] Each button is read with its version ("Use this version instead: {version line}", "Checked: not current:
+      {version line}") and reachable by Tab.
+- [ ] The check row is read as a group named for its version; *From:* and the detail are read "…, for the check of
+      {version line}"; *Why* is read with its label. Record whether Escape closes the row (it is not built to).
+- [ ] "restores the … version" is read with its list line; each settle line and "replaced: …" is read.
+- [ ] A refusal is read beside the version it is about.
+- [ ] No dialog at any point.
+
+**WebKit and the real Tauri IPC.** The webview was walked headlessly in Chromium with a stubbed `invoke`. Walk it in
+the real window: `med_list_restore_open` (`patientId`, `charts`, `versionId`) and `med_version_check` (`patientId`,
+`charts`, `versionId`, `preset`, `detail`, `why`, `credential`). A name Tauri cannot map fails the call with an
+"invalid args" error.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
+WebKit need the window and a human. The rest was run as follows:
+- **The wire:** `cairn-event`'s `medication/charting_tests.rs` and `medication/version_checked.rs` (pure).
+- **The floor and the projections:** `medication_restore_floor.rs`, `medication_restore_replaces.rs`,
+  `medication_version_checked_floor.rs` (DB-gated); `db/tests/078_medication_version_checked_test.sql`.
+- **The draft store and the signing:** `medication_draft_list_restore_store.rs`, `medication_version_settle.rs`
+  (DB-gated).
+- **The window's commands:** `cairn-gui-tauri`'s `med_list_restore_tests.rs` (pure) and `med_list_restore_db_tests.rs`,
+  `med_list_restore_chain_db_tests.rs`, `med_version_check_db_tests.rs` (DB-gated; CI never runs those, #905).
+- **The webview:** `med_versions_settle_webview_tests.rs`.
+
+`TEMPLATE.md` carries a matching block (*Settling a set-aside version*).

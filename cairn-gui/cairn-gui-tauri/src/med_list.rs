@@ -25,11 +25,11 @@ use crate::chart_set::check_displayed_set;
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::{press, view, LineCheckView, PartArg};
-use crate::med_line_sign::{fresh_check, parts_before_the_key, the_line};
 use crate::med_list_delabel::DelabelOffer;
 pub(crate) use crate::med_list_judge::{
-    already_on_the_list, elsewhere, fresh_read, judge, tick_holds, vouched, Judged,
+    already_on_the_list, elsewhere, fresh_read, judge, tick_holds, vouched, warnings_now, Judged,
 };
+use crate::med_list_restore::{mark_restores, restore_vouched};
 use crate::med_list_versions::{
     companion_words, companions_of, given, stamp_new_line, versions_recorded, FromView,
 };
@@ -136,7 +136,8 @@ pub struct ListLineView {
     /// The stored veto ([`LineArg::held`]).
     pub held: bool,
     pub unfinished: bool,
-    /// The warnings drawn on the line now (its check's allergy marks), for [`LineArg::seen`].
+    /// The warnings drawn on the line now (its check's allergy marks, and on a restore line what
+    /// stands for its companion: `restore_seen`), for [`LineArg::seen`].
     pub against: Vec<WarningRef>,
     /// The same-drug de-label offers this line may show (empty when none).
     pub delabel_offers: Vec<DelabelOffer>,
@@ -151,6 +152,8 @@ pub struct ListLineView {
     /// Each of `companions` as the "Version of which line?" pick names it, in the same order
     /// (`med_list_versions::companion_words`).
     pub companion_words: Vec<String>,
+    /// A restore line's mark, "restores the {source} version" (`med_list_restore`); else `None`.
+    pub restores_words: Option<String>,
 }
 
 /// What a save or a delete answers: the door's one word (`saved`, `moved`, `deleted`, …), and
@@ -228,10 +231,12 @@ pub async fn med_list_read_impl(
         .map(|(preset, detail)| FromView { preset, detail });
     let charted = std::mem::take(&mut fresh.charted);
     let words = std::mem::take(&mut fresh.charted_words);
+    let versions = fresh.versions.clone();
     let same_set = charts.is_none_or(|c| check_displayed_set(&fresh.set, c).is_ok());
     let judged = judge(state, fresh, same_set, writer.is_some()).await;
     let terminal = state.terminal_id.get().map(String::as_str);
-    let lines = lines_view(&judged, &charted, &words, terminal);
+    let mut lines = lines_view(&judged, &charted, &words, terminal);
+    mark_restores(&mut lines, &judged, &versions);
     Ok(MedListView {
         writer,
         writer_name,
@@ -259,11 +264,16 @@ pub async fn med_list_save_impl(
     let line_id: Uuid = line.line_id.parse().map_err(|_| refused("not a line id"))?;
     press(&line.charted_as)?;
     // The door keeps the refs of the moment a tick was GIVEN; a later save's are ignored there.
+    // A restore line's tick also vouches for what stood for its companion as drawn (`restore_seen`).
     let ticked_against = match line.hand_ticked {
-        true => vouched(
-            &warnings_now(state, patient, charts, &line).await,
-            &line.seen,
-        ),
+        true => {
+            let mut refs = vouched(
+                &warnings_now(state, patient, charts, &line).await,
+                &line.seen,
+            );
+            refs.extend(restore_vouched(&line.seen));
+            refs
+        }
         false => vec![],
     };
     let mut row = DraftLine {
@@ -286,6 +296,8 @@ pub async fn med_list_save_impl(
         source_detail: given(line.source_detail),
         why: given(line.why),
         set_aside_of: given(line.set_aside_of),
+        // Only `add_restore_line` sets it; a save never writes it (db/078).
+        restores: None,
     };
     let db = state
         .db
@@ -309,24 +321,6 @@ pub async fn med_list_save_impl(
         info_source,
         source_detail,
     })
-}
-
-/// The warnings on `line` now: a fresh check over the set on screen. Any failure is none, which
-/// can only make the tick fail at Sign (it needs every warning seen).
-async fn warnings_now(
-    state: &AppState,
-    patient: Uuid,
-    charts: &[String],
-    line: &LineArg,
-) -> Vec<Uuid> {
-    let Ok((term, parts)) = parts_before_the_key(&line.parts, &line.typed_drug) else {
-        return vec![];
-    };
-    let lines = the_line(&line.typed_drug, &term, &parts);
-    fresh_check(state, patient, charts, &lines)
-        .await
-        .map(|check| check.against)
-        .unwrap_or_default()
 }
 
 /// Remove one of the writer's lines, whatever it last saved (the clinician pressed remove on it).
@@ -457,6 +451,7 @@ pub(crate) fn line_view(j: &Judged) -> ListLineView {
         set_aside_of: l.set_aside_of.clone(),
         companions: vec![],
         companion_words: vec![],
+        restores_words: None,
     }
 }
 
@@ -491,3 +486,7 @@ mod source_db_tests;
 #[cfg(test)]
 #[path = "med_list_versions_kept_db_tests.rs"]
 mod versions_kept_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_restore_db_tests.rs"]
+mod restore_db_tests;

@@ -34,6 +34,7 @@ fn line(id: u128, code: u128, mark: Option<String>) -> DraftLine {
         source_detail: None,
         why: None,
         set_aside_of: mark,
+        restores: None,
     }
 }
 
@@ -274,6 +275,7 @@ fn judged_version(line: DraftLine) -> Judged {
         duplicate: false,
         duplicate_of: None,
         default_ticked: false,
+        restore_tick_holds: true,
         offers: vec![],
     }
 }

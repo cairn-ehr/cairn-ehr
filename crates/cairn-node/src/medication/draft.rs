@@ -10,6 +10,7 @@ use super::assert::AssertMedicationInput;
 use super::charting::chart_body;
 use super::draft_versions_sign::{prepare_version, spend_row, submit, VersionToSign};
 use super::sealed_submit::{prepare_sealed, AuthorParams};
+use super::version_settle::{prepare_stops, RestoreToSign};
 use anyhow::Context;
 use cairn_event::medication::Charting;
 use cairn_event::SigningKey;
@@ -51,6 +52,9 @@ pub struct DraftLine {
     /// `line:<uuid>` (a draft line) or `med:<uuid>` (a charted medication) this line is a
     /// version of; `None` = not set aside. See `draft_versions`.
     pub set_aside_of: Option<String>,
+    /// The set-aside version this line RESTORES (a restore line, slice 2b); `None` for an
+    /// ordinary line. Only [`add_restore_line`] sets it; a save never writes it.
+    pub restores: Option<Uuid>,
 }
 
 /// `[{"source": "...", "ref": "<uuid>"}]` to pairs, or `None` when ANY element is malformed.
@@ -80,7 +84,7 @@ pub async fn read_draft_lines(
         .query(
             "SELECT line_id::text, terminal_id, seq, charted_as, line_text, parts::text, reason, \
                     hand_ticked, ticked_against::text, finished, saved_at::text, typed_drug, directions, held, \
-                    info_source, source_detail, why, set_aside_of \
+                    info_source, source_detail, why, set_aside_of, restores::text \
                FROM cairn_med_draft_lines($1::text::uuid, $2)",
             &[&patient.to_string(), &writer],
         )
@@ -113,6 +117,10 @@ pub async fn read_draft_lines(
                 source_detail: r.try_get(15)?,
                 why: r.try_get(16)?,
                 set_aside_of: r.try_get(17)?,
+                restores: r
+                    .try_get::<_, Option<String>>(18)?
+                    .map(|s| s.parse())
+                    .transpose()?,
             })
         })
         .collect()
@@ -162,6 +170,49 @@ pub async fn save_draft_line(
         )
         .await
         .context("saving the medication draft line")?;
+    Ok(row.try_get(0)?)
+}
+
+/// The words a restore line starts with (pre-filled from the version it restores).
+pub struct RestoreContent<'a> {
+    pub charted_as: &'a str,
+    pub line_text: &'a str,
+    pub typed_drug: &'a str,
+    pub directions: &'a str,
+    pub parts: &'a serde_json::Value,
+}
+
+/// Add `line` as a RESTORE line of set-aside `version` on `patient` (db/078): the door's one word,
+/// the save door's new-row answers plus `'no-such-version'` (the version is not on this chart).
+pub async fn add_restore_line(
+    client: &(impl GenericClient + Sync),
+    line: Uuid,
+    patient: Uuid,
+    terminal: &str,
+    writer: Option<&str>,
+    version: Uuid,
+    content: &RestoreContent<'_>,
+) -> anyhow::Result<String> {
+    let parts = content.parts.to_string();
+    let row = client
+        .query_one(
+            "SELECT cairn_med_draft_restore_add($1::text::uuid, $2::text::uuid, $3, $4, \
+                    $5::text::uuid, $6, $7, $8::text::jsonb, $9, $10)",
+            &[
+                &line.to_string(),
+                &patient.to_string(),
+                &terminal,
+                &writer,
+                &version.to_string(),
+                &content.charted_as,
+                &content.line_text,
+                &parts,
+                &content.typed_drug,
+                &content.directions,
+            ],
+        )
+        .await
+        .context("adding a restore line to the medication draft list")?;
     Ok(row.try_get(0)?)
 }
 
@@ -320,6 +371,12 @@ pub async fn writer_drafts(
 /// version's spend answer `changed` and roll everything back. A lost commit is marked
 /// outcome-unknown (#814) exactly as `seal_sign_submit`'s attested arm does.
 ///
+/// A RESTORE line (`restore` Some, slice 2b) first stops every line in `restore.stop` (one
+/// cessation each, submitted FIRST so db/080's pairing check passes even IMMEDIATE), and the line
+/// carries `restores` = `restore.version_id`, the ONE source of it: a caller's own
+/// `charting.restores` is refused, with or without a restore. A failed spend rolls the stops back
+/// with everything else.
+///
 /// Returns the companion's thread and the versions' ids; `event_id` is the companion's.
 #[allow(clippy::too_many_arguments)] // signer + node context + the line's identity + its content
 pub async fn chart_draft_line(
@@ -336,9 +393,34 @@ pub async fn chart_draft_line(
     charting: &Charting<'_>,
     author: &AuthorParams<'_>,
     versions: &[VersionToSign<'_>],
+    restore: Option<&RestoreToSign<'_>>,
 ) -> anyhow::Result<crate::db_diagnosis::Committed<(Uuid, Vec<Uuid>)>> {
+    anyhow::ensure!(
+        charting.restores.is_none(),
+        "a line's `restores` comes from its RestoreToSign, never from its charting"
+    );
+    let stops = match restore {
+        Some(r) => {
+            prepare_stops(
+                client,
+                node_sk,
+                node_kid,
+                node_origin,
+                patient,
+                &r.stop,
+                author,
+            )
+            .await?
+        }
+        None => Vec::new(),
+    };
+    let restores = restore.map(|r| r.version_id.to_string());
+    let charting = Charting {
+        restores: restores.as_deref(),
+        ..*charting
+    };
     let (body, medication_id) =
-        chart_body(client, node_kid, node_origin, patient, input, charting).await?;
+        chart_body(client, node_kid, node_origin, patient, input, &charting).await?;
     let companion = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
     let event_id = companion.event_id;
     let mut prepared_versions = Vec::with_capacity(versions.len());
@@ -359,6 +441,9 @@ pub async fn chart_draft_line(
     }
 
     let tx = client.transaction().await?;
+    for stop in &stops {
+        submit(&tx, stop).await?;
+    }
     submit(&tx, &companion).await?;
     for (p, _) in &prepared_versions {
         submit(&tx, p).await?;

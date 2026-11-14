@@ -32,6 +32,9 @@
 //! line saying why. Each version's companion comes from its STORED mark on the fresh read (ruling
 //! R9). A lost commit covers the companion's versions too: they are reported NOT known with it.
 //!
+//! A restore line (slice 2b, `med_list_restore.rs`) signs, in its own transaction, the stops of
+//! what stands for its companion on the fresh read; one whose version is gone is refused alone.
+//!
 //! The webview's word is never trusted: the lines signed are rebuilt from the stored rows, and
 //! every tick, check, duplicate and version's companion is re-derived here.
 use crate::allergies::{failure_named, local_today, on_screen_and_writable};
@@ -44,6 +47,9 @@ use crate::med_line_sign::{charting, components, override_refs, single_coding};
 use crate::med_list::{
     claim_writer, fresh_read, judge, med_list_read_impl, tick_holds, Judged, MedListView,
 };
+use crate::med_list_judge::untick;
+use crate::med_list_restore::{replaced_by, restore_holds, restore_source, restore_to_sign};
+use crate::med_list_restore::{version_of, Versions};
 use crate::med_list_versions::{
     list_input, outcome_words, plan_versions, sign_alone, version_to_sign, VERSION_KEPT,
 };
@@ -52,7 +58,7 @@ use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write};
 use cairn_event::medication::ChartedAs;
-use cairn_node::medication::draft::{self, SpendRefused};
+use cairn_node::medication::draft::{self, DraftLine, SpendRefused};
 use cairn_node::medication::AuthorParams;
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -143,6 +149,7 @@ pub async fn med_list_sign_impl(
     let mut fresh = fresh_read(state, patient, writer.as_deref()).await?;
     check_displayed_set(&fresh.set, &charts).map_err(ChartSetError::into_view)?;
     let charted_lines = std::mem::take(&mut fresh.charted);
+    let restores = fresh.versions.clone();
     let judged = judge(state, fresh, true, writer.is_some()).await;
     let chosen = ticked_lines(&judged, ticked, &terminal)?;
     // 4. Every tick still holds, or nothing is signed.
@@ -156,7 +163,13 @@ pub async fn med_list_sign_impl(
     }
     // Slice 1a's per-line checks, decided before the key so a Sign that could chart nothing never
     // asks for a passphrase; a failing line is skipped, the others sign.
-    let verdicts: Vec<_> = chosen.iter().map(|j| (*j, line_verdict(j))).collect();
+    // A restore line is judged against the lines before it that will sign (rulings R9, R10).
+    let mut verdicts: Vec<(&Judged, Result<_, ErrorView>)> = Vec::with_capacity(chosen.len());
+    for j in chosen.iter().copied() {
+        let signing = verdicts.iter().filter(|(_, v)| v.is_ok());
+        let earlier: Vec<&DraftLine> = signing.map(|(e, _)| &e.line).collect();
+        verdicts.push((j, line_verdict(j, &earlier, &restores)));
+    }
     let mut not_charted: Vec<(String, String)> = verdicts
         .iter()
         .filter_map(|(j, v)| {
@@ -209,9 +222,9 @@ pub async fn med_list_sign_impl(
         let list = (patient, terminal.as_str(), writer.as_deref());
         let mut stopped = false;
         let mut lines = to_sign.into_iter();
-        while let Some((j, (charted_as, reason))) = lines.next() {
+        while let Some((j, verdict)) = lines.next() {
             let with = plan.with.remove(&j.line.line_id).unwrap_or_default();
-            let signed = sign_line(state, node_sk, list, j, charted_as, reason, &with, &author);
+            let signed = sign_line(state, node_sk, list, j, verdict, &with, &restores, &author);
             match signed.await.map_err(|e| line_failure(&e)) {
                 Ok(n) => {
                     plan.charted(j.line.line_id);
@@ -291,7 +304,7 @@ pub async fn med_list_sign_impl(
 /// Sign one line that passed its checks: rebuild what it signs (and each of its `versions`) from
 /// the STORED rows, then write their events and spend their draft rows in one transaction
 /// (`chart_draft_line`). `list` is the list's identity: `(chart, terminal, writer)`. Answers how
-/// many versions went in with it.
+/// many versions went in with it; a restore line's stops go in with it too (`med_list_restore`).
 ///
 /// A version's FLOOR refusal rolls back its companion's whole transaction: the version and its
 /// line are one decision (design §3.3, ADR-0060 decision 7's scoping), so the companion is
@@ -302,9 +315,9 @@ async fn sign_line(
     node_sk: &cairn_event::SigningKey,
     (patient, terminal, writer): (Uuid, &str, Option<&str>),
     j: &Judged,
-    charted_as: ChartedAs,
-    reason: Option<&str>,
+    (charted_as, reason): (ChartedAs, Option<&str>),
     versions: &[&Judged],
+    restores: &Versions,
     author: &AuthorParams<'_>,
 ) -> anyhow::Result<usize> {
     let (term, parts) = j
@@ -315,7 +328,11 @@ async fn sign_line(
     let against = override_refs(&ids);
     let today = local_today().to_string();
     let components = components(parts);
-    let input = list_input(j, term, single_coding(parts), charted_as, &today);
+    let mut input = list_input(j, term, single_coding(parts), charted_as, &today);
+    input.info_source = restore_source(&j.line, input.info_source);
+    let restored = version_of(&j.line, restores);
+    let stop_reason = restored.map(|v| replaced_by(&v.source)).unwrap_or_default();
+    let restore = restore_to_sign(&j.line, restored, &stop_reason).map_err(anyhow::Error::msg)?;
     let versions = versions
         .iter()
         .map(|v| version_to_sign(v))
@@ -343,6 +360,7 @@ async fn sign_line(
         &charting,
         author,
         &versions,
+        restore.as_ref(),
     )
     .await
     .map(|c| c.value.1.len())
@@ -394,8 +412,13 @@ pub(crate) fn ticked_lines<'a>(
 }
 
 /// Slice 1a's per-line checks on a holding line: its press, what it signs, and the reason a
-/// Start line with an allergy mark needs. Pure.
-fn line_verdict(j: &Judged) -> Result<(ChartedAs, Option<&str>), ErrorView> {
+/// Start line with an allergy mark needs; a restore line's own (`restore_holds`, 2b). Pure.
+fn line_verdict<'a>(
+    j: &'a Judged,
+    earlier: &[&DraftLine],
+    restores: &Versions,
+) -> Result<(ChartedAs, Option<&'a str>), ErrorView> {
+    restore_holds(&j.line, earlier.iter().copied(), restores).map_err(refused)?;
     let charted_as = press(&j.line.charted_as)?;
     j.signable.as_ref().map_err(Clone::clone)?;
     let reason = override_before_the_key(charted_as, &j.check, j.line.reason.as_deref())?;
@@ -427,31 +450,6 @@ pub(crate) fn outcome(charted: usize, of: usize, lines: &[String]) -> String {
 /// One line not charted, as the outcome names it. Pure.
 pub(crate) fn not_charted_line(drug_line: &str, reason: &str) -> String {
     format!("{drug_line} — not charted: {reason}")
-}
-
-/// Clear the hand tick of each line in `lines` that has one, through the save door (the same
-/// content with `hand_ticked = false`): a tick that no longer holds must not survive to the next
-/// press. A default tick is derived, never stored, so there is nothing to clear. A failure is
-/// logged: the next Sign re-derives the tick and refuses it again.
-async fn untick(state: &AppState, patient: Uuid, writer: Option<&str>, lines: &[&Judged]) {
-    let Some(db) = state.db.as_ref() else { return };
-    let db = match db.lock().await {
-        Ok(db) => db,
-        Err(e) => return eprintln!("the changed lines' ticks were not cleared: {e}"),
-    };
-    for j in lines.iter().filter(|j| j.line.hand_ticked) {
-        let mut line = j.line.clone();
-        line.hand_ticked = false;
-        line.ticked_against.clear();
-        match draft::save_draft_line(&*db, patient, writer, &line).await {
-            Ok(a) if a == "saved" => {}
-            Ok(a) => eprintln!("a changed line's tick was not cleared: the list answered {a}"),
-            Err(e) => eprintln!(
-                "a changed line's tick was not cleared: {}",
-                cairn_gui_live::cause_of(&db.explain(e))
-            ),
-        }
-    }
 }
 
 /// `raw` as the vault normalises a staff id (the rule is SQL's alone, R7).

@@ -25,6 +25,7 @@ fn line(id: u128, parts: serde_json::Value, set_aside_of: Option<String>) -> Dra
         source_detail: None,
         why: None,
         set_aside_of,
+        restores: None,
     }
 }
 
@@ -174,5 +175,24 @@ fn a_chained_mark_says_its_line_is_itself_set_aside() {
     assert_eq!(
         version_holds(&a, &[a.clone(), b], &[]),
         Err("its line is itself set aside")
+    );
+}
+
+/// `l` made a restore line of version `v`.
+fn restoring(mut l: DraftLine, v: u128) -> DraftLine {
+    l.restores = Some(u(v));
+    l
+}
+
+#[test]
+fn a_restore_line_has_no_set_aside_candidates() {
+    let restore = restoring(oxy(1, None), 90);
+    let other = oxy(2, None);
+    assert!(companion_candidates(&restore, &[restore.clone(), other.clone()], &[]).is_empty());
+    // It is also nobody's version: with the restore line the only twin, `other` has no candidate.
+    assert_eq!(
+        companion_candidates(&other, &[restore, other.clone()], &[]),
+        vec![Companion::Draft(u(1))],
+        "a restore line may still be a companion (the rule only bars it from being a version)"
     );
 }

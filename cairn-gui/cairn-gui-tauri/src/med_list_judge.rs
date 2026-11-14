@@ -8,9 +8,13 @@ use crate::allergy_check::check_lines;
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::med_chart::PartArg;
-use crate::med_line_sign::{line_under, not_read, parts_before_the_key};
-use crate::med_list::WarningRef;
+use crate::med_line_sign::{fresh_check, line_under, not_read, parts_before_the_key, the_line};
+use crate::med_list::{LineArg, WarningRef};
 use crate::med_list_delabel::{offers_for, DelabelOffer};
+use crate::med_list_restore::{
+    current_besides_stops, read_versions, restore_tick_holds, restore_withholds_default_tick,
+    Versions,
+};
 use crate::med_list_versions::{charted_companions, charted_words};
 use crate::state::AppState;
 use crate::write_failure::chart_read_failed;
@@ -20,12 +24,10 @@ use cairn_node::allergy::check::LineCheck;
 use cairn_node::allergy::read::PatientAllergies;
 use cairn_node::allergy::view::{build_view, ListStatus};
 use cairn_node::medication::draft::{self, DraftLine};
-use cairn_node::medication::draft_tick::{
-    default_tick, duplicate_codes, hand_tick_holds, TickFacts,
-};
+use cairn_node::medication::draft_tick::{default_tick, hand_tick_holds, TickFacts};
 use cairn_node::medication::line::{read_directions, Directions};
 use chrono::Offset;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
 /// A stored line whose parts no longer read as parts (a row older than this build's shape): it is
@@ -43,7 +45,10 @@ pub fn already_on_the_list(line: &str) -> String {
 /// on the chart"), the writer's lines, the OPENED chart's current lines a version may be set
 /// aside beside as `(medication_id, moiety code)` (`med_list_versions::charted_companions`), and
 /// the writer's "From:" as `(preset, detail)`; and the opened chart's lines as the "Version of
-/// which line?" pick names them (`med_list_versions::charted_words`).
+/// which line?" pick names them (`med_list_versions::charted_words`). Slice 2b: the versions the
+/// restore lines name, on the opened chart (`med_list_restore::read_versions`), and each restore
+/// line's own `current`, without the lines it will stop
+/// (`med_list_restore::current_besides_stops`).
 pub(crate) struct Fresh {
     pub set: ChartSet,
     pub allergies: PatientAllergies,
@@ -52,6 +57,8 @@ pub(crate) struct Fresh {
     pub charted: Vec<(Uuid, String)>,
     pub from: Option<(Option<String>, Option<String>)>,
     pub charted_words: Vec<(Uuid, String)>,
+    pub versions: Versions,
+    pub beside: BTreeMap<Uuid, Vec<(String, String)>>,
 }
 
 /// [`Fresh`], read in ONE snapshot, so a line is never judged against allergies or a chart from
@@ -71,6 +78,8 @@ pub(crate) async fn fresh_read(
             charted: vec![],
             from: None,
             charted_words: vec![],
+            versions: Versions::new(),
+            beside: BTreeMap::new(),
         });
     };
     let mut db = db.lock().await?;
@@ -79,10 +88,13 @@ pub(crate) async fn fresh_read(
         let allergies = cairn_node::allergy::read::list_patient_allergies(tx, patient).await?;
         let lines = draft::read_draft_lines(tx, patient, writer).await?;
         let from = draft::read_draft_from(tx, patient, writer).await?;
+        let versions = read_versions(tx, patient, &lines).await?;
         Ok(Fresh {
             current: current_lines(&list.rows),
             charted: charted_companions(&list.rows, patient),
             charted_words: charted_words(&list.rows, patient),
+            beside: current_besides_stops(&list.rows, &lines, &versions),
+            versions,
             from,
             set: list.charts,
             allergies,
@@ -154,6 +166,9 @@ pub(crate) struct Judged {
     /// The line it duplicates, as the clinician reads it ([`duplicate_of`]).
     pub duplicate_of: Option<String>,
     pub default_ticked: bool,
+    /// A hand tick's restore still holds: it vouched for exactly what stands for the restore's
+    /// companion now (`restore_tick_holds`; `true` for an ordinary line).
+    pub restore_tick_holds: bool,
     /// The same-drug de-label offers ([`offers_for`]); empty unless the allergies were read over
     /// the set on screen and the line is signable.
     pub offers: Vec<DelabelOffer>,
@@ -187,15 +202,14 @@ pub(crate) async fn judge(
             .iter()
             .map(|(l, _, _)| l.line_text.as_str())
             .collect();
-        let current: Vec<&str> = fresh.current.iter().map(|(c, _)| c.as_str()).collect();
-        let dups = duplicate_codes(&codes, &current);
+        // A line is a duplicate exactly when it duplicates something (`duplicate_of`); a restore
+        // line is judged against the chart without the lines it will stop (Review Focus 2).
         (0..codes.len())
             .map(|i| {
-                let duplicate = codes[i].is_some_and(|c| dups.contains(c));
-                let of = duplicate
-                    .then(|| duplicate_of(i, &codes, &texts, &fresh.current))
-                    .flatten();
-                (duplicate, of)
+                let line = decoded[i].0.line_id;
+                let current = fresh.beside.get(&line).unwrap_or(&fresh.current);
+                let of = duplicate_of(i, &codes, &texts, current);
+                (of.is_some(), of)
             })
             .collect()
     };
@@ -224,7 +238,11 @@ pub(crate) async fn judge(
                 duplicate,
                 named_writer,
                 set_aside: line.set_aside_of.is_some(),
-            });
+            })
+            // Replacing a restore just charted must be deliberate (R9b); another source's stop since
+            // the press is never silently undone (R12, the chart-held rule).
+            && !restore_withholds_default_tick(&line, &fresh.versions);
+            let restore_tick_holds = restore_tick_holds(&line, &fresh.versions);
             let offers = match (&signable, use_allergies) {
                 (Ok((_, p)), true) => offers_for(&resolved, &fresh.allergies.doubted_charts, p),
                 _ => vec![],
@@ -238,6 +256,7 @@ pub(crate) async fn judge(
                 duplicate,
                 duplicate_of,
                 default_ticked,
+                restore_tick_holds,
                 offers,
             }
         })
@@ -305,12 +324,13 @@ fn not_checked() -> LineCheck {
 
 /// Whether a line's tick holds on this read: a default tick by its own derivation unless the
 /// clinician vetoed it (`held`, review C1), a hand tick while every warning found now is one it
-/// was given against (`hand_tick_holds`). The view shows
+/// was given against (`hand_tick_holds`) and, on a restore line, while what it stops is what it
+/// was given against (`restore_tick_holds`). The view shows
 /// a tick only while it holds (review M1), and the Sign refuses the whole Sign when a ticked line's
 /// does not (`med_list_sign.rs`, step 4). The reason rules are per-line, at Sign (ruling R3). Pure.
 pub(crate) fn tick_holds(j: &Judged) -> bool {
     match j.line.hand_ticked {
-        true => hand_tick_holds(&j.check, &j.line.ticked_against),
+        true => hand_tick_holds(&j.check, &j.line.ticked_against) && j.restore_tick_holds,
         false => j.default_ticked && !j.line.held,
     }
 }
@@ -326,4 +346,52 @@ pub(crate) fn vouched(now: &[Uuid], seen: &[WarningRef]) -> Vec<(String, Uuid)> 
         })
         .map(|id| (ALLERGY_SOURCE.to_string(), *id))
         .collect()
+}
+
+/// The warnings on `line` now: a fresh check over the set on screen. Any failure is none, which
+/// can only make the tick fail at Sign (it needs every warning seen).
+pub(crate) async fn warnings_now(
+    state: &AppState,
+    patient: Uuid,
+    charts: &[String],
+    line: &LineArg,
+) -> Vec<Uuid> {
+    let Ok((term, parts)) = parts_before_the_key(&line.parts, &line.typed_drug) else {
+        return vec![];
+    };
+    let lines = the_line(&line.typed_drug, &term, &parts);
+    fresh_check(state, patient, charts, &lines)
+        .await
+        .map(|check| check.against)
+        .unwrap_or_default()
+}
+
+/// Clear the hand tick of each line in `lines` that has one, through the save door (the same
+/// content with `hand_ticked = false`): a tick that no longer holds must not survive to the next
+/// press. A default tick is derived, never stored, so there is nothing to clear. A failure is
+/// logged: the next Sign re-derives the tick and refuses it again.
+pub(crate) async fn untick(
+    state: &AppState,
+    patient: Uuid,
+    writer: Option<&str>,
+    lines: &[&Judged],
+) {
+    let Some(db) = state.db.as_ref() else { return };
+    let db = match db.lock().await {
+        Ok(db) => db,
+        Err(e) => return eprintln!("the changed lines' ticks were not cleared: {e}"),
+    };
+    for j in lines.iter().filter(|j| j.line.hand_ticked) {
+        let mut line = j.line.clone();
+        line.hand_ticked = false;
+        line.ticked_against.clear();
+        match draft::save_draft_line(&*db, patient, writer, &line).await {
+            Ok(a) if a == "saved" => {}
+            Ok(a) => eprintln!("a changed line's tick was not cleared: the list answered {a}"),
+            Err(e) => eprintln!(
+                "a changed line's tick was not cleared: {}",
+                cairn_gui_live::cause_of(&db.explain(e))
+            ),
+        }
+    }
 }

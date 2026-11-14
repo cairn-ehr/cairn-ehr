@@ -408,6 +408,10 @@ fn every_command_the_webview_calls_is_registered() {
             "med_list_versions.js",
             include_str!("../src-ui/med_list_versions.js"),
         ),
+        (
+            "med_versions_settle.js",
+            include_str!("../src-ui/med_versions_settle.js"),
+        ),
         ("allergies.js", include_str!("../src-ui/allergies.js")),
         ("person_menu.js", include_str!("../src-ui/person_menu.js")),
         ("whos_here.js", include_str!("../src-ui/whos_here.js")),

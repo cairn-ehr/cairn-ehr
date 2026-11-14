@@ -79,6 +79,7 @@ fn line_view() -> ListLineView {
         set_aside_of: None,
         companions: vec![],
         companion_words: vec![],
+        restores_words: None,
     }
 }
 

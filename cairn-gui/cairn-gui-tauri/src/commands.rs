@@ -100,7 +100,16 @@ pub async fn med_list_impl(
     let mut pane = chart_pane(&list, patient, members, links, dups, change, allergy);
     // NOT `?` either: a failed versions read is worded above the list (`VERSIONS_NOT_READ`).
     match versions {
-        Ok(v) => crate::chart_versions::attach_versions(&mut pane.list.rows, &list.rows, &v),
+        Ok(v) => {
+            let now = chrono::Local::now();
+            crate::chart_versions::attach_versions(
+                &mut pane.list.rows,
+                &list.rows,
+                &v,
+                patient,
+                &now,
+            )
+        }
         Err(why) => pane.versions_error = Some(why),
     }
     Ok(pane)

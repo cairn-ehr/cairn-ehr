@@ -216,6 +216,7 @@ function renderRow(row) {
     rows.push(note);
   }
   rows.push(...allergyRows(row)); // marks and notes under the line (allergy_tags.js)
+  rows.push(...replacedRows(row)); // the line a restore replaced (med_versions_settle.js)
   rows.push(...versionRows(row)); // its set-aside versions, collapsed (med_list_versions.js)
   return rows;
 }
@@ -333,6 +334,7 @@ function clearChart() {
   clearAllergies(); // the allergy strip, its lists and its form (allergies.js)
   clearMedList(); // its unsigned medication lines, their pending saves queued (med_list.js)
   clearMedChart(); // the medication line editor (med_chart.js)
+  clearSettle(); // a version's open check row and the words beside it (med_versions_settle.js)
   clearDrawnList();
   const button = el("sign-off");
   button.disabled = true;
