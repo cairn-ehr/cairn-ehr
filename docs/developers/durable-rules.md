@@ -19,8 +19,13 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `check.marks.is_empty()` or read `check.against` at a new site "because only allergies matter here" — a lowered
   site's adverse-effect warnings then slip through that one site (memory: warnings are general, not allergy-only).
 - **The threshold is stamped on the DRAFT path only** (`allergy_check::check_lines`), never by `check_medications`
-  and never on `check_list`. **Tempting wrong fix:** stamp it in `check_lines_unsure` "so every check agrees" — the
-  charted list would start drawing adverse effects as warnings, against the maintainer's ruling Q2.
+  and never on `check_list`; and the charted list's renderer (`chart_set/mod.rs`) copies the RAW `marks`/`notes`.
+  Both keep ruling Q2. **Tempting wrong fixes:** stamp it in `check_lines_unsure` "so every check agrees", or make
+  `chart_set` read `warning_notes()` "for consistency" — either one is a step toward charted lines drawing adverse
+  effects as warnings, against Q2.
+- **The reason's words are general** ("Charting despite a warning needs a reason", "Reason for charting despite the
+  warning"). **Tempting wrong fix:** restore "listed allergy" for precision — at a lowered site it names an allergy
+  the patient does not have. Pin: `med_chart_tests.rs::a_start_line_with_a_mark_needs_a_trimmed_reason`.
 - **`adverse_against` is a PREFIX alignment:** `adverse_against[i]` is `notes[i]`'s record; notes past it name none.
   `merge` keeps recorded notes first. **Tempting wrong fix:** push a merged note and its id at the end of `notes`
   regardless (a record-less note ahead of it shifts every record onto the wrong words, and a "could not be read"

@@ -37,8 +37,8 @@ and that the threshold is a policy changed only by an administrator, never a per
    machine before connecting and prints the level read back. `cairn_medication_warning_threshold()` is the one read,
    a definer door granted to `cairn_window` only.
 4. **The check keeps each adverse-effect note's record.** `LineCheck.adverse_against[i]` is the allergy record
-   `notes[i]` came from, for every `i` below its length; a note past that names no record (the window's "the allergy
-   list could not be read") and is never a warning. `merge` keeps the notes with a record ahead of those without, so
+   `notes[i]` came from, for every `i` below its length; a note past that names no record (the window's `ALLERGIES_NOT_READ`,
+   "Allergies could not be read: medications not checked against them") and is never a warning. `merge` keeps the notes with a record ahead of those without, so
    a record never slides onto another note's words. `check_medications` never reads policy; it leaves
    `LineCheck.threshold` at the default.
 5. **One rule for "warns".** `LineCheck::warned_against()` is the marks' records, then, at `adverse-effect`, the
@@ -49,14 +49,20 @@ and that the threshold is a policy changed only by an administrator, never a per
    override entry is `{source: "allergy", ref: <its record's event_id>}`, as a hit's is. No wire change.
 6. **The draft path only (maintainer, Q2).** The window's `allergy_check::check_lines` (the line being charted and
    each list line) reads the threshold and stamps it on every check it returns. The charted list's
-   `check_list` is not stamped, so a current line is drawn as ADR-0098 draws it whatever the threshold.
+   `check_list` is not stamped, and its renderer (`chart_set`) copies the raw marks and notes, never `warns()` or
+   `warning_notes()`; together they keep a current line drawn as ADR-0098 draws it whatever the threshold.
 7. **How a warned adverse effect looks (maintainer, Q1).** Its words stay "Previous adverse effect: …". It is drawn as
    loud as a mark (`warning_notes`, class `allergy-prominent`), and with no allergy mark the tag reads **`Warning`**,
    never `Allergy`. When an allergy on the line could not be checked as well, the tag reads `Warning · not checked`.
-8. **An unreadable threshold over-warns.** A failed read, no connection, or a word this build does not know reads as
-   `adverse-effect` (logged): a read that cannot say what the site decided must never quietly drop a warning.
+8. **An unreadable threshold over-warns.** A failed read or no connection (logged), or a word this build does not
+   know (silently; the table's CHECK makes it unreachable today), reads as `adverse-effect`: a read that cannot say what the site decided must never quietly drop a warning.
 9. **A hand tick sees the threshold.** A tick made at the default and still standing when the administrator lowers it
    no longer holds at Sign if the line has an adverse effect: it never saw that warning (ADR-0100's rule, unchanged).
+
+10. **The reason's words are general (overlays ADR-0099 decision 17.5's quoted copy).** An adverse effect is no
+    allergy, so the Start line's field reads "Reason for charting despite the warning" and the refusal "Charting
+    despite a warning needs a reason", for an allergy mark too (the loud `Allergy` tag above it says which). Found by
+    the slice's final review: the old words told a lowered site's clinician of a "listed allergy" that does not exist.
 
 ## Consequences
 

@@ -47,8 +47,9 @@ use cairn_node::medication::{chart_medication, AssertMedicationInput, AuthorPara
 use std::time::Instant;
 use uuid::Uuid;
 
-/// The refusal of Sign on a Start line with an allergy mark and no reason (Global Constraints).
-pub const NEEDS_A_REASON: &str = "Charting despite a listed allergy needs a reason";
+/// The refusal of Sign on a Start line with a warning (an allergy mark, or an adverse effect at a
+/// lowered threshold, ADR-0104) and no reason. General words: an adverse effect is no allergy.
+pub const NEEDS_A_REASON: &str = "Charting despite a warning needs a reason";
 
 /// The refusal of Sign when the window drew a mark (and so sent a reason) but Sign's own fresh
 /// check could not run: signing would drop the reason silently, so nothing is signed and the

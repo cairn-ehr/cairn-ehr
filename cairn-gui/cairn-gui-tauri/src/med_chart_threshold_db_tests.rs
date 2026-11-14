@@ -15,7 +15,7 @@ use crate::notes::review::db_tests::{credential, supervised_note};
 use cairn_node::allergy::read::list_patient_allergies;
 use tokio_postgres::Client;
 
-const NEEDS_A_REASON: &str = "Charting despite a listed allergy needs a reason";
+const NEEDS_A_REASON: &str = "Charting despite a warning needs a reason";
 
 /// A previous adverse effect to codeine on `chart`, under Dr Bea's key; its record id.
 async fn codeine_adverse_effect(owner: &Client, state: &AppState, chart: Uuid) -> Uuid {

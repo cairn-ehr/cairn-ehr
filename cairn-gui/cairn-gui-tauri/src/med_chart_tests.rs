@@ -183,7 +183,7 @@ fn a_start_line_with_a_mark_needs_a_trimmed_reason() {
             override_before_the_key(start, &hit(9), blank)
                 .unwrap_err()
                 .text,
-            "Charting despite a listed allergy needs a reason"
+            "Charting despite a warning needs a reason"
         );
     }
     assert_eq!(

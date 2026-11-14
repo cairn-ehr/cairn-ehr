@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 
 /// The refusal a Start line with an allergy mark and no reason gets (Global Constraints).
 /// Deliberately a copy of `med_chart`'s constant, not an import: it pins the exact words.
-const NEEDS_A_REASON: &str = "Charting despite a listed allergy needs a reason";
+const NEEDS_A_REASON: &str = "Charting despite a warning needs a reason";
 
 /// Sign a drug allergy to `term` on `chart` under Dr Bea's key, coded when `coding` is given;
 /// its record id.

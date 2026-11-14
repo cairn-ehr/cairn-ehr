@@ -116,7 +116,7 @@ function drawnTicked(line) {
   return Boolean(line.view) && line.view.ticked && !line.view.unfinished;
 }
 
-/** A Start line with an allergy mark needs a reason (design §3.5); Already taking never does. */
+/** A Start line with a warning needs a reason (design §3.5, ADR-0104); Already taking never does. */
 function needsReasonOn(line) {
   const marked = Boolean(line.view) && line.view.check.reason_needed;
   return line.content.charted_as === "started-here" && (marked || line.reason !== "");
@@ -273,7 +273,7 @@ function medLineRow(line) {
   const tick = cell("input", "", { type: "checkbox" });
   const text = cell("button", "", { type: "button", class: "med-list-text" });
   const remove = cell("button", "Remove", { type: "button" });
-  const label = cell("label", "Reason for charting despite the listed allergy");
+  const label = cell("label", "Reason for charting despite the warning");
   const reason = cell("input", "", { type: "text", autocomplete: "off" });
   label.append(reason);
   const r = {

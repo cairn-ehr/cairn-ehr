@@ -318,11 +318,8 @@ fn a_start_hit_needs_a_reason_on_its_list_line() {
         "the editor has no reason field"
     );
     assert!(!MED_JS.contains("med-reason"), "nor reads one");
-    assert!(LIST_JS.contains("cell(\"label\", \"Reason for charting despite the listed allergy\")"));
-    assert_eq!(
-        NEEDS_A_REASON,
-        "Charting despite a listed allergy needs a reason"
-    );
+    assert!(LIST_JS.contains("cell(\"label\", \"Reason for charting despite the warning\")"));
+    assert_eq!(NEEDS_A_REASON, "Charting despite a warning needs a reason");
     for js in [MED_JS, LIST_JS] {
         assert!(
             !js.contains(NEEDS_A_REASON),

@@ -202,7 +202,9 @@
 >   the hand tick, the Start line's reason and the override's refs on the DRAFT path; the charted list is unchanged.
 >   **Maintainer rulings 2026-11-14:** Q1 a warned adverse effect is loud under a `Warning` tag, never `Allergy`; Q2
 >   charted lines unchanged; Q3 the row is in no backup — a restore returns the default, filed **#1102** (all three
->   site-policy rows). Owed by a human: **RUNBOOK §35**.
+>   site-policy rows). The final review's one Important finding was fixed: the reason's words are now general
+>   ("Charting despite a warning needs a reason"), since "listed allergy" was false for an adverse effect (ADR-0104
+>   decision 10). Owed by a human: **RUNBOOK §35**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,

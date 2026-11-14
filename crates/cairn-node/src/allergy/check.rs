@@ -77,7 +77,8 @@ pub struct LineCheck {
     /// `event_id`). What a warning override names, as its `allergy` refs (design §3.5).
     pub against: Vec<Uuid>,
     /// Previous adverse effects that meet the line, worded — and, past them, any note that
-    /// names no record (the window's "the allergy list could not be read").
+    /// names no record (the window's `ALLERGIES_NOT_READ` note, when the allergies could not
+    /// be read).
     pub notes: Vec<String>,
     /// One allergy record per adverse-effect note: `adverse_against[i]` is the record `notes[i]`
     /// came from, for every `i < adverse_against.len()`; the notes past that carry none. What a

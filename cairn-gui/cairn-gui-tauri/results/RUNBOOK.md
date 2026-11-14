@@ -2841,7 +2841,7 @@ The slice's gestures:
   read-back row says "Drug · Form · Strength · Dose · Route · How often", "—" for each field not read, then "not read:
   …".
 - **The check.** The line carries ADR-0098's **Allergy** tag and words, a muted note, or the small **not checked** tag,
-  before Sign. On *Start medication* a mark also shows "Reason for charting despite the listed allergy", and Sign stays
+  before Sign. On *Start medication* a mark also shows "Reason for charting despite the warning", and Sign stays
   unavailable until something is typed there. *Already taking* shows the mark and asks no reason.
 - **Cancel**, or Escape with no list open, discards the unsigned line.
 - **After Sign** the line closes, "Charted." is said, and the list shows the line with its dose cell as `dose — sig`.
@@ -2922,7 +2922,7 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
 
 - [ ] On `$C1`, *Start medication*, `amox`, choose "amoxicillin", ` 500mg tds`. Before Sign, with no click: the
       **Allergy** tag and "amoxicillin is a Penicillins (allergy group); allergy recorded: anaphylaxis" on the line,
-      and "Reason for charting despite the listed allergy" below it. Sign is unavailable.
+      and "Reason for charting despite the warning" below it. Sign is unavailable.
 - [ ] Type three spaces in the reason: Sign stays unavailable. Type `benefit outweighs risk`, Sign. "Charted.".
       `psql "$CONN" -c "SELECT override_reason, override_against FROM medication_charting WHERE patient_id = '$C1'"`
       reads the reason and one `{"source": "allergy", "ref": <uuid>}` entry. Check the `ref` against
@@ -3514,10 +3514,11 @@ moves `SCHEMA_GENERATION` to 81. Then:
 
 ```bash
 T1=$(achart "Threshold Lowered" 1985-05-05)
-[ -n "$T1" ] || echo "the registration failed — read the output above" >&2
+T2=$(achart "Threshold Taking" 1986-06-06)
+for c in "$T1" "$T2"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
 ```
 
-On `$T1`, record an **adverse effect** (not an allergy) to codeine, reaction rash.
+On each, record an **adverse effect** (not an allergy) to codeine, reaction rash.
 
 **Measurement 1: the default.**
 
@@ -3532,12 +3533,14 @@ On `$T1`, record an **adverse effect** (not an allergy) to codeine, reaction ras
       effects now count as warnings when charting". A bare `cnode medication-set-warning-threshold` and
       `--level nothing` are refused (usage errors).
 - [ ] Re-open `$T1`'s list: the codeine line's note is now loud, its tag reads **Warning** (never "Allergy"), its tick
-      is gone, and the Reason field is required. Sign with no reason: refused, "Charting despite a listed allergy needs
-      a reason". Type `tolerated in hospital`, Sign (≤ 3 s, section 30's budget): charted.
+      is gone, and the Reason field is required, labelled "Reason for charting despite the warning". Sign with no
+      reason: refused, "Charting despite a warning needs a reason". Type `tolerated in hospital`, Sign (≤ 3 s,
+      section 30's budget): charted.
 - [ ] `psql "$CONN" -c "SELECT cairn_clear_payload(e)->'warning_override' FROM event_log e WHERE patient_id = '$T1'
       AND event_type = 'clinical.medication.asserted'"` names the adverse-effect record as `{"source": "allergy", "ref": …}`.
 - [ ] The charted codeine line on the medication list still shows the note **muted**, with no tag (ADR-0104 decision 6).
-- [ ] *Already taking* `codeine 30mg tab qid` on a fresh list: loud, **Warning**, not ticked, no reason asked.
+- [ ] On `$T2` (no codeine charted, so no duplicate can withhold the tick), *Already taking* `codeine 30mg tab
+      qid`: loud, **Warning**, not ticked by default, no reason asked.
 - [ ] Hand-tick a codeine list line at the default, then lower the threshold at the console, then Sign: the line is
       not charted and comes back unticked (the tick never saw the warning).
 - [ ] VoiceOver reads the **Warning** tag and the note; keyboard-only, the Reason field is reachable.
