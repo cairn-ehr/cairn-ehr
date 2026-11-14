@@ -10,6 +10,29 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ BATCH CHARTING SLICE 3 — THE WARNING THRESHOLD (ADR-0104, db/081) — do not undo**
+(pins: `db/tests/081_medication_warning_policy_test.sql`; `crates/cairn-node/tests/cli_medication_warning_threshold.rs`;
+`crates/cairn-node/src/allergy/check_threshold_tests.rs`, `crates/cairn-node/src/medication/draft_tick_tests.rs`; in
+`cairn-gui/cairn-gui-tauri/src/`, `med_chart_threshold_tests.rs`, `med_chart_threshold_db_tests.rs`, `med_list_tests.rs`).
+- **"Warns" is ONE rule: `LineCheck::warned_against()` / `warns()`.** Every draft-path decision (default tick, hand
+  tick, reason gate, override refs, the records a list line draws as seen) reads it. **Tempting wrong fix:** test
+  `check.marks.is_empty()` or read `check.against` at a new site "because only allergies matter here" — a lowered
+  site's adverse-effect warnings then slip through that one site (memory: warnings are general, not allergy-only).
+- **The threshold is stamped on the DRAFT path only** (`allergy_check::check_lines`), never by `check_medications`
+  and never on `check_list`. **Tempting wrong fix:** stamp it in `check_lines_unsure` "so every check agrees" — the
+  charted list would start drawing adverse effects as warnings, against the maintainer's ruling Q2.
+- **`adverse_against` is a PREFIX alignment:** `adverse_against[i]` is `notes[i]`'s record; notes past it name none.
+  `merge` keeps recorded notes first. **Tempting wrong fix:** push a merged note and its id at the end of `notes`
+  regardless (a record-less note ahead of it shifts every record onto the wrong words, and a "could not be read"
+  note becomes a warning). Pin: `merge_keeps_the_adverse_notes_first`.
+- **An unreadable or unknown threshold OVER-warns** (`WarningThreshold::parse`, `allergy_check::threshold_of`).
+  **Tempting wrong fix:** fall back to the default on a failed read "because that is what a fresh site has" — a
+  read error at a lowered site would then silently drop its warnings. Pin: `an_unread_threshold_over_warns`.
+- **Only two words, and no off switch.** The table CHECK and the setter admit `allergy-hit` and `adverse-effect`;
+  a new level is ADDED below `allergy-hit` (additive CHECK). **Tempting wrong fix:** add `none` / `off` "for a site
+  that finds warnings noisy". Pin: `refused_words` in the SQL test.
+- **Known limit, not a bug to patch in place:** a restore returns the row to the default (#1102).
+
 **⇒ BATCH CHARTING SLICE 2b — THE RESTORE AND "CHECKED: NOT CURRENT" (ADR-0103, db/080, db/078 + db/079 +
 db/048 + db/037 + db/031 in place) — do not undo**
 (pins: in `crates/cairn-node/tests/`, `medication_restore_floor.rs`, `medication_restore_replaces.rs`,

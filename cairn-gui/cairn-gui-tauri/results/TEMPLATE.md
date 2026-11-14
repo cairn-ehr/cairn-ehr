@@ -954,3 +954,22 @@ Steps: a restore on paper *N* = 2 acts → observed \_\_ presses and \_\_ Signs;
 - Observed p95 inside the provisional budget? **yes / no**
 - If no: issue filed \_\_\_\_. **Do not adjust the budget to match the measurement.**
 - Anything that surprised the operator:
+
+## The warning threshold (batch charting slice 3, runbook §35)
+
+`SCHEMA_GENERATION` 81 and `provision-window-role` re-run? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| A *Start* line with a warned adverse effect: *Sign ticked lines* → outcome | held | | | | ≤ 3 s | |
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| The verb prints the level in force; a bare verb and `--level nothing` are refused | | |
+| At the default the adverse effect is muted, no tag, no reason, default-ticked | | |
+| Lowered: loud, **Warning** (never "Allergy"), unticked, reason required; signs with it | | |
+| The override names the adverse-effect record | | |
+| A charted line's note stays muted (Q2) | | |
+| A hand tick from before the lowering does not hold at Sign | | |
+| VoiceOver reads the tag and the note; keyboard reaches Reason | | |
+| A restore returns the threshold to `allergy-hit` (#1102) | | |

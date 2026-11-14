@@ -3490,3 +3490,71 @@ WebKit need the window and a human. The rest was run as follows:
 - **The webview:** `med_versions_settle_webview_tests.rs`.
 
 `TEMPLATE.md` carries a matching block (*Settling a set-aside version*).
+
+## 35. The warning threshold (batch charting slice 3, ADR-0104)
+
+The slice's one administrator gesture and what it changes for the clinician:
+- **At the node's console**, `cnode medication-set-warning-threshold --level adverse-effect` makes a previous adverse
+  effect a warning when a line is charted; `--default` returns to allergy hits only. The verb prints the level now in
+  force. No level switches allergy warnings off.
+- **In the window**, on the line being charted and on each list line (never on a line already charted): a warned
+  adverse effect keeps its words "Previous adverse effect: …", drawn as loud as an allergy mark, under a **Warning**
+  tag (never "Allergy"); a *Start* line needs a typed reason; the line is never ticked by default.
+
+Paper counterpart: the drug committee's memo ("acknowledge recorded adverse reactions in writing") and, at the bedside,
+the prescriber reading the reaction box and writing a justification. **Live only**: a `--mock` window has no list.
+
+**Budgets (the slice plan's §1.2).** No new clinician gesture: a *Start* line's Sign stays within section 30's budget
+(the added read is one function call per check). Steps: paper *N* = read the box + write the justification → forced
+*M* = the same → target *K* = *M*. The administrator: paper = one memo → one console command. **A figure outside
+its budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
+
+**Setup.** As section 30, but build this checkout and re-run section 0's `provision-window-role`, because the build
+moves `SCHEMA_GENERATION` to 81. Then:
+
+```bash
+T1=$(achart "Threshold Lowered" 1985-05-05)
+[ -n "$T1" ] || echo "the registration failed — read the output above" >&2
+```
+
+On `$T1`, record an **adverse effect** (not an allergy) to codeine, reaction rash.
+
+**Measurement 1: the default.**
+
+- [ ] `cnode medication-set-warning-threshold --default` prints "only allergy hits count as warnings when charting (the
+      default)".
+- [ ] *Start medication* `codeine 30mg tab qid`: the line shows "Previous adverse effect: codeine → rash" muted, no tag,
+      no reason field required; it is ticked by default once finished (if complete and coded).
+
+**Measurement 2: lowered.**
+
+- [ ] `cnode medication-set-warning-threshold --level adverse-effect` prints "allergy hits and previous adverse
+      effects now count as warnings when charting". A bare `cnode medication-set-warning-threshold` and
+      `--level nothing` are refused (usage errors).
+- [ ] Re-open `$T1`'s list: the codeine line's note is now loud, its tag reads **Warning** (never "Allergy"), its tick
+      is gone, and the Reason field is required. Sign with no reason: refused, "Charting despite a listed allergy needs
+      a reason". Type `tolerated in hospital`, Sign (≤ 3 s, section 30's budget): charted.
+- [ ] `psql "$CONN" -c "SELECT cairn_clear_payload(e)->'warning_override' FROM event_log e WHERE patient_id = '$T1'
+      AND event_type = 'clinical.medication.asserted'"` names the adverse-effect record as `{"source": "allergy", "ref": …}`.
+- [ ] The charted codeine line on the medication list still shows the note **muted**, with no tag (ADR-0104 decision 6).
+- [ ] *Already taking* `codeine 30mg tab qid` on a fresh list: loud, **Warning**, not ticked, no reason asked.
+- [ ] Hand-tick a codeine list line at the default, then lower the threshold at the console, then Sign: the line is
+      not charted and comes back unticked (the tick never saw the warning).
+- [ ] VoiceOver reads the **Warning** tag and the note; keyboard-only, the Reason field is reachable.
+
+**Measurement 3: a restore.**
+
+- [ ] Record that a restore comes back at `allergy-hit` (the policy is outside the backups, like section 17's expiry):
+      with the threshold lowered, back up and restore into a throwaway database as section 17's Measurement 7 does,
+      then `psql "$CONN" -c "SELECT cairn_medication_warning_threshold()"` reads `allergy-hit` — the documented limit
+      (#1102). Set it again.
+
+Reset with `cnode medication-set-warning-threshold --default`.
+
+**What a test already pins** (the stopwatch, the visual check, VoiceOver and WebKit need the window and a human):
+- **The policy row:** `db/tests/081_medication_warning_policy_test.sql`; `cli_medication_warning_threshold.rs`.
+- **The rule:** `cairn-node`'s `allergy/check_threshold_tests.rs` and `medication/draft_tick_tests.rs` (pure).
+- **The window:** `cairn-gui-tauri`'s `med_chart_threshold_tests.rs`, `med_list_tests.rs` (pure) and
+  `med_chart_threshold_db_tests.rs` (DB-gated; CI never runs those, #905).
+
+`TEMPLATE.md` carries a matching block (*The warning threshold*).

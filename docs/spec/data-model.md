@@ -103,6 +103,13 @@ version's, so the reviewer may edit the dose. **"Checked: not current"** is its 
 line. Under the line, a version reads who checked or restored it and when, and the new line reads what it replaced
 ([ADR-0103](decisions/0103-settling-a-set-aside-version.md)).
 
+Which findings count as a **warning** when a line is charted is the site's policy, set only by an administrator at the
+node's console: by default only an allergy hit warns, and the threshold can only be lowered, so that a previous
+adverse effect warns too. No setting switches allergy warnings off. A warning withholds the default tick, asks a
+*Start* line for a reason, and is named in the signed override by its allergy record; a line already charted is shown
+the same whatever the threshold. The row is in no backup, so a restore returns the default
+([ADR-0104](decisions/0104-the-warning-threshold.md)).
+
 The allergies row above is built as two born-sealed, additive event types: one entry
 (`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose
 "not known" is a recorded answer, and the source) and a "none known" **statement** (`clinical.allergy-none.asserted`,
