@@ -261,13 +261,13 @@ fn a_partly_typed_time_is_refused_and_signs_nothing() {
     let kept = position(press, "keep(field, false);");
     let refused = position(
         press,
-        "if (words.kind === \"give\" && words.time === null) return sayStat(stat.medication_id, PARTLY_TYPED_GIVEN);",
+        "if (words.kind === \"give\" && words.time === null) return sayStat(stat.medication_id, field.validity.badInput ? PARTLY_TYPED_GIVEN : GIVEN_TIME_LOST);",
     );
     let signed = position(press, "medListSignInFlight = true;");
     assert!(kept < refused && refused < signed, "{press}");
     let keep = js_fn(STAT_JS, "keep");
     assert!(
-        keep.contains("if (field.validity.badInput) statOpen.time = null;"),
+        position(keep, "if (field.validity.badInput) {") < position(keep, "statOpen.time = null;"),
         "{keep}"
     );
     // Kept on every way a partial can be typed: a partly typed datetime-local fires no `input`.
@@ -435,11 +435,20 @@ fn a_partly_typed_time_survives_a_redraw_refused() {
     for step in [
         "if (!statOpen) return;",
         "if (statOpen.kind !== \"give\") return void (statOpen.why = field.value);",
-        "if (field.validity.badInput) statOpen.time = null;",
-        "else if (edited || statOpen.time !== null) statOpen.time = field.value;",
+        "if (field.validity.badInput) {",
+        "field.sawPartial = true;",
+        "statOpen.time = null;",
+        "} else if (edited || field.sawPartial || statOpen.time !== null) statOpen.time = field.value;",
     ] {
         assert!(keep.contains(step), "{step}: {keep}");
     }
+    // The rebuilt field is a NEW element: it never saw a partial, so its empty value keeps the null.
+    assert!(!js_fn(STAT_JS, "statRow").contains("sawPartial"));
+    // Its words: nothing is left to clear, so the refusal says what happened and the way on.
+    assert_eq!(
+        js_const(STAT_JS, "GIVEN_TIME_LOST"),
+        "The time given was lost while it was being typed — type it again, or press Cancel and Given for now"
+    );
     let row = js_fn(STAT_JS, "statRow");
     for step in [
         "field.value = give ? words.time || \"\" : words.why;",
@@ -451,4 +460,32 @@ fn a_partly_typed_time_survives_a_redraw_refused() {
     let press = js_fn(STAT_JS, "pressStatSign");
     assert!(press.contains("keep(field, false);"), "{press}");
     assert!(!press.contains("keep(field, true)"), "{press}");
+}
+
+/// Review finding N1: clearing a partial key by key fires no `input` (the value goes "" → ""), only
+/// keyup and blur — so a field that was ITSELF partial (`sawPartial`, set by `keep` on its own
+/// `badInput`) takes its later empty value as the clinician's: cleared means "given now", as the
+/// refusal words promise. While the field shows a partial, the refusal says so.
+#[test]
+fn a_cleared_partial_time_signs_now() {
+    let keep = js_fn(STAT_JS, "keep");
+    let saw = position(keep, "field.sawPartial = true;");
+    let used = position(
+        keep,
+        "} else if (edited || field.sawPartial || statOpen.time !== null) statOpen.time = field.value;",
+    );
+    assert!(saw < used, "{keep}");
+    let press = js_fn(STAT_JS, "pressStatSign");
+    assert!(
+        position(press, "keep(field, false);")
+            < position(
+                press,
+                "field.validity.badInput ? PARTLY_TYPED_GIVEN : GIVEN_TIME_LOST"
+            ),
+        "{press}"
+    );
+    assert_eq!(
+        js_const(STAT_JS, "PARTLY_TYPED_GIVEN"),
+        "the time given is only partly typed — finish it, or clear it if the dose was given now"
+    );
 }

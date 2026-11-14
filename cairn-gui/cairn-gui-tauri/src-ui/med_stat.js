@@ -39,6 +39,8 @@ const STAT_SIGN = "Sign";
 const STAT_CANCEL = "Cancel";
 /** Said instead of signing a time only begun (the notes pane's words, for a dose). */
 const PARTLY_TYPED_GIVEN = "the time given is only partly typed — finish it, or clear it if the dose was given now";
+/** Said when a redraw rebuilt the field empty while a time was half typed: nothing is left to clear. */
+const GIVEN_TIME_LOST = "The time given was lost while it was being typed — type it again, or press Cancel and Given for now";
 /** A fault in this window mid-sign: what went in is the pane's next read. */
 const STAT_FAULT = "Whether this was recorded is not known — read the chart again.";
 
@@ -157,17 +159,22 @@ function closeStat(form) {
 
 /**
  * Keep what the open row's field holds. A partly typed `datetime-local` has value "" and
- * `validity.badInput`: kept as null, never as "" (which Rust reads as now). A null outlives a
- * redraw: the rebuilt field is an ordinary EMPTY one, with no `badInput` to tell it from a
- * cleared field, so only a real edit of it (`edited`: its `input` or `change`) may replace the
- * null. A keyup, a blur or the press itself never turns it into "" — the half-typed time would
- * otherwise sign as now, a time nobody gave.
+ * `validity.badInput`: kept as null, never as "" (which Rust reads as now).
+ *
+ * A null outlives a redraw, and must: the rebuilt field is a NEW, ordinary EMPTY element, with no
+ * `badInput` to tell it from a cleared one, so its "" never replaces the null unless it is a real
+ * edit of it (`edited`: its `input` or `change`) — the half-typed time would otherwise sign as
+ * now, a time nobody gave. A field that was ITSELF partial (`sawPartial`, an expando set here) is
+ * different: clearing a partial key by key goes "" → "" and fires no `input`, only keyup and
+ * blur, so its later empty value IS the clinician's clear, and means "given now".
  */
 function keep(field, edited) {
   if (!statOpen) return; // a field removed with its row may still report a blur
   if (statOpen.kind !== "give") return void (statOpen.why = field.value);
-  if (field.validity.badInput) statOpen.time = null;
-  else if (edited || statOpen.time !== null) statOpen.time = field.value;
+  if (field.validity.badInput) {
+    field.sawPartial = true;
+    statOpen.time = null;
+  } else if (edited || field.sawPartial || statOpen.time !== null) statOpen.time = field.value;
 }
 
 /** The open row from `statOpen`'s words: "Time given" (a `datetime-local`, `max` now) or "Why
@@ -200,7 +207,8 @@ function pressStatSign(stat, field) {
   if (signInFlight() || settleBlocked("stat")) return;
   const words = statOpen;
   keep(field, false);
-  if (words.kind === "give" && words.time === null) return sayStat(stat.medication_id, PARTLY_TYPED_GIVEN);
+  // A partial on screen says so; an empty field still holding a null lost its partial to a redraw.
+  if (words.kind === "give" && words.time === null) return sayStat(stat.medication_id, field.validity.badInput ? PARTLY_TYPED_GIVEN : GIVEN_TIME_LOST);
   medListSignInFlight = true;
   medListSigning = signStat(stat, words)
     .catch((failure) => {

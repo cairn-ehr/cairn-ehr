@@ -65,7 +65,7 @@ pub(crate) fn attach_stat(
         // order charted at two terminals) shows ONE — the one with a standing give if any, else
         // the first read — and offers Given only when NO order under it has a standing give:
         // Rust re-derives "waiting" per thread, so a Given on the waiting twin would give the dose
-        // twice. Follow-up issue: "a row holding several stat orders shows one".
+        // twice. Follow-up: #1107.
         let under = under_line(row, &views);
         let given = under.iter().any(|s| !s.gives.is_empty());
         let Some(mut stat) = under
