@@ -307,6 +307,29 @@ async fn completes_on_a_line_that_is_not_a_stat_order_is_refused() {
     assert!(e.contains("stat order"), "{e}");
 }
 
+/// A stop signed in an EARLIER act is a real decision ("patient refused"). A given naming it
+/// would let a later strike of that given void the real stop, so `completes` may only name the
+/// stop signed in the same transaction as the given.
+#[tokio::test]
+async fn completes_naming_a_stop_from_an_earlier_transaction_is_refused() {
+    rig!(c, sk, kid);
+    let (p, med) = chart(&c, &sk, &kid, true).await;
+    let refused = CeaseMedicationInput {
+        stopped: None,
+        stopped_precision: None,
+        reason: Some("patient refused"),
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let real = build_cease_body(Uuid::now_v7(), med, p, &refused, &kid, hlc);
+    let real = submit(&c, &sk, real).await.expect("the doctor's real stop");
+    let e = submit(&c, &sk, given(&c, &kid, p, med, Some(real)).await)
+        .await
+        .expect_err("a given may not claim an earlier, real stop");
+    assert!(e.contains("signed in this transaction"), "{e}");
+    let given = "SELECT count(*) FROM medication_given WHERE medication_id = $1::text::uuid";
+    assert_eq!(count(&c, given, med).await, 0, "nothing was given");
+}
+
 #[tokio::test]
 async fn another_charts_line_is_refused() {
     rig!(c, sk, kid);

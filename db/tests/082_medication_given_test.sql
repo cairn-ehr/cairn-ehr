@@ -102,7 +102,7 @@ BEGIN
         'schema_version');
     PERFORM pg_temp.refuses('given',
         pg_temp.g(pg_temp.med(), over => jsonb_build_object('completes', gen_random_uuid()::text)),
-        'completes');
+        'signed in this transaction');
     -- The same refusals' bodies are ADMITTED at the remote door (other chart, orphan, no time).
     PERFORM pg_temp.door(true);
     PERFORM pg_temp.accepts('given', pg_temp.g(pg_temp.med(), pg_temp.other()));
@@ -127,6 +127,12 @@ BEGIN
         'the shred takes the given row';
     ASSERT position('medication_given' IN pg_get_functiondef('cairn_event_thread'::regproc)) > 0,
         'a given resolves to its thread';
+    -- `completes` may name only a stop signed in the SAME transaction (so a later strike can never
+    -- void a real stop). Behaviour needs a signed stop from an earlier transaction, which this
+    -- one-transaction script cannot make; medication_given_floor.rs pins it. Pinned here by shape.
+    ASSERT position('pg_current_xact_id' IN
+                    pg_get_functiondef('cairn_check_medication_given(text, jsonb)'::regprocedure)) > 0,
+        'completes is held to a stop of this transaction';
     ASSERT EXISTS (SELECT 1 FROM information_schema.columns
                     WHERE table_name = 'medication_charting' AND column_name = 'stat'),
         'medication_charting carries stat';

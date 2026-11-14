@@ -19,10 +19,11 @@
 --
 -- THE TWO TIERS (ADR-0056, db/079's idiom). STRUCTURAL rules — the payload's shape, no §5.9
 -- claim, no charting key — refuse at BOTH doors. REFERENCE rules — the schema tag, a time given,
--- the line is on THIS chart, `completes` names this line's stop and the line is a stat order —
--- refuse at the AUTHORING door only: a peer's given may arrive before its line or its stop has
--- synced (an ORPHAN, held and shown nowhere, because readers join medication_given to the line on
--- medication_id AND patient_id), and a peer's signed words must never wedge sync.
+-- the line is on THIS chart, `completes` names this line's stop signed in the same transaction,
+-- the line is a stat order — refuse at the AUTHORING door only: a peer's given may arrive before
+-- its line or its stop has synced (an ORPHAN, held and shown nowhere, because readers join
+-- medication_given to the line on medication_id AND patient_id), and a peer's signed words must
+-- never wedge sync.
 --
 -- WHY THE CHARTING KEYS ARE REFUSED. A given is not a medication line: it was never charted,
 -- overrode no warning, restores nothing and is not itself a stat order. No writer produces those
@@ -109,18 +110,24 @@ BEGIN
         RETURN;
     END IF;
     v_stop := (p ->> 'completes')::uuid;
-    -- completes names THIS line's stop on THIS chart, already in the log: the window signs the
-    -- stop first, in the same transaction, so it is there by now. Read from the log, not from
-    -- medication_cessation, because that table keeps only one winning stop per thread. A stop's
-    -- medication_id is a valid uuid (db/031's floor checks it at both doors); the CASE keeps the
-    -- cast off any other event `completes` might name, whose payload need not have one.
+    -- completes names THIS line's stop on THIS chart, signed in THIS transaction (the window signs
+    -- the stop first, then the given). WHY the same transaction: a given may only complete the
+    -- stop signed with it. A stop from an earlier act is someone's real decision ("patient
+    -- refused"); a given naming it would let a later "entered in error" strike void that real stop
+    -- (Task 3's retraction voids exactly what `completes` names) and show the line current again.
+    -- `xmin = pg_current_xact_id()` is db/065's idiom for "inserted by this transaction". Read from
+    -- the log, not from medication_cessation, because that table keeps only one winning stop per
+    -- thread. A stop's medication_id is a valid uuid (db/031's floor checks it at both doors);
+    -- the CASE keeps the cast off any other event `completes` might name, whose payload need not
+    -- have one.
     IF NOT EXISTS (SELECT 1 FROM event_log l
                     WHERE l.event_id = v_stop
                       AND l.patient_id = v_patient
+                      AND l.xmin = pg_current_xact_id()::xid
                       AND CASE WHEN l.event_type = 'clinical.medication-cessation.asserted'
                                THEN (cairn_clear_payload(l) ->> 'medication_id')::uuid = v_med
                                ELSE false END) THEN
-        RAISE EXCEPTION 'medication given: completes % is not a stop of this line on this chart (sign the stop first)', v_stop;
+        RAISE EXCEPTION 'medication given: completes % is not a stop of this line on this chart signed in this transaction (sign the stop first, with the given)', v_stop;
     END IF;
     -- Only a stat order is completed by being given; any other line is given without a stop.
     IF NOT EXISTS (SELECT 1 FROM medication_charting WHERE medication_id = v_med AND stat) THEN
