@@ -183,8 +183,11 @@ DECLARE
     f text;
 BEGIN
     EXECUTE format('CREATE ROLE %I NOLOGIN', r);
+    -- The doors' own helpers too (charting slice 3): the pick calls the shared match, which is
+    -- executable by its owner only, so the probe must own it as the doors' owner does.
     FOREACH f IN ARRAY ARRAY['cairn_drug_available()', 'cairn_drug_search(text, integer)',
-                             'cairn_drug_facts(uuid[], uuid[])', 'cairn_drug_group_status(uuid[])'] LOOP
+                             'cairn_drug_facts(uuid[], uuid[])', 'cairn_drug_group_status(uuid[])',
+                             'cairn_drug_names_available()', 'cairn_drug_moiety_matches(text)'] LOOP
         EXECUTE format('ALTER FUNCTION %s OWNER TO %I', f, r);
     END LOOP;
     EXECUTE format('GRANT USAGE ON SCHEMA drugref TO %I', r);
@@ -383,6 +386,41 @@ BEGIN
     ASSERT (SELECT coding = pg_temp.coding('drugref-class') FROM clinical_allergy
              WHERE event_id = md5('a coded entry')::uuid),
         'the projection holds the signed coding object';
+END $$;
+ROLLBACK;
+
+-- 5. Names (charting slice 3, ADR-0106; Rust mirror crates/cairn-node/tests/drug_names_door.rs):
+--    an alias finds its drug and names itself; one drug is listed once, display first; a shared
+--    name lists every drug it names; without the view, the display-name search as before; the
+--    names check and the shared match are no one's but the doors'.
+BEGIN;
+\ir ../../crates/cairn-node/tests/fixtures/drug_stub.sql
+DO $$
+BEGIN
+    ASSERT cairn_drug_names_available() IS FALSE, 'the older drugref: no names';
+    ASSERT (SELECT array_agg(display || '|' || coalesce(matched, '-'))
+              FROM cairn_drug_medication_search('amox', 20)) = ARRAY['amoxicillin|-'],
+        'no names: the display-name search';
+    ASSERT NOT EXISTS (SELECT 1 FROM cairn_drug_search('adren', 20)), 'no names: no alias';
+    ASSERT NOT has_function_privilege('cairn_window', 'cairn_drug_moiety_matches(text)', 'EXECUTE')
+       AND NOT has_function_privilege('cairn_window', 'cairn_drug_names_available()', 'EXECUTE')
+       AND NOT has_function_privilege('public', 'cairn_drug_moiety_matches(text)', 'EXECUTE'),
+        'the helper and the names check are the doors'' own';
+END $$;
+\ir ../../crates/cairn-node/tests/fixtures/drug_names_stub.sql
+DO $$
+BEGIN
+    ASSERT cairn_drug_names_available() IS TRUE, 'the names view is readable';
+    ASSERT (SELECT array_agg(display || '|' || coalesce(matched, '-'))
+              FROM cairn_drug_search('adren', 20) WHERE system = 'drugref-moiety')
+           = ARRAY['epinephrine|adrenaline'], 'an alias names itself, lower-cased';
+    ASSERT (SELECT array_agg(display || '|' || coalesce(matched, '-'))
+              FROM cairn_drug_medication_search('amox', 20)) = ARRAY['amoxicillin|-'],
+        'one drug once, display first';
+    ASSERT (SELECT array_agg(display || '|' || coalesce(matched, '-'))
+              FROM cairn_drug_medication_search('cefalexin', 20))
+           = ARRAY['cephalexin|cefalexin', 'cephalexin anhydrous|cefalexin'],
+        'a shared name lists both drugs';
 END $$;
 ROLLBACK;
 
