@@ -9,6 +9,8 @@
 --   substance.strength         free strength text ("875/125 mg")
 --   substance.components       a combination: [{term, coding|null}, …], ≥ 2, never beside
 --                              substance.coding
+--   stat                       JSON true on a stat ORDER, absent otherwise (charting slice 2;
+--                              the dose given is db/082's own event type)
 --
 -- §1 is the floor; §2 the projection (medication_charting). The medication pick's drug search
 -- reads drugref, so it lives in the drug read door, db/076 §5 — the one file that may
@@ -63,6 +65,15 @@ BEGIN
         RAISE EXCEPTION
             'medication assertion: charted_as must be started-here, pre-existing or unknown, got "%"',
             p ->> 'charted_as';
+    END IF;
+
+    -- stat (charting slice 2): JSON true on a stat order, else absent (JSON null = absent). At
+    -- BOTH doors: the builder never writes `false` (an assertion without the key must stay
+    -- byte-identical to before, principle 11), so any other value is a defect at its source, and
+    -- a stat flag read the wrong way round would show an ordinary line as waiting to be given.
+    v_val := p -> 'stat';
+    IF v_val IS NOT NULL AND v_val NOT IN ('null'::jsonb, 'true'::jsonb) THEN
+        RAISE EXCEPTION 'medication assertion: stat must be true on a stat order, and absent otherwise, got %', v_val;
     END IF;
 
     -- substance.strength: free text.
@@ -200,6 +211,7 @@ CREATE TABLE IF NOT EXISTS medication_charting (
     override_against JSONB,
     source_detail    TEXT,
     why              TEXT,
+    stat             BOOLEAN NOT NULL DEFAULT false,
     hlc_wall         BIGINT  NOT NULL,
     hlc_counter      INTEGER NOT NULL,
     origin           TEXT    NOT NULL,
@@ -210,6 +222,8 @@ CREATE TABLE IF NOT EXISTS medication_charting (
 -- claim came from, and why it was charted this way (free text, db/079 is their floor).
 ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS source_detail text;
 ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS why text;
+-- Charting slice 2: a stat order. NOT NULL DEFAULT false, so every older row reads "not stat".
+ALTER TABLE medication_charting ADD COLUMN IF NOT EXISTS stat boolean NOT NULL DEFAULT false;
 GRANT SELECT ON medication_charting TO cairn_agent;
 -- One-off for a dev database that loaded an earlier draft of this unmerged file, when the
 -- column was UUID[] and the payload key had its earlier allergy-only name. Guarded on the
@@ -233,7 +247,7 @@ CREATE INDEX IF NOT EXISTS medication_charting_content_address_idx
 -- The apply fn, registered below beside medication_statement_apply (db/031) for the same
 -- event type. FLOW:
 --   1. read the clear payload (ADR-0052); sealed without custody here -> nothing to project;
---   2. pull the five keys out; a JSON null reads as absent (the floor's rule);
+--   2. pull the keys out; a JSON null reads as absent (the floor's rule);
 --   3. none present -> write nothing. An uncharted assertion has no row, and — as for
 --      medication_coding — a later uncharted re-assertion never clears an earlier charting;
 --   4. upsert under the overlay-winner rule, so set-union sync converges.
@@ -253,8 +267,11 @@ DECLARE
     v_med     uuid;
     v_comp    jsonb;
     v_against jsonb;
+    v_stat    boolean;
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
+    -- Only JSON true is a stat order; absent, null or a peer's odd value reads "not stat".
+    v_stat := coalesce(p -> 'stat' = 'true'::jsonb, false);
     v_comp := NULLIF(p #> '{substance,components}', 'null'::jsonb);
     IF jsonb_typeof(p #> '{warning_override,against}') = 'array' THEN
         v_against := p #> '{warning_override,against}';
@@ -263,14 +280,14 @@ BEGIN
     IF p ->> 'charted_as' IS NULL AND p ->> 'route' IS NULL
        AND p #>> '{substance,strength}' IS NULL AND v_comp IS NULL
        AND p #>> '{warning_override,reason}' IS NULL AND v_against IS NULL
-       AND p ->> 'source_detail' IS NULL AND p ->> 'why' IS NULL THEN
+       AND p ->> 'source_detail' IS NULL AND p ->> 'why' IS NULL AND NOT v_stat THEN
         RETURN;
     END IF;
     v_med := (p ->> 'medication_id')::uuid;
 
     INSERT INTO medication_charting
         (medication_id, patient_id, charted_as, route, strength, components,
-         override_reason, override_against, source_detail, why,
+         override_reason, override_against, source_detail, why, stat,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
         v_med,
@@ -283,6 +300,7 @@ BEGIN
         v_against,
         p ->> 'source_detail',
         p ->> 'why',
+        v_stat,
         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET
         patient_id       = EXCLUDED.patient_id,
@@ -294,6 +312,7 @@ BEGIN
         override_against = EXCLUDED.override_against,
         source_detail    = EXCLUDED.source_detail,
         why              = EXCLUDED.why,
+        stat             = EXCLUDED.stat,
         hlc_wall         = EXCLUDED.hlc_wall,
         hlc_counter      = EXCLUDED.hlc_counter,
         origin           = EXCLUDED.origin,

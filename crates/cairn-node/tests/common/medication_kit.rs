@@ -73,6 +73,7 @@ pub async fn setup_node(c: &Client) -> (SigningKey, String) {
            IF to_regclass('public.medication_set_aside') IS NOT NULL THEN TRUNCATE medication_set_aside; END IF; \
            IF to_regclass('public.medication_restore') IS NOT NULL THEN TRUNCATE medication_restore; END IF; \
            IF to_regclass('public.medication_set_aside_checked') IS NOT NULL THEN TRUNCATE medication_set_aside_checked; END IF; \
+           IF to_regclass('public.medication_given') IS NOT NULL THEN TRUNCATE medication_given; END IF; \
            IF to_regclass('public.medication_withhold') IS NOT NULL THEN TRUNCATE medication_withhold; END IF; \
            IF to_regclass('public.medication_withhold_release') IS NOT NULL THEN TRUNCATE medication_withhold_release; END IF; \
          END $$;",
