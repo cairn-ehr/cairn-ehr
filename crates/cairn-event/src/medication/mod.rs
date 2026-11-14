@@ -18,6 +18,7 @@ pub mod cessation;
 pub mod charting;
 pub mod coding;
 pub mod dose;
+pub mod given;
 pub mod reconciliation;
 pub mod set_aside;
 pub mod source_note;
@@ -46,6 +47,11 @@ pub use coding::{
 pub use dose::{
     dose_change_body, dose_correction_body, render_dose_change_twin, render_dose_correction_twin,
     DoseChange, DoseCorrection,
+};
+pub use given::{
+    given_body, given_retraction_body, render_given_retraction_twin, render_given_twin, Given,
+    GivenRetraction, GIVEN_EVENT_TYPE, GIVEN_RETRACTION_EVENT_TYPE, GIVEN_RETRACTION_SCHEMA,
+    GIVEN_SCHEMA, STAT_GIVEN_REASON,
 };
 pub use reconciliation::{
     reconciliation_body, render_reconciliation_twin, render_separation_twin, separation_body,

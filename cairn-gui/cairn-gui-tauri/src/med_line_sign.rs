@@ -237,5 +237,6 @@ pub(crate) fn charting<'a>(
         components,
         warning_override: reason.map(|reason| WarningOverride { reason, against }),
         restores: None,
+        stat: false,
     }
 }

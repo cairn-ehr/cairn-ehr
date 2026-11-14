@@ -350,3 +350,35 @@ fn restores_is_a_top_level_key_and_named_in_the_twin() {
         render_medication_twin(&a).ends_with(" · restores a set-aside version — from GP letter")
     );
 }
+
+#[test]
+fn an_assertion_without_stat_is_byte_identical() {
+    // Charting slice 2 added `stat`; a line that is not a stat order must serialise exactly as
+    // before (principle 11): `stat: false` writes nothing, and `false` never appears on the wire.
+    let want = serde_json::to_vec(&todays_full_assertion_json()).unwrap();
+    let got = medication_assertion_body(&lipitor(Some(Charting {
+        stat: false,
+        ..Charting::default()
+    })));
+    assert_eq!(serde_json::to_vec(&got).unwrap(), want);
+    assert!(!got.as_object().unwrap().contains_key("stat"));
+}
+
+#[test]
+fn stat_is_a_top_level_true_and_absent_when_false() {
+    let v = medication_assertion_body(&lipitor(Some(Charting {
+        stat: true,
+        ..Charting::default()
+    })));
+    assert_eq!(v["stat"], json!(true));
+    // Top level, never inside `substance`; and the twin does not mention it (its sig says "stat").
+    assert!(!v["substance"].as_object().unwrap().contains_key("stat"));
+    let c = Charting {
+        stat: true,
+        ..Charting::default()
+    };
+    assert_eq!(
+        charting_twin_parts(&c),
+        charting_twin_parts(&Charting::default())
+    );
+}

@@ -29,7 +29,7 @@ pub struct MedicationSetAside<'a> {
 }
 
 /// The payload: the assertion's body minus `medication_id`, plus `version_id` and
-/// `alternative_to`. `charted_as` / `warning_override` / `safety` are stripped: a set-aside
+/// `alternative_to`. `charted_as` / `warning_override` / `restores` / `stat` / `safety` are stripped: a set-aside
 /// version was never charted, never overridden a warning, and asserts no safety claim.
 pub fn set_aside_body(s: &MedicationSetAside) -> Value {
     debug_assert!(
@@ -56,6 +56,7 @@ fn stripped_body(s: &MedicationSetAside) -> Value {
         "charted_as",
         "warning_override",
         "restores",
+        "stat",
         "safety",
     ] {
         o.remove(k);
@@ -157,6 +158,18 @@ mod tests {
             .contains_key("restores"));
         let v = stripped_body(&set_aside(&d));
         assert!(!v.as_object().unwrap().contains_key("restores"), "{v}");
+    }
+
+    #[test]
+    fn a_set_aside_body_never_carries_stat() {
+        let mut d = charted_drug();
+        d.charting.as_mut().unwrap().stat = true;
+        assert!(medication_assertion_body(&d)
+            .as_object()
+            .unwrap()
+            .contains_key("stat"));
+        let v = stripped_body(&set_aside(&d));
+        assert!(!v.as_object().unwrap().contains_key("stat"), "{v}");
     }
 
     #[test]

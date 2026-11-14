@@ -98,6 +98,11 @@ pub struct Charting<'a> {
     /// version becomes a charted line by NEW assertion; the original set-aside event is never
     /// edited. Top-level key `restores`; `None` writes nothing (principle 11).
     pub restores: Option<&'a str>,
+    /// A stat ORDER: a pure one-off dose, ordered now and given by someone else (slice 2).
+    /// Top-level key `stat`, written as `true` only when true and never as `false`, so a line
+    /// that is not a stat order is byte-identical to before (principle 11). Not in the twin:
+    /// the sig already reads "stat".
+    pub stat: bool,
 }
 
 /// Write the charting keys into an assertion's `payload` and its `substance` object.
@@ -126,6 +131,9 @@ pub fn insert_charting(
     }
     if let Some(v) = c.restores {
         payload.insert("restores".into(), json!(v));
+    }
+    if c.stat {
+        payload.insert("stat".into(), json!(true));
     }
     if let Some(s) = c.strength {
         substance.insert("strength".into(), json!(s));
