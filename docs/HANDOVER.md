@@ -210,7 +210,7 @@
 >   warning), **#1104** (an unreadable threshold over-warns with its cause on stderr only) and **#1105** (the list
 >   path, `drawMarks` and the CLI success path are untested). Owed by a human: **RUNBOOK §35**.
 >
-> - **Charting slice 2 — a stat dose, ordered then given — built 2026-11-14 on PR
+> - **Charting slice 2 — a stat dose, ordered then given — MERGED 2026-11-14 in PR
 >   [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106)** (plan
 >   [`superpowers/plans/2026-11-14-charting-slice-2-stat-ordered-then-given.md`](superpowers/plans/2026-11-14-charting-slice-2-stat-ordered-then-given.md),
 >   [ADR-0105](spec/decisions/0105-a-stat-dose-ordered-then-given.md), spec **v0.107**, new `db/082` with db/005, db/020,
@@ -281,9 +281,12 @@
 >    given; aliases + PBS forms as drugref supplies them). **Slice 1a MERGED in PR #1066** (the bullet above);
 >    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Batch-charting slice 2a MERGED** in PR #1088 (the bullet
 >    above); **slice 2b** MERGED in PR #1098 (the bullet above); **slice 3** (the warning threshold, the bullet above) MERGED in PR #1101. Charting **1b** (the same-drug de-label
->    offer) MERGED in PR #1086 (the bullet above). **Charting slice 2** (stat ordered → given, #1069) — **BUILT 2026-11-14 on PR
->    [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106)** (the bullet above); **merge it once CI is green**,
->    then slice 3 (aliases + PBS forms, as drugref supplies them, #1065/drugref#231). Later picks: slice 4
+>    offer) MERGED in PR #1086 (the bullet above). **Charting slice 2** (stat ordered → given, #1069) — **MERGED 2026-11-14 in PR
+>    [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106)** (the bullet above). **Next: charting slice 3 — the
+>    drug names (#1065)**: drugref#231 closed 2026-11-13 (`drugref.moiety_name`: display + UNII official + MeSH
+>    BAN/AAN names). **Maintainer rulings 2026-11-15:** names only (PBS forms deferred, no site has PBS data;
+>    brand → combination needs a drugref source, to be filed there); a pick row found by another name reads
+>    "adrenaline → epinephrine"; the "(as typed)" bracket (#1073) on the medication AND allergy lists. Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
 >    Design: [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
