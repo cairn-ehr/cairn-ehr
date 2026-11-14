@@ -833,3 +833,146 @@ async fn a_pen_row_already_acked_is_counted_apart_from_an_ordinary_refusal() {
          otherwise the summary promises a `requeue` that deliberately skips them: {second:?}"
     );
 }
+
+/// **A GIVEN AND A STRUCK GIVEN COME BACK AS THEY WERE** (charting slice 2, review focus 2).
+///
+/// The restore replays the medium in log order into a database with no projections, so a stat
+/// order's stop, its given and a strike arrive through the remote-apply door. Line A was given
+/// then struck (must read CURRENT); line B was given (must read STOPPED). The whole stat read
+/// (orderer, giver, strike) must equal what the dead node showed.
+#[tokio::test]
+async fn a_restore_brings_back_a_given_and_a_struck_given_as_they_were() {
+    use cairn_event::medication::Charting;
+    use cairn_node::medication::stat_give::{give_stat, strike_given};
+    use cairn_node::medication::stat_read::read_stat_orders;
+    use cairn_node::medication::{chart_medication, AuthorParams};
+
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    db::reset_node_federation_tables(&c).await.unwrap();
+    let (sk, kid, hsk, hkid, chart) = common::note_setup(&c).await;
+    c.batch_execute("TRUNCATE medication_charting, medication_given, medication_given_retraction")
+        .await
+        .unwrap();
+    identity::provision(&c, &sk, &kid, "solo-clinic", "127.0.0.1:7931")
+        .await
+        .unwrap();
+    let author = AuthorParams {
+        human_sk: &hsk,
+        human_kid: &hkid,
+    };
+    let assert_in = cairn_node::medication::AssertMedicationInput {
+        term: "morphine",
+        coding: None,
+        formulation: None,
+        dose_amount: Some("5"),
+        dose_unit: Some("mg"),
+        sig: None,
+        info_source: "clinician-observed",
+        started: None,
+        started_precision: None,
+        source_note: None,
+    };
+    let stat = Charting {
+        stat: true,
+        ..Charting::default()
+    };
+    let mut lines = Vec::new();
+    for _ in 0..2 {
+        let l = chart_medication(
+            &mut c,
+            &sk,
+            &kid,
+            "test-node",
+            chart,
+            &assert_in,
+            &stat,
+            Some(&author),
+            None,
+        )
+        .await
+        .unwrap()
+        .value;
+        let at = chrono::Utc::now() - chrono::Duration::minutes(5);
+        let g = give_stat(&mut c, &sk, &kid, "test-node", chart, l, at, &author)
+            .await
+            .unwrap()
+            .value;
+        lines.push((l, g));
+    }
+    strike_given(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        chart,
+        lines[0].1,
+        Some("wrong patient"),
+        &author,
+    )
+    .await
+    .unwrap();
+
+    async fn current(c: &Client, l: Uuid) -> bool {
+        let sql =
+            "SELECT count(*) FROM patient_medication_current WHERE medication_id = $1::text::uuid";
+        c.query_one(sql, &[&l.to_string()])
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+            == 1
+    }
+    assert!(
+        current(&c, lines[0].0).await,
+        "anti-vacuity: struck line reads current"
+    );
+    assert!(
+        !current(&c, lines[1].0).await,
+        "anti-vacuity: given line reads stopped"
+    );
+    let before = read_stat_orders(&c, &[chart]).await.unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let records = capture_clinical_records(&c, &sk, &kid, tmp.path()).await;
+    let secret = fixture_unwrap_secret(&sk);
+    let bundle = cairn_node::localstate_read::read_local_state(&c, Some(&secret))
+        .await
+        .unwrap();
+    wipe_to_a_fresh_dr_machine(&c).await;
+    c.batch_execute("TRUNCATE medication_charting, medication_given, medication_given_retraction")
+        .await
+        .unwrap();
+    clear_actor_registry(&c).await;
+    let keydir = tempfile::tempdir().unwrap();
+    cairn_node::localstate::apply_local_state(
+        &c,
+        &bundle,
+        &cairn_node::localstate::CustodyKeyDestination::Plaintext {
+            path: &keydir.path().join("restored.key.unwrap"),
+        },
+    )
+    .await
+    .unwrap();
+    let report = apply_clinical_plane(&c, &records, Some(&secret))
+        .await
+        .unwrap();
+    assert_eq!(report.penned(), 0, "{:?}", report.refusals);
+
+    assert!(
+        current(&c, lines[0].0).await,
+        "a struck given's line reads current after a restore"
+    );
+    assert!(
+        !current(&c, lines[1].0).await,
+        "an unstruck given's line reads stopped after a restore"
+    );
+    assert_eq!(
+        read_stat_orders(&c, &[chart]).await.unwrap(),
+        before,
+        "orders, gives and the strike read as they did"
+    );
+}

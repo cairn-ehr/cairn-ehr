@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 /// Reading the stated time (`notes_time.rs`).
 #[path = "notes_time.rs"]
-mod time;
+pub(crate) mod time;
 
 /// The pane's views: its notes, and each draft's parts (`notes_parts.rs`).
 #[path = "notes_parts.rs"]

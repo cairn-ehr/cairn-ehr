@@ -119,6 +119,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         set_change: None,
         allergy_check_failed: None,
         versions_error: None,
+        stat_error: None,
     })
     .unwrap();
     let member_json = serde_json::to_value(&member).unwrap();
@@ -412,6 +413,7 @@ fn every_command_the_webview_calls_is_registered() {
             "med_versions_settle.js",
             include_str!("../src-ui/med_versions_settle.js"),
         ),
+        ("med_stat.js", include_str!("../src-ui/med_stat.js")),
         ("allergies.js", include_str!("../src-ui/allergies.js")),
         ("person_menu.js", include_str!("../src-ui/person_menu.js")),
         ("whos_here.js", include_str!("../src-ui/whos_here.js")),

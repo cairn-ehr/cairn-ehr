@@ -56,6 +56,8 @@ DECLARE
     p jsonb := cairn_clear_payload(e);
 BEGIN
     IF p IS NULL OR btrim(coalesce(p ->> 'reason', '')) = '' THEN RETURN; END IF;
+    -- A voided stop (db/082 §2) lists no reason, exactly as db/031 gives it no winner row.
+    IF cairn_medication_cessation_voided(e.event_id, (p ->> 'medication_id')::uuid) THEN RETURN; END IF;
     INSERT INTO medication_cessation_reason
         (content_address, medication_id, reason, hlc_wall, hlc_counter, origin)
     VALUES (e.content_address, (p ->> 'medication_id')::uuid, p ->> 'reason',

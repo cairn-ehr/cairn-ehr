@@ -41,7 +41,7 @@ pub struct SettlementRow {
 /// verified, and which is the human under ADR-0053 authorship: the note read's `k`. Named only
 /// when the registry enrolled that key for a HUMAN (db/067): a device or agent key is never read
 /// as the person who checked or restored.
-const WHO: &str = "CASE WHEN cairn_note_key_is_human(COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id)) \
+pub(crate) const WHO: &str = "CASE WHEN cairn_note_key_is_human(COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id)) \
      THEN cairn_note_signer_name(COALESCE(cairn_note_vouched_attester(e.event_id), e.signer_key_id)) END";
 
 /// The version's own row must sit on its chart beside a companion present on that chart.

@@ -270,6 +270,9 @@ pub struct ChartPane {
     /// Set when the set-aside versions could not be read (`chart_versions::VERSIONS_NOT_READ`),
     /// so none is drawn under its line; the window draws it above the list.
     pub versions_error: Option<String>,
+    /// Set when the stat orders could not be read (`chart_stat::STAT_NOT_READ`), so no line
+    /// shows whether it was given; the window draws it above the list.
+    pub stat_error: Option<String>,
 }
 
 /// The row sentence on a hazard line whose Withhold and Stop [`chart_pane`] did not draw (#841):
@@ -381,6 +384,7 @@ pub fn chart_pane(
         set_change,
         allergy_check_failed,
         versions_error: None,
+        stat_error: None,
     }
 }
 

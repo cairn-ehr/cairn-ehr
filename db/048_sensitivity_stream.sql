@@ -604,6 +604,17 @@ BEGIN
          WHERE k.content_address = v_ca
          LIMIT 1;
     END IF;
+    -- db/082 §1: a given dose belongs to the thread it was given on. Its own probe, for the same
+    -- reason as the check's: a later file's table must not blind the resolutions above.
+    IF v_thread IS NULL AND to_regclass('public.medication_given') IS NOT NULL THEN
+        SELECT medication_id INTO v_thread
+          FROM medication_given WHERE content_address = v_ca LIMIT 1;
+    END IF;
+    -- db/082 §2: so does its strike (the same file creates both tables).
+    IF v_thread IS NULL AND to_regclass('public.medication_given') IS NOT NULL THEN
+        SELECT medication_id INTO v_thread
+          FROM medication_given_retraction WHERE content_address = v_ca LIMIT 1;
+    END IF;
     RETURN v_thread;
 END;
 $$;

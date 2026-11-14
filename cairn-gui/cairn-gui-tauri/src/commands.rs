@@ -66,7 +66,7 @@ pub async fn med_list_impl(
     // The node resolves the chart SET itself; `list.charts` is what the view hands the webview
     // to send back with every write.
     // The set-aside versions come from the same snapshot, to show under their lines (slice 2a).
-    let (list, versions) = crate::chart_versions::read_chart_and_versions(state, patient)
+    let (list, versions, stat) = crate::chart_versions::read_chart_and_versions(state, patient)
         .await
         .map_err(|e| format!("{e:#}"))?;
     // NOT `?`: a failed read of the member identities must never hide the medication list
@@ -111,6 +111,14 @@ pub async fn med_list_impl(
             )
         }
         Err(why) => pane.versions_error = Some(why),
+    }
+    // Likewise the stat orders (`chart_stat::STAT_NOT_READ`); their words join the lines there.
+    match stat {
+        Ok(orders) => {
+            let now = chrono::Local::now();
+            crate::chart_stat::attach_stat(&mut pane.list.rows, &list.rows, &orders, patient, &now)
+        }
+        Err(why) => pane.stat_error = Some(why),
     }
     Ok(pane)
 }

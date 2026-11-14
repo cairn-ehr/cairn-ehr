@@ -490,3 +490,7 @@ mod versions_kept_db_tests;
 #[cfg(test)]
 #[path = "med_list_restore_db_tests.rs"]
 mod restore_db_tests;
+
+#[cfg(test)]
+#[path = "med_stat_db_tests.rs"]
+mod stat_db_tests;

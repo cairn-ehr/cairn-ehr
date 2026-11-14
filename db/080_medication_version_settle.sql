@@ -353,7 +353,7 @@ BEGIN
         RAISE EXCEPTION 'medication version-checked: info_source must be a non-blank string';
     END IF;
     -- A check is not a charted line: refused even as a JSON null.
-    FOREACH k IN ARRAY ARRAY['charted_as', 'warning_override', 'restores'] LOOP
+    FOREACH k IN ARRAY ARRAY['charted_as', 'warning_override', 'restores', 'stat'] LOOP
         IF p ? k THEN
             RAISE EXCEPTION 'medication version-checked: % must be absent (a check is not a medication line)', k;
         END IF;

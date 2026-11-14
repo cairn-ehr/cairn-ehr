@@ -506,8 +506,11 @@ REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 -- Doors granting custody do NOT take this lock: a key arriving during a heal races nothing the heal
 -- can resurrect (custody-vs-shred is cairn_lock_custody's job).
 --
--- LOCK ORDER. A shred takes this lock BEFORE its per-event custody lock; the heal takes only this
--- one. No transaction takes a custody lock and then this one, so the two never form a cycle.
+-- LOCK ORDER. A shred takes this lock BEFORE its per-event custody lock. The heal takes this one
+-- first; inside it, a strike's re-fold (db/082 §2) can then take cairn_lock_shred_refold and
+-- sibling custody locks, so an owner-run heal can meet a door's strike in a 40P01 (retryable,
+-- writes nothing). No transaction takes a custody lock and then this one, so the two never form
+-- a cycle.
 CREATE OR REPLACE FUNCTION cairn_lock_erasure_heal(p_exclusive boolean)
 RETURNS void LANGUAGE plpgsql
 SET search_path = public, pg_temp
@@ -1176,6 +1179,14 @@ DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);
 -- late-custody call below must run strict too (tests/late_custody_reaches_the_chart.rs).
 -- Pinned by tests/medication_patient_consistency.rs::
 -- runtime_role_cannot_relax_the_strict_door_by_raising_the_remote_apply_marker.
+--
+-- `SET cairn.reprojecting = ''` — the same pin for the whole-log replay marker (ADR-0105
+-- decision 18). cairn_lock_medication_stop (db/082) is a no-op while it reads 'on', which only
+-- cairn_reproject (db/039, owner-only) may mean: it calls the appliers directly, never through a
+-- door, so this clause never reaches a rebuild. A caller who raised it here would otherwise skip
+-- its own stop's per-stop lock and race a strike into a struck dose committed as given. Pinned by
+-- tests/medication_given_retraction_race.rs::
+-- a_raised_reprojecting_marker_does_not_skip_the_lock_at_either_door.
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -1186,6 +1197,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 SET cairn.remote_apply = ''
+SET cairn.reprojecting = ''
 AS $$
 DECLARE
     b              JSONB;

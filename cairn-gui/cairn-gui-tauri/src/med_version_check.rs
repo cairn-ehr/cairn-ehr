@@ -148,19 +148,7 @@ fn note<'a>(source_detail: Option<&'a str>, why: Option<&'a str>) -> Option<Sour
 /// again, or a sentence saying it was signed and how to see it — never an error, which the window
 /// would offer to retry and so record it twice. Pure.
 pub(crate) fn checked(reread: Result<crate::chart_set::ChartPane, String>) -> MedChartWrite {
-    match reread {
-        Ok(pane) => MedChartWrite {
-            outcome: "Checked: not current.".into(),
-            pane: Some(pane),
-        },
-        Err(e) => MedChartWrite {
-            outcome: format!(
-                "Signed — but the medication list could not be read again ({e}). \
-                 Use “Read this chart again”."
-            ),
-            pane: None,
-        },
-    }
+    crate::med_stat::landed("Checked: not current.", reread)
 }
 
 #[cfg(test)]

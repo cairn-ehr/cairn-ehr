@@ -60,10 +60,11 @@ const THREAD_PROJECTIONS: [&str; 8] = [
 ];
 
 /// Every medication event type that resolves to a thread: the nine that write one of those eight
-/// tables, and the check, whose `medication_set_aside_checked` row db/048 §10's second probe
-/// reads. The short-circuit is safe only while `cairn_event_type_has_no_thread` answers FALSE
-/// for all of them.
-const MEDICATION_EVENT_TYPES: [&str; 10] = [
+/// tables, the check, whose `medication_set_aside_checked` row db/048 §10's second probe reads,
+/// the given dose, whose `medication_given` row its third probe reads, and its strike, whose
+/// `medication_given_retraction` row its fourth probe reads. The short-circuit is safe only while
+/// `cairn_event_type_has_no_thread` answers FALSE for all of them.
+const MEDICATION_EVENT_TYPES: [&str; 12] = [
     "clinical.medication.asserted",
     "clinical.medication-cessation.asserted",
     "clinical.medication-coding.asserted",
@@ -74,6 +75,8 @@ const MEDICATION_EVENT_TYPES: [&str; 10] = [
     "clinical.medication-withhold-release.asserted",
     "clinical.medication-set-aside.asserted",
     "clinical.medication-set-aside-checked.asserted",
+    "clinical.medication-given.asserted",
+    "clinical.medication-given-retraction.asserted",
 ];
 
 /// The `content_address` lookup the eight-way UNION performs must be index-backed on each arm.

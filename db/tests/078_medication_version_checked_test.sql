@@ -68,6 +68,7 @@ BEGIN
         PERFORM pg_temp.refuses(pg_temp.k(pg_temp.ver(), over => '{"charted_as":null}'), 'charted_as');
         PERFORM pg_temp.refuses(pg_temp.k(pg_temp.ver(), over => '{"warning_override":{"reason":"x"}}'), 'warning_override');
         PERFORM pg_temp.refuses(pg_temp.k(pg_temp.ver(), over => '{"restores":"78787878-0001-7878-8878-787878787878"}'), 'restores');
+        PERFORM pg_temp.refuses(pg_temp.k(pg_temp.ver(), over => '{"stat":true}'), 'stat must be absent');
         PERFORM pg_temp.refuses(pg_temp.k(pg_temp.ver(), over => '{"why":true}'), 'why');
         PERFORM pg_temp.refuses(pg_temp.k(pg_temp.ver()) || '{"safety":{"rung":"existence"}}', 'safety');
         PERFORM pg_temp.accepts(pg_temp.k(pg_temp.ver()) || '{"safety":null}');

@@ -728,6 +728,8 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/medication/draft_versions_sign.rs",
     // version_settle.rs: check_version signs a "checked: not current" in its own transaction.
     "crates/cairn-node/src/medication/version_settle.rs",
+    // stat_give.rs: give_stat (a stop and a given, one transaction) and strike_given (one event).
+    "crates/cairn-node/src/medication/stat_give.rs",
     "crates/cairn-node/src/medication/reconciliation.rs",
     "crates/cairn-node/src/medication/attestation.rs",
     "crates/cairn-node/src/identify.rs",

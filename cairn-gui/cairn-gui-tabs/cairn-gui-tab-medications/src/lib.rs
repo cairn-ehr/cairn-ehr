@@ -7,6 +7,7 @@
 //! screen reader; automating the DOM assertions is issue #332.
 mod hold_view;
 mod row_view;
+mod stat_view;
 #[cfg(test)]
 mod test_rows;
 pub mod view;
@@ -15,6 +16,9 @@ pub use hold_view::HoldView;
 pub use row_view::{
     settle_words, under_line, version_line, versions_under, SettleLine, VersionView,
     SIGNER_NOT_KNOWN,
+};
+pub use stat_view::{
+    give_words, stat_words, struck_words, GiveIn, GiveView, StatView, StatWordsIn,
 };
 pub use view::{build_view, MedListRowView, MedListView};
 
