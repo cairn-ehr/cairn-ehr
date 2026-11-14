@@ -174,9 +174,7 @@ async fn a_rebuild_takes_no_per_stop_lock() {
 async fn a_raised_reprojecting_marker_does_not_skip_the_lock_at_either_door() {
     rig!(c, sk, kid);
     let (p, med) = chart(&c, &sk, &kid, true).await;
-    c.batch_execute("SET cairn.reprojecting = 'on'; BEGIN")
-        .await
-        .unwrap();
+    raise_marker_and_begin(&c).await;
     let stop = submit(&c, &sk, stop_body(&c, &kid, p, med).await)
         .await
         .unwrap();
@@ -185,7 +183,7 @@ async fn a_raised_reprojecting_marker_does_not_skip_the_lock_at_either_door() {
     let mut peer = stop_body(&c, &kid, p, med).await;
     peer.hlc = peer_hlc(db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000);
     let peer_id: Uuid = peer.event_id.parse().unwrap();
-    c.batch_execute("BEGIN").await.unwrap();
+    raise_marker_and_begin(&c).await;
     apply_remote(&c, &sk, &peer)
         .await
         .expect("the peer's stop applies");
@@ -194,7 +192,26 @@ async fn a_raised_reprojecting_marker_does_not_skip_the_lock_at_either_door() {
         1,
         "apply_remote_event"
     );
-    c.batch_execute("ROLLBACK; RESET cairn.reprojecting")
+    c.batch_execute("ROLLBACK").await.unwrap();
+    c.batch_execute("RESET cairn.reprojecting").await.unwrap();
+}
+
+/// Raise `cairn.reprojecting` for the SESSION, then open a transaction, and check it reads 'on'.
+/// The SET is its own message: in one simple-query message with BEGIN ("SET …; BEGIN") Postgres
+/// folds the SET into the new transaction block, so the ROLLBACK after the door would undo it and
+/// the next door would run with the marker unset, proving nothing.
+async fn raise_marker_and_begin(c: &Client) {
+    c.batch_execute("SET cairn.reprojecting = 'on'")
         .await
         .unwrap();
+    c.batch_execute("BEGIN").await.unwrap();
+    let marker: String = c
+        .query_one("SELECT current_setting('cairn.reprojecting', true)", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        marker, "on",
+        "the caller's marker is raised before the door"
+    );
 }

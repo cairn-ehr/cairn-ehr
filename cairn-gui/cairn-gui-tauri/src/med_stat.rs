@@ -82,10 +82,10 @@ pub(crate) fn struck_outcome(waiting_again: bool) -> &'static str {
 }
 
 /// What an act that LANDED answers (a give, a strike, a version checked): always an Ok: the pane
-/// read again, or a sentence saying it was signed and how to see it — never an error. An error
-/// would read as "not recorded" and be offered for retry; the retry would only be refused as
-/// stale (`STAT_NOT_OPEN`), and the clinician would be left believing a dose they gave went
-/// unrecorded. Pure.
+/// read again, or a sentence saying it was signed and how to see it — never an error, which would
+/// read as "not recorded" and be offered for retry. For a give or a strike the retry would only be
+/// refused as stale (`STAT_NOT_OPEN`), leaving the clinician believing a dose they gave went
+/// unrecorded; a retried check would record it twice (`med_version_check::checked`). Pure.
 pub(crate) fn landed(
     outcome: &str,
     reread: Result<crate::chart_set::ChartPane, String>,
