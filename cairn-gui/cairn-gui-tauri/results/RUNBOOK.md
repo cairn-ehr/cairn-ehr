@@ -3563,3 +3563,129 @@ Reset with `cnode medication-set-warning-threshold --default`.
   `med_chart_threshold_db_tests.rs` (DB-gated; CI never runs those, #905).
 
 `TEMPLATE.md` carries a matching block (*The warning threshold*).
+
+## 36. A stat dose, ordered then given (charting slice 2, ADR-0105)
+
+The slice's gestures:
+- **The order.** *Start medication* `ceftriaxone 1g iv stat`, Sign: a stat ORDER. Under its drug line the list reads
+  "stat · ordered {o} {orderer} · not yet given", and the line stays current.
+- **Given** sits beside that line. It opens a row under it: "Time given" (pre-filled with now), *Sign* and *Cancel*.
+  The row signs nothing until its own *Sign*. Signed, the outcome reads "Given.", the row's status reads **given**
+  (struck as a ceased line is), and the stat line reads "stat · ordered {o} {orderer} · given {g} {giver}".
+- **Entered in error** sits beside each standing give. Its row reads "Why (optional)", *Sign* and *Cancel*. Signed,
+  the give gains its own line "given {g} {giver} — entered in error by {who}, {when}" (and "— {why}"), the line is
+  current again, and the outcome reads "Entered in error: the stat dose is waiting to be given again."
+
+Paper counterpart: the registrar writes "ceftriaxone 1 g IV stat" in the stat box and signs it; the nurse initials it
+and writes the time given; a dose initialled in error is struck through, initialled and annotated. **Live only**: a
+`--mock` window has no list.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Give at now | the press of *Given* | the row drawn **given** with "· given {g} {giver}" | **≤ 3 s** |
+| Give at an earlier time | the press of *Given* | the row drawn **given** | — (record; the one extra step is the edit) |
+| Entered in error | the press of *Entered in error* | the line drawn current, "not yet given" | **≤ 3 s** (slice 1's Sign budget) |
+| Reading whether it was given | the chart open | the stat line read | **no click** |
+
+The budgets are with the key held (`--key-hold-seconds 900`); repeat each on a shared terminal (the clock starting at
+the press, the credential typed) and record both. Steps: the order on paper *N* = 1 (write and sign) → forced *M* = 1
+signed act → target *K* = 1 line + Sign. A give: *N* = 1 (initial and time) → *M* = 1 signed act (the stop and the
+given under one key release, in one transaction) → *K* = 1 press + Sign (+ an edit of the time). A strike: *N* = 1
+(strike, initial, note) → *M* = 1 → *K* = 1 press + the optional why + Sign. **Neither act has a `ui_gesture_timing`
+kind**, so the stopwatch figure is the only one. **A figure outside its budget, or an `M > N`, is the finding: file an
+issue, and never adjust the budget.**
+
+**Setup.** As section 30 (drugref present), but build this checkout and re-run section 0's `provision-window-role`,
+because the build moves `SCHEMA_GENERATION` to 82. Then:
+
+```bash
+G1=$(achart "Stat Given" 1987-07-07)     # "No known drug allergies" recorded
+G2=$(achart "Stat Before" 1988-08-08)    # "No known drug allergies" recorded
+for c in "$G1" "$G2"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+```
+
+Name a clinician in who's here (`dr-a`) for the orders, and a second (`rn-b`) for the gives.
+
+**Measurement 1: the order and its give.**
+
+- [ ] On `$G1`, as `dr-a`, *Start medication* `ceftriaxone 1g iv stat` (pick ceftriaxone), Sign. The line is current
+      and reads "stat · ordered {o} Dr A … · not yet given" under its drug line, with *Given* beside it.
+      `psql "$CONN" -c "SELECT stat FROM medication_charting WHERE patient_id = '$G1'"` reads `t`.
+- [ ] Not stat orders (chart each, read it, then stop it): `1g iv stat then daily`, `1g iv prn stat`, and *Already
+      taking* `1g iv stat`. None shows a stat line or *Given*; `stat` reads `f` for each.
+- [ ] Switch who's here to `rn-b`. Start the stopwatch, press *Given*: the row opens with "Time given" holding now.
+      Press its *Sign* (one passphrase on a shared terminal): stop when the row reads **given** and the stat line
+      reads "stat · ordered {o} Dr A … · given {g} RN B …" (≤ 3 s). The outcome reads "Given."; *Given* is gone,
+      *Entered in error* is beside the give.
+- [ ] The two events, one transaction, read with `psql "$CONN" -c`:
+      `"SELECT reason FROM medication_cessation WHERE patient_id = '$G1'"` reads `stat dose given`;
+      `"SELECT completes IS NOT NULL, given_at FROM medication_given WHERE patient_id = '$G1'"` reads `t` and the
+      time given; the ceftriaxone line is no longer in `patient_medication_current`.
+- [ ] *Cancel* on an open Given row closes it with nothing signed; record where focus lands. A redraw while the row
+      is open (the chart read again) keeps what was typed.
+
+**Measurement 2: the time given.**
+
+- [ ] On `$G2`, chart `ceftriaxone 1g iv stat` as `dr-a`. As `rn-b`, press *Given* and set "Time given" to ten
+      minutes before the order was charted. Sign: the stat line reads "stat · given {g} RN B …, before it was charted
+      {o} Dr A …", in that order. Nothing was refused and nothing was reordered.
+- [ ] A time later than now (type it, past the field's maximum): *Sign* is refused beside the line, "The time given
+      cannot be later than now", and nothing is signed.
+- [ ] A partly typed time (the date only, no hour): *Sign* is refused beside the line ("the time given is only partly
+      typed — finish it, or clear it if the dose was given now"). Read the chart again while the partial is in the
+      field, then press *Sign*: still refused, "The time given was lost while it was being typed — type it again, or
+      press Cancel and Given for now". Clear the field key by key and Sign: given at now.
+- [ ] Record what a VoiceOver user hears for each refusal (it is not a live region, #1112).
+
+**Measurement 3: entered in error, and a stale press.**
+
+- [ ] On `$G1`, as `dr-a`, press *Entered in error* beside the give, type `wrong patient`, Sign (≤ 3 s): the give
+      gains its own line "given {g} RN B … — entered in error by Dr A …, {when} — wrong patient", the line is current
+      and reads "· not yet given" again, and the outcome reads "Entered in error: the stat dose is waiting to be given
+      again." *Given* is back.
+- [ ] `psql "$CONN" -c "SELECT count(*) FROM medication_cessation WHERE patient_id = '$G1'"` is 0;
+      `SELECT voids IS NOT NULL, text FROM medication_given_retraction WHERE patient_id = '$G1'` reads `t`,
+      `wrong patient`.
+- [ ] Nothing to walk, but know it: a strike beside a second standing give or a real stop of the same line says
+      only "Entered in error." and the line stays stopped. This window offers neither state (it refuses a second
+      Given), so it arises only from two nodes or a raw client; `med_stat_db_tests.rs` pins both.
+- [ ] A stale press: draw a waiting stat line on two terminals; give it on the first; press *Given* and Sign on the
+      second. Refused beside the line, "That stat dose is no longer waiting to be given; read the chart again", with
+      no event written (`SELECT count(*) FROM medication_given` is unchanged). Likewise strike a give on the first and
+      *Entered in error* the same give on the second: "That given dose is no longer on this chart, or is already
+      struck; read it again".
+- [ ] A linked chart's stat line (open a chart linked to `$G1`): no *Given*, no *Entered in error*.
+
+**Measurement 4: the timings (five runs each, held key, then shared terminal).**
+
+- [ ] The give at now (≤ 3 s); the give at an earlier time (record); the strike (≤ 3 s).
+
+**Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only), on BOTH rows:
+
+- [ ] *Given* and each *Entered in error* are reachable by Tab and read with their drug line. Record whether two
+      *Entered in error* buttons on one line can be told apart by ear (they are labelled alike today).
+- [ ] The Given row and the strike row are each read as a group named for their line; "Time given" and "Why
+      (optional)" are read with their labels; the time field is operable from the keyboard alone.
+- [ ] The stat line, each struck line and the **given** status are read.
+- [ ] After a Sign and the redraw, record where focus lands (it is lost today, #1112). Record whether Escape closes
+      a row (it is not built to).
+- [ ] No dialog at any point.
+
+**WebKit and the real Tauri IPC.** The webview was walked headlessly in Chromium and WebKit with a stubbed `invoke`.
+Walk it in the real window: `med_stat_give` (`patientId`, `charts`, `medicationId`, `givenAt`, `credential`) and
+`med_stat_strike` (`patientId`, `charts`, `givenEvent`, `why`, `credential`). A name Tauri cannot map fails the call
+with an "invalid args" error.
+
+**What could not be run here.** Every stopwatch figure, the VoiceOver pass, the real Tauri IPC and the real window's
+WebKit need the window and a human. The rest was run as follows:
+- **The wire:** `cairn-event`'s `medication/given.rs` and `medication/charting_tests.rs` (pure).
+- **The floor and the projections:** `medication_given_floor.rs`, `medication_given_retraction_floor.rs`,
+  `medication_given_retraction_race.rs` (DB-gated); `db/tests/082_medication_given_test.sql`.
+- **The node's acts and the read:** `medication_stat_give.rs` (DB-gated).
+- **The window's commands:** `cairn-gui-tauri`'s `med_stat_tests.rs`, `chart_stat_tests.rs` (pure) and
+  `med_stat_db_tests.rs` (DB-gated; CI never runs those, #905).
+- **The webview:** `med_stat_webview_tests.rs`; the tab crate's `stat_view_tests.rs`.
+
+`TEMPLATE.md` carries a matching block (*A stat dose, ordered then given*).
