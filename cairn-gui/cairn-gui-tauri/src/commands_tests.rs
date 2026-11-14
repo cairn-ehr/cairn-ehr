@@ -119,6 +119,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         set_change: None,
         allergy_check_failed: None,
         versions_error: None,
+        stat_error: None,
     })
     .unwrap();
     let member_json = serde_json::to_value(&member).unwrap();
