@@ -61,7 +61,7 @@ pub(crate) async fn supervised_note() -> Option<(
     // clock a previous suite left ahead would time parts after acts recorded later.
     owner
         .batch_execute(
-            "TRUNCATE clinical_note, clinical_note_attestation, note_draft, note_draft_spent, medication_draft_line, \
+            "TRUNCATE clinical_note, clinical_note_attestation, note_draft, note_draft_spent, medication_draft_line, medication_warning_policy, \
              note_policy, vault_attempt, vault_member, vault_terminal, vault_policy, \
              patient_link, person_member, link_veto_flag, event_log, actor_event, patient_chart, \
              node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE; \

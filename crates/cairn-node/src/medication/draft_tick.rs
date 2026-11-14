@@ -51,9 +51,9 @@ pub fn default_tick(f: &TickFacts) -> bool {
         && directions_read
         // The check ran (principle 4: "not checked" is never read as "clear").
         && !f.check.unverified
-        // A mark is an allergy hit: the clinician decides, not the default. An adverse-effect
-        // note alone is information, not a hit, and does not withhold.
-        && f.check.marks.is_empty()
+        // A warning at the site's threshold (an allergy hit; a previous adverse effect too
+        // when the administrator lowered it, ADR-0104): the clinician decides, not the default.
+        && !f.check.warns()
         // With the allergy list never asked, "no hit" proves nothing.
         && *f.drug_allergies != ListStatus::NotYetAsked
         && !f.duplicate
@@ -71,7 +71,7 @@ pub fn default_tick(f: &TickFacts) -> bool {
 /// there), but a combination checked only in part can carry marks AND be unverified at once, and
 /// each of those marks must still have been seen.
 pub fn hand_tick_holds(fresh: &LineCheck, ticked_against: &[(String, Uuid)]) -> bool {
-    fresh.against.iter().all(|id| {
+    fresh.warned_against().iter().all(|id| {
         ticked_against
             .iter()
             .any(|(s, r)| s == ALLERGY_SOURCE && r == id)

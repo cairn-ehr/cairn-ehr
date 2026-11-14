@@ -321,7 +321,7 @@ fn a_start_mark_keeps_the_box_disabled_until_a_reason() {
     );
     let row = js_fn(LIST_JS, "medLineRow");
     assert!(
-        row.contains("cell(\"label\", \"Reason for charting despite the listed allergy\")"),
+        row.contains("cell(\"label\", \"Reason for charting despite the warning\")"),
         "{row}"
     );
     assert!(

@@ -2841,7 +2841,7 @@ The slice's gestures:
   read-back row says "Drug · Form · Strength · Dose · Route · How often", "—" for each field not read, then "not read:
   …".
 - **The check.** The line carries ADR-0098's **Allergy** tag and words, a muted note, or the small **not checked** tag,
-  before Sign. On *Start medication* a mark also shows "Reason for charting despite the listed allergy", and Sign stays
+  before Sign. On *Start medication* a mark also shows "Reason for charting despite the warning", and Sign stays
   unavailable until something is typed there. *Already taking* shows the mark and asks no reason.
 - **Cancel**, or Escape with no list open, discards the unsigned line.
 - **After Sign** the line closes, "Charted." is said, and the list shows the line with its dose cell as `dose — sig`.
@@ -2922,7 +2922,7 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
 
 - [ ] On `$C1`, *Start medication*, `amox`, choose "amoxicillin", ` 500mg tds`. Before Sign, with no click: the
       **Allergy** tag and "amoxicillin is a Penicillins (allergy group); allergy recorded: anaphylaxis" on the line,
-      and "Reason for charting despite the listed allergy" below it. Sign is unavailable.
+      and "Reason for charting despite the warning" below it. Sign is unavailable.
 - [ ] Type three spaces in the reason: Sign stays unavailable. Type `benefit outweighs risk`, Sign. "Charted.".
       `psql "$CONN" -c "SELECT override_reason, override_against FROM medication_charting WHERE patient_id = '$C1'"`
       reads the reason and one `{"source": "allergy", "ref": <uuid>}` entry. Check the `ref` against
@@ -3490,3 +3490,76 @@ WebKit need the window and a human. The rest was run as follows:
 - **The webview:** `med_versions_settle_webview_tests.rs`.
 
 `TEMPLATE.md` carries a matching block (*Settling a set-aside version*).
+
+## 35. The warning threshold (batch charting slice 3, ADR-0104)
+
+The slice's one administrator gesture and what it changes for the clinician:
+- **At the node's console**, `cnode medication-set-warning-threshold --level adverse-effect` makes a previous adverse
+  effect a warning when a line is charted; `--default` returns to allergy hits only. The verb prints the level now in
+  force. No level switches allergy warnings off.
+- **In the window**, on the line being charted and on each list line (never on a line already charted): a warned
+  adverse effect keeps its words "Previous adverse effect: …", drawn as loud as an allergy mark, under a **Warning**
+  tag (never "Allergy"); a *Start* line needs a typed reason; the line is never ticked by default.
+
+Paper counterpart: the drug committee's memo ("acknowledge recorded adverse reactions in writing") and, at the bedside,
+the prescriber reading the reaction box and writing a justification. **Live only**: a `--mock` window has no list.
+
+**Budgets (the slice plan's §1.2).** No new clinician gesture: a *Start* line's Sign stays within section 30's budget
+(the added read is one function call per check). Steps: paper *N* = read the box + write the justification → forced
+*M* = the same → target *K* = *M*. The administrator: paper = one memo → one console command. **A figure outside
+its budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
+
+**Setup.** As section 30, but build this checkout and re-run section 0's `provision-window-role`, because the build
+moves `SCHEMA_GENERATION` to 81. Then:
+
+```bash
+T1=$(achart "Threshold Lowered" 1985-05-05)
+T2=$(achart "Threshold Taking" 1986-06-06)
+for c in "$T1" "$T2"; do [ -n "$c" ] || echo "a registration failed — read the output above" >&2; done
+```
+
+On each, record an **adverse effect** (not an allergy) to codeine, reaction rash.
+
+**Measurement 1: the default.**
+
+- [ ] `cnode medication-set-warning-threshold --default` prints "only allergy hits count as warnings when charting (the
+      default)".
+- [ ] *Start medication* `codeine 30mg tab qid`: the line shows "Previous adverse effect: codeine → rash" muted, no tag,
+      no reason field required; it is ticked by default once finished (if complete and coded).
+
+**Measurement 2: lowered.**
+
+- [ ] `cnode medication-set-warning-threshold --level adverse-effect` prints "allergy hits and previous adverse
+      effects now count as warnings when charting". A bare `cnode medication-set-warning-threshold` and
+      `--level nothing` are refused (usage errors).
+- [ ] Re-open `$T1`'s list: the codeine line's note is now loud, its tag reads **Warning** (never "Allergy"), its tick
+      is gone, and the Reason field is required, labelled "Reason for charting despite the warning". With no reason
+      the tick box stays disabled (the refusal "Charting despite a warning needs a reason" is the single-line Sign's,
+      pinned by `med_chart_threshold_db_tests.rs`). Type `tolerated in hospital`, tick the line, Sign (≤ 3 s,
+      section 30's budget): charted.
+- [ ] `psql "$CONN" -c "SELECT cairn_clear_payload(e)->'warning_override' FROM event_log e WHERE patient_id = '$T1'
+      AND event_type = 'clinical.medication.asserted'"` names the adverse-effect record as `{"source": "allergy", "ref": …}`.
+- [ ] The charted codeine line on the medication list still shows the note **muted**, with no tag (ADR-0104 decision 6).
+- [ ] On `$T2` (no codeine charted, so no duplicate can withhold the tick), *Already taking* `codeine 30mg tab
+      qid`: loud, **Warning**, not ticked by default, no reason asked.
+- [ ] `cnode medication-set-warning-threshold --default`. On `$T2`, untick the codeine line and tick it again (a hand
+      tick at the default), then `--level adverse-effect` at the console, then Sign: the line is not charted and
+      comes back unticked (the tick never saw the warning).
+- [ ] VoiceOver reads the **Warning** tag and the note; keyboard-only, the Reason field is reachable.
+
+**Measurement 3: a restore.**
+
+- [ ] Record that a restore comes back at `allergy-hit` (the policy is outside the backups, like section 17's expiry):
+      the documented limit (#1102). A restored database has no policy row, which `db/tests/081`'s no-row default pins
+      as `allergy-hit`. After any real restore, on the restored database (`$RESTORED`, its connection string),
+      `psql "$RESTORED" -c "SELECT cairn_medication_warning_threshold()"` reads `allergy-hit`; set it again.
+
+Reset with `cnode medication-set-warning-threshold --default`.
+
+**What a test already pins** (the stopwatch, the visual check, VoiceOver and WebKit need the window and a human):
+- **The policy row:** `db/tests/081_medication_warning_policy_test.sql`; `cli_medication_warning_threshold.rs`.
+- **The rule:** `cairn-node`'s `allergy/check_threshold_tests.rs` and `medication/draft_tick_tests.rs` (pure).
+- **The window:** `cairn-gui-tauri`'s `med_chart_threshold_tests.rs`, `med_list_tests.rs` (pure) and
+  `med_chart_threshold_db_tests.rs` (DB-gated; CI never runs those, #905).
+
+`TEMPLATE.md` carries a matching block (*The warning threshold*).

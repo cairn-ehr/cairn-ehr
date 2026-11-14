@@ -14,6 +14,10 @@
 /** The loud tag's words, and the small one's. Pinned in drug_pick_webview_tests.rs. */
 const ALLERGY_TAG = "Allergy";
 const NOT_CHECKED_TAG = "not checked";
+/** A line being charted whose warning is not an allergy (a previous adverse effect, when the
+ *  site lowered the threshold, ADR-0104): never labelled "Allergy". Pinned in
+ *  med_chart_threshold_tests.rs. */
+const WARNING_TAG = "Warning";
 
 /** The line's name cell: the drug (and source chart, on a combined list) then its allergy tag. */
 function nameCell(row) {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::allergy::check::WarningThreshold;
 use crate::medication::line::read_directions;
 use chrono::NaiveDate;
 
@@ -189,4 +190,41 @@ fn a_set_aside_line_is_never_default_ticked() {
         set_aside: false,
         ..f
     }));
+}
+
+/// A check carrying one adverse-effect note from record `u(9)`, at `threshold`.
+fn adverse(threshold: WarningThreshold) -> LineCheck {
+    LineCheck {
+        notes: vec!["Previous adverse effect: codeine → GI upset".into()],
+        adverse_against: vec![u(9)],
+        threshold,
+        ..Default::default()
+    }
+}
+
+/// Slice 3 (ADR-0104): at a lowered threshold an adverse effect is a warning, so it withholds
+/// the default tick as a mark does; at the default it still does not.
+#[test]
+fn a_lowered_threshold_makes_an_adverse_effect_withhold_the_tick() {
+    assert!(tick(
+        |_, c, _, _, _| *c = adverse(WarningThreshold::AllergyHit)
+    ));
+    assert!(!tick(
+        |_, c, _, _, _| *c = adverse(WarningThreshold::AdverseEffect)
+    ));
+}
+
+/// Review focus 4: a hand tick made before the administrator lowered the threshold saw no
+/// adverse-effect warning, so at Sign the world has moved under it; one that saw it holds.
+#[test]
+fn a_hand_tick_must_have_seen_a_lowered_adverse_effect() {
+    assert!(hand_tick_holds(&adverse(WarningThreshold::AllergyHit), &[]));
+    assert!(!hand_tick_holds(
+        &adverse(WarningThreshold::AdverseEffect),
+        &[]
+    ));
+    assert!(hand_tick_holds(
+        &adverse(WarningThreshold::AdverseEffect),
+        &seen(&[u(9)])
+    ));
 }

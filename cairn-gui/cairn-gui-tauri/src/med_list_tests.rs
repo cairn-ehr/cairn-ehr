@@ -217,3 +217,36 @@ fn a_duplicate_names_the_other_line_or_the_chart_line() {
         "already on the list: Warfarin 5 mg"
     );
 }
+
+/// Slice 3 (ADR-0104): at a lowered threshold a list line's drawn warnings include its
+/// adverse-effect record, so a hand tick made on it stores that record as seen, and a tick
+/// that saw none no longer holds.
+#[test]
+fn a_lowered_adverse_effect_is_drawn_seen_and_judged() {
+    use cairn_node::allergy::check::WarningThreshold;
+    let check = |threshold| LineCheck {
+        notes: vec!["Previous adverse effect: codeine → GI upset".into()],
+        adverse_against: vec![Uuid::from_u128(9)],
+        threshold,
+        ..LineCheck::default()
+    };
+    let refs = |j: &Judged| -> Vec<String> {
+        line_view(j)
+            .against
+            .into_iter()
+            .map(|w| w.reference)
+            .collect()
+    };
+    let at_default = judged(1, "here", true, check(WarningThreshold::AllergyHit));
+    assert!(refs(&at_default).is_empty());
+    assert!(
+        tick_holds(&at_default),
+        "nothing warned, nothing to have seen"
+    );
+    let lowered = judged(1, "here", true, check(WarningThreshold::AdverseEffect));
+    assert_eq!(refs(&lowered), [Uuid::from_u128(9).to_string()]);
+    assert!(
+        !tick_holds(&lowered),
+        "the tick never saw the adverse effect"
+    );
+}

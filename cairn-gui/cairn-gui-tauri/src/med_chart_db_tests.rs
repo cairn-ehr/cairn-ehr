@@ -11,7 +11,7 @@ use tokio_postgres::Client;
 
 /// The refusal a Start line with an allergy mark and no reason gets (Global Constraints).
 /// Deliberately a copy of `med_chart`'s constant, not an import: it pins the exact words.
-const NEEDS_A_REASON: &str = "Charting despite a listed allergy needs a reason";
+const NEEDS_A_REASON: &str = "Charting despite a warning needs a reason";
 
 /// Sign a drug allergy to `term` on `chart` under Dr Bea's key, coded when `coding` is given;
 /// its record id.
@@ -67,7 +67,12 @@ fn amox_part(moiety: Uuid) -> PartArg {
     }
 }
 
-fn line(parts: Vec<PartArg>, typed: &str, charted_as: &str, reason: Option<&str>) -> ChartArg {
+pub(super) fn line(
+    parts: Vec<PartArg>,
+    typed: &str,
+    charted_as: &str,
+    reason: Option<&str>,
+) -> ChartArg {
     ChartArg {
         parts,
         typed_drug: typed.into(),
@@ -77,13 +82,17 @@ fn line(parts: Vec<PartArg>, typed: &str, charted_as: &str, reason: Option<&str>
     }
 }
 
-async fn chart_it(state: &AppState, chart: Uuid, l: ChartArg) -> Result<MedChartWrite, ErrorView> {
+pub(super) async fn chart_it(
+    state: &AppState,
+    chart: Uuid,
+    l: ChartArg,
+) -> Result<MedChartWrite, ErrorView> {
     let patient = chart.to_string();
     med_chart_impl(state, &patient, vec![patient.clone()], l, credential("bea")).await
 }
 
 /// The clear payloads of every medication assertion on `chart`.
-async fn asserted(owner: &Client, chart: Uuid) -> Vec<Value> {
+pub(super) async fn asserted(owner: &Client, chart: Uuid) -> Vec<Value> {
     owner
         .query(
             "SELECT cairn_clear_payload(e)::text FROM event_log e \

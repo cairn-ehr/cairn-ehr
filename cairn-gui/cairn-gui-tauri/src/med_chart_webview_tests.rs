@@ -17,7 +17,7 @@ use crate::source_guard::{js_fn, position};
 use cairn_node::allergy::check::LineCheck;
 use cairn_node::medication::line::read_directions;
 
-const MED_JS: &str = include_str!("../src-ui/med_chart.js");
+pub(crate) const MED_JS: &str = include_str!("../src-ui/med_chart.js");
 /// The list the editor is mounted in (batch charting slice 1): med_list.js and its Sign.
 const LIST_JS: &str = concat!(
     include_str!("../src-ui/med_list.js"),
@@ -318,11 +318,8 @@ fn a_start_hit_needs_a_reason_on_its_list_line() {
         "the editor has no reason field"
     );
     assert!(!MED_JS.contains("med-reason"), "nor reads one");
-    assert!(LIST_JS.contains("cell(\"label\", \"Reason for charting despite the listed allergy\")"));
-    assert_eq!(
-        NEEDS_A_REASON,
-        "Charting despite a listed allergy needs a reason"
-    );
+    assert!(LIST_JS.contains("cell(\"label\", \"Reason for charting despite the warning\")"));
+    assert_eq!(NEEDS_A_REASON, "Charting despite a warning needs a reason");
     for js in [MED_JS, LIST_JS] {
         assert!(
             !js.contains(NEEDS_A_REASON),

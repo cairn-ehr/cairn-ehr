@@ -38,7 +38,7 @@ const MED_LIST_ELSEWHERE = "These lines are open on another terminal: ";
 const MED_LIST_NOT_REMOVED = "This line was not removed";
 const MED_PRESS_WORDS = { "started-here": "Start medication", "pre-existing": "Already taking" };
 /** A line's check while the editor shows its own: nothing drawn twice. */
-const NO_MARKS = { marks: [], notes: [], unverified: false };
+const NO_MARKS = { marks: [], warning_notes: [], notes: [], unverified: false };
 
 /** The list drawn: `{ patient, writer, writerName, elsewhere }`, or null while none is read. */
 let medList = null;
@@ -116,7 +116,7 @@ function drawnTicked(line) {
   return Boolean(line.view) && line.view.ticked && !line.view.unfinished;
 }
 
-/** A Start line with an allergy mark needs a reason (design §3.5); Already taking never does. */
+/** A Start line with a warning needs a reason (design §3.5, ADR-0104); Already taking never does. */
 function needsReasonOn(line) {
   const marked = Boolean(line.view) && line.view.check.reason_needed;
   return line.content.charted_as === "started-here" && (marked || line.reason !== "");
@@ -273,7 +273,7 @@ function medLineRow(line) {
   const tick = cell("input", "", { type: "checkbox" });
   const text = cell("button", "", { type: "button", class: "med-list-text" });
   const remove = cell("button", "Remove", { type: "button" });
-  const label = cell("label", "Reason for charting despite the listed allergy");
+  const label = cell("label", "Reason for charting despite the warning");
   const reason = cell("input", "", { type: "text", autocomplete: "off" });
   label.append(reason);
   const r = {

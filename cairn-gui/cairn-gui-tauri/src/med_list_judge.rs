@@ -362,7 +362,7 @@ pub(crate) async fn warnings_now(
     let lines = the_line(&line.typed_drug, &term, &parts);
     fresh_check(state, patient, charts, &lines)
         .await
-        .map(|check| check.against)
+        .map(|check| check.warned_against())
         .unwrap_or_default()
 }
 

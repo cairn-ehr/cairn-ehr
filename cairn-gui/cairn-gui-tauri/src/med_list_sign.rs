@@ -42,7 +42,7 @@ use crate::chart_set::{check_displayed_set, ChartPane, ChartSetError};
 use crate::commands::{med_list_impl, record_timing};
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
-use crate::med_chart::{override_before_the_key, press, UNKNOWN_LEAD};
+use crate::med_chart::{override_before_the_key, override_ids, press, UNKNOWN_LEAD};
 use crate::med_line_sign::{charting, components, override_refs, single_coding};
 use crate::med_list::{
     claim_writer, fresh_read, judge, med_list_read_impl, tick_holds, Judged, MedListView,
@@ -324,7 +324,7 @@ async fn sign_line(
         .signable
         .as_ref()
         .map_err(|e| anyhow::anyhow!("{}", e.text))?;
-    let ids: Vec<String> = j.check.against.iter().map(Uuid::to_string).collect();
+    let ids = override_ids(&j.check);
     let against = override_refs(&ids);
     let today = local_today().to_string();
     let components = components(parts);
