@@ -259,7 +259,7 @@
 >    above); **slice 2b** MERGED in PR #1098 (the bullet above); **slice 3** (the warning threshold, the bullet above) MERGED in PR #1101. Charting **1b** (the same-drug de-label
 >    offer) MERGED in PR #1086 (the bullet above). **Next: charting slice 2** (stat ordered → given, #1069) — **PLANNED 2026-11-14**, plan
 >    [`superpowers/plans/2026-11-14-charting-slice-2-stat-ordered-then-given.md`](superpowers/plans/2026-11-14-charting-slice-2-stat-ordered-then-given.md)
->    (draft PR on `plan/charting-slice-2-stat-given`). Maintainer rulings 2026-11-14: Q1 given = a stop + a given under
+>    (draft PR [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106)). Maintainer rulings 2026-11-14: Q1 given = a stop + a given under
 >    one signature; Q2 `stat` only on a pure one-off Start line; Q3 the row reads "given", no new section; Q4 build
 >    "Entered in error" now (it voids the stop by naming it). Awaiting the maintainer's review of the plan and an
 >    execution method; then build it. Later picks: slice 4
