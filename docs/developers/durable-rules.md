@@ -15,7 +15,8 @@ db/039 + db/048 + db/060 + db/077 + db/079 + db/080 in place) — do not undo**
 (pins: in `crates/cairn-node/tests/`, `medication_given_floor.rs`, `medication_given_retraction_floor.rs`,
 `medication_given_retraction_race.rs`, `medication_stat_give.rs`; `db/tests/082_medication_given_test.sql`;
 `crates/cairn-event/src/medication/charting_tests.rs` and `given.rs`; in `cairn-gui/cairn-gui-tauri/src/`,
-`med_stat_tests.rs`, `med_stat_db_tests.rs`, `med_stat_webview_tests.rs`, `chart_stat_tests.rs`).
+`med_stat_tests.rs`, `med_stat_db_tests.rs`, `med_stat_webview_tests.rs`, `chart_stat_tests.rs`; the tab crate's
+`stat_view_tests.rs`).
 Every slice 1a, 2a, 2b and 3 rule below still holds; a stat order is a charted line.
 - **A given's stop and the given are signed in ONE transaction, the stop first**, and `completes` must name a stop of
   this line inserted by that same transaction (`xmin = pg_current_xact_id()`). **Tempting wrong fixes:** wrap the
@@ -72,6 +73,11 @@ Every slice 1a, 2a, 2b and 3 rule below still holds; a stat order is a charted l
   Pins: `striking_one_of_two_gives_does_not_say_waiting_again`,
   `striking_a_give_beside_a_real_stop_does_not_say_waiting_again`,
   `two_stat_orders_under_one_row_show_the_given_one_and_offer_no_given`.
+- **"Before it was charted" compares the time given with the MINUTE the order was charted**, and is said once, on the
+  last give before it (`stat_view::stat_words`). The time given is stated to the minute; the order's `t_recorded` is
+  to the millisecond. **Tempting wrong fix:** compare the two instants as they are "for precision" (an untouched
+  Given in the order's own minute would read "given 13:22, before it was charted 13:22:41", a precise untruth). Pins:
+  `a_give_in_the_orders_own_minute_is_not_before_it`, `before_it_was_charted_is_said_once`.
 - **Known limits, not bugs to patch in place:** #1107–#1112 (ADR-0105, "What is not guaranteed").
 
 **⇒ BATCH CHARTING SLICE 3 — THE WARNING THRESHOLD (ADR-0104, db/081) — do not undo**
