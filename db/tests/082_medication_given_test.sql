@@ -138,5 +138,38 @@ BEGIN
         'medication_charting carries stat';
 END $$;
 
+-- ---- §2: "entered in error" (behaviour, voiding and shreds pinned by
+-- medication_given_retraction_floor.rs, which needs signed events) ----
+DO $$
+DECLARE ok jsonb := jsonb_build_object('schema_version', 'clinical.medication-given-retraction/1',
+    'patient_id', pg_temp.chart(), 'payload', jsonb_build_object('medication_id', pg_temp.med(),
+    'target', pg_temp.other(), 'voids', null, 'text', null));
+BEGIN
+    ASSERT (SELECT check_fn FROM cairn_event_twin_check
+             WHERE event_type = 'clinical.medication-given-retraction.asserted')
+           = 'cairn_check_medication_given_retraction', 'the strike floor is registered';
+    ASSERT (SELECT projection_tables FROM cairn_projection_apply
+             WHERE apply_fn = 'medication_given_retraction_apply')
+           = ARRAY['medication_given_retraction', 'medication_cessation', 'medication_cessation_reason'],
+        'the strike is registered against every table it writes (db/039 narrow-rebuild refusal)';
+    ASSERT position('cairn_medication_cessation_voided' IN
+                    pg_get_functiondef('medication_cessation_apply(event_log)'::regprocedure)) > 0
+       AND position('cairn_medication_cessation_voided' IN
+                    pg_get_functiondef('medication_cessation_reason_apply(event_log)'::regprocedure)) > 0,
+        'both stop appliers skip a voided stop';
+    ASSERT position('medication_given_retraction' IN pg_get_functiondef('cairn_execute_shred'::regproc)) > 0,
+        'the shred takes the strike row';
+    -- The remote door admits a well-shaped orphan; the authoring door refuses its unknown target.
+    PERFORM pg_temp.door(true);
+    PERFORM cairn_check_medication_given_retraction('clinical.medication-given-retraction.asserted', ok);
+    PERFORM pg_temp.door(false);
+    BEGIN
+        PERFORM cairn_check_medication_given_retraction('clinical.medication-given-retraction.asserted', ok);
+        RAISE EXCEPTION 'FAIL: an unknown given was struck';
+    EXCEPTION WHEN raise_exception THEN
+        ASSERT SQLERRM LIKE '%is not a given dose of this line%', SQLERRM;
+    END;
+END $$;
+
 ROLLBACK;
 \o
