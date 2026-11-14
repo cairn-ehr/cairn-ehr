@@ -684,3 +684,31 @@ tr[data-replaced="true"] td {
   color: var(--muted);
   font-style: italic;
 }
+
+/* Charting slice 2: a stat order's line under its drug line, each give entered in error a line
+   of its own (muted, as paper's struck initials), its buttons and its inline row beside them. */
+tr[data-stat="true"] td {
+  padding-left: 1rem;
+}
+
+.med-stat-struck {
+  display: block;
+  color: var(--muted);
+}
+
+.med-stat-act {
+  margin: 0.2rem 0.4rem 0.2rem 0.4rem;
+}
+
+.med-stat-said {
+  margin: 0.2rem 0;
+}
+
+.med-stat-row {
+  margin: 0.3rem 0 0.3rem 1rem;
+}
+
+.med-stat-row label,
+.med-stat-row button {
+  margin-right: 0.4rem;
+}

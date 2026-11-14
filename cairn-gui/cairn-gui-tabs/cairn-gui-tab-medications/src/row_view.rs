@@ -96,6 +96,9 @@ pub struct MedListRowView {
     /// ([`settle_words`]'s `Replaced`), so the stopped line is never silently gone. Filled by the
     /// window, as `versions`.
     pub replaced: Vec<String>,
+    /// On a stat order's line (charting slice 2): its stat line, buttons and struck gives
+    /// ([`crate::StatView`]). Filled by the window (`chart_stat::attach_stat`), as `versions`.
+    pub stat: Option<crate::StatView>,
 }
 
 /// One set-aside version as the line shows it, collapsed: never a current medication.
@@ -210,6 +213,7 @@ pub(crate) fn build_row(
         allergy_unverified: false,
         versions: vec![],
         replaced: vec![],
+        stat: None,
     }
 }
 

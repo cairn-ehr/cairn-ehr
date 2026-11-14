@@ -73,6 +73,8 @@ mod med_list_versions_webview_tests;
 #[cfg(test)]
 mod med_list_webview_tests;
 mod med_stat;
+#[cfg(test)]
+mod med_stat_webview_tests;
 mod med_version_check;
 #[cfg(test)]
 mod med_versions_settle_webview_tests;

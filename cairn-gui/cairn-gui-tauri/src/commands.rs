@@ -113,7 +113,13 @@ pub async fn med_list_impl(
         Err(why) => pane.versions_error = Some(why),
     }
     // Likewise the stat orders (`chart_stat::STAT_NOT_READ`); their words join the lines there.
-    pane.stat_error = stat.err();
+    match stat {
+        Ok(orders) => {
+            let now = chrono::Local::now();
+            crate::chart_stat::attach_stat(&mut pane.list.rows, &list.rows, &orders, patient, &now)
+        }
+        Err(why) => pane.stat_error = Some(why),
+    }
     Ok(pane)
 }
 
