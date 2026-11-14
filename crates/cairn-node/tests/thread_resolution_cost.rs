@@ -59,9 +59,11 @@ const THREAD_PROJECTIONS: [&str; 8] = [
     "medication_set_aside",
 ];
 
-/// Every medication event type that writes one of those eight tables. The short-circuit is
-/// safe only while `cairn_event_type_has_no_thread` answers FALSE for all of them.
-const MEDICATION_EVENT_TYPES: [&str; 9] = [
+/// Every medication event type that resolves to a thread: the nine that write one of those eight
+/// tables, and the check, whose `medication_set_aside_checked` row db/048 §10's second probe
+/// reads. The short-circuit is safe only while `cairn_event_type_has_no_thread` answers FALSE
+/// for all of them.
+const MEDICATION_EVENT_TYPES: [&str; 10] = [
     "clinical.medication.asserted",
     "clinical.medication-cessation.asserted",
     "clinical.medication-coding.asserted",
@@ -71,6 +73,7 @@ const MEDICATION_EVENT_TYPES: [&str; 9] = [
     "clinical.medication-withhold.asserted",
     "clinical.medication-withhold-release.asserted",
     "clinical.medication-set-aside.asserted",
+    "clinical.medication-set-aside-checked.asserted",
 ];
 
 /// The `content_address` lookup the eight-way UNION performs must be index-backed on each arm.
@@ -263,7 +266,7 @@ async fn a_thread_free_event_type_never_reaches_the_medication_scans() {
 /// predicate. The short-circuit removed that independence, so this test and
 /// `sensitivity_ladder.rs::f5a_*` are what remain.
 ///
-/// KNOWN LIMIT: `MEDICATION_EVENT_TYPES` is hand-maintained, so a TENTH medication verb is
+/// KNOWN LIMIT: `MEDICATION_EVENT_TYPES` is hand-maintained, so an ELEVENTH medication verb is
 /// unguarded until someone adds it here — the mirror-pair hazard `common/mod.rs` warns about,
 /// tracked in #441.
 #[tokio::test]
@@ -285,7 +288,7 @@ async fn no_medication_event_type_is_classified_thread_free() {
             .get(0);
         assert!(
             !has_no_thread,
-            "{event_type} writes one of the eight thread projections, so classifying it \
+            "{event_type} resolves to a medication thread, so classifying it \
              thread-free would make cairn_event_thread return NULL for every event on every \
              medication thread (#385)"
         );

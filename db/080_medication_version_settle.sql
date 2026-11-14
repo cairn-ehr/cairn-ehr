@@ -319,9 +319,10 @@ CREATE CONSTRAINT TRIGGER medication_restore_pairs
 
 -- §2. "Checked: not current" — a set-aside version looked at again and found still not current.
 -- Its own event type (ADR-0102 / spec §3.4): the type IS the verdict, so there is no flag to get
--- backwards; the opposite outcome is a restore (§1). Never a medication line, never a thread:
--- it is not in medication_statement, the active read or the safety projection. A second check of
--- the same version is admitted and shown. Modelled on db/079 §2's set-aside type.
+-- backwards; the opposite outcome is a restore (§1). Never a medication line, and it never starts
+-- a thread; it sits on its version's companion thread (db/048 §10). It is not in
+-- medication_statement, the active read or the safety projection. A second check of the same
+-- version is admitted and shown. Modelled on db/079 §2's set-aside type.
 
 INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
     ('clinical.medication-set-aside-checked.asserted', 'additive', FALSE)
