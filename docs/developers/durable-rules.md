@@ -48,10 +48,10 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   `medication_restore_replaces.rs::a_restore_projects_whatever_order_it_arrives_in`,
   `medication_restore_floor.rs::a_shred_removes_the_restore_row`, `a_reprojection_rebuilds_restores`.
 - **`restores` has ONE source.** Only `cairn_med_draft_restore_add` sets a draft line's `restores`; the save door has no
-  `p_restores`; `chart_draft_line` refuses a caller's own `charting.restores` (`draft.rs`), so the key signed is always
-  the stored line's version. **Tempting wrong fix:** add `p_restores` to the save door, or let a caller pass
-  `charting.restores`, "for symmetry" (a typo-fix save, or any caller, could turn a plain line into a restore that
-  stops the patient's current line). Pins:
+  `p_restores`; `chart_draft_line` refuses a caller's own `charting.restores`, with or without a restore (`draft.rs`),
+  so the key signed is always the stored line's version. **Tempting wrong fix:** add `p_restores` to the save door,
+  or let a caller pass `charting.restores`, "for symmetry" (a typo-fix save, or any caller, could turn a plain line
+  into a restore that stops the patient's current line). Pins:
   `medication_draft_list_restore_store.rs::a_save_never_clears_or_sets_restores`,
   `medication_version_settle.rs::a_restore_with_its_own_charting_restores_is_refused`.
 - **"Checked: not current" is its own type with no verdict field**, never a medication line, and it locks nothing.
@@ -64,8 +64,7 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   else the envelope signer, named only when `cairn_note_key_is_human` holds for that key, else "signer not known".
   **Tempting wrong fix:** swap in a plain `cairn_note_signer_name(e.signer_key_id)` "to show a name more often" (a
   device or agent key would read as the person who checked or restored). Pin:
-  `medication_version_settle.rs::an_unvouched_signer_reads_as_none`; the non-human-key pin lands in the slice's final
-  wave.
+  `medication_version_settle.rs::a_non_human_signer_is_never_named` (an enrolled agent key the registry names).
 - **A restore line never takes a press default or a "From:" stamp.** It is created stored by
   `cairn_med_draft_restore_add`, so `stamp_new_line` never sees it as new, and with no source category of its own it
   signs `unknown` (`restore_source`). **Tempting wrong fixes:** let the restore door stamp "From:" "for speed" (the
@@ -86,6 +85,12 @@ Every slice 2a and slice 1 rule below still holds; a restore line is a list line
   `a_later_restore_of_the_same_line_is_refused`,
   `med_list_restore_chain_db_tests.rs::a_restore_replacing_a_charted_restore_is_never_default_ticked`,
   `two_hand_ticked_restores_of_one_line_refuse_the_second_legibly`.
+- **A restore line with nothing standing is never default-ticked** (ruling R12): its line was stopped since the press,
+  and its mark adds "— its line has since been stopped"; a hand tick signs it as a deliberate restart. **Tempting wrong
+  fix:** default-tick it because it "stops nothing, so it is harmless" (a colleague's stop for myalgia is silently
+  undone: the chart-held rule). Pins:
+  `med_list_restore_tests.rs::a_restore_whose_line_was_stopped_since_withholds_the_tick_and_says_so`,
+  `med_list_restore_chain_db_tests.rs::a_restore_whose_line_was_stopped_since_is_never_default_ticked`.
 
 **⇒ BATCH CHARTING SLICE 2a — FROM:, THE WHY, AND THE SET-ASIDE VERSION (ADR-0102, db/079, db/078 + db/048 + db/037 + db/077 + db/031 in place) — do not undo**
 (pins: `crates/cairn-node/tests/{medication_set_aside_floor,medication_set_aside_peer,medication_set_aside_sign,medication_source_note_floor,medication_draft_list_versions_store}.rs`,

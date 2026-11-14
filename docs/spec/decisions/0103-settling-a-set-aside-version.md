@@ -8,7 +8,7 @@
   the "checked" type) and its continuation PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098) (the list,
   the node, the window and these docs). Design:
   `docs/superpowers/specs/2026-11-13-batch-charting-slice-2-versions-wire-design.md` §3.3 and §3.4, amended by
-  the build's rulings R1, R3–R10 and R11 (recorded below; R2 was superseded by R5). Refs
+  the build's rulings R1 and R3–R13 (recorded below; R2 was superseded by R5). Refs
   [#1097](https://github.com/cairn-ehr/cairn-ehr/issues/1097) (an erased link in a restore chain).
 - **Builds on:** [ADR-0102](0102-set-aside-versions-and-the-source-of-a-line.md) (the set-aside version, "From:", the
   two source keys; its Consequences required a restore to be a stop and a new line) ·
@@ -64,7 +64,8 @@ Ruling R3 replaced it (decision 2).
    once per row: unless the restore's own thread has a cessation, no other member of the lineage may be current
    (projected in `medication_statement` with no `medication_cessation` row). Otherwise the whole transaction fails and
    every write in it rolls back; no client of the authoring door, raw SQL included, can sign a restore that leaves two
-   current lines. The row is then deleted, so the table is empty outside a transaction. The stop and the line may be
+   current lines among those the lineage can see (two multi-node limits are under "What is not guaranteed"). The row
+   is then deleted, so the table is empty outside a transaction. The stop and the line may be
    submitted in either order. A client that sets the constraint `IMMEDIATE` only makes the check stricter: the stop
    must then come first. Two restores of one companion in one transaction commit when only one of them stands.
 6. **The commit check never reads the `cairn.remote_apply` setting.** Only the authoring door owes the pairing, but
@@ -130,17 +131,24 @@ Ruling R3 replaced it (decision 2).
     made wholly of its `standing` lines, but still against every other current line and every other list line, so
     two restores of one drug (the same moiety code, or the same text) duplicate each other and neither is
     default-ticked; ruling R9 a catches the rest at Sign (decision 18). A restore whose `standing` holds a restore
-    line is never default-ticked (ruling R9 b): replacing a restore charted earlier must be deliberate.
+    line is never default-ticked (ruling R9 b): replacing a restore charted earlier must be deliberate. Nor is a
+    restore whose `standing` is empty (ruling R12): its line was stopped since the press, by another source, and Sign
+    would restart a stopped drug without a word (the chart-held rule). Its mark reads
+    `restores the {source} version — its line has since been stopped`, and a hand tick still signs it, as a
+    deliberate restart.
 18. **Sign re-derives the restore from the STORED row on the fresh read**, never from the webview. Each restore
     line's version is read on the OPENED chart with what stands for it. Two per-line refusals come before the key:
     `RESTORE_VERSION_GONE` ("the version it restores can no longer be read"), and, for a later ticked restore of the
     same lineage as one about to sign (the same companion, or a shared standing line), `SAME_LINE_RESTORED` (ruling R9
-    a): its stops were read before the first one charts, so the floor would refuse it in its own words.
+    a): its stops were read before the first one charts, so the floor would refuse it in its own words. It reads
+    "another restore of the same line is signed first; signed after it, this one replaces it" (ruling R13), saying
+    what a later Sign does.
     `chart_draft_line` then signs one cessation of each standing line, reason `replaced by the {source} version`,
     FIRST, then the line, then its spend, in ONE transaction; a failed spend rolls the stops back with the rest. A
-    caller's own `charting.restores` is refused, so the key has one source. A companion stopped by someone else
-    between the read and the commit still leaves one current line: `db/031` admits a second cessation of a stopped
-    thread, and `medication_cessation` keeps one row for it.
+    caller's own `charting.restores` is refused, with or without a restore, so the key has one source. A companion
+    stopped by someone else between the read and the commit still leaves one current line: `db/031` admits a second
+    cessation of a stopped thread, and `medication_cessation` keeps one row for it, the HLC winner's (see "What is not
+    guaranteed").
 19. **The check is an inline row** under the version: "From:" with slice 2a's presets, the document or person,
     *Why*, its own Sign and Cancel. The row signs nothing until its Sign. Sign checks that the chart is on screen and
     writable, re-reads the version on the OPENED chart, releases the key once and signs one event in its own
@@ -189,7 +197,20 @@ Ruling R3 replaced it (decision 2).
   both trees, and a restore in either must stop the current line of the other.
 - **A receiving node may briefly show none current, or two.** There the stop and the restore are separate events,
   and the remote door checks structure only. When the stop arrives first (the usual order: the stops take their HLCs
-  first) the drug briefly shows no current line; when the restore arrives first, two. Both settle when both arrive.
+  first) the drug briefly shows no current line; when the restore arrives first, two. For one restore, both settle
+  when both arrive; the next bullet is when they do not.
+- **Restores made apart can leave two current lines for good.** Two offline nodes that each restore a different
+  version of one line each stop it and each chart their own line; after sync, both lines are current. So are two
+  lines when a node restores a version while a peer's restore line of the same line is ahead of its version: the
+  lineage walks `medication_restore` through `medication_set_aside`, cannot reach the peer's line, and stops nothing
+  for it. The floor cannot prevent either (availability over consistency: each node signed what it could see). They
+  surface only where the two lines share a duplicate key (`patient_medication_reconciliation_flag`, `db/031` §9: the
+  coding pair, else the term). Separately, shredding a restore line's only assertion leaves its companion stopped,
+  reading "replaced by the … version", with no replacement on the chart.
+- **A colleague's stop can lose its reason to a restore's.** A stop of the companion that lands between Sign's fresh
+  read and its commit is overwritten in `medication_cessation` (one row per thread) by the restore's own stop, when
+  that stop holds the later HLC. The log keeps both cessations, but the chart then reads "replaced by the … version"
+  rather than the colleague's reason.
 - **Drafts do not cross nodes** ([#963](https://github.com/cairn-ehr/cairn-ehr/issues/963)): a restore line lives on
   the node that pressed it. The signed restore and check do cross.
 - **The figures are owed by a human.** Every stopwatch figure, the real window's WebKit and VoiceOver are measured
