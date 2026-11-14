@@ -165,3 +165,26 @@ async fn a_rebuild_takes_no_per_stop_lock() {
     c.batch_execute("COMMIT").await.unwrap();
     assert!(!is_current(&c, med).await, "the rebuild kept the stop");
 }
+
+/// Principle 12: `cairn.reprojecting` is an unregistered setting ANY role may raise, so both doors
+/// pin it off (a function-level SET clause, as #602 pinned `cairn.remote_apply`). A raw-SQL
+/// client that raises it still has its stop take the per-stop lock, at the strict door and at the
+/// remote one; otherwise its stop could race a strike and commit a struck dose as given.
+#[tokio::test]
+async fn a_raised_reprojecting_marker_does_not_skip_the_lock_at_either_door() {
+    rig!(c, sk, kid);
+    let (p, med) = chart(&c, &sk, &kid, true).await;
+    c.batch_execute("SET cairn.reprojecting = 'on'; BEGIN").await.unwrap();
+    let stop = submit(&c, &sk, stop_body(&c, &kid, p, med).await)
+        .await
+        .unwrap();
+    assert_eq!(count(&c, HOLDS_STOP_LOCK, stop).await, 1, "submit_event");
+    c.batch_execute("ROLLBACK").await.unwrap();
+    let mut peer = stop_body(&c, &kid, p, med).await;
+    peer.hlc = peer_hlc(db::next_hlc(&c, "test-node").await.unwrap().wall + 1_000);
+    let peer_id: Uuid = peer.event_id.parse().unwrap();
+    c.batch_execute("BEGIN").await.unwrap();
+    apply_remote(&c, &sk, &peer).await.expect("the peer's stop applies");
+    assert_eq!(count(&c, HOLDS_STOP_LOCK, peer_id).await, 1, "apply_remote_event");
+    c.batch_execute("ROLLBACK; RESET cairn.reprojecting").await.unwrap();
+}

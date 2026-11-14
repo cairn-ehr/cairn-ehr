@@ -35,13 +35,17 @@ Every slice 1a, 2a, 2b and 3 rule below still holds; a stat order is a charted l
   recurses until the stack overflows). Pins: `every_arrival_order_converges`,
   `a_reprojection_keeps_a_struck_givens_line_current`.
 - **A stop and the strike voiding it serialize on `cairn_lock_medication_stop`, in both appliers, and the lock is a
-  no-op while `cairn.reprojecting` is `'on'`.** **Tempting wrong fixes:** drop the lock "because the strike already
-  takes `cairn_lock_shred_refold`" (a hub applying a peer's stop and another pull's strike at once commits the struck
-  dose as given); take it inside `cairn_reproject` too (a rebuild would hold one lock per stop and exhaust
-  `max_locks_per_transaction`); clear `cairn.reprojecting` anywhere but the end of `cairn_reproject`. Pins:
+  no-op while `cairn.reprojecting` is `'on'`, which both doors pin off for their own call** (a function-level
+  `SET cairn.reprojecting = ''` on `submit_event` and `apply_remote_event`, as #602 pinned `cairn.remote_apply`).
+  **Tempting wrong fixes:** drop the lock "because the strike already takes `cairn_lock_shred_refold`" (a hub
+  applying a peer's stop and another pull's strike at once commits the struck dose as given); take it inside
+  `cairn_reproject` too (a rebuild would hold one lock per stop and exhaust `max_locks_per_transaction`); move the
+  doors' pin into the body as `set_config` (it would leave the marker cleared in the caller's transaction after the
+  call, as `db/005`'s #602 note explains); route `cairn_reproject` through a door
+  (the pin would then take one lock per stop in the rebuild). Pins:
   `a_strike_applied_while_its_stop_is_uncommitted_still_voids_it`,
-  `a_stop_applied_while_its_strike_is_uncommitted_never_wins`, `a_rebuild_takes_no_per_stop_lock`. Known gap: the
-  doors do not yet pin the setting (ADR-0105, "not guaranteed").
+  `a_stop_applied_while_its_strike_is_uncommitted_never_wins`, `a_rebuild_takes_no_per_stop_lock`,
+  `a_raised_reprojecting_marker_does_not_skip_the_lock_at_either_door`.
 - **A narrow rebuild of `clinical.medication-given-retraction`, of `clinical.medication-given` or of
   `clinical.medication-cessation` is refused** (`db/039`), because the strike's applier is registered against
   `medication_cessation` and `medication_cessation_reason` (`clinical.medication-cessation` was already refused on

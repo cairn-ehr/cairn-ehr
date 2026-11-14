@@ -65,6 +65,10 @@ DROP FUNCTION IF EXISTS apply_remote_event(bytea, bytea, bytea);
 -- fail loudly first, so under the bare `public` form a shadowed `event_log` diverted EVERY
 -- replicated event silently, with no local actor present to notice and the sync watermark
 -- still advancing. See the house-rule note on cairn_node_hlc_merge (db/001, #426).
+--
+-- `SET cairn.reprojecting = ''` — the whole-log replay marker is pinned off for this call, as
+-- submit_event pins it (db/005; ADR-0105 decision 18): a caller who raised it would otherwise
+-- skip the per-stop lock (db/082) and race a strike. cairn_reproject never calls this door.
 CREATE OR REPLACE FUNCTION apply_remote_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -74,6 +78,7 @@ CREATE OR REPLACE FUNCTION apply_remote_event(
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
+SET cairn.reprojecting = ''
 AS $$
 DECLARE
     b               JSONB;

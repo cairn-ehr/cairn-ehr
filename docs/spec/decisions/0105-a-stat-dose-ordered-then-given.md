@@ -145,8 +145,11 @@ The maintainer ruled on four questions (2026-11-14):
     `cairn_lock_medication_stop(stop)`: the stop applier before its voided check, the strike after
     `cairn_lock_shred_refold()`. Whichever comes second waits, then reads the first's rows. The lock is a no-op
     while `cairn.reprojecting` is `'on'`, which `cairn_reproject` (`db/039`, in place) sets for its own run, so a
-    rebuild never holds one lock per stop (`max_locks_per_transaction`). Pinned by
-    `medication_given_retraction_race.rs`, both orders.
+    rebuild never holds one lock per stop (`max_locks_per_transaction`). Both doors pin that setting off for their
+    own call with a function-level `SET cairn.reprojecting = ''` (`submit_event` in `db/005`, `apply_remote_event`
+    in `db/020`, both in place), as #602 pinned `cairn.remote_apply`, so a caller who raises it still takes the lock;
+    `cairn_reproject` calls the appliers directly, never through a door. Pinned by
+    `medication_given_retraction_race.rs`, both orders and both doors.
 19. **A narrow rebuild that would truncate the stops is refused.** The strike's applier is registered against
     `medication_given_retraction`, `medication_cessation` and `medication_cessation_reason`, so `db/039` refuses a
     rebuild of `clinical.medication-given-retraction`, of `clinical.medication-given` (which matches both new types)
@@ -223,10 +226,6 @@ The maintainer ruled on four questions (2026-11-14):
 - **`stat`, `ordered {o}` and the orderer follow the charting row's overlay winner.** `medication_charting` keeps one
   row per thread, so a later re-assertion of the thread carrying any charting key but no `stat` clears the flag, and
   it renames the orderer and moves `{o}` to its own signer and time.
-- **`cairn.reprojecting` is not pinned at the doors.** At this commit `submit_event` pins `cairn.remote_apply` for
-  its own run (#602) and `apply_remote_event` sets it itself, but neither touches `cairn.reprojecting`. A caller who
-  sets it to `'on'` therefore skips its own per-stop lock and reopens decision 18's race for its own transaction.
-  Pinning it at both doors, as #602 pinned the other setting, is owed by the slice's final review wave.
 - **Accessibility gaps** ([#1112](https://github.com/cairn-ehr/cairn-ehr/issues/1112)): a refusal beside the line is
   not a live region, focus is lost when the pane redraws, and the tab's semantics do not list Given or Entered in
   error.
