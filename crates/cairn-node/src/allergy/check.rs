@@ -14,7 +14,9 @@
 //!   [`same_allergen_rows`], transitively (`allergen_groups`).
 //! - **A note** ("Previous adverse effect: …") for an adverse effect that meets it the same way.
 //!   Never a mark: an adverse effect is not an allergy. Every other entry kind, including a
-//!   peer's newer word this build does not know, counts as an allergy (over-warning).
+//!   peer's newer word this build does not know, counts as an allergy (over-warning). A note
+//!   with its record is still a WARNING where the site lowered the threshold (db/081,
+//!   ADR-0104): see [`LineCheck::warns`] and [`LineCheck::warned_against`].
 //! - **"Not checked"** (D8) when the line has no mark and some live ALLERGY could not be
 //!   verified against it: either side uncoded, no drug list, an `unplaced` answer (any reason,
 //!   ruling R1), or no answer at all — or the patient holds an allergy record this terminal
@@ -74,7 +76,8 @@ pub struct LineCheck {
     /// then not in `against`. The line is never left unmarked by a merge.
     pub marks: Vec<String>,
     /// One allergy record per mark, in mark order: the live head whose hit produced it (its
-    /// `event_id`). What a warning override names, as its `allergy` refs (design §3.5).
+    /// `event_id`). The marks' records only: a warning override names
+    /// [`LineCheck::warned_against`], which adds the adverse-effect records at a lowered threshold.
     pub against: Vec<Uuid>,
     /// Previous adverse effects that meet the line, worded — and, past them, any note that
     /// names no record (the window's `ALLERGIES_NOT_READ` note, when the allergies could not
@@ -106,7 +109,7 @@ pub enum WarningThreshold {
 }
 
 impl WarningThreshold {
-    /// The stored word. Any word but `allergy-hit` reads as the LOWEST level: a word from a
+    /// Read the stored word. Any word but `allergy-hit` reads as the LOWEST level: a word from a
     /// newer build, or a garbled read, must never quietly drop a warning (over-warning is the
     /// safe error, as in the module doc).
     pub fn parse(word: &str) -> WarningThreshold {
@@ -160,6 +163,10 @@ impl LineCheck {
 
     /// How many leading notes carry a record (bounded by `notes`, should the two ever differ).
     fn warned_notes(&self) -> usize {
+        debug_assert!(
+            self.adverse_against.len() <= self.notes.len(),
+            "every adverse-effect record has its note: {self:?}"
+        );
         self.adverse_against.len().min(self.notes.len())
     }
 }

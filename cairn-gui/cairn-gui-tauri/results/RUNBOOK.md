@@ -3533,24 +3533,26 @@ On each, record an **adverse effect** (not an allergy) to codeine, reaction rash
       effects now count as warnings when charting". A bare `cnode medication-set-warning-threshold` and
       `--level nothing` are refused (usage errors).
 - [ ] Re-open `$T1`'s list: the codeine line's note is now loud, its tag reads **Warning** (never "Allergy"), its tick
-      is gone, and the Reason field is required, labelled "Reason for charting despite the warning". Sign with no
-      reason: refused, "Charting despite a warning needs a reason". Type `tolerated in hospital`, Sign (≤ 3 s,
+      is gone, and the Reason field is required, labelled "Reason for charting despite the warning". With no reason
+      the tick box stays disabled (the refusal "Charting despite a warning needs a reason" is the single-line Sign's,
+      pinned by `med_chart_threshold_db_tests.rs`). Type `tolerated in hospital`, tick the line, Sign (≤ 3 s,
       section 30's budget): charted.
 - [ ] `psql "$CONN" -c "SELECT cairn_clear_payload(e)->'warning_override' FROM event_log e WHERE patient_id = '$T1'
       AND event_type = 'clinical.medication.asserted'"` names the adverse-effect record as `{"source": "allergy", "ref": …}`.
 - [ ] The charted codeine line on the medication list still shows the note **muted**, with no tag (ADR-0104 decision 6).
 - [ ] On `$T2` (no codeine charted, so no duplicate can withhold the tick), *Already taking* `codeine 30mg tab
       qid`: loud, **Warning**, not ticked by default, no reason asked.
-- [ ] Hand-tick a codeine list line at the default, then lower the threshold at the console, then Sign: the line is
-      not charted and comes back unticked (the tick never saw the warning).
+- [ ] `cnode medication-set-warning-threshold --default`. On `$T2`, untick the codeine line and tick it again (a hand
+      tick at the default), then `--level adverse-effect` at the console, then Sign: the line is not charted and
+      comes back unticked (the tick never saw the warning).
 - [ ] VoiceOver reads the **Warning** tag and the note; keyboard-only, the Reason field is reachable.
 
 **Measurement 3: a restore.**
 
 - [ ] Record that a restore comes back at `allergy-hit` (the policy is outside the backups, like section 17's expiry):
-      with the threshold lowered, back up and restore into a throwaway database as section 17's Measurement 7 does,
-      then `psql "$CONN" -c "SELECT cairn_medication_warning_threshold()"` reads `allergy-hit` — the documented limit
-      (#1102). Set it again.
+      the documented limit (#1102). A restored database has no policy row, which `db/tests/081`'s no-row default pins
+      as `allergy-hit`. After any real restore, on the restored database (`$RESTORED`, its connection string),
+      `psql "$RESTORED" -c "SELECT cairn_medication_warning_threshold()"` reads `allergy-hit`; set it again.
 
 Reset with `cnode medication-set-warning-threshold --default`.
 

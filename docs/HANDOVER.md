@@ -204,7 +204,11 @@
 >   charted lines unchanged; Q3 the row is in no backup — a restore returns the default, filed **#1102** (all three
 >   site-policy rows). The final review's one Important finding was fixed: the reason's words are now general
 >   ("Charting despite a warning needs a reason"), since "listed allergy" was false for an adverse effect (ADR-0104
->   decision 10). Owed by a human: **RUNBOOK §35**.
+>   decision 10). The finalcheck review fixed the rest in place: a source guard pins both draft paths to the stamping
+>   `check_lines`; an unknown threshold word is logged, and the console reads it back as the window does. It filed
+>   **#1103** (a threshold that differs between the draw and Sign drops a typed reason, or asks one for an unseen
+>   warning), **#1104** (an unreadable threshold over-warns with its cause on stderr only) and **#1105** (the list
+>   path, `drawMarks` and the CLI success path are untested). Owed by a human: **RUNBOOK §35**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,

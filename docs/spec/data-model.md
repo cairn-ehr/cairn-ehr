@@ -64,8 +64,8 @@ in this GUI milestone "prescribe" means charted, and nothing is printed or sent.
 assertion, with no new type or schema version: whether it was **started here** or was **already being taken** (or
 `unknown`, an old list nobody can vouch for), the **route**, the **strength**, a combination's **components** (each its
 own coding claim, never beside a single coding), and a **warning override**: the reason typed for charting a new drug
-despite a warning, and the warnings it was charted against, each a `{source, ref}` pair. A listed allergy is the
-only source today (its ref the allergy record); drug interactions, drug–disease warnings and renal/hepatic dosing
+despite a warning, and the warnings it was charted against, each a `{source, ref}` pair. The allergy list is the
+only source today (its ref an allergy-list record, an adverse effect's too where the site lowered the threshold); drug interactions, drug–disease warnings and renal/hepatic dosing
 are later sources of the same shape. Requiring an override is a window rule, never a floor
 rule, so an event without one always syncs. The typed directions are the signed record; a structured field is filled
 only when the reading is certain, and an unread word stays visible as unread (principle 4). The allergy check runs on
@@ -107,7 +107,7 @@ Which findings count as a **warning** when a line is charted is the site's polic
 node's console: by default only an allergy hit warns, and the threshold can only be lowered, so that a previous
 adverse effect warns too. No setting switches allergy warnings off. A warning withholds the default tick, asks a
 *Start* line for a reason, and is named in the signed override by its allergy record; a line already charted is shown
-the same whatever the threshold. The row is in no backup, so a restore returns the default
+the same whatever the threshold. The setting is in no backup, so a restore returns the default
 ([ADR-0104](decisions/0104-the-warning-threshold.md)).
 
 The allergies row above is built as two born-sealed, additive event types: one entry

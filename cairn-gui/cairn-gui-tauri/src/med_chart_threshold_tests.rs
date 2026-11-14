@@ -3,7 +3,7 @@
 //! effect on a line being charted is a warning too: a Start line needs a reason for it, it is
 //! drawn as loud as a mark under a `Warning` tag (never `Allergy`, maintainer Q1), and the
 //! override names its record. The threshold is read on the draft path only. DB walks are
-//! `allergy_check_threshold_db_tests.rs`.
+//! `med_chart_threshold_db_tests.rs`.
 use super::*;
 use crate::allergy_check::ALLERGIES_NOT_READ;
 use crate::med_chart_webview_tests::MED_JS;
@@ -114,6 +114,11 @@ fn an_unread_threshold_over_warns() {
         threshold_of(Ok("adverse-effect".into())),
         WarningThreshold::AdverseEffect
     );
+    // A word from a newer node's scale.
+    assert_eq!(
+        threshold_of(Ok("renal-dosing".into())),
+        WarningThreshold::AdverseEffect
+    );
     assert_eq!(
         threshold_of(Err(anyhow::anyhow!("connection lost"))),
         WarningThreshold::AdverseEffect
@@ -160,4 +165,30 @@ fn a_warning_that_is_not_an_allergy_is_tagged_warning() {
     assert!(LIST_JS.contains(
         "const NO_MARKS = { marks: [], warning_notes: [], notes: [], unverified: false };"
     ));
+}
+
+/// Both draft paths read the threshold: the single line's Sign and the list (its view, its Sign,
+/// `warnings_now`) go through the stamping `check_lines`, never `check_lines_unsure`, whose checks
+/// carry the default threshold. Pointing either at the unsure body would silently drop every
+/// adverse-effect warning on a lowered site, and no pure test builds a check through it (the DB
+/// walk is never run by CI, #905), so the choice of call is pinned here.
+#[test]
+fn both_draft_paths_stamp_the_threshold() {
+    use crate::source_guard::rust_fn;
+    for (file, src, name) in [
+        (
+            "med_line_sign.rs",
+            include_str!("med_line_sign.rs"),
+            "fresh_check",
+        ),
+        (
+            "med_list_judge.rs",
+            include_str!("med_list_judge.rs"),
+            "check_all",
+        ),
+    ] {
+        let body = rust_fn(src, name);
+        assert!(body.contains("check_lines("), "{file}: {body}");
+        assert!(!body.contains("check_lines_unsure("), "{file}: {body}");
+    }
 }

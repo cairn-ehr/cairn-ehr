@@ -10,7 +10,9 @@
 --   'adverse-effect' a previous adverse effect warns too.
 -- Nothing sits above 'allergy-hit', so no word can switch allergy warnings off: the threshold can
 -- only be LOWERED from the default (design §3.5, "lowerable only"). A later check (interactions,
--- renal dosing) adds its own level on this scale; the CHECK below grows additively.
+-- renal dosing) adds its own level on this scale. The CHECK below is inside CREATE TABLE IF NOT
+-- EXISTS, so editing it in place never reaches an existing database (#207): a new level needs a
+-- paired ALTER TABLE ... DROP/ADD CONSTRAINT, a guard test, and the setter's list widened too.
 --
 -- WHO. The policy is the administrator's, never a clinician's preference: set only at the node's
 -- console (`cairn-node medication-set-warning-threshold`), so no runtime role holds the setter.

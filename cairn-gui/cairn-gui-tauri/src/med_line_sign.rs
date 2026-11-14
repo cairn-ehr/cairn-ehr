@@ -187,8 +187,9 @@ pub(crate) fn not_read(why: &str) -> LineCheck {
     }
 }
 
-/// The fresh check's allergy marks as the override names them, each by its allergy record's
-/// event id (`ids`: those ids as text, owned by the caller). Pure.
+/// The fresh check's warnings as the override names them (its marks, and its adverse effects at
+/// a lowered threshold), each by its allergy record's event id (`ids`: those ids as text, owned
+/// by the caller). Pure.
 pub(crate) fn override_refs(ids: &[String]) -> Vec<OverrideRef<'_>> {
     ids.iter()
         .map(|id| OverrideRef {

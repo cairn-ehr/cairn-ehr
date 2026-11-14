@@ -5028,11 +5028,15 @@ async fn run() -> anyhow::Result<()> {
             } else {
                 ""
             };
-            match now.as_str() {
-                "adverse-effect" => println!(
+            // Read the word as the window does, so the console never understates what it applies.
+            use cairn_node::allergy::check::WarningThreshold;
+            match WarningThreshold::parse(&now) {
+                WarningThreshold::AdverseEffect => println!(
                     "allergy hits and previous adverse effects now count as warnings when charting{default}"
                 ),
-                _ => println!("only allergy hits count as warnings when charting{default}"),
+                WarningThreshold::AllergyHit => {
+                    println!("only allergy hits count as warnings when charting{default}")
+                }
             }
         }
         Cmd::SupervisionSet {

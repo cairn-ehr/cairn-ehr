@@ -205,7 +205,7 @@ fn a_start_line_with_a_mark_needs_a_trimmed_reason() {
     );
 }
 
-/// The window drew a mark (so it sent a reason) but Sign's own fresh check could not run: the
+/// The window drew a warning (so it sent a reason) but Sign's own fresh check could not run: the
 /// reason must never be dropped silently — refused before the key, so the window checks again
 /// and the clinician sees "not checked" before a line signs unchecked (review finding, PR #1066).
 #[test]

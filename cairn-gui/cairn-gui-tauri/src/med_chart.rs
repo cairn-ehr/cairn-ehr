@@ -51,7 +51,7 @@ use uuid::Uuid;
 /// lowered threshold, ADR-0104) and no reason. General words: an adverse effect is no allergy.
 pub const NEEDS_A_REASON: &str = "Charting despite a warning needs a reason";
 
-/// The refusal of Sign when the window drew a mark (and so sent a reason) but Sign's own fresh
+/// The refusal of Sign when the window drew a warning (and so sent a reason) but Sign's own fresh
 /// check could not run: signing would drop the reason silently, so nothing is signed and the
 /// window checks the line again (PR #1066 review finding).
 pub const CHECK_DID_NOT_RUN: &str =
@@ -296,8 +296,9 @@ pub(crate) fn press(w: &str) -> Result<ChartedAs, ErrorView> {
 /// The reason to sign as the warning override (an allergy source today), or the refusal. Only a
 /// Start line with a warning at the site's threshold needs one (an allergy mark; a previous
 /// adverse effect too when the administrator lowered it, ADR-0104): an already-taking line
-/// records what the patient takes, a quiet note or "not checked" is no warning. A blank trimmed reason is [`NEEDS_A_REASON`]; a reason
-/// sent against a check that could not run is [`CHECK_DID_NOT_RUN`]. Pure.
+/// records what the patient takes, a quiet note or "not checked" is no warning. A blank trimmed
+/// reason is [`NEEDS_A_REASON`]; a reason sent against a check that could not run is
+/// [`CHECK_DID_NOT_RUN`]. Pure.
 pub(crate) fn override_before_the_key<'a>(
     charted_as: ChartedAs,
     check: &LineCheck,
@@ -308,7 +309,7 @@ pub(crate) fn override_before_the_key<'a>(
     }
     let reason = reason.map(str::trim).filter(|r| !r.is_empty());
     match (!check.warns(), reason) {
-        // A reason the window sent for a mark this check could not confirm: never dropped.
+        // A reason the window sent for a warning this check could not confirm: never dropped.
         (true, Some(_)) if check.unverified => Err(refused(CHECK_DID_NOT_RUN)),
         (true, _) => Ok(None),
         (false, Some(r)) => Ok(Some(r)),
