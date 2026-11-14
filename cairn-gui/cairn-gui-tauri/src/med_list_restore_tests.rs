@@ -175,6 +175,19 @@ fn the_restore_line_inherits_the_companions_charted_as() {
     assert_eq!(restore_charted_as(&old), "pre-existing");
 }
 
+/// Ruling R11: the wire admits `unknown` and a peer may send any word, but a list line takes only
+/// the two presses (db/078's CHECK), so anything but `started-here` restores as `pre-existing`.
+#[test]
+fn a_companion_charted_unknown_or_any_peer_word_restores_as_pre_existing() {
+    for word in ["unknown", "pre-existing", "a-peers-new-word", ""] {
+        let v = VersionForRestore {
+            companion_charted_as: Some(word.into()),
+            ..version(None)
+        };
+        assert_eq!(restore_charted_as(&v), "pre-existing", "{word:?}");
+    }
+}
+
 /// Ruling R9 (a): among the ticked lines in Sign order, a restore of a version whose companion an
 /// EARLIER ticked restore line also replaces is refused alone, legibly; the first is not.
 #[test]

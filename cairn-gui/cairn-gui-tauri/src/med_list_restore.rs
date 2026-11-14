@@ -179,10 +179,15 @@ pub(crate) fn restore_prefill(
     (typed_drug, directions, line_text, parts)
 }
 
-/// The press the restored line takes: the companion's, `pre-existing` for a companion charted
-/// before slice 1a (the maintainer's ruling). The reviewer may change it. Pure.
-pub(crate) fn restore_charted_as(v: &VersionForRestore) -> &str {
-    v.companion_charted_as.as_deref().unwrap_or("pre-existing")
+/// The press the restored line takes: `started-here` when the companion was started here, else
+/// `pre-existing` — for a companion charted before slice 1a (the maintainer's ruling), and for
+/// `unknown` or any word a peer sent (ruling R11), since a list line takes only the two presses
+/// (db/078's CHECK). The line keeps it: no list control changes a press. Pure.
+pub(crate) fn restore_charted_as(v: &VersionForRestore) -> &'static str {
+    match v.companion_charted_as.as_deref() {
+        Some("started-here") => "started-here",
+        _ => "pre-existing",
+    }
 }
 
 /// The reason each stop of a restore signs. Pure.
