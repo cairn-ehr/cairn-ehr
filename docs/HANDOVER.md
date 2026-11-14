@@ -181,12 +181,12 @@
 >   db/048, db/077, db/078 and db/079 in place, `SCHEMA_GENERATION` **80**). Plan Tasks 1–3 (the wire, the restore
 >   floor, the checked type) **MERGED 2026-11-13 in PR [#1096](https://github.com/cairn-ehr/cairn-ehr/pull/1096)**;
 >   Tasks 4–8 (the list's restore line, the node's signing and reads, the window commands, the pane, the docs) on
->   **draft PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098)**, each task reviewed; final whole-branch
->   review + one fix wave + the gate still to run there. **A restore stops whatever stands for its companion**
+>   **draft PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098)**, each task reviewed, then a final whole-branch
+>   review and its one fix wave (re-review: ready to merge); CI is the full gate. **A restore stops whatever stands for its companion**
 >   (rulings R3/R4/R10: one ROOTED lineage function, `cairn_medication_restore_lineage`, read by the commit-time floor
 >   AND the window); `restores` in its own projection (R5); a second restore of one line refused before the key and
->   never default-ticked (R9). The rulings are in ADR-0103 and #1098's body — **the maintainer should read them**.
->   Open: **#1097** (an erased middle link lets a later restore leave two current lines — a documented limit).
+>   never default-ticked (R9); a restore line whose line was stopped since is never default-ticked (R12). The rulings are in ADR-0103 and #1098's body — **the maintainer should read them**.
+>   Open: **#1097** (an erased middle link lets a later restore leave two current lines — a documented limit) · **#1099** (review residuals, all can-wait).
 >   Owed by a human: **RUNBOOK §34**.
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
@@ -235,8 +235,7 @@
 >    medication in the window** (design APPROVED 2026-11-11, three PRs: the line + the check at charting; stat ordered →
 >    given; aliases + PBS forms as drugref supplies them). **Slice 1a MERGED in PR #1066** (the bullet above);
 >    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Batch-charting slice 2a MERGED** in PR #1088 (the bullet
->    above); **slice 2b** (the bullet above) — **finish draft PR #1098**
->    (final review, fix wave, gate) and merge it; then **slice 3** (the warning threshold as administrator policy, lowerable only). Charting **1b** (the same-drug de-label
+>    above); **slice 2b** (the bullet above) — **merge PR #1098** once CI is green; then **slice 3** (the warning threshold as administrator policy, lowerable only). Charting **1b** (the same-drug de-label
 >    offer) MERGED in PR #1086 (the bullet above). Then slice 2 (stat ordered → given, #1069). Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2
 >    are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**.
