@@ -370,6 +370,21 @@ async fn the_window_role_holds_execute_and_no_table_privilege() {
         .unwrap()
         .get(0);
     assert_eq!(n, 5);
+    // The doors' shared preamble is the owner's alone, like db/065's trigger function: every door
+    // reaches it as its definer, so the window never needs to call it directly (#1138 item 8).
+    let gate_reachable: bool = owner
+        .query_one(
+            "SELECT has_function_privilege('cairn_window', \
+             'cairn_med_draft_gate(text, uuid, uuid, text, text)', 'EXECUTE')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        !gate_reachable,
+        "cairn_window must not EXECUTE cairn_med_draft_gate"
+    );
     assert!(!owner
         .query_one(
             "SELECT has_table_privilege('cairn_window', 'medication_draft_line', 'SELECT')",

@@ -174,6 +174,11 @@ pub(crate) struct Judged {
     pub offers: Vec<DelabelOffer>,
 }
 
+/// The muted note on every draft line while the drug allergies are "not yet asked" (#1138 item
+/// 4). With nothing recorded, the check finds nothing, and a line with no tag reads exactly like
+/// a line checked clean. The strip's own words, so the two say the same thing.
+pub(crate) const DRUG_ALLERGIES_NOT_YET_ASKED: &str = "Drug allergies not yet asked: not checked";
+
 /// Judge every line of `fresh`. `use_allergies`: the allergies were read over the set on screen
 /// (else every line is "not checked"). `named_writer`: the list has a writer (else no line is
 /// default-ticked).
@@ -225,6 +230,7 @@ pub(crate) async fn judge(
                 (true, false) => not_checked(),
                 (false, _) => not_read("the linked charts changed since the list was read"),
             };
+            let check = noting_not_yet_asked(check, &status);
             let read = read_directions(&line.directions);
             let all_parts_coded = signable
                 .as_ref()
@@ -315,6 +321,16 @@ async fn check_all(
 }
 
 /// "Not checked", for a line the check was never given (it cannot be read as a drug). Pure.
+/// Pure: `check` with [`DRUG_ALLERGIES_NOT_YET_ASKED`] among its notes while the drug allergies
+/// are not yet asked. Only a note: the tick and reason rules already read the status itself
+/// (`default_tick` refuses a default tick), so nothing else changes.
+fn noting_not_yet_asked(mut check: LineCheck, drug_allergies: &ListStatus) -> LineCheck {
+    if *drug_allergies == ListStatus::NotYetAsked {
+        check.notes.push(DRUG_ALLERGIES_NOT_YET_ASKED.into());
+    }
+    check
+}
+
 fn not_checked() -> LineCheck {
     LineCheck {
         unverified: true,

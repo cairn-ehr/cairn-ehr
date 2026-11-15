@@ -106,8 +106,12 @@ fn refusal_sentences_never_echo_the_passphrase() {
     let secret = test_passphrase();
     let every = [
         KeyRefusal::NeedCredential,
-        KeyRefusal::Wrong { retry_after: None },
         KeyRefusal::Wrong {
+            staff_id: "jsmith".into(),
+            retry_after: None,
+        },
+        KeyRefusal::Wrong {
+            staff_id: String::new(),
             retry_after: Some(Duration::from_secs(2)),
         },
         KeyRefusal::Waiting {
@@ -141,8 +145,23 @@ fn refusal_sentences_never_echo_the_passphrase() {
         KeyRefusal::NeedCredential.sentence(),
         "Enter your staff ID and passphrase to sign."
     );
+    // #1138 item 2: the ID tried is named. A prefilled ID belongs to whoever who's here names,
+    // so a passer-by's own passphrase is a counted wrong guess against THAT person; the sentence
+    // says whose ID it was. With no ID to name, the plain sentence.
+    let wrong = |id: &str, wait: Option<Duration>| KeyRefusal::Wrong {
+        staff_id: id.into(),
+        retry_after: wait,
+    };
     assert_eq!(
-        KeyRefusal::Wrong { retry_after: None }.sentence(),
+        wrong("jsmith", None).sentence(),
+        "That passphrase is not right for staff ID jsmith."
+    );
+    assert_eq!(
+        wrong(" jsmith ", Some(Duration::from_secs(2))).sentence(),
+        "That passphrase is not right for staff ID jsmith. Wait 2 s, then try again."
+    );
+    assert_eq!(
+        wrong("  ", None).sentence(),
         "That passphrase is not right."
     );
     // #898: the window tells the clinician what to ask for, in the brief's words.
@@ -179,44 +198,51 @@ fn each_vault_answer_maps_to_its_refusal() {
     use cairn_node::vault::Release;
     let wait = Duration::from_secs(4);
     assert_eq!(
-        from_release(Release::Wrong {
-            retry_after: Some(wait)
-        })
+        from_release(
+            "jsmith",
+            Release::Wrong {
+                retry_after: Some(wait)
+            }
+        )
         .unwrap_err(),
         KeyRefusal::Wrong {
+            staff_id: "jsmith".into(),
             retry_after: Some(wait)
         }
     );
     assert_eq!(
-        from_release(Release::Waiting { retry_after: wait }).unwrap_err(),
+        from_release("jsmith", Release::Waiting { retry_after: wait }).unwrap_err(),
         KeyRefusal::Waiting { retry_after: wait }
     );
     assert_eq!(
-        from_release(Release::Unknown).unwrap_err(),
+        from_release("jsmith", Release::Unknown).unwrap_err(),
         KeyRefusal::Unknown
     );
     assert_eq!(
-        from_release(Release::RefusedPurpose).unwrap_err(),
+        from_release("jsmith", Release::RefusedPurpose).unwrap_err(),
         KeyRefusal::NotForClinicalActs
     );
     assert_eq!(
-        from_release(Release::NotCurrent).unwrap_err(),
+        from_release("jsmith", Release::NotCurrent).unwrap_err(),
         KeyRefusal::NotCurrent
     );
     assert_eq!(
-        from_release(Release::Expired).unwrap_err(),
+        from_release("jsmith", Release::Expired).unwrap_err(),
         KeyRefusal::Expired
     );
     assert_eq!(
-        from_release(Release::OverPowered { why: "any reason." }).unwrap_err(),
+        from_release("jsmith", Release::OverPowered { why: "any reason." }).unwrap_err(),
         KeyRefusal::OverPowered
     );
     let key = SessionKey::for_test(Now::read()).signing_key();
     let kid = hex::encode(key.verifying_key().to_bytes());
-    let (got, got_kid) = from_release(Release::Released {
-        key: key.clone(),
-        kid: kid.clone(),
-    })
+    let (got, got_kid) = from_release(
+        "jsmith",
+        Release::Released {
+            key: key.clone(),
+            kid: kid.clone(),
+        },
+    )
     .expect("a released key signs");
     assert_eq!(got.to_bytes(), key.to_bytes());
     assert_eq!(got_kid, kid);
@@ -424,7 +450,7 @@ fn utc_now() -> chrono::DateTime<chrono::Utc> {
 fn a_notice_names_the_approver_and_its_absence_degrades_to_wrong() {
     let wait = Some(Duration::from_secs(3));
     assert_eq!(
-        noting(wait, Ok(Some(notice("Dr Smith"))), &utc_now()),
+        noting("jsmith", wait, Ok(Some(notice("Dr Smith"))), &utc_now()),
         KeyRefusal::Replaced {
             at: "Sun 1 Nov 2026 04:05".into(),
             approver: "Dr Smith".into(),
@@ -432,12 +458,23 @@ fn a_notice_names_the_approver_and_its_absence_degrades_to_wrong() {
         }
     );
     assert_eq!(
-        noting(wait, Ok(None), &utc_now()),
-        KeyRefusal::Wrong { retry_after: wait }
+        noting("jsmith", wait, Ok(None), &utc_now()),
+        KeyRefusal::Wrong {
+            staff_id: "jsmith".into(),
+            retry_after: wait
+        }
     );
     assert_eq!(
-        noting(None, Err(anyhow::anyhow!("lookup failed")), &utc_now()),
-        KeyRefusal::Wrong { retry_after: None }
+        noting(
+            "jsmith",
+            None,
+            Err(anyhow::anyhow!("lookup failed")),
+            &utc_now()
+        ),
+        KeyRefusal::Wrong {
+            staff_id: "jsmith".into(),
+            retry_after: None
+        }
     );
 }
 

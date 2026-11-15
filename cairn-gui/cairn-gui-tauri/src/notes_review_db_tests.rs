@@ -268,3 +268,43 @@ async fn the_key_not_the_claim_decides_in_the_window() {
     );
     assert_eq!(vouch_count(&owner).await, 0, "Zed's key wrote no vouch");
 }
+
+/// #1138 item 1: a held key is re-checked on each use. Repudiated at another terminal (here the
+/// owner appends the repudiation, as the console door does), it is forgotten on its next use and
+/// the act asks for the passphrase, instead of the strip saying "Signed in for the next act" while
+/// the floor refuses every act it signs.
+#[tokio::test]
+async fn a_held_key_repudiated_elsewhere_is_forgotten_on_its_next_use() {
+    let Some((_g, owner, state, _, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let now = crate::state::Now::read;
+    let (_, kid) = state
+        .signer_for_act(credential("sue"), now())
+        .await
+        .unwrap();
+    assert_eq!(state.key_status(now()).await.as_deref(), Some("sue"));
+    assert!(
+        state.signer_for_act(None, now()).await.is_ok(),
+        "held, and still current"
+    );
+
+    owner
+        .execute(
+            "SELECT cairn_actor_append(a.actor_id, 'repudiate', $1, 'console', NULL) \
+               FROM actor_current a WHERE a.signing_key_id = $1",
+            &[&kid],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state.signer_for_act(None, now()).await.err(),
+        Some(crate::signer::KeyRefusal::NeedCredential)
+    );
+    assert_eq!(
+        state.key_status(now()).await,
+        None,
+        "the stale key is wiped"
+    );
+}

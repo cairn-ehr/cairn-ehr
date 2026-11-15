@@ -229,3 +229,64 @@ async fn the_window_may_call_both_and_public_may_not() {
         );
     }
 }
+
+/// #1138 item 7: "due", "stuck" and the spent word each have ONE definition. The menu used to copy
+/// db/067's expressions and the three save/take doors repeated one CASE; a change to one copy would
+/// make the menu and the chart (or two doors) disagree. Read from the catalogue, so it checks what
+/// the database runs, not what a file says.
+#[tokio::test]
+async fn due_stuck_and_the_spent_word_each_have_one_definition() {
+    db_gated!();
+    let (_g, c, _, _) = fresh().await;
+    let body = |name: &'static str| {
+        let c = &c;
+        async move {
+            c.query_one("SELECT prosrc FROM pg_proc WHERE proname = $1", &[&name])
+                .await
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+                .get::<_, String>(0)
+        }
+    };
+    for door in [
+        "cairn_note_drafts_overdue",
+        "cairn_note_drafts_due",
+        "cairn_note_draft_commit_overdue",
+        "cairn_note_drafts_by_writer",
+    ] {
+        let src = body(door).await;
+        assert!(
+            src.contains("cairn_note_draft_due("),
+            "{door} must read the due helper"
+        );
+        assert!(
+            !src.contains("make_interval"),
+            "{door} copies the due expression"
+        );
+    }
+    for door in ["cairn_note_drafts_due", "cairn_note_drafts_by_writer"] {
+        let src = body(door).await;
+        assert!(
+            src.contains("cairn_note_draft_stuck("),
+            "{door} must read the stuck helper"
+        );
+        assert!(
+            !src.contains("cairn_vault_member_key"),
+            "{door} copies the stuck test"
+        );
+    }
+    for door in [
+        "cairn_note_draft_part_save",
+        "cairn_note_draft_take",
+        "cairn_note_draft_addendum_part_save",
+    ] {
+        let src = body(door).await;
+        assert!(
+            src.contains("cairn_note_draft_spent_word("),
+            "{door} must read the spent word"
+        );
+        assert!(
+            !src.contains("by_timer THEN"),
+            "{door} copies the spent CASE"
+        );
+    }
+}

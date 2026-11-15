@@ -289,7 +289,7 @@ async fn a_superuser_key_is_released_for_enrol_after_a_refused_clinical() {
     .await
     .unwrap_err();
     assert!(
-        wrong.starts_with("That passphrase is not right."),
+        wrong.starts_with("That passphrase is not right for staff ID boss."),
         "{wrong}"
     );
 }

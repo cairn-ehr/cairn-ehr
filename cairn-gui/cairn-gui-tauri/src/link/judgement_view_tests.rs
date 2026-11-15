@@ -175,7 +175,10 @@ fn a_locked_key_is_not_a_verdict() {
     use crate::signer::KeyRefusal;
     for refusal in [
         KeyRefusal::NeedCredential,
-        KeyRefusal::Wrong { retry_after: None },
+        KeyRefusal::Wrong {
+            staff_id: "jsmith".into(),
+            retry_after: None,
+        },
         KeyRefusal::Waiting {
             retry_after: std::time::Duration::from_secs(3),
         },

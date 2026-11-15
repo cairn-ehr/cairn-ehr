@@ -101,6 +101,17 @@ DROP FUNCTION IF EXISTS cairn_note_draft_spend(uuid, uuid);
 -- if the text or stated time changed; otherwise a non-empty text appends part tail+1 (an empty one
 -- makes no part — a colleague clicking in and out writes nothing). A new draft always gets part 1.
 -- Every write stamps the part's and the header's last_keystroke and leaves a revision row.
+-- The word a SPENT draft answers with, or NULL while it is open: 'discarded' (db/069), 'committed'
+-- (a timer's commit, db/067 — never this window's Sign) or 'spent' (a Sign). One definition for
+-- every draft door (db/066's save and take, db/070's addendum save), so they never disagree (#1138).
+-- Not a definer: each caller is one, and holds the draft's lock when it asks.
+CREATE OR REPLACE FUNCTION cairn_note_draft_spent_word(p_draft uuid) RETURNS text
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
+    SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'
+                WHEN s.by_timer THEN 'committed' ELSE 'spent' END
+      FROM note_draft_spent s WHERE s.draft_id = p_draft;
+$$;
+
 CREATE OR REPLACE FUNCTION cairn_note_draft_part_save(
     p_draft uuid, p_patient uuid, p_terminal text, p_writer text, p_narrative text,
     p_stated_time timestamptz)
@@ -127,10 +138,7 @@ BEGIN
         RETURN 'no-such-writer';
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
-    -- A timer's commit is never this window's Sign, so it gets its own word (db/067).
-    v_spent := (SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'  -- db/069
-                            WHEN s.by_timer THEN 'committed' ELSE 'spent' END
-                  FROM note_draft_spent s WHERE s.draft_id = p_draft);
+    v_spent := cairn_note_draft_spent_word(p_draft);
     IF v_spent IS NOT NULL THEN
         RETURN v_spent;
     END IF;
@@ -218,10 +226,7 @@ BEGIN
         RAISE EXCEPTION 'cairn_note_draft_take needs a draft, a patient and a terminal';
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
-    -- A timer's commit is never this window's Sign, so it gets its own word (db/067).
-    v_spent := (SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'  -- db/069
-                            WHEN s.by_timer THEN 'committed' ELSE 'spent' END
-                  FROM note_draft_spent s WHERE s.draft_id = p_draft);
+    v_spent := cairn_note_draft_spent_word(p_draft);
     IF v_spent IS NOT NULL THEN
         RETURN v_spent;
     END IF;
@@ -282,7 +287,8 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_note_draft_part_save(uuid, uuid, text, text, text, timestamptz),
     cairn_note_draft_parts(uuid), cairn_note_draft_take(uuid, uuid, text),
-    cairn_note_draft_spend_parts(uuid, uuid), cairn_whos_here_directory() FROM PUBLIC;
+    cairn_note_draft_spend_parts(uuid, uuid), cairn_whos_here_directory(),
+    cairn_note_draft_spent_word(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_note_draft_part_save(uuid, uuid, text, text, text, timestamptz),
     cairn_note_draft_parts(uuid), cairn_note_draft_take(uuid, uuid, text),
     cairn_note_draft_spend_parts(uuid, uuid), cairn_whos_here_directory() TO cairn_window;

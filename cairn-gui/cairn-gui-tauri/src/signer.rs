@@ -119,8 +119,13 @@ pub fn decide(
 pub enum KeyRefusal {
     /// No credential was typed and no key is held.
     NeedCredential,
-    /// The passphrase did not match; `retry_after` is the back-off before the next try, if any.
-    Wrong { retry_after: Option<Duration> },
+    /// The passphrase did not match `staff_id` (as typed); `retry_after` is the back-off before the
+    /// next try, if any. The sentence names the ID: a prefilled one is who's here's, so a passer-by's
+    /// own passphrase is a counted guess against that person, and must say so (#1138 item 2).
+    Wrong {
+        staff_id: String,
+        retry_after: Option<Duration>,
+    },
     /// The passphrase typed is the one this member had BEFORE a re-key (still a counted wrong
     /// guess, so `retry_after` is the same back-off). `at` is already a local date and time;
     /// `approver` is a display name, or "" when that person is no longer in the vault.
@@ -158,13 +163,19 @@ impl KeyRefusal {
     pub fn sentence(&self) -> String {
         match self {
             KeyRefusal::NeedCredential => "Enter your staff ID and passphrase to sign.".into(),
-            KeyRefusal::Wrong { retry_after: None } => "That passphrase is not right.".into(),
             KeyRefusal::Wrong {
-                retry_after: Some(wait),
-            } => format!(
-                "That passphrase is not right. Wait {} s, then try again.",
-                seconds(*wait)
-            ),
+                staff_id,
+                retry_after,
+            } => {
+                let base = match staff_id.trim() {
+                    "" => "That passphrase is not right.".to_string(),
+                    id => format!("That passphrase is not right for staff ID {id}."),
+                };
+                match retry_after {
+                    None => base,
+                    Some(wait) => format!("{base} Wait {} s, then try again.", seconds(*wait)),
+                }
+            }
             KeyRefusal::Replaced {
                 at,
                 approver,
@@ -223,14 +234,21 @@ fn seconds(d: Duration) -> u64 {
     d.as_millis().div_ceil(1000).max(1) as u64
 }
 
-/// Pure: a vault answer as the key that signs, or the refusal it means.
-pub(crate) fn from_release(release: Release) -> Result<(SigningKey, String), KeyRefusal> {
+/// Pure: a vault answer for `staff_id` as the key that signs, or the refusal it means.
+pub(crate) fn from_release(
+    staff_id: &str,
+    release: Release,
+) -> Result<(SigningKey, String), KeyRefusal> {
+    let wrong = |retry_after| KeyRefusal::Wrong {
+        staff_id: staff_id.to_string(),
+        retry_after,
+    };
     match release {
         Release::Released { key, kid } => Ok((key, kid)),
-        Release::Wrong { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
+        Release::Wrong { retry_after } => Err(wrong(retry_after)),
         // Pure, so no notice to quote: reads as a wrong passphrase. Callers holding the database
         // use `from_release_noting`, which gives a replaced key its own sentence.
-        Release::Replaced { retry_after } => Err(KeyRefusal::Wrong { retry_after }),
+        Release::Replaced { retry_after } => Err(wrong(retry_after)),
         Release::Waiting { retry_after } => Err(KeyRefusal::Waiting { retry_after }),
         Release::Unknown => Err(KeyRefusal::Unknown),
         Release::RefusedPurpose => Err(KeyRefusal::NotForClinicalActs),
@@ -248,16 +266,17 @@ pub(crate) async fn from_release_noting(
     release: Release,
 ) -> Result<(SigningKey, String), KeyRefusal> {
     let Release::Replaced { retry_after } = release else {
-        return from_release(release);
+        return from_release(staff_id, release);
     };
     let notice = cairn_node::vault_admin::replaced_notice(db, staff_id).await;
-    Err(noting(retry_after, notice, &chrono::Local::now()))
+    Err(noting(staff_id, retry_after, notice, &chrono::Local::now()))
 }
 
 /// Pure: the refusal for a `Replaced` answer, given what the notice lookup returned. A notice
 /// names the date and approver; no notice, or a failed lookup (logged to stderr), degrades to
 /// the plain wrong-passphrase refusal with the SAME back-off, never to an error.
 pub(crate) fn noting<Tz: chrono::TimeZone>(
+    staff_id: &str,
     retry_after: Option<Duration>,
     notice: anyhow::Result<Option<cairn_node::vault_admin::ReplacedNotice>>,
     now: &chrono::DateTime<Tz>,
@@ -271,10 +290,16 @@ where
             approver: n.approver,
             retry_after,
         },
-        Ok(None) => KeyRefusal::Wrong { retry_after },
+        Ok(None) => KeyRefusal::Wrong {
+            staff_id: staff_id.to_string(),
+            retry_after,
+        },
         Err(e) => {
             eprintln!("the replaced-key notice could not be read: {e:#}");
-            KeyRefusal::Wrong { retry_after }
+            KeyRefusal::Wrong {
+                staff_id: staff_id.to_string(),
+                retry_after,
+            }
         }
     }
 }

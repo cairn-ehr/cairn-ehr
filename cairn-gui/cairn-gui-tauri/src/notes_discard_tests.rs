@@ -163,8 +163,12 @@ fn a_key_refusal_under_discard_never_says_sign() {
     use std::time::Duration;
     let every = [
         KeyRefusal::NeedCredential,
-        KeyRefusal::Wrong { retry_after: None },
         KeyRefusal::Wrong {
+            staff_id: "jsmith".into(),
+            retry_after: None,
+        },
+        KeyRefusal::Wrong {
+            staff_id: "jsmith".into(),
             retry_after: Some(Duration::from_secs(2)),
         },
         KeyRefusal::Replaced {

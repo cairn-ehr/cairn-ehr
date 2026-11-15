@@ -304,43 +304,12 @@ async fn an_enroller_may_rekey_a_doubtful_member() {
 
 // ---- The optional site expiry for unconfirmed keys (§5.5, last bullet) ----
 
-/// Age key `v` by `days`: its introducing (and any confirm) row is back-dated. The registry is
-/// append-only (`actor_event_no_update`), so the owner lifts that trigger for this fixture alone,
-/// inside ONE transaction: DDL is transactional in Postgres, so if anything between fails (or the
-/// test panics and drops the connection) the trigger comes back with the rollback, and no later
-/// suite on this shared database runs with the registry left writable.
-async fn age_key(c: &tokio_postgres::Client, v: u8, days: i32) {
-    c.batch_execute("BEGIN; ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update")
-        .await
-        .unwrap();
-    let aged = c
-        .execute(
-            "UPDATE actor_event SET recorded_at = recorded_at - make_interval(days => $2) \
-              WHERE signing_key_id = $1",
-            &[&kid_of(v), &days],
-        )
-        .await;
-    let end = if aged.is_ok() {
-        "ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update; COMMIT"
-    } else {
-        "ROLLBACK"
-    };
-    c.batch_execute(end).await.unwrap();
-    aged.unwrap();
-}
-
 /// When the window should say signing stops for `staff`, as the window asks it.
 async fn expires_at(c: &tokio_postgres::Client, staff: &str) -> Option<std::time::SystemTime> {
     c.query_one("SELECT cairn_vault_unconfirmed_expires_at($1)", &[&staff])
         .await
         .unwrap()
         .get(0)
-}
-
-async fn set_expiry(c: &tokio_postgres::Client, days: Option<i32>) {
-    c.execute("SELECT cairn_vault_set_unconfirmed_expiry($1)", &[&days])
-        .await
-        .unwrap();
 }
 
 /// The reference default is no expiry: an unconfirmed key a year old still signs.

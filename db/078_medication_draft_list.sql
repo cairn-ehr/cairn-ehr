@@ -493,5 +493,7 @@ GRANT EXECUTE ON FUNCTION
     cairn_med_draft_lines(uuid, text), cairn_med_draft_line_delete(uuid, uuid, text, text, timestamptz),
     cairn_med_draft_take(uuid, text, text), cairn_med_drafts_by_writer(),
     cairn_med_draft_from_save(uuid, text, text, text), cairn_med_draft_from(uuid, text),
-    cairn_med_draft_restore_add(uuid, uuid, text, text, uuid, text, text, jsonb, text, text),
-    cairn_med_draft_gate(text, uuid, uuid, text, text) TO cairn_window;
+    cairn_med_draft_restore_add(uuid, uuid, text, text, uuid, text, text, jsonb, text, text) TO cairn_window;
+-- The shared preamble is the owner's alone, like db/065's trigger function: each door above reaches
+-- it as its definer. A node that ran an earlier copy of this file granted it, hence the REVOKE (#1138).
+REVOKE EXECUTE ON FUNCTION cairn_med_draft_gate(text, uuid, uuid, text, text) FROM cairn_window;
