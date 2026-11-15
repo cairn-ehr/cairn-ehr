@@ -96,13 +96,31 @@ fn one_part_signs_the_finished_term_and_its_canonical_code() {
 /// display's and carries the name only as the pick sent it.
 #[test]
 fn a_picked_alias_signs_the_matched_name() {
-    let epi = Uuid::from_u128(0xE91);
-    let mut coding = coded(epi, "epinephrine");
-    coding.as_mut().unwrap().matched = Some("adrenaline".into());
-    let (term, parts) =
-        before_key(&line(vec![part("adren", coding)], "adren", "started-here")).unwrap();
-    assert_eq!(term, "adrenaline");
+    // `matched` as the door returns it: drugref's MeSH spelling, capital and all.
+    let alias = |code: u128, display: &str, matched: &str| {
+        let mut coding = coded(Uuid::from_u128(code), display);
+        coding.as_mut().unwrap().matched = Some(matched.into());
+        coding
+    };
+    let epi = alias(0xE91, "epinephrine", "Adrenaline");
+    let (term, parts) = before_key(&line(
+        vec![part("adren", epi.clone())],
+        "adren",
+        "started-here",
+    ))
+    .unwrap();
+    assert_eq!(term, "Adrenaline");
     assert_eq!(parts[0].coding.as_ref().unwrap().display, "epinephrine");
+    // A combination whose parts were each found by another name (lignocaine with adrenaline):
+    // each part completes to its own matched name, and the codings stay drugref's.
+    let both = vec![
+        part("ligno", alias(0x11D0, "lidocaine", "Lignocaine")),
+        part("adren", epi),
+    ];
+    let (term, parts) = before_key(&line(both, "ligno + adren", "started-here")).unwrap();
+    assert_eq!(term, "Lignocaine + Adrenaline");
+    assert_eq!(parts[0].coding.as_ref().unwrap().display, "lidocaine");
+    assert_eq!(parts[1].coding.as_ref().unwrap().display, "epinephrine");
 }
 
 /// Final review M5: a draft line's parts are saved as `PartArg` JSON (`med_list.rs`) and read back

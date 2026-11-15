@@ -57,12 +57,13 @@ search-only, and a name two moieties share is kept for both.
    "Adrenaline → epinephrine". Both
    doors gained it as a trailing column, `cairn_drug_search → (system, code, display, matched)` and
    `cairn_drug_medication_search → (code, display, uses, matched)`, each dropped first by the file's
-   guarded-`DROP` idiom when its old shape is found. Groups never carry one. Within a tier (allergy pick) or a use
-   count (medication pick), a display-name match ranks first, then the shorter name that matched (`matched` when set, else `display`).
+   guarded-`DROP` idiom whenever its result shape is not the new one. Groups never carry one. Within a tier
+   (allergy pick) or a use count (medication pick), a display-name match ranks first, then the shorter name that
+   matched (`matched` when set, else `display`).
 5. **A name two drugs share lists both.** "cefalexin" is a MeSH synonym of *cephalexin* and the UNII official name
    of *cephalexin anhydrous*: the pick shows both, each with its arrow, and never picks one (design §3.3, risk 3).
    A salt listed beside its base follows from drugref's ruling on #231 ("salt/base cross-matches stay").
-6. **The pick row reads "adrenaline → epinephrine" (maintainer, R2)** in all three drug picks: the allergy pick
+6. **The pick row reads "Adrenaline → epinephrine" (maintainer, R2)** in all three drug picks: the allergy pick
    (`pickLabel`), the medication line (`medPickLabel`) and the de-label's tolerated drug (`delabel_pick.js`, which
    reads the medication door). In the allergy and de-label picks, choosing such a row writes that name into the
    field; the medication line keeps the words as typed, and Sign completes them (decision 8).
@@ -77,7 +78,7 @@ search-only, and a name two moieties share is kept for both.
    as typed (a brand). Before this, "adren" picked as epinephrine would
    have signed the unfinished "adren". The allergy pick writes `matched || display` into the field on a choose.
 9. **The list shows the generic first, the clinician's word after it (maintainer, R3; #1073).** The pure
-   `cairn_medication_view::shown_name(display, term)` gives "epinephrine (adrenaline)", and no bracket when the
+   `cairn_medication_view::shown_name(display, term)` gives "epinephrine (Adrenaline)", and no bracket when the
    term is blank or the same word in another case. It is drawn in the medication list's name cell
    (`MedicationRow::shown_name`) and on every allergy line: the strip, the line, earlier versions,
    entered-in-error, and the de-labelled "Historically reported" line (`allergy::history_words::allergen_name`),
@@ -108,6 +109,15 @@ search-only, and a name two moieties share is kept for both.
 - No PBS forms or strengths (#1081).
 - A synonym drugref lists for a salt shows the salt beside its base. The clinician chooses.
 - Two spellings of one drug that the typed text both starts sign the shorter ("frus" signs "Frusemid", not
-  "Frusemide"), and the ordering across drugs can put a local name below drugs found by their display name
+  "Frusemide"). The ordering across drugs can put a local name below drugs found by their display name, and in
+  the medication pick a drug charted more often ranks above one whose display name was typed exactly (Enter takes
+  the first row). "Version of which line?" still shows the bare name
   ([#1122](https://github.com/cairn-ehr/cairn-ehr/issues/1122)).
+- The names are off without a trace: nothing logs that a drugref lacks or cannot read the view, and a fault that
+  raises only while reading it (as opposed to a missing or reshaped view) empties the whole pick
+  ([#1123](https://github.com/cairn-ehr/cairn-ehr/issues/1123)).
+- Matching is `ILIKE` and a bare `lower()`: no accent folding and no named collation. Durable rule 17
+  (`COLLATE pg_unicode_fast`) governs patient names, where a stored and a typed token must case-map alike; drugref's
+  names are ASCII in practice. For a non-ASCII name, a cluster-dependent case map can change whether it matches and
+  how `matched` is spelled; the coding is still the display of the row the clinician picked.
 - RUNBOOK §37 (the human pass, with `drugref_synonyms` copied in) is owed.

@@ -4,15 +4,18 @@
 //! (since its db/070 + db/071, drugref#231) lists every name a moiety answers to in the view
 //! `drugref.moiety_name`: its display name, its UNII official names, its MeSH synonyms. Both pick
 //! doors (`cairn_drug_search` for allergies, `cairn_drug_medication_search` for medication lines)
-//! now search that view when it is there, and say which name matched (`matched`, lower-cased;
-//! NULL when the display name matched), so the window can draw "adrenaline → epinephrine".
+//! now search that view when it is there, and say which name matched (`matched`: a UNII name
+//! lower-cased, a MeSH name in its own case; NULL when the display name matched), so the window
+//! can draw "Adrenaline → epinephrine".
 //!
 //! What is pinned here:
 //!   * an alias finds its drug and names itself; one moiety is listed once, display first; a
-//!     name two moieties claim lists both (the pick never chooses between them);
+//!     name two moieties claim lists both (the pick never chooses between them); a drug found
+//!     by its display name ranks before one found only by another name;
 //!   * a drugref WITHOUT the view (any release before drugref db/070), or with one the door's
 //!     owner cannot read or that has the wrong columns, answers exactly as before — never an
-//!     error, never nothing;
+//!     error, never nothing; a view that GAINED a column (additive drugref evolution) still
+//!     serves the names;
 //!   * the text stays literal; the internal helper and the names check are not the window's;
 //!     a replay converges on the new shapes.
 //!
@@ -137,6 +140,27 @@ async fn one_moiety_is_listed_once_display_first() {
     tx.rollback().await.unwrap();
 }
 
+/// "cef" finds cefuroxime axetil by its display name and both cephalexins only by another name.
+/// The display-name match comes first in both doors, though its name is the longer (so only that
+/// rank, not length or byte order, can put it there): the window shows few rows, so an alias must
+/// never push a drug the clinician spelled out below them.
+#[tokio::test]
+async fn a_display_name_match_ranks_before_another_names_match() {
+    let Some((_g, mut c)) = rig().await else {
+        return;
+    };
+    let tx = c.transaction().await.unwrap();
+    load(&tx, true).await;
+    let cef = [
+        "cefuroxime axetil|-",
+        "cephalexin|Cefalexin",
+        "cephalexin anhydrous|cefalexin",
+    ];
+    assert_eq!(allergy_pick(&tx, "cef").await, cef);
+    assert_eq!(med_pick(&tx, "cef").await, cef);
+    tx.rollback().await.unwrap();
+}
+
 /// Review Focus 1: "cefalexin" is a MeSH synonym of cephalexin AND the UNII official name of
 /// cephalexin anhydrous. Both are listed; the door never picks one.
 #[tokio::test]
@@ -224,6 +248,35 @@ async fn an_unreadable_or_reshaped_name_view_is_ignored() {
     .await
     .unwrap();
     assert_display_only(&tx, "a reshaped view").await;
+    tx.rollback().await.unwrap();
+}
+
+/// drugref evolves additively (principle 11): a view that gains a column still has the three
+/// the door reads, so the names stay ON. A check tightened to the exact column set would switch
+/// every node's names off, silently, on the next drugref release.
+#[tokio::test]
+async fn a_view_with_an_added_column_still_serves_the_names() {
+    let Some((_g, mut c)) = rig().await else {
+        return;
+    };
+    let tx = c.transaction().await.unwrap();
+    load(&tx, true).await;
+    tx.batch_execute(
+        "CREATE OR REPLACE VIEW drugref.moiety_name AS
+             SELECT moiety_uuid, display_name AS name, 'display'::text AS name_kind,
+                    'en'::text AS lang
+               FROM drugref.substance_moiety
+             UNION ALL SELECT moiety_uuid, name, 'mesh_synonym'::text, 'en'::text
+               FROM drugref.moiety_mesh_synonym;",
+    )
+    .await
+    .unwrap();
+    assert!(
+        names_available(&tx).await,
+        "an added column: names still on"
+    );
+    assert_eq!(allergy_pick(&tx, "ligno").await, ["lidocaine|Lignocaine"]);
+    assert_eq!(med_pick(&tx, "ligno").await, ["lidocaine|Lignocaine"]);
     tx.rollback().await.unwrap();
 }
 
@@ -329,8 +382,9 @@ async fn the_node_reads_the_matched_name() {
     tx.rollback().await.unwrap();
 }
 
-/// Final review M5: a node still holding a door's OLD three-column shape is moved to the new one
-/// by a replay (the guarded DROP really drops, and the door is granted to the window again).
+/// Final review M5: a node still holding either door's OLD shape (before `matched`) is moved to
+/// the new one by a replay (each guarded DROP really drops, and the door is granted to the window
+/// again).
 /// Committed, because db/076 runs its own transaction; the replay restores the converged shape.
 #[tokio::test]
 async fn a_replay_moves_an_old_shape_to_the_new_one() {
@@ -341,25 +395,37 @@ async fn a_replay_moves_an_old_shape_to_the_new_one() {
         "DROP FUNCTION cairn_drug_search(text, integer);
          CREATE FUNCTION cairn_drug_search(p_text text, p_limit int)
          RETURNS TABLE(system text, code text, display text)
-         LANGUAGE sql STABLE AS $$ SELECT NULL::text, NULL::text, NULL::text WHERE false $$;",
+         LANGUAGE sql STABLE AS $$ SELECT NULL::text, NULL::text, NULL::text WHERE false $$;
+         DROP FUNCTION cairn_drug_medication_search(text, integer);
+         CREATE FUNCTION cairn_drug_medication_search(p_text text, p_limit int)
+         RETURNS TABLE(code text, display text, uses bigint)
+         LANGUAGE sql STABLE AS $$ SELECT NULL::text, NULL::text, 0::bigint WHERE false $$;",
     )
     .await
     .unwrap();
     let c = replay(&c).await;
-    let row = c
-        .query_one(
-            "SELECT pg_get_function_result('cairn_drug_search(text, integer)'::regprocedure), \
-                    has_function_privilege('cairn_window', 'cairn_drug_search(text, integer)', 'EXECUTE')",
-            &[],
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        row.get::<_, String>(0),
-        "TABLE(system text, code text, display text, matched text)"
-    );
-    assert!(
-        row.get::<_, bool>(1),
-        "the re-created door is the window's again"
-    );
+    for (f, shape) in [
+        (
+            "cairn_drug_search(text, integer)",
+            "TABLE(system text, code text, display text, matched text)",
+        ),
+        (
+            "cairn_drug_medication_search(text, integer)",
+            "TABLE(code text, display text, uses bigint, matched text)",
+        ),
+    ] {
+        let row = c
+            .query_one(
+                "SELECT pg_get_function_result($1::text::regprocedure), \
+                        has_function_privilege('cairn_window', $1, 'EXECUTE')",
+                &[&f],
+            )
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, String>(0), shape, "{f}");
+        assert!(
+            row.get::<_, bool>(1),
+            "{f}: the re-created door is the window's again"
+        );
+    }
 }

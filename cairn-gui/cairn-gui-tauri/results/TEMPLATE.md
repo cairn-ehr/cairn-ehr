@@ -1037,7 +1037,7 @@ Steps: on paper *N* = 1 act → observed \_\_ picks and \_\_ Signs.
 | An allergy by *ligno*: field "Lignocaine", strip and line "lidocaine (Lignocaine)" | | |
 | A group-coded allergy keeps its words, no bracket | | |
 | `lidocaine` charted against it, coded and uncoded: tagged **Allergy** both times | | |
-| `drugref_allergy` back in place: *adren* finds nothing, *amox* still finds amoxicillin | | |
+| `drugref_allergy` back in place: *adren* no longer finds epinephrine, *amox* still finds amoxicillin | | |
 
 | Accessibility check | Verdict | Notes |
 |---|---|---|

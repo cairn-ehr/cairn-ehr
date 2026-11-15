@@ -16,13 +16,17 @@
 --                  cephalexin, and Racemic Adrenaline + "Adrenaline, Racemic Mixture" → the
 --                  racemate epinephrine,(+/-)- (two names of one drug, only one starting "adren")
 --   unii_official  ACETAMINOPHEN → paracetamol, CEFALEXIN → cephalexin anhydrous (so "cefalexin"
---                  names TWO moieties: the pick lists both)
+--                  names TWO moieties: the pick lists both), and AMOXICILLIN → amoxicillin (UNII's
+--                  capitals of the display name, the commonest real shape: "amox" then finds ONE
+--                  drug by three names, and it is still listed once)
+--   display only   cefuroxime axetil, which "cef" finds by its display name: it must rank before
+--                  the two cephalexins "cef" finds only by another name, though its name is longer
 -- Every uuid is computed (md5 of a label), never written out (house rule 6). amoxicillin is
--- `drug_stub.sql`'s row; the other five moieties are added here.
+-- `drug_stub.sql`'s row; the other seven moieties are added here.
 INSERT INTO drugref.substance_moiety (moiety_uuid, display_name)
 SELECT md5('stub moiety ' || n)::uuid, n
   FROM unnest(ARRAY['epinephrine', 'lidocaine', 'paracetamol', 'cephalexin',
-                    'cephalexin anhydrous', 'epinephrine,(+/-)-']) n;
+                    'cephalexin anhydrous', 'epinephrine,(+/-)-', 'cefuroxime axetil']) n;
 
 CREATE TABLE drugref.moiety_official_name (
     moiety_uuid uuid   NOT NULL REFERENCES drugref.substance_moiety(moiety_uuid),
@@ -40,7 +44,8 @@ CREATE TABLE drugref.moiety_mesh_synonym (
 
 INSERT INTO drugref.moiety_official_name (moiety_uuid, name, ingest_run)
 VALUES (md5('stub moiety paracetamol')::uuid, 'ACETAMINOPHEN', 1),
-       (md5('stub moiety cephalexin anhydrous')::uuid, 'CEFALEXIN', 1);
+       (md5('stub moiety cephalexin anhydrous')::uuid, 'CEFALEXIN', 1),
+       (md5('stub moiety amoxicillin')::uuid, 'AMOXICILLIN', 1);
 INSERT INTO drugref.moiety_mesh_synonym (moiety_uuid, name, mesh_ui, ingest_run)
 VALUES (md5('stub moiety epinephrine')::uuid, 'Adrenaline', 'D004837', 1),
        (md5('stub moiety lidocaine')::uuid, 'Lignocaine', 'D008012', 1),

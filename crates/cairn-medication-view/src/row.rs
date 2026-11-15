@@ -341,10 +341,11 @@ impl MedicationRow {
     }
 
     /// The name the clinician actually sees: the coded display name when the drug has been
-    /// coded, else the term exactly as asserted. Every renderer and the sort MUST use this, or
-    /// the chart is ordered by a string the reader cannot see (a coded chart would sort under
-    /// its invisible `term` while the clinician reads `coding_display` — e.g. "Lipitor" filed
-    /// under "atorvastatin").
+    /// coded, else the term exactly as asserted. Every renderer's leading name and the sort MUST
+    /// use this (the list's name cell adds the term after it: `shown_name`), or the chart is
+    /// ordered by a string the reader cannot see (a coded chart would sort under its invisible
+    /// `term` while the clinician reads `coding_display` — e.g. "Lipitor" filed under
+    /// "atorvastatin").
     pub fn display_name(&self) -> &str {
         self.coding_display.as_deref().unwrap_or(&self.term)
     }

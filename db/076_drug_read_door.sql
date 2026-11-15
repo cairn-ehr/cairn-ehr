@@ -128,11 +128,12 @@ $$;
 --     about which names find a drug. Not the window's: only the doors call it.
 --     * With the names (§1b): any name of the drug may match, at a word start. When several of a
 --       drug's names match ("amox" finds amoxicillin AND its synonym Amoxycillin), the display
---       name wins, then the shorter name, then byte order — so a drug is listed ONCE.
+--       name wins, then a name the typed text STARTS, then the shorter name, then byte order (of
+--       the lower-cased name) — so a drug is listed ONCE.
 --     * `matched` is the name that found it, or NULL when that was the display name (or the same
 --       word in another case). A UNII official name is lower-cased (UNII spells every name in
---       capitals); a MeSH name keeps its own case, which can carry meaning ("5-FU", "L-Dopa"). The window draws
---       "adrenaline → epinephrine" from it. It is never signed: the coding stays drugref's
+--       capitals); a MeSH name keeps its own case, which can carry meaning ("5-FU", "L-Dopa").
+--       The window draws "Adrenaline → epinephrine" from it. It is never signed: the coding stays drugref's
 --       display name (ADR-0059).
 --     * A name two drugs share ("cefalexin": a MeSH synonym of cephalexin, the UNII official
 --       name of cephalexin anhydrous) finds BOTH. The door never picks one (design §3.3).
@@ -188,12 +189,13 @@ $$;
 --    The answer's `system` is the coding system the entry will carry; `code` the drugref uuid
 --    (a moiety_uuid, or a group's class_uuid, M2); `display` the name to sign with it (the
 --    window adds " (group)" to a group's option unless its name already says "group").
---    `matched` (charting slice 3): the other name that found a drug ("adrenaline" for
+--    `matched` (charting slice 3): the other name that found a drug ("Adrenaline" for
 --    epinephrine), from §1c; NULL for a display-name match and for every group. A drug found by
 --    another name ranks after the display-name matches of its tier, then by the matched name's
 --    length.
 --    The shape gained `matched`; CREATE OR REPLACE cannot change a RETURNS TABLE, so the old one
---    is dropped first (a converged node's replay leaves the function untouched).
+--    is dropped first whenever its result shape is not the new one (a converged node's replay
+--    does not drop it, so its grants survive).
 DO $$
 BEGIN
     IF pg_get_function_result(to_regprocedure('public.cairn_drug_search(text, integer)'))

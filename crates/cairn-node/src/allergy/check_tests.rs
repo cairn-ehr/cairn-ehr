@@ -13,6 +13,7 @@ pub(super) const AMOX: u128 = 500;
 pub(super) const FLUCLOX: u128 = 501;
 pub(super) const AMOX_SODIUM: u128 = 502;
 pub(super) const PARACETAMOL: u128 = 700;
+pub(super) const EPINEPHRINE: u128 = 701;
 pub(super) const PEN_GROUP: u128 = 600;
 pub(super) const CEPH_GROUP: u128 = 601;
 
@@ -123,7 +124,7 @@ fn a_coded_allergens_drug_name_marks_an_uncoded_line() {
     let mut row = coded(
         entry(1, "drug", "adrenaline", "allergy", "rash", 1),
         MOIETY_SYSTEM,
-        AMOX,
+        EPINEPHRINE,
     );
     row.coding.as_mut().unwrap().display = "epinephrine".into();
     let got = run(

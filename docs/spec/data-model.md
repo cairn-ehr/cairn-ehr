@@ -125,10 +125,10 @@ time order, and each struck give on a line of its own, each with who signed it
 
 The drug picks (allergy, medication line, a de-label's tolerated drug) find a drug by any name drugref lists for it
 when its optional name list is there: the display name, a UNII official name (*acetaminophen*), a MeSH synonym
-(*lignocaine*, *adrenaline*). A pick row found by another name reads "adrenaline → epinephrine", and a name two drugs
+(*lignocaine*, *adrenaline*). A pick row found by another name reads "Adrenaline → epinephrine", and a name two drugs
 share lists both. The coding stays drugref's display name. The term signed is the name the clinician typed, completed
 to the name that matched. The medication and allergy lists show a drug-coded entry generic first, the clinician's word
-after it: "epinephrine (adrenaline)". No wire change ([ADR-0106](decisions/0106-drug-names-in-the-pick.md)).
+after it: "epinephrine (Adrenaline)". No wire change ([ADR-0106](decisions/0106-drug-names-in-the-pick.md)).
 
 The allergies row above is built as two born-sealed, additive event types: one entry
 (`clinical.allergy.asserted`: drug or other allergen, an allergy or an adverse effect, the reaction, an onset whose

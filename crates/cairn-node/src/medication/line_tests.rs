@@ -87,19 +87,21 @@ fn term_to_sign_keeps_what_was_typed_unless_unfinished() {
 }
 
 /// Charting slice 3 (Review Focus 4): a drug found by another name ("adren" finds epinephrine
-/// through its synonym adrenaline) completes to THAT name, never to the display and never left
-/// unfinished as "adren".
+/// through its MeSH synonym "Adrenaline") completes to THAT name, never to the display and never
+/// left unfinished as "adren". `matched` is drugref's MeSH spelling, capital and all, exactly as
+/// the door returns it (drug_names_door.rs), so "adren" signs "Adrenaline".
 #[test]
 fn term_to_sign_completes_to_the_matched_name() {
-    let (epi, adr) = (Some("epinephrine"), Some("adrenaline"));
-    assert_eq!(term_to_sign("adren", epi, adr), "adrenaline");
-    // The clinician's own capitals are kept when they typed the whole name (final review M2).
+    let (epi, adr) = (Some("epinephrine"), Some("Adrenaline"));
+    assert_eq!(term_to_sign("adren", epi, adr), "Adrenaline");
+    // The clinician's own case is kept when they typed the whole name (final review M2).
     assert_eq!(term_to_sign("Adrenaline", epi, adr), "Adrenaline");
+    assert_eq!(term_to_sign("adrenaline", epi, adr), "adrenaline");
     assert_eq!(
         term_to_sign("5-FU", Some("fluorouracil"), Some("5-fu")),
         "5-FU"
     );
-    assert_eq!(term_to_sign(" adren ", epi, adr), "adrenaline");
+    assert_eq!(term_to_sign(" adren ", epi, adr), "Adrenaline");
     // The door named the alias, so "epi" was not what found it: the clinician's words stay.
     assert_eq!(term_to_sign("epi", epi, adr), "epi");
     assert_eq!(

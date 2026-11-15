@@ -210,15 +210,16 @@
 >   [ADR-0106](spec/decisions/0106-drug-names-in-the-pick.md), spec **v0.108**, `db/076` in place, `SCHEMA_GENERATION`
 >   82 unchanged; no wire change; executed inline, one whole-branch review). Both picks search drugref's optional
 >   `moiety_name` view (drugref#231) through one shared match, else display names as before; the row reads
->   "adrenaline → epinephrine"; a name two drugs share lists both; `matched` is never signed, and the term completes to
->   it ("adren" signs "adrenaline"); the medication and allergy lists read "epinephrine (adrenaline)" for a drug-coded
->   entry (#1073). **Maintainer rulings 2026-11-15:** R1 names only (PBS forms deferred, #1081 commented; brand →
+>   "Adrenaline → epinephrine"; a name two drugs share lists both; `matched` is never signed, and the term completes to
+>   it ("adren" signs "Adrenaline", MeSH's spelling); the medication and allergy lists read "epinephrine (Adrenaline)"
+>   for a drug-coded entry (#1073). **Maintainer rulings 2026-11-15:** R1 names only (PBS forms deferred, #1081 commented; brand →
 >   combination filed as **drugref#244**), R2 the arrow, R3 the bracket on both lists. The whole-branch review's two
 >   Important findings, both real on `drugref_synonyms`, were fixed: of one drug's names the one the typed text starts
 >   wins (else "adren" signed "adren"), and the by-name allergy check reads a drug-coded allergen's drug name (else an
 >   allergy typed "adrenaline" missed an uncoded "epinephrine" line); MeSH names keep their case. Filed **#1122**
 >   (variant spellings sign the shorter, "Frusemid"; cross-drug ranking buries a local name; the versions pick's bare
->   name). Owed by a human: **RUNBOOK §37** (copy `drugref_synonyms`, not `drugref_allergy`).
+>   name; the finalcheck added three ranking items as a comment) and **#1123** (names-off is silent, and a names-only
+>   read fault empties the pick). Owed by a human: **RUNBOOK §37** (copy `drugref_synonyms`, not `drugref_allergy`).
 >
 > **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
 > `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,

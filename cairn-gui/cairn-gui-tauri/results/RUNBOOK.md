@@ -3738,9 +3738,10 @@ N1=$(achart "Names Charted" 1990-10-10)
 
 **Measurement 1: the medication pick.**
 
-- [ ] On `$N1`, record "No known drug allergies". *Start medication*, type `adren`: the pick lists "Adrenaline →
-      epinephrine" (record where it ranks, #1122). Take it, finish `adrenaline 1mg im`, Sign (stopwatch, ≤ 10 s).
-      The list's name reads "epinephrine (adrenaline)", the clinician's own case kept. `psql "$CONN" -Atc "SELECT
+- [ ] On `$N1`, record "No known drug allergies". *Start medication*, type `adrenaline`: the pick lists
+      "Adrenaline → epinephrine" (record where it ranks, #1122). Take it, add ` 1mg im`, Sign (stopwatch, ≤ 10 s).
+      (Take the pick once the drug's word is whole: editing a part after the pick drops its coding.) The list's
+      name reads "epinephrine (adrenaline)", the clinician's own case kept. `psql "$CONN" -Atc "SELECT
       term FROM medication_statement WHERE patient_id = '$N1'"` reads `adrenaline`.
 - [ ] The same line typed `adren 1mg im` and left unfinished at the pick: Sign signs `Adrenaline`, never `adren`.
 - [ ] *Already taking* `cefalexin 500mg qid`: the pick lists both cephalexin rows. Take one. Its name reads
@@ -3752,7 +3753,8 @@ N1=$(achart "Names Charted" 1990-10-10)
 
 - [ ] On a fresh chart, record an allergy, typing *ligno*: "Lignocaine → lidocaine". Take it: the field reads
       "Lignocaine", "Coded as: lidocaine (drug)". Sign. The strip and the line read "lidocaine (Lignocaine)".
-- [ ] An allergy coded to "Penicillins (allergy group)" while typed "penicillin" reads "penicillin", with no bracket.
+- [ ] An allergy coded to the group "Penicillins (allergy group)" (choosing it writes that name into the field)
+      reads its own words with no drug bracket; only a group's review-status words may follow them.
 - [ ] Chart *Start medication* `lidocaine 1% 5ml sc`: the line is tagged **Allergy** (the coded check). Chart it
       again WITHOUT taking a pick (uncoded): still tagged **Allergy**, by the allergen's drug name (ADR-0106
       decision 10).
@@ -3761,7 +3763,8 @@ N1=$(achart "Names Charted" 1990-10-10)
 - [ ] Record what VoiceOver reads for an arrow row ("Adrenaline → epinephrine"), and whether it says the arrow.
 
 **Without the names.** Restore `drugref_allergy` in place of `drugref_synonyms`: `cairn_drug_names_available()` reads
-`f`, *adren* finds nothing, *amox* still finds amoxicillin, and every earlier section's pick behaves as before.
+`f`, *adren* no longer finds epinephrine (only display-name matches such as adrenalone), *amox* still finds
+amoxicillin, and every earlier section's pick behaves as before.
 
 **Where it is pinned.**
 - **The doors:** `crates/cairn-node/tests/drug_names_door.rs` and `db/tests/076_drug_read_door_test.sql` §5.

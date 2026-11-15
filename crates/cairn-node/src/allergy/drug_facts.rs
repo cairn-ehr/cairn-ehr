@@ -44,9 +44,10 @@ pub struct DrugOption {
     pub system: String,
     pub code: String,
     pub display: String,
-    /// The other name the drug was found by ("adrenaline" for epinephrine), lower-cased; `None`
-    /// when its display name matched, and for a group (charting slice 3, ADR-0106). Shown in the
-    /// pick and used to complete the typed term; never signed (the coding is `display`'s).
+    /// The other name the drug was found by ("Adrenaline" for epinephrine): a UNII official name
+    /// lower-cased, a MeSH synonym in its own case. `None` when its display name matched, and for
+    /// a group (charting slice 3, ADR-0106). Shown in the pick and used to complete the typed
+    /// term; never the coding's name (the coding is `display`'s).
     pub matched: Option<String>,
 }
 

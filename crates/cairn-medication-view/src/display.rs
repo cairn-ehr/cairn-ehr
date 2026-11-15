@@ -1,6 +1,8 @@
-//! Display helpers shared by every surface that shows an actor key id.
+//! Display helpers shared by more than one surface: [`short_kid`] for every surface that shows
+//! an actor key id, and [`shown_name`] for every list that shows a coded drug (the medication
+//! list and the allergy list).
 //!
-//! WHY THIS IS ONE FUNCTION AND NOT TWO. The med-list window shows a key id in two places
+//! WHY `short_kid` IS ONE FUNCTION AND NOT TWO. The med-list window shows a key id in two places
 //! at once: the signature column (from the view model) and the "signing as …" line (from
 //! the window's own lock state). Those came from two hand-written copies of the same
 //! truncation rule. Two copies is one edit away from a chart that renders the same person
@@ -61,7 +63,7 @@ mod tests {
 }
 
 /// How a coded drug is shown: its listed (generic) name, plus the term the clinician signed in
-/// brackets when that is another word — "epinephrine (adrenaline)", "amoxicillin + clavulanic
+/// brackets when that is another word — "epinephrine (Adrenaline)", "amoxicillin + clavulanic
 /// acid (Augmentin)" (charting design §3.3, #1073, ADR-0106). The same word in another case is
 /// no other word: "amoxicillin", never "amoxicillin (Amoxicillin)". Shared by the medication list
 /// and the allergy list, so both bracket alike. Pure.
@@ -99,5 +101,10 @@ mod shown_name_tests {
         );
         assert_eq!(shown_name("amoxicillin", "Amoxicillin"), "amoxicillin");
         assert_eq!(shown_name("amoxicillin", "  "), "amoxicillin");
+        // What "adren" really signs (drugref's MeSH spelling), as the list then reads it.
+        assert_eq!(
+            shown_name("epinephrine", "Adrenaline"),
+            "epinephrine (Adrenaline)"
+        );
     }
 }

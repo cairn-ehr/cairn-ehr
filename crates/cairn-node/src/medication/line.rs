@@ -255,10 +255,10 @@ pub fn read_directions(text: &str) -> Directions {
 /// pick. Anything else they typed (a brand, a spelling) is their words and stays.
 ///
 /// `picked_matched` is the OTHER name the drug list found the pick by (charting slice 3,
-/// ADR-0106): "adren" finds epinephrine through its synonym "adrenaline". That name, not the
-/// display, is what the clinician was typing, so the unfinished text completes to it ("adren"
-/// signs "adrenaline", and the list then reads "epinephrine (adrenaline)"). With no other name
-/// (`None`), the display is the name that was typed.
+/// ADR-0106): "adren" finds epinephrine through its MeSH synonym "Adrenaline". That name, not
+/// the display, is what the clinician was typing, so the unfinished text completes to it, in
+/// drugref's spelling ("adren" signs "Adrenaline", and the list then reads "epinephrine
+/// (Adrenaline)"). With no other name (`None`), the display is the name that was typed.
 pub fn term_to_sign(
     typed: &str,
     picked_display: Option<&str>,

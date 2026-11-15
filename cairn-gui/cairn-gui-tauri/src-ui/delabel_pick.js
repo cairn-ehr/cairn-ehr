@@ -40,8 +40,8 @@ function wireDelabelPick(row) {
     list.hidden = true;
     hint.hidden = true;
   };
-  // A drug found by another name (charting slice 3, ADR-0106): the field takes the clinician's
-  // word, the coding stays the drug list's three fields.
+  // A drug found by another name (charting slice 3, ADR-0106): the field takes the name that
+  // found the drug ("Adrenaline"), the coding stays the drug list's three fields.
   const choose = (option) => {
     input.value = option.matched || option.display;
     holdDelabelCoding(row, { system: option.system, code: option.code, display: option.display });

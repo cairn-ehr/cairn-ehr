@@ -273,7 +273,7 @@ function chooseMedPick(index) {
   const option = medPickOptions[index];
   if (!option || !medLine.parts.includes(medPickPart)) return;
   // `matched` rides with the pick (and the saved line; undefined is dropped when sent) so Sign
-  // completes "adren" to "adrenaline". It is never signed (ADR-0106).
+  // completes "adren" to "Adrenaline". It is never the coding's name (ADR-0106).
   const coding = { system: option.system, code: option.code, display: option.display, matched: option.matched };
   medHeld = medHeld.filter((held) => held.text !== medPickPart).concat([{ text: medPickPart, coding: coding }]);
   closeMedPick();
@@ -282,7 +282,7 @@ function chooseMedPick(index) {
   if (medEditor) medEditor.changed(); // and saved: the pick is part of the line
 }
 
-/** An option's words: "adrenaline → epinephrine" for a drug found by another name (charting
+/** An option's words: "Adrenaline → epinephrine" for a drug found by another name (charting
  *  slice 3, ADR-0106), else its display. */
 function medPickLabel(option) {
   return option.matched ? option.matched + " → " + option.display : option.display;
