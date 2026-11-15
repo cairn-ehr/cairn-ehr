@@ -155,7 +155,7 @@ Every slice 1a, 2a, 2b and 3 rule below still holds; a stat order is a charted l
   given rebuild back (the strike would then void a stop that the other chart's stat read never shows as struck). Pin:
   `a_peers_given_or_strike_filed_under_another_chart_is_flagged`.
 - **`stat` is signed only on a pure one-off *Start* line** (`med_stat::is_stat_order`: *Start medication*, the
-  directions read `stat`, no frequency, no `prn`), from `med_line_sign::charting`, so both Sign paths agree, and it is
+  directions read `stat`, no frequency, no `prn`), from `med_line_sign::charting`, the one place it is set, and it is
   written only as `true`. **Tempting wrong fixes:** sign it whenever the `sig` says "stat" ("1g iv stat then daily"
   would leave the list at its first dose; so would "prn stat"); write `"stat": false` on other lines (every
   assertion would change its bytes, principle 11). Pins: `ceftriaxone_1g_iv_stat_is_a_stat_order`,
@@ -482,10 +482,12 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   it, and it signed every warning its fresh check found as overridden (no R1 seen-set). Its per-line rules (`press`,
   `override_before_the_key`, `override_ids`) stay in `med_chart.rs` and the list's Sign calls them.
   `command_registry_tests.rs::every_registered_command_is_one_the_webview_calls` fails on a registered command the
-  webview never calls; it reads three call shapes (`invoke("`, `sendJudgement("`, `superuserAct("`). **Tempting wrong
+  webview never calls; it reads three call shapes (`invoke("`, `sendJudgement("`, `superuserAct("`), and it FAILS on
+  any call or `generate_handler!` row it cannot read rather than skipping it (`calls_in`, `rows_of`). **Tempting wrong
   fixes:** keep a command "for later" or give the guard an exception list (any webview script can call a registered
-  command, so an uncalled one is an unreviewed door); add an `invoke` wrapper without adding its shape to the guard
-  (its commands read as uncalled, and a name it calls that is not registered passes the forward guard).
+  command, so an uncalled one is an unreviewed door); add a new `invoke` wrapper to `VARIABLE_CALLS` without adding
+  its `"name"` opener (its commands read as uncalled, and a name it calls that is not registered passes the forward
+  guard).
 - **Requiring an override is a WINDOW rule, never a floor rule** (design §3.5, ADR-0021). The list's Sign refuses a Start
   line with an allergy mark and a blank trimmed reason, per line and before the key, and a reason sent when its own re-check could not
   run (`CHECK_DID_NOT_RUN`: never dropped). db/077 never requires an override and checks one's shape only when it is
@@ -509,7 +511,8 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   `reason_needed` / marks to the Sign "to save a round trip" (an allergy signed since reads clean); treat a changed
   set as "not checked" at Sign the way the on-screen check does (a Start line signs unchecked against a newly linked
   chart's allergies); check a combination under one term only (a by-name allergy on the other term reads "not
-  checked" and Sign asks no reason). Pins: `med_list_review_db_tests.rs::a_warning_recorded_before_the_tick_but_never_drawn_refuses`,
+  checked" and Sign asks no reason). Pins: `med_list_db_tests.rs::an_allergy_entered_after_the_tick_refuses_and_unticks_only_that_line`,
+  `med_list_review_db_tests.rs::a_warning_recorded_before_the_tick_but_never_drawn_refuses`,
   `med_chart_rows_tests.rs::a_changed_set_refuses_and_a_failed_read_proceeds`,
   `a_by_name_allergy_on_the_signed_combination_term_marks_the_line`,
   `med_chart_db_tests.rs::med_chart_db_a_by_name_allergy_on_the_typed_drug_marks_the_check`.

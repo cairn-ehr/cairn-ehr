@@ -325,3 +325,21 @@ fn the_view_carries_the_check() {
 // The medication list's lines, with combinations, and the check at Sign: its own file (500 lines).
 #[path = "med_chart_rows_tests.rs"]
 mod rows;
+
+/// The list's Sign refuses another chart before fixture mode, and fixture mode before anything
+/// else (moved from the deleted `med_chart` command's test, #1139).
+#[tokio::test]
+async fn the_lists_sign_refuses_another_chart_then_fixture_mode_first() {
+    let (state, chart) = on_screen();
+    let other = Uuid::from_u128(424_242).to_string();
+    let err =
+        crate::med_list_sign::med_list_sign_impl(&state, &other, vec![other.clone()], &[], None)
+            .await
+            .unwrap_err();
+    assert!(!err.text.contains("fixture mode"), "{}", err.text);
+    let err =
+        crate::med_list_sign::med_list_sign_impl(&state, &chart, vec![chart.clone()], &[], None)
+            .await
+            .unwrap_err();
+    assert!(err.text.contains("fixture mode"), "{}", err.text);
+}

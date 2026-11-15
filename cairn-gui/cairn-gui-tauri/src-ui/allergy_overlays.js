@@ -226,7 +226,7 @@ function closeOverlayRow(li) {
 
 /**
  * Sign one overlay on the chart whose list is drawn, inside `pressOnce`. `send(base)` is the
- * act's own `invoke` (a literal command name, so commands_tests.rs sees it is registered), given
+ * act's own `invoke` (a literal command name, so command_registry_tests.rs can read it), given
  * the arguments every write carries: the chart, the chart set the list was read over, the key.
  * Signed: `afterSigned` redraws the list (the row goes with it). Refused: `afterRefused` — a
  * stale list is read again; any other refusal ("Name what was tolerated.", a date it cannot

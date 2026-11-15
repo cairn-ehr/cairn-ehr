@@ -1,7 +1,7 @@
 //! `med_chart`'s tests, continued: the medication list's lines with combinations
 //! (`allergy_check::charted_lines`), a brand allergy on a combination, and the allergy read at
 //! Sign over a changed chart set. Split from `med_chart_tests.rs` to keep each under 500 lines;
-//! it shares that file's helpers (`before_key`, `line`, `part`, `coded`).
+//! it shares that file's helpers (`before_key`, `part`, `coded`).
 use super::*;
 use crate::allergy_check::charted_lines;
 use cairn_medication_view::fixtures::sample_chart;

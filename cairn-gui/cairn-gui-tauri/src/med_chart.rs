@@ -1,4 +1,4 @@
-//! Charting a medication from one typed line (charting slice 1a): the line editor's three
+//! The one-line medication editor (charting slice 1a), which charts nothing itself: its three
 //! commands, and the per-line rules the list's Sign (`med_list_sign.rs`) signs by.
 //!
 //! - [`med_line_read`]: the typed directions read into fields for the read-back row (pure; the

@@ -2214,7 +2214,7 @@ enum Cmd {
     ///
     /// Not a clinical surface: there is no allergy check, so no warning is shown and no
     /// override is asked for or signed, even against a recorded allergy (#1136). Chart for a
-    /// patient in the window, whose Sign checks the line (ADR-0099).
+    /// patient in the window, whose Sign checks the line (ADR-0099, ADR-0100).
     MedicationAssert {
         /// The patient UUID this medication is recorded against.
         patient: Uuid,

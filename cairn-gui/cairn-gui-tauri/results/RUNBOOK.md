@@ -2832,6 +2832,12 @@ The real drugref's group-first order (#1057) was checked only by running the doo
 
 ## 30. Charting a medication from one line, and the check at charting (charting slice 1a, ADR-0099)
 
+> [!NOTE]
+> This section records slice 1a's lone-line Sign. Batch charting slice 1 (section 31) replaced it in the window,
+> and #1139 deleted its `med_chart` command, so the Sign gestures here can no longer be run as written: the line
+> editor now only reads and checks, and Sign is the list's (section 31). Sections 31 and 35 still use this section's
+> budgets as their baseline.
+
 The slice's gestures:
 - **The presses.** Over a chart on screen the medication pane shows *Start medication* and *Already taking*. Either one
   opens one line, and the pressed one reads as pressed.
@@ -2940,7 +2946,8 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
       no brand names, #1065). The line reads **not checked** and asks no reason. Note it: this is the gap #1065 owes.
 - [ ] **The check is re-run at Sign.** An allergy recorded elsewhere while a line is open cannot be produced by hand
       on this rig: there is no console verb for an allergy, and an allergy recorded in this window re-reads the list,
-      which checks the open line again. `med_list_review_db_tests.rs::a_warning_recorded_before_the_tick_but_never_drawn_refuses` pins it.
+      which checks the open line again. `med_list_db_tests.rs::an_allergy_entered_after_the_tick_refuses_and_unticks_only_that_line`
+      and `med_list_review_db_tests.rs::a_warning_recorded_before_the_tick_but_never_drawn_refuses` pin it.
       What can be seen, on a fresh `achart` (not `$C1`, which Measurement 3 needs) with the Penicillins allergy
       recorded: open a *Start* line for amoxicillin, see its mark, then sign the allergy's *Entered in error* in the
       allergy list. The open line reads **not checked** at once, then clean, and the reason field goes.
@@ -2963,9 +2970,9 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
 - [ ] Relaunch with no `--key-hold-seconds` on fresh charts and repeat the common drug.
 
 **Measurement 4: the real Tauri IPC** (the webview tests stubbed `invoke`). The webview sends `med_line_read`'s
-`text`, `med_drug_search`'s `text`, `med_line_check`'s `patientId`, `charts`, `typedDrug` and `parts`, and
-`med_chart`'s `patientId`, `charts`, `line` (`parts`, `typed_drug`, `directions`, `charted_as`, `reason`) and
-`credential`. A name Tauri cannot map fails the call with an "invalid args" error.
+`text`, `med_drug_search`'s `text`, and `med_line_check`'s `patientId`, `charts`, `typedDrug` and `parts`; Sign is
+`med_list_sign`, whose arguments are section 31's. A name Tauri cannot map fails the call with an "invalid args"
+error.
 
 - [ ] The read-back fills as you type, the pick lists options with drugref installed (never the no-drug-list hint),
       and the line's tag follows the allergies (Measurement 2).
@@ -2995,7 +3002,8 @@ WebKit need the window and a human. The rest was run as follows:
   `medication_drug_search_door.rs`, `medication_chart.rs` (DB-gated, against the drug stub).
 - **The parser and the check:** `medication/line_tests.rs`, `allergy/check_combination_tests.rs`.
 - **The window's commands:** `cairn-gui-tauri`'s `med_chart_tests.rs` and `med_chart_rows_tests.rs` (pure) and
-  `med_chart_db_tests.rs` (DB-gated; CI never runs those, #905).
+  `med_chart_db_tests.rs` (the check) and `med_list_signed_db_tests.rs` (what the list's Sign signs), DB-gated; CI
+  never runs those, #905.
 - **The webview:** source guards (`med_chart_webview_tests.rs`, `med_chart_line_webview_tests.rs`).
 
 `TEMPLATE.md` carries a matching block (*Charting a medication*).
@@ -3534,7 +3542,7 @@ On each, record an **adverse effect** (not an allergy) to codeine, reaction rash
       `--level nothing` are refused (usage errors).
 - [ ] Re-open `$T1`'s list: the codeine line's note is now loud, its tag reads **Warning** (never "Allergy"), its tick
       is gone, and the Reason field is required, labelled "Reason for charting despite the warning". With no reason
-      the tick box stays disabled (the refusal "Charting despite a warning needs a reason" is the single-line Sign's,
+      the tick box stays disabled (the list Sign's per-line refusal "Charting despite a warning needs a reason",
       pinned by `med_list_signed_db_tests.rs`). Type `tolerated in hospital`, tick the line, Sign (≤ 3 s,
       section 30's budget): charted.
 - [ ] `psql "$CONN" -c "SELECT cairn_clear_payload(e)->'warning_override' FROM event_log e WHERE patient_id = '$T1'

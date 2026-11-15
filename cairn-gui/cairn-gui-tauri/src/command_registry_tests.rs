@@ -16,11 +16,27 @@ fn registered() -> BTreeSet<&'static str> {
         .find("generate_handler![")
         .expect("main.rs registers commands");
     let block = &main[start..start + main[start..].find(']').expect("the list closes")];
+    rows_of(block)
+}
+
+/// The command name on each row of a `generate_handler!` block. A row this cannot read (no
+/// trailing comma, a trailing comment, two rows on a line) fails rather than being dropped: a
+/// dropped row is a registered command the converse check never sees.
+fn rows_of(block: &str) -> BTreeSet<&str> {
     block
         .lines()
         .skip(1)
-        .filter_map(|line| line.trim().strip_suffix(','))
-        .map(|path| path.rsplit("::").next().unwrap_or(path))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let path = line
+                .strip_suffix(',')
+                .filter(|path| !path.contains([',', ' ', '/']))
+                .unwrap_or_else(|| {
+                    panic!("a generate_handler! row this guard cannot read: {line}")
+                });
+            path.rsplit("::").next().unwrap_or(path)
+        })
         .collect()
 }
 
@@ -103,12 +119,41 @@ fn webview_calls() -> BTreeSet<&'static str> {
         webview.iter().map(|(name, _)| *name).collect(),
         "index.html loads a script this guard does not scan (or no longer loads one it does)"
     );
-    let mut called = BTreeSet::new();
-    for (_, js) in webview {
-        for opener in ["invoke(\"", "sendJudgement(\"", "superuserAct(\""] {
-            for (at, _) in js.match_indices(opener) {
-                let rest = &js[at + opener.len()..];
-                called.insert(&rest[..rest.find('"').expect("the name closes")]);
+    webview
+        .into_iter()
+        .flat_map(|(file, js)| calls_in(file, js))
+        .collect()
+}
+
+/// Where a call takes a variable, not a literal: each wrapper's definition, and the `invoke`
+/// inside it. Every other `invoke(`, `sendJudgement(` or `superuserAct(` must name its
+/// command as a `"literal"`.
+const VARIABLE_CALLS: [(&str, &str); 4] = [
+    ("link.js", "sendJudgement(command)"),
+    ("link.js", "invoke(command,"),
+    ("superuser.js", "superuserAct(command, args)"),
+    ("superuser.js", "invoke(command,"),
+];
+
+/// The command names one script calls. A call this cannot read the name of (a single-quoted or
+/// template name, a name on the next line, a new wrapper) fails rather than being skipped: a
+/// skipped call is a command neither direction of the guard sees.
+fn calls_in<'a>(file: &str, js: &'a str) -> Vec<&'a str> {
+    let mut called = Vec::new();
+    for opener in ["invoke(", "sendJudgement(", "superuserAct("] {
+        for (at, _) in js.match_indices(opener) {
+            let rest = &js[at + opener.len()..];
+            if let Some(name) = rest.strip_prefix('"') {
+                called.push(&name[..name.find('"').expect("the name closes")]);
+            } else {
+                let here = &js[at..];
+                assert!(
+                    VARIABLE_CALLS
+                        .iter()
+                        .any(|(known, shape)| *known == file && here.starts_with(shape)),
+                    "{file}: a call this guard cannot read the command name of: {}",
+                    &here[..here.find('\n').unwrap_or(here.len())]
+                );
             }
         }
     }
@@ -149,4 +194,29 @@ fn every_registered_command_is_one_the_webview_calls() {
         uncalled.is_empty(),
         "main.rs registers commands the webview never calls: {uncalled:?}"
     );
+}
+
+/// The parsers refuse a shape they cannot read instead of skipping it (PR #1145 review).
+#[test]
+#[should_panic(expected = "cannot read the command name of")]
+fn a_call_whose_name_is_not_a_literal_fails() {
+    calls_in("x.js", "invoke('med_x', {})");
+}
+
+#[test]
+#[should_panic(expected = "cannot read the command name of")]
+fn a_new_wrapper_invoking_a_variable_fails() {
+    calls_in("x.js", "function fooAct(c) { return invoke(c, {}); }");
+}
+
+#[test]
+#[should_panic(expected = "row this guard cannot read")]
+fn a_handler_row_with_a_trailing_comment_fails() {
+    rows_of("generate_handler![\n    med_x::foo, // why\n");
+}
+
+#[test]
+#[should_panic(expected = "row this guard cannot read")]
+fn a_handler_row_without_a_comma_fails() {
+    rows_of("generate_handler![\n    med_x::foo,\n    med_x::bar\n");
 }

@@ -4,7 +4,7 @@
 //!
 //! Moved here from slice 1a's lone-line `med_chart` Sign when that command was deleted (#1139):
 //! these are the walks the list's own tests lacked — the signed event's fields, its override and
-//! its combination components, the warning threshold at Sign, and a Sign that could chart nothing
+//! its combination components, an uncoded line reading "not checked", the warning threshold at Sign, and a Sign that could chart nothing
 //! never releasing the key. Each line is ticked as the webview ticks it: by hand, having seen
 //! what the pane draws on it (ruling R1: a tick vouches only for the warnings drawn).
 use super::db_tests::{amoxicillin_allergy, arg, assertions, bea_list, done, pick, read, releases};
@@ -140,7 +140,7 @@ async fn an_already_taking_line_signs_what_was_typed() {
     assert_eq!(row(&pane, "amoxicillin").allergy_marks.len(), 1);
 }
 
-/// No drug list: an uncoded Start line charts, started today, and against a coded allergy it
+/// No drug list: an uncoded Start line charts, started to the day, and against a coded allergy it
 /// reads "not checked", never clean.
 #[tokio::test]
 async fn an_uncoded_start_line_charts_and_reads_not_checked() {

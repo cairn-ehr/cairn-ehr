@@ -31,10 +31,11 @@ pub(super) async fn payloads(owner: &Client, chart: Uuid) -> Vec<serde_json::Val
         .collect()
 }
 
-/// How many keys the vault has released, over every member (each release with the right passphrase
-/// moves its member's `success_mark`): unchanged means "refused before the key". Not the row count,
-/// which is one per member and so never moves once that member has signed anything (#1139).
-async fn vault_attempts(owner: &Client) -> i64 {
+/// A measure that moves on every key release: the sum of each member's `success_mark` (db/061,
+/// the attempt number of its last release), so unchanged means "refused before the key". Not the
+/// row count, which is one per member and so never moves once that member has signed anything
+/// (#1139).
+async fn release_mark(owner: &Client) -> i64 {
     owner
         .query_one(
             "SELECT coalesce(sum(success_mark), 0)::bigint FROM vault_attempt",
@@ -202,7 +203,7 @@ async fn give_signs_and_the_line_leaves_the_current_list() {
         crate::notes::time::stated_time_from_local(&at).unwrap()
     );
     // A stale second press: refused, the vault not asked, nothing written.
-    let before = vault_attempts(&owner).await;
+    let before = release_mark(&owner).await;
     let again = give(&state, chart, &[chart], order.medication_id, None)
         .await
         .unwrap_err();
@@ -210,7 +211,7 @@ async fn give_signs_and_the_line_leaves_the_current_list() {
     // Behind the record: the window re-reads by itself (and drops the stale Given).
     assert_eq!(again.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(
-        vault_attempts(&owner).await,
+        release_mark(&owner).await,
         before,
         "the vault was not asked"
     );
@@ -241,14 +242,14 @@ async fn give_on_a_line_stopped_since_is_refused_before_the_key() {
     )
     .await
     .unwrap();
-    let before = vault_attempts(&owner).await;
+    let before = release_mark(&owner).await;
     let refused = give(&state, chart, &[chart], order.medication_id, None)
         .await
         .unwrap_err();
     assert_eq!(refused.text, STAT_NOT_OPEN);
     assert_eq!(refused.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(
-        vault_attempts(&owner).await,
+        release_mark(&owner).await,
         before,
         "the vault was not asked"
     );
@@ -344,14 +345,14 @@ async fn strike_on_a_given_struck_since_is_refused() {
         .unwrap();
     let given = read_stat_orders(&owner, &[chart]).await.unwrap()[0].gives[0].event_id;
     strike(&state, chart, given, None).await.unwrap();
-    let before = vault_attempts(&owner).await;
+    let before = release_mark(&owner).await;
     for target in [given, Uuid::now_v7()] {
         let refused = strike(&state, chart, target, None).await.unwrap_err();
         assert_eq!(refused.text, GIVE_GONE);
         assert_eq!(refused.retry, Retry::AfterReread(Recorded::No), "{target}");
     }
     assert_eq!(
-        vault_attempts(&owner).await,
+        release_mark(&owner).await,
         before,
         "the vault was not asked"
     );

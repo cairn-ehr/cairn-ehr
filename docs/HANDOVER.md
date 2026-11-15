@@ -153,7 +153,7 @@
 >    text without a word; pre-existing). **#1139 + #1136 BUILT 2026-11-15** in PR
 >    [#1145](https://github.com/cairn-ehr/cairn-ehr/pull/1145): `med_chart` deleted, its walks moved to `med_list_signed_db_tests.rs`;
 >    `command_registry_tests.rs` now fails on a registered command the webview never calls (it reads `invoke("`,
->    `sendJudgement("`, `superuserAct("`); the CLI's `--help` says it checks no allergies (the medium fix — signing
+>    `sendJudgement("`, `superuserAct("`, and fails on a call or row it cannot read); the CLI's `--help` says it checks no allergies (the medium fix — signing
 >    `warning_override` from the CLI — is not built). **Small fixes ready to build:** **#1138** (nine minors); #1109
 >    widened.
 >    **Then the maintainer picks:** sign-in
