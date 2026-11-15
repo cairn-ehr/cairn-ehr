@@ -2,8 +2,9 @@
 //! judging a key (spec 2026-11-01-sign-in-slice-2, §5.1, §5.2, §5.5). Re-key and reseal are
 //! `vault_rekey.rs`; the shared fixtures are `common/vault_enroller_kit.rs`.
 //!
-//! The trust boundary under test: a raw-SQL client holding `cairn_agent` can call every door
-//! here, so each act must be refused unless it carries the right SIGNED approval —
+//! The trust boundary under test: a raw-SQL client holding `cairn_window` (never `cairn_agent`,
+//! #1129) can call every door here, so each act must be refused unless it carries the right
+//! SIGNED approval —
 //!
 //! * an enroller (a member a superuser granted the role) may enrol, never a `superuser` or an
 //!   `admin`, and only while their own key is CONFIRMED;

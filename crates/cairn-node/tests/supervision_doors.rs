@@ -2,8 +2,8 @@
 //! link, require or lift co-signing, and grant the "assigns supervision" right (design
 //! 2026-11-06-sign-in-slice-3c-3 §3.1; the plan's Global Constraints matrix).
 //!
-//! The trust boundary under test: `cairn_supervision_act` is reachable by `cairn_agent`, so by any
-//! raw-SQL client holding it. Every act must carry a SIGNED approval over its own address, by a
+//! The trust boundary under test: `cairn_supervision_act` is reachable by `cairn_window` (never
+//! `cairn_agent`, #1129), so by any raw-SQL client holding it. Every act must carry a SIGNED approval over its own address, by a
 //! member whose key is current (and, unless a superuser, confirmed), and must pass the matrix:
 //! one test per matrix row below, each allowed approver succeeding and each refusal firing with
 //! its own words. Nobody acts on their own supervision as the supervisee (Review Focus 4).

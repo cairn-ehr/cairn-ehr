@@ -17,7 +17,7 @@
 --   * a site MAY make an unconfirmed key stop signing after a set number of days (§5.5, off by
 --     default): the console sets it, the window reads the date to warn days ahead.
 --
--- THE TRUST BOUNDARY. Every door below is reachable by cairn_agent (the window) — so by any
+-- THE TRUST BOUNDARY. Every door below is reachable by cairn_window (the window) — so by any
 -- raw-SQL client holding it. None may act without a SIGNED approval verified HERE:
 --   * the approver rule lives in ONE function, cairn_vault_approver_ok, which every door calls;
 --   * each act is signed over its own ADDRESS (a sha2-256 multihash, domain-separated by a
@@ -473,8 +473,9 @@ RETURNS timestamptz LANGUAGE sql STABLE SECURITY DEFINER SET search_path = publi
       FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
 $$;
 
--- Grants. Every definer and internal helper is first revoked from PUBLIC; the window (cairn_agent,
--- which cairn_window inherits, db/062) gets exactly the doors it calls. The pure address and
+-- Grants. Every definer and internal helper is first revoked from PUBLIC; the window
+-- (cairn_window, db/062) gets exactly the doors it calls, and cairn_agent, the advisory-actor role,
+-- none of them (#1129; each GRANT is paired with a REVOKE for a node built before then). The pure address and
 -- purpose functions keep PUBLIC EXECUTE, as cairn_vault_enrol_address does: they read nothing.
 -- cairn_vault_bootstrap_rekey, cairn_vault_bootstrap_repudiate and cairn_vault_set_unconfirmed_expiry
 -- have NO grant: the console's alone.
@@ -494,15 +495,25 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_member_key(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_set_unconfirmed_expiry(int) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) FROM PUBLIC;
 
-GRANT EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_grant_prior(text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_rekey(text, text, text, text, text, text, bytea, text, text, bytea) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_set_enroller(text, boolean, text, bytea) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed() TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_enrollers() TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_member_key(text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_grant_prior(text) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_grant_prior(text) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_rekey(text, text, text, text, text, text, bytea, text, text, bytea) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_rekey(text, text, text, text, text, text, bytea, text, text, bytea) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_set_enroller(text, boolean, text, bytea) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_set_enroller(text, boolean, text, bytea) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_judge_key(text, boolean, text, bytea) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed() TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed() FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_enrollers() TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_enrollers() FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_member_key(text) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_member_key(text) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) FROM cairn_agent; -- #1129
 
 COMMIT;

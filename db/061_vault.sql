@@ -85,9 +85,11 @@
 -- can keep a named member at the five-minute cap (#903).
 --
 -- WHO MAY CALL WHAT:
---   * cairn_agent (the window's runtime role): cairn_vault_release, cairn_vault_hint, cairn_vault_staff_id_taken,
---     cairn_vault_terminal_phc, cairn_vault_enrol (which itself demands a superuser's or a
---     confirmed enroller's token), and slice 2's doors in db/063.
+--   * cairn_window (the window's runtime role; db/062 carries these GRANTs, as it creates the
+--     role — #1129: never cairn_agent, the advisory-actor role): cairn_vault_release,
+--     cairn_vault_hint, cairn_vault_staff_id_taken, cairn_vault_terminal_phc, cairn_vault_enrol
+--     (which itself demands a superuser's or a confirmed enroller's token), and slice 2's doors in
+--     db/063.
 --   * owner only (the node's console, `cairn-node vault-bootstrap-superuser` and friends):
 --     cairn_vault_bootstrap, cairn_vault_set_terminal_phc, and db/063's cairn_vault_bootstrap_rekey
 --     and cairn_vault_set_unconfirmed_expiry.
@@ -763,12 +765,14 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION cairn_vault_release(text, text, text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_hint(text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_staff_id_taken(text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_terminal_phc() TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_enrol(text, text, text, jsonb, text, bytea, text, text, text, text, bytea) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_is_enroller(text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_vault_replaced_notice(text) TO cairn_agent;
+-- #1129: these doors are cairn_window's, granted in db/062. They were cairn_agent's before db/062
+-- existed, so a node built then still holds those grants until this REVOKE replays.
+REVOKE EXECUTE ON FUNCTION cairn_vault_release(text, text, text) FROM cairn_agent;
+REVOKE EXECUTE ON FUNCTION cairn_vault_hint(text) FROM cairn_agent;
+REVOKE EXECUTE ON FUNCTION cairn_vault_staff_id_taken(text) FROM cairn_agent;
+REVOKE EXECUTE ON FUNCTION cairn_vault_terminal_phc() FROM cairn_agent;
+REVOKE EXECUTE ON FUNCTION cairn_vault_enrol(text, text, text, jsonb, text, bytea, text, text, text, text, bytea) FROM cairn_agent;
+REVOKE EXECUTE ON FUNCTION cairn_vault_is_enroller(text) FROM cairn_agent;
+REVOKE EXECUTE ON FUNCTION cairn_vault_replaced_notice(text) FROM cairn_agent;
 
 COMMIT;

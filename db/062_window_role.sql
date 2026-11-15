@@ -22,6 +22,18 @@ END $$;
 -- The doors and projections the window already uses are cairn_agent's.
 GRANT cairn_agent TO cairn_window;
 
+-- #1129: db/061's human-key vault doors are this role's, never cairn_agent's (the advisory-actor
+-- role an agent's login inherits): an agent must not release a person's key, read the staff list
+-- and hints, take the terminal lock's hash, or spend anyone's tries. Granted here, not in db/061,
+-- because db/061 runs before this file creates cairn_window.
+GRANT EXECUTE ON FUNCTION cairn_vault_release(text, text, text) TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_vault_hint(text) TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_vault_staff_id_taken(text) TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_vault_terminal_phc() TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_vault_enrol(text, text, text, jsonb, text, bytea, text, text, text, text, bytea) TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_vault_is_enroller(text) TO cairn_window;
+GRANT EXECUTE ON FUNCTION cairn_vault_replaced_notice(text) TO cairn_window;
+
 -- The window shows which node and schema it is on; both are small, non-secret tables.
 GRANT SELECT ON local_node, node_schema TO cairn_window;
 
