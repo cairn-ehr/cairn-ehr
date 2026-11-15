@@ -85,8 +85,11 @@ BEGIN;
 -- or neither, and the node's HLC is MERGED FORWARD past each one (`cairn_node_hlc_merge`). The note
 -- read judges a part against the supervision record on that clock; a fresh node's HLC starts behind
 -- the restored stamps, so without the merge a part signed after the restore could sort BEFORE a
--- restored `require-cosign` and escape it. A stamp past now + db/001's drift ceiling is refused: no
--- honest node minted one, and merging it would park this node's clock in the future for good.
+-- restored `require-cosign` and escape it. An UNSTAMPED supervision row (exported before #1014) is
+-- merged past the stamp the read gives it, `(recorded_at floored to the ms, 0)` (#1125). A stamp —
+-- carried or so derived — past now + db/001's drift ceiling is refused: no honest node minted one,
+-- and merging it would park this node's clock in the future for good. A stamp on any of the other
+-- ops is refused too: only the six supervision ops are ever stamped.
 --
 -- IT DELIBERATELY BYPASSES `enroll_actor`'s COLLISION GUARDS (#152 / #166), and this is the
 -- one thing about it that needs saying out loud. Those guards refuse a FRESH enroll that
@@ -130,6 +133,9 @@ DECLARE
     v_at        TIMESTAMPTZ;
     v_hwall     BIGINT;
     v_hcount    INTEGER;
+    v_mwall     BIGINT;
+    v_mcount    INTEGER;
+    v_superv    BOOLEAN;
     v_present   actor_event%ROWTYPE;
     v_differs   TEXT;
 BEGIN
@@ -245,11 +251,40 @@ BEGIN
         END IF;
         v_hwall  := (v_row ->> 'hlc_wall')::BIGINT;
         v_hcount := (v_row ->> 'hlc_counter')::INTEGER;
-        IF v_hwall > (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms() THEN
-            RAISE EXCEPTION 'restore_actor_registry: row % carries hlc_wall %, beyond this machine''s '
-                'clock plus the drift ceiling. No honest node minted it, and merging it would park '
-                'this node''s HLC in the future. Check this machine''s clock, then retry.',
-                v_id, v_hwall;
+
+        -- The six supervision ops: the ones cairn_actor_append stamps (db/004) and
+        -- cairn_supervision_record() reads (db/072). Keep all three lists in step (#1125).
+        v_superv := v_op IN ('link-supervisor', 'unlink-supervisor', 'require-cosign',
+                             'lift-cosign', 'grant-assigner', 'withdraw-assigner');
+
+        -- Only those ops are ever stamped (cairn_actor_append, #1125): a stamp on any other op is
+        -- a shape no live door writes.
+        IF v_hwall IS NOT NULL AND NOT v_superv THEN
+            RAISE EXCEPTION 'restore_actor_registry: row % is a % row carrying hlc_wall % and '
+                'hlc_counter %. Only the six supervision ops are stamped on the node''s HLC '
+                '(ADR-0107); no live door writes a stamp on a % row.',
+                v_id, v_op, v_hwall, v_hcount, v_op;
+        END IF;
+
+        -- The stamp the note read judges this row at, which the merge below must pass: its own, or
+        -- for an UNSTAMPED (pre-#1014) supervision row cairn_supervision_record()'s fallback,
+        -- (recorded_at floored to the ms, 0) — db/072, keep the two in step (#1125). Without it a
+        -- machine whose clock runs behind the source's starts its HLC below that fallback, and a
+        -- part signed after the restore escapes a restored require-cosign. NULL for the other ops,
+        -- which nothing compares to an HLC.
+        IF v_hwall IS NULL AND v_superv THEN
+            v_mwall  := floor(extract(epoch FROM v_at) * 1000)::bigint;
+            v_mcount := 0;
+        ELSE
+            v_mwall  := v_hwall;
+            v_mcount := v_hcount;
+        END IF;
+        IF v_mwall > (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms() THEN
+            RAISE EXCEPTION 'restore_actor_registry: row % is judged at HLC wall % (its hlc_wall, or '
+                'its recorded_at if it has none), beyond this machine''s clock plus the drift '
+                'ceiling. No honest node minted it, and merging it would park this node''s HLC in '
+                'the future. Check this machine''s clock, then retry.',
+                v_id, v_mwall;
         END IF;
 
         INSERT INTO actor_event
@@ -297,8 +332,8 @@ BEGIN
         END IF;
 
         -- Monotone, so a resumed restore that merges a stamp again moves nothing.
-        IF v_hwall IS NOT NULL THEN
-            PERFORM cairn_node_hlc_merge(v_hwall, v_hcount);
+        IF v_mwall IS NOT NULL THEN
+            PERFORM cairn_node_hlc_merge(v_mwall, v_mcount);
         END IF;
 
         v_inserted := v_inserted + v_hit;

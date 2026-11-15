@@ -886,13 +886,20 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   (after a ratchet every part and the lift share ONE wall and only the counter orders them — the lift would clear
   the parts again); tick the HLC for every `cairn_actor_append` op (the vault ops would take the hot `hlc_state` lock
   for nothing); tick it earlier in the function (lock order: `hlc_state` last); drop the restore door's
-  `cairn_node_hlc_merge` (a part signed after a restore would sort before a restored `require-cosign`); re-add the
+  `cairn_node_hlc_merge` (a part signed after a restore would sort before a restored `require-cosign`); merge only
+  the rows that carry a stamp (#1125: an unstamped pre-#1014 supervision row is judged at `(recorded_at ms, 0)`, so
+  the door merges past THAT, the same formula as db/072's, under the same drift ceiling, or on a machine whose clock
+  runs behind a restored `require-cosign` is escaped); merge an unstamped vault op too, or accept a stamp on one
+  (only the six supervision ops are ever stamped; the door refuses a stamp on any other, naming the op); re-add the
   DB suites' `hlc_state` reset (it hid this defect). Pins: `supervision.rs`'s
   `a_lift_on_the_parts_wall_with_a_later_counter_does_not_clear_it`,
   `a_vouch_on_the_unlinks_wall_with_a_later_counter_is_not_the_supervisors`,
   `an_unstamped_rows_millisecond_is_in_effect_at_the_part`, `the_requirement_is_read_as_it_stood_at_t`;
   `note_supervision.rs::a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting`;
-  `restore_actor_registry_supervision.rs`; `db/tests/{004_actors,072_supervision}_test.sql`.
+  `restore_actor_registry_supervision.rs` (incl. #1125's
+  `an_unstamped_supervision_row_moves_the_hlc_past_its_recorded_at`, `every_unstamped_supervision_op_moves_the_hlc`,
+  `an_unstamped_supervision_row_past_the_drift_ceiling_is_refused`, `a_stamp_on_a_non_supervision_op_is_refused`);
+  `db/tests/{004_actors,072_supervision}_test.sql`.
 - **The fallback accepts the strongest countersignature the floor allows ON THAT PART: a `co-signed` vouch, or,
   only where the part's envelope key is not a human's, an attested `sign-off`.** (The floor also admits an attested
   sign-off on a human-signed part; under the fallback that one clears nothing.) With no supervisor at the vouch's time, `clears_cosign` accepts a non-student's
