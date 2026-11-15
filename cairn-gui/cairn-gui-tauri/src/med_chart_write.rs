@@ -1,37 +1,20 @@
-//! What `med_chart.rs`'s Sign writes and answers: the assertion one typed line becomes
-//! ([`charted_input`]), and the answer once it landed ([`charted`]). Pure; kept apart so
-//! `med_chart.rs` holds the commands and their refusals.
+//! What one typed line signs and what a medication write answers: the assertion the line becomes
+//! ([`charted_input`], for the list's Sign), its pick's coding ([`substance`]), and the answer
+//! shape of the window's single-act medication writes ([`MedChartWrite`]: Given, Entered in error,
+//! "checked: not current"). Pure.
 use crate::allergy_check::CodingArg;
 use crate::chart_set::ChartPane;
 use cairn_event::medication::{ChartedAs, SubstanceCoding};
 use cairn_node::medication::line::Directions;
 use cairn_node::medication::AssertMedicationInput;
 
-/// What Sign answers once the line is signed: what happened, and the medication list read
-/// again when that read worked. A Sign that signed nothing answers an `ErrorView` instead.
+/// What a single-act medication write answers once it landed: what happened, and the medication
+/// list read again when that read worked. A write that wrote nothing answers an `ErrorView`
+/// instead.
 #[derive(Debug, serde::Serialize)]
 pub struct MedChartWrite {
     pub outcome: String,
     pub pane: Option<ChartPane>,
-}
-
-/// What a Sign that LANDED answers: always an Ok (as `allergies::written`). With the list read
-/// again, the pane; without it, a sentence saying it was signed and how to see it — never an
-/// error, which the window would offer to retry and so chart the drug twice. Pure.
-pub(crate) fn charted(reread: Result<ChartPane, String>) -> MedChartWrite {
-    match reread {
-        Ok(pane) => MedChartWrite {
-            outcome: "Charted.".into(),
-            pane: Some(pane),
-        },
-        Err(e) => MedChartWrite {
-            outcome: format!(
-                "Signed — but the medication list could not be read again ({e}). \
-                 Use “Read this chart again”."
-            ),
-            pane: None,
-        },
-    }
 }
 
 /// The assertion the line signs: the directions as typed are the `sig` (blank: none), and the

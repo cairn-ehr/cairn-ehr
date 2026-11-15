@@ -3,7 +3,7 @@
 //! effect on a line being charted is a warning too: a Start line needs a reason for it, it is
 //! drawn as loud as a mark under a `Warning` tag (never `Allergy`, maintainer Q1), and the
 //! override names its record. The threshold is read on the draft path only. DB walks are
-//! `med_chart_threshold_db_tests.rs`.
+//! `med_list_signed_db_tests.rs::a_lowered_threshold_warns_on_an_adverse_effect`.
 use super::*;
 use crate::allergy_check::ALLERGIES_NOT_READ;
 use crate::med_chart_webview_tests::MED_JS;

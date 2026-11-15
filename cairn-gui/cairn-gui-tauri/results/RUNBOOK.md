@@ -2940,7 +2940,7 @@ in the window as section 29 Measurement 1 does: *Drug*, `penicillin`, choose "Pe
       no brand names, #1065). The line reads **not checked** and asks no reason. Note it: this is the gap #1065 owes.
 - [ ] **The check is re-run at Sign.** An allergy recorded elsewhere while a line is open cannot be produced by hand
       on this rig: there is no console verb for an allergy, and an allergy recorded in this window re-reads the list,
-      which checks the open line again. `med_chart_db_tests.rs::med_chart_db_the_check_is_reread_at_sign` pins it.
+      which checks the open line again. `med_list_review_db_tests.rs::a_warning_recorded_before_the_tick_but_never_drawn_refuses` pins it.
       What can be seen, on a fresh `achart` (not `$C1`, which Measurement 3 needs) with the Penicillins allergy
       recorded: open a *Start* line for amoxicillin, see its mark, then sign the allergy's *Entered in error* in the
       allergy list. The open line reads **not checked** at once, then clean, and the reason field goes.
@@ -3535,7 +3535,7 @@ On each, record an **adverse effect** (not an allergy) to codeine, reaction rash
 - [ ] Re-open `$T1`'s list: the codeine line's note is now loud, its tag reads **Warning** (never "Allergy"), its tick
       is gone, and the Reason field is required, labelled "Reason for charting despite the warning". With no reason
       the tick box stays disabled (the refusal "Charting despite a warning needs a reason" is the single-line Sign's,
-      pinned by `med_chart_threshold_db_tests.rs`). Type `tolerated in hospital`, tick the line, Sign (≤ 3 s,
+      pinned by `med_list_signed_db_tests.rs`). Type `tolerated in hospital`, tick the line, Sign (≤ 3 s,
       section 30's budget): charted.
 - [ ] `psql "$CONN" -c "SELECT cairn_clear_payload(e)->'warning_override' FROM event_log e WHERE patient_id = '$T1'
       AND event_type = 'clinical.medication.asserted'"` names the adverse-effect record as `{"source": "allergy", "ref": …}`.
@@ -3560,7 +3560,7 @@ Reset with `cnode medication-set-warning-threshold --default`.
 - **The policy row:** `db/tests/081_medication_warning_policy_test.sql`; `cli_medication_warning_threshold.rs`.
 - **The rule:** `cairn-node`'s `allergy/check_threshold_tests.rs` and `medication/draft_tick_tests.rs` (pure).
 - **The window:** `cairn-gui-tauri`'s `med_chart_threshold_tests.rs`, `med_list_tests.rs` (pure) and
-  `med_chart_threshold_db_tests.rs` (DB-gated; CI never runs those, #905).
+  `med_list_signed_db_tests.rs` (DB-gated; CI never runs those, #905).
 
 `TEMPLATE.md` carries a matching block (*The warning threshold*).
 

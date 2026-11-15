@@ -1,5 +1,5 @@
 //! DB-gated walks for charting slice 2 in the window (`med_stat.rs`, `chart_stat.rs`): a stat line
-//! signs `stat: true` from both Sign paths; Given signs and the line leaves the current list;
+//! signs `stat: true` from the list's Sign; Given signs and the line leaves the current list;
 //! Entered in error returns it; a stale press is refused BEFORE the key, writing nothing. Nested
 //! under `med_list.rs` to share `med_list_db_tests.rs`'s fixture (Dr Bea named, a John Doe
 //! chart). Run locally on `CAIRN_TEST_PG` (#905: CI never runs these).
@@ -7,7 +7,6 @@ use super::db_tests::{bea_list, done, pick, save, sign};
 use super::*;
 use crate::chart_stat::STAT_NOT_READ;
 use crate::funnel::view::{Recorded, Retry};
-use crate::med_chart::{med_chart_impl, ChartArg};
 use crate::med_stat::{med_stat_give_impl, med_stat_strike_impl, GIVE_GONE, STAT_NOT_OPEN};
 use crate::notes::review::db_tests::credential;
 use cairn_node::medication::stat_read::{read_stat_orders, StatOrder};
@@ -17,7 +16,7 @@ use tokio_postgres::Client;
 const CEFTRIAXONE: u128 = 0xCEF7_0001;
 
 /// The clear payloads of every medication assertion on `chart` (read as the owner).
-async fn payloads(owner: &Client, chart: Uuid) -> Vec<serde_json::Value> {
+pub(super) async fn payloads(owner: &Client, chart: Uuid) -> Vec<serde_json::Value> {
     owner
         .query(
             "SELECT cairn_clear_payload(e)::text FROM event_log e \
@@ -32,10 +31,15 @@ async fn payloads(owner: &Client, chart: Uuid) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// How many times the vault was asked for a key: unchanged means "refused before the key".
+/// How many keys the vault has released, over every member (each release with the right passphrase
+/// moves its member's `success_mark`): unchanged means "refused before the key". Not the row count,
+/// which is one per member and so never moves once that member has signed anything (#1139).
 async fn vault_attempts(owner: &Client) -> i64 {
     owner
-        .query_one("SELECT count(*) FROM vault_attempt", &[])
+        .query_one(
+            "SELECT coalesce(sum(success_mark), 0)::bigint FROM vault_attempt",
+            &[],
+        )
         .await
         .unwrap()
         .get(0)
@@ -129,43 +133,36 @@ async fn strike(
     .await
 }
 
-/// Both Sign paths sign `stat: true` on a stat ORDER, and leave it off every other line.
+/// The list's Sign signs `stat: true` on a stat ORDER, and leaves it off every other line.
 #[tokio::test]
 async fn a_charted_stat_line_signs_stat_true() {
     let Some((_guard, owner, state, chart)) = bea_list().await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    // The list's Sign.
     stat_line(&state, &owner, chart).await;
-    // The one-line Sign: a stat order, then a regimen.
-    let patient = chart.to_string();
-    for directions in ["1g iv stat", "1g iv daily"] {
-        let line = ChartArg {
-            parts: pick("ceftriaxone", CEFTRIAXONE),
-            typed_drug: "ceftriaxone".into(),
-            directions: directions.into(),
-            charted_as: "started-here".into(),
-            reason: None,
-        };
-        med_chart_impl(
-            &state,
-            &patient,
-            vec![patient.clone()],
-            line,
-            credential("bea"),
-        )
-        .await
-        .unwrap();
-    }
+    let regimen = save(
+        &state,
+        chart,
+        ("ceftriaxone", "1g iv daily"),
+        pick("ceftriaxone", CEFTRIAXONE),
+        true,
+    )
+    .await;
+    let (outcome, charted, ..) = done(
+        sign(&state, chart, &[regimen.to_string()], credential("bea"))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(charted, 1, "{outcome}");
     let stat: Vec<Option<bool>> = payloads(&owner, chart)
         .await
         .iter()
         .map(|p| p.get("stat").map(|s| s.as_bool().unwrap()))
         .collect();
     // Absent, never `false`, on the regimen (the wire is forever: today's bytes).
-    assert_eq!(stat, [Some(true), Some(true), None]);
-    assert_eq!(read_stat_orders(&owner, &[chart]).await.unwrap().len(), 2);
+    assert_eq!(stat, [Some(true), None]);
+    assert_eq!(read_stat_orders(&owner, &[chart]).await.unwrap().len(), 1);
 }
 
 /// Given signs, the line leaves the current list (stopped by the give), the time given is the

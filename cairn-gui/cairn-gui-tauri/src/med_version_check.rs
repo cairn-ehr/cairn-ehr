@@ -144,9 +144,9 @@ fn note<'a>(source_detail: Option<&'a str>, why: Option<&'a str>) -> Option<Sour
     (source_detail.is_some() || why.is_some()).then_some(SourceNote { source_detail, why })
 }
 
-/// What a check that LANDED answers: always an Ok (as `med_chart_write::charted`): the pane read
-/// again, or a sentence saying it was signed and how to see it — never an error, which the window
-/// would offer to retry and so record it twice. Pure.
+/// What a check that LANDED answers: always an Ok (`med_stat::landed`): the pane read again, or a
+/// sentence saying it was signed and how to see it — never an error, which the window would offer
+/// to retry and so record it twice. Pure.
 pub(crate) fn checked(reread: Result<crate::chart_set::ChartPane, String>) -> MedChartWrite {
     crate::med_stat::landed("Checked: not current.", reread)
 }

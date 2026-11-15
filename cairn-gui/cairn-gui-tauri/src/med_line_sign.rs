@@ -1,5 +1,5 @@
-//! What one medication line signs, shared by the one-line Sign (`med_chart.rs`) and the list's
-//! Sign (`med_list_sign.rs`), so the two can never disagree about a line.
+//! What one medication line signs, for the list's Sign (`med_list_sign.rs`) and the line check
+//! while typing (`med_chart.rs`), so the two can never disagree about a line.
 //!
 //! - [`parts_before_the_key`]: the term and parts a line signs, or the per-line refusal (a blank
 //!   name, a pick that is not a drug), said before any key is asked for.
@@ -10,8 +10,8 @@
 //!   signed event's charting fields from a checked line.
 //!
 //! Moved here from `med_chart.rs` unchanged in behaviour when the list's Sign became the second
-//! caller (batch charting slice 1); `med_chart.rs` re-imports them, so its tests read them as
-//! before.
+//! caller (batch charting slice 1); the lone-line Sign that was the first is gone (#1139).
+//! `med_chart.rs` re-imports some for its tests.
 use crate::allergies::read_list;
 use crate::allergy_check::{canonical_code, check_lines, part_line, CodingArg, ALLERGIES_NOT_READ};
 use crate::chart_set::{check_displayed_set, ChartSetError};

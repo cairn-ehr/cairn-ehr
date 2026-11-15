@@ -182,7 +182,7 @@ Every slice 1a, 2a, 2b and 3 rule below still holds; a stat order is a charted l
 **⇒ BATCH CHARTING SLICE 3 — THE WARNING THRESHOLD (ADR-0104, db/081) — do not undo**
 (pins: `db/tests/081_medication_warning_policy_test.sql`; `crates/cairn-node/tests/cli_medication_warning_threshold.rs`;
 `crates/cairn-node/src/allergy/check_threshold_tests.rs`, `crates/cairn-node/src/medication/draft_tick_tests.rs`; in
-`cairn-gui/cairn-gui-tauri/src/`, `med_chart_threshold_tests.rs`, `med_chart_threshold_db_tests.rs`, `med_list_tests.rs`).
+`cairn-gui/cairn-gui-tauri/src/`, `med_chart_threshold_tests.rs`, `med_list_signed_db_tests.rs`, `med_list_tests.rs`).
 - **"Warns" is ONE rule: `LineCheck::warned_against()` / `warns()`.** Every draft-path decision (default tick, hand
   tick, reason gate, override refs, the records a list line draws as seen) reads it. **Tempting wrong fix:** test
   `check.marks.is_empty()` or read `check.against` at a new site "because only allergies matter here" — a lowered
@@ -475,10 +475,19 @@ Every charting 1a rule below still holds; the list's lines are 1a's line, and 1a
 (pins: `crates/cairn-event/src/medication/charting.rs`'s tests,
 `crates/cairn-node/tests/{medication_charting_floor,medication_charting_projection,medication_drug_search_door,medication_chart}.rs`,
 `crates/cairn-node/src/medication/line_tests.rs`, `crates/cairn-node/src/allergy/check_combination_tests.rs`,
-`cairn-gui/cairn-gui-tauri/src/{med_chart,med_chart_db,med_chart_rows,med_chart_webview,med_chart_line_webview}_tests.rs`).
+`cairn-gui/cairn-gui-tauri/src/{med_chart,med_chart_db,med_chart_rows,med_chart_webview,med_chart_line_webview}_tests.rs`,
+`med_list_signed_db_tests.rs`).
 Every allergy slice 3 rule below still holds; the pick's door is a db/076 door like the other four.
-- **Requiring an override is a WINDOW rule, never a floor rule** (design §3.5, ADR-0021). `med_chart` refuses a Start line
-  with an allergy mark and a blank trimmed reason, before the key, and a reason sent when its own re-check could not
+- **ONE charting path: the list's Sign (#1139).** Slice 1a's lone-line `med_chart` command was deleted: nothing called
+  it, and it signed every warning its fresh check found as overridden (no R1 seen-set). Its per-line rules (`press`,
+  `override_before_the_key`, `override_ids`) stay in `med_chart.rs` and the list's Sign calls them.
+  `command_registry_tests.rs::every_registered_command_is_one_the_webview_calls` fails on a registered command the
+  webview never calls; it reads three call shapes (`invoke("`, `sendJudgement("`, `superuserAct("`). **Tempting wrong
+  fixes:** keep a command "for later" or give the guard an exception list (any webview script can call a registered
+  command, so an uncalled one is an unreviewed door); add an `invoke` wrapper without adding its shape to the guard
+  (its commands read as uncalled, and a name it calls that is not registered passes the forward guard).
+- **Requiring an override is a WINDOW rule, never a floor rule** (design §3.5, ADR-0021). The list's Sign refuses a Start
+  line with an allergy mark and a blank trimmed reason, per line and before the key, and a reason sent when its own re-check could not
   run (`CHECK_DID_NOT_RUN`: never dropped). db/077 never requires an override and checks one's shape only when it is
   present (a blank reason refused at the authoring door only), and a peer's override missing its `reason`, `against`, or an entry's `source` / `ref` is admitted.
   The override is `warning_override` `{reason, against: [{source, ref}]}`, never allergy-only: `source` is an
@@ -493,14 +502,14 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   `charting.rs::the_tail_names_each_source_once_in_first_seen_order`,
   `charting.rs::a_blank_or_missing_source_is_never_rendered_as_empty_parentheses`,
   `med_chart_tests.rs::a_start_line_with_a_mark_needs_a_trimmed_reason`.
-- **The check is RE-RUN at Sign on a fresh read; the webview's answer is never trusted.** `med_chart` reads the
-  allergies again over the chart set on screen, refuses a changed set as a re-read, and signs `against` from that
+- **The check is RE-RUN at Sign on a fresh read; the webview's answer is never trusted.** The list's Sign reads
+  the allergies again over the chart set on screen, refuses a changed set as a re-read, and signs `against` from that
   fresh check. The on-screen check and the check at Sign build their lines with the one `the_line`, which checks
   each part of a combination under its signed AND its typed term. **Tempting wrong fixes:** pass the webview's
-  `reason_needed` / marks to `med_chart` "to save a round trip" (an allergy signed since reads clean); treat a changed
+  `reason_needed` / marks to the Sign "to save a round trip" (an allergy signed since reads clean); treat a changed
   set as "not checked" at Sign the way the on-screen check does (a Start line signs unchecked against a newly linked
   chart's allergies); check a combination under one term only (a by-name allergy on the other term reads "not
-  checked" and Sign asks no reason). Pins: `med_chart_db_tests.rs::med_chart_db_the_check_is_reread_at_sign`,
+  checked" and Sign asks no reason). Pins: `med_list_review_db_tests.rs::a_warning_recorded_before_the_tick_but_never_drawn_refuses`,
   `med_chart_rows_tests.rs::a_changed_set_refuses_and_a_failed_read_proceeds`,
   `a_by_name_allergy_on_the_signed_combination_term_marks_the_line`,
   `med_chart_db_tests.rs::med_chart_db_a_by_name_allergy_on_the_typed_drug_marks_the_check`.
@@ -2251,7 +2260,7 @@ guards in `cairn-gui-tauri/src/chart_view_webview_tests.rs`, each mutation-check
 
 **⇒ THE BANNER'S AND TRAY'S FAILURE STATES (#745 · #752 · #740) — do not undo any of these** (pins:
 `cairn-gui-tauri/src/duplicates/{tests.rs,view_tests.rs,verdict_tests.rs}`, `worklist/tests.rs`,
-`commands_tests.rs::every_command_the_webview_calls_is_registered`; the JS halves by SOURCE guards —
+`command_registry_tests.rs::every_command_the_webview_calls_is_registered`; the JS halves by SOURCE guards —
 `duplicates/webview_tests.rs` and `worklist/tests.rs`, each mutation-checked — since there is no JS runner):
 - **The banner hides ONLY on Rust's `silent`** (`DuplicateSection::is_silent`, sent by a hand-written `Serialize`).
   Both destructure EXHAUSTIVELY: a new field must not compile until someone decides whether it un-silences the banner.

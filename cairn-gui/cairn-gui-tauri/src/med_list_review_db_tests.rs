@@ -44,7 +44,7 @@ async fn allergy(state: &AppState, chart: Uuid, term: &str, moiety: u128) {
 }
 
 /// The line `id` as the pane drew it.
-fn drawn(view: &MedListView, id: &str) -> Vec<WarningRef> {
+pub(super) fn drawn(view: &MedListView, id: &str) -> Vec<WarningRef> {
     view.lines
         .iter()
         .find(|l| l.line_id == id)

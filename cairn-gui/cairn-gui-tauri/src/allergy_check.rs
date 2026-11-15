@@ -340,8 +340,8 @@ pub(crate) fn charting_or_unsure(
 }
 
 /// Check `lines` against allergy rows `a`, asking the drug list on `c` (the rules of
-/// [`check_list`]; both run [`check_lines_unsure`], and `med_chart` checks the line being
-/// charted with this).
+/// [`check_list`]; both run [`check_lines_unsure`], and the line being charted is checked
+/// with this).
 ///
 /// This is the DRAFT path (a line being charted, a list line): each check is stamped with the
 /// site's warning threshold (db/081, ADR-0104), which decides what warns. The charted list

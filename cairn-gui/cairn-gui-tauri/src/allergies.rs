@@ -321,7 +321,7 @@ pub(crate) fn sign_failure(e: &anyhow::Error, act: &Act) -> ErrorView {
 }
 
 /// [`sign_failure`]'s rule for any act, its unknown outcome led by `lead` ("Whether this
-/// medication was charted", `med_chart.rs`). Pure.
+/// medication was charted", `med_chart::UNKNOWN_LEAD`). Pure.
 pub(crate) fn failure_named(e: &anyhow::Error, lead: &str) -> ErrorView {
     match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
         Some(event) => ErrorView {
