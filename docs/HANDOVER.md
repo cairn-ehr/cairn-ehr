@@ -144,8 +144,8 @@
 >    (a student's timer-committed part escapes its co-sign — an ADR-0094 amendment), **#1141** (does an equal-severity
 >    newer account unsettle a hand tick? today it does, the safe direction), **#1133** (an unsigned medication
 >    list can be stranded), **#1134** (no log-out gesture: Lock keeps the claim and the editor), **#1135** (medication
->    co-sign for a supervisee; allergies' no-draft rule). **#1130 + #1137 BUILT 2026-11-15** on branch
->    `fix/1130-1137-leave-chart-waits` (`leave_chart.js`; durable-rules block; link/unlink still read the strip
+>    co-sign for a supervisee; allergies' no-draft rule). **#1130 + #1137 BUILT 2026-11-15** in PR
+>    [#1142](https://github.com/cairn-ehr/cairn-ehr/pull/1142) (`leave_chart.js`; durable-rules block; link/unlink still read the strip
 >    outside the set — #1002, #709). **Small fixes ready to build:** **#1136** (the CLI charts with no allergy check — at least say it is not a clinical surface), **#1139** (`med_chart`
 >    is a dead, weaker command — delete it; NOT a bare deletion: `med_chart_db_tests.rs` walks checks the list's Sign
 >    shares, so move what the list's tests lack first), **#1138** (nine minors); #1109 widened.
