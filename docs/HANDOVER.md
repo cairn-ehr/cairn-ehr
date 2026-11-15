@@ -46,7 +46,7 @@
 >   **3c-3a** (PR #1013, [ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), `db/072`): #1015 ·
 >   #1016 · #1017 · #1018. Its #1014 (two clocks in the co-sign judgement) MERGED 2026-11-15 in PR #1124
 >   ([ADR-0107](spec/decisions/0107-supervision-on-the-nodes-hlc.md), spec v0.109); the restore-door follow-on **#1125**
->   is fixed on PR [#1126](https://github.com/cairn-ehr/cairn-ehr/pull/1126); its final check filed #1127 (the six
+>   MERGED 2026-11-15 in PR [#1126](https://github.com/cairn-ehr/cairn-ehr/pull/1126); its final check filed #1127 (the six
 >   supervision ops are hand-copied across db/004, db/072 and db/052). Not guaranteed: a CONCURRENT peer part from a clock ahead
 >   can still sort after a lift it never saw (no local clock fixes that).
 >   **3c-3c** (PR #1019, [ADR-0095](spec/decisions/0095-the-person-menu.md), `db/073`): #1020 (two actors sharing a
