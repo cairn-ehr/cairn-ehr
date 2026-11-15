@@ -45,6 +45,15 @@ pub(crate) fn credential(staff_id: &str) -> Option<Credential> {
     })
 }
 
+/// Name `staff` in who's here, as the person picker does. A test that signs as someone other
+/// than the fixture's Sue and relies on that key being HELD must name them first (#1128).
+pub(crate) async fn here_as(state: &AppState, staff: &str, name: &str) {
+    state.whos_here.lock().await.pick(Claim::Named {
+        staff_id: staff.into(),
+        display_name: name.into(),
+    });
+}
+
 /// The fixture above: the serial guard (bind it), the owner's client, the window's state with
 /// who's here naming Sue, the chart, and Bea's part. `None` without `CAIRN_TEST_PG`.
 pub(crate) async fn supervised_note() -> Option<(

@@ -22,9 +22,9 @@
 -- link stands while its latest link/unlink row is a link, and so on. A student needs co-signing by
 -- role alone, so nothing is stored for one and require/lift on a student is refused.
 --
--- THE TRUST BOUNDARY. cairn_supervision_act is reachable by cairn_agent (which the window's role
--- inherits), so by any raw-SQL client holding it. It never acts without a SIGNED approval checked
--- HERE, as db/063's vault doors do:
+-- THE TRUST BOUNDARY. cairn_supervision_act is reachable by cairn_window (the window's role, never
+-- cairn_agent's, #1129), so by any raw-SQL client holding it. It never acts without a SIGNED
+-- approval checked HERE, as db/063's vault doors do:
 --   * the approver rule lives in ONE function, cairn_supervision_approver: a member whose key is
 --     current, confirmed (or predating confirmation) unless a superuser, whose token verifies
 --     over this act's ADDRESS;
@@ -350,10 +350,10 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
       FROM vault_member m WHERE m.role <> 'superuser' ORDER BY m.staff_id;
 $$;
 
--- Grants. Every definer and helper is first revoked from PUBLIC; cairn_agent (which cairn_window
--- inherits, db/062) gets the act door, the prior and the staff list; cairn_window the record. The
--- console door and every helper have NO grant: the owner's alone. Only the pure address keeps
--- PUBLIC EXECUTE.
+-- Grants. Every definer and helper is first revoked from PUBLIC; cairn_window gets the act door,
+-- the prior, the staff list and the record, and cairn_agent, the advisory-actor role, none (#1129;
+-- each GRANT is paired with a REVOKE for a node built before then). The console door and every
+-- helper have NO grant: the owner's alone. Only the pure address keeps PUBLIC EXECUTE.
 REVOKE EXECUTE ON FUNCTION cairn_supervision_latest(bytea, text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_supervision_supervisors(bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_supervision_staff_of(bytea) FROM PUBLIC;
@@ -366,9 +366,12 @@ REVOKE EXECUTE ON FUNCTION cairn_supervision_console_act(text, text, text) FROM 
 REVOKE EXECUTE ON FUNCTION cairn_supervision_record() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_supervision_staff() FROM PUBLIC;
 
-GRANT EXECUTE ON FUNCTION cairn_supervision_prior(text, text, text) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_supervision_act(text, text, text, text, bytea) TO cairn_agent;
-GRANT EXECUTE ON FUNCTION cairn_supervision_staff() TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_supervision_prior(text, text, text) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_supervision_prior(text, text, text) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_supervision_act(text, text, text, text, bytea) TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_supervision_act(text, text, text, text, bytea) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_supervision_staff() TO cairn_window;
+REVOKE EXECUTE ON FUNCTION cairn_supervision_staff() FROM cairn_agent; -- #1129
 GRANT EXECUTE ON FUNCTION cairn_supervision_record() TO cairn_window;
 
 COMMIT;

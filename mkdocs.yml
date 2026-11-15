@@ -236,6 +236,7 @@ nav:
       - ADR-0105 · A stat dose, ordered then given: spec/decisions/0105-a-stat-dose-ordered-then-given.md
       - ADR-0106 · Drug names in the pick: spec/decisions/0106-drug-names-in-the-pick.md
       - ADR-0107 · The supervision record on the node's HLC: spec/decisions/0107-supervision-on-the-nodes-hlc.md
+      - ADR-0108 · The human doors are the window's role's: spec/decisions/0108-the-human-doors-are-the-windows-role.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

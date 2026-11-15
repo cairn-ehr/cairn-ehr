@@ -538,7 +538,7 @@ async fn the_runtime_role_cannot_read_the_vault() {
     };
     let (_g, c) = fresh().await;
     let (_, jsmith) = boss_and_jsmith(&c).await;
-    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    c.batch_execute("SET ROLE cairn_window").await.unwrap();
 
     let e = c
         .query("SELECT sealed FROM vault_member", &[])
@@ -569,7 +569,7 @@ async fn the_runtime_role_cannot_read_the_vault() {
         .await
         .unwrap()
         .get(0);
-    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    c.batch_execute("SET ROLE cairn_window").await.unwrap();
     let e = c
         .query(&format!("SELECT setval('{clock}'::regclass, 1)"), &[])
         .await
@@ -880,7 +880,7 @@ async fn staff_id_taken_normalises_and_answers() {
     }
     assert!(taken(&c, " JSmith ").await);
     assert!(!taken(&c, "nobody-here").await);
-    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    c.batch_execute("SET ROLE cairn_window").await.unwrap();
     assert!(taken(&c, "jsmith").await, "callable by the runtime role");
     assert!(!taken(&c, "nobody-here").await);
     c.batch_execute("RESET ROLE").await.unwrap();

@@ -389,26 +389,44 @@ async fn a_blank_named_line_is_skipped_and_the_rest_sign() {
     let _ = met;
 }
 
-/// Review Focus 3: Bea's list, but the key held is Sue's. A Sign with no staff id typed releases
-/// nothing new and writes nothing: the key is not the writer's. A typed id for Sue is refused
-/// before the vault is asked.
+/// Review Focus 3 and #1128: Bea's list, with who's here naming Bea, and Sue presses one act with
+/// her own passphrase. Sue's act signs, but her key is NOT held for the next one (it would sign
+/// every later press made under Bea's name); Bea's own key is. A Sign with no passphrase then has
+/// no key and writes nothing, and a Sign by Sue's typed passphrase is refused: not the writer's.
 #[tokio::test]
 async fn a_held_key_of_another_member_writes_nothing() {
     let Some((_guard, owner, state, chart)) = bea_list().await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    assert!(
+        !state.key_hold.is_zero(),
+        "the fixture is a key-hold terminal"
+    );
     let met = save(&state, chart, ("metformin", "500mg bd"), vec![], true).await;
     state
         .signer_for_act(credential("sue"), Now::read())
         .await
-        .expect("Sue's key is held");
+        .expect("Sue's own act signs");
+    assert_eq!(
+        state.key_status(Now::read()).await,
+        None,
+        "Sue's key is not held under Bea's name"
+    );
     let ids = [met.to_string()];
     let not_yours = "This list was written by Dr Bea; only they can sign it";
-    assert_eq!(
+    assert_ne!(
         sign(&state, chart, &ids, None).await.unwrap_err().text,
-        not_yours
+        not_yours,
+        "no key at all: the strip asks for a passphrase"
     );
+    assert_eq!(assertions(&owner, chart).await, 0);
+    state
+        .signer_for_act(credential("bea"), Now::read())
+        .await
+        .expect("Bea's own act signs");
+    assert_eq!(state.key_status(Now::read()).await.as_deref(), Some("bea"));
+    state.forget_held_key().await;
     let before = releases(&owner, "sue").await;
     assert_eq!(
         sign(&state, chart, &ids, credential("sue"))

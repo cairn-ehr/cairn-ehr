@@ -91,7 +91,9 @@ BEGIN
         'cairn_vault_replaced_notice(text)',
         'cairn_vault_unconfirmed_expires_at(text)'
     ] LOOP
-        ASSERT has_function_privilege('cairn_agent', f, 'EXECUTE'), format('the window must reach %s', f);
+        ASSERT has_function_privilege('cairn_window', f, 'EXECUTE'), format('the window must reach %s', f);
+        ASSERT NOT has_function_privilege('cairn_agent', f, 'EXECUTE'),
+            format('%s is never the advisory role''s (#1129, ADR-0108)', f);
     END LOOP;
     FOREACH f IN ARRAY ARRAY[
         'cairn_vault_bootstrap_rekey(text, text, text, bytea, text, text, text)',

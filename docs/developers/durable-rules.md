@@ -10,6 +10,36 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ THE WHOLE-MILESTONE REVIEW'S FIXES (#1128, #1129, #1131; ADR-0108) — do not undo**
+(review `docs/code_reviews/2026-11-15-gui-milestone-review.md`).
+- **A released key is HELD only when who's here names nobody, or names that key's own person, compared by KEY, and then
+  under the claim's staff ID** (`Claim::hold_under`, `AppState::hold_name_for_claim`, #1128). The act itself still
+  signs with the key just released. The strip returns to the claim's ID after the act, so a hold under the typed text
+  ("JSmith" for the vault's "jsmith") would be forgotten by the very next press. A pick wipes the held key again once
+  its claim is set: a press that took the connection during the pick's directory read saw "nobody named". **Tempting
+  wrong fixes:** compare by staff-ID text (handle case and a re-keyed member fool it); check the claim on `UseHeld`
+  instead (the claim changes only by a pick or the re-lock, which forget the key, so the keep is the one place); "keep
+  the hold, the strip shows whose key it is" (the loud bar names the claimed person, and their next presses sign with
+  another's key). A test that signs as someone other than its fixture's claimed person and relies on the hold must
+  name them first (`here_as`). Pins: `whos_here_tests.rs::only_the_named_persons_own_key_is_held` and
+  `::a_pick_wipes_the_held_key_again_after_setting_the_claim`,
+  `state.rs::signer_for_act_keeps_the_key_with_the_generation_of_its_own_wipe`,
+  `med_list_db_tests.rs::a_held_key_of_another_member_writes_nothing`,
+  `signer_webview_tests.rs::a_key_hold_strip_returns_to_the_claimed_id_after_another_persons_act`.
+- **Every `cairn_vault_*` / `cairn_supervision_*` door the window calls is `cairn_window`'s; `cairn_agent` holds
+  none** (ADR-0108, #1129). The console doors stay the owner's alone. `cairn_agent` is the advisory-actor role an
+  agent's login inherits. db/061's doors are granted in db/062 (it creates the role), and every grant is paired with a
+  `REVOKE … FROM cairn_agent` for an older node. **Tempting wrong fixes:** grant a new vault or supervision door to
+  `cairn_agent` "because the window inherits it" (every agent login then holds it); drop a REVOKE as redundant (an
+  older node keeps the grant). Pins: `advisory_role_holds_no_human_doors.rs` (both tests: the catalogue, and a replay
+  over an older node's grants).
+- **A mark's warning names every account its words show** (`LineCheck::worse_accounts`, #1131): the words read the
+  allergen's most severe account, the id the hitting record, so the worse account is named beside it in
+  `warned_against`. **Tempting wrong fixes:** put the worse account into `against` (it is aligned one-per-mark, and
+  `merge` zips them); drop `worse_accounts` as "the same allergen as the hit" (a hand tick for "→ rash" then holds past
+  an "→ anaphylaxis" that arrived later). Pins: `check_worse_account_tests.rs`, `check_tests.rs`'s
+  `differing_accounts_mark_once_with_the_more_severe` and `linked_accounts_mark_once_with_the_most_severe`.
+
 **⇒ CHARTING SLICE 3 — DRUG NAMES IN THE PICK (ADR-0106, db/076 in place) — do not undo**
 (pins: `crates/cairn-node/tests/drug_names_door.rs`; `db/tests/076_drug_read_door_test.sql` §5; `cairn-node`'s
 `medication::line` tests and `allergy/names_tests.rs`; `cairn-medication-view`'s `display.rs` and `row.rs` tests; in

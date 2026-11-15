@@ -483,8 +483,8 @@ async fn public_cannot_execute_the_person_menu_doors() {
 }
 
 /// The supervision doors and helpers (sign-in slice 3c-3a, db/072), named because the family has
-/// no registry to read. The act door, prior and staff list are `cairn_agent`'s, the record
-/// `cairn_window`'s (driven in `window_role_vault_doors.rs`); the console door and every helper
+/// no registry to read. The act door, prior, staff list and record are `cairn_window`'s, never
+/// `cairn_agent`'s (#1129; driven in `window_role_vault_doors.rs`); the console door and every helper
 /// are the owner's alone. Only the pure address keeps PUBLIC EXECUTE, as the vault's addresses do.
 #[tokio::test]
 async fn public_cannot_execute_the_supervision_doors() {

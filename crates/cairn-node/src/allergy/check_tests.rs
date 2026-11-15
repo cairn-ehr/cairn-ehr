@@ -334,7 +334,10 @@ fn differing_accounts_mark_once_with_the_more_severe() {
     );
     assert_eq!(
         got[&id(900)],
-        marks(&[("Allergy recorded: Augmentin → anaphylaxis", 1)])
+        LineCheck {
+            worse_accounts: vec![id(2)], // the anaphylaxis shown, which did not hit (#1131)
+            ..marks(&[("Allergy recorded: Augmentin → anaphylaxis", 1)])
+        }
     );
 }
 
@@ -415,7 +418,10 @@ fn linked_accounts_mark_once_with_the_most_severe() {
     );
     assert_eq!(
         got[&id(900)],
-        marks(&[("Allergy recorded: amoxicillin → anaphylaxis", 2)])
+        LineCheck {
+            worse_accounts: vec![id(1)], // the anaphylaxis shown, which did not hit (#1131)
+            ..marks(&[("Allergy recorded: amoxicillin → anaphylaxis", 2)])
+        }
     );
 }
 

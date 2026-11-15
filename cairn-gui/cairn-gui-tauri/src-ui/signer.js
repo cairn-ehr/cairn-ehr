@@ -32,10 +32,12 @@ function signerCredential() {
 
 /**
  * Called after EVERY write comes back, success and refusal alike: a typed passphrase never stays
- * on screen for the next person. The staff ID stays on a terminal with a key hold, so the holder
- * carries on with no passphrase; it is not `heldBy` that decides, because `heldBy` is only
- * refreshed by the poll below, after this runs. Keeping it is safe: the node signs an ID with no
- * passphrase only with that same person's live held key, never by asking the vault.
+ * on screen for the next person. On a terminal with a key hold the staff ID stays when nobody is
+ * named or it is the claimed person's, so the holder carries on with no passphrase; otherwise it
+ * returns to the claimed ID, the one the node holds a named person's key under (#1128). It is not
+ * `heldBy` that decides, because `heldBy` is only refreshed by the poll below, after this runs.
+ * Keeping it is safe: the node signs an ID with no passphrase only with that same person's live
+ * held key, never by asking the vault.
  * `signed` is true on the success path: the ID then joins the type-ahead list.
  */
 function clearSigner(signed) {
@@ -43,7 +45,10 @@ function clearSigner(signed) {
   // Only a SIGNED act enters the recent list, so a typo never does (shared terminal).
   if (signed) rememberSigner(el("staff-id").value);
   el("signer-passphrase").value = "";
-  if (keyHoldSecs === 0) {
+  // On a key-hold terminal the act's ID stays only if nobody is named or it is the claim's own text:
+  // the node holds no other person's key under a claim, and holds the claimed person's under the
+  // claim's ID (#1128), so any other text would only aim the next press at nothing.
+  if (keyHoldSecs === 0 || (claimedStaffId() !== "" && typed !== claimedStaffId())) {
     el("staff-id").value = "";
     // The act's ID goes; who's here's ID comes back (design §3.6: prefilled for every act, not
     // only the first after a pick — empty when nobody is named). The passphrase never is.
