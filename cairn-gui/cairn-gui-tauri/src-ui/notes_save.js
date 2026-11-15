@@ -76,7 +76,7 @@ function saveNoteNow() {
   return noteSaveQueue;
 }
 
-/** Every save queued so far, done (funnel.js's `closeChart` waits for it before `close_chart`). */
+/** Every save queued so far, done (leave_chart.js's `closeChart` waits for it before `close_chart`). */
 function notesSaved() {
   return noteSaveQueue;
 }

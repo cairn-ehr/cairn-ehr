@@ -10,7 +10,7 @@ const WAITING_JS: &str = include_str!("../src-ui/waiting.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 /// Every script index.html loads (`every_command_goes_through_the_bar` checks it against the
 /// page, so a new script cannot go unscanned).
-const SCRIPTS: [(&str, &str); 35] = [
+const SCRIPTS: [(&str, &str); 36] = [
     ("main.js", include_str!("../src-ui/main.js")),
     ("waiting.js", include_str!("../src-ui/waiting.js")),
     ("chart_stale.js", include_str!("../src-ui/chart_stale.js")),
@@ -21,6 +21,7 @@ const SCRIPTS: [(&str, &str); 35] = [
     ("supervision.js", include_str!("../src-ui/supervision.js")),
     ("reseal.js", include_str!("../src-ui/reseal.js")),
     ("funnel.js", include_str!("../src-ui/funnel.js")),
+    ("leave_chart.js", include_str!("../src-ui/leave_chart.js")),
     ("holds.js", include_str!("../src-ui/holds.js")),
     ("link.js", include_str!("../src-ui/link.js")),
     ("signer.js", include_str!("../src-ui/signer.js")),

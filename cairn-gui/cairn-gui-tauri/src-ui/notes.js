@@ -17,8 +17,8 @@
 //
 // Classic script, loaded right after signer.js and notes_save.js, sharing main.js's global scope (`el`, `cell`,
 // `setMessage`, `invoke`, `refresh`, `displayedPatient`), signer.js's `signerCredential` and
-// `clearSigner`, whos_here.js's `whosHere`/`claimAsked`/`askWhosHere`, funnel.js's `failureText`
-// and chart_stale.js's `behindTheRecord` — all read only when a chart is read or a key is
+// `clearSigner`, whos_here.js's `whosHere`/`claimAsked`/`askWhosHere`, funnel.js's `failureText`,
+// leave_chart.js's `actsInFlight` and chart_stale.js's `behindTheRecord` — all read only when a chart is read or a key is
 // pressed, long after every script has loaded. main.js's `refresh` calls `readNotes`; its
 // `clearChart` calls `clearNotes`.
 //
@@ -363,18 +363,26 @@ async function signNote() {
 }
 
 /**
- * The last Sign, Discard or sign-off, done, as its outcome (`noteSigning`'s values). idle.js's re-lock and
- * whos_here.js's switch wait for it.
+ * The act in flight, done, as its outcome: a note's Sign, Discard or sign-off as `noteSigning`'s
+ * values; the medication list's Sign, stat or settle, or a `chartAct`, as `{ words }` or null.
+ * idle.js's re-lock, whos_here.js's switch, the person menu and leave_chart.js wait for it.
  */
 function signsSettled() {
+  // A chart act in flight (leave_chart.js's `chartAct`) answers with its words: `{ words }` or
+  // null. Only one act is ever in flight (each checks `signInFlight` first), so its answer is THE one.
+  if (actsInFlight.size > 0) return Promise.all(actsInFlight).then((said) => said[said.length - 1]);
   // The medication list's Sign in flight (med_list_sign.js) answers instead: `{ words }`.
   if (!medListSignInFlight) return noteSigning;
   return Promise.all([noteSigning, medListSigning]).then(([, list]) => list);
 }
 
-/** Whether a Sign, Discard or sign-off — or the medication list's Sign — is in flight right now. */
+/**
+ * Whether an act is in flight: a note's Sign, Discard, sign-off or review (`noteSignInFlight`);
+ * the medication list's Sign, a stat dose or a version's settle (`medListSignInFlight`); or a
+ * `chartAct` (leave_chart.js: the medication sign-off, Stop, Withhold, Release, an allergy press).
+ */
 function signInFlight() {
-  return noteSignInFlight || medListSignInFlight;
+  return noteSignInFlight || medListSignInFlight || actsInFlight.size > 0;
 }
 
 /** Say how the note pane's last act went. Never a dialog. */

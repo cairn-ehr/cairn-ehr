@@ -39,7 +39,8 @@
 >   **3c-1** (PR #992, [ADR-0091](spec/decisions/0091-the-compound-note-and-the-addendum.md), `db/070`): #993
 >   (`K = 4 > N = 3`) · #994 · #995 · #996 · #998 · #999 (a decision).
 >   **3c-2** (PR #1000, [ADR-0092](spec/decisions/0092-the-vouch-and-the-sign-off.md), `db/071`): #1001 · #1002 (the
->   medication pane reads the strip while a note act is in flight) · #1003 · #1005.
+>   medication pane reads the strip while a note act is in flight; PR #1142 closed it for sign-off, Stop, Withhold,
+>   Release and the allergy presses — link and unlink remain) · #1003 · #1005.
 >   **3c-3b** (PR #1006, [ADR-0093](spec/decisions/0093-a-repudiated-signature-counts-as-unsigned.md)): #1007 · #1008 ·
 >   #1010 · #1011 (needs a gesture design) · #1012; #918's link half stays open. Design of 3c-3:
 >   [`superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md`](superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md).
@@ -51,7 +52,7 @@
 >   can still sort after a lift it never saw (no local clock fixes that).
 >   **3c-3c** (PR #1019, [ADR-0095](spec/decisions/0095-the-person-menu.md), `db/073`): #1020 (two actors sharing a
 >   staff id) · #1021 (measured and cut 5–6× in PR #1025; open for the obligations projection and the Pi figures) ·
->   #1022 · #1023 (incl. `funnel.js` at 499 lines) · #1024; RUNBOOK §26 also owes WebKit + real Tauri IPC.
+>   #1022 · #1023 (incl. `funnel.js`, 473 lines since PR #1142 moved `closeChart` out) · #1024; RUNBOOK §26 also owes WebKit + real Tauri IPC.
 > - **Allergies** (design [`superpowers/specs/2026-11-08-allergy-stream-design.md`](superpowers/specs/2026-11-08-allergy-stream-design.md);
 >   born-sealed, **no clear `safety` signal**, #406/#401).
 >   **1** (PR [#1026](https://github.com/cairn-ehr/cairn-ehr/pull/1026), [ADR-0096](spec/decisions/0096-the-allergy-list.md),
@@ -144,10 +145,14 @@
 >    (a student's timer-committed part escapes its co-sign — an ADR-0094 amendment), **#1141** (does an equal-severity
 >    newer account unsettle a hand tick? today it does, the safe direction), **#1133** (an unsigned medication
 >    list can be stranded), **#1134** (no log-out gesture: Lock keeps the claim and the editor), **#1135** (medication
->    co-sign for a supervisee; allergies' no-draft rule). **Small fixes ready to build:** **#1130** + **#1137** (leaving
->    a chart with an act in flight: the answer is said on the next chart, or dropped; one window-wide in-flight set),
->    **#1136** (the CLI charts with no allergy check — at least say it is not a clinical surface), **#1139** (`med_chart`
->    is a dead, weaker command — delete it), **#1138** (nine minors); #1109 widened.
+>    co-sign for a supervisee; allergies' no-draft rule). **#1130 + #1137 BUILT 2026-11-15** in PR
+>    [#1142](https://github.com/cairn-ehr/cairn-ehr/pull/1142) (`leave_chart.js`; durable-rules block; link/unlink still read the strip
+>    outside the set — #1002, #709). Its finalcheck fixed an allergy press settling as "said nothing" (it now hands
+>    back the words it said) and filed **#1143** (a press refused because another act is in flight says nothing — a
+>    UI decision: disable the controls or say it beside them) and **#1144** (a refused close-time note flush loses the
+>    text without a word; pre-existing). **Small fixes ready to build:** **#1136** (the CLI charts with no allergy check — at least say it is not a clinical surface), **#1139** (`med_chart`
+>    is a dead, weaker command — delete it; NOT a bare deletion: `med_chart_db_tests.rs` exercises checks that the
+>    list's Sign shares, so move what the list's tests lack first), **#1138** (nine minors); #1109 widened.
 >    **Then the maintainer picks:** sign-in
 >    **slice 4** (the emergency key, design §5.6 — its own ADR, brainstorm first); the order of **#909** vs **slice 5**
 >    (either gates a multi-terminal pilot) and of **#912**; **#1021**'s obligations projection and Pi figures (figures
@@ -294,7 +299,7 @@ milestone-scoped review 2026-11-15 (#1128–#1139); the next whole-project pass 
 
 ---
 
-**Session date:** 2026-11-15, fourth session (#1126 found merged; the whole-milestone review → #1128–#1139 filed;
+**Session date:** 2026-11-15, fifth session (#1130 + #1137 built, PR [#1142](https://github.com/cairn-ehr/cairn-ehr/pull/1142); its finalcheck fixed the allergy-words gap and filed #1143 + #1144) · 2026-11-15, fourth session (#1126 found merged; the whole-milestone review → #1128–#1139 filed;
 #1128, #1129 (ADR-0108, spec v0.110) and #1131 fixed inline, PR [#1140](https://github.com/cairn-ehr/cairn-ehr/pull/1140)) · 2026-11-15, third session (#1124 found merged; HANDOVER condensed; #1125 fixed inline, PR [#1126](https://github.com/cairn-ehr/cairn-ehr/pull/1126) — db/052's restore door merges past an unstamped supervision row's fallback stamp and refuses a stamp on a non-supervision op; no ADR, no wire change, `SCHEMA_GENERATION` 82) · 2026-11-15, second session (#1121 found merged; #1014 planned → built inline, PR [#1124](https://github.com/cairn-ehr/cairn-ehr/pull/1124), ADR-0107) · 2026-11-15 (#1106 found merged; charting slice 3 (drug names) planned with rulings R1–R3 → built inline, PR [#1121](https://github.com/cairn-ehr/cairn-ehr/pull/1121); drugref#244 filed) · 2026-11-14, third session (#1101 found merged; charting slice 2 planned with rulings Q1–Q4 → SDD Tasks 1–7 + a whole-branch review on draft PR [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106); #1107–#1112 filed) · 2026-11-14, second session (#1098 found merged; batch-charting slice 3 planned → built inline, PR [#1101](https://github.com/cairn-ehr/cairn-ehr/pull/1101); #1102 filed) · 2026-11-14 (#1088 merged; slice 2b planned → SDD Tasks 1–8, Tasks 1–3 merged mid-session in PR [#1096](https://github.com/cairn-ehr/cairn-ehr/pull/1096), Tasks 4–8 on draft PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098); #1097 filed) · 2026-11-13 (#1086 merged; batch-charting slice 2's wire brainstormed → designed → slice 2a planned → built by SDD, PR [#1088](https://github.com/cairn-ehr/cairn-ehr/pull/1088); #1089 + #1090 filed; final check: #1091–#1095 filed) · 2026-11-12 (charting slice 1b brainstormed → designed → built, PR [#1086](https://github.com/cairn-ehr/cairn-ehr/pull/1086), merged the same day; #1084 + #1085 filed) · 2026-11-11 (batch charting slice 1's Task 7 after its merge: ADR-0100, spec v0.102, RUNBOOK §31, a whole-slice review; #1081 + #1082 filed; PR [#1083](https://github.com/cairn-ehr/cairn-ehr/pull/1083)) · 2026-11-11 (#1072 batch charting brainstormed → design approved → slice 1 planned, draft PR [#1078](https://github.com/cairn-ehr/cairn-ehr/pull/1078)) · 2026-11-11 (charting slice 1a plan → SDD, Tasks 1–7 + final fix wave on draft PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066); #1067–#1073 filed) · 2026-11-10 (#1052 merged; #1065 + drugref#231 filed; charting-a-medication brainstorm) · 2026-11-08 (#1021 measured; key facts once per key; keep rule) · 2026-11-07 (3c-3c plan → SDD, 7 tasks + final fix wave, PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)) · 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
 **Spec:** **v0.110** (newest ADR-0108, PR #1140, db/061 + db/062 + db/063 + db/072 in place; v0.109 ADR-0107, PR #1124, db/004 + db/052 + db/072 in place; #1125 needed no ADR — a db/052 fix in place, meeting ADR-0107 decision 4's stated purpose; v0.108 ADR-0106, PR #1121, `db/076` in place; v0.107 ADR-0105, PR #1106, `db/082`; v0.106 ADR-0104, PR #1101, `db/081`; v0.105 ADR-0103, PRs #1096/#1098, `db/080`; v0.104 ADR-0102, PR #1088, `db/079`; v0.103 ADR-0101, PR #1086, `db/075` in place, no new file; v0.102 ADR-0100, PR #1078, `db/078`; v0.101 ADR-0099, PR #1066, `db/077`; v0.100 ADR-0098, PR #1052, `db/076`; v0.99 ADR-0097, PR #1038, `db/075`; v0.98 ADR-0096, PR #1026, `db/074`; v0.97 ADR-0095, PR #1019, `db/073`; v0.96 ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation

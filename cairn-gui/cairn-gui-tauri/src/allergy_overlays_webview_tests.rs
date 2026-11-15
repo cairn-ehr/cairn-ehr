@@ -200,8 +200,8 @@ fn overlay_presses_go_through_press_once() {
     for step in [
         "charts: allergyCharts,",
         "credential: signerCredential(),",
-        "afterSigned(answer, patient, false);",
-        "await afterRefused(failure, patient, false, sayHere);",
+        "return afterSigned(answer, patient, false);",
+        "return afterRefused(failure, patient, false, sayHere);",
     ] {
         assert!(sign.contains(step), "{step}: {sign}");
     }
@@ -380,7 +380,7 @@ fn a_refusal_after_a_redraw_mid_press_is_said_on_the_status_line() {
         "{sign}"
     );
     assert!(
-        sign.contains("await afterRefused(failure, patient, false, sayHere);"),
+        sign.contains("return afterRefused(failure, patient, false, sayHere);"),
         "{sign}"
     );
 }

@@ -4,10 +4,11 @@
 // The words are all Rust's (`person_menu_view.rs`): this file draws what `person_menu` answers and
 // writes no sentence a clinician reads. Reading the menu signs nothing and asks for no passphrase.
 // Classic script, loaded BEFORE whos_here.js (whose `showClaim` calls `refreshMenuCount`), sharing
-// main.js's globals (`el`, `cell`, `setMessage`, `invoke`), funnel.js's `enterChart`, `closeChart`,
-// `displayedPatient`, `registering`, `failureText`, and notes.js's `signInFlight`, `signsSettled`,
-// `noteDraft`, and whos_here.js's `signOutcomeLine`. Only main.js's `el` is used at load (the listeners at the bottom; main.js loads
-// first); the rest are used inside functions, at a press or an answer, after every script loaded.
+// main.js's globals (`el`, `cell`, `setMessage`, `invoke`, `displayedPatient`), funnel.js's
+// `enterChart`, `registering` and `failureText`, leave_chart.js's `closeChart`/`closing`, notes.js's
+// `signInFlight`, `signsSettled` and `noteDraft`, and whos_here.js's `signOutcomeLine`. Only
+// main.js's `el` is used at load (the listeners at the bottom; main.js loads first); the rest are
+// used inside functions, at a press or an answer, after every script loaded.
 "use strict";
 
 // One counter per kind of read (the worklist.js pattern, #752): an older answer must never draw
@@ -112,9 +113,10 @@ function menuRow(row) {
 }
 
 /**
- * Open a menu row's note: the queued saves land first (a sign in flight settles, then `closeChart` awaits the
- * saves), THEN the node re-reads the menu and opens the chart only if a row still names it. A sign in
- * flight that did not go through keeps its chart open instead.
+ * Open a menu row's note: a close already in progress lands first (#1137), then the queued saves
+ * (an act in flight settles — a note's Sign or any `chartAct` — then `closeChart` awaits the
+ * saves), THEN the node re-reads the menu and opens the chart only if a row still names it. An act
+ * that did not settle well (`SETTLED_WELL`) keeps its chart open instead.
  */
 async function openMenuRow(row) {
   if (registering) return; // as funnel.js's openChart: registration's own enterChart must not be replaced
@@ -122,6 +124,9 @@ async function openMenuRow(row) {
   menuOpening = true;
   try {
     setMessage(el("person-menu-status"), "");
+    // A close still in progress (its saves still landing) finishes first, or this open would
+    // overtake it: A's remaining saves refused, and A's `close_chart` closing B (#1137).
+    await closing;
     const outcome = signInFlight() ? await signsSettled() : null;
     if (outcome && !SETTLED_WELL.has(outcome)) {
       // It did not go through (or is not known to have): stay on its chart. `closeChart` would

@@ -47,6 +47,8 @@ mod hold;
 mod holds_webview_tests;
 #[cfg(test)]
 mod launch_posture_tests;
+#[cfg(test)]
+mod leave_chart_webview_tests;
 mod link;
 mod med_chart;
 #[cfg(test)]

@@ -298,7 +298,7 @@ fn typing_a_time_chooses_until_a_time() {
     let shown = position(controls, "untilKind.value = kind;");
     let sent = position(
         controls,
-        "void withhold(row.group_id, whyHold.value, kind, untilAt.value).then(",
+        "chartAct(() => withhold(row.group_id, whyHold.value, kind, untilAt.value), \"outcome\")",
     );
     assert!(pressed < kind && kind < shown && shown < sent, "{controls}");
 }

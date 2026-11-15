@@ -27,7 +27,7 @@ pub(crate) const LIST_JS: &str = concat!(
 );
 const MED_JS: &str = include_str!("../src-ui/med_chart.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
-const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
+const LEAVE_JS: &str = include_str!("../src-ui/leave_chart.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 const STYLE_CSS: &str = include_str!("../src-ui/style.css");
 
@@ -237,7 +237,7 @@ fn two_lines_then_one_sign() {
     // the list's queued saves as for the note's.
     assert!(js_fn(MAIN_JS, "render").contains("syncMedList();"));
     assert!(js_fn(MAIN_JS, "clearChart").contains("clearMedList();"));
-    let close = js_fn(FUNNEL_JS, "closeChart");
+    let close = js_fn(LEAVE_JS, "leaveChart");
     assert!(
         position(close, "clearChart();") < position(close, "await medListSaved();")
             && position(close, "await medListSaved();")

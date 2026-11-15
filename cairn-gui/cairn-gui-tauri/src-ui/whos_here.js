@@ -15,9 +15,9 @@
 //
 // Recent people and bookmarks live in the window's Rust memory only, never browser storage.
 // Classic script, loaded after notes.js, sharing main.js's globals (`el`, `cell`, `setMessage`,
-// `invoke`, `pollLock`), signer.js's `onStaffIdChange`, funnel.js's `closeChart`/`openChart` and
-// funnel.js's `failureText` and person_menu.js's `hideMenu`/`refreshMenuCount` — all read only at
-// a press, long after every script has loaded.
+// `invoke`, `pollLock`), signer.js's `onStaffIdChange`, leave_chart.js's `closeChart`, funnel.js's
+// `openChart` and `failureText`, and person_menu.js's `hideMenu`/`refreshMenuCount` — all read
+// only at a press, long after every script has loaded.
 "use strict";
 
 /** Said in the picker for a Sign that settled while a switch waited (no patient identifier:
@@ -106,8 +106,8 @@ function takeClaim(claim) {
 }
 
 /**
- * "Who's here?" and the hot key. A Sign, Discard or sign-off in flight settles first, so its
- * outcome is said on the chart it acted on (the pick also forgets the held key). Then the chart leaves the screen, its
+ * "Who's here?" and the hot key. An act in flight (a note's Sign, Discard or sign-off, or any
+ * `chartAct`) settles first, so its outcome is said on the chart it acted on (the pick also forgets the held key). Then the chart leaves the screen, its
  * queued saves awaited (`closeChart`), so nothing typed is saved under the next person; then
  * the picker opens.
  */

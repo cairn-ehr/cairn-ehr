@@ -141,7 +141,7 @@ function clearMedList() {
   putAwayMedList();
 }
 
-/** Every save and delete queued so far, done (funnel.js's `closeChart` waits for it). */
+/** Every save and delete queued so far, done (leave_chart.js's `closeChart` waits for it). */
 function medListSaved() {
   return medSaveQueue;
 }

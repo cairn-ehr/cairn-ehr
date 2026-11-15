@@ -26,8 +26,9 @@
 // Do not move it into `FunnelSession` without reopening that decision.
 //
 // Loaded after main.js as a classic script, so these are shared globals: `el`, `setMessage`,
-// `refresh`, `clearChart`, `say` and `invoke` (read), and `displayedPatient` (WRITTEN here —
-// it is how every chart command names the chart on screen, `AppState::displayed_patient`).
+// `refresh`, `clearChart`, `say` and `invoke` (read), and `displayedPatient` (WRITTEN here and in
+// leave_chart.js — it is how every chart command names the chart on screen,
+// `AppState::displayed_patient`).
 "use strict";
 
 /** How long typing must pause before a search runs (ms). */
@@ -413,6 +414,7 @@ function enterChart(header) {
 /** Open a listed chart; a refusal is shown next to the list it was clicked in (`statusId`). */
 async function openChart(patientId, statusId) {
   if (registering) return; // the rows are disabled; this is the belt to those braces
+  await closing; // a close in progress lands first (leave_chart.js, #1137)
   try {
     enterChart(await invoke("open_chart", { patientId }));
   } catch (refusal) {
@@ -429,33 +431,6 @@ function resetFrontDoor() {
   el("prompt-status").textContent = "";
   el("register-outcome").textContent = "";
   onRegisterEdited();
-}
-
-async function closeChart() {
-  displayedPatient = null;
-  clearChart();
-  // As in `enterChart`: the panel must not survive the chart under it. `false` — focus heads for
-  // the front door, not `#same-person`, which is hidden with the rest of `#chart-view`.
-  if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
-  if (typeof closeUnlinkPanel === "function" && !el("unlink-panel").hidden) closeUnlinkPanel(false);
-  say("");
-  // Every queued note save lands while the node still shows this chart (sent first is not enough).
-  if (typeof notesSaved === "function") await notesSaved();
-  await medListSaved(); // and every medication line's (med_list.js)
-  try {
-    await invoke("close_chart");
-  } catch (failure) {
-    // Stay on the (now empty) chart view and SAY so, rather than leaving a blank view with a
-    // "Loading…" button and no word. Every chart command is already refused: nothing is displayed.
-    say("Could not return to the front door: " + failureText(failure));
-    return;
-  }
-  el("chart-view").hidden = true;
-  el("front-door").hidden = false;
-  resetFrontDoor();
-  el("browse-name").focus();
-  void refreshTray();
-  void refreshMenuCount(); // person_menu.js: a saved draft may have moved the count
 }
 
 // ---- Start -------------------------------------------------------------------------------
@@ -494,6 +469,5 @@ el("browse-form").addEventListener("submit", (event) => {
 });
 el("register-form").addEventListener("input", onRegisterEdited);
 el("register-form").addEventListener("submit", onRegister);
-el("close-chart").addEventListener("click", closeChart);
 
 void boot();

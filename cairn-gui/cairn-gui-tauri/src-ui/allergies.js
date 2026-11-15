@@ -251,10 +251,9 @@ async function recordAllergy() {
     clearSigner(true);
   } catch (failure) {
     clearSigner();
-    await afterRefused(failure, patient, true);
-    return;
+    return afterRefused(failure, patient, true);
   }
-  afterSigned(answer, patient, true);
+  return afterSigned(answer, patient, true);
 }
 
 /** Sign "no known allergies" (`scope` "all") or "no known drug allergies" ("drug"). */
@@ -271,10 +270,9 @@ async function recordNoneKnown(scope) {
     clearSigner(true);
   } catch (failure) {
     clearSigner();
-    await afterRefused(failure, patient, false);
-    return;
+    return afterRefused(failure, patient, false);
   }
-  afterSigned(answer, patient, false);
+  return afterSigned(answer, patient, false);
 }
 
 /**
@@ -285,6 +283,7 @@ async function recordNoneKnown(scope) {
  * it is drawn. Without it, nothing of the old list may stay up — it lacks what was just signed —
  * so the strip says Rust's outcome (which names "Read this chart again", the way back) and no
  * write can be pressed until a list draws. Nothing is drawn for a chart the clinician has left.
+ * Answers the words it said, wherever it said them (leave_chart.js's `chartAct` reads them).
  */
 function afterSigned(answer, patient, wasEntry) {
   // A chart the clinician has left: its next read says the truth, and the chart on screen's
@@ -299,10 +298,11 @@ function afterSigned(answer, patient, wasEntry) {
     stripSays(answer.outcome, true); // said once, where the list was; prominent: the list is unknown
     sayAllergy("");
     syncAllergyButtons();
-    return;
+    return answer.outcome;
   }
   sayAllergy(answer.outcome);
   renderAllergies(answer.pane, patient);
+  return answer.outcome;
 }
 
 /**
@@ -312,7 +312,7 @@ function afterSigned(answer, patient, wasEntry) {
  * emptied too — a live Sign over it could record it twice.
  * Any other refusal recorded nothing: said by `sayHere` when the act's own row says it (an
  * overlay's inline row, allergy_overlays.js), else under its field (`FIELD_REFUSALS`) or on the
- * status line, with what was typed left as it is.
+ * status line, with what was typed left as it is. Answers the words it said, wherever it said them.
  */
 async function afterRefused(failure, patient, wasEntry, sayHere) {
   if (patient !== displayedPatient) return;
@@ -327,15 +327,16 @@ async function afterRefused(failure, patient, wasEntry, sayHere) {
     // Said once, as the re-read's lead on `#outcome`: chart_stale.js keeps it there (a failed
     // re-read is said after it; a read that overtakes this one still says it).
     await refresh(text, behind);
-    return;
+    return text;
   }
   if (sayHere) {
     sayHere(text);
-    return;
+    return text;
   }
   const field = FIELD_REFUSALS.find(([fragment]) => text.includes(fragment));
   if (field) setMessage(el(field[1]), text);
   else sayAllergy(text);
+  return text;
 }
 
 /** Say how the form's last act went. Never a dialog. */
@@ -376,7 +377,9 @@ async function pressOnce(act) {
   sayAllergy("");
   syncAllergyButtons();
   try {
-    await act();
+    // One act in flight (leave_chart.js). `act` hands back the words it said, wherever it said
+    // them; the status line is read only when it hands back none (a chart already left).
+    await chartAct(act, "allergy-status");
   } catch (fault) {
     console.error(fault);
     if (patient !== displayedPatient) return; // a chart left: its next read says the truth

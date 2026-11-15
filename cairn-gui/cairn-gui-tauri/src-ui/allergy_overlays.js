@@ -250,10 +250,9 @@ async function signOverlay(row, send) {
     // A list drawn mid-press (a hold timer, another pane's act, a read in flight) replaces the
     // row: a refusal said into it then would be unseen, and its vanishing reads as success.
     const sayHere = (text) => (said.isConnected ? setMessage(said, text) : sayAllergy(text));
-    await afterRefused(failure, patient, false, sayHere);
-    return;
+    return afterRefused(failure, patient, false, sayHere);
   }
-  afterSigned(answer, patient, false); // re-reads the chart, and so the medication list's offers and marks
+  return afterSigned(answer, patient, false); // re-reads the chart, and so the medication list's offers and marks
 }
 
 el("allergy-correct-cancel").addEventListener("click", () => {

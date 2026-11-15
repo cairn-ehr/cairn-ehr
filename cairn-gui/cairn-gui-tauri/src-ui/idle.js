@@ -9,7 +9,7 @@
 // first armed by the first touch, and the poll only hands over the interval (`setIdleLock`).
 //
 // Classic script, loaded after whos_here.js, sharing main.js's `el` and `invoke`, notes.js's
-// `signsSettled`, funnel.js's `closeChart`, signer.js's `relockTerminal` and whos_here.js's
+// `signsSettled`, leave_chart.js's `closeChart`, signer.js's `relockTerminal` and whos_here.js's
 // `takeClaim`/`closePicker`/`dismissOffer` — all read only when the timer fires.
 "use strict";
 

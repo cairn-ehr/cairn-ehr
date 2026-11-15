@@ -429,6 +429,7 @@ fn every_command_the_webview_calls_is_registered() {
         ("duplicates.js", include_str!("../src-ui/duplicates.js")),
         ("worklist.js", include_str!("../src-ui/worklist.js")),
         ("funnel.js", include_str!("../src-ui/funnel.js")),
+        ("leave_chart.js", include_str!("../src-ui/leave_chart.js")),
         ("link.js", include_str!("../src-ui/link.js")),
         ("unlink.js", include_str!("../src-ui/unlink.js")),
     ];

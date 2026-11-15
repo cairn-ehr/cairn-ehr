@@ -16,7 +16,7 @@ const NOTES_JS: &str = concat!(
 );
 const SIGNER_JS: &str = include_str!("../src-ui/signer.js");
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
-const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
+const LEAVE_JS: &str = include_str!("../src-ui/leave_chart.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
 /// Review Focus 1: Nurse A has typed and not yet saved when Dr B presses the hot key. The chart
@@ -36,7 +36,7 @@ fn switch_awaits_the_save_queue_before_picking() {
         position(switch, "await signsSettled();") < position(switch, "await closeChart();"),
         "{switch}"
     );
-    let close = js_fn(FUNNEL_JS, "closeChart");
+    let close = js_fn(LEAVE_JS, "leaveChart");
     assert!(
         position(close, "await notesSaved();") < position(close, "invoke(\"close_chart\")"),
         "{close}"
@@ -291,10 +291,9 @@ fn a_sign_settled_during_a_switch_is_said_in_the_picker() {
     assert!(NOTES_JS.contains(
         "noteSignInFlight = true;\n  noteSigning = signNote()\n    .catch((failure) => {"
     ));
-    // The medication list's Sign counts too (Task 6 review I1).
-    assert!(
-        js_fn(NOTES_JS, "signInFlight").contains("return noteSignInFlight || medListSignInFlight;")
-    );
+    // The medication list's Sign counts too (Task 6 review I1), and every chart act (#1130).
+    assert!(js_fn(NOTES_JS, "signInFlight")
+        .contains("return noteSignInFlight || medListSignInFlight || actsInFlight.size > 0;"));
 }
 
 /// A draft's parts are drawn as read-only blocks through `cell` (3a's rule: never `innerHTML` a
