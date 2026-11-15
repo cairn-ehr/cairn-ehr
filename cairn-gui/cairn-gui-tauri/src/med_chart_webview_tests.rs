@@ -141,7 +141,7 @@ fn four_letters_list_drugs_with_full_names() {
     assert!(js_fn(MED_JS, "askMedPick").contains("invoke(\"med_drug_search\", { text: text })"));
     let draw = js_fn(MED_JS, "drawMedPick");
     assert!(
-        draw.contains("cell(\"li\", option.display, { role: \"option\""),
+        draw.contains("cell(\"li\", medPickLabel(option), { role: \"option\""),
         "{draw}"
     );
     assert!(
@@ -163,15 +163,20 @@ fn four_letters_list_drugs_with_full_names() {
     ] {
         assert!(!MED_JS.contains(markup), "med_chart.js uses {markup}");
     }
-    // What the pick answers is what Rust sends.
+    // What the pick answers is what Rust sends — for a drug found by another name, the richest
+    // option (`matched` is skipped when absent, charting slice 3).
+    let alias = CodingArg {
+        matched: Some("adrenaline".into()),
+        ..coding()
+    };
     let sent = keys_of(&DrugSearch {
         available: true,
-        options: vec![coding()],
+        options: vec![alias.clone()],
     });
     for field in fields_read_in(MED_JS, "found") {
         assert!(sent.contains(&field), "found.{field}: Rust sends {sent:?}");
     }
-    let sent = keys_of(&coding());
+    let sent = keys_of(&alias);
     for field in fields_read_in(MED_JS, "option") {
         assert!(sent.contains(&field), "option.{field}: Rust sends {sent:?}");
     }
@@ -439,6 +444,7 @@ fn no_drug_list_says_so_and_still_signs() {
 
 fn coding() -> CodingArg {
     CodingArg {
+        matched: None,
         system: "drugref-moiety".into(),
         code: "c".into(),
         display: "amoxicillin".into(),
@@ -451,4 +457,20 @@ fn keys_of(value: &impl serde::Serialize) -> Vec<String> {
         serde_json::Value::Object(map) => map.keys().cloned().collect(),
         other => panic!("not an object: {other}"),
     }
+}
+
+/// Charting slice 3 (ruling R2): the medication pick draws "adrenaline → epinephrine" for a drug
+/// found by another name, and the held pick keeps `matched`, so Sign (`term_to_sign`) completes
+/// "adren" to "adrenaline" — also after the draft line is saved and reopened.
+#[test]
+fn a_drug_found_by_another_name_reads_name_arrow_drug() {
+    let label = js_fn(MED_JS, "medPickLabel");
+    assert!(
+        label.contains(
+            "option.matched ? option.matched + \" → \" + option.display : option.display"
+        ),
+        "{label}"
+    );
+    let choose = js_fn(MED_JS, "chooseMedPick");
+    assert!(choose.contains("matched: option.matched"), "{choose}");
 }

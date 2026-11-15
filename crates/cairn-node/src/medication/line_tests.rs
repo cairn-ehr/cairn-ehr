@@ -71,25 +71,43 @@ fn unknown_words_are_unread_never_dropped() {
 
 #[test]
 fn term_to_sign_keeps_what_was_typed_unless_unfinished() {
-    assert_eq!(term_to_sign("amox", Some("amoxicillin")), "amoxicillin");
     assert_eq!(
-        term_to_sign("Augmentin", Some("amoxicillin + clavulanic acid")),
+        term_to_sign("amox", Some("amoxicillin"), None),
+        "amoxicillin"
+    );
+    assert_eq!(
+        term_to_sign("Augmentin", Some("amoxicillin + clavulanic acid"), None),
         "Augmentin"
     );
     assert_eq!(
-        term_to_sign("amoxycillin", Some("amoxicillin")),
+        term_to_sign("amoxycillin", Some("amoxicillin"), None),
         "amoxycillin"
     );
-    assert_eq!(term_to_sign("x", None), "x");
+    assert_eq!(term_to_sign("x", None, None), "x");
 }
 
+/// Charting slice 3 (Review Focus 4): a drug found by another name ("adren" finds epinephrine
+/// through its MeSH synonym "Adrenaline") completes to THAT name, never to the display and never
+/// left unfinished as "adren". `matched` is drugref's MeSH spelling, capital and all, exactly as
+/// the door returns it (drug_names_door.rs), so "adren" signs "Adrenaline".
 #[test]
-fn shown_name_adds_the_typed_brand_only_when_different() {
+fn term_to_sign_completes_to_the_matched_name() {
+    let (epi, adr) = (Some("epinephrine"), Some("Adrenaline"));
+    assert_eq!(term_to_sign("adren", epi, adr), "Adrenaline");
+    // The clinician's own case is kept when they typed the whole name (final review M2).
+    assert_eq!(term_to_sign("Adrenaline", epi, adr), "Adrenaline");
+    assert_eq!(term_to_sign("adrenaline", epi, adr), "adrenaline");
     assert_eq!(
-        shown_name("amoxicillin + clavulanic acid", "Augmentin"),
-        "amoxicillin + clavulanic acid (Augmentin)"
+        term_to_sign("5-FU", Some("fluorouracil"), Some("5-fu")),
+        "5-FU"
     );
-    assert_eq!(shown_name("amoxicillin", "Amoxicillin"), "amoxicillin");
+    assert_eq!(term_to_sign(" adren ", epi, adr), "Adrenaline");
+    // The door named the alias, so "epi" was not what found it: the clinician's words stay.
+    assert_eq!(term_to_sign("epi", epi, adr), "epi");
+    assert_eq!(
+        term_to_sign("Augmentin", Some("amoxicillin"), None),
+        "Augmentin"
+    );
 }
 
 #[test]

@@ -21,6 +21,7 @@ mod common;
 
 /// The drugref stand-in (see its header). Never load it outside a transaction that rolls back.
 const STUB: &str = include_str!("fixtures/drug_stub.sql");
+const NAMES: &str = include_str!("fixtures/drug_names_stub.sql");
 const DOOR: &str = "cairn_drug_medication_search(text, integer)";
 
 async fn rig() -> Option<(Client, Client)> {
@@ -84,6 +85,10 @@ async fn the_search_lists_drugs_only_ranked_by_use() {
         ["amoxicillin:2", "amoxapine:0"],
         "drugs only, the two charted amoxicillin lines first, then shorter names"
     );
+    // The same ranking once drugref has its names (charting slice 3): the counts still join on
+    // the moiety the names helper found, so a charted drug keeps its place.
+    tx.batch_execute(NAMES).await.unwrap();
+    assert_eq!(search(&tx, "amox").await, ["amoxicillin:2", "amoxapine:0"]);
     let code: String = tx
         .query_one(
             "SELECT code FROM cairn_drug_medication_search('amoxicillin', 20)",

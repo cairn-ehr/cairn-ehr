@@ -341,10 +341,11 @@ impl MedicationRow {
     }
 
     /// The name the clinician actually sees: the coded display name when the drug has been
-    /// coded, else the term exactly as asserted. Every renderer and the sort MUST use this, or
-    /// the chart is ordered by a string the reader cannot see (a coded chart would sort under
-    /// its invisible `term` while the clinician reads `coding_display` — e.g. "Lipitor" filed
-    /// under "atorvastatin").
+    /// coded, else the term exactly as asserted. Every renderer's leading name and the sort MUST
+    /// use this (the list's name cell adds the term after it: `shown_name`), or the chart is
+    /// ordered by a string the reader cannot see (a coded chart would sort under its invisible
+    /// `term` while the clinician reads `coding_display` — e.g. "Lipitor" filed under
+    /// "atorvastatin").
     pub fn display_name(&self) -> &str {
         self.coding_display.as_deref().unwrap_or(&self.term)
     }
@@ -531,6 +532,24 @@ mod tests {
     fn an_uncoded_row_displays_its_asserted_term() {
         assert_eq!(
             row("little white pill", None).display_name(),
+            "little white pill"
+        );
+    }
+
+    /// Charting slice 3 (#1073, Review Focus 5): generic first, the signed term in brackets only
+    /// when the row is coded and the term is another word.
+    #[test]
+    fn shown_name_brackets_the_term_only_when_coded_and_different() {
+        assert_eq!(
+            row("adrenaline", Some("epinephrine")).shown_name(),
+            "epinephrine (adrenaline)"
+        );
+        assert_eq!(
+            row("Amoxicillin", Some("amoxicillin")).shown_name(),
+            "amoxicillin"
+        );
+        assert_eq!(
+            row("little white pill", None).shown_name(),
             "little white pill"
         );
     }

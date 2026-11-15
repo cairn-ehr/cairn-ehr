@@ -3694,3 +3694,85 @@ WebKit need the window and a human. The rest was run as follows:
 - **The webview:** `med_stat_webview_tests.rs`; the tab crate's `stat_view_tests.rs`.
 
 `TEMPLATE.md` carries a matching block (*A stat dose, ordered then given*).
+
+## 37. Drug names in the pick (charting slice 3, ADR-0106)
+
+The slice's gestures:
+- **Either pick, by the clinician's word.** Typing *adren*, *ligno*, *frus*, *amoxy* or *acetam* in the allergy pick
+  (Substance) or the medication line lists the drug, each row reading "{the name that matched} → {drugref's name}":
+  "Adrenaline → epinephrine", "Lignocaine → lidocaine" (a MeSH name keeps its own case; a UNII name reads lower
+  case, "acetaminophen → paracetamol"). A name two drugs share lists both ("Cefalexin → cephalexin" and "cefalexin
+  → cephalexin anhydrous").
+- **Choosing it** fills the allergy field with the matched name ("Lignocaine"), and "Coded as: lidocaine (drug)"
+  shows under it. On the medication line, Sign signs the word completed ("adren" signs "Adrenaline").
+- **The lists** read generic first, the word after it: "epinephrine (Adrenaline)" on the medication list's name, and
+  "Allergy: lidocaine (Lignocaine) …" on the allergy line and in the strip. A group-coded allergy keeps its words.
+
+Paper counterpart: the nurse writes "adrenaline 1 mg IM" and the doctor "lignocaine — rash", each in their own
+word. **Live only.**
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Chart a drug by a local name | the first key of `adrenaline 1mg im` | the line signed | **≤ 10 s** (slice 1a's) |
+| Code an allergy by a local name | the first key of *ligno* | "Coded as: lidocaine (drug)" shown | no slower than by the display name |
+| Read what was charted | the chart open | "epinephrine (adrenaline)" read | **no click** |
+
+Steps: paper *N* = 1 (write the word) → forced *M* = 1 (the existing Sign) → target *K* = 1 pick. Record the figure
+by the display name beside it ("epinephrine"): a local name slower than that is the finding. **A figure outside its
+budget, or an `M > N`, is the finding: file an issue, and never adjust the budget.**
+
+**Setup.** As section 30, but copy drugref from `drugref_synonyms`, which carries the names (drugref db/070 +
+db/071; `drugref_allergy` does not), in place of `drugref_allergy`. Its `allergy_check` has db/076's shape. Drop
+any drugref copied before (`DROP SCHEMA drugref CASCADE` on `$CONN`) first:
+
+```bash
+"$PGBIN/pg_dump" -h 127.0.0.1 -p 5532 -d drugref_synonyms -n drugref --no-owner --no-privileges \
+  | "$PGBIN/psql" "$CONN" -v ON_ERROR_STOP=1 -q
+psql "$CONN" -Atc "SELECT cairn_drug_names_available()"                                       # t
+psql "$WINDOW_CONN" -Atc "SELECT display || ' ' || matched FROM cairn_drug_search('adren', 12)" # incl. epinephrine Adrenaline
+N1=$(achart "Names Charted" 1990-10-10)
+[ -n "$N1" ] || echo "the registration failed — read the output above" >&2
+```
+
+**Measurement 1: the medication pick.**
+
+- [ ] On `$N1`, record "No known drug allergies". *Start medication*, type `adrenaline`: the pick lists
+      "Adrenaline → epinephrine" (record where it ranks, #1122). Take it, add ` 1mg im`, Sign (stopwatch, ≤ 10 s).
+      (Take the pick once the drug's word is whole: editing a part after the pick drops its coding.) The list's
+      name reads "epinephrine (adrenaline)", the clinician's own case kept. `psql "$CONN" -Atc "SELECT
+      term FROM medication_statement WHERE patient_id = '$N1'"` reads `adrenaline`.
+- [ ] The same line typed `adren 1mg im` and left unfinished at the pick: Sign signs `Adrenaline`, never `adren`.
+- [ ] *Already taking* `cefalexin 500mg qid`: the pick lists both cephalexin rows. Take one. Its name reads
+      "cephalexin (cefalexin)" or "cephalexin anhydrous (cefalexin)", as taken.
+- [ ] Add the same `adren` line to a batch list, close the window and open it again, then Sign the list: the term is
+      still `Adrenaline` (the pick's name is saved with the line).
+
+**Measurement 2: the allergy pick.**
+
+- [ ] On a fresh chart, record an allergy, typing *ligno*: "Lignocaine → lidocaine". Take it: the field reads
+      "Lignocaine", "Coded as: lidocaine (drug)". Sign. The strip and the line read "lidocaine (Lignocaine)".
+- [ ] An allergy coded to the group "Penicillins (allergy group)" (choosing it writes that name into the field)
+      reads its own words with no drug bracket; only a group's review-status words may follow them.
+- [ ] Chart *Start medication* `lidocaine 1% 5ml sc`: the line is tagged **Allergy** (the coded check). Chart it
+      again WITHOUT taking a pick (uncoded): still tagged **Allergy**, by the allergen's drug name (ADR-0106
+      decision 10).
+- [ ] De-label a drug allergy, typing *amoxy* as the tolerated drug: "Amoxycillin → amoxicillin". Take it: the field
+      reads "Amoxycillin", and the de-label signs with the amoxicillin coding.
+- [ ] Record what VoiceOver reads for an arrow row ("Adrenaline → epinephrine"), and whether it says the arrow.
+
+**Without the names.** Restore `drugref_allergy` in place of `drugref_synonyms`: `cairn_drug_names_available()` reads
+`f`, *adren* no longer finds epinephrine (only display-name matches such as adrenalone), *amox* still finds
+amoxicillin, and every earlier section's pick behaves as before.
+
+**Where it is pinned.**
+- **The doors:** `crates/cairn-node/tests/drug_names_door.rs` and `db/tests/076_drug_read_door_test.sql` §5.
+- **The term:** `cairn-node`'s `medication::line` tests (`term_to_sign_completes_to_the_matched_name`) and
+  `cairn-gui-tauri`'s `med_chart_tests.rs` (`a_picked_alias_signs_the_matched_name`).
+- **The lists:** `cairn-medication-view`'s `shown_name` tests, the tab crate's `row_view_tests.rs`, and
+  `cairn-node`'s `allergy/names_tests.rs`.
+- **The webview:** `drug_pick_webview_tests.rs` and `med_chart_webview_tests.rs`
+  (`a_drug_found_by_another_name_reads_name_arrow_drug`).
+
+`TEMPLATE.md` carries a matching block (*Drug names in the pick*).

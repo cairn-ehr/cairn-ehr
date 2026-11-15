@@ -219,6 +219,7 @@ pub(crate) fn restore_prefill(
     let part = PartArg {
         term: v.term.clone(),
         coding: v.coding.as_ref().map(|(system, code, display)| CodingArg {
+            matched: None,
             system: system.clone(),
             code: code.clone(),
             display: display.clone(),

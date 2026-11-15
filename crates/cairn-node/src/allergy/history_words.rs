@@ -7,6 +7,21 @@ use super::thread::{by_words, by_words_inside};
 use super::view::{allergen_kind_mark, day_text, local_day, onset_text, DOUBT};
 use chrono::FixedOffset;
 
+/// The allergen as every allergy line names it (charting slice 3, ADR-0106, ruling R3): for an
+/// entry coded to a DRUG, the drug list's name first and the clinician's word in brackets when
+/// it is another word — "lidocaine (lignocaine)" (`cairn_medication_view::shown_name`, as the
+/// medication list does). A GROUP-coded entry keeps its words: "Penicillins (allergy group)
+/// (penicillin)" would be noise, not information. An uncoded entry is its term. The by-name
+/// check still reads `term` (check.rs), so nothing here changes what warns. Pure.
+pub fn allergen_name(row: &AllergyRow) -> String {
+    match &row.coding {
+        Some(c) if c.system == super::check::MOIETY_SYSTEM => {
+            cairn_medication_view::shown_name(&c.display, &row.term)
+        }
+        _ => row.term.clone(),
+    }
+}
+
 /// A de-label's date as the clinician reads it, with its leading space (`" Mar 2022"`), or
 /// nothing when not known.
 pub(super) fn challenge_date(c: &ChallengeRow) -> String {
@@ -73,7 +88,7 @@ pub(super) fn historical_text(r: &AllergyRow, c: &ChallengeRow, offset: FixedOff
     };
     format!(
         "Historically reported: {} {kind}{}. Challenged: tolerated {}{} (de-labelled {}{}){}",
-        r.term,
+        allergen_name(r),
         allergen_kind_mark(r),
         c.tolerated,
         challenge_date(c),
@@ -82,3 +97,7 @@ pub(super) fn historical_text(r: &AllergyRow, c: &ChallengeRow, offset: FixedOff
         dash_note(c.text.as_deref())
     )
 }
+
+#[cfg(test)]
+#[path = "names_tests.rs"]
+mod names_tests;

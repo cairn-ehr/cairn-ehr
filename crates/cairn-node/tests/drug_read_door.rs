@@ -301,7 +301,9 @@ async fn an_unreadable_drugref_is_unavailable_not_a_fault() {
              EXECUTE format('CREATE ROLE %I NOLOGIN', r);
              FOREACH f IN ARRAY ARRAY['cairn_drug_available()', 'cairn_drug_search(text, integer)',
                                       'cairn_drug_facts(uuid[], uuid[])',
-                                      'cairn_drug_group_status(uuid[])'] LOOP
+                                      'cairn_drug_group_status(uuid[])',
+                                      'cairn_drug_names_available()',
+                                      'cairn_drug_moiety_matches(text)'] LOOP
                  EXECUTE format('ALTER FUNCTION %s OWNER TO %I', f, r);
              END LOOP;
              EXECUTE format('GRANT USAGE ON SCHEMA drugref TO %I', r);

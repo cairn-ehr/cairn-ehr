@@ -23,7 +23,7 @@ pub use chart::{
     SEPARATION_INSTRUCTION,
 };
 pub use chart_set::ChartSet;
-pub use display::{short_kid, DISPLAYED_KID_CHARS};
+pub use display::{short_kid, shown_name, DISPLAYED_KID_CHARS};
 pub use elsewhere::{elsewhere_report, ElsewhereLine, ELSEWHERE_INSTRUCTION};
 pub use row::{
     already_stopped_sentence, MedicationHold, MedicationRow, MedicationStatus, MemberVouch,

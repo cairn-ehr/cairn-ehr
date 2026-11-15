@@ -44,6 +44,11 @@ pub struct DrugOption {
     pub system: String,
     pub code: String,
     pub display: String,
+    /// The other name the drug was found by ("Adrenaline" for epinephrine): a UNII official name
+    /// lower-cased, a MeSH synonym in its own case. `None` when its display name matched, and for
+    /// a group (charting slice 3, ADR-0106). Shown in the pick and used to complete the typed
+    /// term; never the coding's name (the coding is `display`'s).
+    pub matched: Option<String>,
 }
 
 /// One row of the door's answer for a pair: `(outcome, match_kind, group_name)`.
@@ -162,7 +167,7 @@ pub async fn search_drugs(
     }
     let rows = c
         .query(
-            "SELECT system, code, display FROM cairn_drug_search($1, 12)",
+            "SELECT system, code, display, matched FROM cairn_drug_search($1, 12)",
             &[&text],
         )
         .await
@@ -170,9 +175,10 @@ pub async fn search_drugs(
     rows.iter()
         .map(|r| {
             Ok(DrugOption {
-                system: r.try_get(0)?,
-                code: r.try_get(1)?,
-                display: r.try_get(2)?,
+                system: r.try_get("system")?,
+                code: r.try_get("code")?,
+                display: r.try_get("display")?,
+                matched: r.try_get("matched")?,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()
@@ -217,7 +223,7 @@ async fn try_search_medication_drugs(
     }
     let rows = c
         .query(
-            "SELECT code, display FROM cairn_drug_medication_search($1, $2)",
+            "SELECT code, display, matched FROM cairn_drug_medication_search($1, $2)",
             &[&text, &limit],
         )
         .await
@@ -226,8 +232,9 @@ async fn try_search_medication_drugs(
         .map(|r| {
             Ok(DrugOption {
                 system: super::check::MOIETY_SYSTEM.to_string(),
-                code: r.try_get(0)?,
-                display: r.try_get(1)?,
+                code: r.try_get("code")?,
+                display: r.try_get("display")?,
+                matched: r.try_get("matched")?,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()

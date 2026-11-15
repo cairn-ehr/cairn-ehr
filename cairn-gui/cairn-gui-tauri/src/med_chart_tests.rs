@@ -14,6 +14,7 @@ fn on_screen() -> (AppState, String) {
 
 fn coded(code: impl ToString, display: &str) -> Option<CodingArg> {
     Some(CodingArg {
+        matched: None,
         system: MOIETY_SYSTEM.into(),
         code: code.to_string(),
         display: display.into(),
@@ -88,6 +89,56 @@ fn one_part_signs_the_finished_term_and_its_canonical_code() {
     ))
     .unwrap();
     assert_eq!(term, "Amoxil");
+}
+
+/// Charting slice 3 (Review Focus 4): a drug found by another name ("adren" finds epinephrine
+/// through "adrenaline") signs that name, never the unfinished "adren"; the coding stays the
+/// display's and carries the name only as the pick sent it.
+#[test]
+fn a_picked_alias_signs_the_matched_name() {
+    // `matched` as the door returns it: drugref's MeSH spelling, capital and all.
+    let alias = |code: u128, display: &str, matched: &str| {
+        let mut coding = coded(Uuid::from_u128(code), display);
+        coding.as_mut().unwrap().matched = Some(matched.into());
+        coding
+    };
+    let epi = alias(0xE91, "epinephrine", "Adrenaline");
+    let (term, parts) = before_key(&line(
+        vec![part("adren", epi.clone())],
+        "adren",
+        "started-here",
+    ))
+    .unwrap();
+    assert_eq!(term, "Adrenaline");
+    assert_eq!(parts[0].coding.as_ref().unwrap().display, "epinephrine");
+    // A combination whose parts were each found by another name (lignocaine with adrenaline):
+    // each part completes to its own matched name, and the codings stay drugref's.
+    let both = vec![
+        part("ligno", alias(0x11D0, "lidocaine", "Lignocaine")),
+        part("adren", epi),
+    ];
+    let (term, parts) = before_key(&line(both, "ligno + adren", "started-here")).unwrap();
+    assert_eq!(term, "Lignocaine + Adrenaline");
+    assert_eq!(parts[0].coding.as_ref().unwrap().display, "lidocaine");
+    assert_eq!(parts[1].coding.as_ref().unwrap().display, "epinephrine");
+}
+
+/// Final review M5: a draft line's parts are saved as `PartArg` JSON (`med_list.rs`) and read back
+/// at Sign (`med_list_judge.rs`), so `matched` must survive the round trip — or a reopened
+/// "adren" line signs "adren" — and must be absent (not `null`) when there is none.
+#[test]
+fn a_saved_part_keeps_its_matched_name() {
+    let mut coding = coded(Uuid::from_u128(0xE91), "epinephrine");
+    coding.as_mut().unwrap().matched = Some("adrenaline".into());
+    let saved = serde_json::to_value(vec![part("adren", coding)]).unwrap();
+    let back: Vec<PartArg> = serde_json::from_value(saved).unwrap();
+    assert_eq!(
+        back[0].coding.as_ref().unwrap().matched.as_deref(),
+        Some("adrenaline")
+    );
+    let plain =
+        serde_json::to_value(part("amox", coded(Uuid::from_u128(1), "amoxicillin"))).unwrap();
+    assert!(plain["coding"].get("matched").is_none(), "{plain}");
 }
 
 /// Ruling R22: a combination signs its parts' signed terms joined " + " — "amox + clav" with

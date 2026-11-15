@@ -253,22 +253,23 @@ pub fn read_directions(text: &str) -> Directions {
 /// The text to sign as the drug term. If the clinician stopped typing part-way and then
 /// picked a suggestion ("amox" -> amoxicillin), the typed text is unfinished: sign the
 /// pick. Anything else they typed (a brand, a spelling) is their words and stays.
-pub fn term_to_sign(typed: &str, picked_display: Option<&str>) -> String {
+///
+/// `picked_matched` is the OTHER name the drug list found the pick by (charting slice 3,
+/// ADR-0106): "adren" finds epinephrine through its MeSH synonym "Adrenaline". That name, not
+/// the display, is what the clinician was typing, so the unfinished text completes to it, in
+/// drugref's spelling ("adren" signs "Adrenaline", and the list then reads "epinephrine
+/// (Adrenaline)"). With no other name (`None`), the display is the name that was typed.
+pub fn term_to_sign(
+    typed: &str,
+    picked_display: Option<&str>,
+    picked_matched: Option<&str>,
+) -> String {
     let typed = typed.trim();
-    match picked_display {
+    match picked_matched.or(picked_display) {
+        // The whole name typed, in the clinician's own case ("5-FU", "Adrenaline"): their words.
+        Some(p) if p.to_lowercase() == typed.to_lowercase() => typed.to_string(),
         Some(p) if p.to_lowercase().starts_with(&typed.to_lowercase()) => p.to_string(),
         _ => typed.to_string(),
-    }
-}
-
-/// How a picked drug is shown: its listed name, plus what the clinician typed when that
-/// differs ("amoxicillin + clavulanic acid (Augmentin)").
-pub fn shown_name(display: &str, term: &str) -> String {
-    let term = term.trim();
-    if term.is_empty() || term.to_lowercase() == display.to_lowercase() {
-        display.to_string()
-    } else {
-        format!("{display} ({term})")
     }
 }
 

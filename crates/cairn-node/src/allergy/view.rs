@@ -143,7 +143,7 @@ pub fn entry_line_text(row: &AllergyRow) -> String {
     let words = entry_words_dated(
         &row.kind,
         &row.source,
-        &row.term,
+        &super::history_words::allergen_name(row),
         &row.category,
         row.reaction_text.as_deref(),
         onset.as_deref(),

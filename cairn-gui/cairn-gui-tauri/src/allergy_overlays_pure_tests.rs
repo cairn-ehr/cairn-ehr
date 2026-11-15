@@ -316,6 +316,7 @@ fn every_act_on_a_line_checks_its_target_before_the_key_and_files_under_its_char
 fn a_group_coding_is_not_a_tolerated_drug() {
     use crate::allergy_check::{tolerated_coding_before_the_key, CodingArg, NOT_FROM_THE_LIST};
     let group = CodingArg {
+        matched: None,
         system: cairn_node::allergy::check::GROUP_SYSTEM.into(),
         code: Uuid::from_u128(7).to_string(),
         display: "penicillins".into(),
@@ -328,6 +329,7 @@ fn a_group_coding_is_not_a_tolerated_drug() {
 fn a_moiety_code_is_respelled_canonically() {
     use crate::allergy_check::{tolerated_coding_before_the_key, CodingArg, BAD_CODE};
     let pick = |code: String, display: &str| CodingArg {
+        matched: None,
         system: MOIETY_SYSTEM.into(),
         code,
         display: display.into(),

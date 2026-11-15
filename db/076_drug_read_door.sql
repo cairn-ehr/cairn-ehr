@@ -52,10 +52,15 @@
 --   allergy_group(class_uuid, review_status, …)            the allergy groups, 'structural-seed'
 --                                                          or 'reviewed'
 --   allergy_check(p_prescribed uuid, p_allergen uuid)      the check, one row per path
+--   moiety_name(moiety_uuid, name, name_kind)              OPTIONAL (drugref db/070 + db/071,
+--                                                          charting slice 3, ADR-0106): every
+--                                                          name a drug answers to — display,
+--                                                          UNII official, MeSH synonym. Without
+--                                                          it the picks search display names.
 --
--- Replay-safe: CREATE OR REPLACE with fixed return shapes (and one guarded DROP, below, for the
--- facts door's changed shape). plpgsql plans its queries when they RUN, so these functions load
--- on a node with no drugref schema at all.
+-- Replay-safe: CREATE OR REPLACE with fixed return shapes (and a guarded DROP, below, before each
+-- door whose shape changed: the facts door and the two picks). plpgsql plans its queries when
+-- they RUN, so these functions load on a node with no drugref schema at all.
 BEGIN;
 
 -- 1. Is there a drugref this door can read? True only when the owner may use the schema, may
@@ -95,6 +100,78 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalo
          WHERE n.nspname = 'drugref'), false);
 $$;
 
+-- 1b. Can the picks search drugref's moiety NAMES (charting slice 3, ADR-0106)? True only when
+--     drugref is available (§1) AND it has the view `moiety_name` with drugref db/070's columns
+--     (moiety_uuid uuid, name text, name_kind text) that this door's owner may SELECT. Read from
+--     the catalogue, so it never raises (the T2-a rule in §1).
+--
+--     WHY A SEPARATE CHECK, NOT A FOURTH TABLE IN §1: the view is newer than allergy groups. A
+--     drugref from before drugref db/070 is a perfectly good drug list without it, and must keep
+--     answering — so a missing view switches the names OFF, never the drug list.
+CREATE OR REPLACE FUNCTION cairn_drug_names_available()
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+    SELECT public.cairn_drug_available() AND coalesce((
+        SELECT has_table_privilege(c.oid, 'SELECT')
+               AND (SELECT count(*) = 3
+                      FROM pg_catalog.pg_attribute a
+                     WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                       AND (a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)) IN
+                           (('moiety_uuid', 'uuid'), ('name', 'text'), ('name_kind', 'text')))
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'drugref' AND c.relname = 'moiety_name'
+           AND c.relkind IN ('r', 'p', 'v', 'm', 'f')), false);
+$$;
+
+-- 1c. The drugs whose name matches an ALREADY ESCAPED pattern (the doors escape it), one row per
+--     drug: (moiety_uuid, display, matched). Both picks read it, so they can never disagree
+--     about which names find a drug. Not the window's: only the doors call it.
+--     * With the names (§1b): any name of the drug may match, at a word start. When several of a
+--       drug's names match ("amox" finds amoxicillin AND its synonym Amoxycillin), the display
+--       name wins, then a name the typed text STARTS, then the shorter name, then byte order (of
+--       the lower-cased name) — so a drug is listed ONCE.
+--     * `matched` is the name that found it, or NULL when that was the display name (or the same
+--       word in another case). A UNII official name is lower-cased (UNII spells every name in
+--       capitals); a MeSH name keeps its own case, which can carry meaning ("5-FU", "L-Dopa").
+--       The window draws "Adrenaline → epinephrine" from it. It is never signed: the coding stays drugref's
+--       display name (ADR-0059).
+--     * A name two drugs share ("cefalexin": a MeSH synonym of cephalexin, the UNII official
+--       name of cephalexin anhydrous) finds BOTH. The door never picks one (design §3.3).
+--     * Without the names: exactly the display-name search the doors always did, `matched` NULL.
+--     plpgsql plans each query when it runs, so the branch naming moiety_name loads (and runs)
+--     fine on a node whose drugref has no such view.
+CREATE OR REPLACE FUNCTION cairn_drug_moiety_matches(p_pat text)
+RETURNS TABLE(moiety_uuid uuid, display text, matched text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+#variable_conflict use_column
+BEGIN
+    IF public.cairn_drug_names_available() THEN
+        RETURN QUERY
+            SELECT DISTINCT ON (n.moiety_uuid) n.moiety_uuid, m.display_name,
+                   CASE WHEN n.name_kind = 'display' OR lower(n.name) = lower(m.display_name)
+                             THEN NULL
+                        WHEN n.name_kind = 'unii_official' THEN lower(n.name)
+                        ELSE n.name END
+              FROM drugref.moiety_name n
+              JOIN drugref.substance_moiety m ON m.moiety_uuid = n.moiety_uuid
+             -- A leading space makes "the start of the name" one more word start.
+             WHERE (' ' || n.name) ILIKE ('% ' || p_pat || '%') ESCAPE '\'
+             -- A name the text STARTS beats one where it starts a later word ("adren" takes
+             -- "Adrenaline, Racemic Mixture" over the shorter "Racemic Adrenaline"): Sign
+             -- completes the typed text only to a name it starts (term_to_sign), so the other
+             -- would sign the unfinished "adren" (final review I1).
+             ORDER BY n.moiety_uuid, (n.name_kind <> 'display'),
+                      NOT (n.name ILIKE (p_pat || '%') ESCAPE '\'), length(n.name),
+                      lower(n.name) COLLATE "C";
+    ELSE
+        RETURN QUERY
+            SELECT m.moiety_uuid, m.display_name, NULL::text
+              FROM drugref.substance_moiety m
+             WHERE (' ' || m.display_name) ILIKE ('% ' || p_pat || '%') ESCAPE '\';
+    END IF;
+END;
+$$;
+
 -- 2. The pick: drugs and allergy groups whose name matches what the clinician typed.
 --    * Fewer than 3 characters (after trimming) answers nothing — two letters would otherwise
 --      offer most of the table.
@@ -112,8 +189,22 @@ $$;
 --    The answer's `system` is the coding system the entry will carry; `code` the drugref uuid
 --    (a moiety_uuid, or a group's class_uuid, M2); `display` the name to sign with it (the
 --    window adds " (group)" to a group's option unless its name already says "group").
+--    `matched` (charting slice 3): the other name that found a drug ("Adrenaline" for
+--    epinephrine), from §1c; NULL for a display-name match and for every group. A drug found by
+--    another name ranks after the display-name matches of its tier, then by the matched name's
+--    length.
+--    The shape gained `matched`; CREATE OR REPLACE cannot change a RETURNS TABLE, so the old one
+--    is dropped first whenever its result shape is not the new one (a converged node's replay
+--    does not drop it, so its grants survive).
+DO $$
+BEGIN
+    IF pg_get_function_result(to_regprocedure('public.cairn_drug_search(text, integer)'))
+       <> 'TABLE(system text, code text, display text, matched text)' THEN
+        DROP FUNCTION public.cairn_drug_search(text, integer);
+    END IF;
+END $$;
 CREATE OR REPLACE FUNCTION cairn_drug_search(p_text text, p_limit int)
-RETURNS TABLE(system text, code text, display text)
+RETURNS TABLE(system text, code text, display text, matched text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 #variable_conflict use_column
 DECLARE
@@ -126,18 +217,17 @@ BEGIN
     -- Backslash first: it is the escape character for the two that follow.
     v_pat := replace(replace(replace(v_text, '\', '\\'), '%', '\%'), '_', '\_');
     RETURN QUERY
-        SELECT o.system, o.code, o.display
-          FROM (SELECT 'drugref-moiety'::text AS system, m.moiety_uuid::text AS code,
-                       m.display_name AS display, 1 AS tier
-                  FROM drugref.substance_moiety m
-                 -- A leading space makes "the start of the name" one more word start.
-                 WHERE (' ' || m.display_name) ILIKE ('% ' || v_pat || '%') ESCAPE '\'
+        SELECT o.system, o.code, o.display, o.matched
+          FROM (SELECT 'drugref-moiety'::text AS system, d.moiety_uuid::text AS code,
+                       d.display, d.matched, 1 AS tier
+                  FROM public.cairn_drug_moiety_matches(v_pat) d
                 UNION ALL
-                SELECT 'drugref-class'::text, c.class_uuid::text, c.class_name, 0
+                SELECT 'drugref-class'::text, c.class_uuid::text, c.class_name, NULL::text, 0
                   FROM drugref.allergy_group g
                   JOIN drugref.substance_class c ON c.class_uuid = g.class_uuid
                  WHERE c.class_name ILIKE ('%' || v_pat || '%') ESCAPE '\') o
-         ORDER BY o.tier, length(o.display), o.display COLLATE "C"
+         ORDER BY o.tier, (o.matched IS NOT NULL), length(coalesce(o.matched, o.display)),
+                  o.display COLLATE "C"
          LIMIT greatest(0, least(coalesce(p_limit, 20), 20));
 END;
 $$;
@@ -214,11 +304,21 @@ $$;
 --    shortcut: the counts are recomputed per keystroke by scanning medication_coding's drugref
 --    rows and every combination row; keep a per-moiety counter table if a node's medication list
 --    grows large enough for the pick to lag.
+--    * `matched` (charting slice 3): as the allergy pick's (§2), from §1c. Among drugs used
+--      equally often, a display-name match ranks first.
 -- The door's first name (pre-merge dev databases): drop it, or the replay leaves an orphan
 -- definer the window can still execute, outside drug_door_callers.rs's `cairn_drug_` guard.
 DROP FUNCTION IF EXISTS cairn_medication_drug_search(text, int);
+-- The shape gained `matched` (as §2's did): drop the old one first.
+DO $$
+BEGIN
+    IF pg_get_function_result(to_regprocedure('public.cairn_drug_medication_search(text, integer)'))
+       <> 'TABLE(code text, display text, uses bigint, matched text)' THEN
+        DROP FUNCTION public.cairn_drug_medication_search(text, integer);
+    END IF;
+END $$;
 CREATE OR REPLACE FUNCTION cairn_drug_medication_search(p_text text, p_limit int)
-RETURNS TABLE(code text, display text, uses bigint)
+RETURNS TABLE(code text, display text, uses bigint, matched text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 #variable_conflict use_column
 DECLARE
@@ -243,11 +343,11 @@ BEGIN
         ), counts AS (
             SELECT u.code, count(*) AS n FROM used u GROUP BY u.code
         )
-        SELECT m.moiety_uuid::text, m.display_name, coalesce(c.n, 0)
-          FROM drugref.substance_moiety m
-          LEFT JOIN counts c ON c.code = m.moiety_uuid::text
-         WHERE (' ' || m.display_name) ILIKE ('% ' || v_pat || '%') ESCAPE '\'
-         ORDER BY coalesce(c.n, 0) DESC, length(m.display_name), m.display_name COLLATE "C"
+        SELECT d.moiety_uuid::text, d.display, coalesce(c.n, 0), d.matched
+          FROM public.cairn_drug_moiety_matches(v_pat) d
+          LEFT JOIN counts c ON c.code = d.moiety_uuid::text
+         ORDER BY coalesce(c.n, 0) DESC, (d.matched IS NOT NULL),
+                  length(coalesce(d.matched, d.display)), d.display COLLATE "C"
          LIMIT greatest(0, least(coalesce(p_limit, 20), 20));
 END;
 $$;
@@ -258,6 +358,9 @@ REVOKE EXECUTE ON FUNCTION cairn_drug_search(text, int) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_facts(uuid[], uuid[]) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_group_status(uuid[]) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_drug_medication_search(text, int) FROM PUBLIC;
+-- The names check and the shared match are the doors' own: revoked, and granted to no one.
+REVOKE EXECUTE ON FUNCTION cairn_drug_names_available() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_drug_moiety_matches(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_drug_available() TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_search(text, int) TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_drug_facts(uuid[], uuid[]) TO cairn_window;

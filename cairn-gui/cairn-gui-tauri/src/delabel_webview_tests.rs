@@ -181,6 +181,7 @@ fn every_field_read_is_one_rust_sends() {
     use crate::allergy_check::{CodingArg, DrugSearch};
     use crate::med_list_delabel::DelabelOffer;
     let coding = || CodingArg {
+        matched: None,
         system: "s".into(),
         code: "c".into(),
         display: "d".into(),
@@ -212,7 +213,14 @@ fn every_field_read_is_one_rust_sends() {
         (
             PICK_JS,
             "option",
-            keys(serde_json::to_value(coding()).unwrap()),
+            // A search option at its richest: `matched` is skipped when absent (charting slice 3).
+            keys(
+                serde_json::to_value(CodingArg {
+                    matched: Some("m".into()),
+                    ..coding()
+                })
+                .unwrap(),
+            ),
         ),
     ] {
         let read = fields_read_in(js, binding);
@@ -341,4 +349,19 @@ fn med_list_js_stays_under_500_lines() {
             js.lines().count()
         );
     }
+}
+
+/// Charting slice 3 (ruling R2): the tolerated-drug pick reads the same search, so a drug found
+/// by another name reads "adrenaline → epinephrine" here too, and choosing it writes the
+/// clinician's word into the field while holding only the three signed coding fields.
+#[test]
+fn the_tolerated_pick_names_a_drug_found_by_another_name() {
+    assert!(
+        PICK_JS.contains("cell(\"li\", option.matched ? option.matched + \" → \" + option.display : option.display,"),
+        "the arrow row"
+    );
+    assert!(PICK_JS.contains("input.value = option.matched || option.display;"));
+    assert!(PICK_JS.contains(
+        "holdDelabelCoding(row, { system: option.system, code: option.code, display: option.display });"
+    ));
 }

@@ -1013,3 +1013,32 @@ Steps: a give on paper *N* = 1 act → observed \_\_ presses and \_\_ Signs; a s
 | The stat line, the struck lines and **given** read | | |
 | A refusal read (not a live region, #1112); focus after a Sign; Escape (not built: record) | | |
 | No dialog | | |
+
+## Drug names in the pick (charting slice 3, runbook §37)
+
+drugref copied from `drugref_synonyms`; `cairn_drug_names_available()` reads `t`? yes / no
+
+| Gesture | Key | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| `adrenaline 1mg im` by *adren* → Sign → the line signed | held | | | | ≤ 10 s | |
+| The same by *epinephrine* (the display name, for comparison) | held | | | | — (record) | |
+| An allergy by *ligno* → "Coded as: lidocaine (drug)" | | | | | ≤ by the display name | |
+| Reading what was charted: clicks | | | | | 0 | |
+
+Steps: on paper *N* = 1 act → observed \_\_ picks and \_\_ Signs.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| *adren* lists "Adrenaline → epinephrine" in both picks (rank: record, #1122) | | |
+| The list reads "epinephrine (adrenaline)"; the signed term is `adrenaline` (own case kept) | | |
+| `adren` left unfinished at the pick signs `Adrenaline` | | |
+| *cefalexin* lists both cephalexin rows | | |
+| A batch line saved and reopened still signs `Adrenaline` | | |
+| An allergy by *ligno*: field "Lignocaine", strip and line "lidocaine (Lignocaine)" | | |
+| A group-coded allergy keeps its words, no bracket | | |
+| `lidocaine` charted against it, coded and uncoded: tagged **Allergy** both times | | |
+| `drugref_allergy` back in place: *adren* no longer finds epinephrine, *amox* still finds amoxicillin | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| VoiceOver reads an arrow row (and whether it says the arrow) | | |

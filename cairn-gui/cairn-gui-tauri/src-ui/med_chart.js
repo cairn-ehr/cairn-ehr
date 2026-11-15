@@ -272,11 +272,20 @@ function activateMedPick(index) {
 function chooseMedPick(index) {
   const option = medPickOptions[index];
   if (!option || !medLine.parts.includes(medPickPart)) return;
-  medHeld = medHeld.filter((held) => held.text !== medPickPart).concat([{ text: medPickPart, coding: { system: option.system, code: option.code, display: option.display } }]);
+  // `matched` rides with the pick (and the saved line; undefined is dropped when sent) so Sign
+  // completes "adren" to "Adrenaline". It is never the coding's name (ADR-0106).
+  const coding = { system: option.system, code: option.code, display: option.display, matched: option.matched };
+  medHeld = medHeld.filter((held) => held.text !== medPickPart).concat([{ text: medPickPart, coding: coding }]);
   closeMedPick();
   drawCodedAs();
   recheck(); // every coding change is checked
   if (medEditor) medEditor.changed(); // and saved: the pick is part of the line
+}
+
+/** An option's words: "Adrenaline → epinephrine" for a drug found by another name (charting
+ *  slice 3, ADR-0106), else its display. */
+function medPickLabel(option) {
+  return option.matched ? option.matched + " → " + option.display : option.display;
 }
 
 /** Draw a `med_drug_search` answer: the drugs, top one highlighted, or the no-drug-list hint. */
@@ -290,7 +299,7 @@ function drawMedPick(found, part) {
   medPickPart = part;
   el("med-pick").replaceChildren(
     ...medPickOptions.map((option, i) => {
-      const li = cell("li", option.display, { role: "option", "aria-selected": "false" });
+      const li = cell("li", medPickLabel(option), { role: "option", "aria-selected": "false" });
       li.addEventListener("click", () => chooseMedPick(i));
       return li;
     }),

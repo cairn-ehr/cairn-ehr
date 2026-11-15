@@ -243,10 +243,15 @@ fn match_pair(paths: &[MatchPath]) -> Pair<'_> {
 /// the drug list's answer, when both sides are coded and it gave one; anything else is
 /// unverified.
 fn pair<'f>(head: &AllergyRow, line: &MedLine, facts: &'f DrugFacts) -> Pair<'f> {
-    let by_name = same_allergen(&head.term, line.term)
-        || line
-            .coding_display
-            .is_some_and(|d| same_allergen(&head.term, d));
+    // The allergen's names: its term, and the drug it was coded to ("adrenaline" coded to
+    // epinephrine also names epinephrine, so an uncoded "epinephrine" line marks; ADR-0106).
+    let coded = head.coding.as_ref().filter(|c| c.system == MOIETY_SYSTEM);
+    let by_name = [Some(head.term.as_str()), coded.map(|c| c.display.as_str())]
+        .into_iter()
+        .flatten()
+        .any(|a| {
+            same_allergen(a, line.term) || line.coding_display.is_some_and(|d| same_allergen(a, d))
+        });
     let by_code = line.moiety.is_some() && code_under(head, MOIETY_SYSTEM) == line.moiety;
     if by_name || by_code {
         return Pair::SameDrug;
