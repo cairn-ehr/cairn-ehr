@@ -198,8 +198,22 @@ async fn a_tampered_hlc_stamp_is_refused() {
         msg.contains("hlc_wall"),
         "refusal must name hlc_wall: {msg}"
     );
+    // The same for the counter alone: it decides the order on a shared wall.
+    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let row = v
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r.get("hlc_wall").is_some())
+        .unwrap();
+    row["hlc_counter"] = serde_json::json!(row["hlc_counter"].as_i64().unwrap() + 1);
+    let msg = refusal(&c, &v).await;
+    assert!(
+        msg.contains("different hlc_counter"),
+        "refusal must name hlc_counter: {msg}"
+    );
 
-    // A wall with no counter is refused by shape, naming both fields, before any row is read.
+    // A wall with no counter is refused by shape, naming both fields, before that row is inserted.
     clear(&c).await;
     let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let row = v

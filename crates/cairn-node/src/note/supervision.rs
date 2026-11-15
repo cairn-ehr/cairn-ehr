@@ -11,9 +11,9 @@
 //! `(hlc_wall, hlc_counter)` and a part's or vouch's own. The door returns rows in
 //! `(hlc_wall, hlc_counter, seq)` order, so the latest match is the LAST one in iteration order.
 //!
-//! Why the counter matters: a peer's event can ratchet the HLC ahead (up to 24 h, db/001), and from
-//! then on every local part AND every supervision act shares that one wall, ordered only by the
-//! counter. Comparing walls alone would let a lift clear the parts signed before it.
+//! Why the counter matters: a peer's event can ratchet the HLC ahead (up to 24 h, db/001), and until
+//! real time catches up every local part AND every supervision act shares that one wall, ordered
+//! only by the counter. Comparing walls alone would let a lift clear the parts signed before it.
 use anyhow::{bail, Context};
 use tokio_postgres::GenericClient;
 
@@ -325,6 +325,34 @@ mod tests {
         p.recorded_counter = 4;
         annotate(&mut p, &s);
         assert!(p.needs_cosigning, "annotate reads the part's counter");
+    }
+
+    /// #1014, the vouch's half: after a ratchet an unlink and the ex-supervisor's sign-off share one
+    /// wall. The vouch's counter places it after the unlink, so it is no supervisor's co-sign; and a
+    /// sign-off after a link on that wall is one.
+    #[test]
+    fn a_vouch_on_the_unlinks_wall_with_a_later_counter_is_not_the_supervisors() {
+        let wall = 1_000_000;
+        let mut unlink = row("unlink-supervisor", "aa", Some("s1"), 0);
+        unlink.at = (wall, 3);
+        let mut link = row("link-supervisor", "aa", Some("s2"), 0);
+        link.at = (wall, 3);
+        let s = sup(vec![
+            row("link-supervisor", "aa", Some("s1"), -10),
+            unlink,
+            link,
+        ]);
+        let mut p = part(1, Some(who("aa", "Dr A")));
+        for (n, by) in [(10, "s1"), (11, "s2")] {
+            let mut v = vouch(n, VouchAct::SignOff, VouchRole::CoSigned, who(by, "S"));
+            v.at = DateTime::from_timestamp_millis(wall).unwrap();
+            v.counter = 4;
+            p.vouches.push(v);
+        }
+        annotate(&mut p, &s);
+        assert!(!p.vouches[0].by_supervisor, "s1 was unlinked just before");
+        assert!(p.vouches[1].by_supervisor, "s2 was linked just before");
+        assert!(p.vouches.iter().all(|v| v.writer_supervised));
     }
 
     /// A row written before #1014 reads as (its millisecond, 0): in effect at a part in that

@@ -7,7 +7,8 @@
 -- student role is pinned on the actor (ADR-0092 decision 10). A probationary doctor needs the same
 -- paper countersignature, and only their supervisor's should count. So the node now keeps a
 -- RECORD: "B supervises C", "C needs co-signing", "D may assign supervision". The note read
--- judges each part against it as of the part's commit (its own hlc_wall) to decide whether
+-- judges each part against it as of the part's commit (its own HLC stamp, wall and counter: #1014,
+-- ADR-0107) to decide whether
 -- "— not co-signed" still shows.
 --
 -- THE RECORD IS THE ACTOR REGISTRY. Each change is one append-only actor_event row (db/004), never

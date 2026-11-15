@@ -167,9 +167,9 @@ END $$;
 -- #1014 (ADR-0107): a supervision row's time on the NODE'S HLC, the clock note parts and vouches
 -- carry. recorded_at is this database's wall clock; an HLC ratcheted ahead by a peer (up to 24 h,
 -- db/001) stamps parts on a different clock, and comparing the two let a lift clear parts signed
--- before it. Stamped by cairn_actor_append for the six supervision ops only; NULL on every other
--- row, and on supervision rows written before this fix (their readers fall back to recorded_at).
--- Additive columns (ADR-0012); both or neither, added once (the guard keeps a replay lock-free).
+-- before it. cairn_actor_append stamps the six supervision ops only and leaves every other op NULL;
+-- supervision rows written before this fix are NULL too (their readers fall back to recorded_at).
+-- Additive columns (ADR-0012); both or neither (the guard keeps the CHECK from being re-added).
 ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS hlc_wall    BIGINT;
 ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS hlc_counter INTEGER;
 DO $$
@@ -483,7 +483,7 @@ BEGIN
         END IF;
     END IF;
     -- #1014: a supervision op takes the node's HLC tick, the clock its readers compare note parts
-    -- on. LAST, just before the INSERT: hlc_state is the hot lock and is always taken last
+    -- on. LAST, just before the INSERT: hlc_state is the hot lock, taken last in a live door
     -- (db/005's lock-order note). A rollback rolls the tick back with the row, which is harmless —
     -- nothing else saw it. Every other op stays off that lock (nothing compares it to an HLC).
     IF p_op IN ('link-supervisor','unlink-supervisor','require-cosign','lift-cosign',

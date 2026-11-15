@@ -57,10 +57,6 @@ macro_rules! db_test {
             let _guard = db::test_serial_guard(&base).await.unwrap();
             #[allow(unused_mut)]
             let mut $c = db::connect_and_load_schema(&base).await.unwrap();
-            // A part's time is its HLC wall; start the clock from zero (see note_supervision.rs).
-            $c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
-                .await
-                .unwrap();
             $body
         }
     };

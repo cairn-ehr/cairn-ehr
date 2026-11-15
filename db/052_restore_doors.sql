@@ -228,9 +228,9 @@ BEGIN
                                                          'restore_actor_registry') END;
         v_at     := v_recorded::TIMESTAMPTZ;
 
-        -- The HLC stamp (#1014): both or neither, non-negative integers, within the drift
-        -- ceiling. Checked as text first so a malformed one names its field rather than raising
-        -- a bare cast error.
+        -- The HLC stamp (#1014): both or neither, JSON numbers that are non-negative integers,
+        -- within the drift ceiling. Checked before any cast, so a malformed one is refused naming
+        -- both fields rather than raising a bare cast error.
         -- (A JSON null is absent, as for every optional field here: `->>` reads it as NULL.)
         IF ((v_row ->> 'hlc_wall') IS NULL) <> ((v_row ->> 'hlc_counter') IS NULL)
            OR ((v_row ->> 'hlc_wall') IS NOT NULL

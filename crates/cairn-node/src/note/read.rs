@@ -37,14 +37,14 @@ pub struct NoteRow {
     /// `"stated"` or `"recording-started"`.
     pub effective_basis: String,
     pub recording_started: DateTime<Utc>,
-    /// When the part entered the record: its `event_log.hlc_wall`, never `t_effective`. The
-    /// instant the supervision record is judged "as of" (`supervision`).
+    /// When the part entered the record: its `event_log.hlc_wall`, never `t_effective`. With
+    /// `recorded_counter`, the stamp the supervision record is judged "as of" (`supervision`).
     pub recorded_at: DateTime<Utc>,
     /// Its `event_log.hlc_counter`: with `recorded_at`'s wall, the part's HLC stamp, which the
     /// supervision record is compared on (#1014 — after a ratchet the wall alone cannot order a
     /// part against a lift on the same wall).
     pub recorded_counter: i32,
-    /// The supervision RECORD said the writer needed co-signing at `recorded_at` (a student's
+    /// The supervision RECORD said the writer needed co-signing at the part's stamp (a student's
     /// role is not folded in here; `cosign` combines them). Default false.
     pub needs_cosigning: bool,
     /// The writer's supervisors NOW (actors, lower hex). Default empty.
@@ -147,9 +147,9 @@ pub struct PatientNoteList {
 /// too, so `signed_by` and the grade name the same person. The three columns after the human
 /// drafted key say who `k` is (`vouch_read::signer_of`); the next is the drafted key's actor
 /// (for `vouch::addendum_covers`). Then come the part's verified vouches
-/// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot. The
-/// last column is the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule
-/// reads (`NoteRow::signer_human_actor`). The last two columns are the part's `e.hlc_wall`
+/// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot. Then
+/// comes the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule reads
+/// (`NoteRow::signer_human_actor`). The last two columns are the part's `e.hlc_wall`
 /// (ms since the epoch) and `e.hlc_counter`: its HLC stamp (`NoteRow::recorded_at` and
 /// `recorded_counter`), what the supervision record is judged at.
 ///

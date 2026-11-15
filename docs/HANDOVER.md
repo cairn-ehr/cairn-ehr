@@ -42,8 +42,8 @@
 >   **3c-3b** (PR #1006, [ADR-0093](spec/decisions/0093-a-repudiated-signature-counts-as-unsigned.md)): #1007 · #1008 ·
 >   #1010 · #1011 (needs a gesture design) · #1012; #918's link half stays open. Design of 3c-3:
 >   [`superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md`](superpowers/specs/2026-11-06-sign-in-slice-3c-3-supervision-and-pending-signatures-design.md).
->   **3c-3a** (PR #1013, [ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), `db/072`): #1014 ·
->   #1015 · #1016 · #1017 · #1018.
+>   **3c-3a** (PR #1013, [ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), `db/072`): #1015 ·
+>   #1016 · #1017 · #1018 (#1014 fixed by ADR-0107; its restore-door follow-on #1125).
 >   **3c-3c** (PR #1019, [ADR-0095](spec/decisions/0095-the-person-menu.md), `db/073`): #1020 (two actors sharing a
 >   staff id) · #1021 (measured and cut 5–6× in PR #1025; open for the obligations projection and the Pi figures) ·
 >   #1022 · #1023 (incl. `funnel.js` at 499 lines) · #1024; RUNBOOK §26 also owes WebKit + real Tauri IPC.

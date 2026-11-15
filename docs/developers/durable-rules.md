@@ -871,13 +871,14 @@ Every slice-1 rule below still holds.
 (pins: `db/tests/{004_actors,072_supervision}_test.sql`, `crates/cairn-node/src/note/{supervision,cosign_tests,review}.rs`'s
 tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,note_supervision,note_review_cosign,restore_actor_registry_supervision}.rs`,
 `cairn-gui/cairn-gui-tauri/src/{notes_review,notes_review_db,supervision_panel,notes_sign_off_webview}_tests.rs`):
-- **"As of t" is the part's or the vouch's OWN `hlc_wall`.** `annotate` judges `needs_cosigning` at the part's
-  `recorded_at` (its `event_log.hlc_wall`) and each vouch's `by_supervisor` / `writer_supervised` at that vouch's
-  `at`. **Tempting wrong fixes:** judge the requirement as it stands now (lifting a probation would silently clear
-  every part signed under it: the slice's anti-goal); judge it at `t_effective` (freely backdatable); judge "is a
-  supervisor" now (a supervisor linked after a colleague's co-sign would clear it retroactively, and one who has since
-  stepped away would stop counting). Pins: `supervision.rs`'s `annotate_judges_the_requirement_at_the_parts_time`,
-  `annotate_judges_each_vouchs_supervisor_at_its_own_time`; `note_supervision.rs::a_lifted_requirement_leaves_the_earlier_part_waiting`.
+- **"As of t" is the part's or the vouch's OWN HLC stamp.** `annotate` judges `needs_cosigning` at the part's
+  `(recorded_at, recorded_counter)` (its `event_log.hlc_wall` and `hlc_counter`) and each vouch's `by_supervisor` /
+  `writer_supervised` at that vouch's `(at, counter)`. **Tempting wrong fixes:** judge the requirement as it stands now
+  (lifting a probation would silently clear every part signed under it: the slice's anti-goal); judge it at
+  `t_effective` (freely backdatable); judge "is a supervisor" now (a supervisor linked after a colleague's co-sign would
+  clear it retroactively, and one who has since stepped away would stop counting). Pins: `supervision.rs`'s
+  `annotate_judges_the_requirement_at_the_parts_time`, `annotate_judges_each_vouchs_supervisor_at_its_own_time`;
+  `note_supervision.rs::a_lifted_requirement_leaves_the_earlier_part_waiting`.
 - **The record and the parts are on ONE clock, compared as `(wall, counter)` (#1014, ADR-0107).** The six supervision
   ops take a `node_hlc_tick()` in `cairn_actor_append` (LAST, before the INSERT); the record door returns that stamp,
   an unstamped older row reading as `(recorded_at floored to the ms, 0)`; `annotate` compares `Stamp` tuples with
@@ -888,6 +889,7 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   `cairn_node_hlc_merge` (a part signed after a restore would sort before a restored `require-cosign`); re-add the
   DB suites' `hlc_state` reset (it hid this defect). Pins: `supervision.rs`'s
   `a_lift_on_the_parts_wall_with_a_later_counter_does_not_clear_it`,
+  `a_vouch_on_the_unlinks_wall_with_a_later_counter_is_not_the_supervisors`,
   `an_unstamped_rows_millisecond_is_in_effect_at_the_part`, `the_requirement_is_read_as_it_stood_at_t`;
   `note_supervision.rs::a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting`;
   `restore_actor_registry_supervision.rs`; `db/tests/{004_actors,072_supervision}_test.sql`.

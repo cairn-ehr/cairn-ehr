@@ -97,11 +97,6 @@ async fn repudiate_and_rekey(c: &Client, m: &Member) -> Member {
     }
 }
 
-/// Let the clock pass a millisecond boundary (the record is compared at millisecond granularity).
-async fn next_millisecond() {
-    tokio::time::sleep(std::time::Duration::from_millis(3)).await;
-}
-
 /// `staff`'s menu from the all-people read, checked against the same read 30 days on.
 async fn menu(c: &Client, staff: &str) -> PersonMenu {
     let now = Utc::now();
@@ -148,9 +143,6 @@ macro_rules! db_test {
             let _guard = db::test_serial_guard(&base).await.unwrap();
             #[allow(unused_mut)]
             let mut $c = db::connect_and_load_schema(&base).await.unwrap();
-            $c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
-                .await
-                .unwrap();
             $body
         }
     };
@@ -199,7 +191,6 @@ db_test!(require_sign_lift_keeps_the_part_waiting_and_counted, |c| {
     console(&c, "require-cosign", "bea", None).await;
     console(&c, "link-supervisor", "bea", Some("sue")).await;
     let p = sign_as(&mut c, &node_sk, chart, &bea).await;
-    next_millisecond().await;
     console(&c, "lift-cosign", "bea", None).await;
 
     let m = menu(&c, "sue").await;
@@ -420,7 +411,6 @@ db_test!(
         console(&c, "link-supervisor", "sam", Some("sue")).await;
         console(&c, "link-supervisor", "sam", Some("tom")).await;
         let sp = sign_as(&mut c, &node_sk, chart, &sam).await;
-        next_millisecond().await;
         console(&c, "unlink-supervisor", "sam", Some("tom")).await;
 
         let s = bar_equals_all(&c, "sue").await;

@@ -6,8 +6,9 @@
 - **Spec version at acceptance:** 0.109
 - **Issues:** [#1014](https://github.com/cairn-ehr/cairn-ehr/issues/1014). Plan
   `docs/superpowers/plans/2026-11-15-1014-supervision-on-the-hlc.md`.
-- **Supersedes in part:** [ADR-0094](0094-supervision-and-the-mandatory-co-sign.md) decision 5's bullet "The comparison
-  is at the millisecond", and closes its limit (d). Every other part of ADR-0094 stands.
+- **Supersedes in part:** [ADR-0094](0094-supervision-and-the-mandatory-co-sign.md) decision 5's "as of *t*" rule
+  (the `recorded_at <= t` compare, the `(recorded_at, seq)` order, the bullet "The comparison is at the millisecond"
+  and its pins), and closes its limit (d). Every other part of ADR-0094 stands.
 - **Builds on:** [ADR-0003](0003-bitemporal-time-and-acknowledged-uncertainty.md) (the HLC is `t_recorded`) ·
   [ADR-0080](0080-a-connect-replays-the-schema-only-when-it-changed.md) (an in-place db/ edit replays by its content
   hash; no new file, `SCHEMA_GENERATION` 82 unchanged)
@@ -30,15 +31,16 @@ signed before it, and an `unlink-supervisor` could revoke co-signs given before 
 
 1. **The six supervision ops are stamped on the node's HLC.** `actor_event` gains `hlc_wall BIGINT` and `hlc_counter
    INTEGER` (additive, both or neither: `actor_event_hlc_pair`). `cairn_actor_append` takes a `node_hlc_tick()` for
-   those six ops only, as the last step before its INSERT. `hlc_state` is the hot lock and is always taken last
-   (db/005's lock-order note). A rollback rolls the tick back with the row, which is harmless because nothing else saw
-   it. The vault ops (`confirm`, `rotate-key`, …) are never compared to an HLC. They stay unstamped and off that lock.
-   `recorded_at` stays as written, and `actor_current` and the clock-behind refusal still read it.
-2. **The compare is on `(wall, counter)`, never the wall alone.** After a ratchet, every local part AND every
-   supervision act shares one wall and is ordered only by the HLC counter. A wall-only compare would still let the
-   lift clear the parts. `note::supervision` compares `Stamp = (i64, i32)` tuples with `<=`. `NoteRow` gains
-   `recorded_counter` and `PartVouch` gains `counter` (their `event_log.hlc_counter`). The millisecond floor in
-   `Supervision::from_rows` is gone.
+   those six ops only, as the last step before its INSERT. `hlc_state` is the hot lock and a live door takes it last
+   (db/005's lock-order note; the restore door of decision 4, into a fresh fenced database, merges it mid-loop). A
+   rollback rolls the tick back with the row, which is harmless because nothing else saw it. The vault ops (`confirm`,
+   `rotate-key`, …) are never compared to an HLC. They stay unstamped and off that lock. `recorded_at` stays as written,
+   and `actor_current` and the clock-behind refusal still read it.
+2. **The compare is on `(wall, counter)`, never the wall alone.** After a ratchet, until real time catches up, every
+   local part AND every supervision act shares one wall and is ordered only by the HLC counter. A wall-only compare
+   would still let the lift clear the parts. `note::supervision` compares `Stamp = (i64, i32)` tuples with `<=`.
+   `NoteRow` gains `recorded_counter` and `PartVouch` gains `counter` (their `event_log.hlc_counter`). The millisecond
+   floor in `Supervision::from_rows` is gone.
 3. **Rows written before this fix keep their old rule.** `cairn_supervision_record()` returns `hlc_wall` and
    `hlc_counter`, ordered by them and then by `seq`. A row with no stamp reads as `(recorded_at floored to the
    millisecond, 0)`. With `<=`, that row is in effect at any part in its millisecond, which is exactly ADR-0094's
@@ -73,6 +75,7 @@ signed before it, and an `unlink-supervisor` could revoke co-signs given before 
 
 Pins: `db/tests/004_actors_test.sql` (#1014 block), `db/tests/072_supervision_test.sql` (3.);
 `note/supervision.rs`'s `a_lift_on_the_parts_wall_with_a_later_counter_does_not_clear_it`,
+`a_vouch_on_the_unlinks_wall_with_a_later_counter_is_not_the_supervisors`,
 `an_unstamped_rows_millisecond_is_in_effect_at_the_part`;
 `note_supervision.rs::a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting`;
 `restore_actor_registry_supervision.rs`'s `the_supervision_ops_survive_a_restore`, `a_tampered_hlc_stamp_is_refused`.
