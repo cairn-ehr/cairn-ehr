@@ -39,6 +39,10 @@ use cairn_event::allergy::reaction_phrase;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+#[path = "check_merge.rs"]
+mod merge;
+pub use merge::merge;
+
 /// The coding system of a single drug (a moiety) in the drug list.
 pub const MOIETY_SYSTEM: &str = "drugref-moiety";
 /// The coding system of a drug group (an allergy group) in the drug list (M2).
@@ -87,6 +91,14 @@ pub struct LineCheck {
     /// came from, for every `i < adverse_against.len()`; the notes past that carry none. What a
     /// warning override names when the site's threshold makes adverse effects warn (slice 3).
     pub adverse_against: Vec<Uuid>,
+    /// The accounts a mark's words show beyond the record that hit (#1131): an allergen's most
+    /// severe live account when it is not the hitting one (an uncoded "Amoxil → anaphylaxis" beside
+    /// the coded "Amoxil → rash" that met the line). A set, in no order and not aligned with
+    /// `marks`: [`LineCheck::warned_against`] names them, so a hand tick made before such an
+    /// account arrived no longer holds, and the override names what the clinician read.
+    pub worse_accounts: Vec<Uuid>,
+    /// The same for the adverse-effect notes; named only when adverse effects warn.
+    pub adverse_worse_accounts: Vec<Uuid>,
     /// The small "not checked" tag.
     pub unverified: bool,
     /// The site's warning threshold this check is judged at. Never set by
@@ -134,9 +146,13 @@ impl LineCheck {
     /// seen and what the override's `against` names, each as `{source: "allergy", ref}`.
     pub fn warned_against(&self) -> Vec<Uuid> {
         let mut out = self.against.clone();
+        out.extend(&self.worse_accounts);
         if self.threshold == WarningThreshold::AdverseEffect {
             out.extend(&self.adverse_against);
+            out.extend(&self.adverse_worse_accounts);
         }
+        let mut seen = HashSet::new();
+        out.retain(|id| seen.insert(*id));
         out
     }
 
@@ -310,20 +326,25 @@ fn allergen_groups(heads: &[&AllergyRow]) -> Vec<usize> {
 }
 
 /// One set of words per allergen ([`allergen_groups`]), each beside the `event_id` of the head
-/// whose hit produced it. `heads` is most severe first and `pairs` follows it, so an allergen's
-/// first hit is its most severe hit (its term and coding pick the sentence); `worst` is the
-/// allergen's most severe account, hit or not.
+/// whose hit produced it and that of the allergen's most severe account (`worst`, hit or not,
+/// whose reaction the words show). `heads` is most severe first and `pairs` follows it, so an
+/// allergen's first hit is its most severe hit (its term and coding pick the sentence).
 fn per_allergen(
     heads: &[&AllergyRow],
     pairs: &[Pair],
     words: impl Fn(Pair, &AllergyRow, &AllergyRow) -> String,
-) -> Vec<(String, Uuid)> {
+) -> Vec<(String, Uuid, Uuid)> {
     let group = allergen_groups(heads);
     let mut said: HashSet<usize> = HashSet::new();
     let mut out = Vec::new();
     for (i, p) in pairs.iter().enumerate().filter(|(_, p)| p.is_hit()) {
         if said.insert(group[i]) {
-            out.push((words(*p, heads[i], heads[group[i]]), heads[i].event_id));
+            let worst = heads[group[i]];
+            out.push((
+                words(*p, heads[i], worst),
+                heads[i].event_id,
+                worst.event_id,
+            ));
         }
     }
     out
@@ -343,19 +364,15 @@ fn check_line(
         .partition(|h| h.kind == "adverse-effect");
     let allergy_pairs: Vec<Pair> = allergies.iter().map(|h| pair(h, line, facts)).collect();
     let adverse_pairs: Vec<Pair> = adverse.iter().map(|h| pair(h, line, facts)).collect();
-    let (marks, against): (Vec<String>, Vec<Uuid>) =
-        per_allergen(&allergies, &allergy_pairs, |p, hit, worst| {
+    let (marks, against, worse_accounts) =
+        split_found(per_allergen(&allergies, &allergy_pairs, |p, hit, worst| {
             mark_words(p, hit, worst, line)
-        })
-        .into_iter()
-        .unzip();
-    let (notes, adverse_against): (Vec<String>, Vec<Uuid>) =
-        per_allergen(&adverse, &adverse_pairs, |_, hit, worst| {
+        }));
+    let (notes, adverse_against, adverse_worse_accounts) =
+        split_found(per_allergen(&adverse, &adverse_pairs, |_, hit, worst| {
             let reaction = reaction_phrase(&worst.category, worst.reaction_text.as_deref());
             format!("Previous adverse effect: {} → {reaction}", hit.term)
-        })
-        .into_iter()
-        .unzip();
+        }));
     let unverified =
         marks.is_empty() && (unread_records || allergy_pairs.contains(&Pair::Unverified));
     LineCheck {
@@ -363,55 +380,23 @@ fn check_line(
         against,
         notes,
         adverse_against,
+        worse_accounts,
+        adverse_worse_accounts,
         unverified,
         threshold: WarningThreshold::default(),
     }
 }
 
-/// Two answers for ONE medication line, as one (charting slice 1a: a combination is checked
-/// one component at a time, every part sharing the line's `group_id`). `a`'s words come first.
-///
-/// - A mark of `b` is kept unless its words are already there or its allergy record already has
-///   a mark: one warning per allergy record, and `against` stays one record per mark.
-/// - Notes are unioned by their words; a note kept keeps its record beside it, and the notes
-///   with a record stay ahead of those without (`adverse_against`'s alignment rule), so a
-///   record never slides onto another note's words.
-/// - "Not checked" if either part was, but only while there is no mark (ADR-0098's invariant:
-///   the loud tag already sends the clinician to the allergy list).
-/// - The threshold is `a`'s (the caller stamps it after merging).
-pub fn merge(a: LineCheck, b: LineCheck) -> LineCheck {
-    let mut out = a;
-    for (mark, head) in b.marks.into_iter().zip(b.against) {
-        if !out.marks.contains(&mark) && !out.against.contains(&head) {
-            out.marks.push(mark);
-            out.against.push(head);
-        }
-    }
-    // Split each side into (note, record) pairs and record-less notes, union, then rejoin.
-    let split = |notes: Vec<String>, records: Vec<Uuid>| {
-        let mut notes = notes.into_iter();
-        let paired: Vec<(String, Uuid)> = notes.by_ref().zip(records).collect();
-        (paired, notes.collect::<Vec<String>>())
-    };
-    let (mut paired, mut bare) = split(std::mem::take(&mut out.notes), out.adverse_against);
-    let (b_paired, b_bare) = split(b.notes, b.adverse_against);
-    let said = |w: &String, p: &[(String, Uuid)], n: &[String]| {
-        p.iter().any(|(x, _)| x == w) || n.contains(w)
-    };
-    for (note, record) in b_paired {
-        if !said(&note, &paired, &bare) {
-            paired.push((note, record));
-        }
-    }
-    for note in b_bare {
-        if !said(&note, &paired, &bare) {
-            bare.push(note);
-        }
-    }
-    (out.notes, out.adverse_against) = paired.into_iter().unzip();
-    out.notes.extend(bare);
-    out.unverified = out.marks.is_empty() && (out.unverified || b.unverified);
-    out
+/// [`per_allergen`]'s answer as (words, the hitting records, the worse accounts): the third
+/// keeps only an allergen's worst account that is not its hitting record.
+fn split_found(found: Vec<(String, Uuid, Uuid)>) -> (Vec<String>, Vec<Uuid>, Vec<Uuid>) {
+    let worse = found
+        .iter()
+        .filter(|(_, hit, worst)| hit != worst)
+        .map(|f| f.2)
+        .collect();
+    let (words, hits) = found.into_iter().map(|(w, h, _)| (w, h)).unzip();
+    (words, hits, worse)
 }
 
 /// Check every current line (D7, D8, D9). A line with nothing to say has no key. Lines that share
@@ -497,3 +482,7 @@ mod combination_tests;
 #[cfg(test)]
 #[path = "check_threshold_tests.rs"]
 mod threshold_tests;
+
+#[cfg(test)]
+#[path = "check_worse_account_tests.rs"]
+mod worse_account_tests;
