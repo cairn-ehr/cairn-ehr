@@ -15,6 +15,7 @@ const HOLDS_JS: &str = include_str!("../src-ui/holds.js");
 const ALLERGIES_JS: &str = include_str!("../src-ui/allergies.js");
 const MENU_JS: &str = include_str!("../src-ui/person_menu.js");
 const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
+const OVERLAYS_JS: &str = include_str!("../src-ui/allergy_overlays.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
 /// Every `src-ui/*.js` file, as (name, source): a guard over them all covers a new script too.
@@ -90,7 +91,9 @@ fn an_open_waits_for_a_close_in_progress() {
 
 /// #1130: the acts that set no flag of their own join one window-wide set: sign-off and Stop
 /// (main.js), Withhold and Release (holds.js), every allergy press (allergies.js's `pressOnce`).
-/// Each says its outcome in a known place, which the act's words are read from once it settles.
+/// Each says its outcome in a known place, which the act's words are read from once it settles —
+/// `#outcome` for the first four; an allergy press hands back its own (the next guard), its status
+/// line read only when it hands back none.
 #[test]
 fn every_chart_press_runs_as_an_act_in_flight() {
     assert!(
@@ -144,6 +147,39 @@ fn a_chart_act_never_starts_while_another_is_in_flight() {
     );
 }
 
+/// An allergy press says its outcome in one of several places — the status line, the strip (a sign
+/// whose list did not come back), `#outcome` (a refusal behind the record, an outcome NOT known,
+/// #814), under a field, in an overlay's row — so it hands back the words it said, and `chartAct`
+/// takes them over its one element. Read from `#allergy-status` alone, a refused or unknown write
+/// settled as "said nothing", and "Find another patient" left the chart that said it (PR #1142
+/// review).
+#[test]
+fn an_allergy_press_hands_back_the_words_it_said() {
+    let act = js_fn(LEAVE_JS, "chartAct");
+    assert!(
+        act.contains("typeof value === \"string\" ? value : el(saidIn).textContent"),
+        "{act}"
+    );
+    let signed = js_fn(ALLERGIES_JS, "afterSigned");
+    assert_eq!(
+        signed.matches("return answer.outcome;").count(),
+        2,
+        "{signed}"
+    );
+    let refused = js_fn(ALLERGIES_JS, "afterRefused");
+    // The behind-the-record re-read, the row's own line, and the field or status line.
+    assert_eq!(refused.matches("return text;").count(), 3, "{refused}");
+    for (src, name) in [
+        (ALLERGIES_JS, "recordAllergy"),
+        (ALLERGIES_JS, "recordNoneKnown"),
+        (OVERLAYS_JS, "signOverlay"),
+    ] {
+        let body = js_fn(src, name);
+        assert!(body.contains("return afterRefused("), "{name}: {body}");
+        assert!(body.contains("return afterSigned("), "{name}: {body}");
+    }
+}
+
 /// A chart act settles as the words it said (`{ words }`, which whos_here.js's picker repeats once
 /// the switch has taken the chart away), or null when it said nothing — never a rejection, so a
 /// switch's wait always ends. `signsSettled` answers a chart act's words while one is in flight.
@@ -151,7 +187,7 @@ fn a_chart_act_never_starts_while_another_is_in_flight() {
 fn a_chart_act_settles_as_the_words_it_said() {
     let act = js_fn(LEAVE_JS, "chartAct");
     assert!(
-        act.contains("const said = el(saidIn).textContent;"),
+        act.contains("const said = typeof value === \"string\" ? value : el(saidIn).textContent;"),
         "{act}"
     );
     assert!(
@@ -169,11 +205,13 @@ fn a_chart_act_settles_as_the_words_it_said() {
     assert!(settled.contains("Promise.all(actsInFlight)"), "{settled}");
 }
 
-/// #1130's "dropped" half: "Find another patient" waits for an act in flight, and one that did not
-/// go through (or is not known to have) keeps its chart on screen, where it said so — as the person
-/// menu does. Leaving would clear the only place that says it.
+/// #1130's "dropped" half: "Find another patient" waits for an act in flight and leaves only when
+/// it settled well (`SETTLED_WELL`: a note act that went through). A chart act's words — success
+/// included, as the person menu does — keep the chart on screen: leaving would clear the only place
+/// that says them. And it is the button's ONE listener: a second, bare `closeChart` would leave
+/// regardless.
 #[test]
-fn find_another_patient_stays_on_a_chart_whose_act_did_not_go_through() {
+fn find_another_patient_stays_unless_the_act_settled_well() {
     assert!(
         LEAVE_JS.contains(
             "el(\"close-chart\").addEventListener(\"click\", () => void findAnotherPatient());"
@@ -188,6 +226,11 @@ fn find_another_patient_stays_on_a_chart_whose_act_did_not_go_through() {
     let stay = position(find, "if (outcome && !SETTLED_WELL.has(outcome)) return;");
     let close = position(find, "await closeChart();");
     assert!(settle < stay && stay < close, "{find}");
+    let listeners: usize = scripts()
+        .iter()
+        .map(|(_, js)| js.matches("el(\"close-chart\").addEventListener").count())
+        .sum();
+    assert_eq!(listeners, 1, "one listener on #close-chart");
 }
 
 /// The single choke point that makes per-answer "is this still my chart?" checks unneeded: only
@@ -214,6 +257,43 @@ fn only_leave_chart_takes_a_chart_off_screen() {
     assert!(
         !FUNNEL_JS.contains("function closeChart("),
         "moved to leave_chart.js"
+    );
+}
+
+/// The other way a chart leaves the screen is another one replacing it: `enterChart` sets
+/// `displayedPatient` and clears the chart without waiting for anything. So every caller is placed:
+/// funnel.js's are the front door's (a row, a registration, the boot) and `openChart` itself; the
+/// tray (worklist.js) and who's-here's return button sit inside `#front-door`; the person menu
+/// opens after `await closeChart()`. A new caller fails here until it is placed — one reachable
+/// from the chart view must close first.
+#[test]
+fn every_chart_opener_is_placed() {
+    let mut found: Vec<(String, usize)> = scripts()
+        .into_iter()
+        .map(|(name, js)| {
+            let calls = js.matches("enterChart(").count() + js.matches("openChart(").count()
+                - js.matches("function enterChart(").count()
+                - js.matches("function openChart(").count();
+            (name, calls)
+        })
+        .filter(|(_, calls)| *calls > 0)
+        .collect();
+    found.sort();
+    let expected: Vec<(String, usize)> = [
+        ("funnel.js", 4),
+        ("person_menu.js", 1),
+        ("whos_here.js", 1),
+        ("worklist.js", 1),
+    ]
+    .iter()
+    .map(|(n, c)| (n.to_string(), *c))
+    .collect();
+    assert_eq!(found, expected);
+    let menu = js_fn(MENU_JS, "openMenuRow");
+    assert!(
+        position(menu, "if (displayedPatient) await closeChart();")
+            < position(menu, "enterChart(header);"),
+        "{menu}"
     );
 }
 

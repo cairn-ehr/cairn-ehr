@@ -16,10 +16,10 @@ const invoke = watchWaits(window.__TAURI__.core.invoke);
 const LOCK_POLL_MS = 10_000;
 
 /**
- * The chart id this window is DISPLAYING, set by funnel.js when a chart opens and cleared when
- * it closes. Every chart command sends it, and the backend refuses unless it is the open chart:
- * a sign-off must sign what the clinician was looking at, never whatever happens to be open by
- * the time the command runs (`AppState::displayed_patient`).
+ * The chart id this window is DISPLAYING, set by funnel.js when a chart opens and cleared by
+ * leave_chart.js when it closes. Every chart command sends it, and the backend refuses unless it
+ * is the open chart: a sign-off must sign what the clinician was looking at, never whatever
+ * happens to be open by the time the command runs (`AppState::displayed_patient`).
  */
 let displayedPatient = null;
 

@@ -324,7 +324,7 @@ fn every_field_refusal_is_announced_and_describes_its_control() {
 fn a_behind_the_record_refusal_is_said_once_as_the_rereads_lead() {
     let refused = js_fn(ALLERGIES_JS, "afterRefused");
     let behind = &refused[position(refused, "if (behind) {")..];
-    let behind = &behind[..position(behind, "return;")];
+    let behind = &behind[..position(behind, "return text;")];
     assert!(behind.contains("await refresh(text, behind);"), "{refused}");
     assert!(!behind.contains("sayAllergy("), "{refused}");
 }

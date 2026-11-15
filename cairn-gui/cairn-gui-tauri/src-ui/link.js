@@ -70,10 +70,11 @@ function openLinkPanel() {
  * opposite focus behaviour (controller ruling). When a clinician acts ON the panel itself —
  * the "Close comparison" button, Escape — focus belongs back on the control that opened it:
  * the banner's **Review** (`linkOpener`) or `#same-person`. But this is ALSO called from
- * funnel.js whenever the chart underneath the panel is about to change (`enterChart`,
- * `closeChart`), so a panel from the old chart can never stay open over the new one's header; in that case funnel.js is about to move focus
- * itself (to the new patient heading, or to the front door), and `#same-person` may not even
- * exist yet there — so this function must NOT touch focus, and callers pass `false`.
+ * funnel.js's `enterChart` and leave_chart.js's `closeChart` whenever the chart underneath the
+ * panel is about to change, so a panel from the old chart can never stay open over the new one's
+ * header; in that case the caller is about to move focus itself (to the new patient heading, or
+ * to the front door), and `#same-person` may not even exist yet there — so this function must
+ * NOT touch focus, and callers pass `false`.
  */
 function closeLinkPanel(returnFocus) {
   el("link-panel").hidden = true;

@@ -6,14 +6,16 @@
 // Every chart-leaving path goes through `closeChart`: "Find another patient" (below), a who's-here
 // switch (whos_here.js), the idle re-lock (idle.js) and the person menu (person_menu.js). It first
 // waits for every act in flight — notes.js's `signsSettled`: a note's Sign, Discard, sign-off or
-// review, the medication list's Sign, a stat dose and a version's settle (their own flags), and
-// every `chartAct` here. Since nothing else takes a chart off the screen, no answer handler needs
-// to ask "is this still my chart?" (`leave_chart_webview_tests.rs` pins the choke point).
+// review (`noteSignInFlight`), the medication list's Sign, a stat dose and a version's settle
+// (their one shared `medListSignInFlight`), and every `chartAct` here. Since nothing else takes a
+// chart off the screen, no answer handler of those acts needs to ask "is this still my chart?"
+// (`leave_chart_webview_tests.rs` pins the choke point). Link and unlink stay outside the set and
+// keep their own late-answer handling (#709, #1002).
 //
-// Classic script, loaded after funnel.js, sharing main.js's `el`, `invoke`, `say`, `clearChart`,
-// `failureText` and `displayedPatient` (WRITTEN here, as in funnel.js's `enterChart`), funnel.js's
-// `resetFrontDoor`, notes.js's `signsSettled`/`signInFlight`, notes_save.js's `notesSaved`,
-// med_list.js's `medListSaved`, person_menu.js's `SETTLED_WELL`/`refreshMenuCount`,
+// Classic script, loaded after funnel.js, sharing main.js's `el`, `invoke`, `say`, `clearChart`
+// and `displayedPatient` (WRITTEN here, as in funnel.js's `enterChart`), funnel.js's
+// `resetFrontDoor` and `failureText`, notes.js's `signsSettled`/`signInFlight`, notes_save.js's
+// `notesSaved`, med_list.js's `medListSaved`, person_menu.js's `SETTLED_WELL`/`refreshMenuCount`,
 // worklist.js's `refreshTray` and link.js's / unlink.js's panel closers — all read when called.
 "use strict";
 
@@ -35,16 +37,18 @@ let closing = null;
  * in flight on the chart on screen. One strip credential serves one act at a time (#1002), so a
  * press made while another act is in flight does nothing and answers `false` (for Withhold and
  * Release, "not spent": their button comes back). Once `run` settles, the act's entry settles as
- * the words it left in element `saidIn` — `{ words }`, which a who's-here switch repeats in its
- * picker after taking the chart away — or null when it said nothing there. Resolves `run`'s own
- * value, so a caller reads it exactly as before.
+ * the words it said — `{ words }`, which a who's-here switch repeats in its picker after taking
+ * the chart away — or null when it said nothing. Those words are what `run` resolves when it is a
+ * string (an allergy press, which says them in one of several places), else the text of element
+ * `saidIn`. A `run` that rejects settles as `CHART_ACT_FAULT`. Resolves, or rejects, as `run`
+ * does, so a caller reads it exactly as before.
  */
 function chartAct(run, saidIn) {
   if (signInFlight()) return Promise.resolve(false);
   const done = run();
   const settled = done.then(
-    () => {
-      const said = el(saidIn).textContent;
+    (value) => {
+      const said = typeof value === "string" ? value : el(saidIn).textContent;
       return said ? { words: said } : null;
     },
     (fault) => {
@@ -102,9 +106,11 @@ async function leaveChart() {
 }
 
 /**
- * "Find another patient". An act still in flight settles first; one that did not go through — or
- * is not known to have — keeps its chart on screen, where it said so, as the person menu does
- * (#1130): leaving would clear the only place that says it. One that went through lets it go.
+ * "Find another patient". An act still in flight settles first, and the chart leaves only when it
+ * settled well (`SETTLED_WELL`: a note act that went through). Any other words — a chart act's,
+ * success included, or a note act that did not go through or is not known to have — keep the
+ * chart on screen, as the person menu does (#1130): leaving would clear the only place that says
+ * them. A second press leaves.
  */
 async function findAnotherPatient() {
   const outcome = signInFlight() ? await signsSettled() : null;

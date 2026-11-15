@@ -148,8 +148,8 @@ function renderUnlinkComparison(view) {
 
 /**
  * Hide the panel and forget what it held. `returnFocus` only when the clinician acted ON the
- * panel (Close, Escape); funnel.js calls it with `false` when the chart underneath changes,
- * because it is about to move focus itself.
+ * panel (Close, Escape); funnel.js and leave_chart.js call it with `false` when the chart
+ * underneath changes, because each is about to move focus itself.
  */
 function closeUnlinkPanel(returnFocus) {
   el("unlink-panel").hidden = true;
