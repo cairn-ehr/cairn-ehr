@@ -15,7 +15,7 @@
 //
 // Recent people and bookmarks live in the window's Rust memory only, never browser storage.
 // Classic script, loaded after notes.js, sharing main.js's globals (`el`, `cell`, `setMessage`,
-// `invoke`, `pollLock`), signer.js's `onStaffIdChange`, funnel.js's `closeChart`/`openChart` and
+// `invoke`, `pollLock`), signer.js's `onStaffIdChange`, leave_chart.js's `closeChart`, funnel.js's `openChart` and
 // funnel.js's `failureText` and person_menu.js's `hideMenu`/`refreshMenuCount` — all read only at
 // a press, long after every script has loaded.
 "use strict";

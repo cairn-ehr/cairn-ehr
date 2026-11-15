@@ -167,7 +167,9 @@ function holdControls(row) {
       // ...and the select says so, so the re-read after a refusal keeps "until a time" (#799's
       // restore) and a second press is refused again, never an open-ended W (#841).
       untilKind.value = kind;
-      void withhold(row.group_id, whyHold.value, kind, untilAt.value).then((spent) => {
+      // One act in flight (leave_chart.js): a chart left waits for it; refused while another is.
+      const sent = chartAct(() => withhold(row.group_id, whyHold.value, kind, untilAt.value), "outcome");
+      void sent.then((spent) => {
         if (!spent) holdButton.disabled = false;
       });
     });
@@ -188,7 +190,10 @@ function holdControls(row) {
     releaseButton.setAttribute("aria-label", "Release the holds on " + row.primary);
     releaseButton.addEventListener("click", () => {
       releaseButton.disabled = true; // one press, one release, as Withhold
-      const sent = release(row.group_id, row.holds.map((hold) => hold.withhold_event_id), whyRelease.value);
+      const sent = chartAct(
+        () => release(row.group_id, row.holds.map((hold) => hold.withhold_event_id), whyRelease.value),
+        "outcome",
+      );
       void sent.then((spent) => {
         if (!spent) releaseButton.disabled = false;
       });

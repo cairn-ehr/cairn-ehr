@@ -367,14 +367,20 @@ async function signNote() {
  * whos_here.js's switch wait for it.
  */
 function signsSettled() {
+  // A chart act in flight (leave_chart.js's `chartAct`) answers with its words: `{ words }` or
+  // null. Only one act is ever in flight (each checks `signInFlight` first), so its answer is THE one.
+  if (actsInFlight.size > 0) return Promise.all(actsInFlight).then((said) => said[said.length - 1]);
   // The medication list's Sign in flight (med_list_sign.js) answers instead: `{ words }`.
   if (!medListSignInFlight) return noteSigning;
   return Promise.all([noteSigning, medListSigning]).then(([, list]) => list);
 }
 
-/** Whether a Sign, Discard or sign-off — or the medication list's Sign — is in flight right now. */
+/**
+ * Whether a Sign, Discard or sign-off — or the medication list's Sign, or any chart act
+ * (leave_chart.js's `chartAct`: sign-off, Stop, Withhold, Release, an allergy press) — is in flight.
+ */
 function signInFlight() {
-  return noteSignInFlight || medListSignInFlight;
+  return noteSignInFlight || medListSignInFlight || actsInFlight.size > 0;
 }
 
 /** Say how the note pane's last act went. Never a dialog. */

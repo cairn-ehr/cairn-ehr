@@ -376,7 +376,7 @@ async function pressOnce(act) {
   sayAllergy("");
   syncAllergyButtons();
   try {
-    await act();
+    await chartAct(act, "allergy-status"); // one act in flight (leave_chart.js)
   } catch (fault) {
     console.error(fault);
     if (patient !== displayedPatient) return; // a chart left: its next read says the truth

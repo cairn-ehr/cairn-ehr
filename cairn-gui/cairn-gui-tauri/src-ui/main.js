@@ -198,7 +198,7 @@ function renderRow(row) {
     // "Stop" alone is ambiguous when a screen reader reads the buttons out of table
     // context, so the accessible name names the drug.
     stop.setAttribute("aria-label", "Stop " + row.primary);
-    stop.addEventListener("click", () => cease(row.group_id, reason.value));
+    stop.addEventListener("click", () => void chartAct(() => cease(row.group_id, reason.value), "outcome"));
 
     action.append(reason, stop);
   }
@@ -473,7 +473,7 @@ async function pollLock() {
   }
 }
 
-el("sign-off").addEventListener("click", signOff);
+el("sign-off").addEventListener("click", () => void chartAct(signOff, "outcome"));
 
 // No `refresh()` here: whether a chart is showing at all is the front door's decision
 // (funnel.js), which calls `refresh()` when it opens one. `refresh` and `say` stay globals —

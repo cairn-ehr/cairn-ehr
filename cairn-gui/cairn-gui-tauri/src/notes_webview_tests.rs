@@ -14,7 +14,7 @@ const NOTES_JS: &str = concat!(
 );
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
-const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
+const LEAVE_JS: &str = include_str!("../src-ui/leave_chart.js");
 
 /// Review Focus 3: a pending autosave that fires after Sign must never be sent. `signNote` cancels
 /// the pending timer BEFORE it sends the sign (the node answers `spent` to a late save anyway;
@@ -355,7 +355,7 @@ fn notes_js_reads_no_field_the_backend_does_not_send() {
 /// rejects (`sendDraft` catches everything), so the close always goes on.
 #[test]
 fn closing_a_chart_waits_for_every_queued_save() {
-    let close = js_fn(FUNNEL_JS, "closeChart");
+    let close = js_fn(LEAVE_JS, "leaveChart");
     let waited = position(
         close,
         "if (typeof notesSaved === \"function\") await notesSaved();",

@@ -10,6 +10,31 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ LEAVING A CHART WAITS FOR EVERY ACT IN FLIGHT (#1130, #1137) — do not undo** (`src-ui/leave_chart.js`).
+- **A chart leaves the screen only through `closeChart`, which first awaits `signsSettled()`.** Waiting comes BEFORE
+  `displayedPatient = null`. Nothing else clears `displayedPatient` or calls `close_chart`, so no answer handler
+  needs to ask "is this still my chart?". **Tempting wrong fixes:** add a per-handler chart check instead (each new
+  press must then remember it, and an answer for a left chart is still said nowhere); clear `displayedPatient` first
+  "so nothing new starts on the leaving chart" (the act's answer then thinks its chart was left, and drops it).
+  Pins: `leave_chart_webview_tests.rs::a_close_waits_for_every_act_in_flight_before_it_takes_the_chart_down`,
+  `::only_leave_chart_takes_a_chart_off_screen`.
+- **Every chart press is one act in flight, one at a time.** Sign-off, Stop, Withhold, Release and every allergy press
+  run through `chartAct`. Note presses and the medication list's Sign, stat and settle keep their own flags. All of
+  them count in `signInFlight()`, and a press made while one is in flight does nothing (#1002's "one strip credential,
+  one act"). `chartAct` settles as the `{ words }` it said, which a who's-here switch repeats. A new
+  `signerCredential()` reader fails `every_credential_reader_is_placed` until someone places it. **Tempting wrong
+  fix:** call a press bare "because it is quick" (a slow link makes no press quick). Pins:
+  `::every_chart_press_runs_as_an_act_in_flight`, `::a_chart_act_never_starts_while_another_is_in_flight`,
+  `::every_credential_reader_is_placed`.
+- **"Find another patient" pressed during an act stays on that chart unless the act settled well** (a note's
+  `SETTLED_WELL`). A `{ words }` outcome stays too, as in the person menu: it is said on the chart, and leaving would
+  clear it. **Tempting wrong fix:** close anyway (A's refused or "not known" outcome is then said nowhere). Pin:
+  `::find_another_patient_stays_on_a_chart_whose_act_did_not_go_through`.
+- **A close in progress is joined, and an open waits for it** (`closing`, #1137). **Tempting wrong fix:** let
+  `openMenuRow` skip the close when `displayedPatient` is null. Mid-close it is null while A's saves are still
+  landing, so B's open refuses them and A's `close_chart` closes B. Pins: `::a_close_in_progress_is_joined_never_run_twice`,
+  `::an_open_waits_for_a_close_in_progress`.
+
 **⇒ THE WHOLE-MILESTONE REVIEW'S FIXES (#1128, #1129, #1131; ADR-0108) — do not undo**
 (review `docs/code_reviews/2026-11-15-gui-milestone-review.md`).
 - **A released key is HELD only when who's here names nobody, or names that key's own person, compared by KEY, and then

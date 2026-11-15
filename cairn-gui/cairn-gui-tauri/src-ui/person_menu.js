@@ -4,8 +4,8 @@
 // The words are all Rust's (`person_menu_view.rs`): this file draws what `person_menu` answers and
 // writes no sentence a clinician reads. Reading the menu signs nothing and asks for no passphrase.
 // Classic script, loaded BEFORE whos_here.js (whose `showClaim` calls `refreshMenuCount`), sharing
-// main.js's globals (`el`, `cell`, `setMessage`, `invoke`), funnel.js's `enterChart`, `closeChart`,
-// `displayedPatient`, `registering`, `failureText`, and notes.js's `signInFlight`, `signsSettled`,
+// main.js's globals (`el`, `cell`, `setMessage`, `invoke`), funnel.js's `enterChart`, leave_chart.js's
+// `closeChart`/`closing`, `displayedPatient`, `registering`, `failureText`, and notes.js's `signInFlight`, `signsSettled`,
 // `noteDraft`, and whos_here.js's `signOutcomeLine`. Only main.js's `el` is used at load (the listeners at the bottom; main.js loads
 // first); the rest are used inside functions, at a press or an answer, after every script loaded.
 "use strict";
@@ -122,6 +122,9 @@ async function openMenuRow(row) {
   menuOpening = true;
   try {
     setMessage(el("person-menu-status"), "");
+    // A close still in progress (its saves still landing) finishes first, or this open would
+    // overtake it: A's remaining saves refused, and A's `close_chart` closing B (#1137).
+    await closing;
     const outcome = signInFlight() ? await signsSettled() : null;
     if (outcome && !SETTLED_WELL.has(outcome)) {
       // It did not go through (or is not known to have): stay on its chart. `closeChart` would

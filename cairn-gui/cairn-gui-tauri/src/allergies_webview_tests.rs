@@ -194,7 +194,8 @@ fn a_fault_mid_press_outdates_every_read_in_flight() {
 fn a_fault_for_a_chart_left_never_touches_the_chart_on_screen() {
     let press = js_fn(ALLERGIES_JS, "pressOnce");
     assert!(
-        position(press, "const patient = allergyPatient;") < position(press, "await act();"),
+        position(press, "const patient = allergyPatient;")
+            < position(press, "await chartAct(act, \"allergy-status\");"),
         "{press}"
     );
     let caught = &press[position(press, "catch (fault) {")..];

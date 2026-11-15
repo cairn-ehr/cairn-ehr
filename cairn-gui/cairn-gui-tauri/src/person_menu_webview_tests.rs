@@ -8,7 +8,7 @@ const MENU_JS: &str = include_str!("../src-ui/person_menu.js");
 const WHOS_HERE_JS: &str = include_str!("../src-ui/whos_here.js");
 const NOTES_JS: &str = include_str!("../src-ui/notes.js");
 const COMPOUND_JS: &str = include_str!("../src-ui/notes_compound.js");
-const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
+const LEAVE_JS: &str = include_str!("../src-ui/leave_chart.js");
 const SUPERVISION_JS: &str = include_str!("../src-ui/supervision.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
@@ -159,7 +159,7 @@ fn the_other_scripts_call_the_menu_where_it_changes() {
     assert!(js_fn(WHOS_HERE_JS, "showClaim").contains("refreshMenuCount()"));
     assert!(js_fn(NOTES_JS, "readNotes").contains("refreshMenuCount()"));
     assert!(js_fn(NOTES_JS, "renderNotes").contains("takeMenuFocus()"));
-    assert!(js_fn(FUNNEL_JS, "closeChart").contains("refreshMenuCount()"));
+    assert!(js_fn(LEAVE_JS, "leaveChart").contains("refreshMenuCount()"));
     assert!(NOTES_JS.contains("li.dataset.draft = draft.draft_id;"));
     assert!(COMPOUND_JS.contains("li.dataset.parts = compound.shown_parts.join(\" \");"));
 }
