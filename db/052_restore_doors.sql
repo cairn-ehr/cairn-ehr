@@ -81,6 +81,13 @@ BEGIN;
 -- defaulted to `clock_timestamp()` would outrank a genuine older `revoke` and silently
 -- re-authorise a recalled actor — arriving through the door built to restore the registry.
 --
+-- A SUPERVISION ROW'S HLC STAMP (`hlc_wall`, `hlc_counter`, #1014 / ADR-0107) IS CARRIED TOO, both
+-- or neither, and the node's HLC is MERGED FORWARD past each one (`cairn_node_hlc_merge`). The note
+-- read judges a part against the supervision record on that clock; a fresh node's HLC starts behind
+-- the restored stamps, so without the merge a part signed after the restore could sort BEFORE a
+-- restored `require-cosign` and escape it. A stamp past now + db/001's drift ceiling is refused: no
+-- honest node minted one, and merging it would park this node's clock in the future for good.
+--
 -- IT DELIBERATELY BYPASSES `enroll_actor`'s COLLISION GUARDS (#152 / #166), and this is the
 -- one thing about it that needs saying out loud. Those guards refuse a FRESH enroll that
 -- would silently merge two actors (`cairn_actor_id_key_conflict`) or resurrect a retired one
@@ -121,6 +128,8 @@ DECLARE
     v_appr      BYTEA;
     v_related   BYTEA;
     v_at        TIMESTAMPTZ;
+    v_hwall     BIGINT;
+    v_hcount    INTEGER;
     v_present   actor_event%ROWTYPE;
     v_differs   TEXT;
 BEGIN
@@ -219,10 +228,33 @@ BEGIN
                                                          'restore_actor_registry') END;
         v_at     := v_recorded::TIMESTAMPTZ;
 
+        -- The HLC stamp (#1014): both or neither, non-negative integers, within the drift
+        -- ceiling. Checked as text first so a malformed one names its field rather than raising
+        -- a bare cast error.
+        -- (A JSON null is absent, as for every optional field here: `->>` reads it as NULL.)
+        IF ((v_row ->> 'hlc_wall') IS NULL) <> ((v_row ->> 'hlc_counter') IS NULL)
+           OR ((v_row ->> 'hlc_wall') IS NOT NULL
+               AND ((v_row ->> 'hlc_wall') !~ '^[0-9]{1,18}$'
+                    OR (v_row ->> 'hlc_counter') !~ '^[0-9]{1,9}$')) THEN
+            RAISE EXCEPTION 'restore_actor_registry: row % carries hlc_wall % and hlc_counter %. '
+                'They are one HLC stamp: both or neither, each a non-negative integer.',
+                v_id, COALESCE(v_row -> 'hlc_wall', 'null'::jsonb),
+                COALESCE(v_row -> 'hlc_counter', 'null'::jsonb);
+        END IF;
+        v_hwall  := (v_row ->> 'hlc_wall')::BIGINT;
+        v_hcount := (v_row ->> 'hlc_counter')::INTEGER;
+        IF v_hwall > (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms() THEN
+            RAISE EXCEPTION 'restore_actor_registry: row % carries hlc_wall %, beyond this machine''s '
+                'clock plus the drift ceiling. No honest node minted it, and merging it would park '
+                'this node''s HLC in the future. Check this machine''s clock, then retry.',
+                v_id, v_hwall;
+        END IF;
+
         INSERT INTO actor_event
             (actor_event_id, actor_id, op, kind, pinned, signing_key_id, superseded_by,
-             approved_by, approval, related_actor, recorded_at)
-        VALUES (v_id, v_actor, v_op, v_kind, v_pinned, v_key, v_succ, v_by, v_appr, v_related, v_at)
+             approved_by, approval, related_actor, recorded_at, hlc_wall, hlc_counter)
+        VALUES (v_id, v_actor, v_op, v_kind, v_pinned, v_key, v_succ, v_by, v_appr, v_related, v_at,
+                v_hwall, v_hcount)
         -- Idempotent by row identity, which is what makes a resume safe to re-run any number
         -- of times. Fence 2 has already established that every row present belongs to this
         -- set BY ID; whether it is the SAME row is checked just below.
@@ -250,6 +282,8 @@ BEGIN
                 WHEN v_present.approval       IS DISTINCT FROM v_appr   THEN 'approval'
                 WHEN v_present.related_actor  IS DISTINCT FROM v_related THEN 'related_actor'
                 WHEN v_present.recorded_at    IS DISTINCT FROM v_at     THEN 'recorded_at'
+                WHEN v_present.hlc_wall       IS DISTINCT FROM v_hwall  THEN 'hlc_wall'
+                WHEN v_present.hlc_counter    IS DISTINCT FROM v_hcount THEN 'hlc_counter'
             END;
             IF v_differs IS NOT NULL THEN
                 RAISE EXCEPTION 'restore_actor_registry: row % is already present with a different '
@@ -258,6 +292,11 @@ BEGIN
                     'leave a recalled actor authorised. Restore into a fresh database.',
                     v_id, v_differs;
             END IF;
+        END IF;
+
+        -- Monotone, so a resumed restore that merges a stamp again moves nothing.
+        IF v_hwall IS NOT NULL THEN
+            PERFORM cairn_node_hlc_merge(v_hwall, v_hcount);
         END IF;
 
         v_inserted := v_inserted + v_hit;

@@ -878,14 +878,19 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   supervisor" now (a supervisor linked after a colleague's co-sign would clear it retroactively, and one who has since
   stepped away would stop counting). Pins: `supervision.rs`'s `annotate_judges_the_requirement_at_the_parts_time`,
   `annotate_judges_each_vouchs_supervisor_at_its_own_time`; `note_supervision.rs::a_lifted_requirement_leaves_the_earlier_part_waiting`.
-  **Caveat:** registry rows are on the DB clock and parts on the HLC, which a peer can ratchet up to 24 h ahead, so
-  "as of t" can be judged wrong (ADR-0094 (d), [#1014](https://github.com/cairn-ehr/cairn-ehr/issues/1014)); the DB
-  suites reset `hlc_state` in their setup for the same reason.
-- **Registry times are FLOORED to the millisecond before they are compared.** `recorded_at` has microseconds, an HLC
-  wall milliseconds; `Supervision::from_rows` floors, and the compare is `<=`, so a row in the same millisecond as a
-  signing counts as in effect. **Tempting wrong fixes:** drop the floor "because chrono compares fine" (a requirement
-  recorded at .000700 and a part signed at .000 would read as signed before it); use `<`. Pins:
-  `supervision.rs`'s `a_row_in_the_same_millisecond_as_the_part_is_in_effect`, `the_requirement_is_read_as_it_stood_at_t`.
+- **The record and the parts are on ONE clock, compared as `(wall, counter)` (#1014, ADR-0107).** The six supervision
+  ops take a `node_hlc_tick()` in `cairn_actor_append` (LAST, before the INSERT); the record door returns that stamp,
+  an unstamped older row reading as `(recorded_at floored to the ms, 0)`; `annotate` compares `Stamp` tuples with
+  `<=`. **Tempting wrong fixes:** compare `recorded_at` or the HLC wall alone "since walls are milliseconds anyway"
+  (after a ratchet every part and the lift share ONE wall and only the counter orders them — the lift would clear
+  the parts again); tick the HLC for every `cairn_actor_append` op (the vault ops would take the hot `hlc_state` lock
+  for nothing); tick it earlier in the function (lock order: `hlc_state` last); drop the restore door's
+  `cairn_node_hlc_merge` (a part signed after a restore would sort before a restored `require-cosign`); re-add the
+  DB suites' `hlc_state` reset (it hid this defect). Pins: `supervision.rs`'s
+  `a_lift_on_the_parts_wall_with_a_later_counter_does_not_clear_it`,
+  `an_unstamped_rows_millisecond_is_in_effect_at_the_part`, `the_requirement_is_read_as_it_stood_at_t`;
+  `note_supervision.rs::a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting`;
+  `restore_actor_registry_supervision.rs`; `db/tests/{004_actors,072_supervision}_test.sql`.
 - **The fallback accepts the strongest countersignature the floor allows ON THAT PART: a `co-signed` vouch, or,
   only where the part's envelope key is not a human's, an attested `sign-off`.** (The floor also admits an attested
   sign-off on a human-signed part; under the fallback that one clears nothing.) With no supervisor at the vouch's time, `clears_cosign` accepts a non-student's

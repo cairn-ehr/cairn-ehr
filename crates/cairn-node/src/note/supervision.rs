@@ -206,9 +206,9 @@ pub fn annotate(p: &mut NoteRow, sup: &Supervision) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Utc};
     use crate::note::vouch::fixture::{part, vouch, who};
     use cairn_event::note_attestation::{VouchAct, VouchRole};
+    use chrono::{DateTime, Utc};
 
     /// Minute `m` on the HLC, counter 0.
     fn at(m: i64) -> Stamp {
@@ -308,9 +308,18 @@ mod tests {
         let mut lift = row("lift-cosign", "aa", None, 0);
         lift.at = (wall, 5);
         let s = sup(vec![req, lift]);
-        assert!(s.needs_cosigning_at("aa", (wall, 4)), "signed between the two");
-        assert!(!s.needs_cosigning_at("aa", (wall, 6)), "signed after the lift");
-        assert!(!s.needs_cosigning_at("aa", (wall, 2)), "signed before the requirement");
+        assert!(
+            s.needs_cosigning_at("aa", (wall, 4)),
+            "signed between the two"
+        );
+        assert!(
+            !s.needs_cosigning_at("aa", (wall, 6)),
+            "signed after the lift"
+        );
+        assert!(
+            !s.needs_cosigning_at("aa", (wall, 2)),
+            "signed before the requirement"
+        );
         let mut p = part(1, Some(who("aa", "Dr A")));
         p.recorded_at = DateTime::from_timestamp_millis(wall).unwrap();
         p.recorded_counter = 4;

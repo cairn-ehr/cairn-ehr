@@ -306,7 +306,8 @@ $$;
 -- parts and vouches carry, and "as of t" (note/supervision.rs) compares on them, never on
 -- recorded_at. A row written before the stamp existed has none; it reads as (recorded_at floored to
 -- the millisecond, 0), the rule it was judged by before, so it behaves exactly as it did. The return
--- type grew, so the old shape is dropped first — only when present, so a replay takes no lock.
+-- type grew, so the old shape is dropped first — only when present, so a replay never drops it
+-- again.
 -- (db/073 calls this by name from SQL-language bodies, which hold no dependency on it.)
 DO $$
 BEGIN

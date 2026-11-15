@@ -93,12 +93,6 @@ async fn byline(c: &Client, chart: Uuid, p: Uuid) -> String {
     part_byline(&note(c, chart, p).await.parts()[0]).shown
 }
 
-/// Let the clock pass a millisecond boundary: the record and the parts are compared at
-/// millisecond granularity, and an act in the same millisecond counts as already in effect.
-async fn next_millisecond() {
-    tokio::time::sleep(std::time::Duration::from_millis(3)).await;
-}
-
 macro_rules! db_test {
     ($name:ident, |$c:ident| $body:block) => {
         #[tokio::test]
@@ -110,12 +104,8 @@ macro_rules! db_test {
             let _guard = db::test_serial_guard(&base).await.unwrap();
             #[allow(unused_mut)]
             let mut $c = db::connect_and_load_schema(&base).await.unwrap();
-            // A part's time is its HLC wall, a registry row's the DB clock: a clock a previous
-            // suite left ahead (hlc_drift parks it near the drift ceiling) would time this
-            // suite's parts after acts recorded later. Every write below ticks it back to now.
-            $c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
-                .await
-                .unwrap();
+            // No HLC reset: the parts and the supervision record are on one clock (#1014), so a
+            // clock a previous suite left ahead orders them as correctly as one at now.
             $body
         }
     };
@@ -128,7 +118,6 @@ db_test!(a_lifted_requirement_leaves_the_earlier_part_waiting, |c| {
     let bea = member(&c, "bea", "Dr Bea", "clinician").await;
     console(&c, "require-cosign", "bea", None).await;
     let p = sign_as(&mut c, &node_sk, chart, &bea).await;
-    next_millisecond().await;
     console(&c, "lift-cosign", "bea", None).await;
 
     assert_eq!(
@@ -138,7 +127,6 @@ db_test!(a_lifted_requirement_leaves_the_earlier_part_waiting, |c| {
     assert!(needs_sign_off(note(&c, chart, p).await.parts()));
 
     // A part signed after the lift owes nothing.
-    next_millisecond().await;
     let later = sign_as(&mut c, &node_sk, chart, &bea).await;
     assert_eq!(byline(&c, chart, later).await, "signed by Dr Bea");
     assert!(!needs_sign_off(note(&c, chart, later).await.parts()));
@@ -268,27 +256,30 @@ db_test!(
 // event ratchets the HLC two hours ahead, so a part signed now carries a wall two hours on. The lift
 // recorded after it, in real time, must still sort after it: the part keeps waiting. Before the fix
 // the lift was timed by the database clock (now), judged EARLIER than the part, and cleared it.
-db_test!(a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting, |c| {
-    let (node_sk, chart) = ward(&c).await;
-    let bea = member(&c, "bea", "Dr Bea", "clinician").await;
-    c.batch_execute(
+db_test!(
+    a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting,
+    |c| {
+        let (node_sk, chart) = ward(&c).await;
+        let bea = member(&c, "bea", "Dr Bea", "clinician").await;
+        c.batch_execute(
         "UPDATE hlc_state SET hlc_wall = (extract(epoch FROM clock_timestamp()) * 1000)::bigint \
          + 7200000, hlc_counter = 0",
     )
     .await
     .unwrap();
-    console(&c, "require-cosign", "bea", None).await;
-    let p = sign_as(&mut c, &node_sk, chart, &bea).await;
-    console(&c, "lift-cosign", "bea", None).await;
+        console(&c, "require-cosign", "bea", None).await;
+        let p = sign_as(&mut c, &node_sk, chart, &bea).await;
+        console(&c, "lift-cosign", "bea", None).await;
 
-    assert_eq!(
-        byline(&c, chart, p).await,
-        "signed by Dr Bea — not co-signed (no supervisor recorded)"
-    );
-    assert!(needs_sign_off(note(&c, chart, p).await.parts()));
+        assert_eq!(
+            byline(&c, chart, p).await,
+            "signed by Dr Bea — not co-signed (no supervisor recorded)"
+        );
+        assert!(needs_sign_off(note(&c, chart, p).await.parts()));
 
-    // And a part signed after the lift, on the same ratcheted wall, owes nothing: no sleep is
-    // needed, the counter orders them.
-    let later = sign_as(&mut c, &node_sk, chart, &bea).await;
-    assert_eq!(byline(&c, chart, later).await, "signed by Dr Bea");
-});
+        // And a part signed after the lift, on the same ratcheted wall, owes nothing: no sleep is
+        // needed, the counter orders them.
+        let later = sign_as(&mut c, &node_sk, chart, &bea).await;
+        assert_eq!(byline(&c, chart, later).await, "signed by Dr Bea");
+    }
+);
