@@ -250,6 +250,143 @@ async fn a_tampered_hlc_stamp_is_refused() {
     clear(&c).await;
 }
 
+/// The export `build_registry` makes, as it would have been written before #1014: no row carries
+/// an HLC stamp, so the restore has only each row's `recorded_at` to go on.
+async fn unstamped_export(c: &tokio_postgres::Client) -> serde_json::Value {
+    build_registry(c).await;
+    let mut v: serde_json::Value = serde_json::from_str(&export_json(c).await).unwrap();
+    for row in v.as_array_mut().unwrap() {
+        let o = row.as_object_mut().unwrap();
+        o.remove("hlc_wall");
+        o.remove("hlc_counter");
+    }
+    v
+}
+
+/// `now() + interval` as Postgres text — the form the export writes `recorded_at` in.
+async fn pg_time_from_now(c: &tokio_postgres::Client, interval: &str) -> String {
+    c.query_one(
+        "SELECT (clock_timestamp() + $1::text::interval)::text",
+        &[&interval],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+/// #1125 item 1: a supervision row exported before #1014 has no stamp, and the note read judges it
+/// at `(recorded_at floored to the ms, 0)`. The restore must move the HLC past THAT, or a part
+/// signed after the restore on a machine whose clock runs behind sorts before a restored
+/// `require-cosign` and escapes it. A vault op is never compared to an HLC, so an unstamped
+/// `enroll` moves nothing.
+#[tokio::test]
+async fn an_unstamped_supervision_row_moves_the_hlc_past_its_recorded_at() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut v = unstamped_export(&c).await;
+    // The source's clock ran an hour ahead of this machine's (well inside the drift ceiling).
+    let ahead = pg_time_from_now(&c, "1 hour").await;
+    let later = pg_time_from_now(&c, "3 hours").await;
+    for row in v.as_array_mut().unwrap() {
+        let at = if row["op"] == "enroll" {
+            &later
+        } else {
+            &ahead
+        };
+        row["recorded_at"] = serde_json::json!(at);
+    }
+    clear(&c).await;
+    c.query_one(
+        "SELECT restore_actor_registry($1::text::jsonb)",
+        &[&v.to_string()],
+    )
+    .await
+    .unwrap();
+    let r = c
+        .query_one(
+            "SELECT s.hlc_wall, \
+                    (SELECT max(hlc_wall) FROM cairn_supervision_record()), \
+                    (SELECT floor(extract(epoch FROM max(recorded_at)) * 1000)::bigint \
+                       FROM actor_event WHERE op = 'enroll') \
+               FROM hlc_state s",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (wall, supervision, enroll): (i64, i64, i64) = (r.get(0), r.get(1), r.get(2));
+    assert!(
+        wall >= supervision,
+        "hlc_state wall {wall} must be at or past the restored supervision rows' {supervision}"
+    );
+    assert!(
+        wall < enroll,
+        "an unstamped enroll must not move the HLC ({wall} reached its {enroll})"
+    );
+    clear(&c).await;
+}
+
+/// #1125 item 1, the ceiling: an unstamped supervision row whose `recorded_at` is past now + the
+/// drift ceiling is refused, as a stamped one is — merging it would park the HLC in the future.
+#[tokio::test]
+async fn an_unstamped_supervision_row_past_the_drift_ceiling_is_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut v = unstamped_export(&c).await;
+    let far = pg_time_from_now(&c, "2 days").await;
+    let row = v
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["op"] == "require-cosign")
+        .expect("fixture has a require-cosign row");
+    row["recorded_at"] = serde_json::json!(far);
+    clear(&c).await;
+    let msg = refusal(&c, &v).await;
+    assert!(msg.contains("drift ceiling"), "{msg}");
+    clear(&c).await;
+}
+
+/// #1125 item 2: only the six supervision ops are ever stamped (`cairn_actor_append`), so a stamp
+/// on any other op is a shape no live door writes. Refused, naming the op.
+#[tokio::test]
+async fn a_stamp_on_a_non_supervision_op_is_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    build_registry(&c).await;
+    let mut v: serde_json::Value = serde_json::from_str(&export_json(&c).await).unwrap();
+    let (wall, counter) = {
+        let s = stamped(&mut v);
+        (s["hlc_wall"].clone(), s["hlc_counter"].clone())
+    };
+    let row = v
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["op"] == "enroll")
+        .expect("fixture has an enroll row");
+    row["hlc_wall"] = wall;
+    row["hlc_counter"] = counter;
+    clear(&c).await;
+    let msg = refusal(&c, &v).await;
+    assert!(
+        msg.contains("enroll") && msg.contains("hlc_wall"),
+        "refusal must name the op and the stamp: {msg}"
+    );
+    clear(&c).await;
+}
+
 /// The first row of `rows` that carries an HLC stamp.
 fn stamped(rows: &mut serde_json::Value) -> &mut serde_json::Value {
     rows.as_array_mut()
