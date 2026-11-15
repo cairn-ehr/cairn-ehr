@@ -360,6 +360,8 @@ fn a_fully_populated_row() -> ActorRegistryRow {
         approved_by: None,
         approval: None,
         related_actor: None,
+        hlc_wall: None,
+        hlc_counter: None,
         seq: 42,
         recorded_at: "2026-09-11 04:05:06.123456+00".into(),
     }
@@ -427,6 +429,8 @@ fn the_registry_encoder_omits_absent_optionals_rather_than_nulling_them() {
         approved_by: None,
         approval: None,
         related_actor: None,
+        hlc_wall: None,
+        hlc_counter: None,
         seq: 1,
         recorded_at: "2026-09-11 04:05:06+00".into(),
     };
@@ -441,6 +445,9 @@ fn the_registry_encoder_omits_absent_optionals_rather_than_nulling_them() {
         "superseded_by",
         "approved_by",
         "approval",
+        "related_actor",
+        "hlc_wall",
+        "hlc_counter",
     ] {
         assert!(
             !o.contains_key(absent),

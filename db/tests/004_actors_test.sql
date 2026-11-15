@@ -221,4 +221,35 @@ BEGIN
     RAISE NOTICE 'supervision ops OK';
 END $$;
 
+-- #1014: a supervision op is stamped with the node's HLC, the clock note parts carry, so a ratcheted
+-- HLC (a peer up to 24 h ahead) cannot reorder a lift against the parts signed before it.
+DO $$
+DECLARE sv bytea; ahead bigint := (extract(epoch FROM clock_timestamp()) * 1000)::bigint + 7200000;
+        w bigint; c integer;
+BEGIN
+    UPDATE hlc_state SET hlc_wall = ahead, hlc_counter = 5;   -- ratcheted 2 h ahead by a peer
+    sv := enroll_actor('human', '{"role":"clinician","handle":"hlc-a"}', 'hlcK1');
+    PERFORM cairn_actor_append(sv, 'require-cosign', NULL, 'console', NULL);
+    SELECT hlc_wall, hlc_counter INTO w, c FROM actor_event WHERE actor_id = sv AND op = 'require-cosign';
+    IF (w, c) IS DISTINCT FROM (ahead, 6) THEN
+        RAISE EXCEPTION '#1014 FAILED: require-cosign stamped (%, %), want the ticked HLC (%, 6)', w, c, ahead;
+    END IF;
+    IF (SELECT (hlc_wall, hlc_counter) FROM hlc_state) IS DISTINCT FROM (ahead, 6) THEN
+        RAISE EXCEPTION '#1014 FAILED: the stamp did not advance hlc_state';
+    END IF;
+    -- A vault op is never compared to an HLC, so it stays off the hlc_state lock: no stamp.
+    PERFORM cairn_actor_append(sv, 'grant-enroller', NULL, 'console', NULL);
+    IF (SELECT hlc_wall FROM actor_event WHERE actor_id = sv AND op = 'grant-enroller') IS NOT NULL THEN
+        RAISE EXCEPTION '#1014 FAILED: a vault op was stamped';
+    END IF;
+    -- Both or neither (the floor).
+    BEGIN
+        INSERT INTO actor_event (actor_id, op, approved_by, hlc_wall)
+        VALUES (sv, 'lift-cosign', 'console', ahead);
+        RAISE EXCEPTION '#1014 FAILED: a wall with no counter was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    RAISE NOTICE '#1014 HLC stamp OK';
+END $$;
+
 ROLLBACK;

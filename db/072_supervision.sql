@@ -7,7 +7,8 @@
 -- student role is pinned on the actor (ADR-0092 decision 10). A probationary doctor needs the same
 -- paper countersignature, and only their supervisor's should count. So the node now keeps a
 -- RECORD: "B supervises C", "C needs co-signing", "D may assign supervision". The note read
--- judges each part against it as of the part's commit (its own hlc_wall) to decide whether
+-- judges each part against it as of the part's commit (its own HLC stamp, wall and counter: #1014,
+-- ADR-0107) to decide whether
 -- "— not co-signed" still shows.
 --
 -- THE RECORD IS THE ACTOR REGISTRY. Each change is one append-only actor_event row (db/004), never
@@ -301,14 +302,35 @@ $$;
 
 -- The whole supervision record, oldest first: every one of the six ops, actors as hex. The
 -- window's audit view (who changed what, when); granted to cairn_window, as db/071's readers are.
+--
+-- #1014 (ADR-0107): hlc_wall / hlc_counter are the row's time on the node's HLC, the clock note
+-- parts and vouches carry, and "as of t" (note/supervision.rs) compares on them, never on
+-- recorded_at. A row written before the stamp existed has none; it reads as (recorded_at floored to
+-- the millisecond, 0), the rule it was judged by before, so it behaves exactly as it did. The return
+-- type grew, so the old shape is dropped first — only when present, so a replay never drops it
+-- again.
+-- (db/073 calls this by name from SQL-language bodies, which hold no dependency on it.)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cairn_supervision_record'
+                 AND pronargs = 0 AND NOT ('hlc_wall' = ANY (proargnames))) THEN
+        DROP FUNCTION cairn_supervision_record();
+    END IF;
+END $$;
 CREATE OR REPLACE FUNCTION cairn_supervision_record()
-RETURNS TABLE(op text, actor_id text, related_actor text, recorded_at timestamptz)
+RETURNS TABLE(op text, actor_id text, related_actor text, recorded_at timestamptz,
+              hlc_wall bigint, hlc_counter integer)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT e.op, encode(e.actor_id, 'hex'), encode(e.related_actor, 'hex'), e.recorded_at
-      FROM actor_event e
-     WHERE e.op IN ('link-supervisor', 'unlink-supervisor', 'require-cosign', 'lift-cosign',
-                    'grant-assigner', 'withdraw-assigner')
-     ORDER BY e.recorded_at, e.seq;
+    SELECT s.op, s.actor_id, s.related_actor, s.recorded_at, s.hlc_wall, s.hlc_counter
+      FROM (SELECT e.op, encode(e.actor_id, 'hex') AS actor_id,
+                   encode(e.related_actor, 'hex') AS related_actor, e.recorded_at, e.seq,
+                   COALESCE(e.hlc_wall, floor(extract(epoch FROM e.recorded_at) * 1000)::bigint)
+                       AS hlc_wall,
+                   COALESCE(e.hlc_counter, 0) AS hlc_counter
+              FROM actor_event e
+             WHERE e.op IN ('link-supervisor', 'unlink-supervisor', 'require-cosign',
+                            'lift-cosign', 'grant-assigner', 'withdraw-assigner')) s
+     ORDER BY s.hlc_wall, s.hlc_counter, s.seq;
 $$;
 
 -- The assigner's and supervisor's panels: every non-superuser member as of NOW — whether they need

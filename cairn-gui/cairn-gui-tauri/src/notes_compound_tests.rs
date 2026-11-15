@@ -37,6 +37,7 @@ fn note(n: u128, chart: u128, to: Option<u128>, min: i64, grade: NoteGrade) -> N
         effective_basis: "stated".into(),
         recording_started: t,
         recorded_at: t,
+        recorded_counter: 0,
         needs_cosigning: false,
         writer_supervisors: vec![],
         // `Some` exactly when the grade is `Signed`, as the node's read builds it.

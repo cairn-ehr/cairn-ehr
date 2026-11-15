@@ -583,6 +583,13 @@ pub struct ActorRegistryRow {
     /// (`deny_unknown_fields`) — a deliberate one-way door.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_actor: Option<Vec<u8>>,
+    /// #1014 (ADR-0107): a supervision row's time on the node's HLC (wall ms, then counter); both
+    /// or neither. Skipped when absent, as `related_actor` is, so an export with no stamped row is
+    /// byte-identical to the older one, and one that carries a stamp is a one-way door.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hlc_wall: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hlc_counter: Option<i32>,
     pub seq: i64,
     /// Required — see the struct doc. A defaulted value here can re-authorise a
     /// recalled actor.
@@ -640,6 +647,12 @@ pub fn actor_registry_rows_to_json(rows: &[ActorRegistryRow]) -> String {
             }
             if let Some(r) = &r.related_actor {
                 o.insert("related_actor".into(), hex::encode(r).into());
+            }
+            if let Some(w) = r.hlc_wall {
+                o.insert("hlc_wall".into(), w.into());
+            }
+            if let Some(c) = r.hlc_counter {
+                o.insert("hlc_counter".into(), c.into());
             }
             serde_json::Value::Object(o)
         })

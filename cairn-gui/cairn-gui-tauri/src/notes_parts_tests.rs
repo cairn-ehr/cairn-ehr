@@ -192,6 +192,7 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
             effective_basis: "stated".into(),
             recording_started: t,
             recorded_at: t,
+            recorded_counter: 0,
             needs_cosigning: false,
             writer_supervisors: vec![],
             grade: NoteGrade::Signed {

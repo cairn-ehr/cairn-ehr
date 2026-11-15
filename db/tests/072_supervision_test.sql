@@ -60,4 +60,21 @@ BEGIN
     END LOOP;
 END $$;
 
+-- 3. #1014 (ADR-0107): the record's time is the row's HLC stamp, and the rows come in that order. A
+--    row written before the stamp existed reads as (recorded_at floored to the millisecond, 0) —
+--    the millisecond rule it was judged by before.
+DO $$
+DECLARE sv bytea; got text;
+BEGIN
+    sv := enroll_actor('human', '{"role":"clinician","handle":"rec-hlc"}', 'recHlcK');
+    INSERT INTO actor_event (actor_id, op, approved_by, recorded_at)
+    VALUES (sv, 'require-cosign', 'console', '2026-01-01 00:00:00.000700+00');
+    INSERT INTO actor_event (actor_id, op, approved_by, recorded_at, hlc_wall, hlc_counter)
+    VALUES (sv, 'lift-cosign', 'console', '2026-01-02 00:00:00+00', 1767139200000, 3);  -- 2025-12-31
+    SELECT string_agg(r.op || '@' || r.hlc_wall || '.' || r.hlc_counter, ' ')
+      INTO got FROM cairn_supervision_record() r WHERE r.actor_id = encode(sv, 'hex');
+    ASSERT got = 'lift-cosign@1767139200000.3 require-cosign@1767225600000.0',
+        format('the record orders by the HLC stamp, old rows at (ms, 0); got %s', got);
+END $$;
+
 ROLLBACK;

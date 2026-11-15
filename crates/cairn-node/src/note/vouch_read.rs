@@ -53,11 +53,16 @@ pub struct PartVouch {
     pub act: VouchAct,
     pub role: VouchRole,
     pub by: Signer,
-    /// The vouch's own `hlc_wall`: the instant "was the signer the writer's supervisor" is judged.
+    /// The vouch's own `hlc_wall`: with `counter`, the stamp "was the signer the writer's
+    /// supervisor" is judged at.
     pub at: DateTime<Utc>,
-    /// Its signer supervised the part's writer at `at` (`supervision::annotate`). Default false.
+    /// The vouch's `hlc_counter`: with `at`'s wall, its HLC stamp, which the supervision record is
+    /// compared on (#1014).
+    pub counter: i32,
+    /// Its signer supervised the part's writer at `(at, counter)` (`supervision::annotate`). Default
+    /// false.
     pub by_supervisor: bool,
-    /// The part's writer had any supervisor at `at`. Default false.
+    /// The part's writer had any supervisor at `(at, counter)`. Default false.
     pub writer_supervised: bool,
 }
 
@@ -179,6 +184,7 @@ pub fn parse_vouches(column: &str) -> anyhow::Result<Vec<PartVouch>> {
                     v.confirmation.as_deref(),
                 )?,
                 at,
+                counter: v.hlc_counter.context("a vouch has no hlc_counter")?,
                 by_supervisor: false,
                 writer_supervised: false,
             },

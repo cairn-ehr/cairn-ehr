@@ -411,6 +411,7 @@ pub(crate) mod fixture {
             role,
             by,
             at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            counter: 0,
             by_supervisor: false,
             writer_supervised: false,
         }
@@ -428,6 +429,7 @@ pub(crate) mod fixture {
             effective_basis: "stated".into(),
             recording_started: t,
             recorded_at: t,
+            recorded_counter: 0,
             needs_cosigning: false,
             writer_supervisors: vec![],
             grade: match &signer {

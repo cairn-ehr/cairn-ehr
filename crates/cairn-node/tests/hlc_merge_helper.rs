@@ -179,6 +179,7 @@ fn every_door_still_calls_the_helper() {
         ("007_node_federation.sql", 1), // apply_remote_node_event: ONE shared tail for all three arms (#619)
         ("009_node_supersede_and_restore.sql", 1), // restore_node_event
         ("020_apply_remote_event.sql", 1), // the clinical door, passing its clamped wall
+        ("052_restore_doors.sql", 1), // restore_actor_registry: a restored supervision stamp (#1014)
     ]
     .iter()
     .map(|(f, n)| (f.to_string(), *n))

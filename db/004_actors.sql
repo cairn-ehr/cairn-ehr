@@ -164,6 +164,23 @@ BEGIN
     END IF;
 END $$;
 
+-- #1014 (ADR-0107): a supervision row's time on the NODE'S HLC, the clock note parts and vouches
+-- carry. recorded_at is this database's wall clock; an HLC ratcheted ahead by a peer (up to 24 h,
+-- db/001) stamps parts on a different clock, and comparing the two let a lift clear parts signed
+-- before it. cairn_actor_append stamps the six supervision ops only and leaves every other op NULL;
+-- supervision rows written before this fix are NULL too (their readers fall back to recorded_at).
+-- Additive columns (ADR-0012); both or neither (the guard keeps the CHECK from being re-added).
+ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS hlc_wall    BIGINT;
+ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS hlc_counter INTEGER;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'actor_event'::regclass
+                     AND conname = 'actor_event_hlc_pair') THEN
+        ALTER TABLE actor_event ADD CONSTRAINT actor_event_hlc_pair
+            CHECK ((hlc_wall IS NULL) = (hlc_counter IS NULL));
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS actor_event_actor_idx ON actor_event (actor_id);
 CREATE INDEX IF NOT EXISTS actor_event_key_idx ON actor_event (signing_key_id);
 
@@ -402,6 +419,7 @@ CREATE OR REPLACE FUNCTION cairn_actor_append(p_actor_id BYTEA, p_op TEXT, p_key
                                               p_related BYTEA DEFAULT NULL)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE v_kind TEXT; v_pinned JSONB; v_latest TIMESTAMPTZ; v_now TIMESTAMPTZ;
+        v_wall BIGINT; v_counter INTEGER;
 BEGIN
     IF p_op IS NULL OR p_op NOT IN
        ('rotate-key','confirm','repudiate','grant-enroller','withdraw-enroller',
@@ -464,12 +482,20 @@ BEGIN
                 p_op, COALESCE(p_key, 'NULL'), encode(p_actor_id, 'hex');
         END IF;
     END IF;
+    -- #1014: a supervision op takes the node's HLC tick, the clock its readers compare note parts
+    -- on. LAST, just before the INSERT: hlc_state is the hot lock, taken last in a live door
+    -- (db/005's lock-order note). A rollback rolls the tick back with the row, which is harmless —
+    -- nothing else saw it. Every other op stays off that lock (nothing compares it to an HLC).
+    IF p_op IN ('link-supervisor','unlink-supervisor','require-cosign','lift-cosign',
+                'grant-assigner','withdraw-assigner') THEN
+        SELECT t.wall, t.counter INTO v_wall, v_counter FROM node_hlc_tick() t;
+    END IF;
     INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id, approved_by, approval,
-                             related_actor)
+                             related_actor, hlc_wall, hlc_counter)
     VALUES (p_actor_id, p_op,
             CASE WHEN p_op = 'rotate-key' THEN v_kind END,
             CASE WHEN p_op = 'rotate-key' THEN v_pinned END,
-            p_key, p_approved_by, p_approval, p_related);
+            p_key, p_approved_by, p_approval, p_related, v_wall, v_counter);
 END;
 $$;
 
