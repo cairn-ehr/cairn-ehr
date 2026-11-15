@@ -151,7 +151,7 @@
 >    back the words it said) and filed **#1143** (a press refused because another act is in flight says nothing — a
 >    UI decision: disable the controls or say it beside them) and **#1144** (a refused close-time note flush loses the
 >    text without a word; pre-existing). **#1139 + #1136 BUILT 2026-11-15** in PR
->    #NNNN: `med_chart` deleted, its walks moved to `med_list_signed_db_tests.rs`;
+>    [#1145](https://github.com/cairn-ehr/cairn-ehr/pull/1145): `med_chart` deleted, its walks moved to `med_list_signed_db_tests.rs`;
 >    `command_registry_tests.rs` now fails on a registered command the webview never calls (it reads `invoke("`,
 >    `sendJudgement("`, `superuserAct("`); the CLI's `--help` says it checks no allergies (the medium fix — signing
 >    `warning_override` from the CLI — is not built). **Small fixes ready to build:** **#1138** (nine minors); #1109
