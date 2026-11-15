@@ -327,9 +327,9 @@ impl AppState {
     ///    through the connection guard so a cut-off says so (#893); the clinician gets
     ///    [`KeyRefusal::Fault`], which carries no database text.
     /// 4. The released key is held for the next act only on a terminal with a key hold, only if
-    ///    who's here names nobody or names the key's own person (#1128, `may_hold_for_claim`),
-    ///    and only if no Lock or newer press wiped the slot while the vault was checking
-    ///    ([`Held::keep_for_next_act`]).
+    ///    who's here names nobody or names the key's own person, under whose claimed ID it is held
+    ///    (#1128, `hold_name_for_claim`), and only if no Lock or newer press wiped the slot while
+    ///    the vault was checking ([`Held::keep_for_next_act`]).
     ///
     /// An all-empty credential (both fields blank) counts as none, so it never wipes a hold.
     ///
@@ -399,40 +399,45 @@ impl AppState {
         };
         // Never hold another person's key under the name who's here shows (#1128): this act signs
         // with the key just released either way, since its owner typed the passphrase.
-        if !self.may_hold_for_claim(&kid).await {
+        let Some(holder) = self.hold_name_for_claim(&kid, &credential.staff_id).await else {
             return Ok((key, kid));
-        }
+        };
         // A copy for the hold (a `SigningKey` wipes itself on drop); this act signs with `key`.
-        self.session.lock().await.keep_for_next_act(
-            seen,
-            self.key_hold,
-            key.clone(),
-            &credential.staff_id,
-            now,
-        );
+        self.session
+            .lock()
+            .await
+            .keep_for_next_act(seen, self.key_hold, key.clone(), &holder, now);
         Ok((key, kid))
     }
 
-    /// Whether key `kid` may be held under the current who's-here claim
-    /// ([`crate::whos_here::Claim::may_hold_key`]). A named person's current key is read from the
-    /// vault; a read that fails holds nothing (the next act asks for a passphrase, never a wrong
-    /// signer). No hold on this terminal means nothing to decide, and no database call.
-    async fn may_hold_for_claim(&self, kid: &str) -> bool {
+    /// The staff ID key `kid` is held under for the next act, or `None` to hold nothing
+    /// ([`crate::whos_here::Claim::hold_under`]; `typed` is the act's typed ID). A named
+    /// person's current key is read from the vault; a read that fails holds nothing (the next act
+    /// asks for a passphrase, never a wrong signer), and says why on stderr for IT. No hold on
+    /// this terminal means nothing to decide, and no database call.
+    async fn hold_name_for_claim(&self, kid: &str, typed: &str) -> Option<String> {
         if self.key_hold.is_zero() {
-            return false;
+            return None;
         }
         let claim = self.whos_here.lock().await.claim().clone();
         let claimed_key = match (&claim, self.db.as_ref()) {
-            (crate::whos_here::Claim::Named { staff_id, .. }, Some(db)) => match db.lock().await {
-                Ok(db) => cairn_node::medication::draft::writer_key(&*db, staff_id)
-                    .await
-                    .ok()
-                    .flatten(),
-                Err(_) => None,
-            },
+            (crate::whos_here::Claim::Named { staff_id, .. }, Some(db)) => {
+                let read = match db.lock().await {
+                    Err(lost) => Err(anyhow::Error::from(lost)),
+                    Ok(db) => cairn_node::medication::draft::writer_key(&*db, staff_id)
+                        .await
+                        .map_err(|e| db.explain(e)),
+                };
+                read.unwrap_or_else(|e| {
+                    eprintln!("who's here: {staff_id}'s current key could not be read, so no key is held: {e:#}");
+                    None
+                })
+            }
             _ => None,
         };
-        claim.may_hold_key(claimed_key.as_deref(), kid)
+        claim
+            .hold_under(claimed_key.as_deref(), kid, typed)
+            .map(str::to_string)
     }
 
     /// Wipe the held key now — the window's explicit Lock.
@@ -671,6 +676,14 @@ mod tests {
         let wipe = body.find("letseen=held.wipe();").expect(&body);
         let keep = body.find(".keep_for_next_act(seen,").expect(&body);
         assert!(wipe < keep, "{body}");
+        // #1128: the claim is asked before any key is kept, and the key is kept under the name
+        // it answers, never the typed one (a DB-gated test pins the behaviour; CI skips it, #905).
+        let gate = body.find("self.hold_name_for_claim(&kid,").expect(&body);
+        assert!(gate < keep, "{body}");
+        assert!(
+            !body[keep..].contains("&credential.staff_id"),
+            "the key must be held under the claim's name: {body}"
+        );
         assert_eq!(body.matches("store_if_current(").count(), 0, "{body}");
     }
 

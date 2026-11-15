@@ -81,7 +81,8 @@ pub struct LineCheck {
     pub marks: Vec<String>,
     /// One allergy record per mark, in mark order: the live head whose hit produced it (its
     /// `event_id`). The marks' records only: a warning override names
-    /// [`LineCheck::warned_against`], which adds the adverse-effect records at a lowered threshold.
+    /// [`LineCheck::warned_against`], which adds the worse accounts, and the adverse-effect
+    /// records at a lowered threshold.
     pub against: Vec<Uuid>,
     /// Previous adverse effects that meet the line, worded — and, past them, any note that
     /// names no record (the window's `ALLERGIES_NOT_READ` note, when the allergies could not
@@ -141,9 +142,10 @@ impl WarningThreshold {
 }
 
 impl LineCheck {
-    /// The allergy records whose findings are warnings at this check's threshold: every mark's,
-    /// then (when adverse effects warn) every adverse-effect note's. What a hand tick must have
-    /// seen and what the override's `against` names, each as `{source: "allergy", ref}`.
+    /// The allergy records whose findings are warnings at this check's threshold, each once:
+    /// every mark's and its worse accounts, then (when adverse effects warn) every
+    /// adverse-effect note's and theirs. What a hand tick must have seen and what the override's
+    /// `against` names, each as `{source: "allergy", ref}`.
     pub fn warned_against(&self) -> Vec<Uuid> {
         let mut out = self.against.clone();
         out.extend(&self.worse_accounts);

@@ -209,19 +209,49 @@ async fn fixture_mode_lists_its_staff() {
 
 /// #1128: a key released for someone other than the person named is never held for the next act,
 /// or that person's next presses would sign with it. Compared by KEY, never by staff-ID text.
+/// The named person's own key is held under the CLAIM's staff ID, not the typed one: the strip
+/// returns to the claim's ID after the act, so a hold under "DrA" would be forgotten by the very
+/// next press carrying "dra" (a case-different ID is the same person to the vault).
 #[test]
 fn only_the_named_persons_own_key_is_held() {
     let dra = named("dra", "Dr A");
-    assert!(dra.may_hold_key(Some("kid-a"), "kid-a"));
-    assert!(
-        !dra.may_hold_key(Some("kid-a"), "kid-b"),
+    assert_eq!(dra.hold_under(Some("kid-a"), "kid-a", "dra"), Some("dra"));
+    assert_eq!(
+        dra.hold_under(Some("kid-a"), "kid-a", "DrA"),
+        Some("dra"),
+        "held under the claim's ID, the one the strip shows for the next press"
+    );
+    assert_eq!(
+        dra.hold_under(Some("kid-a"), "kid-b", "drb"),
+        None,
         "Dr B's key under Dr A's claim"
     );
-    assert!(
-        !dra.may_hold_key(None, "kid-b"),
+    assert_eq!(
+        dra.hold_under(None, "kid-b", "drb"),
+        None,
         "the named person's key could not be read"
     );
     // Nobody named: the hold is the personal workstation's (ADR-0083 §8); nobody to mis-sign for.
-    assert!(Claim::NotAsked.may_hold_key(None, "kid-b"));
-    assert!(Claim::Unknown.may_hold_key(None, "kid-b"));
+    assert_eq!(
+        Claim::NotAsked.hold_under(None, "kid-b", "drb"),
+        Some("drb")
+    );
+    assert_eq!(Claim::Unknown.hold_under(None, "kid-b", "drb"), Some("drb"));
+}
+
+/// #1128 review: a sign press can take the database between a pick's first wipe and its new
+/// claim (the directory read waits on the same connection), read the interim "nobody named", and
+/// hold its key. The pick wipes again AFTER the claim is set, so such a key is wiped, or refused
+/// by the generation check if its store is still in flight.
+#[test]
+fn a_pick_wipes_the_held_key_again_after_setting_the_claim() {
+    let flat: String =
+        crate::source_guard::rust_fn(include_str!("whos_here.rs"), "whos_here_pick_impl")
+            .split_whitespace()
+            .collect();
+    let pick = flat.find("here.pick(claim);").expect(&flat);
+    assert!(
+        flat[pick..].contains("state.forget_held_key().await;"),
+        "{flat}"
+    );
 }

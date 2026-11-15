@@ -23,8 +23,8 @@ END $$;
 GRANT cairn_agent TO cairn_window;
 
 -- #1129: db/061's human-key vault doors are this role's, never cairn_agent's (the advisory-actor
--- role an agent's login inherits): an agent must not release a person's key, read the staff list
--- and hints, take the terminal lock's hash, or spend anyone's tries. Granted here, not in db/061,
+-- role an agent's login inherits): an agent must not release a person's key, probe staff IDs and
+-- read their hints, take the terminal lock's hash, or spend anyone's tries. Granted here, not in db/061,
 -- because db/061 runs before this file creates cairn_window.
 GRANT EXECUTE ON FUNCTION cairn_vault_release(text, text, text) TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_vault_hint(text) TO cairn_window;

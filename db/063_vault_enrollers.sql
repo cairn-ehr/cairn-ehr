@@ -473,12 +473,12 @@ RETURNS timestamptz LANGUAGE sql STABLE SECURITY DEFINER SET search_path = publi
       FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
 $$;
 
--- Grants. Every definer and internal helper is first revoked from PUBLIC; the window
--- (cairn_window, db/062) gets exactly the doors it calls, and cairn_agent, the advisory-actor role,
--- none of them (#1129; each GRANT is paired with a REVOKE for a node built before then). The pure address and
+-- Grants. Every definer and internal helper is first revoked from PUBLIC; the window (cairn_window,
+-- db/062) gets exactly the doors it calls, and cairn_agent, the advisory-actor role, none of them
+-- (#1129; each GRANT is paired with a REVOKE for a node built before then). The pure address and
 -- purpose functions keep PUBLIC EXECUTE, as cairn_vault_enrol_address does: they read nothing.
--- cairn_vault_bootstrap_rekey, cairn_vault_bootstrap_repudiate and cairn_vault_set_unconfirmed_expiry
--- have NO grant: the console's alone.
+-- cairn_vault_bootstrap_rekey, cairn_vault_bootstrap_repudiate and
+-- cairn_vault_set_unconfirmed_expiry have NO grant: the console's alone.
 REVOKE EXECUTE ON FUNCTION cairn_vault_reseal_address(text, bytea) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_grant_prior(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_update_custody(text, text, bytea, text, text, text, text) FROM PUBLIC;

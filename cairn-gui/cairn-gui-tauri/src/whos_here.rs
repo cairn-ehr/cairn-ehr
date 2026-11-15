@@ -45,17 +45,28 @@ pub enum Claim {
 }
 
 impl Claim {
-    /// Pure: whether a key just released for an act (`kid`) may be HELD for the next one under
-    /// this claim (#1128). With someone named, only that person's current key (`claimed_key`,
-    /// read from the vault; `None` when it could not be) — or another person's held key would
-    /// sign every later press made under the named person's name. Compared by KEY, never by
-    /// staff-ID text (durable rule R-B). With nobody named, the personal workstation's hold
-    /// stands (ADR-0083 §8): there is no named person to sign for wrongly. A pick or the re-lock
-    /// forgets the held key, so checking once, when a key is kept, covers the claim changing.
-    pub fn may_hold_key(&self, claimed_key: Option<&str>, kid: &str) -> bool {
+    /// Pure: the staff ID a key just released for an act (`kid`, typed into the strip as
+    /// `typed`) is HELD under for the next act, or `None` to hold nothing (#1128).
+    ///
+    /// With someone named, only that person's current key (`claimed_key`, read from the vault;
+    /// `None` when it could not be) — or another person's held key would sign every later press
+    /// made under the named person's name. Compared by KEY, never by staff-ID text (ruling R-B).
+    /// It is held under the CLAIM's ID: the strip returns to that ID after the act, and the next
+    /// press must find the key under it (a typed "DrA" is the vault's "dra").
+    ///
+    /// With nobody named, the personal workstation's hold stands under the typed ID (ADR-0083
+    /// §8): there is no named person to sign for wrongly. A pick or the re-lock forgets the held
+    /// key — the pick again once its claim is set, for a keep that read the claim mid-pick — so
+    /// checking once, when a key is kept, covers the claim changing.
+    pub fn hold_under<'a>(
+        &'a self,
+        claimed_key: Option<&str>,
+        kid: &str,
+        typed: &'a str,
+    ) -> Option<&'a str> {
         match self {
-            Claim::Named { .. } => claimed_key == Some(kid),
-            Claim::NotAsked | Claim::Unknown => true,
+            Claim::Named { staff_id, .. } => (claimed_key == Some(kid)).then_some(staff_id),
+            Claim::NotAsked | Claim::Unknown => Some(typed),
         }
     }
 }
@@ -310,6 +321,9 @@ pub async fn whos_here_pick_impl(
         here.pick(claim);
         (claim_view(here.claim()), here.offer().cloned())
     };
+    // Again, now the claim is set: a sign press that took the connection during the directory
+    // read saw "nobody named" and may have held its key (#1128 review).
+    state.forget_held_key().await;
     if let Some(c) = &offer {
         state.shown.lock().await.insert(c.patient_id, c.clone());
     }

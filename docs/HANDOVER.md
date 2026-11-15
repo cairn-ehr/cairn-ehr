@@ -141,7 +141,8 @@
 >    passes. **Fixed on PR [#1140](https://github.com/cairn-ehr/cairn-ehr/pull/1140):** #1128 (a held key signed for someone other than the person named — key-hold terminals),
 >    #1129 (the vault and supervision doors were the advisory role's; [ADR-0108](spec/decisions/0108-the-human-doors-are-the-windows-role.md)),
 >    #1131 (a hand tick held past a worse account of the same allergen). **Rulings owed by the maintainer:** **#1132**
->    (a student's timer-committed part escapes its co-sign — an ADR-0094 amendment), **#1133** (an unsigned medication
+>    (a student's timer-committed part escapes its co-sign — an ADR-0094 amendment), **#1141** (does an equal-severity
+>    newer account unsettle a hand tick? today it does, the safe direction), **#1133** (an unsigned medication
 >    list can be stranded), **#1134** (no log-out gesture: Lock keeps the claim and the editor), **#1135** (medication
 >    co-sign for a supervisee; allergies' no-draft rule). **Small fixes ready to build:** **#1130** + **#1137** (leaving
 >    a chart with an act in flight: the answer is said on the next chart, or dropped; one window-wide in-flight set),
@@ -331,7 +332,7 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 - **⇒ Per-slice reviews cannot see seams.** Five passes, one question each traced through every layer (who signs ·
   which chart · allergy ↔ medication · drafts at log-out · the floor as a whole), found one Critical and nine
   Important defects that ~20 slice reviews had passed. Verify each agent claim against the code before filing.
-- **⇒ When a rule tightens, the old tests that go red may be pinning the defect.** Eight allergy DB tests signed as
+- **⇒ When a rule tightens, the old tests that go red may be pinning the defect.** Nine allergy DB tests signed as
   Bea under a fixture that names Sue and relied on Bea's key staying held — exactly #1128. Name the signer first
   (`here_as`), never loosen the rule.
 

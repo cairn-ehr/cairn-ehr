@@ -88,8 +88,8 @@
 --   * cairn_window (the window's runtime role; db/062 carries these GRANTs, as it creates the
 --     role — #1129: never cairn_agent, the advisory-actor role): cairn_vault_release,
 --     cairn_vault_hint, cairn_vault_staff_id_taken, cairn_vault_terminal_phc, cairn_vault_enrol
---     (which itself demands a superuser's or a confirmed enroller's token), and slice 2's doors in
---     db/063.
+--     (which itself demands a superuser's or a confirmed enroller's token),
+--     cairn_vault_is_enroller, cairn_vault_replaced_notice, and slice 2's doors in db/063.
 --   * owner only (the node's console, `cairn-node vault-bootstrap-superuser` and friends):
 --     cairn_vault_bootstrap, cairn_vault_set_terminal_phc, and db/063's cairn_vault_bootstrap_rekey
 --     and cairn_vault_set_unconfirmed_expiry.

@@ -29,10 +29,6 @@ const EXEMPT: &[&str] = &[
     // med_list_judge.rs: the list's check, by `fresh_check`'s rule: a cut leaves every line "not
     // checked" (so no default tick, and a reasoned hand tick refused at Sign); stderr only.
     "check_all",
-    // state.rs (#1128): whether a released key may be HELD. Any failure, a cut included, holds
-    // nothing; the act has already signed, and the next one asks for a passphrase (never a wrong
-    // signer). No error reaches the screen.
-    "may_hold_for_claim",
 ];
 
 /// Any of these in a function's body is its errors passed through the cut check: the guard's own

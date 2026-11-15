@@ -18,24 +18,28 @@
 
 The vault (db/061) was written before db/062 gave the window its own role, when `cairn_agent` was the role the window
 ran on. Its doors, and slice 2's (db/063), were granted to `cairn_agent`; db/072 followed that pattern for three of its
-four supervision doors. Every door written after db/062 grants to `cairn_window` instead.
+four supervision doors.
 
 `cairn_agent` is also what every advisory actor's login inherits: the matcher worker (db/017) and any ADR-0030 agent.
 So an agent's login could call `cairn_vault_release`, which returns a human's signing seed for a passphrase it has
-seen; list every staff ID and read their passphrase hints; take the terminal lock's Argon2 hash and guess it offline;
+seen; list every non-superuser staff ID and read any member's passphrase hint; take the terminal lock's Argon2 hash and
+guess it offline;
 and spend every clinician's tries, holding the whole staff at the 300 s back-off. No signature could be forged by
 that, since the floor still checks each act, but the role that must never author as a human held the means to.
 
 ## Decision
 
-1. **Every `cairn_vault_*` and `cairn_supervision_*` door is `cairn_window`'s, and `cairn_agent` holds none of them.**
-   The pure address builders that PUBLIC may execute are unchanged.
+1. **Every `cairn_vault_*` and `cairn_supervision_*` door the window calls is `cairn_window`'s, and `cairn_agent`
+   holds none of them.** The console doors (`cairn_vault_bootstrap`, `_set_terminal_phc`, `_bootstrap_rekey`,
+   `_bootstrap_repudiate`, `_set_unconfirmed_expiry`, `cairn_supervision_console_act`) and every internal helper keep no
+   grant at all: the owner's alone. The pure functions PUBLIC may execute (the address builders other than
+   `cairn_vault_reseal_address`, and helpers such as `cairn_vault_staff_id`) are unchanged.
 2. **Each grant is paired with a `REVOKE … FROM cairn_agent`.** A grant persists until revoked, so a node built before
    this fix keeps the old grants until the REVOKE replays. db/061's doors are granted in db/062, because db/061 runs
    before db/062 creates `cairn_window`.
-3. **Pinned from the catalogue:** `advisory_role_holds_no_human_doors.rs` fails if `cairn_agent` can execute any
-   function of either family that PUBLIC cannot. The window still reaches every door it calls
-   (`window_role_vault_doors.rs`).
+3. **Pinned from the catalogue and by replay:** `advisory_role_holds_no_human_doors.rs` fails if `cairn_agent` can
+   execute any function of either family that PUBLIC cannot, and if replaying db/061, db/063 or db/072 over an older
+   node's grant leaves it standing. The window still reaches every door it calls (`window_role_vault_doors.rs`).
 
 ## Consequences
 
