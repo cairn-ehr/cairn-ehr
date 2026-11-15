@@ -132,8 +132,10 @@ BEGIN
         'bootstrap is the console''s alone';
     ASSERT NOT has_function_privilege('cairn_agent', 'cairn_vault_set_terminal_phc(text)', 'EXECUTE'),
         'setting the terminal passphrase is the console''s alone';
-    ASSERT has_function_privilege('cairn_agent', 'cairn_vault_release(text, text, text)', 'EXECUTE'),
+    ASSERT has_function_privilege('cairn_window', 'cairn_vault_release(text, text, text)', 'EXECUTE'),
         'the window must reach the release door';
+    ASSERT NOT has_function_privilege('cairn_agent', 'cairn_vault_release(text, text, text)', 'EXECUTE'),
+        'the advisory role must never release a human''s key (#1129, ADR-0108)';
 END $$;
 
 -- 6. Every member, even one inserted by hand, gets its attempt row and two sequences at birth,

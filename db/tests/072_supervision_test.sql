@@ -43,7 +43,9 @@ BEGIN
         'cairn_supervision_prior(text, text, text)',
         'cairn_supervision_staff()'
     ] LOOP
-        ASSERT has_function_privilege('cairn_agent', f, 'EXECUTE'), format('the window must reach %s', f);
+        ASSERT has_function_privilege('cairn_window', f, 'EXECUTE'), format('the window must reach %s', f);
+        ASSERT NOT has_function_privilege('cairn_agent', f, 'EXECUTE'),
+            format('%s is never the advisory role''s (#1129, ADR-0108)', f);
         ASSERT NOT has_function_privilege('public', f, 'EXECUTE'), format('%s is revoked from PUBLIC', f);
     END LOOP;
     ASSERT has_function_privilege('cairn_window', 'cairn_supervision_record()', 'EXECUTE')
