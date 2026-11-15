@@ -150,9 +150,12 @@
 >    outside the set — #1002, #709). Its finalcheck fixed an allergy press settling as "said nothing" (it now hands
 >    back the words it said) and filed **#1143** (a press refused because another act is in flight says nothing — a
 >    UI decision: disable the controls or say it beside them) and **#1144** (a refused close-time note flush loses the
->    text without a word; pre-existing). **Small fixes ready to build:** **#1136** (the CLI charts with no allergy check — at least say it is not a clinical surface), **#1139** (`med_chart`
->    is a dead, weaker command — delete it; NOT a bare deletion: `med_chart_db_tests.rs` exercises checks that the
->    list's Sign shares, so move what the list's tests lack first), **#1138** (nine minors); #1109 widened.
+>    text without a word; pre-existing). **#1139 + #1136 BUILT 2026-11-15** in PR
+>    [#1145](https://github.com/cairn-ehr/cairn-ehr/pull/1145): `med_chart` deleted, its walks moved to `med_list_signed_db_tests.rs`;
+>    `command_registry_tests.rs` now fails on a registered command the webview never calls (it reads `invoke("`,
+>    `sendJudgement("`, `superuserAct("`, and fails on a call or row it cannot read); the CLI's `--help` says it checks no allergies (the medium fix — signing
+>    `warning_override` from the CLI — is not built). **Small fixes ready to build:** **#1138** (nine minors); #1109
+>    widened.
 >    **Then the maintainer picks:** sign-in
 >    **slice 4** (the emergency key, design §5.6 — its own ADR, brainstorm first); the order of **#909** vs **slice 5**
 >    (either gates a multi-terminal pilot) and of **#912**; **#1021**'s obligations projection and Pi figures (figures

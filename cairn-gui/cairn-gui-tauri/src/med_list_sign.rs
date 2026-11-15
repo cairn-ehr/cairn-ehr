@@ -19,8 +19,8 @@
 //! writer's CURRENT key, by KEY (ruling R-B): a key held for someone else signs nothing. That key
 //! is read BEFORE the release, so no read failure ever spends a passphrase.
 //!
-//! Then, in list order, each line: slice 1a's per-line checks (the press, the parts, the reason:
-//! `NEEDS_A_REASON`, `CHECK_DID_NOT_RUN`),
+//! Then, in list order, each line (its per-line verdict — slice 1a's checks of the press, the parts
+//! and the reason, `NEEDS_A_REASON`, `CHECK_DID_NOT_RUN` — was already reached BEFORE the key),
 //! a failure skipping that line only (ADR-0060 decision 1), and `chart_draft_line`, which writes
 //! the event and spends the draft row in one transaction. A line whose commit got no answer may
 //! have landed: it is reported NOT known and the loop STOPS, so the lines after it stay in the

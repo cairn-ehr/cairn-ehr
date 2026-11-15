@@ -227,6 +227,8 @@ operation. Grouped:
   `assert-observed-evidence`, `apply-auto-candidates`, `duplicate-check`.
 - **Medication:** `medication-assert`, `-change-dose`, `-correct-dose`, `-cease`, `-withhold`,
   `-release`, `-code`, `-code-correct`, `-reconcile`, `-separate`, `-attest`, `-list`, `-sign-off`.
+  These are **not a clinical surface**: no allergy check, so no warning, no override and no marks
+  (#1136). The window is where a patient's medications are charted and read.
 - **Sensitivity, safety, erasure, maintenance:** `sensitivity-assert`, `sensitivity-withdraw`,
   `patient-sensitivity`, `patient-safety`, `shred`, `reproject`, `event`, `deferred`.
 

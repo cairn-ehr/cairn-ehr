@@ -1,7 +1,7 @@
 //! `med_chart`'s tests, continued: the medication list's lines with combinations
 //! (`allergy_check::charted_lines`), a brand allergy on a combination, and the allergy read at
 //! Sign over a changed chart set. Split from `med_chart_tests.rs` to keep each under 500 lines;
-//! it shares that file's helpers (`before_key`, `line`, `part`, `coded`).
+//! it shares that file's helpers (`before_key`, `part`, `coded`).
 use super::*;
 use crate::allergy_check::charted_lines;
 use cairn_medication_view::fixtures::sample_chart;
@@ -159,14 +159,13 @@ async fn a_brand_allergy_marks_a_combination_typed_by_the_brand() {
     );
     assert!(!on_list.unverified);
 
-    let (term, parts) = before_key(&line(
-        vec![
+    let (term, parts) = before_key(
+        &[
             part("amoxicillin", coded(amox, "amoxicillin")),
             part("clavulanic acid", coded(clav, "clavulanic acid")),
         ],
         "Augmentin",
-        "started-here",
-    ))
+    )
     .unwrap();
     let charting_now = check_lines(
         None::<&tokio_postgres::Client>,
@@ -233,14 +232,13 @@ fn a_coded_combination_row_keeps_its_own_line() {
 async fn a_by_name_allergy_on_the_signed_combination_term_marks_the_line() {
     let (amox, clav) = (Uuid::from_u128(0xA40C), Uuid::from_u128(0xC1A7));
     let a = uncoded_allergy("amoxicillin + clavulanic acid");
-    let (term, parts) = before_key(&line(
-        vec![
+    let (term, parts) = before_key(
+        &[
             part("amox", coded(amox, "amoxicillin")),
             part("clav", coded(clav, "clavulanic acid")),
         ],
         "amox + clav",
-        "started-here",
-    ))
+    )
     .unwrap();
     assert_eq!(term, "amoxicillin + clavulanic acid");
     let checks = check_lines(

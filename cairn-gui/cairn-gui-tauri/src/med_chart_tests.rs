@@ -1,6 +1,7 @@
-//! Pure tests for `med_chart.rs`: what the line signs (its term, its parts, its input and its
-//! override), said before the key, and the refusal order against `AppState::mock` (no Tauri
-//! runtime, as `allergies_tests.rs` does). The DB-gated walks are `med_chart_db_tests.rs`;
+//! Pure tests for `med_chart.rs` and the per-line rules the list's Sign shares: what a line signs
+//! (its term, its parts, its input and its override), said before the key, against
+//! `AppState::mock` (no Tauri runtime, as `allergies_tests.rs` does). The DB-gated walks are
+//! `med_chart_db_tests.rs` (the check) and `med_list_signed_db_tests.rs` (what the Sign signs);
 //! the list's combination lines are `med_chart_rows_tests.rs`.
 use super::*;
 use crate::allergy_check::BAD_CODE;
@@ -28,19 +29,9 @@ fn part(term: &str, coding: Option<CodingArg>) -> PartArg {
     }
 }
 
-fn line(parts: Vec<PartArg>, typed_drug: &str, charted_as: &str) -> ChartArg {
-    ChartArg {
-        parts,
-        typed_drug: typed_drug.into(),
-        directions: "500mg tds".into(),
-        charted_as: charted_as.into(),
-        reason: None,
-    }
-}
-
-/// The shared helper, as Sign calls it on the line it was sent.
-fn before_key(l: &ChartArg) -> Result<(String, Vec<PartArg>), ErrorView> {
-    parts_before_the_key(&l.parts, &l.typed_drug)
+/// The shared helper, as the list's Sign calls it on a line's parts and the drug as typed.
+fn before_key(parts: &[PartArg], typed_drug: &str) -> Result<(String, Vec<PartArg>), ErrorView> {
+    parts_before_the_key(parts, typed_drug)
 }
 
 /// A check with one allergy mark against the record `head`.
@@ -72,22 +63,12 @@ async fn no_drug_list_in_fixture_mode_is_not_an_error() {
 fn one_part_signs_the_finished_term_and_its_canonical_code() {
     let amox = Uuid::from_u128(0xA40C);
     let upper = amox.to_string().to_uppercase();
-    let (term, parts) = before_key(&line(
-        vec![part("amox", coded(&upper, "amoxicillin"))],
-        "amox",
-        "started-here",
-    ))
-    .unwrap();
+    let (term, parts) = before_key(&[part("amox", coded(&upper, "amoxicillin"))], "amox").unwrap();
     assert_eq!(term, "amoxicillin");
     assert_eq!(parts.len(), 1);
     assert_eq!(parts[0].term, "amoxicillin");
     assert_eq!(parts[0].coding.as_ref().unwrap().code, amox.to_string());
-    let (term, _) = before_key(&line(
-        vec![part("Amoxil", coded(amox, "amoxicillin"))],
-        "Amoxil",
-        "started-here",
-    ))
-    .unwrap();
+    let (term, _) = before_key(&[part("Amoxil", coded(amox, "amoxicillin"))], "Amoxil").unwrap();
     assert_eq!(term, "Amoxil");
 }
 
@@ -103,12 +84,7 @@ fn a_picked_alias_signs_the_matched_name() {
         coding
     };
     let epi = alias(0xE91, "epinephrine", "Adrenaline");
-    let (term, parts) = before_key(&line(
-        vec![part("adren", epi.clone())],
-        "adren",
-        "started-here",
-    ))
-    .unwrap();
+    let (term, parts) = before_key(&[part("adren", epi.clone())], "adren").unwrap();
     assert_eq!(term, "Adrenaline");
     assert_eq!(parts[0].coding.as_ref().unwrap().display, "epinephrine");
     // A combination whose parts were each found by another name (lignocaine with adrenaline):
@@ -117,7 +93,7 @@ fn a_picked_alias_signs_the_matched_name() {
         part("ligno", alias(0x11D0, "lidocaine", "Lignocaine")),
         part("adren", epi),
     ];
-    let (term, parts) = before_key(&line(both, "ligno + adren", "started-here")).unwrap();
+    let (term, parts) = before_key(&both, "ligno + adren").unwrap();
     assert_eq!(term, "Lignocaine + Adrenaline");
     assert_eq!(parts[0].coding.as_ref().unwrap().display, "lidocaine");
     assert_eq!(parts[1].coding.as_ref().unwrap().display, "epinephrine");
@@ -153,7 +129,7 @@ fn a_combination_signs_its_parts_names_and_checks_both_terms() {
         part("amox", coded(amox, "amoxicillin")),
         part("clav", coded(clav, "clavulanic acid")),
     ];
-    let (term, parts) = before_key(&line(both, " amox + clav ", "started-here")).unwrap();
+    let (term, parts) = before_key(&both, " amox + clav ").unwrap();
     assert_eq!(term, "amoxicillin + clavulanic acid");
     let checked = the_line(" amox + clav ", &term, &parts);
     let terms: Vec<&str> = checked.iter().map(|l| l.term).collect();
@@ -168,29 +144,23 @@ fn a_combination_signs_its_parts_names_and_checks_both_terms() {
     );
     assert!(checked.iter().all(|l| l.group_id == Uuid::nil()));
 
-    let (term, parts) = before_key(&line(
-        vec![part("amox", coded(amox, "amoxicillin")), part("clav", None)],
+    let (term, parts) = before_key(
+        &[part("amox", coded(amox, "amoxicillin")), part("clav", None)],
         " amox + clav ",
-        "started-here",
-    ))
+    )
     .unwrap();
     assert_eq!(term, "amoxicillin + clav");
     assert_eq!(parts[0].term, "amoxicillin");
     assert_eq!(parts[1].term, "clav");
     assert!(parts[1].coding.is_none());
     // One part: the check reads the signed term, as before (R16).
-    let (term, parts) = before_key(&line(
-        vec![part("amox", coded(amox, "amoxicillin"))],
-        "amox",
-        "started-here",
-    ))
-    .unwrap();
+    let (term, parts) = before_key(&[part("amox", coded(amox, "amoxicillin"))], "amox").unwrap();
     assert_eq!(the_line("amox", &term, &parts)[0].term, "amoxicillin");
 }
 
 #[test]
 fn a_bad_pick_or_a_blank_name_is_refused_before_the_key() {
-    let bad = |p: Vec<PartArg>, typed: &str| before_key(&line(p, typed, "started-here"));
+    let bad = |p: Vec<PartArg>, typed: &str| before_key(&p, typed);
     assert_eq!(
         bad(
             vec![part("amox", coded("amoxicillin", "amoxicillin"))],
@@ -339,34 +309,6 @@ fn only_the_two_presses_are_charted() {
     }
 }
 
-#[tokio::test]
-async fn med_chart_refuses_another_chart_then_fixture_mode_first() {
-    let (state, chart) = on_screen();
-    let other = Uuid::from_u128(424_242).to_string();
-    let l = || line(vec![], "metformin", "no such press");
-    let err = med_chart_impl(&state, &other, vec![other.clone()], l(), None)
-        .await
-        .unwrap_err();
-    assert!(!err.text.contains("fixture mode"), "{}", err.text);
-    // The chart on screen, but fixture mode: refused before the press is even read.
-    let err = med_chart_impl(&state, &chart, vec![chart.clone()], l(), None)
-        .await
-        .unwrap_err();
-    assert!(err.text.contains("fixture mode"), "{}", err.text);
-}
-
-/// A Sign that landed is an Ok whether or not the list could be read again.
-#[test]
-fn a_landed_sign_is_always_ok() {
-    let w = charted(Err("connection closed".into()));
-    assert!(w.pane.is_none());
-    assert_eq!(
-        w.outcome,
-        "Signed — but the medication list could not be read again (connection closed). \
-         Use “Read this chart again”."
-    );
-}
-
 /// The view says a reason is needed exactly when there is an allergy mark.
 #[test]
 fn the_view_carries_the_check() {
@@ -383,3 +325,21 @@ fn the_view_carries_the_check() {
 // The medication list's lines, with combinations, and the check at Sign: its own file (500 lines).
 #[path = "med_chart_rows_tests.rs"]
 mod rows;
+
+/// The list's Sign refuses another chart before fixture mode, and fixture mode before anything
+/// else (moved from the deleted `med_chart` command's test, #1139).
+#[tokio::test]
+async fn the_lists_sign_refuses_another_chart_then_fixture_mode_first() {
+    let (state, chart) = on_screen();
+    let other = Uuid::from_u128(424_242).to_string();
+    let err =
+        crate::med_list_sign::med_list_sign_impl(&state, &other, vec![other.clone()], &[], None)
+            .await
+            .unwrap_err();
+    assert!(!err.text.contains("fixture mode"), "{}", err.text);
+    let err =
+        crate::med_list_sign::med_list_sign_impl(&state, &chart, vec![chart.clone()], &[], None)
+            .await
+            .unwrap_err();
+    assert!(err.text.contains("fixture mode"), "{}", err.text);
+}

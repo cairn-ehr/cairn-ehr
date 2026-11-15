@@ -133,7 +133,7 @@ function codingFor(part) {
   return match ? match.coding : null;
 }
 
-/** The parts as `med_line_check` and `med_chart` take them (Rust's `PartArg`). */
+/** The parts as `med_line_check` and the list's lines take them (Rust's `PartArg`). */
 function partArgs(line) {
   return line.parts.map((part) => ({ term: part, coding: codingFor(part) }));
 }

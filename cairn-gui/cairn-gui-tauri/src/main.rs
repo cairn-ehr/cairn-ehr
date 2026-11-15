@@ -34,6 +34,8 @@ mod chart_stat;
 mod chart_versions;
 #[cfg(test)]
 mod chart_view_webview_tests;
+#[cfg(test)]
+mod command_registry_tests;
 mod commands;
 #[cfg(test)]
 mod delabel_webview_tests;
@@ -226,7 +228,6 @@ fn main() -> anyhow::Result<()> {
             med_chart::med_line_read,
             med_chart::med_drug_search,
             med_chart::med_line_check,
-            med_chart::med_chart,
             med_list::med_list_read,
             med_list::med_list_save,
             med_list::med_list_delete,

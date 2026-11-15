@@ -3,7 +3,7 @@
 //! order is done. Here:
 //!
 //! - **Sign** signs `stat: true` on a line that is a stat ORDER ([`is_stat_order`], called by
-//!   `med_line_sign::charting`, so the one-line Sign and the list's Sign can never disagree).
+//!   `med_line_sign::charting`, so every line the list's Sign charts gets it from one place).
 //! - **Given** ([`med_stat_give`]) signs the give with the time given ("Time given", now when
 //!   left empty); the node signs the order's stop with it, so the line leaves the current list.
 //! - **Entered in error** ([`med_stat_strike`]) strikes a give; the stop it made is voided, so

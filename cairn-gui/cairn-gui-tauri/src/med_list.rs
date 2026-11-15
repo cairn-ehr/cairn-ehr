@@ -494,3 +494,7 @@ mod restore_db_tests;
 #[cfg(test)]
 #[path = "med_stat_db_tests.rs"]
 mod stat_db_tests;
+
+#[cfg(test)]
+#[path = "med_list_signed_db_tests.rs"]
+mod signed_db_tests;

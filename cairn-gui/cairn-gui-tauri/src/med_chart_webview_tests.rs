@@ -1,6 +1,6 @@
 //! Charting slice 1a, Task 6: the one-line medication entry (`med_chart.js`) — "Start
 //! medication" / "Already taking", the drug pick per part, the read-back row, the allergy check on
-//! the line, and Sign through the signer strip.
+//! the line. The editor signs nothing: Sign is the list's (#1139).
 //!
 //! Like `drug_pick_webview_tests.rs`, these read the scripts' source (the window has no JS test rig:
 //! no npm, by design) and pin the CHOICE or ORDER a property is. Two halves are checked for real:

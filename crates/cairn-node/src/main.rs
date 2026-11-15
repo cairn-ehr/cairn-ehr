@@ -2211,6 +2211,10 @@ enum Cmd {
     /// Record a medication the patient takes/took (clinical.medication.asserted).
     /// Mints a medication thread id. Only --term is required; it may be vague
     /// ("little white pill"). Everything else is an honest unknown when omitted.
+    ///
+    /// Not a clinical surface: there is no allergy check, so no warning is shown and no
+    /// override is asked for or signed, even against a recorded allergy (#1136). Chart for a
+    /// patient in the window, whose Sign checks the line (ADR-0099, ADR-0100).
     MedicationAssert {
         /// The patient UUID this medication is recorded against.
         patient: Uuid,
@@ -2509,6 +2513,9 @@ enum Cmd {
     /// Read a patient's medication list — current drugs and ceased ones, each with the
     /// clinician whose signature it carries. The read path the reference UI uses; a
     /// future native API (ADR-0023) is expected to wrap the same function.
+    ///
+    /// Not a clinical surface: there is no allergy check, so no line carries an allergy mark
+    /// (#1136). Read a patient's list in the window, which marks each line.
     MedicationList {
         /// The patient UUID whose chart to read.
         patient: Uuid,

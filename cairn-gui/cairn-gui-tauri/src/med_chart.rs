@@ -1,4 +1,5 @@
-//! Charting a medication from one typed line (charting slice 1a): the window's four commands.
+//! The one-line medication editor (charting slice 1a), which charts nothing itself: its three
+//! commands, and the per-line rules the list's Sign (`med_list_sign.rs`) signs by.
 //!
 //! - [`med_line_read`]: the typed directions read into fields for the read-back row (pure; the
 //!   rules are `cairn_node::medication::line`'s).
@@ -7,45 +8,34 @@
 //! - [`med_line_check`]: the line being typed, checked against the live allergies, part by part
 //!   (a combination is checked one component at a time), so the window can put the warning on
 //!   the line before Sign.
-//! - [`med_chart`]: Sign. Refusal order, every one before the key (a passphrase that writes
-//!   nothing is a step paper never has): the chart on screen and writable, the press
-//!   (`started-here` / `pre-existing`), each part named and each pick's code, then the allergy check RE-RUN on a
-//!   fresh read over the set on screen (a set that changed since is refused as a re-read, R15)
-//!   — the webview's earlier answer is never trusted — and, on a Start line with an
-//!   allergy mark, the reason (or, when the window sent one but that re-run could not check
-//!   the line, [`CHECK_DID_NOT_RUN`]: a typed reason is never dropped). Then one signed assertion carrying its charting fields
-//!   (`chart_medication`), its timing sample, and the medication list read again.
+//!
+//! The window charts only through the list's ONE Sign (ADR-0100). Slice 1a's lone-line `med_chart`
+//! command was deleted (#1139): nothing called it, and it signed every warning its fresh check
+//! found as overridden, where the list's Sign vouches only for the warnings drawn (ruling R1). The
+//! per-line rules the list's Sign shares stay here: [`press`], [`override_before_the_key`]
+//! ([`NEEDS_A_REASON`], [`CHECK_DID_NOT_RUN`]), [`override_ids`] and [`UNKNOWN_LEAD`].
 //!
 //! Requiring an override is a window rule, never a floor rule (design §3.5, ADR-0021 soft
 //! policy): the floor never requires one, and checks a present override's shape (its reason
 //! non-blank, at the authoring door). The drug list is optional: with
 //! none, or a check that fails, the line still charts, uncoded, and reads "not checked".
-use crate::allergies::{failure_named, local_today, on_screen_and_writable};
 use crate::allergy_check::{drug_search_answer, CodingArg, DrugSearch};
-use crate::commands::{med_list_impl, record_timing};
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
-use crate::med_chart_write::{charted, charted_input, MedChartWrite};
-// The helpers this file shares with the list's Sign (`med_line_sign.rs`). Names its tests read
-// through `super::*` from before the move are imported for them alone.
-use crate::med_line_sign::{
-    charting, components, fresh_check, not_read, override_refs, parts_before_the_key,
-    single_coding, the_line,
-};
-use crate::signer::Credential;
-use crate::state::{AppState, Now};
-use crate::write_failure::{key_locked, node_cannot_write};
-#[cfg(test)]
-use crate::{allergy_check::check_lines, med_line_sign::fresh_allergies};
-use cairn_event::medication::{ChartedAs, Charting};
+use crate::med_line_sign::{fresh_check, not_read, parts_before_the_key, the_line};
+use crate::state::AppState;
+use cairn_event::medication::ChartedAs;
 use cairn_node::allergy::check::LineCheck;
-#[cfg(test)]
-use cairn_node::allergy::check::MOIETY_SYSTEM;
 use cairn_node::allergy::drug_facts::search_medication_drugs;
 use cairn_node::medication::line::{read_directions, Directions};
-use cairn_node::medication::{chart_medication, AssertMedicationInput, AuthorParams};
-use std::time::Instant;
 use uuid::Uuid;
+// Names this file's tests read through `super::*` (from before the helpers moved out).
+#[cfg(test)]
+use crate::{
+    allergy_check::check_lines, med_chart_write::charted_input, med_line_sign::fresh_allergies,
+};
+#[cfg(test)]
+use cairn_node::allergy::check::MOIETY_SYSTEM;
 
 /// The refusal of Sign on a Start line with a warning (an allergy mark, or an adverse effect at a
 /// lowered threshold, ADR-0104) and no reason. General words: an adverse effect is no allergy.
@@ -78,18 +68,6 @@ const PICK_LIMIT: i32 = 12;
 pub struct PartArg {
     pub term: String,
     pub coding: Option<CodingArg>,
-}
-
-/// The line, as Sign sends it. `parts` are the drug parts split at ` + ` (one for a single
-/// drug); `typed_drug` is the drug as typed, `directions` everything after it. `charted_as` is
-/// the button pressed (`started-here` | `pre-existing`); `reason` the reason field, if shown.
-#[derive(Debug, serde::Deserialize)]
-pub struct ChartArg {
-    pub parts: Vec<PartArg>,
-    pub typed_drug: String,
-    pub directions: String,
-    pub charted_as: String,
-    pub reason: Option<String>,
 }
 
 /// The line's check as the webview draws it: the loud `Allergy` marks, the notes that warn at
@@ -131,18 +109,6 @@ pub async fn med_line_check(
     parts: Vec<PartArg>,
 ) -> Result<LineCheckView, ErrorView> {
     Ok(med_line_check_impl(&state, &patient_id, &charts, typed_drug, parts).await)
-}
-
-/// Sign the line on the chart on screen (refusal order: module doc).
-#[tauri::command]
-pub async fn med_chart(
-    state: tauri::State<'_, AppState>,
-    patient_id: String,
-    charts: Vec<String>,
-    line: ChartArg,
-    credential: Option<Credential>,
-) -> Result<MedChartWrite, ErrorView> {
-    med_chart_impl(&state, &patient_id, charts, line, credential).await
 }
 
 /// [`med_drug_search`] against a plain state. Never fails: no database, a lost connection or a
@@ -193,93 +159,6 @@ pub async fn med_line_check_impl(
     let lines = the_line(&typed_drug, &term, &parts);
     let check = fresh_check(state, patient, charts, &lines).await;
     view(check.unwrap_or_else(|_| not_read("the linked charts changed since the list was read")))
-}
-
-/// Sign the line (refusal order: module doc).
-pub async fn med_chart_impl(
-    state: &AppState,
-    patient_id: &str,
-    charts: Vec<String>,
-    line: ChartArg,
-    credential: Option<Credential>,
-) -> Result<MedChartWrite, ErrorView> {
-    let patient = on_screen_and_writable(state, patient_id, &charts).await?;
-    let charted_as = press(&line.charted_as)?;
-    let (term, parts) = parts_before_the_key(&line.parts, &line.typed_drug)?;
-    // Re-run on a fresh read: the allergies may have changed since the webview last asked.
-    let check = fresh_check(
-        state,
-        patient,
-        &charts,
-        &the_line(&line.typed_drug, &term, &parts),
-    )
-    .await?;
-    let reason = override_before_the_key(charted_as, &check, line.reason.as_deref())?;
-    // What the fresh check found warning, each named by its allergy record's event id.
-    let ids = override_ids(&check);
-    let against = override_refs(&ids);
-    let d = read_directions(&line.directions);
-    let today = local_today().to_string();
-    let components = components(&parts);
-    let single = single_coding(&parts);
-    let input = charted_input(&term, single, &d, &line.directions, charted_as, &today);
-    let charting = charting(charted_as, &d, &components, reason, &against);
-    sign_then_reread(state, patient, charts, &input, &charting, credential).await
-}
-
-/// Ask for the key, sign the line on `patient` (the chart on screen), time it, and read the
-/// medication list again. A failed sign is an `ErrorView` (`allergies::failure_named`: nothing
-/// written, or NOT known); a sign that landed is an Ok whatever the re-read did ([`charted`]).
-async fn sign_then_reread(
-    state: &AppState,
-    patient: Uuid,
-    charts: Vec<String>,
-    input: &AssertMedicationInput<'_>,
-    charting: &Charting<'_>,
-    credential: Option<Credential>,
-) -> Result<MedChartWrite, ErrorView> {
-    let (human_sk, human_kid) = state
-        .signer_for_act(credential, Now::read())
-        .await
-        .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
-        .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-    let author = AuthorParams {
-        human_sk: &human_sk,
-        human_kid: &human_kid,
-    };
-    let started = Instant::now();
-    let signed = {
-        let mut db = state
-            .db
-            .as_ref()
-            .ok_or_else(|| node_cannot_write("no database connection"))?
-            .lock()
-            .await?;
-        let origin = state.node_origin.as_str();
-        chart_medication(
-            &mut db,
-            node_sk,
-            &node_kid,
-            origin,
-            patient,
-            input,
-            charting,
-            Some(&author),
-            None,
-        )
-        .await
-        .map_err(|e| db.explain(e))
-    };
-    signed.map_err(|e| failure_named(&e, UNKNOWN_LEAD))?;
-    let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    record_timing(state, "medication-chart", 1, elapsed_ms).await;
-    // `charts` is what the window showed: only a change from elsewhere since then is announced.
-    let reread = med_list_impl(state, &patient.to_string(), Some(charts)).await;
-    Ok(charted(reread))
 }
 
 /// The press, parsed: `started-here` or `pre-existing`. The window has no button for any other
@@ -345,7 +224,3 @@ mod db_tests;
 #[cfg(test)]
 #[path = "med_chart_threshold_tests.rs"]
 mod threshold_tests;
-
-#[cfg(test)]
-#[path = "med_chart_threshold_db_tests.rs"]
-mod threshold_db_tests;
