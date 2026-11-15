@@ -263,3 +263,32 @@ db_test!(
         assert!(!needs_sign_off(n.parts()));
     }
 );
+
+// #1014 (ADR-0107): the record is stamped on the node's HLC, the clock the parts carry. A peer's
+// event ratchets the HLC two hours ahead, so a part signed now carries a wall two hours on. The lift
+// recorded after it, in real time, must still sort after it: the part keeps waiting. Before the fix
+// the lift was timed by the database clock (now), judged EARLIER than the part, and cleared it.
+db_test!(a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting, |c| {
+    let (node_sk, chart) = ward(&c).await;
+    let bea = member(&c, "bea", "Dr Bea", "clinician").await;
+    c.batch_execute(
+        "UPDATE hlc_state SET hlc_wall = (extract(epoch FROM clock_timestamp()) * 1000)::bigint \
+         + 7200000, hlc_counter = 0",
+    )
+    .await
+    .unwrap();
+    console(&c, "require-cosign", "bea", None).await;
+    let p = sign_as(&mut c, &node_sk, chart, &bea).await;
+    console(&c, "lift-cosign", "bea", None).await;
+
+    assert_eq!(
+        byline(&c, chart, p).await,
+        "signed by Dr Bea — not co-signed (no supervisor recorded)"
+    );
+    assert!(needs_sign_off(note(&c, chart, p).await.parts()));
+
+    // And a part signed after the lift, on the same ratcheted wall, owes nothing: no sleep is
+    // needed, the counter orders them.
+    let later = sign_as(&mut c, &node_sk, chart, &bea).await;
+    assert_eq!(byline(&c, chart, later).await, "signed by Dr Bea");
+});

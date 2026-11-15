@@ -55,6 +55,7 @@ pub(crate) fn part(
         effective_basis: "stated".into(),
         recording_started: t,
         recorded_at: t,
+        recorded_counter: 0,
         needs_cosigning: false,
         writer_supervisors: vec![],
         grade: match &signer {
@@ -110,6 +111,7 @@ fn can_sign_off_follows_needs_sign_off() {
         role: VouchRole::Attested,
         by: who("act-ada", "Dr Ada"),
         at: utc("2025-11-02T17:00:00Z"),
+        counter: 0,
         by_supervisor: false,
         writer_supervised: false,
     });
@@ -262,6 +264,7 @@ fn no_covers_line_without_a_claim_or_without_parts() {
         role: VouchRole::Attested,
         by: who("act-a", "Nurse A"),
         at: utc("2025-11-02T17:00:00Z"),
+        counter: 0,
         by_supervisor: false,
         writer_supervised: false,
     });

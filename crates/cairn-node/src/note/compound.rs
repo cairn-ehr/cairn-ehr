@@ -193,6 +193,7 @@ mod tests {
             effective_basis: "stated".into(),
             recording_started: origin + Duration::minutes(rec),
             recorded_at: origin + Duration::minutes(rec),
+            recorded_counter: 0,
             needs_cosigning: false,
             writer_supervisors: vec![],
             addendum_to: to.map(id),

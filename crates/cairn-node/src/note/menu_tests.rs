@@ -18,7 +18,7 @@ fn row(op: &str, actor: &str, related: Option<&str>, m: i64) -> SupervisionRow {
         op: op.into(),
         actor: actor.into(),
         related: related.map(Into::into),
-        at: ms(m),
+        at: (ms(m).timestamp_millis(), 0),
     }
 }
 fn link(supervisee: &str, supervisor: &str, m: i64) -> SupervisionRow {

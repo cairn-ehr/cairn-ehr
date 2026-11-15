@@ -7,10 +7,14 @@
 //! behaviour, so a part with no writer, or a record with no rows, changes nothing.
 //!
 //! "As of t" = the latest row of the op's family for that actor (and, for a link, that supervisor)
-//! with `recorded_at <= t`. The door returns rows in `(recorded_at, seq)` order, so the latest
-//! match is the LAST one in iteration order (a tie on `recorded_at` takes the later row).
+//! with `stamp <= t`, where both are times on the node's HLC (#1014, ADR-0107): a row's
+//! `(hlc_wall, hlc_counter)` and a part's or vouch's own. The door returns rows in
+//! `(hlc_wall, hlc_counter, seq)` order, so the latest match is the LAST one in iteration order.
+//!
+//! Why the counter matters: a peer's event can ratchet the HLC ahead (up to 24 h, db/001), and from
+//! then on every local part AND every supervision act shares that one wall, ordered only by the
+//! counter. Comparing walls alone would let a lift clear the parts signed before it.
 use anyhow::{bail, Context};
-use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
 
 use super::read::NoteRow;
@@ -35,6 +39,15 @@ fn family(op: &str) -> anyhow::Result<Family> {
     }
 }
 
+/// A time on the node's HLC: `(wall ms, counter)`. Tuples compare lexicographically, which is the
+/// HLC's own order (the wall first, the counter within one wall).
+pub type Stamp = (i64, i32);
+
+/// The HLC stamp of a part (its `event_log` wall and counter).
+pub fn part_stamp(p: &NoteRow) -> Stamp {
+    (p.recorded_at.timestamp_millis(), p.recorded_counter)
+}
+
 /// One row of the supervision record, as `cairn_supervision_record()` returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisionRow {
@@ -43,7 +56,9 @@ pub struct SupervisionRow {
     pub actor: String,
     /// The supervisor, for link rows only.
     pub related: Option<String>,
-    pub at: DateTime<Utc>,
+    /// The row's HLC stamp. A row written before #1014 has none; the door gives it
+    /// `(recorded_at floored to the millisecond, 0)`, the rule it was judged by before.
+    pub at: Stamp,
 }
 
 /// The whole record, in the door's order.
@@ -54,22 +69,15 @@ pub struct Supervision {
 
 impl Supervision {
     /// Validate every op word up front, so a bad row fails the read rather than a later query.
-    ///
-    /// Each row's `at` is floored to the MILLISECOND. A part's or vouch's time is an HLC wall in
-    /// milliseconds, but a registry row's `recorded_at` has microseconds: a requirement recorded at
-    /// 10:00:00.000700 and a part signed in the same millisecond (wall .000) must count as
-    /// "required", not "signed before the requirement". Comparing at the coarser clock's
-    /// resolution makes a same-millisecond row count as in effect.
-    pub fn from_rows(mut rows: Vec<SupervisionRow>) -> anyhow::Result<Self> {
-        for r in &mut rows {
+    pub fn from_rows(rows: Vec<SupervisionRow>) -> anyhow::Result<Self> {
+        for r in &rows {
             family(&r.op)?;
-            r.at = DateTime::from_timestamp_millis(r.at.timestamp_millis()).unwrap_or(r.at);
         }
         Ok(Self { rows })
     }
 
     /// The record said `actor` must have every note co-signed, as of `t`.
-    pub fn needs_cosigning_at(&self, actor: &str, t: DateTime<Utc>) -> bool {
+    pub fn needs_cosigning_at(&self, actor: &str, t: Stamp) -> bool {
         self.rows
             .iter()
             .rfind(|r| {
@@ -81,7 +89,7 @@ impl Supervision {
     }
 
     /// Supervisors whose link to `actor` stands after every row with `at <= t` (`None` = all rows).
-    fn standing(&self, actor: &str, t: Option<DateTime<Utc>>) -> Vec<String> {
+    fn standing(&self, actor: &str, t: Option<Stamp>) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for r in &self.rows {
             let related = r.related.as_deref().unwrap_or("");
@@ -116,14 +124,14 @@ impl Supervision {
     }
 
     /// `supervisor` supervised `supervisee` as of `t`.
-    pub fn supervises_at(&self, supervisor: &str, supervisee: &str, t: DateTime<Utc>) -> bool {
+    pub fn supervises_at(&self, supervisor: &str, supervisee: &str, t: Stamp) -> bool {
         self.standing(supervisee, Some(t))
             .iter()
             .any(|s| same_actor(s, supervisor))
     }
 
     /// `actor` had at least one supervisor as of `t`.
-    pub fn has_supervisor_at(&self, actor: &str, t: DateTime<Utc>) -> bool {
+    pub fn has_supervisor_at(&self, actor: &str, t: Stamp) -> bool {
         !self.standing(actor, Some(t)).is_empty()
     }
 
@@ -151,7 +159,7 @@ impl Supervision {
 pub async fn load(client: &(impl GenericClient + Sync)) -> anyhow::Result<Supervision> {
     let rows = client
         .query(
-            "SELECT op, actor_id, related_actor, recorded_at FROM cairn_supervision_record()",
+            "SELECT op, actor_id, related_actor, hlc_wall, hlc_counter FROM cairn_supervision_record()",
             &[],
         )
         .await
@@ -162,7 +170,7 @@ pub async fn load(client: &(impl GenericClient + Sync)) -> anyhow::Result<Superv
                 op: r.get(0),
                 actor: r.get(1),
                 related: r.get(2),
-                at: r.get(3),
+                at: (r.get(3), r.get(4)),
             })
             .collect(),
     )
@@ -186,22 +194,32 @@ pub fn annotate(p: &mut NoteRow, sup: &Supervision) {
     let Some(writer) = writer_actor(p).map(str::to_string) else {
         return;
     };
-    p.needs_cosigning = sup.needs_cosigning_at(&writer, p.recorded_at);
+    p.needs_cosigning = sup.needs_cosigning_at(&writer, part_stamp(p));
     p.writer_supervisors = sup.supervisors_now(&writer);
     for v in &mut p.vouches {
-        v.by_supervisor = sup.supervises_at(&v.by.actor, &writer, v.at);
-        v.writer_supervised = sup.has_supervisor_at(&writer, v.at);
+        let at = (v.at.timestamp_millis(), v.counter);
+        v.by_supervisor = sup.supervises_at(&v.by.actor, &writer, at);
+        v.writer_supervised = sup.has_supervisor_at(&writer, at);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use crate::note::vouch::fixture::{part, vouch, who};
     use cairn_event::note_attestation::{VouchAct, VouchRole};
 
-    fn at(m: i64) -> DateTime<Utc> {
+    /// Minute `m` on the HLC, counter 0.
+    fn at(m: i64) -> Stamp {
+        (m * 60_000, 0)
+    }
+    /// Minute `m` as a part's or vouch's wall time.
+    fn when(m: i64) -> DateTime<Utc> {
         DateTime::from_timestamp_millis(m * 60_000).unwrap()
+    }
+    fn stamp_of(t: DateTime<Utc>) -> Stamp {
+        (t.timestamp_millis(), 0)
     }
     fn row(op: &str, actor: &str, related: Option<&str>, m: i64) -> SupervisionRow {
         SupervisionRow {
@@ -280,17 +298,37 @@ mod tests {
         assert!(!s.supervises_at("aa", "sv", at(15)));
     }
 
-    /// A registry row has microseconds, a part's wall only milliseconds: same-millisecond counts.
+    /// #1014: after a ratchet the part and the lift share ONE wall; the counter orders them. A lift
+    /// with a later counter on the part's own wall leaves the part required.
     #[test]
-    fn a_row_in_the_same_millisecond_as_the_part_is_in_effect() {
-        let mut r = row("require-cosign", "aa", None, 0);
-        r.at = DateTime::from_timestamp_micros(1_000_000_700).unwrap(); // .000700
-        let s = sup(vec![r]);
-        assert!(s.needs_cosigning_at("aa", DateTime::from_timestamp_millis(1_000_000).unwrap()));
+    fn a_lift_on_the_parts_wall_with_a_later_counter_does_not_clear_it() {
+        let wall = 1_000_000;
+        let mut req = row("require-cosign", "aa", None, 0);
+        req.at = (wall, 3);
+        let mut lift = row("lift-cosign", "aa", None, 0);
+        lift.at = (wall, 5);
+        let s = sup(vec![req, lift]);
+        assert!(s.needs_cosigning_at("aa", (wall, 4)), "signed between the two");
+        assert!(!s.needs_cosigning_at("aa", (wall, 6)), "signed after the lift");
+        assert!(!s.needs_cosigning_at("aa", (wall, 2)), "signed before the requirement");
+        let mut p = part(1, Some(who("aa", "Dr A")));
+        p.recorded_at = DateTime::from_timestamp_millis(wall).unwrap();
+        p.recorded_counter = 4;
+        annotate(&mut p, &s);
+        assert!(p.needs_cosigning, "annotate reads the part's counter");
+    }
+
+    /// A row written before #1014 reads as (its millisecond, 0): in effect at a part in that
+    /// millisecond, whatever the part's counter — the millisecond rule it was judged by before.
+    #[test]
+    fn an_unstamped_rows_millisecond_is_in_effect_at_the_part() {
+        let s = sup(vec![row("require-cosign", "aa", None, 0)]);
+        assert!(s.needs_cosigning_at("aa", (0, 0)));
+        assert!(s.needs_cosigning_at("aa", (0, 7)));
     }
 
     #[test]
-    fn a_tie_on_recorded_at_takes_the_later_row() {
+    fn a_tie_on_the_stamp_takes_the_later_row() {
         let s = sup(vec![
             row("require-cosign", "aa", None, 10),
             row("lift-cosign", "aa", None, 10),
@@ -329,7 +367,7 @@ mod tests {
         annotate(&mut p, &s);
         assert!(p.needs_cosigning);
         let mut early = part(2, Some(who("aa", "Dr A")));
-        early.recorded_at = at(-5);
+        early.recorded_at = when(-5);
         annotate(&mut early, &s);
         assert!(!early.needs_cosigning);
     }
@@ -344,19 +382,19 @@ mod tests {
                 op: "link-supervisor".into(),
                 actor: "aa".into(),
                 related: Some("s1".into()),
-                at: ms(-10),
+                at: stamp_of(ms(-10)),
             },
             SupervisionRow {
                 op: "unlink-supervisor".into(),
                 actor: "aa".into(),
                 related: Some("s1".into()),
-                at: ms(10),
+                at: stamp_of(ms(10)),
             },
             SupervisionRow {
                 op: "link-supervisor".into(),
                 actor: "aa".into(),
                 related: Some("s2".into()),
-                at: ms(10),
+                at: stamp_of(ms(10)),
             },
         ])
         .unwrap();

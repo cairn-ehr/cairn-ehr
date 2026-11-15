@@ -204,7 +204,7 @@
 >   **#1119** (a row act's JS fault reaches only the console) · **#1120** (a strike does not stale a sign-off). Owed
 >   by a human: **RUNBOOK §36**.
 >
-> - **Charting slice 3 — drug names in the pick — built 2026-11-15 on PR
+> - **Charting slice 3 — drug names in the pick — MERGED 2026-11-15 in PR
 >   [#1121](https://github.com/cairn-ehr/cairn-ehr/pull/1121)** (plan
 >   [`superpowers/plans/2026-11-15-charting-slice-3-drug-names.md`](superpowers/plans/2026-11-15-charting-slice-3-drug-names.md),
 >   [ADR-0106](spec/decisions/0106-drug-names-in-the-pick.md), spec **v0.108**, `db/076` in place, `SCHEMA_GENERATION`
@@ -269,8 +269,8 @@
 >    **batch charting (#1072) slice 1 MERGED** (the bullet above; ADR-0100). **Batch-charting slice 2a MERGED** in PR #1088 (the bullet
 >    above); **slice 2b** MERGED in PR #1098 (the bullet above); **slice 3** (the warning threshold, the bullet above) MERGED in PR #1101. Charting **1b** (the same-drug de-label
 >    offer) MERGED in PR #1086 (the bullet above). **Charting slice 2** (stat ordered → given, #1069) — **MERGED 2026-11-14 in PR
->    [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106)** (the bullet above). **Charting slice 3 (the drug names, #1065 + #1073) — BUILT 2026-11-15 on
->    PR [#1121](https://github.com/cairn-ehr/cairn-ehr/pull/1121)** (the bullet above); **merge it once CI is green.**
+>    [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106)** (the bullet above). **Charting slice 3 (the drug names, #1065 + #1073) — MERGED 2026-11-15 in
+>    PR [#1121](https://github.com/cairn-ehr/cairn-ehr/pull/1121)** (the bullet above).
 >    The charting design's three PRs are then done; PBS forms (#1081) and brand → combination (drugref#244) wait on
 >    data drugref does not have. Later picks: slice 4
 >    (the emergency key); **#1014** (first if a multi-node pilot nears); #1021's projection. Design §10's findings 1–2

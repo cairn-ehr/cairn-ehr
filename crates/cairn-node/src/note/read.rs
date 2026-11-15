@@ -40,6 +40,10 @@ pub struct NoteRow {
     /// When the part entered the record: its `event_log.hlc_wall`, never `t_effective`. The
     /// instant the supervision record is judged "as of" (`supervision`).
     pub recorded_at: DateTime<Utc>,
+    /// Its `event_log.hlc_counter`: with `recorded_at`'s wall, the part's HLC stamp, which the
+    /// supervision record is compared on (#1014 — after a ratchet the wall alone cannot order a
+    /// part against a lift on the same wall).
+    pub recorded_counter: i32,
     /// The supervision RECORD said the writer needed co-signing at `recorded_at` (a student's
     /// role is not folded in here; `cosign` combines them). Default false.
     pub needs_cosigning: bool,
@@ -145,8 +149,9 @@ pub struct PatientNoteList {
 /// (for `vouch::addendum_covers`). Then come the part's verified vouches
 /// (`vouch_read::vouches_column!`), read in this same statement so they share its snapshot. The
 /// last column is the ENVELOPE signer's actor, only for a human's key: what db/071's co-sign rule
-/// reads (`NoteRow::signer_human_actor`). The very last column is the part's `e.hlc_wall`
-/// (ms since the epoch), what `NoteRow::recorded_at` and the supervision record are judged at.
+/// reads (`NoteRow::signer_human_actor`). The last two columns are the part's `e.hlc_wall`
+/// (ms since the epoch) and `e.hlc_counter`: its HLC stamp (`NoteRow::recorded_at` and
+/// `recorded_counter`), what the supervision record is judged at.
 ///
 /// **Four CTEs, for cost, not meaning (#1021).** `base` reads each part's KEYS and time once (the
 /// WHERE runs here, and the attester door once per part); `facts` asks the key doors about each
@@ -168,7 +173,7 @@ macro_rules! notes_sql {
     // `base`: one row per part, its keys and time only (the WHERE runs here).
     "WITH base AS MATERIALIZED (SELECT n.event_id, e.signer_key_id, g.attester, \
             (SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
-              WHERE c ->> 'role' = 'drafted' LIMIT 1) AS drafted, e.hlc_wall \
+              WHERE c ->> 'role' = 'drafted' LIMIT 1) AS drafted, e.hlc_wall, e.hlc_counter \
        FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
       CROSS JOIN LATERAL (SELECT cairn_note_vouched_attester(e.event_id) AS attester) g \
       WHERE ", $where, "), \
@@ -193,13 +198,13 @@ macro_rules! notes_sql {
                      WHERE c ->> 'role' = 'attested' AND c ->> 'actor_id' = e.signer_key_id) AS signer_attested, \
             b.drafted, ",
     vouches_column!(),
-    " AS vouches, b.hlc_wall \
+    " AS vouches, b.hlc_wall, b.hlc_counter \
        FROM kept b JOIN clinical_note n ON n.event_id = b.event_id JOIN event_log e ON e.event_id = b.event_id) \
     SELECT r.event_id, r.patient_id, r.narrative, r.t_effective, r.effective_basis, r.recording_started, \
            r.signer_key_id, r.contributors, r.attester, fk.name, r.addendum_to, fd.name, r.has_drafted, \
            r.signer_attested, CASE WHEN fd.human THEN r.drafted END, \
            fk.actor, fk.role, fk.confirmation, fd.actor, r.vouches, \
-           CASE WHEN fs.human THEN fs.actor END, r.hlc_wall \
+           CASE WHEN fs.human THEN fs.actor END, r.hlc_wall, r.hlc_counter \
       FROM rows r \
       LEFT JOIN facts fk ON fk.key = r.k \
       LEFT JOIN facts fd ON fd.key = r.drafted \
@@ -362,6 +367,7 @@ fn note_row(r: &Row, sup: &Supervision) -> anyhow::Result<NoteRow> {
         effective_basis: r.get(4),
         recording_started: r.get(5),
         recorded_at,
+        recorded_counter: r.get(22),
         needs_cosigning: false,
         writer_supervisors: vec![],
         grade,
