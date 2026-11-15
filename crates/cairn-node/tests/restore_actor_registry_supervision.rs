@@ -220,6 +220,12 @@ async fn a_tampered_hlc_stamp_is_refused() {
     row["hlc_wall"] = serde_json::Value::Null;
     let msg = refusal(&c, &v).await;
     assert!(msg.contains("both or neither"), "{msg}");
+    // A number carried as a JSON string is refused too, as `seq` is (the export writes numbers).
+    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let row = stamped(&mut v);
+    row["hlc_counter"] = serde_json::json!(row["hlc_counter"].to_string());
+    let msg = refusal(&c, &v).await;
+    assert!(msg.contains("both or neither"), "{msg}");
     // A stamp past now + the 24 h drift ceiling would park the HLC in the future: refused.
     let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let row = stamped(&mut v);

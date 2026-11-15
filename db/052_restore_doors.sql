@@ -234,7 +234,9 @@ BEGIN
         -- (A JSON null is absent, as for every optional field here: `->>` reads it as NULL.)
         IF ((v_row ->> 'hlc_wall') IS NULL) <> ((v_row ->> 'hlc_counter') IS NULL)
            OR ((v_row ->> 'hlc_wall') IS NOT NULL
-               AND ((v_row ->> 'hlc_wall') !~ '^[0-9]{1,18}$'
+               AND (jsonb_typeof(v_row -> 'hlc_wall') <> 'number'
+                    OR jsonb_typeof(v_row -> 'hlc_counter') <> 'number'
+                    OR (v_row ->> 'hlc_wall') !~ '^[0-9]{1,18}$'
                     OR (v_row ->> 'hlc_counter') !~ '^[0-9]{1,9}$')) THEN
             RAISE EXCEPTION 'restore_actor_registry: row % carries hlc_wall % and hlc_counter %. '
                 'They are one HLC stamp: both or neither, each a non-negative integer.',
