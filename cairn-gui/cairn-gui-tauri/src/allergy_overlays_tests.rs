@@ -7,7 +7,7 @@
 use super::*;
 use crate::allergies::{allergy_list_impl, allergy_none_impl, allergy_record_impl, EntryInput};
 use crate::funnel::view::{Recorded, Retry};
-use crate::notes::review::db_tests::{credential, supervised_note};
+use crate::notes::review::db_tests::{credential, here_as, supervised_note};
 
 /// A complete entry, as the form sends it.
 fn entry(term: &str) -> EntryInput {
@@ -114,6 +114,7 @@ async fn correct_files_under_the_targets_chart() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let (other, theirs) = linked_entry(&state, &mut owner, chart).await;
     let pane = allergy_list_impl(&state, &here).await.unwrap();
@@ -189,6 +190,7 @@ async fn an_act_on_a_doubted_charts_line_is_refused_before_the_key() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let (other, theirs) = linked_entry(&state, &mut owner, chart).await;
     let (lo, hi) = (chart.min(other), chart.max(other));
@@ -262,6 +264,7 @@ async fn a_delabelled_line_is_struck_in_one_act() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let charts = vec![here.clone()];
     let pane = allergy_record_impl(
@@ -323,6 +326,7 @@ async fn a_challenge_and_a_retraction_land_and_reread() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let charts = vec![here.clone()];
     let pane = allergy_record_impl(
@@ -556,6 +560,7 @@ async fn each_act_is_timed_with_its_own_kind() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let charts = vec![here.clone()];
     let pane = allergy_record_impl(

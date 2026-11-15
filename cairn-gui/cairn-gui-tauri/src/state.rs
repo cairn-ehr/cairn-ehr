@@ -326,8 +326,9 @@ impl AppState {
     ///    and the lock poll must not wait on it). A fault's detail goes to stderr, explained
     ///    through the connection guard so a cut-off says so (#893); the clinician gets
     ///    [`KeyRefusal::Fault`], which carries no database text.
-    /// 4. The released key is held for the next act only on a terminal with a key hold, and
-    ///    only if no Lock or newer press wiped the slot while the vault was checking
+    /// 4. The released key is held for the next act only on a terminal with a key hold, only if
+    ///    who's here names nobody or names the key's own person (#1128, `may_hold_for_claim`),
+    ///    and only if no Lock or newer press wiped the slot while the vault was checking
     ///    ([`Held::keep_for_next_act`]).
     ///
     /// An all-empty credential (both fields blank) counts as none, so it never wipes a hold.
@@ -396,6 +397,11 @@ impl AppState {
                 return Err(KeyRefusal::Fault);
             }
         };
+        // Never hold another person's key under the name who's here shows (#1128): this act signs
+        // with the key just released either way, since its owner typed the passphrase.
+        if !self.may_hold_for_claim(&kid).await {
+            return Ok((key, kid));
+        }
         // A copy for the hold (a `SigningKey` wipes itself on drop); this act signs with `key`.
         self.session.lock().await.keep_for_next_act(
             seen,
@@ -405,6 +411,28 @@ impl AppState {
             now,
         );
         Ok((key, kid))
+    }
+
+    /// Whether key `kid` may be held under the current who's-here claim
+    /// ([`crate::whos_here::Claim::may_hold_key`]). A named person's current key is read from the
+    /// vault; a read that fails holds nothing (the next act asks for a passphrase, never a wrong
+    /// signer). No hold on this terminal means nothing to decide, and no database call.
+    async fn may_hold_for_claim(&self, kid: &str) -> bool {
+        if self.key_hold.is_zero() {
+            return false;
+        }
+        let claim = self.whos_here.lock().await.claim().clone();
+        let claimed_key = match (&claim, self.db.as_ref()) {
+            (crate::whos_here::Claim::Named { staff_id, .. }, Some(db)) => match db.lock().await {
+                Ok(db) => cairn_node::medication::draft::writer_key(&*db, staff_id)
+                    .await
+                    .ok()
+                    .flatten(),
+                Err(_) => None,
+            },
+            _ => None,
+        };
+        claim.may_hold_key(claimed_key.as_deref(), kid)
     }
 
     /// Wipe the held key now — the window's explicit Lock.

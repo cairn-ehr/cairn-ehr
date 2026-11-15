@@ -43,7 +43,9 @@ function clearSigner(signed) {
   // Only a SIGNED act enters the recent list, so a typo never does (shared terminal).
   if (signed) rememberSigner(el("staff-id").value);
   el("signer-passphrase").value = "";
-  if (keyHoldSecs === 0) {
+  // On a key-hold terminal the act's ID stays only if it is the claimed person's: the window never
+  // holds another person's key under the claim (#1128), so their ID would only aim the next press.
+  if (keyHoldSecs === 0 || (claimedStaffId() !== "" && typed !== claimedStaffId())) {
     el("staff-id").value = "";
     // The act's ID goes; who's here's ID comes back (design §3.6: prefilled for every act, not
     // only the first after a pick — empty when nobody is named). The passphrase never is.

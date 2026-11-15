@@ -4,7 +4,7 @@
 use super::*;
 use crate::allergies::{allergy_record_impl, EntryInput};
 use crate::allergy_check::CodingArg;
-use crate::notes::review::db_tests::{credential, supervised_note};
+use crate::notes::review::db_tests::{credential, here_as, supervised_note};
 
 const AMOX: u128 = 0xA40C_7002;
 
@@ -53,6 +53,7 @@ async fn a_coded_delabel_lands_with_its_coding() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let charts = vec![here.clone()];
     let pane = allergy_record_impl(
@@ -96,6 +97,7 @@ async fn an_uncoded_delabel_is_unchanged() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let charts = vec![here.clone()];
     let pane = allergy_record_impl(
@@ -136,6 +138,7 @@ async fn a_delabel_of_a_head_struck_since_is_refused_before_the_key() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let here = chart.to_string();
     let charts = vec![here.clone()];
     let pane = allergy_record_impl(

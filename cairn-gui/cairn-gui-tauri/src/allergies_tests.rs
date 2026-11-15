@@ -4,7 +4,7 @@
 //! `CAIRN_TEST_PG`, run locally: #905, CI never runs it).
 use super::*;
 use crate::funnel::view::{Recorded, Retry};
-use crate::notes::review::db_tests::{credential, supervised_note};
+use crate::notes::review::db_tests::{credential, here_as, supervised_note};
 
 fn today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 11, 8).unwrap()
@@ -237,6 +237,7 @@ async fn record_then_list_shows_the_entry_on_the_strip() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    here_as(&state, "bea", "Dr Bea").await; // Bea signs and her key is held (#1128)
     let patient = chart.to_string();
     let charts = vec![patient.clone()];
     let pane = allergy_list_impl(&state, &patient).await.unwrap();

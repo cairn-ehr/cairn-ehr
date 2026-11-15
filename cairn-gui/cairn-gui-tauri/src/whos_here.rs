@@ -44,6 +44,22 @@ pub enum Claim {
     },
 }
 
+impl Claim {
+    /// Pure: whether a key just released for an act (`kid`) may be HELD for the next one under
+    /// this claim (#1128). With someone named, only that person's current key (`claimed_key`,
+    /// read from the vault; `None` when it could not be) — or another person's held key would
+    /// sign every later press made under the named person's name. Compared by KEY, never by
+    /// staff-ID text (durable rule R-B). With nobody named, the personal workstation's hold
+    /// stands (ADR-0083 §8): there is no named person to sign for wrongly. A pick or the re-lock
+    /// forgets the held key, so checking once, when a key is kept, covers the claim changing.
+    pub fn may_hold_key(&self, claimed_key: Option<&str>, kid: &str) -> bool {
+        match self {
+            Claim::Named { .. } => claimed_key == Some(kid),
+            Claim::NotAsked | Claim::Unknown => true,
+        }
+    }
+}
+
 /// The terminal's who's-here memory: the claim, the recent people (newest first, at most
 /// [`RECENT_CAP`]), each person's bookmark, and this terminal's idle re-lock interval (a launch
 /// setting kept here so `AppState` gains one field, not two).

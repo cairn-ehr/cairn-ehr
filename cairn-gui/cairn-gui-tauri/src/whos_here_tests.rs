@@ -206,3 +206,22 @@ async fn fixture_mode_lists_its_staff() {
     assert!(dir[0].recent);
     assert!(dir.iter().any(|e| e.staff_id == "nurse-a" && !e.recent));
 }
+
+/// #1128: a key released for someone other than the person named is never held for the next act,
+/// or that person's next presses would sign with it. Compared by KEY, never by staff-ID text.
+#[test]
+fn only_the_named_persons_own_key_is_held() {
+    let dra = named("dra", "Dr A");
+    assert!(dra.may_hold_key(Some("kid-a"), "kid-a"));
+    assert!(
+        !dra.may_hold_key(Some("kid-a"), "kid-b"),
+        "Dr B's key under Dr A's claim"
+    );
+    assert!(
+        !dra.may_hold_key(None, "kid-b"),
+        "the named person's key could not be read"
+    );
+    // Nobody named: the hold is the personal workstation's (ADR-0083 §8); nobody to mis-sign for.
+    assert!(Claim::NotAsked.may_hold_key(None, "kid-b"));
+    assert!(Claim::Unknown.may_hold_key(None, "kid-b"));
+}

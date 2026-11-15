@@ -8,6 +8,11 @@
 //! beforehand and the hint would be false.
 use crate::source_guard::{js_fn, position};
 
+/// When `clearSigner` empties the strip's ID: always on a shared terminal, and on a key-hold one
+/// after another person's act than the claimed one (#1128).
+const STRIP_RESET: &str =
+    "if (keyHoldSecs === 0 || (claimedStaffId() !== \"\" && typed !== claimedStaffId())) {";
+
 const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const HOLDS_JS: &str = include_str!("../src-ui/holds.js");
 const LINK_JS: &str = include_str!("../src-ui/link.js");
@@ -76,7 +81,7 @@ fn clear_signer_empties_the_passphrase_and_keeps_the_id_only_on_a_held_terminal(
         clear.contains("el(\"signer-passphrase\").value = \"\";"),
         "{clear}"
     );
-    assert!(clear.contains("if (keyHoldSecs === 0) {"), "{clear}");
+    assert!(clear.contains(STRIP_RESET), "{clear}");
     assert!(!clear.contains("if (!heldBy)"), "{clear}");
     let render = js_fn(SIGNER_JS, "renderSigner");
     assert!(
@@ -428,7 +433,7 @@ fn the_expiry_warning_is_asked_for_the_typed_id_before_the_act() {
         clear.contains("if (signed && typed === \"\" && heldBy) void showExpiryNotice(heldBy);"),
         "{clear}"
     );
-    let shared = &clear[position(clear, "if (keyHoldSecs === 0) {")..];
+    let shared = &clear[position(clear, STRIP_RESET)..];
     assert!(
         shared[..position(shared, "}")].contains("setMessage(el(\"signer-notice\"), \"\");"),
         "a shared terminal clears the warning with the ID: {clear}"
@@ -443,5 +448,17 @@ fn the_expiry_warning_is_asked_for_the_typed_id_before_the_act() {
     assert!(
         INDEX_HTML.contains("<p id=\"signer-notice\" role=\"status\" hidden></p>"),
         "the warning has its own announced line in the strip"
+    );
+}
+
+/// #1128: on a key-hold terminal the strip keeps the act's typed ID only when it is the person
+/// who's here names (or nobody is named). Another person's ID left in the strip would aim the next
+/// press at a key the window no longer holds, or count a wrong guess against them.
+#[test]
+fn a_key_hold_strip_returns_to_the_claimed_id_after_another_persons_act() {
+    let clear = js_fn(SIGNER_JS, "clearSigner");
+    assert!(
+        clear.contains(STRIP_RESET),
+        "clearSigner must reset the strip to the claim after another person's act: {clear}"
     );
 }
