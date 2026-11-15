@@ -897,7 +897,7 @@ tests, `crates/cairn-node/tests/{supervision_doors,supervision_doors_approver,no
   `an_unstamped_rows_millisecond_is_in_effect_at_the_part`, `the_requirement_is_read_as_it_stood_at_t`;
   `note_supervision.rs::a_lift_after_a_ratcheted_hlc_leaves_the_earlier_part_waiting`;
   `restore_actor_registry_supervision.rs` (incl. #1125's
-  `an_unstamped_supervision_row_moves_the_hlc_past_its_recorded_at`,
+  `an_unstamped_supervision_row_moves_the_hlc_past_its_recorded_at`, `every_unstamped_supervision_op_moves_the_hlc`,
   `an_unstamped_supervision_row_past_the_drift_ceiling_is_refused`, `a_stamp_on_a_non_supervision_op_is_refused`);
   `db/tests/{004_actors,072_supervision}_test.sql`.
 - **The fallback accepts the strongest countersignature the floor allows ON THAT PART: a `co-signed` vouch, or,

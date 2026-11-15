@@ -329,6 +329,66 @@ async fn an_unstamped_supervision_row_moves_the_hlc_past_its_recorded_at() {
     clear(&c).await;
 }
 
+/// #1125 item 1, per op: each of the six supervision ops on its own must move the HLC. The test
+/// above dates them all alike, so it would pass with five of them dropped from the door's merge
+/// list; here each op in turn is dated LATEST, so the wall reaches its row only if that op merges.
+#[tokio::test]
+async fn every_unstamped_supervision_op_moves_the_hlc() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let template = unstamped_export(&c).await;
+    let early = pg_time_from_now(&c, "1 hour").await;
+    let late = pg_time_from_now(&c, "2 hours").await;
+    for op in [
+        "link-supervisor",
+        "unlink-supervisor",
+        "require-cosign",
+        "lift-cosign",
+        "grant-assigner",
+        "withdraw-assigner",
+    ] {
+        let mut v = template.clone();
+        let mut found = false;
+        for row in v.as_array_mut().unwrap() {
+            let at = if row["op"] == op {
+                found = true;
+                &late
+            } else {
+                &early
+            };
+            row["recorded_at"] = serde_json::json!(at);
+        }
+        assert!(found, "fixture has a {op} row");
+        clear(&c).await;
+        c.query_one(
+            "SELECT restore_actor_registry($1::text::jsonb)",
+            &[&v.to_string()],
+        )
+        .await
+        .unwrap();
+        let r = c
+            .query_one(
+                "SELECT s.hlc_wall, \
+                        (SELECT floor(extract(epoch FROM max(recorded_at)) * 1000)::bigint \
+                           FROM actor_event WHERE op = $1) \
+                   FROM hlc_state s",
+                &[&op],
+            )
+            .await
+            .unwrap();
+        let (wall, own): (i64, i64) = (r.get(0), r.get(1));
+        assert!(
+            wall >= own,
+            "an unstamped {op} row must move the HLC: wall {wall} is below its {own}"
+        );
+    }
+    clear(&c).await;
+}
+
 /// #1125 item 1, the ceiling: an unstamped supervision row whose `recorded_at` is past now + the
 /// drift ceiling is refused, as a stamped one is — merging it would park the HLC in the future.
 #[tokio::test]

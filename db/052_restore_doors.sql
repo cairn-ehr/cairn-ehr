@@ -135,6 +135,7 @@ DECLARE
     v_hcount    INTEGER;
     v_mwall     BIGINT;
     v_mcount    INTEGER;
+    v_superv    BOOLEAN;
     v_present   actor_event%ROWTYPE;
     v_differs   TEXT;
 BEGIN
@@ -251,11 +252,14 @@ BEGIN
         v_hwall  := (v_row ->> 'hlc_wall')::BIGINT;
         v_hcount := (v_row ->> 'hlc_counter')::INTEGER;
 
-        -- Only the six supervision ops are ever stamped (cairn_actor_append, #1125): a stamp on any
-        -- other op is a shape no live door writes.
-        IF v_hwall IS NOT NULL
-           AND v_op NOT IN ('link-supervisor', 'unlink-supervisor', 'require-cosign',
-                            'lift-cosign', 'grant-assigner', 'withdraw-assigner') THEN
+        -- The six supervision ops: the ones cairn_actor_append stamps (db/004) and
+        -- cairn_supervision_record() reads (db/072). Keep all three lists in step (#1125).
+        v_superv := v_op IN ('link-supervisor', 'unlink-supervisor', 'require-cosign',
+                             'lift-cosign', 'grant-assigner', 'withdraw-assigner');
+
+        -- Only those ops are ever stamped (cairn_actor_append, #1125): a stamp on any other op is
+        -- a shape no live door writes.
+        IF v_hwall IS NOT NULL AND NOT v_superv THEN
             RAISE EXCEPTION 'restore_actor_registry: row % is a % row carrying hlc_wall % and '
                 'hlc_counter %. Only the six supervision ops are stamped on the node''s HLC '
                 '(ADR-0107); no live door writes a stamp on a % row.',
@@ -268,8 +272,7 @@ BEGIN
         -- machine whose clock runs behind the source's starts its HLC below that fallback, and a
         -- part signed after the restore escapes a restored require-cosign. NULL for the other ops,
         -- which nothing compares to an HLC.
-        IF v_hwall IS NULL AND v_op IN ('link-supervisor', 'unlink-supervisor', 'require-cosign',
-                                        'lift-cosign', 'grant-assigner', 'withdraw-assigner') THEN
+        IF v_hwall IS NULL AND v_superv THEN
             v_mwall  := floor(extract(epoch FROM v_at) * 1000)::bigint;
             v_mcount := 0;
         ELSE

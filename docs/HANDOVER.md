@@ -46,7 +46,8 @@
 >   **3c-3a** (PR #1013, [ADR-0094](spec/decisions/0094-supervision-and-the-mandatory-co-sign.md), `db/072`): #1015 ·
 >   #1016 · #1017 · #1018. Its #1014 (two clocks in the co-sign judgement) MERGED 2026-11-15 in PR #1124
 >   ([ADR-0107](spec/decisions/0107-supervision-on-the-nodes-hlc.md), spec v0.109); the restore-door follow-on **#1125**
->   is fixed on PR [#1126](https://github.com/cairn-ehr/cairn-ehr/pull/1126). Not guaranteed: a CONCURRENT peer part from a clock ahead
+>   is fixed on PR [#1126](https://github.com/cairn-ehr/cairn-ehr/pull/1126); its final check filed #1127 (the six
+>   supervision ops are hand-copied across db/004, db/072 and db/052). Not guaranteed: a CONCURRENT peer part from a clock ahead
 >   can still sort after a lift it never saw (no local clock fixes that).
 >   **3c-3c** (PR #1019, [ADR-0095](spec/decisions/0095-the-person-menu.md), `db/073`): #1020 (two actors sharing a
 >   staff id) · #1021 (measured and cut 5–6× in PR #1025; open for the obligations projection and the Pi figures) ·
@@ -318,6 +319,9 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
   `cairn_supervision_record()` reads an unstamped row as `(recorded_at ms, 0)`, but the restore door merged the HLC
   only past rows carrying a stamp, so a pre-#1014 export lost the guarantee the merge exists for. Grep for every
   consumer of a new column's NULL case, not only its readers.
+- **⇒ A test that gives every member of a set the same value pins none of them**: the first #1125 test dated all six
+  supervision rows alike, so five could drop out of the merge list unseen. The final check added a per-op test
+  (each op dated latest in turn, RED when one is dropped) and filed #1127 for the hand-copied list itself.
 
 ### 2026-11-15 — charting slice 3, drug names (PR #1121): plan → inline build
 - **⇒ An existing key-set guard caught the new field before any review did**: `med_chart_webview_tests` checks every
