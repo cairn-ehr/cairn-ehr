@@ -78,6 +78,7 @@ REVOKE ALL ON registration_request FROM PUBLIC;
 -- its status. A re-send of the SAME id with the SAME inputs is answered with the status the first
 -- one now has (pending, registered, …), never a second row, so a lost reply never registers twice.
 -- The same id with DIFFERENT inputs is a caller bug and raises: one id is one request.
+-- Idempotent only until purge (24 h): generate a fresh random uuid per request, never re-send one later.
 CREATE OR REPLACE FUNCTION cairn_registration_submit(p_request uuid, p_name text, p_query jsonb,
                                                      p_displayed jsonb, p_today text)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -227,7 +228,9 @@ REVOKE ALL ON note_draft_commit_failure FROM PUBLIC;
 
 -- The service's tick reports draft p_draft's last timed commit: p_failed = true records (or
 -- re-stamps) the failure, false clears it. A failure for a draft already gone (signed between the
--- try and this call) writes nothing: there is nothing left to warn about.
+-- try and this call) writes nothing: there is nothing left to warn about. The EXISTS skips a draft
+-- gone before the INSERT; the foreign_key_violation handler covers one deleted between the two
+-- (not a refusal, so nothing is raised).
 CREATE OR REPLACE FUNCTION cairn_note_draft_commit_failed(p_draft uuid, p_failed boolean)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
@@ -242,6 +245,8 @@ BEGIN
     ELSE
         DELETE FROM note_draft_commit_failure f WHERE f.draft = p_draft;
     END IF;
+EXCEPTION WHEN foreign_key_violation THEN
+    NULL;  -- the draft went between the EXISTS and the INSERT: nothing left to warn about
 END;
 $$;
 

@@ -76,16 +76,20 @@ async fn rig() -> Option<(Client, String, Client, Client, Client)> {
 
 /// The window's submit, with a fixed attested search so a test varies only what it is about.
 async fn submit(window: &Client, id: Uuid, name: &str) -> Result<String, tokio_postgres::Error> {
+    submit_raw(window, id, Some(name), r#"{"family":"Nguyen"}"#).await
+}
+
+/// [`submit`] with the name (NULL allowed) and the query's JSON text chosen by the caller.
+async fn submit_raw(
+    window: &Client,
+    id: Uuid,
+    name: Option<&str>,
+    query: &str,
+) -> Result<String, tokio_postgres::Error> {
     window
         .query_one(
             "SELECT cairn_registration_submit($1::text::uuid, $2, $3::text::jsonb, $4::text::jsonb, $5)",
-            &[
-                &id.to_string(),
-                &name,
-                &r#"{"family":"Nguyen"}"#,
-                &"[]",
-                &"2026-11-17",
-            ],
+            &[&id.to_string(), &name, &query, &"[]", &"2026-11-17"],
         )
         .await
         .map(|r| r.get(0))
@@ -187,6 +191,26 @@ async fn a_resubmitted_request_returns_its_first_status_and_a_changed_one_is_ref
     // The same id with different content is a caller bug, refused out loud.
     let e = submit(&window, id, "Ann Smith").await.unwrap_err();
     assert!(db_msg(&e).contains("different"), "{}", db_msg(&e));
+    // "The same inputs" is NULL-safe: a nameless request re-sent is the same request.
+    let nameless = Uuid::now_v7();
+    for _ in 0..2 {
+        let s = submit_raw(&window, nameless, None, "{}").await.unwrap();
+        assert_eq!(s, "pending", "a nameless re-send answers its status");
+    }
+    // And it compares the search as JSON, not as text: key order is not a different request.
+    let reordered = Uuid::now_v7();
+    for query in [
+        r#"{"family":"Nguyen","given":"Ann"}"#,
+        r#"{"given":"Ann","family":"Nguyen"}"#,
+    ] {
+        let s = submit_raw(&window, reordered, Some("Ann Nguyen"), query)
+            .await
+            .unwrap();
+        assert_eq!(
+            s, "pending",
+            "a re-send with its keys reordered answers its status"
+        );
+    }
 }
 
 #[tokio::test]
@@ -299,11 +323,12 @@ async fn expire_waits_behind_a_claim_and_then_reports_registered() {
     };
     let id = Uuid::now_v7();
     submit(&window, id, "Ann Nguyen").await.unwrap();
-    // Session A (the service): claim and settle, transaction left OPEN.
+    // Session A (the service): CLAIM only, transaction left open. Nothing else holds the row, so
+    // a wait below can only be on the claim's own lock (settling first would let settle's UPDATE
+    // be what B waits on, and the test would pass with the claim taking no lock at all).
     svc.batch_execute("BEGIN").await.unwrap();
     assert_eq!(claim(&svc).await, vec![id]);
-    settle_registered(&svc, id).await.unwrap();
-    // Session B (the window): its expire must queue behind A's row lock.
+    // Session B (the window): its expire must queue behind A's claim.
     let b_pid: i32 = window
         .query_one("SELECT pg_backend_pid()", &[])
         .await
@@ -335,6 +360,8 @@ async fn expire_waits_behind_a_claim_and_then_reports_registered() {
         !pending.is_finished(),
         "it has not returned while A holds the row"
     );
+    // A registers while B waits, then commits: B must read that outcome, never "expired".
+    settle_registered(&svc, id).await.unwrap();
     svc.batch_execute("COMMIT").await.unwrap();
     let (s, _window) = pending.await.unwrap();
     assert_eq!(s, "registered", "B reports what actually happened");
