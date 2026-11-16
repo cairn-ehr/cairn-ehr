@@ -23,8 +23,7 @@
 //! (`terminal_service::registration::verdict_text`) and settles the request `refused` in their
 //! words; the port returns those words as `Refused`. So the registration probes below prove the
 //! verdict still reaches the clerk as a verdict, end to end, and the chain walk itself is pinned
-//! by `a_sqlstate_is_found_under_context_layers_not_only_at_the_top` and by the window's own
-//! submit (a refused submit is classified by `data_error_from`, as before).
+//! by `a_sqlstate_is_found_under_context_layers_not_only_at_the_top`.
 mod common;
 
 use cairn_gui_data::port::{DataError, PatientRegistration, PatientSearch};
@@ -164,7 +163,9 @@ async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
 ///
 /// Until #651 they reached the clerk as `Unavailable`, and this test pinned that wrong answer
 /// on purpose. It now pins the right one: `cairn_node::db_diagnosis::DeliberateRefusal` marks
-/// the refusal and `data_error_from` consults **both** discriminators.
+/// the refusal. Since #909 the node's terminal service is what reads that mark
+/// (`terminal_service::registration::verdict_text`), settling the request `refused` in the
+/// refusal's own words, which the port returns as `Refused`.
 ///
 /// **Why this is the arm that mattered most.** The trigger applies no date format check, and
 /// correctly so — a registrar is often told only a year (principle 4) — and db/046's pass 2 is
@@ -172,9 +173,10 @@ async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
 /// and then fails here. That is not an edge case; it is the DEFAULT failure mode of the surface
 /// slice 2c builds, and before this it came with a retry button that could never work.
 ///
-/// **The mutation that kills this test:** remove the
-/// `|| cairn_node::db_diagnosis::carries_refusal_marker(e)` arm from `data_error_from` and this
-/// goes back to `Unavailable`. Nothing else in either tree notices.
+/// **The mutation that kills this test:** remove the `DeliberateRefusal` arm from the service's
+/// `verdict_text`. The refusal is then an accident to the service, the request stays pending
+/// until it expires, and the clerk is told the terminal service did not answer
+/// (`NotProvisioned`) instead of what to change.
 #[tokio::test]
 async fn a_rust_side_pre_flight_refusal_is_refused_not_unavailable() {
     let Some(cs) = common::cs() else { return };

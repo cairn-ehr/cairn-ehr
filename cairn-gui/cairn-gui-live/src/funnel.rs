@@ -1,8 +1,8 @@
 //! The two port implementations. Each is a thin adapter over a `cairn-node` orchestrator:
 //! resolve the connection, call, map the error. (Registration's "orchestrator" is a request
-//! to the node's terminal service, and waiting for its answer, #909.) **No clinical logic lives here** — the same
-//! rule `commands.rs` follows one layer up, and for the same reason: a rule that lives in an
-//! adapter is a rule no test goes looking for.
+//! to the node's terminal service, and waiting for its answer, #909.) **No clinical logic
+//! lives here** — the same rule `commands.rs` follows one layer up, and for the same reason: a
+//! rule that lives in an adapter is a rule no test goes looking for.
 use crate::error::data_error_from;
 use crate::LiveData;
 use cairn_gui_data::port::{DataError, PatientRegistration, PatientSearch};

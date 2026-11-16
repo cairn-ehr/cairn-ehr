@@ -105,7 +105,9 @@ fn parse_status(
 ///
 /// `query` and `displayed` are written with the SAME serde shapes the service reads them back
 /// with (`serve_one`'s decode step). `name` must be the raw typed string `query` was built from;
-/// the service refuses any other. `today` is the date the window's search was asked as of.
+/// the service refuses any other. `today` is the database's date at the press (the window
+/// asks `current_date`); in the service's re-run search it feeds only the displayed age, while
+/// the ranking and the prompt's bound ignore it, so it cannot change which charts are compared.
 ///
 /// A re-send of the same id with the same inputs answers with the first one's status; the same
 /// id with different inputs is refused by the door (P0001).

@@ -4,10 +4,12 @@
 //!
 //! `cairn_gui_data::port` declares `PatientSearch` and `PatientRegistration`; `--mock`
 //! implements them over fixtures. This crate implements them over a real
-//! `tokio_postgres::Client`, by delegating to the `cairn-node` orchestrators that already own
-//! the rules — `search_patients` (§5.8) and `register_patient` (§5.3, ADR-0061). It adds **no
-//! clinical logic of its own**. There is exactly one decision in here, and it is the one in
-//! [`error`]: whether a failure was a VERDICT about this call or an accident that befell it.
+//! `tokio_postgres::Client`, by delegating to `cairn-node`, which owns the rules: the search
+//! calls `search_patients` (§5.8), and a registration (§5.3, ADR-0061) goes through the node's
+//! terminal service, a request the window submits and then polls
+//! (`cairn_node::patient::register_request`, #909). It adds **no clinical logic of its own**.
+//! There is exactly one decision in here, and it is the one in [`error`]: whether a failure was
+//! a VERDICT about this call or an accident that befell it.
 //!
 //! # Why it is a separate crate
 //!
@@ -46,11 +48,12 @@ pub use connection::{
 ///
 /// # Why [`NodeConnection`]'s mutex is `tokio::sync::Mutex` and not `std::sync::Mutex`
 ///
-/// `register_patient` takes `&mut Client`, while `PatientRegistration::register` takes `&self`
-/// and must return a `Send` future. A `std::sync::MutexGuard` is not `Send`, so holding one
-/// across the `.await` inside `register` does not compile — and the mock's "compute before the
-/// async block" trick is not available here, because the whole body is awaits. The port doc in
-/// `cairn-gui-data` states this so it is not rediscovered by fighting the compiler.
+/// The ports take `&self` and must return `Send` futures, and every call here holds the
+/// connection's guard across an `.await` (a query, a submit, each poll of a registration
+/// request). A `std::sync::MutexGuard` is not `Send`, so holding one across those awaits does
+/// not compile — and the mock's "compute before the async block" trick is not available here,
+/// because the whole body is awaits. The port doc in `cairn-gui-data` states this so it is not
+/// rediscovered by fighting the compiler.
 ///
 /// # One connection, not a pool — and SHARED with the chart
 ///
@@ -58,9 +61,9 @@ pub use connection::{
 /// mutex makes the borrow rules explicit at every call site. The window's chart commands read
 /// through the SAME connection ([`LiveData::sharing`]), so "which node am I" is answered once
 /// per window rather than once per connection. If a later slice puts two windows
-/// on one `LiveData`, the second one waits — which is correct rather than merely acceptable:
-/// `register_patient` ticks this node's HLC, and two registrations interleaving inside one
-/// connection is not a thing to be clever about.
+/// on one `LiveData`, the second one waits for each call the first makes. A registration holds
+/// the connection only per call (submit, each poll, expire), never across its wait, so it does
+/// not shut the chart commands out for the seconds the node's terminal service may take.
 ///
 /// The window's connection is reopened when it is lost (#807, [`NodeConnection::reopening`]);
 /// one made by [`LiveData::new`] is not ([`NodeConnection::fixed`]).
