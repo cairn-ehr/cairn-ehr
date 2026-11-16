@@ -463,6 +463,16 @@ async fn not_yet_asked_hand_ticks_sign() {
     .await;
     let view = read(&state, chart).await;
     assert!(!view.lines[0].default_ticked && !view.lines[0].ticked);
+    // #1138 item 4: the line says so itself, or it reads exactly like a line checked clean.
+    assert!(
+        view.lines[0]
+            .check
+            .notes
+            .iter()
+            .any(|n| n == crate::med_list_judge::DRUG_ALLERGIES_NOT_YET_ASKED),
+        "{:?}",
+        view.lines[0].check
+    );
     let line = save(
         &state,
         chart,

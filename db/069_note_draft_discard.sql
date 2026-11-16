@@ -77,10 +77,8 @@ BEGIN
     -- behind a save must not be stamped before that save's last keystroke, since this instant is
     -- signed into the event's t_effective.
     v_now := clock_timestamp();
-    -- Already gone into the record or thrown away: each says which (db/066's doors say the same).
-    v_spent := (SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'
-                            WHEN s.by_timer THEN 'committed' ELSE 'spent' END
-                  FROM note_draft_spent s WHERE s.draft_id = p_draft);
+    -- Already gone into the record or thrown away: each says which, in db/066's one definition.
+    v_spent := cairn_note_draft_spent_word(p_draft);
     IF v_spent IS NULL THEN
         SELECT * INTO v_head FROM note_draft d WHERE d.draft_id = p_draft FOR UPDATE;
         v_spent := CASE WHEN NOT FOUND THEN 'gone'

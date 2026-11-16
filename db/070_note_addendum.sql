@@ -56,10 +56,8 @@ BEGIN
         RAISE EXCEPTION 'cairn_note_draft_addendum_part_save needs a draft, a patient, a terminal, a narrative and the note it adds to';
     END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended('note_draft:' || p_draft::text, 0));
-    -- The same words as db/066's doors, so the window handles a spent addendum draft as any other.
-    v_spent := (SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'
-                            WHEN s.by_timer THEN 'committed' ELSE 'spent' END
-                  FROM note_draft_spent s WHERE s.draft_id = p_draft);
+    -- db/066's own words, so the window handles a spent addendum draft as any other.
+    v_spent := cairn_note_draft_spent_word(p_draft);
     IF v_spent IS NOT NULL THEN
         RETURN v_spent;
     END IF;

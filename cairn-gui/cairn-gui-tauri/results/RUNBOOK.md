@@ -1109,9 +1109,10 @@ log-in). Then relaunch with `--key-hold-seconds 900` (a personal workstation) an
       credential.
 
 **Measurement 5 — the back-off, read aloud.** With VoiceOver on, sign as nurse-a with a wrong passphrase, four
-times. Tries 1–3 say "… That passphrase is not right." Try 4 says "That passphrase is not right. Wait 1 s, then
-try again." A press inside that wait says "Too many tries. Wait 1 s, then try again." and does not count as a
-failure. Then the right passphrase, after the wait, signs. Confirm:
+times. Tries 1–3 say "… That passphrase is not right for staff ID nurse-a." Try 4 says "That passphrase is not
+right for staff ID nurse-a. Wait 1 s, then try again." (#1138: the ID tried is named.) A press inside that wait
+says "Too many tries. Wait 1 s, then try again." and does not count as a failure. Then the right passphrase, after
+the wait, signs. Confirm:
 
 - [ ] VoiceOver reads each sentence once, whole, from the outcome line, and the wait is said in whole seconds.
 - [ ] No sentence, on screen or spoken, contains the passphrase.
@@ -1205,7 +1206,8 @@ current passphrase and a new one twice, and presses *Change passphrase*.
 
 - [ ] "Your passphrase is changed." The next sign with the new passphrase works; the old one is "not right" (no
       "replaced": the key did not change).
-- [ ] A wrong current passphrase: the ordinary refusal ("That passphrase is not right."), and it counts as a try.
+- [ ] A wrong current passphrase: the ordinary refusal ("That passphrase is not right for staff ID …."), and it
+      counts as a try.
 - [ ] The same passphrase as the current one: "Your new passphrase is the same as your current one. Nothing was changed."
 
 **Measurement 5 — confirm and repudiate (the ≤ 10 s per row budget).** Back in the superuser's panel as `boss`.

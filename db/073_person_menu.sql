@@ -40,19 +40,15 @@ $$;
 
 -- Every open draft with its writers: one row per (draft, distinct named writer of a NON-BLANK
 -- part — the commit door's own blank test, cairn_twin_is_present). A part by an unknown (NULL)
--- writer names nobody, so it belongs on nobody's menu. due and stuck are cairn_note_drafts_due's
--- (db/067) expressions copied verbatim, so the menu and the chart's own draft row can never
--- disagree; they are per DRAFT, hence repeated on each of its writers' rows. No clock read, so
+-- writer names nobody, so it belongs on nobody's menu. due and stuck are db/067's helpers, the ones
+-- cairn_note_drafts_due reads, so the menu and the chart's own draft row can never disagree
+-- (#1138); they are per DRAFT, hence repeated on each of its writers' rows. No clock read, so
 -- the window decides "overdue" itself. No text and no terminal leave this door.
 CREATE OR REPLACE FUNCTION cairn_note_drafts_by_writer()
 RETURNS TABLE(writer text, draft_id uuid, patient_id uuid, due timestamptz, stuck boolean)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT w.writer, d.draft_id, d.patient_id,
-           d.last_keystroke + make_interval(mins => cairn_note_quarantine_minutes()),
-           EXISTS (SELECT 1 FROM note_draft_part p
-                    WHERE p.draft_id = d.draft_id AND p.writer IS NOT NULL
-                      AND cairn_twin_is_present(p.narrative)  -- the commit door's blank test
-                      AND cairn_vault_member_key(p.writer) IS NULL)
+           cairn_note_draft_due(d.last_keystroke), cairn_note_draft_stuck(d.draft_id)
       FROM (SELECT DISTINCT p.draft_id, p.writer FROM note_draft_part p
              WHERE p.writer IS NOT NULL AND cairn_twin_is_present(p.narrative)) w
       JOIN note_draft d ON d.draft_id = w.draft_id

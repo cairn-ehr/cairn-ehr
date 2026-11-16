@@ -446,6 +446,19 @@ RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_t
     SELECT m.signing_key_id FROM vault_member m WHERE m.staff_id = cairn_vault_staff_id(p_staff_id);
 $$;
 
+-- Whether a key the window already HOLDS may still sign (#1138 item 1): the release door's two
+-- admission checks (db/061: current in actor_current; not past the site's expiry for an unconfirmed
+-- key), asked with no passphrase, plus `kind = 'human'` of its own (every vault member is one, so
+-- it only narrows). A re-key, a repudiation or an expiry at another terminal leaves a held key in
+-- this window's memory; asked on each use, the window wipes it and asks for the passphrase instead
+-- of signing what the floor (or, for the expiry, only the release door) would refuse. Reveals only
+-- yes or no for a key id.
+CREATE OR REPLACE FUNCTION cairn_vault_key_may_sign(p_key text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = p_key AND a.kind = 'human')
+       AND NOT COALESCE(cairn_vault_key_expires_at(p_key) <= now(), false);
+$$;
+
 -- Owner only (the node's console, `cairn-node vault-set-unconfirmed-expiry`): after how many days
 -- an unconfirmed key stops signing (§5.5), or NULL for no expiry — the reference default. Hard
 -- policy, the site's to choose; Cairn ships the mechanism (principle 9). No grant: being able to
@@ -492,6 +505,7 @@ REVOKE EXECUTE ON FUNCTION cairn_vault_reseal(text, bytea, text, bytea) FROM PUB
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_enrollers() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_member_key(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_vault_key_may_sign(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_set_unconfirmed_expiry(int) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) FROM PUBLIC;
 
@@ -513,6 +527,7 @@ GRANT EXECUTE ON FUNCTION cairn_vault_enrollers() TO cairn_window;
 REVOKE EXECUTE ON FUNCTION cairn_vault_enrollers() FROM cairn_agent; -- #1129
 GRANT EXECUTE ON FUNCTION cairn_vault_member_key(text) TO cairn_window;
 REVOKE EXECUTE ON FUNCTION cairn_vault_member_key(text) FROM cairn_agent; -- #1129
+GRANT EXECUTE ON FUNCTION cairn_vault_key_may_sign(text) TO cairn_window;
 GRANT EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) TO cairn_window;
 REVOKE EXECUTE ON FUNCTION cairn_vault_unconfirmed_expires_at(text) FROM cairn_agent; -- #1129
 

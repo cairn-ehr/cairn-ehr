@@ -67,6 +67,25 @@ RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_te
     SELECT COALESCE((SELECT p.quarantine_minutes FROM note_policy p), 180);
 $$;
 
+-- When a draft whose last keystroke was p_last_keystroke falls due: the ONE definition every
+-- reader of "due" uses (the timer's two doors, the chart's due row, db/073's person menu), so the
+-- menu and the chart can never disagree (#1138). Not a definer: each caller is one.
+CREATE OR REPLACE FUNCTION cairn_note_draft_due(p_last_keystroke timestamptz)
+RETURNS timestamptz LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
+    SELECT p_last_keystroke + make_interval(mins => cairn_note_quarantine_minutes());
+$$;
+
+-- Whether draft p_draft is STUCK: a non-blank part (the commit door's blank test,
+-- cairn_twin_is_present) names a writer with no vault key, so the timer's commit rolls it back
+-- every time and it never goes in by itself. One definition for the chart and the menu (#1138).
+CREATE OR REPLACE FUNCTION cairn_note_draft_stuck(p_draft uuid)
+RETURNS boolean LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
+    SELECT EXISTS (SELECT 1 FROM note_draft_part p
+                    WHERE p.draft_id = p_draft AND p.writer IS NOT NULL
+                      AND cairn_twin_is_present(p.narrative)
+                      AND cairn_vault_member_key(p.writer) IS NULL);
+$$;
+
 -- The drafts now overdue (no real change for the quarantine time, on the database's clock),
 -- oldest last keystroke first; p_patient = one chart, NULL = every chart. A HINT only: it takes no
 -- lock, so a draft listed here may be typed into, signed or committed before the caller gets to
@@ -76,7 +95,7 @@ RETURNS TABLE(draft_id uuid)
 LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT d.draft_id FROM note_draft d
      WHERE (p_patient IS NULL OR d.patient_id = p_patient)
-       AND d.last_keystroke + make_interval(mins => cairn_note_quarantine_minutes()) <= clock_timestamp()
+       AND cairn_note_draft_due(d.last_keystroke) <= clock_timestamp()
      ORDER BY d.last_keystroke, d.draft_id;
 $$;
 
@@ -98,13 +117,8 @@ END $$;
 CREATE OR REPLACE FUNCTION cairn_note_drafts_due(p_patient uuid)
 RETURNS TABLE(draft_id uuid, due timestamptz, overdue boolean, stuck boolean)
 LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT q.draft_id, q.due, q.due <= clock_timestamp(),
-           EXISTS (SELECT 1 FROM note_draft_part p
-                    WHERE p.draft_id = q.draft_id AND p.writer IS NOT NULL
-                      AND cairn_twin_is_present(p.narrative)  -- the commit door's blank test
-                      AND cairn_vault_member_key(p.writer) IS NULL)
-      FROM (SELECT d.draft_id,
-                   d.last_keystroke + make_interval(mins => cairn_note_quarantine_minutes()) AS due
+    SELECT q.draft_id, q.due, q.due <= clock_timestamp(), cairn_note_draft_stuck(q.draft_id)
+      FROM (SELECT d.draft_id, cairn_note_draft_due(d.last_keystroke) AS due
               FROM note_draft d WHERE d.patient_id = p_patient) q;
 $$;
 
@@ -143,7 +157,7 @@ BEGIN
     IF NOT FOUND THEN
         RETURN;  -- absent, or spent (a spend deletes the header)
     END IF;
-    IF v_keystroke + make_interval(mins => cairn_note_quarantine_minutes()) > clock_timestamp() THEN
+    IF cairn_note_draft_due(v_keystroke) > clock_timestamp() THEN
         RETURN;  -- not yet overdue
     END IF;
     -- RETURN QUERY buffers these rows now, so the deletes below cannot take them away.
@@ -178,7 +192,8 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_note_set_quarantine(int), cairn_note_quarantine_minutes(),
     cairn_note_drafts_overdue(uuid), cairn_note_drafts_due(uuid),
-    cairn_note_draft_commit_overdue(uuid, uuid), cairn_note_key_is_human(text) FROM PUBLIC;
+    cairn_note_draft_commit_overdue(uuid, uuid), cairn_note_key_is_human(text),
+    cairn_note_draft_due(timestamptz), cairn_note_draft_stuck(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_note_quarantine_minutes(), cairn_note_drafts_overdue(uuid),
     cairn_note_drafts_due(uuid), cairn_note_draft_commit_overdue(uuid, uuid),
     cairn_note_key_is_human(text) TO cairn_window;

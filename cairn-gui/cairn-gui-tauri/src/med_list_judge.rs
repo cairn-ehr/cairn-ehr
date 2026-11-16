@@ -174,6 +174,11 @@ pub(crate) struct Judged {
     pub offers: Vec<DelabelOffer>,
 }
 
+/// The muted note on every draft line while the drug allergies, as read, are "not yet asked"
+/// (#1138 item 4). With nothing recorded, the check finds nothing, and a line with no tag reads exactly like
+/// a line checked clean. The strip's own words, so the two say the same thing.
+pub(crate) const DRUG_ALLERGIES_NOT_YET_ASKED: &str = "Drug allergies not yet asked: not checked";
+
 /// Judge every line of `fresh`. `use_allergies`: the allergies were read over the set on screen
 /// (else every line is "not checked"). `named_writer`: the list has a writer (else no line is
 /// default-ticked).
@@ -190,6 +195,7 @@ pub(crate) async fn judge(
     };
     let status = match use_allergies {
         true => build_view(&fresh.allergies, chrono::Local::now().offset().fix()).drug,
+        // A stand-in that refuses a default tick; never shown (`noting_not_yet_asked` gets `None`).
         false => ListStatus::NotYetAsked,
     };
     let duplicates: Vec<(bool, Option<String>)> = {
@@ -225,6 +231,7 @@ pub(crate) async fn judge(
                 (true, false) => not_checked(),
                 (false, _) => not_read("the linked charts changed since the list was read"),
             };
+            let check = noting_not_yet_asked(check, use_allergies.then_some(&status));
             let read = read_directions(&line.directions);
             let all_parts_coded = signable
                 .as_ref()
@@ -314,6 +321,17 @@ async fn check_all(
     check_lines(db.as_deref(), allergies, &lines).await
 }
 
+/// Pure: `check` with [`DRUG_ALLERGIES_NOT_YET_ASKED`] among its notes while the drug allergies,
+/// as READ, are not yet asked. `None`: they were not read (the linked charts changed), so the line
+/// already says "could not be read" and claiming "not yet asked" would be false. Only a note: the
+/// tick and reason rules already read the status itself (`default_tick` refuses a default tick).
+fn noting_not_yet_asked(mut check: LineCheck, drug_allergies: Option<&ListStatus>) -> LineCheck {
+    if drug_allergies == Some(&ListStatus::NotYetAsked) {
+        check.notes.push(DRUG_ALLERGIES_NOT_YET_ASKED.into());
+    }
+    check
+}
+
 /// "Not checked", for a line the check was never given (it cannot be read as a drug). Pure.
 fn not_checked() -> LineCheck {
     LineCheck {
@@ -393,5 +411,31 @@ pub(crate) async fn untick(
                 cairn_gui_live::cause_of(&db.explain(e))
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn notes(drug_allergies: Option<&ListStatus>) -> Vec<String> {
+        noting_not_yet_asked(LineCheck::default(), drug_allergies).notes
+    }
+
+    /// #1138 item 4: the note says "not yet asked" only when the allergies were READ and say so.
+    /// Unread (the linked charts changed), the line already says "could not be read"; a second
+    /// note claiming "not yet asked" would be false for a patient whose allergies are recorded.
+    #[test]
+    fn the_not_yet_asked_note_only_when_read_and_not_asked() {
+        let asked = ListStatus::NoneKnown {
+            asked: chrono::NaiveDate::from_ymd_opt(2026, 11, 16).unwrap(),
+        };
+        assert_eq!(
+            notes(Some(&ListStatus::NotYetAsked)),
+            [DRUG_ALLERGIES_NOT_YET_ASKED]
+        );
+        assert!(notes(Some(&ListStatus::Entries)).is_empty());
+        assert!(notes(Some(&asked)).is_empty());
+        assert!(notes(None).is_empty(), "unread is not 'not yet asked'");
     }
 }

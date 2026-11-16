@@ -268,3 +268,79 @@ async fn the_key_not_the_claim_decides_in_the_window() {
     );
     assert_eq!(vouch_count(&owner).await, 0, "Zed's key wrote no vouch");
 }
+
+/// #1138 item 1: a held key is re-checked on each use. Repudiated at another terminal (here the
+/// owner appends the repudiation, as the console door does), it is forgotten on its next use and
+/// the act asks for the passphrase, instead of the strip saying "Signed in for the next act" while
+/// the floor refuses every act it signs.
+#[tokio::test]
+async fn a_held_key_repudiated_elsewhere_is_forgotten_on_its_next_use() {
+    let Some((_g, owner, state, _, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let now = crate::state::Now::read;
+    let (_, kid) = state
+        .signer_for_act(credential("sue"), now())
+        .await
+        .unwrap();
+    assert_eq!(state.key_status(now()).await.as_deref(), Some("sue"));
+    assert!(
+        state.signer_for_act(None, now()).await.is_ok(),
+        "held, and still current"
+    );
+
+    owner
+        .execute(
+            "SELECT cairn_actor_append(a.actor_id, 'repudiate', $1, 'console', NULL) \
+               FROM actor_current a WHERE a.signing_key_id = $1",
+            &[&kid],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state.signer_for_act(None, now()).await.err(),
+        Some(crate::signer::KeyRefusal::NeedCredential)
+    );
+    assert_eq!(
+        state.key_status(now()).await,
+        None,
+        "the stale key is wiped"
+    );
+}
+
+/// #1138 item 1, the check that cannot be made: the window's connection is cut between two uses
+/// of a held key. The act is refused as a fault ("ask IT"), as the passphrase path refuses one,
+/// and the key is NOT wiped (a blip must not cost a passphrase). Not "sign as held": the floor
+/// never reads the site's expiry for an unconfirmed key, so this check is its only enforcement.
+#[tokio::test]
+async fn a_held_key_whose_currency_cannot_be_checked_does_not_sign() {
+    let Some((_g, owner, state, _, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let now = crate::state::Now::read;
+    state
+        .signer_for_act(credential("sue"), now())
+        .await
+        .unwrap();
+    assert_eq!(state.key_status(now()).await.as_deref(), Some("sue"));
+    // The serial guard is held: the only window connection is this test's own.
+    owner
+        .execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+              WHERE usename = 'cairn_window_probe'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state.signer_for_act(None, now()).await.err(),
+        Some(crate::signer::KeyRefusal::Fault)
+    );
+    assert_eq!(
+        state.key_status(now()).await.as_deref(),
+        Some("sue"),
+        "a fault is not a stale key: the hold survives"
+    );
+}

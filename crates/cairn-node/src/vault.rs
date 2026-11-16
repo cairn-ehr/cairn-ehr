@@ -334,6 +334,17 @@ pub async fn staff_id_taken(db: &Client, staff_id: &str) -> anyhow::Result<bool>
     Ok(row.get(0))
 }
 
+/// May key `kid`, which the window already holds, still sign? The release door's admission checks
+/// (current; not past the site's expiry for an unconfirmed key) with no passphrase: the window asks
+/// on each use of a held key, and wipes one re-keyed, repudiated or expired elsewhere (#1138).
+pub async fn key_may_sign(db: &Client, kid: &str) -> anyhow::Result<bool> {
+    let row = db
+        .query_one("SELECT cairn_vault_key_may_sign($1)", &[&kid])
+        .await
+        .map_err(|e| anyhow!("held-key check failed: {}", db_text(&e)))?;
+    Ok(row.get(0))
+}
+
 /// An Argon2id PHC string for the shared terminal-unlock passphrase (the window checks against it).
 pub fn terminal_phc(passphrase: &str) -> anyhow::Result<String> {
     let entropy = seal::rand_bytes::<16>().map_err(|e| anyhow!("entropy unavailable: {e}"))?;
