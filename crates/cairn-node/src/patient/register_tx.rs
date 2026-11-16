@@ -22,6 +22,12 @@ use uuid::Uuid;
 /// Register a chart on `tx` without committing it; the caller commits (or rolls back).
 /// `kid` is the hex of the node's verifying key. Returns the new chart and its registration
 /// event id.
+///
+/// **On `Err`:** only a malformed birth-date shape returns before any SQL. After ANY SQL
+/// error the transaction (or savepoint) is aborted (SQLSTATE 25P02), so the caller must roll
+/// back that savepoint, or the whole transaction, before using it again. The #815
+/// outcome-unknown mapping is NOT applied here: the caller owns the commit, so it applies
+/// `db_diagnosis::commit_failure` to its own commit using the returned event id.
 pub async fn register_patient_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     sk: &SigningKey,
