@@ -19,6 +19,7 @@ use cairn_event::note_discard::NOTE_DISCARD_EVENT_TYPE;
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::discard::{discard_draft, DiscardOutcome, DiscardRefusal};
 use cairn_node::note::draft::{open_drafts, save_part, take_draft, SaveOutcome, TakeOutcome};
 use cairn_node::note::sign::{sign_note, SignNoteInput, SignRefusal};
@@ -156,8 +157,15 @@ async fn discarding_own_draft_records_one_signed_event() {
     // A part by a writer not known, then the discarder's own: both are the discarder's to throw.
     save_as(&c, draft, chart, None, "found on the floor").await;
 
-    let event =
-        recorded(discard_draft(&mut c, &node_sk, &input(draft, chart, "BP <90"), &author).await);
+    let event = recorded(
+        discard_draft(
+            &mut c,
+            NodeKey::Full(&node_sk),
+            &input(draft, chart, "BP <90"),
+            &author,
+        )
+        .await,
+    );
 
     let s = stored(&c, event).await;
     assert_eq!(s.event_type, NOTE_DISCARD_EVENT_TYPE);
@@ -199,8 +207,15 @@ async fn discard_carries_the_text_on_screen() {
     let draft = Uuid::now_v7();
     save_as(&c, draft, chart, Some("notewriter"), "a").await;
 
-    let event =
-        recorded(discard_draft(&mut c, &node_sk, &input(draft, chart, "ab"), &author).await);
+    let event = recorded(
+        discard_draft(
+            &mut c,
+            NodeKey::Full(&node_sk),
+            &input(draft, chart, "ab"),
+            &author,
+        )
+        .await,
+    );
 
     let s = stored(&c, event).await;
     assert_eq!(s.payload["parts"][0]["narrative"], "ab");
@@ -226,9 +241,14 @@ async fn a_colleagues_draft_is_refused_not_yours_and_kept() {
     let draft = Uuid::now_v7();
     save_as(&c, draft, chart, Some("nurse-a"), "obs stable").await;
 
-    let out = discard_draft(&mut c, &node_sk, &input(draft, chart, "mine"), &author)
-        .await
-        .unwrap();
+    let out = discard_draft(
+        &mut c,
+        NodeKey::Full(&node_sk),
+        &input(draft, chart, "mine"),
+        &author,
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(out, Err(DiscardRefusal::NotYours)), "{out:?}");
     let drafts = open_drafts(&c, chart).await.unwrap();
@@ -259,9 +279,14 @@ async fn an_all_blank_draft_is_empty_and_gone() {
     let draft = Uuid::now_v7();
     save_as(&c, draft, chart, Some("notewriter"), "x").await;
 
-    let out = discard_draft(&mut c, &node_sk, &input(draft, chart, "  \n "), &author)
-        .await
-        .unwrap();
+    let out = discard_draft(
+        &mut c,
+        NodeKey::Full(&node_sk),
+        &input(draft, chart, "  \n "),
+        &author,
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(out, Ok(DiscardOutcome::Empty)), "{out:?}");
     assert!(
@@ -300,7 +325,7 @@ async fn sign_after_discard_is_refused_discarded() {
     recorded(
         discard_draft(
             &mut c,
-            &node_sk,
+            NodeKey::Full(&node_sk),
             &input(draft, chart, "abdomen soft"),
             &author,
         )
@@ -309,7 +334,7 @@ async fn sign_after_discard_is_refused_discarded() {
 
     let sign = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "abdomen soft"),
         &author,
     )
@@ -318,7 +343,7 @@ async fn sign_after_discard_is_refused_discarded() {
     assert!(matches!(sign, Err(SignRefusal::Discarded)), "{sign:?}");
     let again = discard_draft(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "abdomen soft"),
         &author,
     )
@@ -356,8 +381,8 @@ async fn discard_racing_sign_one_wins() {
     let sent = input(draft, chart, "seen");
 
     let (discarded, signed) = tokio::join!(
-        discard_draft(&mut c, &node_sk, &sent, &author),
-        sign_note(&mut other, &node_sk, &sent, &author)
+        discard_draft(&mut c, NodeKey::Full(&node_sk), &sent, &author),
+        sign_note(&mut other, NodeKey::Full(&node_sk), &sent, &author)
     );
 
     match (discarded.unwrap(), signed.unwrap()) {
@@ -414,23 +439,26 @@ async fn discarded_at_follows_a_save_that_held_the_lock() {
     // B's discard queues behind the lock; A then saves again (a keystroke stamped while B waits)
     // and commits. B sends the same text, so its own save stamps nothing new.
     let sent = input(draft, chart, "abc");
-    let (out, ()) = tokio::join!(discard_draft(&mut c, &node_sk, &sent, &author), async {
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        let again = save_part(
-            &holder,
-            draft,
-            chart,
-            TERMINAL,
-            Some("notewriter"),
-            "abc",
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(again, SaveOutcome::Saved);
-        holder.commit().await.unwrap();
-    });
+    let (out, ()) = tokio::join!(
+        discard_draft(&mut c, NodeKey::Full(&node_sk), &sent, &author),
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let again = save_part(
+                &holder,
+                draft,
+                chart,
+                TERMINAL,
+                Some("notewriter"),
+                "abc",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(again, SaveOutcome::Saved);
+            holder.commit().await.unwrap();
+        }
+    );
 
     let s = stored(&c, recorded(out)).await;
     let ended: DateTime<Utc> = s.payload["parts"][0]["recording_ended"]

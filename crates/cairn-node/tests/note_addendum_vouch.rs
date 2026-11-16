@@ -17,6 +17,7 @@ mod note_vouch_kit;
 
 use cairn_event::SigningKey;
 use cairn_node::db;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::compound::{compound_state, compounds, CompoundNote, CompoundState};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{sign_note, SignNoteInput, SignedNote};
@@ -82,7 +83,7 @@ async fn sign_claimed(
         addendum_to: to,
         also_vouches: listed,
     };
-    sign_note(c, &w.node_sk, &input, &m.author())
+    sign_note(c, NodeKey::Full(&w.node_sk), &input, &m.author())
         .await
         .unwrap()
         .expect("the note signs")

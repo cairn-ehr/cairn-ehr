@@ -33,6 +33,7 @@ use crate::write_failure::{
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{elsewhere_report, PatientMedicationList};
+use cairn_node::node_key::NodeKey;
 use std::time::Instant;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -402,7 +403,7 @@ pub async fn sign_off_impl(
         };
         let mut outcome = cairn_node::medication::signoff::sign_off_medication_list(
             &mut db,
-            node_sk,
+            NodeKey::Full(node_sk),
             &state.node_origin,
             &params,
             patient,
@@ -612,7 +613,7 @@ pub async fn cease_impl(
             Err(lost) => Err(anyhow::Error::from(lost)),
             Ok(mut db) => cairn_node::medication::cease_medication(
                 &mut db,
-                node_sk,
+                NodeKey::Full(node_sk),
                 &node_kid,
                 &state.node_origin,
                 thread_chart,

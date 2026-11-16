@@ -21,6 +21,7 @@ pub mod localstate;
 pub mod localstate_read;
 pub mod matcher_actor;
 pub mod medication;
+pub mod node_key;
 pub mod note;
 pub mod pairing;
 pub mod patient;

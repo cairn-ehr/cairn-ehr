@@ -14,6 +14,7 @@ mod note_vouch_kit;
 
 use cairn_event::SigningKey;
 use cairn_node::db;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::draft::save_part;
 use cairn_node::note::menu::{PersonMenu, Why};
 use cairn_node::note::menu_read::read_menus;
@@ -46,7 +47,7 @@ async fn sign_as(c: &mut Client, node_sk: &SigningKey, chart: Uuid, m: &Member) 
         addendum_to: None,
         also_vouches: &[],
     };
-    sign_note(c, node_sk, &input, &m.author())
+    sign_note(c, NodeKey::Full(node_sk), &input, &m.author())
         .await
         .unwrap()
         .expect("the note signs")

@@ -11,6 +11,7 @@ use crate::state::AppState;
 use cairn_event::medication::{Charting, MedicationAssertion};
 use cairn_node::medication::draft_versions_sign::{set_aside_draft_line, VersionToSign};
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use uuid::Uuid;
 
 /// What a version signs, rebuilt from its STORED row: the drug fields exactly as a charted line
@@ -74,7 +75,7 @@ pub(crate) async fn sign_alone(
         .await?;
     set_aside_draft_line(
         &mut db,
-        node_sk,
+        NodeKey::Full(node_sk),
         &node_kid,
         &state.node_origin,
         patient,

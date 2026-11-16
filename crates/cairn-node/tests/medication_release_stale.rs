@@ -21,6 +21,7 @@ use cairn_node::medication::{
     build_release_body, build_withhold_body, release_medication_holds, withhold_medication,
     WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -61,7 +62,7 @@ async fn a_second_release_of_a_released_hold_is_refused_as_stale() {
     let wid = withhold(&mut c, &sk, &kid, patient, med, "BP 85/50").await;
     release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -76,7 +77,7 @@ async fn a_second_release_of_a_released_hold_is_refused_as_stale() {
     // The colleague's screen still shows the W; their release must not write a second one.
     let err = release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -127,7 +128,7 @@ async fn a_release_of_a_hold_that_ran_out_is_refused_as_stale() {
 
     let err = release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -161,7 +162,7 @@ async fn an_ended_hold_on_another_thread_gets_the_floors_thread_sentence_not_sta
     let wid = withhold(&mut c, &sk, &kid, patient, med, "K+ 6.1").await;
     release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -175,7 +176,7 @@ async fn an_ended_hold_on_another_thread_gets_the_floors_thread_sentence_not_sta
 
     let err = release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -203,7 +204,7 @@ async fn a_release_naming_one_ended_and_one_standing_hold_releases_neither() {
     let standing = withhold(&mut c, &sk, &kid, patient, med, "HR 44").await;
     release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -217,7 +218,7 @@ async fn a_release_naming_one_ended_and_one_standing_hold_releases_neither() {
 
     let err = release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -237,7 +238,7 @@ async fn a_release_naming_one_ended_and_one_standing_hold_releases_neither() {
     assert_eq!(release_rows(&c, med).await, 1, "nothing more was written");
     release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -264,12 +265,21 @@ async fn a_release_of_a_pending_hold_is_still_admitted() {
         from: Some(&from),
         until: HoldUntil::Reviewed,
     };
-    let wid = withhold_medication(&mut c, &sk, &kid, "test-node", patient, med, &w, None)
-        .await
-        .unwrap();
+    let wid = withhold_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &w,
+        None,
+    )
+    .await
+    .unwrap();
     release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -296,7 +306,7 @@ async fn the_floor_refuses_a_dead_release_at_the_local_door_and_admits_it_at_syn
     let wid = withhold(&mut c, &sk, &kid, patient, med, "HR 44").await;
     release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,

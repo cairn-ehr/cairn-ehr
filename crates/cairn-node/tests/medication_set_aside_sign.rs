@@ -16,6 +16,7 @@ use cairn_node::medication::draft_versions_sign::{set_aside_draft_line, VersionT
 use cairn_node::medication::set_aside_read::read_set_asides;
 use cairn_node::medication::CeaseMedicationInput;
 use cairn_node::medication::{cease_medication, AssertMedicationInput, AuthorParams};
+use cairn_node::node_key::NodeKey;
 use common::note_setup;
 use serde_json::json;
 use tokio_postgres::Client;
@@ -120,7 +121,7 @@ async fn chart(
     };
     chart_draft_line(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,
@@ -277,7 +278,7 @@ async fn a_version_beside_a_charted_line_signs_alone() {
     };
     let done = set_aside_draft_line(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,
@@ -312,7 +313,7 @@ async fn a_charted_companion_stopped_since_refuses_and_keeps_the_version() {
     let at = save(&r, ver, Some(format!("med:{thread}"))).await;
     cease_medication(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,
@@ -339,7 +340,7 @@ async fn a_charted_companion_stopped_since_refuses_and_keeps_the_version() {
     };
     let err = set_aside_draft_line(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,

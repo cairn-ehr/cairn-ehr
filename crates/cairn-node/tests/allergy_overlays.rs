@@ -13,6 +13,7 @@ use cairn_node::allergy::sign::{
 };
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -64,7 +65,7 @@ impl Ward {
         };
         sign_allergy(
             &mut self.c,
-            &self.node_sk,
+            NodeKey::Full(&self.node_sk),
             &self.node_kid,
             "n",
             patient,
@@ -91,7 +92,7 @@ impl Ward {
         };
         sign_allergy_challenge(
             &mut self.c,
-            &self.node_sk,
+            NodeKey::Full(&self.node_sk),
             &self.node_kid,
             "n",
             patient,
@@ -114,7 +115,7 @@ impl Ward {
         };
         sign_allergy_retraction(
             &mut self.c,
-            &self.node_sk,
+            NodeKey::Full(&self.node_sk),
             &self.node_kid,
             "n",
             patient,
@@ -255,7 +256,7 @@ async fn a_repudiated_signer_reads_as_repudiated() {
     };
     sign_allergy_none(
         &mut w.c,
-        &w.node_sk,
+        NodeKey::Full(&w.node_sk),
         &w.node_kid,
         "n",
         a,

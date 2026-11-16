@@ -37,6 +37,7 @@ use cairn_event::allergy_overlay::{AllergyChallenge, AllergyRetraction};
 use cairn_event::medication::SubstanceCoding;
 use cairn_medication_view::ChartSet;
 use cairn_node::allergy::read::PatientAllergies;
+use cairn_node::node_key::NodeKey;
 use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -293,13 +294,19 @@ pub(crate) async fn sign_then_reread(
         use cairn_node::allergy::sign::*;
         let (sk, kid, origin) = (node_sk, node_kid.as_str(), state.node_origin.as_str());
         let result = match &act {
-            Act::Entry(e) => sign_allergy(&mut db, sk, kid, origin, chart, e, &author).await,
-            Act::None(s) => sign_allergy_none(&mut db, sk, kid, origin, chart, *s, &author).await,
+            Act::Entry(e) => {
+                sign_allergy(&mut db, NodeKey::Full(sk), kid, origin, chart, e, &author).await
+            }
+            Act::None(s) => {
+                sign_allergy_none(&mut db, NodeKey::Full(sk), kid, origin, chart, *s, &author).await
+            }
             Act::Challenge(c) => {
-                sign_allergy_challenge(&mut db, sk, kid, origin, chart, c, &author).await
+                sign_allergy_challenge(&mut db, NodeKey::Full(sk), kid, origin, chart, c, &author)
+                    .await
             }
             Act::Retraction(r) => {
-                sign_allergy_retraction(&mut db, sk, kid, origin, chart, r, &author).await
+                sign_allergy_retraction(&mut db, NodeKey::Full(sk), kid, origin, chart, r, &author)
+                    .await
             }
         };
         result.map_err(|e| db.explain(e))

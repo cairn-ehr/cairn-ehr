@@ -14,6 +14,7 @@ use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::discard::{discard_draft, DiscardOutcome};
 use cairn_node::note::draft::save_part;
 use cairn_node::note::read::list_patient_notes;
@@ -47,7 +48,7 @@ async fn sign_on(
         addendum_to: None,
         also_vouches: &[],
     };
-    sign_note(c, node_sk, &input, author)
+    sign_note(c, NodeKey::Full(node_sk), &input, author)
         .await
         .unwrap()
         .expect("signs");
@@ -128,7 +129,7 @@ async fn a_peer_note_signed_by_the_node_alone_reads_writer_not_known() {
     let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
     seal_sign_submit(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         note_body(Uuid::now_v7(), chart, &node_kid, hlc, &a),
         None,
         None,
@@ -175,7 +176,7 @@ async fn a_note_drafted_by_an_agent_key_never_grades_went_in_unsigned() {
         let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
         let body = note_body(Uuid::now_v7(), chart, &node_kid, hlc, &a);
         let body = with_drafting_writer(body, Some(writer));
-        seal_sign_submit(&mut c, &node_sk, body, None, None)
+        seal_sign_submit(&mut c, NodeKey::Full(&node_sk), body, None, None)
             .await
             .unwrap();
     }
@@ -277,7 +278,7 @@ async fn an_addendum_ref_in_a_non_canonical_spelling_still_reads() {
     let first = Uuid::now_v7();
     let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
     let body = note_body(first, chart, &node_kid, hlc, &note(None));
-    seal_sign_submit(&mut c, &node_sk, body, None, None)
+    seal_sign_submit(&mut c, NodeKey::Full(&node_sk), body, None, None)
         .await
         .unwrap();
     // `a0ee-bc99-…`: Postgres reads it as a uuid, `Uuid::parse_str` refuses it.
@@ -291,7 +292,7 @@ async fn an_addendum_ref_in_a_non_canonical_spelling_still_reads() {
     assert!(odd.parse::<Uuid>().is_err(), "the spelling Rust refuses");
     let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
     let body = note_body(Uuid::now_v7(), chart, &node_kid, hlc, &note(Some(&odd)));
-    seal_sign_submit(&mut c, &node_sk, body, None, None)
+    seal_sign_submit(&mut c, NodeKey::Full(&node_sk), body, None, None)
         .await
         .expect("the floor admits the spelling");
 
@@ -335,7 +336,9 @@ async fn discard_on(
         addendum_to: None,
         also_vouches: &[],
     };
-    let out = discard_draft(c, node_sk, &input, author).await.unwrap();
+    let out = discard_draft(c, NodeKey::Full(node_sk), &input, author)
+        .await
+        .unwrap();
     assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
 }
 
@@ -447,7 +450,9 @@ async fn discard_two_parts_on(
         addendum_to: None,
         also_vouches: &[],
     };
-    let out = discard_draft(c, node_sk, &input, author).await.unwrap();
+    let out = discard_draft(c, NodeKey::Full(node_sk), &input, author)
+        .await
+        .unwrap();
     assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
 }
 

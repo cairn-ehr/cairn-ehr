@@ -29,6 +29,7 @@ use cairn_node::medication::line::Directions;
 use cairn_node::medication::stat_give::{give_stat, strike_given};
 use cairn_node::medication::stat_read::read_stat_orders;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -174,7 +175,14 @@ pub async fn med_stat_give_impl(
             .await?;
         let origin = state.node_origin.as_str();
         give_stat(
-            &mut db, node_sk, &node_kid, origin, patient, medication, given_at, &author,
+            &mut db,
+            NodeKey::Full(node_sk),
+            &node_kid,
+            origin,
+            patient,
+            medication,
+            given_at,
+            &author,
         )
         .await
         .map_err(|e| db.explain(e))
@@ -278,7 +286,7 @@ pub async fn med_stat_strike_impl(
         let origin = state.node_origin.as_str();
         let struck = strike_given(
             &mut db,
-            node_sk,
+            NodeKey::Full(node_sk),
             &node_kid,
             origin,
             patient,

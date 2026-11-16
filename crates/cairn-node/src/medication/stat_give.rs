@@ -8,12 +8,13 @@
 use super::cessation::{build_cease_body, CeaseMedicationInput};
 use super::draft_versions_sign::submit;
 use super::sealed_submit::{prepare_sealed, AuthorParams};
+use crate::node_key::NodeKey;
 use cairn_event::medication::{
     given_body, given_retraction_body, render_given_retraction_twin, render_given_twin, Given,
     GivenRetraction, GIVEN_EVENT_TYPE, GIVEN_RETRACTION_EVENT_TYPE, GIVEN_RETRACTION_SCHEMA,
     GIVEN_SCHEMA, STAT_GIVEN_REASON,
 };
-use cairn_event::{ClockGrade, EventBody, SigningKey};
+use cairn_event::{ClockGrade, EventBody};
 use chrono::{DateTime, SecondsFormat, Utc};
 use uuid::Uuid;
 
@@ -57,7 +58,7 @@ fn envelope(
 #[allow(clippy::too_many_arguments)] // signer + node context + the act's own facts
 pub async fn give_stat(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -78,7 +79,7 @@ pub async fn give_stat(
         node_kid,
         stop_hlc,
     );
-    let stop = prepare_sealed(&*client, node_sk, stop_body, Some(author)).await?;
+    let stop = prepare_sealed(&*client, node, stop_body, Some(author)).await?;
 
     let (mid, completes) = (medication_id.to_string(), stop.event_id.to_string());
     let g = Given {
@@ -95,7 +96,7 @@ pub async fn give_stat(
         given_body(&g),
         render_given_twin(&g),
     );
-    let given = prepare_sealed(&*client, node_sk, given_body_, Some(author)).await?;
+    let given = prepare_sealed(&*client, node, given_body_, Some(author)).await?;
 
     let tx = client.transaction().await?;
     submit(&tx, &stop).await?;
@@ -115,7 +116,7 @@ pub async fn give_stat(
 #[allow(clippy::too_many_arguments)] // signer + node context + the act's own facts
 pub async fn strike_given(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -155,7 +156,7 @@ pub async fn strike_given(
         given_retraction_body(&r),
         render_given_retraction_twin(&r),
     );
-    let prepared = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
+    let prepared = prepare_sealed(&*client, node, body, Some(author)).await?;
     let tx = client.transaction().await?;
     submit(&tx, &prepared).await?;
     tx.commit()

@@ -18,6 +18,7 @@ use cairn_node::db;
 use cairn_node::medication::{
     assert_medication, release_medication_holds, withhold_medication, AuthorParams,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -88,7 +89,7 @@ async fn a_nurse_withholds_a_doctors_prescription_and_the_doctor_releases_it() {
     // The nurse holds it at the bedside: another author's prescription.
     let wid = withhold_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -103,7 +104,7 @@ async fn a_nurse_withholds_a_doctors_prescription_and_the_doctor_releases_it() {
     // The doctor reviews and releases the nurse's hold.
     let rid = release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,

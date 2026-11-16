@@ -10,12 +10,13 @@
 //! A set-aside carries NO safety claim (the floor refuses one at both doors), so the §5.9 class
 //! lookup is never called here.
 use super::sealed_submit::{prepare_sealed, AuthorParams, Prepared};
+use crate::node_key::NodeKey;
 use anyhow::Context;
 use cairn_event::medication::{
     render_set_aside_twin, set_aside_body, MedicationAssertion, MedicationSetAside,
     SET_ASIDE_EVENT_TYPE, SET_ASIDE_SCHEMA,
 };
-use cairn_event::{EventBody, SigningKey};
+use cairn_event::EventBody;
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
@@ -33,7 +34,7 @@ pub struct VersionToSign<'a> {
 #[allow(clippy::too_many_arguments)] // signer + node context + the version's identity
 pub(crate) async fn prepare_version(
     client: &tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -64,7 +65,7 @@ pub(crate) async fn prepare_version(
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
         safety: None,
     };
-    let prepared = prepare_sealed(client, node_sk, body, Some(author)).await?;
+    let prepared = prepare_sealed(client, node, body, Some(author)).await?;
     Ok((prepared, version_id))
 }
 
@@ -111,7 +112,7 @@ pub(crate) async fn spend_row(
 #[allow(clippy::too_many_arguments)] // signer + node context + the version's identity
 pub async fn set_aside_draft_line(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -123,7 +124,7 @@ pub async fn set_aside_draft_line(
 ) -> anyhow::Result<crate::db_diagnosis::Committed<Uuid>> {
     let (prepared, version_id) = prepare_version(
         client,
-        node_sk,
+        node,
         node_kid,
         node_origin,
         patient,

@@ -21,6 +21,7 @@ use cairn_node::allergy::read::{list_patient_allergies, Coding};
 use cairn_node::allergy::sign::sign_allergy;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
@@ -246,12 +247,20 @@ async fn a_coded_entry_reads_back_its_coding() {
             display: "amoxicillin",
         }),
     );
-    let coded_id = sign_allergy(&mut c, &node_sk, &node_kid, "n", chart, &coded, &author)
-        .await
-        .unwrap();
+    let coded_id = sign_allergy(
+        &mut c,
+        NodeKey::Full(&node_sk),
+        &node_kid,
+        "n",
+        chart,
+        &coded,
+        &author,
+    )
+    .await
+    .unwrap();
     let plain_id = sign_allergy(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         chart,

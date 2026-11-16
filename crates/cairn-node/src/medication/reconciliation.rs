@@ -1,6 +1,7 @@
 //! Reconciliation/separation — link or split TWO `medication_id` threads
 //! declared to be the same real drug (§3.3, slice 3; never-merge-always-link).
 //! Device-additive; offline-first (no local existence check on either thread).
+use crate::node_key::NodeKey;
 use cairn_event::medication::{
     reconciliation_body, render_reconciliation_twin, render_separation_twin, separation_body,
     ReconciliationAssertion,
@@ -234,8 +235,14 @@ async fn submit_reconcile_like(
 ) -> anyhow::Result<()> {
     match attest {
         None => {
-            crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, None)
-                .await?;
+            crate::medication::sealed_submit::seal_sign_submit(
+                client,
+                NodeKey::Full(node_sk),
+                body,
+                author,
+                None,
+            )
+            .await?;
         }
         Some(params) => {
             // Named by the outcome-unknown marker if the commit below is lost mid-flight (#814).
@@ -250,8 +257,11 @@ async fn submit_reconcile_like(
             // the author key when present; the node still holds custody + signs the
             // attestations (attest_thread_in_tx below is unchanged). Shared with the
             // single-thread door via `apply_author` so the two can never drift.
-            let (body, signing_sk) =
-                crate::medication::sealed_submit::apply_author(body, author, node_sk);
+            let (body, signing_sk) = crate::medication::sealed_submit::apply_author(
+                body,
+                author,
+                NodeKey::Full(node_sk),
+            )?;
             let (signed_bytes, dek) =
                 crate::medication::sealed_submit::seal_and_sign(body, signing_sk)?;
             // The door needs the NODE's provisioned unwrap key registered before it can

@@ -17,6 +17,7 @@ use crate::link::judgement_view::{refused, stale};
 use crate::signer::{Credential, KeyRefusal};
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write, node_failure};
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::discard::{DiscardOutcome, DiscardRefusal};
 use chrono::{DateTime, Utc};
 use std::time::Instant;
@@ -257,7 +258,7 @@ async fn discard_attempt(
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        cairn_node::note::discard::discard_draft(&mut db, node_sk, &input, &author)
+        cairn_node::note::discard::discard_draft(&mut db, NodeKey::Full(node_sk), &input, &author)
             .await
             .map_err(|e| db.explain(e))
     };

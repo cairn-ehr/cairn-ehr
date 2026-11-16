@@ -20,6 +20,7 @@ use cairn_event::note::{EscapedNarrative, NoteAssertion, StatedTime};
 use cairn_event::note_attestation::{VouchAct, VouchRole};
 use cairn_event::{event_address, SigningKey};
 use cairn_node::db;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::compound::{compound_state, compounds, CompoundNote, CompoundState};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{note_body, sign_note, SignNoteInput};
@@ -71,7 +72,7 @@ async fn sign_as(c: &mut Client, w: &Ward, m: &Member, chart: Uuid, to: Option<U
         addendum_to: to,
         also_vouches: &[],
     };
-    sign_note(c, &w.node_sk, &input, &m.author())
+    sign_note(c, NodeKey::Full(&w.node_sk), &input, &m.author())
         .await
         .unwrap()
         .expect("the note signs")

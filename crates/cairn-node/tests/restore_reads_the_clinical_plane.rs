@@ -21,6 +21,7 @@
 //! with no key installed is penned WITH that key. The pen's own quota carve-out and the
 //! registry door's fences live where they are enforced: `db/tests/052_restore_doors_test.sql`.
 
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -898,15 +899,24 @@ async fn a_restore_brings_back_a_given_and_a_struck_given_as_they_were() {
         .unwrap()
         .value;
         let at = chrono::Utc::now() - chrono::Duration::minutes(5);
-        let g = give_stat(&mut c, &sk, &kid, "test-node", chart, l, at, &author)
-            .await
-            .unwrap()
-            .value;
+        let g = give_stat(
+            &mut c,
+            NodeKey::Full(&sk),
+            &kid,
+            "test-node",
+            chart,
+            l,
+            at,
+            &author,
+        )
+        .await
+        .unwrap()
+        .value;
         lines.push((l, g));
     }
     strike_given(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         chart,

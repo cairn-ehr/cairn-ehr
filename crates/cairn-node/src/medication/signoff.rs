@@ -238,14 +238,14 @@ pub struct SignOffOutcome {
 /// silent substitution the "never silently refresh on screen" rule exists to prevent. The
 /// caller refreshes and the clinician signs again.
 ///
-/// `_node_sk` — DELIBERATELY UNUSED, deliberately KEPT, for the reason spelled out on
+/// `_node` — DELIBERATELY UNUSED, deliberately KEPT, for the reason spelled out on
 /// `attestation::attest_medication_thread`: ADR-0066 decision 6 removed its only use
 /// (registering the node's unwrap key), nothing here signs with the node key, and dropping
 /// it would silently stop `medication-sign-off` asking for the node's passphrase — an
 /// operator-facing ceremony change that is not this refactor's to make.
 pub async fn sign_off_medication_list(
     client: &mut tokio_postgres::Client,
-    _node_sk: &cairn_event::SigningKey,
+    _node: crate::node_key::NodeKey<'_>,
     node_origin: &str,
     params: &AttestParams<'_>,
     patient: Uuid,

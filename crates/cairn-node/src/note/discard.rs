@@ -17,12 +17,13 @@
 //!
 //! An all-blank draft is different: nothing to audit, so the door deletes it with no spend, and
 //! we COMMIT with no event (`DiscardOutcome::Empty`).
+use crate::node_key::NodeKey;
 use cairn_event::note::{EscapedNarrative, StatedTime};
 use cairn_event::note_discard::{
     discard_payload, render_discard_twin, DiscardedPart, DiscardedWriter, NOTE_DISCARD_EVENT_TYPE,
     NOTE_DISCARD_SCHEMA_VERSION,
 };
-use cairn_event::{EventBody, Hlc, SigningKey};
+use cairn_event::{EventBody, Hlc};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -170,12 +171,12 @@ fn discard_body(
 /// `db_diagnosis::commit_failure` marks.
 pub async fn discard_draft(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     input: &SignNoteInput<'_>,
     author: &AuthorParams<'_>,
 ) -> anyhow::Result<Result<DiscardOutcome, DiscardRefusal>> {
     let event_id = Uuid::now_v7();
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+    let node_kid = node.kid();
 
     // Every early return below drops `tx` uncommitted, which rolls the whole discard back.
     let tx = client.transaction().await?;
@@ -243,7 +244,7 @@ pub async fn discard_draft(
     );
     let Prepared {
         signed_bytes, dek, ..
-    } = prepare_sealed(&tx, node_sk, body, Some(author)).await?;
+    } = prepare_sealed(&tx, node, body, Some(author)).await?;
     // NO savepoint around this submit (see the module doc): db/065's trigger compares the
     // event row's xmin to THIS transaction's id, which a subtransaction would not carry.
     tx.execute(

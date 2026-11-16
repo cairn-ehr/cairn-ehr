@@ -1,9 +1,10 @@
 //! Medication cessation — marks an existing `medication_id` thread "past"
 //! (§3.3). References the thread; offline-first (no local-presence check).
+use crate::node_key::NodeKey;
 use cairn_event::medication::{
     medication_cessation_body, render_medication_cessation_twin, MedicationCessation,
 };
-use cairn_event::{EventBody, Hlc, SigningKey};
+use cairn_event::{EventBody, Hlc};
 use cairn_medication_view::MedicationStatus;
 use uuid::Uuid;
 
@@ -60,7 +61,7 @@ pub fn build_cease_body(
 #[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/author/attest, mirrors dose orchestrators
 pub async fn cease_medication(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -74,8 +75,7 @@ pub async fn cease_medication(
     let body = build_cease_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door, with the
     // atomic author-time attestation folded in when `attest` is Some (see sealed_submit).
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-        .await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node, body, author, attest).await?;
     Ok(event_id)
 }
 

@@ -24,6 +24,7 @@ use crate::write_failure::{
     UnknownThread,
 };
 use cairn_event::medication::HoldUntil;
+use cairn_node::node_key::NodeKey;
 use outcome::{all_shown_gone, release_outcome, withhold_outcome};
 use std::time::Instant;
 use uuid::Uuid;
@@ -177,7 +178,7 @@ pub async fn withhold_impl(
         };
         cairn_node::medication::withhold_medication(
             &mut db,
-            node_sk,
+            NodeKey::Full(node_sk),
             &node_kid,
             &state.node_origin,
             thread_chart,
@@ -326,7 +327,7 @@ pub async fn release_impl(
             Err(lost) => Err(anyhow::Error::from(lost)),
             Ok(mut db) => cairn_node::medication::release_medication_holds(
                 &mut db,
-                node_sk,
+                NodeKey::Full(node_sk),
                 &node_kid,
                 &state.node_origin,
                 thread_chart,

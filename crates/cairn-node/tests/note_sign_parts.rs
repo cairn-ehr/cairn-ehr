@@ -17,6 +17,7 @@ use cairn_event::generate_key;
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::draft::{open_drafts, save_part, take_draft, SaveOutcome, TakeOutcome};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{sign_note, SignNoteInput, SignRefusal};
@@ -128,7 +129,7 @@ async fn a_one_writer_draft_signs_as_the_signers_own_authored_note() {
     // The door normalises case and spaces: still the signer's own part.
     sent.writer = Some(" NoteWriter ");
 
-    let signed = sign_note(&mut c, &node_sk, &sent, &author)
+    let signed = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
         .await
         .unwrap()
         .expect("signs");
@@ -178,7 +179,7 @@ async fn a_two_writer_draft_signs_as_two_events_chained_by_addendum_to() {
     let mut sent = input(draft, chart, "plan: review in the morning");
     sent.writer = Some("notewriter");
 
-    let signed = sign_note(&mut c, &node_sk, &sent, &author)
+    let signed = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
         .await
         .unwrap()
         .expect("signs");
@@ -248,7 +249,7 @@ async fn an_unknown_writers_part_is_attested_by_the_signer() {
 
     let signed = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "found on the floor"),
         &author,
     )
@@ -310,7 +311,7 @@ async fn a_refused_second_part_rolls_back_the_first() {
     let mut sent = input(draft, chart, "plan");
     sent.writer = Some("notewriter");
 
-    let e = sign_note(&mut c, &node_sk, &sent, &author)
+    let e = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
         .await
         .expect_err("the floor refuses part 2");
 
@@ -355,7 +356,7 @@ async fn empty_parts_are_skipped_and_an_all_empty_draft_is_refused_empty() {
     let mut sent = input(draft, chart, "");
     sent.writer = Some("notewriter");
 
-    let signed = sign_note(&mut c, &node_sk, &sent, &author)
+    let signed = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
         .await
         .unwrap()
         .expect("the typed parts sign");
@@ -375,7 +376,9 @@ async fn empty_parts_are_skipped_and_an_all_empty_draft_is_refused_empty() {
     save_as(&c, blank, chart, Some("nurse-a"), "  ").await;
     let mut sent = input(blank, chart, "\t");
     sent.writer = Some("nurse-a");
-    let out = sign_note(&mut c, &node_sk, &sent, &author).await.unwrap();
+    let out = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
+        .await
+        .unwrap();
     assert_eq!(out.err(), Some(SignRefusal::Empty));
     assert_eq!(
         note_count(&c, chart).await,
@@ -417,7 +420,7 @@ async fn a_blank_first_part_makes_the_next_the_note_and_each_part_continues_the_
     let mut sent = input(draft, chart, "review at 08:00");
     sent.writer = Some("notewriter");
 
-    let signed = sign_note(&mut c, &node_sk, &sent, &author)
+    let signed = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
         .await
         .unwrap()
         .expect("signs");
@@ -467,7 +470,7 @@ async fn the_signs_own_save_of_a_colleagues_part_signs_as_drafted_and_attested()
     let mut sent = input(draft, chart, "obs stable, sats 97% on air");
     sent.writer = Some("nurse-a");
 
-    let signed = sign_note(&mut c, &node_sk, &sent, &author)
+    let signed = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
         .await
         .unwrap()
         .expect("signs");
@@ -514,7 +517,7 @@ async fn a_moved_draft_is_refused_moved_and_writes_nothing() {
 
     let out = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "signed at the ward PC"),
         &author,
     )
@@ -555,7 +558,9 @@ async fn a_part_whose_writer_left_is_refused_no_such_writer() {
     let mut sent = input(draft, chart, "plan");
     sent.writer = Some("notewriter");
 
-    let out = sign_note(&mut c, &node_sk, &sent, &author).await.unwrap();
+    let out = sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
+        .await
+        .unwrap();
 
     assert_eq!(out.err(), Some(SignRefusal::NoSuchWriter));
     assert_eq!(note_count(&c, chart).await, 0);

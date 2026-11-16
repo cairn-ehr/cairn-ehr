@@ -27,6 +27,7 @@ use cairn_node::medication::{
     cease_medication, reconcile_medications, separate_medications, AssertMedicationInput,
     CeaseMedicationInput, ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -375,7 +376,7 @@ async fn local_cessation_under_different_patient_refused() {
 
     let r = cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient_b,
@@ -457,7 +458,7 @@ async fn local_orphan_cessation_still_accepted() {
     let unknown_thread = Uuid::now_v7();
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -718,7 +719,7 @@ async fn cross_patient_group_via_cessation_only_thread_surfaced() {
         .unwrap();
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient_b,

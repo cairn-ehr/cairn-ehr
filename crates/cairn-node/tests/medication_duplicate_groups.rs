@@ -19,6 +19,7 @@ use cairn_node::medication::{
     assert_medication, cease_medication, AssertMedicationInput, CeaseMedicationInput,
     SubstanceCoding,
 };
+use cairn_node::node_key::NodeKey;
 use common::{cs, medication_setup as setup, submit_registration};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -227,7 +228,7 @@ async fn case3_one_ceased_is_not_flagged() {
     let _thread_b = assert_one(&mut c, &sk, &kid, "origin-a", b, "Metformin ").await;
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         a,

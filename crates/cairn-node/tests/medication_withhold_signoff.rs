@@ -19,6 +19,7 @@ use cairn_node::medication::{
     attest_medication_thread, release_medication_holds, withhold_medication, AttestParams,
     WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -101,9 +102,19 @@ async fn a_release_after_sign_off_makes_the_line_stale() {
     sign_off(&mut c, &sk, &human, p, med).await;
     assert!(!stale(&c, med).await);
 
-    release_medication_holds(&mut c, &sk, &kid, "test-node", p, med, &[w], None, None)
-        .await
-        .expect("the release is admitted");
+    release_medication_holds(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        med,
+        &[w],
+        None,
+        None,
+    )
+    .await
+    .expect("the release is admitted");
     assert!(
         stale(&c, med).await,
         "a release after sign-off stales the line"
@@ -149,9 +160,18 @@ async fn expiry_does_not_stale_a_sign_off() {
         from: None,
         until: HoldUntil::At(&until),
     };
-    withhold_medication(&mut c, &sk, &kid, "test-node", p, med, &input, None)
-        .await
-        .expect("the timed withhold is admitted");
+    withhold_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        med,
+        &input,
+        None,
+    )
+    .await
+    .expect("the timed withhold is admitted");
     sign_off(&mut c, &sk, &human, p, med).await;
     assert!(!stale(&c, med).await);
 
@@ -276,9 +296,19 @@ async fn release_ids(
     med: Uuid,
     w: Uuid,
 ) -> Uuid {
-    release_medication_holds(c, sk, kid, "test-node", p, med, &[w], None, None)
-        .await
-        .expect("the release is admitted")
+    release_medication_holds(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        p,
+        med,
+        &[w],
+        None,
+        None,
+    )
+    .await
+    .expect("the release is admitted")
 }
 
 #[tokio::test]

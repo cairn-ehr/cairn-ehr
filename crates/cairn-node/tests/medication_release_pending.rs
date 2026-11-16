@@ -17,6 +17,7 @@ use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{build_release_body, withhold_medication, WithholdMedicationInput};
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -39,7 +40,7 @@ async fn open_ended(
         from: Some(from),
         until: HoldUntil::Reviewed,
     };
-    withhold_medication(c, sk, kid, "test-node", p, med, &input, None)
+    withhold_medication(c, NodeKey::Full(sk), kid, "test-node", p, med, &input, None)
         .await
         .expect("the open-ended withhold is admitted")
 }
@@ -156,9 +157,18 @@ async fn a_release_after_the_hold_has_run_out_is_not_said() {
         from: Some("2029-12-01T00:00:00Z"),
         until: HoldUntil::At("2030-01-10T00:00:00Z"),
     };
-    let w = withhold_medication(&mut c, &sk, &kid, "test-node", p, med, &input, None)
-        .await
-        .expect("the timed withhold is admitted");
+    let w = withhold_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        med,
+        &input,
+        None,
+    )
+    .await
+    .expect("the timed withhold is admitted");
 
     peer_release_at(&c, &sk, &kid, p, med, &[w], "2030-01-20T00:00:00Z").await;
     assert_eq!(pending_at(&c, w, "2030-01-05T00:00:00Z").await, None);

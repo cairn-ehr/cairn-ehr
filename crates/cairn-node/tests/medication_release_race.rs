@@ -30,6 +30,7 @@ use cairn_node::db_diagnosis::{refusal_scope, RefusalScope};
 use cairn_node::medication::{
     build_release_body, release_medication_holds, withhold_medication, WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -78,9 +79,18 @@ async fn hold_started_a_minute_ago(
         from: Some(&from),
         until: HoldUntil::Reviewed,
     };
-    withhold_medication(c, sk, kid, "test-node", patient, med, &input, None)
-        .await
-        .expect("the withhold is admitted")
+    withhold_medication(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        patient,
+        med,
+        &input,
+        None,
+    )
+    .await
+    .expect("the withhold is admitted")
 }
 
 /// Open the colleague's release of `wid` on `c`, stamped one second ago, and leave its
@@ -186,7 +196,7 @@ async fn a_release_overtaken_after_its_precheck_is_refused_as_stale() {
     let second = tokio::spawn(async move {
         release_medication_holds(
             &mut c2,
-            &sk2,
+            NodeKey::Full(&sk2),
             &kid2,
             "test-node",
             patient,

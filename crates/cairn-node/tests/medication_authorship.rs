@@ -9,6 +9,7 @@ use cairn_node::medication::{
     assert_medication, reconcile_medications, AssertMedicationInput, AttestParams, AuthorParams,
     ReconcileInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -211,7 +212,7 @@ async fn human_authored_cessation_is_signed_by_the_human() {
     };
     cairn_node::medication::cease_medication(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         &node_kid,
         patient,

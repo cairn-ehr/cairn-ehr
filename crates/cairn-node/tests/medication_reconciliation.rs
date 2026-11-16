@@ -8,6 +8,7 @@ use cairn_node::medication::{
     reconcile_medications, separate_medications, AssertMedicationInput, CeaseMedicationInput,
     ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -898,7 +899,7 @@ async fn mixed_status_resolves_latest_effective() {
     };
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -944,7 +945,7 @@ async fn mixed_status_resolves_latest_effective() {
     };
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -1037,7 +1038,7 @@ async fn corrected_effective_flips_group_status_across_cessation() {
     .unwrap();
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -1150,7 +1151,7 @@ async fn single_thread_semantics_unchanged() {
     };
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -1228,7 +1229,7 @@ async fn pre_slice2_assert_without_dose_event_falls_back_to_statement_dose() {
     };
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,

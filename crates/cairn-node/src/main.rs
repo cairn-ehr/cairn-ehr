@@ -1,4 +1,5 @@
 use anyhow::Context;
+use cairn_node::node_key::NodeKey;
 use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::net::SocketAddr;
@@ -5407,7 +5408,7 @@ async fn run() -> anyhow::Result<()> {
             };
             let event_id = cairn_node::medication::cease_medication(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &node_kid,
                 &id.node_id_hex,
                 patient,
@@ -5459,7 +5460,7 @@ async fn run() -> anyhow::Result<()> {
             let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::withhold_medication(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &node_kid,
                 &id.node_id_hex,
                 patient,
@@ -5489,7 +5490,7 @@ async fn run() -> anyhow::Result<()> {
             let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::release_medication_holds(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &node_kid,
                 &id.node_id_hex,
                 patient,
@@ -5986,7 +5987,7 @@ async fn run() -> anyhow::Result<()> {
 
             let out = cairn_node::medication::signoff::sign_off_medication_list(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &id.node_id_hex,
                 &params,
                 patient,

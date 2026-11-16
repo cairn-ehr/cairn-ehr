@@ -44,6 +44,7 @@ use cairn_node::medication::{
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ReconcileInput, SubstanceCoding,
 };
 use cairn_node::medication::{withhold_medication, WithholdMedicationInput};
+use cairn_node::node_key::NodeKey;
 use common::{attestation_count, cs, medication_setup as setup};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -264,7 +265,7 @@ async fn a_ceased_medication_is_retained_and_marked_ceased() {
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         patient,
@@ -361,7 +362,7 @@ async fn a_thread_grown_after_attestation_reads_as_stale() {
     // Grow the thread's content AFTER the attestation vouched for it.
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         patient,
@@ -595,9 +596,16 @@ async fn a_cross_patient_group_shows_on_both_charts_flagged() {
         note: None,
     };
     for patient in [patient_a, patient_b] {
-        let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-            .await
-            .expect("a chart with a hazardous line is reported, never refused (#339)");
+        let out = sign_off_medication_list(
+            &mut c,
+            NodeKey::Full(&sk),
+            "origin-a",
+            &params,
+            patient,
+            None,
+        )
+        .await
+        .expect("a chart with a hazardous line is reported, never refused (#339)");
         assert!(
             out.attested.is_empty(),
             "a cross-patient line must not be signed: its displayed dose may be another patient's"
@@ -689,9 +697,16 @@ async fn a_hazardous_line_never_blocks_a_sound_one() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b, None)
-        .await
-        .expect("a chart with a hazardous line must never be refused (#339)");
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient_b,
+        None,
+    )
+    .await
+    .expect("a chart with a hazardous line must never be refused (#339)");
 
     // THE PROPERTY: the sound line is signed, despite a hazardous line on the same chart.
     assert_eq!(
@@ -748,7 +763,7 @@ async fn a_withheld_line_stays_current_and_signable() {
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let ev = withhold_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         patient,
@@ -792,7 +807,7 @@ async fn a_ceased_line_carries_its_reason() {
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         patient,
@@ -830,12 +845,21 @@ async fn a_ceased_line_shows_no_holds() {
         from: None,
         until: HoldUntil::Reviewed,
     };
-    withhold_medication(&mut c, &sk, &kid, "origin-a", patient, thread, &w, None)
-        .await
-        .unwrap();
+    withhold_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "origin-a",
+        patient,
+        thread,
+        &w,
+        None,
+    )
+    .await
+    .unwrap();
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         patient,
@@ -871,7 +895,7 @@ async fn a_pending_hold_is_listed_but_the_line_is_not_withheld() {
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     withhold_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         patient,

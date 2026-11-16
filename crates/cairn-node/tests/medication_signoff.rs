@@ -25,6 +25,7 @@ use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, change_dose,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ChangeDoseInput,
 };
+use cairn_node::node_key::NodeKey;
 use common::{attestation_count, cs, medication_setup as setup};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -85,9 +86,16 @@ async fn one_gesture_attests_every_unvouched_thread() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .unwrap();
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(out.attested.len(), 3, "one gesture, three threads");
     assert_eq!(out.event_ids.len(), 3, "one attestation event per thread");
@@ -150,7 +158,7 @@ async fn a_thread_with_a_fresh_vouch_is_left_untouched() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &me, patient, None)
+    let out = sign_off_medication_list(&mut c, NodeKey::Full(&sk), "origin-a", &me, patient, None)
         .await
         .unwrap();
 
@@ -193,7 +201,7 @@ async fn a_ceased_thread_is_not_signed() {
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         patient,
@@ -215,9 +223,16 @@ async fn a_ceased_thread_is_not_signed() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .unwrap();
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert!(out.attested.is_empty(), "a struck line is not re-signed");
     assert_eq!(attestation_count(&c, thread).await, 0);
@@ -258,9 +273,16 @@ async fn an_empty_list_signs_nothing_without_erroring() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, Uuid::now_v7(), None)
-        .await
-        .unwrap();
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        Uuid::now_v7(),
+        None,
+    )
+    .await
+    .unwrap();
 
     assert!(out.attested.is_empty());
     assert!(out.event_ids.is_empty());
@@ -300,12 +322,26 @@ async fn a_fully_vouched_chart_reports_its_current_rows() {
     };
 
     // First gesture signs it; the second finds nothing left to do.
-    sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .unwrap();
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .unwrap();
+    sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .unwrap();
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert!(out.attested.is_empty(), "nothing left to sign");
     assert_eq!(
@@ -352,9 +388,16 @@ async fn an_unenrolled_attester_fails_every_line_and_commits_nothing() {
         note: None,
     };
 
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .expect("per-line failures are reported, not raised as a whole-gesture error");
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .expect("per-line failures are reported, not raised as a whole-gesture error");
     assert!(out.attested.is_empty(), "nothing may be signed");
     assert_eq!(out.failed.len(), 2, "both lines are reported as failed");
     assert_eq!(attestation_count(&c, a).await, 0);
@@ -428,9 +471,16 @@ async fn a_line_that_cannot_be_attested_never_rolls_back_the_others() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .expect("one unattestable line must not fail the gesture");
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .expect("one unattestable line must not fail the gesture");
 
     // THE PROPERTY: both sound lines are signed and COMMITTED, either side of the failure.
     assert_eq!(
@@ -495,9 +545,16 @@ async fn a_dose_change_after_signoff_is_re_signed_by_the_next_whole_list_signoff
     };
 
     // First whole-list sign-off: the thread is unvouched, so it is signed.
-    let first = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .unwrap();
+    let first = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         first.attested,
         vec![thread],
@@ -530,9 +587,16 @@ async fn a_dose_change_after_signoff_is_re_signed_by_the_next_whole_list_signoff
 
     // Second whole-list sign-off: the vouch from the first is now stale (the thread grew
     // after it), so the whole-list gesture must pick the thread back up and re-attest it.
-    let second = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .unwrap();
+    let second = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         second.attested,
         vec![thread],

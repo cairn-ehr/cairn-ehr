@@ -11,11 +11,12 @@
 //! db/080's lineage function, the same one the floor checks at COMMIT (ruling R4).
 use super::cessation::{build_cease_body, CeaseMedicationInput};
 use super::sealed_submit::{prepare_sealed, AuthorParams, Prepared};
+use crate::node_key::NodeKey;
 use cairn_event::medication::{
     render_version_checked_twin, version_checked_body, SourceNote, VersionChecked,
     VERSION_CHECKED_EVENT_TYPE, VERSION_CHECKED_SCHEMA,
 };
-use cairn_event::{EventBody, SigningKey};
+use cairn_event::EventBody;
 use uuid::Uuid;
 
 /// A restore line's extra at Sign: the version it restores, and every line that stands for the
@@ -32,7 +33,7 @@ pub struct RestoreToSign<'a> {
 /// `SET CONSTRAINTS IMMEDIATE`.
 pub(crate) async fn prepare_stops(
     client: &tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -48,7 +49,7 @@ pub(crate) async fn prepare_stops(
             reason: Some(*reason),
         };
         let body = build_cease_body(Uuid::now_v7(), *line, patient, &input, node_kid, hlc);
-        out.push(prepare_sealed(client, node_sk, body, Some(author)).await?);
+        out.push(prepare_sealed(client, node, body, Some(author)).await?);
     }
     Ok(out)
 }
@@ -66,7 +67,7 @@ pub struct VersionCheck<'a> {
 /// commit is marked outcome-unknown (#814), as every clinical write here is.
 pub async fn check_version(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -95,7 +96,7 @@ pub async fn check_version(
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
         safety: None,
     };
-    let prepared = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
+    let prepared = prepare_sealed(&*client, node, body, Some(author)).await?;
     let tx = client.transaction().await?;
     super::draft_versions_sign::submit(&tx, &prepared).await?;
     tx.commit()

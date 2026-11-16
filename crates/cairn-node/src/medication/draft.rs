@@ -11,9 +11,9 @@ use super::charting::chart_body;
 use super::draft_versions_sign::{prepare_version, spend_row, submit, VersionToSign};
 use super::sealed_submit::{prepare_sealed, AuthorParams};
 use super::version_settle::{prepare_stops, RestoreToSign};
+use crate::node_key::NodeKey;
 use anyhow::Context;
 use cairn_event::medication::Charting;
-use cairn_event::SigningKey;
 use chrono::{DateTime, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -381,7 +381,7 @@ pub async fn writer_drafts(
 #[allow(clippy::too_many_arguments)] // signer + node context + the line's identity + its content
 pub async fn chart_draft_line(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -403,7 +403,7 @@ pub async fn chart_draft_line(
         Some(r) => {
             prepare_stops(
                 client,
-                node_sk,
+                node,
                 node_kid,
                 node_origin,
                 patient,
@@ -421,14 +421,14 @@ pub async fn chart_draft_line(
     };
     let (body, medication_id) =
         chart_body(client, node_kid, node_origin, patient, input, &charting).await?;
-    let companion = prepare_sealed(&*client, node_sk, body, Some(author)).await?;
+    let companion = prepare_sealed(&*client, node, body, Some(author)).await?;
     let event_id = companion.event_id;
     let mut prepared_versions = Vec::with_capacity(versions.len());
     for v in versions {
         prepared_versions.push(
             prepare_version(
                 client,
-                node_sk,
+                node,
                 node_kid,
                 node_origin,
                 patient,

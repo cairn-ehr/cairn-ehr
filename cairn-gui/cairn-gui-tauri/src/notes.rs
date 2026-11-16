@@ -27,6 +27,7 @@ use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::whos_here::Claim;
 use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::sign::SignRefusal;
 use chrono::{DateTime, Utc};
 use parts::{note_pane, others_have_text, NotePane};
@@ -341,7 +342,7 @@ pub async fn note_sign_impl(
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        cairn_node::note::sign::sign_note(&mut db, node_sk, &input, &author)
+        cairn_node::note::sign::sign_note(&mut db, NodeKey::Full(node_sk), &input, &author)
             .await
             .map_err(|e| db.explain(e))
     };

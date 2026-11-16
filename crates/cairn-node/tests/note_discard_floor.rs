@@ -18,6 +18,7 @@ use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -95,7 +96,7 @@ async fn submit_discard(
     };
     let r = seal_sign_submit(
         c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         discard_body(event_id, patient, &node_kid, hlc, payload, twin),
         Some(&author),
         None,

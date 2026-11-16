@@ -20,12 +20,13 @@
 //!
 //! Text is escaped here, once, at signing (`EscapedNarrative::of_typed`): drafts hold the raw text, and
 //! the floor's markup refusals are for raw-SQL clients, never for a clinician's typing.
+use crate::node_key::NodeKey;
 use cairn_event::contributor::with_attesting_signer;
 use cairn_event::note::{
     note_payload, note_t_effective, render_note_twin, EscapedNarrative, NoteAssertion, StatedTime,
     NOTE_EVENT_TYPE, NOTE_SCHEMA_VERSION,
 };
-use cairn_event::{EventBody, Hlc, SigningKey};
+use cairn_event::{EventBody, Hlc};
 use chrono::{DateTime, SecondsFormat, Utc};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -215,13 +216,13 @@ pub(super) async fn writer_key(
 /// `with_attesting_signer` and `prepare_sealed_as`, signed by the signer either way.
 async fn seal_part(
     client: &(impl GenericClient + Sync),
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     body: EventBody,
     who: PartAuthor,
     author: &AuthorParams<'_>,
 ) -> anyhow::Result<Prepared> {
     match who {
-        PartAuthor::Own => prepare_sealed(client, node_sk, body, Some(author)).await,
+        PartAuthor::Own => prepare_sealed(client, node, body, Some(author)).await,
         PartAuthor::Attested { writer_kid } => {
             let body = with_attesting_signer(body, author.human_kid, writer_kid.as_deref());
             prepare_sealed_as(client, body, author.human_sk).await
@@ -238,12 +239,12 @@ async fn seal_part(
 /// `commit_failure` marks.
 pub async fn sign_note(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     input: &SignNoteInput<'_>,
     author: &AuthorParams<'_>,
 ) -> anyhow::Result<Result<Committed<SignedNote>, SignRefusal>> {
     let first = Uuid::now_v7();
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+    let node_kid = node.kid();
 
     // Every early return below drops `tx` uncommitted, which rolls the whole sign back.
     let tx = client.transaction().await?;
@@ -290,7 +291,7 @@ pub async fn sign_note(
         let body = body_from_spent(id, part, &node_kid, hlc, ids.last().copied().or(root));
         let Prepared {
             signed_bytes, dek, ..
-        } = seal_part(&tx, node_sk, body, who, author).await?;
+        } = seal_part(&tx, node, body, who, author).await?;
         // NO savepoint (no nested `transaction()`) around this submit, deliberately. db/065's
         // commit-time trigger accepts the spend only if the note row's xmin is THIS
         // transaction's id; a row inserted inside a subtransaction carries the

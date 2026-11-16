@@ -10,6 +10,7 @@ use crate::funnel::view::{Recorded, Retry};
 use crate::med_stat::{med_stat_give_impl, med_stat_strike_impl, GIVE_GONE, STAT_NOT_OPEN};
 use crate::notes::review::db_tests::credential;
 use cairn_node::medication::stat_read::{read_stat_orders, StatOrder};
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 
 /// A drugref moiety code for ceftriaxone in these walks (no drug list is installed).
@@ -436,7 +437,7 @@ async fn striking_one_of_two_gives_does_not_say_waiting_again() {
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     cairn_node::medication::stat_give::give_stat(
         &mut owner,
-        node_sk,
+        NodeKey::Full(node_sk),
         &node_kid,
         &state.node_origin,
         chart,
@@ -480,7 +481,7 @@ async fn striking_a_give_beside_a_real_stop_does_not_say_waiting_again() {
     };
     cairn_node::medication::cease_medication(
         &mut owner,
-        node_sk,
+        NodeKey::Full(node_sk),
         &node_kid,
         &state.node_origin,
         chart,

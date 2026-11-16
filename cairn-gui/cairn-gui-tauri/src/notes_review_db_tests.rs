@@ -9,6 +9,7 @@
 use super::*;
 use crate::notes::note_list_impl;
 use crate::whos_here::Claim;
+use cairn_node::node_key::NodeKey;
 use cairn_node::vault::{bootstrap_superuser, enrol_member, release_for_act, NewMember, Purpose};
 use zeroize::Zeroizing;
 
@@ -164,11 +165,12 @@ pub(crate) async fn supervised_note() -> Option<(
         human_sk: &bea_sk,
         human_kid: &bea_kid,
     };
-    let part = cairn_node::note::sign::sign_note(&mut owner, &node_sk, &input, &author)
-        .await
-        .unwrap()
-        .expect("Bea's note signs")
-        .event_id;
+    let part =
+        cairn_node::note::sign::sign_note(&mut owner, NodeKey::Full(&node_sk), &input, &author)
+            .await
+            .unwrap()
+            .expect("Bea's note signs")
+            .event_id;
 
     let mut state = AppState::mock(Some(chart));
     state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(

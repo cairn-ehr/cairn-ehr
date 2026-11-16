@@ -19,6 +19,7 @@ use cairn_node::medication::version_settle_read::version_for_restore;
 use cairn_node::medication::{
     cease_medication, AssertMedicationInput, AuthorParams, CeaseMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use serde_json::json;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -63,7 +64,7 @@ pub async fn sign_check(
     };
     check_version(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         patient,
@@ -152,7 +153,7 @@ pub async fn sign(
     };
     chart_draft_line(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,
@@ -195,7 +196,7 @@ pub async fn version_beside(r: &mut Rig, thread: Uuid) -> Uuid {
     };
     set_aside_draft_line(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,
@@ -256,7 +257,7 @@ pub async fn restore(
 pub async fn cease(r: &mut Rig, thread: Uuid) {
     cease_medication(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,

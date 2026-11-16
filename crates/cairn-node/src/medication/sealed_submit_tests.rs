@@ -1,6 +1,7 @@
 //! `sealed_submit`'s unit tests, moved out of the module unchanged to keep it under 500 lines.
 
 use super::*;
+use cairn_event::SigningKey;
 
 /// A minimal, never-submitted `EventBody` — every field is a throwaway placeholder,
 /// because `apply_safety_rung`'s two early-return branches never read past
@@ -113,6 +114,6 @@ fn a_refusing_human_signer_seals_and_signs_nothing() {
     };
     let mut body = bare_body(serde_json::json!({"drug": "test"}));
     body.plaintext_twin = Some("a test twin".into());
-    let (body, signer) = apply_author(body, Some(&author), &node_sk);
+    let (body, signer) = apply_author(body, Some(&author), NodeKey::Full(&node_sk)).unwrap();
     assert!(seal_and_sign(body, signer).is_err());
 }

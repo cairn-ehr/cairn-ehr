@@ -27,6 +27,7 @@ use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use serde_json::{json, Value};
 use tokio_postgres::Client;
@@ -108,7 +109,7 @@ impl Rig {
             human_sk: &self.human_sk,
             human_kid: &self.human_kid,
         };
-        seal_sign_submit(c, &self.node_sk, body, Some(&author), None).await
+        seal_sign_submit(c, NodeKey::Full(&self.node_sk), body, Some(&author), None).await
     }
 
     /// An entry on `patient`, correcting `corrects` when given.

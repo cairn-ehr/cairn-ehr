@@ -23,6 +23,7 @@ use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::signoff::sign_off_medication_list;
 use cairn_node::medication::{assert_medication, AssertMedicationInput, AttestParams};
+use cairn_node::node_key::NodeKey;
 use common::{
     attestation_count, cs, medication_setup as setup, submit_link_event, submit_registration,
 };
@@ -128,7 +129,7 @@ async fn a_combined_sign_off_attests_each_thread_under_its_own_chart() {
 
     let out = sign_off_medication_list(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         "origin-a",
         &params(&hsk, &hkid),
         a,
@@ -193,7 +194,7 @@ async fn a_group_spanning_two_linked_charts_signs_each_thread_on_its_own_chart()
 
     let out = sign_off_medication_list(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         "origin-a",
         &params(&hsk, &hkid),
         b,
@@ -237,7 +238,7 @@ async fn a_sign_off_is_refused_when_the_chart_set_changed() {
 
     let err = sign_off_medication_list(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         "origin-a",
         &params(&hsk, &hkid),
         a,
@@ -273,7 +274,7 @@ async fn a_sign_off_is_refused_when_an_unlink_shrank_the_set() {
 
     let err = sign_off_medication_list(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         "origin-a",
         &params(&hsk, &hkid),
         a,
@@ -300,7 +301,7 @@ async fn an_unlinked_chart_signs_with_its_displayed_set_of_one() {
 
     let out = sign_off_medication_list(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         "origin-a",
         &params(&hsk, &hkid),
         a,
@@ -325,9 +326,16 @@ async fn the_cli_form_signs_the_set_it_finds() {
     assert_one(&mut c, &sk, &kid, a, "metformin").await;
     let aml = assert_one(&mut c, &sk, &kid, b, "amlodipine").await;
     submit_link_event(&c, &sk, &kid, a, b, 10, true).await;
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params(&hsk, &hkid), a, None)
-        .await
-        .unwrap();
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params(&hsk, &hkid),
+        a,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(out.attested.len(), 2);
     assert_eq!(out.charts, ChartSet::new([a, b]).unwrap());
     let aml_event = out.event_ids[out.attested.iter().position(|t| *t == aml).unwrap()];

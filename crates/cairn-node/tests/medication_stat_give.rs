@@ -15,6 +15,7 @@ use cairn_node::db_diagnosis::{refusal_scope, RefusalScope};
 use cairn_node::medication::stat_give::{give_stat, strike_given};
 use cairn_node::medication::stat_read::read_stat_orders;
 use cairn_node::medication::{chart_medication, AuthorParams};
+use cairn_node::node_key::NodeKey;
 use chrono::{Duration, Utc};
 use common::{note_setup, submit_registration, NOTE_AUTHOR};
 use tokio_postgres::Client;
@@ -69,7 +70,7 @@ impl Rig {
         };
         give_stat(
             &mut self.c,
-            &self.nsk,
+            NodeKey::Full(&self.nsk),
             &self.nkid,
             "test-node",
             chart,
@@ -92,7 +93,7 @@ impl Rig {
         };
         strike_given(
             &mut self.c,
-            &self.nsk,
+            NodeKey::Full(&self.nsk),
             &self.nkid,
             "test-node",
             chart,

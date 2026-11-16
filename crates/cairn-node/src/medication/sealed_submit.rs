@@ -17,9 +17,10 @@
 //! peek inside and stash a recoverable copy of that key". The verb never touches
 //! `submit_event` directly any more — it hands its clear body here.
 
+use crate::node_key::NodeKey;
 use anyhow::Context;
 use cairn_event::seal::{seal_event_payload, seal_stub_twin};
-use cairn_event::{sign, EventBody, EventSigner, SigningKey};
+use cairn_event::{sign, EventBody, EventSigner};
 
 /// The human who AUTHORS a clinical event (#204 / ADR-0053) — the FIRST half of
 /// principle 10, the mirror of `AttestParams` (attestation.rs, the second half). The
@@ -48,15 +49,16 @@ pub struct AuthorParams<'a> {
 pub fn apply_author<'a>(
     body: EventBody,
     author: Option<&'a AuthorParams<'a>>,
-    node_sk: &'a SigningKey,
-) -> (EventBody, &'a dyn EventSigner) {
-    match author {
+    node: NodeKey<'a>,
+) -> anyhow::Result<(EventBody, &'a dyn EventSigner)> {
+    Ok(match author {
         Some(a) => (
             cairn_event::contributor::with_human_author(body, a.human_kid),
             a.human_sk,
         ),
-        None => (body, node_sk),
-    }
+        // Only the device-additive path needs the node's SECRET; a public-id-only holder refuses.
+        None => (body, node.signer()?),
+    })
 }
 
 /// Verify this node's X25519 public unwrap key is registered before a sealed write.
@@ -276,13 +278,13 @@ pub(crate) struct Prepared {
 /// serves as well as a `Client`. It writes nothing.
 pub(crate) async fn prepare_sealed(
     client: &(impl tokio_postgres::GenericClient + Sync),
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     body: EventBody,
     author: Option<&AuthorParams<'_>>,
 ) -> anyhow::Result<Prepared> {
     // ADR-0053: when a human authors, rewrite the device-shaped body so the human is
     // an `authored` contributor AND the signer; the node stays `recorded` + custodian.
-    let (body, signing_sk) = apply_author(body, author, node_sk);
+    let (body, signing_sk) = apply_author(body, author, node)?;
     prepare_sealed_as(client, body, signing_sk).await
 }
 
@@ -344,10 +346,10 @@ pub(crate) async fn prepare_sealed_as(
 /// Returns the content event's id (`body.event_id`). The routing facts (patient, node
 /// origin, and — only when attesting — the thread) are read out of the CLEAR body before
 /// `prepare_sealed` consumes it, so the verb call sites keep the tidy
-/// `(client, node_sk, body, author, attest)` shape.
+/// `(client, node, body, author, attest)` shape.
 pub async fn seal_sign_submit(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     body: EventBody,
     author: Option<&AuthorParams<'_>>,
     attest: Option<&super::AttestParams<'_>>,
@@ -369,7 +371,7 @@ pub async fn seal_sign_submit(
         event_id,
         signed_bytes,
         dek,
-    } = prepare_sealed(&*client, node_sk, body, author).await?;
+    } = prepare_sealed(&*client, node, body, author).await?;
 
     match attest {
         // Either arm's final step can be lost mid-flight with the event already written: the

@@ -60,6 +60,7 @@ use crate::write_failure::{key_locked, node_cannot_write};
 use cairn_event::medication::ChartedAs;
 use cairn_node::medication::draft::{self, DraftLine, SpendRefused};
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use std::collections::BTreeSet;
 use std::time::Instant;
 use uuid::Uuid;
@@ -348,7 +349,7 @@ async fn sign_line(
         .await?;
     draft::chart_draft_line(
         &mut db,
-        node_sk,
+        NodeKey::Full(node_sk),
         &node_kid,
         &state.node_origin,
         patient,
