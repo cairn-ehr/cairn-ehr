@@ -7,6 +7,9 @@
 //! actually bounded — the `PromptList`, not the node's raw answer. A prompt showing five could
 //! otherwise swear it displayed forty, and slice 2a's own end-to-end walk had exactly that bug
 //! until `bound_for_prompt` gained a call site.
+//!
+//! Since #909 the window holds no node key: a registration goes in through the node's terminal
+//! service, so every test here that registers runs one (`common::serve`).
 mod common;
 
 use cairn_gui_data::port::{PatientRegistration, PatientSearch};
@@ -40,11 +43,10 @@ const ORIGIN: &str = "gui-live-origin";
 async fn nobody_matched_is_an_empty_list_not_a_failure() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (_sk, kid) = common::setup(&reader).await;
     let live = LiveData::new(
         common::connect_for_live(&cs).await,
-        sk,
-        &common::identity(ORIGIN),
+        &common::identity(ORIGIN, &kid),
     );
 
     let query = SearchQuery::new("zzzznobodyzzzz", Some("1900-01-01"), &[]);
@@ -73,11 +75,11 @@ async fn nobody_matched_is_an_empty_list_not_a_failure() {
 async fn a_registration_creates_a_chart_the_next_search_finds() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (sk, kid) = common::setup(&reader).await;
+    let _service = common::serve(&reader, &cs, sk, ORIGIN).await;
     let live = LiveData::new(
         common::connect_for_live(&cs).await,
-        sk,
-        &common::identity(ORIGIN),
+        &common::identity(ORIGIN, &kid),
     );
 
     // The ONE typed string, feeding both the query and the asserted name — never reassembled
@@ -163,11 +165,11 @@ async fn a_registration_creates_a_chart_the_next_search_finds() {
 async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (sk, kid) = common::setup(&reader).await;
+    let _service = common::serve(&reader, &cs, sk, ORIGIN).await;
     let live = LiveData::new(
         common::connect_for_live(&cs).await,
-        sk,
-        &common::identity(ORIGIN),
+        &common::identity(ORIGIN, &kid),
     );
 
     // Register more namesakes than the prompt can show, so that the raw list and the bounded
@@ -176,9 +178,12 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
     for n in 0..(PROMPT_CAP + 3) {
         let typed = format!("{shared} Number{n}");
         let q = SearchQuery::new(&typed, Some("1970-01-01"), &[]);
+        // Attest what this search really showed (the earlier namesakes): the terminal service
+        // re-runs it and refuses a registration that hides a match (#909).
+        let found = live.search(&q, TODAY).await.expect("the namesake's search");
         let mut store = TokenStore::new();
         let t = store
-            .record(q, bound_for_prompt(&common::nothing_found()))
+            .record(q, bound_for_prompt(&found))
             .expect("a non-empty query mints a token");
         let a = store.take(t).expect("redeemable");
         live.register(a, Some(&typed))
@@ -202,8 +207,9 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
     let mut store = TokenStore::new();
     let token = store.record(query, prompt).expect("a token");
     let attested = store.take(token).expect("redeemable");
+    // The name the query was built from: the node's terminal service refuses any other (#909).
     let created = live
-        .register(attested, Some("Kowalczyk Newcomer"))
+        .register(attested, Some(shared))
         .await
         .map_err(|(e, _)| e)
         .expect("registration accepted");
@@ -216,7 +222,7 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
     assert_eq!(
         tokens,
         vec![shared.to_lowercase()],
-        "the attested query must be the one that produced the list, not the newcomer's name"
+        "the attested query must be the one that produced the list"
     );
     assert_eq!(
         birth_date, None,
@@ -261,11 +267,11 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
 async fn a_search_that_could_not_read_a_chart_still_signs_incomplete() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (sk, kid) = common::setup(&reader).await;
+    let _service = common::serve(&reader, &cs, sk, ORIGIN).await;
     let live = LiveData::new(
         common::connect_for_live(&cs).await,
-        sk,
-        &common::identity(ORIGIN),
+        &common::identity(ORIGIN, &kid),
     );
 
     // A nameless chart: registered off a date-of-birth-only search, with no name asserted.
@@ -295,8 +301,10 @@ async fn a_search_that_could_not_read_a_chart_still_signs_incomplete() {
     let mut store = TokenStore::new();
     let token = store.record(dob_only, prompt).expect("a token");
     let attested = store.take(token).expect("redeemable");
+    // No name: the search was on the date of birth alone, and the terminal service refuses a
+    // name the query was not built from (#909).
     let created = live
-        .register(attested, Some("Nameless Neighbour"))
+        .register(attested, None)
         .await
         .map_err(|(e, _)| e)
         .expect("registration accepted");

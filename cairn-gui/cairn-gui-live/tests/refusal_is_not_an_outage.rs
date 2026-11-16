@@ -14,6 +14,17 @@
 //!
 //! **So this file must never be relaxed into asserting merely that the call failed.** An
 //! `is_err()` assertion here would pass under the exact defect the file exists to detect.
+//!
+//! # Since #909 the registration verdicts are reached by the node's terminal service
+//!
+//! The window holds no node key, so a registration is a request the terminal service serves
+//! (`common::serve`, signing with whichever key the test hands it). The floor's refusal and the
+//! Rust-side pre-flight refusal now happen on the SERVICE's connection, which classifies them
+//! (`terminal_service::registration::verdict_text`) and settles the request `refused` in their
+//! words; the port returns those words as `Refused`. So the registration probes below prove the
+//! verdict still reaches the clerk as a verdict, end to end, and the chain walk itself is pinned
+//! by `a_sqlstate_is_found_under_context_layers_not_only_at_the_top` and by the window's own
+//! submit (a refused submit is classified by `data_error_from`, as before).
 mod common;
 
 use cairn_gui_data::port::{DataError, PatientRegistration, PatientSearch};
@@ -92,10 +103,22 @@ async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
     // the door has a real reason to refuse and the refusal is the floor's, not a fixture's.
     let (_enrolled, _kid) = common::setup(&reader).await;
     let stranger: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(29).wrapping_add(17));
+    // The SERVICE signs with the stranger's key (the window holds none, #909).
+    let stranger_kid = hex::encode(
+        cairn_event::SigningKey::from_bytes(&stranger)
+            .verifying_key()
+            .to_bytes(),
+    );
+    let _service = common::serve(
+        &reader,
+        &cs,
+        cairn_event::SigningKey::from_bytes(&stranger),
+        ORIGIN,
+    )
+    .await;
     let live = LiveData::new(
         common::connect_for_live(&cs).await,
-        cairn_event::SigningKey::from_bytes(&stranger),
-        &common::identity(ORIGIN),
+        &common::identity(ORIGIN, &stranger_kid),
     );
 
     let mut store = TokenStore::new();
@@ -156,11 +179,11 @@ async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
 async fn a_rust_side_pre_flight_refusal_is_refused_not_unavailable() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (sk, kid) = common::setup(&reader).await;
+    let _service = common::serve(&reader, &cs, sk, ORIGIN).await;
     let live = LiveData::new(
         common::connect_for_live(&cs).await,
-        sk,
-        &common::identity(ORIGIN),
+        &common::identity(ORIGIN, &kid),
     );
 
     let mut store = TokenStore::new();
@@ -289,10 +312,22 @@ async fn a_refused_registration_creates_no_chart() {
     let (reader, _guard) = common::connect(&cs).await;
     let (_enrolled, _kid) = common::setup(&reader).await;
     let stranger: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(37).wrapping_add(5));
+    // The SERVICE signs with the stranger's key (the window holds none, #909).
+    let stranger_kid = hex::encode(
+        cairn_event::SigningKey::from_bytes(&stranger)
+            .verifying_key()
+            .to_bytes(),
+    );
+    let _service = common::serve(
+        &reader,
+        &cs,
+        cairn_event::SigningKey::from_bytes(&stranger),
+        ORIGIN,
+    )
+    .await;
     let live = LiveData::new(
         common::connect_for_live(&cs).await,
-        cairn_event::SigningKey::from_bytes(&stranger),
-        &common::identity(ORIGIN),
+        &common::identity(ORIGIN, &stranger_kid),
     );
 
     let before = chart_count(&reader).await;
@@ -341,7 +376,7 @@ async fn a_refused_registration_creates_no_chart() {
 async fn a_failed_search_is_an_error_not_an_empty_list() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (_sk, kid) = common::setup(&reader).await;
 
     // Same recipe as the outage test below: a connection whose backend is terminated under it.
     let victim = common::connect_for_live(&cs).await;
@@ -355,7 +390,7 @@ async fn a_failed_search_is_an_error_not_an_empty_list() {
         .await
         .expect("terminate the victim's backend");
 
-    let live = LiveData::new(victim, sk, &common::identity(ORIGIN));
+    let live = LiveData::new(victim, &common::identity(ORIGIN, &kid));
     let outcome = live
         .search(
             &SearchQuery::new("Search Outage", Some("1970-02-03"), &[]),
@@ -379,6 +414,10 @@ async fn a_failed_search_is_an_error_not_an_empty_list() {
 
 /// ONE CONNECTION, AND IT HAS TO SURVIVE A REFUSAL.
 ///
+/// Since #909 the refused transaction runs on the terminal service's connection, not the
+/// window's; what this still proves is that a refused request leaves the window's port (and the
+/// service) able to register the next one. The history below is why it was written.
+///
 /// `LiveData` holds a single `Client` for the whole life of the window (deliberately — see its
 /// doc). When `submit_event` raises inside `register_patient`'s transaction, the `Transaction`
 /// is dropped, and tokio-postgres sends its `ROLLBACK` **fire-and-forget**: the send result is
@@ -400,11 +439,20 @@ async fn a_refused_registration_leaves_the_connection_usable() {
     // Refuse at the floor's door with a stranger's key, on a port that then keeps working.
     let stranger: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(43).wrapping_add(7));
     let db = common::connect_for_live(&cs).await;
-    let refusing = LiveData::new(
-        db,
-        cairn_event::SigningKey::from_bytes(&stranger),
-        &common::identity(ORIGIN),
+    // The SERVICE signs with the stranger's key (the window holds none, #909).
+    let stranger_kid = hex::encode(
+        cairn_event::SigningKey::from_bytes(&stranger)
+            .verifying_key()
+            .to_bytes(),
     );
+    let _service = common::serve(
+        &reader,
+        &cs,
+        cairn_event::SigningKey::from_bytes(&stranger),
+        ORIGIN,
+    )
+    .await;
+    let refusing = LiveData::new(db, &common::identity(ORIGIN, &stranger_kid));
 
     let mut store = TokenStore::new();
     let attested = attest(
@@ -437,11 +485,6 @@ async fn a_refused_registration_leaves_the_connection_usable() {
     // would open a second connection and prove nothing about this one — enrol the stranger's
     // key, which is exactly what the operator does to fix a fresh node (#654). The port is
     // unchanged; only the floor's opinion of its signer is.
-    let stranger_kid = hex::encode(
-        cairn_event::SigningKey::from_bytes(&stranger)
-            .verifying_key()
-            .to_bytes(),
-    );
     reader
         .execute(
             "SELECT enroll_actor('device', \
@@ -477,7 +520,7 @@ async fn a_refused_registration_leaves_the_connection_usable() {
 async fn a_dead_connection_is_an_outage_not_a_refusal() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (_sk, kid) = common::setup(&reader).await;
 
     // A connection whose server-side session is terminated underneath it. The next statement
     // fails with no verdict of any kind, which is exactly what a ward's flaky link looks like.
@@ -492,7 +535,7 @@ async fn a_dead_connection_is_an_outage_not_a_refusal() {
         .await
         .expect("terminate the victim's backend");
 
-    let live = LiveData::new(victim, sk, &common::identity(ORIGIN));
+    let live = LiveData::new(victim, &common::identity(ORIGIN, &kid));
     let mut store = TokenStore::new();
     let attested = attest(
         &mut store,

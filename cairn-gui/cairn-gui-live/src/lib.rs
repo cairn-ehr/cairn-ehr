@@ -14,13 +14,14 @@
 //! See the comment at the top of `Cargo.toml`. In one line: `cairn-gui-data` must stay free of
 //! a database driver, and `/crates` may never depend on `cairn-gui`.
 //!
-//! # The window still signs nothing (§9.6)
+//! # The window signs nothing, and holds no node key (§9.6, #909)
 //!
-//! [`LiveData`] holds the NODE's key because the node **signs** this act, and db/005's door
-//! resolves that signature to an enrolled, non-revoked actor before admitting anything. It
-//! does not hold the clinician's key: `register_patient` takes no human author, so a
-//! registration is not a per-write human-authored clinical act in the ADR-0053 sense today.
-//! When that changes, it changes in `cairn-node` first and this crate follows.
+//! A registration is NODE-signed (`register_patient` takes no human author, so it is not a
+//! per-write human-authored clinical act in the ADR-0053 sense today), and db/005's door resolves
+//! that signature to an enrolled, non-revoked actor. Since #909 the window holds only the node's
+//! PUBLIC id ([`LiveData::node_kid`]), never its secret key: `PatientRegistration::register` writes
+//! a request to db/083's queue and the node's terminal service registers and signs it
+//! (`cairn_node::patient::register_request`, the funnel's adapter in `funnel.rs`).
 //!
 //! **Sealing does not enter into it, and the distinction matters to anyone arriving from the
 //! medication stream.** A registration is an unsealed identity event — `register_patient`
@@ -32,7 +33,6 @@ pub mod error;
 mod funnel;
 pub mod node;
 
-use cairn_event::SigningKey;
 use cairn_node::identity::Identity;
 use std::sync::Arc;
 use tokio_postgres::Client;
@@ -42,7 +42,7 @@ pub use connection::{
     ConnectionLost, CutOff, CutWatch, NodeConnection, Refusal,
 };
 
-/// One node connection, plus the identity every write is signed under.
+/// One node connection, plus the node identity every write names.
 ///
 /// # Why [`NodeConnection`]'s mutex is `tokio::sync::Mutex` and not `std::sync::Mutex`
 ///
@@ -67,14 +67,9 @@ pub use connection::{
 pub struct LiveData {
     /// `Arc` so the window's chart commands can hold the same connection (see above).
     db: Arc<NodeConnection>,
-    node_sk: SigningKey,
-    /// Hex of `node_sk`'s verifying key. Derived ONCE, here, rather than per call, so the kid
-    /// a registration is signed under cannot drift from the key that signed it.
+    /// Hex of the node's verifying key (`Identity::pubkey_hex`): the node's PUBLIC id, all the
+    /// window holds of its key (#909). The secret key stays with the node's terminal service.
     node_kid: String,
-    /// This node's origin id — `Identity::node_id_hex`, and never one of its three siblings.
-    /// [`LiveData::new`] takes the whole `Identity` so that is true by construction; see its
-    /// doc for what a mis-picked field would do to causal order.
-    node_origin: String,
 }
 
 impl LiveData {
@@ -89,16 +84,15 @@ impl LiveData {
     /// connected on its own could end up describing a different node than the rest of the
     /// window, and nothing on screen would say so.
     ///
-    /// # Why the whole `Identity`, and not a `node_origin: String`
+    /// # Why the whole `Identity`, and not a `node_kid: String`
     ///
     /// `Identity` carries FOUR `String` fields — `node_id_hex`, `pubkey_hex`, `fingerprint`,
     /// `address`. A `String` parameter accepts all four, and `""`, and compiles either way.
-    /// Only one is right: `node_origin` is what `register_patient` feeds to `next_hlc`, so it
-    /// becomes the HLC's origin — the third sort key of causal order (`db/001`) and the final
-    /// tiebreaker between two concurrent demographic assertions (`db/011`). A mis-picked
-    /// field therefore changes merge outcomes across the federation, silently, on events that
-    /// are append-only and can only ever be overlaid. Taking the whole value and reading the
-    /// field HERE makes the right answer the only available one.
+    /// Only `pubkey_hex` is the node's kid, the key [`LiveData::standing`] and
+    /// [`LiveData::require_provisioned`] ask about. Taking the whole value and reading the
+    /// field HERE makes the right answer the only available one. (Until #909 this also took the
+    /// HLC origin, `node_id_hex`, for `register_patient`; the node's terminal service stamps its
+    /// own now.)
     ///
     /// # ⚠️ It does NOT enrol the signing key — AND NEITHER DOES THE CLI ANY MORE (#654)
     ///
@@ -113,13 +107,14 @@ impl LiveData {
     /// ran `init`, and every write path on both surfaces now refuses.
     ///
     /// **So on a node that was never provisioned, a registration through this port is
-    /// REFUSED** — db/005's *"signer … is not an enrolled, non-revoked actor"*, arriving as
+    /// REFUSED** — db/005's *"signer … is not an enrolled, non-revoked actor"*, which the
+    /// terminal service settles as the request's refusal and this port returns as
     /// [`cairn_gui_data::port::DataError::Refused`] (#648). That sentence names a key id, not a
     /// remedy, so the window does not rely on it: it probes [`LiveData::standing`] at launch and
     /// asks [`LiveData::require_provisioned`] before each registration, which refuses as
     /// `NotProvisioned` naming the remedy (#654 option 2, #665; see `node.rs`).
-    pub fn new(db: Client, node_sk: SigningKey, identity: &Identity) -> Self {
-        Self::sharing(Arc::new(NodeConnection::fixed(db)), node_sk, identity)
+    pub fn new(db: Client, identity: &Identity) -> Self {
+        Self::sharing(Arc::new(NodeConnection::fixed(db)), identity)
     }
 
     /// As [`LiveData::new`], over a connection the caller also holds.
@@ -127,13 +122,10 @@ impl LiveData {
     /// The reference window uses this: its medication commands read through the same
     /// connection the funnel writes through, so one window describes one node. Everything
     /// [`LiveData::new`]'s doc says about `identity` and enrolment applies unchanged.
-    pub fn sharing(db: Arc<NodeConnection>, node_sk: SigningKey, identity: &Identity) -> Self {
-        let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+    pub fn sharing(db: Arc<NodeConnection>, identity: &Identity) -> Self {
         Self {
             db,
-            node_sk,
-            node_kid,
-            node_origin: identity.node_id_hex.clone(),
+            node_kid: identity.pubkey_hex.clone(),
         }
     }
 
@@ -161,7 +153,7 @@ mod tests {
     ///
     /// Tauri's `manage`/`State` require `Send + Sync + 'static`, and so does holding this across
     /// an `.await` in a command. Both hold today — `NodeConnection` is `Sync` because its one
-    /// (tokio) mutex is, and `SigningKey` is plain data. The obvious "simplification" of
+    /// (tokio) mutex is, and the rest is plain data. The obvious "simplification" of
     /// swapping that mutex for a `std` one in `connection.rs` takes `Send` away from the guard
     /// rather than from the struct, so this test would stay green; the guard's own pin is
     /// `connection.rs`'s `the_guard_may_be_held_across_an_await`.

@@ -214,9 +214,10 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
             ),
             Retry::AfterOperator,
         ),
-        // Registration never raises `Stale`; if it ever does, nothing was saved. `Never`, not
-        // `AfterReread`: no chart is on screen to re-read, and funnel.js reads `AfterReread`
-        // only as an unknown outcome's "every search is spent" (below).
+        // Registration's `Stale` is the terminal service's new-match refusal (#909): a chart
+        // appeared since the search, nothing was saved, and its text says to search again.
+        // `Never`, not `AfterReread`: no chart is on screen to re-read, and funnel.js reads
+        // `AfterReread` only as an unknown outcome's "every search is spent" (below).
         DataError::Stale(t) => (format!("Nothing was saved: {t}"), Retry::Never),
         DataError::NotFound => ("Nothing was saved.".to_string(), Retry::Never),
         // #815: the commit got no ordinary answer, so the chart may exist. Never "Nothing was

@@ -342,7 +342,7 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     let db = std::sync::Arc::new(
         cairn_gui_live::NodeConnection::reopening(client, task, cli.conn.clone()).await?,
     );
-    let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);
+    let live = cairn_gui_live::LiveData::sharing(db.clone(), &identity);
     Ok(AppState {
         db: Some(db),
         node_sk: Some(node_sk),
