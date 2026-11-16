@@ -202,7 +202,8 @@ async fn an_unknown_request_is_refused_not_reported_pending() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&e), Some(&SqlState::NO_DATA_FOUND), "status: {e:?}");
+    // A bare RAISE (P0001), like every floor refusal (#633); the message names the bug.
+    assert_eq!(code(&e), Some(&SqlState::RAISE_EXCEPTION), "status: {e:?}");
     assert!(db_msg(&e).contains("no registration request"));
     let e = window
         .query_one(
@@ -211,7 +212,8 @@ async fn an_unknown_request_is_refused_not_reported_pending() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&e), Some(&SqlState::NO_DATA_FOUND), "expire: {e:?}");
+    assert_eq!(code(&e), Some(&SqlState::RAISE_EXCEPTION), "expire: {e:?}");
+    assert!(db_msg(&e).contains("no registration request"));
 }
 
 #[tokio::test]

@@ -50,20 +50,12 @@ fn db_dir() -> PathBuf {
     sources::repo_root().join("db")
 }
 
-/// Deliberate exceptions, as (file name, reason). One today: db/083's unknown-request raise,
-/// which is not a refusal at all (its reason says why no classifier must treat it as one).
+/// Deliberate exceptions, as (file name, reason). Empty today, and that is the finding: the
+/// contract currently holds with no exceptions at all.
 ///
 /// A row here is a promise that every `refusal_is_deliberate` caller has been taught about the
 /// code in question. Adding one without doing that is the defect this file exists to prevent.
-/// The exemption is per FILE, so a later errcode added elsewhere in that file is not caught.
-const ALLOWED: &[(&str, &str)] = &[(
-    "083_terminal_service.sql",
-    "#909: an UNKNOWN registration request id raises no_data_found (P0002) in \
-     cairn_registration_status/expire/settle. It is a caller bug, never a floor verdict, so \
-     reading as not-deliberate is the right routing: sync and restore never call these doors, \
-     and the window's port must surface it as a bug, never as a clerk's refusal. Every OTHER \
-     raise in the file is bare.",
-)];
+const ALLOWED: &[(&str, &str)] = &[];
 
 /// Every `*.sql` directly under `db/`, as (file name, CODE with every SQL comment stripped).
 ///

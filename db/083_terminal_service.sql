@@ -102,10 +102,9 @@ END;
 $$;
 
 -- What became of request p_request (the window polls it, or reads it after a NOTIFY). An unknown
--- id raises no_data_found (P0002): it is a caller bug, never a silent "pending" that would leave a
--- clinician waiting on a request that does not exist. The floor's refusals are otherwise bare
--- (P0001, a verdict); P0002 says "not a verdict" on purpose, and is this file's exemption in
--- crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs. Every other raise here is bare.
+-- id raises: it is a caller bug, never a silent "pending" that would leave a clinician waiting on
+-- a request that does not exist. A bare RAISE (P0001), as every floor refusal is (#633); the
+-- message, "no registration request", is what tells the caller which bug it is.
 CREATE OR REPLACE FUNCTION cairn_registration_status(p_request uuid)
 RETURNS TABLE(status text, patient_id uuid, refusal text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -113,8 +112,7 @@ BEGIN
     RETURN QUERY SELECT q.status, q.patient_id, q.refusal
                    FROM registration_request q WHERE q.request_id = p_request;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'cairn_registration_status: no registration request %', p_request
-            USING ERRCODE = 'no_data_found';
+        RAISE EXCEPTION 'cairn_registration_status: no registration request %', p_request;
     END IF;
 END;
 $$;
@@ -123,7 +121,7 @@ $$;
 -- 'expired' only if it is still 'pending', and returns the status the row then holds. The row
 -- lock WAITS (no SKIP LOCKED): if the service has claimed the row, this queues behind that claim
 -- and then reads what the service committed, so a window never reports "expired" for a request
--- that went in. An unknown id raises no_data_found (P0002), as cairn_registration_status does.
+-- that went in. An unknown id raises, as cairn_registration_status does.
 CREATE OR REPLACE FUNCTION cairn_registration_expire(p_request uuid)
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -132,8 +130,7 @@ BEGIN
     SELECT q.status INTO v_status FROM registration_request q
      WHERE q.request_id = p_request FOR UPDATE;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'cairn_registration_expire: no registration request %', p_request
-            USING ERRCODE = 'no_data_found';
+        RAISE EXCEPTION 'cairn_registration_expire: no registration request %', p_request;
     END IF;
     IF v_status = 'pending' THEN
         UPDATE registration_request SET status = 'expired', settled_at = clock_timestamp()
@@ -164,7 +161,7 @@ $$;
 --   'registered' — with the chart p_patient and its registration event p_event, and no refusal;
 --   'refused'    — with the reason p_refusal (the window's words), and no chart or event.
 -- 'expired' is the window's word (cairn_registration_expire), never settle's. Anything else raises,
--- so a settled outcome can never be overwritten. An unknown id raises no_data_found (P0002).
+-- so a settled outcome can never be overwritten. An unknown id raises.
 CREATE OR REPLACE FUNCTION cairn_registration_settle(p_request uuid, p_status text, p_patient uuid,
                                                      p_event uuid, p_refusal text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -185,8 +182,7 @@ BEGIN
     SELECT q.status INTO v_status FROM registration_request q
      WHERE q.request_id = p_request FOR UPDATE;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'cairn_registration_settle: no registration request %', p_request
-            USING ERRCODE = 'no_data_found';
+        RAISE EXCEPTION 'cairn_registration_settle: no registration request %', p_request;
     END IF;
     IF v_status <> 'pending' THEN
         RAISE EXCEPTION 'cairn_registration_settle: request % is % and no longer pending', p_request, v_status;
