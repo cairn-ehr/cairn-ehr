@@ -12,16 +12,12 @@
 //! cannot interleave the failure write between drafts; this loop is the same shape plus that.
 //! "Every chart" is `overdue_drafts(None)`, exactly as the window's tick asked.
 use std::collections::HashSet;
-use std::sync::Mutex;
 
 use cairn_event::SigningKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use crate::note::commit::{commit_overdue, overdue_drafts, CommitOutcome, CommitReport};
-
-/// The stuck drafts already said on stderr by this process: said once per run, not every minute.
-static SAID_STUCK: Mutex<Option<HashSet<Uuid>>> = Mutex::new(None);
 
 /// The drafts in `stuck` not yet in `said`, which now holds them too.
 fn newly_stuck(said: &mut HashSet<Uuid>, stuck: Vec<Uuid>) -> Vec<Uuid> {
@@ -76,10 +72,15 @@ fn failure_cause(e: &tokio_postgres::Error) -> String {
 /// outcome. A draft that errs or is stuck (its writer has no key) is recorded failed; one that
 /// went in is cleared; one not written (not due, locked, gone) is left as it is. One draft's
 /// failure never stops the others. Only the listing's own failure is `Err`.
+///
+/// `said` is the caller's set of stuck drafts already said on stderr: the caller owns it for the
+/// life of its loop, so each stuck draft is said once per run, not every minute, and nothing
+/// here is global state.
 pub async fn commit_tick(
     client: &mut Client,
     node_sk: &SigningKey,
     node_origin: &str,
+    said: &mut HashSet<Uuid>,
 ) -> anyhow::Result<CommitReport> {
     let mut report = CommitReport::default();
     for draft in overdue_drafts(client, None).await? {
@@ -95,8 +96,7 @@ pub async fn commit_tick(
         }
         report.record(draft, outcome);
     }
-    let mut said = SAID_STUCK.lock().unwrap_or_else(|p| p.into_inner());
-    for draft in newly_stuck(said.get_or_insert_with(HashSet::new), report.stuck.clone()) {
+    for draft in newly_stuck(said, report.stuck.clone()) {
         eprintln!(
             "draft {draft} is overdue but cannot go into the record: a writer of it is no \
              longer enrolled on this node"

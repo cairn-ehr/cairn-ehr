@@ -17,6 +17,7 @@ use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::view::NoteGrade;
 use cairn_node::terminal_service::commit::{commit_tick, failure_line};
 use common::{cs, owner_and_window, service_login};
+use std::collections::HashSet;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -120,7 +121,9 @@ async fn an_overdue_draft_goes_in_node_signed() {
     let draft = Uuid::now_v7();
     save_aged(&r.owner, draft, r.chart, Some("notewriter"), 400).await;
 
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN).await.unwrap();
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+        .await
+        .unwrap();
 
     assert_eq!(report.committed, 1);
     let notes = notes_on(&r.owner, r.chart).await;
@@ -137,7 +140,9 @@ async fn a_not_yet_due_draft_is_untouched() {
     let draft = Uuid::now_v7();
     save_aged(&r.owner, draft, r.chart, Some("notewriter"), 0).await;
 
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN).await.unwrap();
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+        .await
+        .unwrap();
 
     assert_eq!(report.committed, 0);
     assert!(notes_on(&r.owner, r.chart).await.is_empty());
@@ -180,14 +185,18 @@ async fn a_failing_commit_is_recorded_and_a_later_success_clears_it() {
         .await
         .unwrap();
 
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN).await.unwrap();
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+        .await
+        .unwrap();
     assert_eq!(report.stuck, vec![draft]);
     assert_eq!(failed_on(&r.window, r.chart).await, vec![draft]);
     assert!(notes_on(&r.owner, r.chart).await.is_empty());
 
     // She is enrolled again: the next tick puts it in and the fact goes.
     r.owner.execute(enrol, &[&a_kid]).await.unwrap();
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN).await.unwrap();
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+        .await
+        .unwrap();
     assert_eq!(report.committed, 1);
     assert!(failed_on(&r.window, r.chart).await.is_empty());
     assert_eq!(notes_on(&r.owner, r.chart).await.len(), 1);
