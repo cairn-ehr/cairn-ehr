@@ -33,7 +33,8 @@ use uuid::Uuid;
 
 /// The window's words when the node's terminal service never answered a request: its deadline
 /// passed with the request still pending, and [`expire`] marked it expired (so it never goes in).
-pub const SERVICE_NOT_RUNNING: &str = "nothing was registered: registration needs the node's terminal service (cairn-node terminal-service), which did not answer; tell the site's operator";
+/// Only the cause: the window's frame already says nothing was saved and an operator must act.
+pub const SERVICE_NOT_RUNNING: &str = "registration needs the node's terminal service (cairn-node terminal-service), which did not answer";
 
 /// How often the window reads its request's status.
 pub const POLL: Duration = Duration::from_millis(200);
