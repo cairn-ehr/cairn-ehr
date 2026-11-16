@@ -10,4 +10,5 @@
 //! window writes a registration REQUEST, this process serves it ([`registration::serve_one`]).
 //! The loop that calls it and the CLI verb come later (#909 slice A, Task 7).
 
+pub mod commit;
 pub mod registration;
