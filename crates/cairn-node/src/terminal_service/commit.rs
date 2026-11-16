@@ -29,17 +29,23 @@ fn newly_stuck(said: &mut HashSet<Uuid>, stuck: Vec<Uuid>) -> Vec<Uuid> {
 /// values there), never note text, never a patient name. A non-database error says its outermost
 /// sentence only. Pure.
 pub fn failure_line(draft: Uuid, e: &anyhow::Error) -> String {
+    format!(
+        "draft {draft} is overdue but could not go into the record: {}",
+        primary_message(e)
+    )
+}
+
+/// An error's PRIMARY message (with the SQLSTATE if it came from the database) and nothing else:
+/// never DETAIL, HINT or context, which Postgres fills with row values. The one renderer every
+/// log line of the terminal service uses; never `{e:#}` or `{e:?}`. Pure.
+pub fn primary_message(e: &anyhow::Error) -> String {
     let db = e
         .chain()
         .find_map(|c| c.downcast_ref::<tokio_postgres::Error>())
         .and_then(|e| e.as_db_error());
     match db {
-        Some(db) => format!(
-            "draft {draft} is overdue but could not go into the record: {} [{}]",
-            db.message(),
-            db.code().code()
-        ),
-        None => format!("draft {draft} is overdue but could not go into the record: {e}"),
+        Some(db) => format!("{} [{}]", db.message(), db.code().code()),
+        None => e.to_string(),
     }
 }
 

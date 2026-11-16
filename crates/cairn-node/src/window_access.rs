@@ -136,53 +136,87 @@ pub async fn role_exists(db: &Client, role: &str) -> anyhow::Result<bool> {
         .get(0))
 }
 
-/// The catalog facts that say whether an existing role is exactly a window login.
+/// Which group role a provisioned login belongs to: the reference window's, or the terminal
+/// service's (#909). The two are provisioned by the same checks; only the group differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginGroup {
+    Window,
+    TerminalService,
+}
+
+impl LoginGroup {
+    /// The NOLOGIN group role the login is granted.
+    pub fn role(&self) -> &'static str {
+        match self {
+            LoginGroup::Window => "cairn_window",
+            LoginGroup::TerminalService => "cairn_terminal_service",
+        }
+    }
+
+    /// What the login is called in a message.
+    fn label(&self) -> &'static str {
+        match self {
+            LoginGroup::Window => "window",
+            LoginGroup::TerminalService => "terminal-service",
+        }
+    }
+}
+
+/// The catalog facts that say whether an existing role is exactly a login of its group.
 #[derive(Debug, Clone, Copy)]
 pub struct RoleFacts {
     pub can_login: bool,
     /// superuser, createrole, createdb, replication or bypassrls.
     pub has_attribute_power: bool,
-    /// a direct membership in any role other than `cairn_window`.
+    /// a direct membership in any role other than the group's.
     pub other_membership: bool,
     /// other roles are members of this one, so a grant to it would reach them too.
     pub has_members: bool,
 }
 
-/// Pure: why an existing role may not be taken over as the window login, or `None` if it may.
-pub fn existing_role_refusal(f: &RoleFacts, posture_why: Option<&str>) -> Option<String> {
+/// Pure: why an existing role may not be taken over as the group's login, or `None` if it may.
+pub fn existing_role_refusal(
+    f: &RoleFacts,
+    posture_why: Option<&str>,
+    group: LoginGroup,
+) -> Option<String> {
     let why = if !f.can_login {
         "it cannot log in"
     } else if f.has_attribute_power {
         "it has superuser, createrole, createdb, replication or bypassrls"
     } else if f.other_membership {
-        "it is a member of roles other than cairn_window"
+        return Some(refusal_text(
+            &format!("it is a member of roles other than {}", group.role()),
+            group,
+        ));
     } else if f.has_members {
         "other roles are members of it"
     } else if let Some(w) = posture_why {
-        return Some(refusal_text(w.trim_end_matches('.')));
+        return Some(refusal_text(w.trim_end_matches('.'), group));
     } else {
         return None;
     };
-    Some(refusal_text(why))
+    Some(refusal_text(why, group))
 }
 
-fn refusal_text(why: &str) -> String {
+fn refusal_text(why: &str, group: LoginGroup) -> String {
+    let l = group.label();
     format!(
-        "that role already exists and is not a window login ({why}); the window login was not created or changed. \
-         Choose a new name, or the existing window login."
+        "that role already exists and is not a {l} login ({why}); the {l} login was not created or changed. \
+         Choose a new name, or the existing {l} login."
     )
 }
 
-async fn read_role_facts(db: &Client, role: &str) -> anyhow::Result<RoleFacts> {
+async fn read_role_facts(db: &Client, role: &str, group: LoginGroup) -> anyhow::Result<RoleFacts> {
     let r = db
         .query_one(
             "SELECT r.rolcanlogin, \
                     (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls), \
                     EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid \
-                             WHERE m.member = r.oid AND g.rolname <> 'cairn_window'), \
+                             WHERE m.member = r.oid AND g.rolname <> $2), \
                     EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = r.oid) \
                FROM pg_roles r WHERE r.rolname = $1",
-            &[&role],
+            &[&role, &group.role()],
         )
         .await
         .map_err(|e| anyhow::anyhow!("reading role {role}: {}", legible_db_error(&e)))?;
@@ -195,6 +229,15 @@ async fn read_role_facts(db: &Client, role: &str) -> anyhow::Result<RoleFacts> {
 }
 
 /// Create (or refresh) the window's LOGIN role, member of `cairn_window`.
+pub async fn provision_window_login(
+    db: &Client,
+    role: &str,
+    password: Option<&str>,
+) -> anyhow::Result<()> {
+    provision_login(db, role, password, LoginGroup::Window).await
+}
+
+/// Create (or refresh) a LOGIN role, member of `group`'s role (see [`LoginGroup`]).
 ///
 /// A new role REQUIRES a password. With a password the role gets a SCRAM-SHA-256 verifier, so the
 /// cleartext never reaches the server (or its logs). With none on an existing role the stored
@@ -205,15 +248,17 @@ async fn read_role_facts(db: &Client, role: &str) -> anyhow::Result<RoleFacts> {
 /// step that fails leaves nothing behind. (Sent one statement at a time, a failed GRANT would
 /// leave a LOGIN with no password, and a re-run, which asks for none on an existing role, would
 /// then report it provisioned.)
-pub async fn provision_window_login(
+pub async fn provision_login(
     db: &Client,
     role: &str,
     password: Option<&str>,
+    group: LoginGroup,
 ) -> anyhow::Result<()> {
+    let label = group.label();
     // Injection floor: the role name is interpolated into DDL (identifiers take no bind parameter).
     if !is_safe_role_ident(role) {
         anyhow::bail!(
-            "invalid window role name {role:?}: use lowercase letters, digits, and underscores \
+            "invalid {label} role name {role:?}: use lowercase letters, digits, and underscores \
              (starting with a letter or underscore), max 63 chars"
         );
     }
@@ -221,9 +266,9 @@ pub async fn provision_window_login(
     if exists {
         // Refuse BEFORE any DDL: re-passwording or re-granting an arbitrary existing login would
         // lock out whoever uses it, or hand cairn_window to a whole group.
-        let facts = read_role_facts(db, role).await?;
+        let facts = read_role_facts(db, role, group).await?;
         let posture = read_posture_of(db, role).await?;
-        if let Some(why) = existing_role_refusal(&facts, over_powered(&posture)) {
+        if let Some(why) = existing_role_refusal(&facts, over_powered(&posture), group) {
             anyhow::bail!(why);
         }
     }
@@ -256,7 +301,7 @@ pub async fn provision_window_login(
     } else {
         ddl.push(format!("CREATE ROLE {role} LOGIN{password_clause}"));
     }
-    ddl.push(format!("GRANT cairn_window TO {role}"));
+    ddl.push(format!("GRANT {} TO {role}", group.role()));
     // A window login holding a transaction open holds hlc_state's tick lock and stalls every
     // writer (db/062). The window cuts each command off after 15 s (cairn-gui-live's
     // `NodeConnection::ANSWER_WITHIN`), so a live transaction never sits idle for 60 s between
@@ -265,7 +310,7 @@ pub async fn provision_window_login(
         "ALTER ROLE {role} SET idle_in_transaction_session_timeout = '60s'"
     ));
     db.batch_execute(&ddl.join("; ")).await.map_err(|e| {
-        anyhow::anyhow!("provisioning window role {role}: {}", legible_db_error(&e))
+        anyhow::anyhow!("provisioning {label} role {role}: {}", legible_db_error(&e))
     })?;
     Ok(())
 }
