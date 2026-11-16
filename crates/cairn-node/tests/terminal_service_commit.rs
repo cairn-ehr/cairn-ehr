@@ -200,7 +200,6 @@ async fn a_failing_commit_is_recorded_and_a_later_success_clears_it() {
     assert_eq!(report.committed, 1);
     assert!(failed_on(&r.window, r.chart).await.is_empty());
     assert_eq!(notes_on(&r.owner, r.chart).await.len(), 1);
-    let _ = &r.base;
 }
 
 /// The log line names the draft, the SQLSTATE and the PRIMARY message only; DETAIL (which can
@@ -231,4 +230,37 @@ fn a_non_database_failure_line_is_the_outer_sentence() {
     let line = failure_line(Uuid::from_u128(1), &e);
     assert!(line.contains("the commit failed"), "{line}");
     assert!(!line.contains("inner detail"), "{line}");
+}
+
+/// A draft whose commit is skipped (its lock is held) is not failing: an old failed fact clears.
+#[tokio::test]
+async fn a_skipped_draft_clears_its_old_failed_fact() {
+    let Some(mut r) = rig().await else { return };
+    let draft = Uuid::now_v7();
+    save_aged(&r.owner, draft, r.chart, Some("notewriter"), 400).await;
+    r.service
+        .execute(
+            "SELECT cairn_note_draft_commit_failed($1::text::uuid, true)",
+            &[&draft.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed_on(&r.window, r.chart).await, vec![draft]);
+    let mut other = db::connect(&r.base).await.unwrap();
+    let holder = other.transaction().await.unwrap();
+    holder
+        .execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('note_draft:' || $1::text::uuid::text, 0))",
+            &[&draft.to_string()],
+        )
+        .await
+        .unwrap();
+
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+        .await
+        .unwrap();
+
+    assert_eq!(report.committed, 0, "the held draft was skipped");
+    assert!(failed_on(&r.window, r.chart).await.is_empty());
+    holder.rollback().await.unwrap();
 }

@@ -70,7 +70,7 @@ fn failure_cause(e: &tokio_postgres::Error) -> String {
 
 /// One pass over every chart: commit each overdue draft in its own transaction, then record the
 /// outcome. A draft that errs or is stuck (its writer has no key) is recorded failed; one that
-/// went in is cleared; one not written (not due, locked, gone) is left as it is. One draft's
+/// went in or was not written (not due, locked, gone) is cleared. One draft's
 /// failure never stops the others. Only the listing's own failure is `Err`.
 ///
 /// `said` is the caller's set of stuck drafts already said on stderr: the caller owns it for the
@@ -87,7 +87,9 @@ pub async fn commit_tick(
         let outcome = commit_overdue(client, node_sk, draft, node_origin).await;
         match &outcome {
             Ok(CommitOutcome::Committed(_)) => note_failed(client, draft, false).await,
-            Ok(CommitOutcome::NothingWritten) => {}
+            // Not written (locked, gone, not due) is not failing: clear any old fact. STUCK
+            // still wins in the window's copy: `due_words` matches `(overdue, stuck)` first.
+            Ok(CommitOutcome::NothingWritten) => note_failed(client, draft, false).await,
             Ok(CommitOutcome::Stuck) => note_failed(client, draft, true).await,
             Err(e) => {
                 eprintln!("{}", failure_line(draft, e));
