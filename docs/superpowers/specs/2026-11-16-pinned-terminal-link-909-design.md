@@ -1,6 +1,6 @@
 # A thin terminal on another machine: the pinned terminal link (#909) — design
 
-**Date:** 2026-11-16 · **Status:** draft, awaiting the maintainer's approval ·
+**Date:** 2026-11-16 · **Status:** approved by the maintainer 2026-11-16, awaiting a plan ·
 **Closes (when built):** [#909](https://github.com/cairn-ehr/cairn-ehr/issues/909) ·
 **Amends (by a new ADR, never an edit):** [ADR-0084](../../spec/decisions/0084-the-window-never-holds-the-owners-keys.md)
 (D5, "a remote database is refused") and [ADR-0089](../../spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md)
