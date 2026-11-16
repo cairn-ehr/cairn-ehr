@@ -155,13 +155,17 @@
 >    [#1145](https://github.com/cairn-ehr/cairn-ehr/pull/1145): `med_chart` deleted, its walks moved to `med_list_signed_db_tests.rs`;
 >    `command_registry_tests.rs` now fails on a registered command the webview never calls (it reads `invoke("`,
 >    `sendJudgement("`, `superuserAct("`, and fails on a call or row it cannot read); the CLI's `--help` says it checks no allergies (the medium fix — signing
->    `warning_override` from the CLI — is not built). **#1138 BUILT 2026-11-16** in PR
+>    `warning_override` from the CLI — is not built). **#1138 MERGED 2026-11-16** in PR
 >    [#1148](https://github.com/cairn-ehr/cairn-ehr/pull/1148): items 1, 2, 4, 7, 8 built (a held key is re-checked
 >    on each use; the wrong-passphrase sentence names the ID; one SQL helper each for due/stuck/the spent word; the
 >    draft gate owner-only; a "not yet asked" note on draft lines); 5 accepted (ADR-0098 d21); 9 commented on #1077.
 >    **Rulings owed: #1146** (item 3, a hold release past a new allergy) and **#1147** (item 6, no audit trail on site
 >    policy). #1109 widened.
->    **Then the maintainer picks:** sign-in
+>    **#909 PICKED 2026-11-16 — design DRAFTED, awaiting the maintainer's approval:**
+>    [`superpowers/specs/2026-11-16-pinned-terminal-link-909-design.md`](superpowers/specs/2026-11-16-pinned-terminal-link-909-design.md)
+>    (a Cairn gateway on the database's machine, pinned both ways; no window holds the node key — registration and
+>    the timed commit move to a node-side service; the rollout's own no-disruption slice needs its own brainstorm,
+>    design §6). Next: approval → writing-plans. **Otherwise the maintainer picks:** sign-in
 >    **slice 4** (the emergency key, design §5.6 — its own ADR, brainstorm first); the order of **#909** vs **slice 5**
 >    (either gates a multi-terminal pilot) and of **#912**; **#1021**'s obligations projection and Pi figures (figures
 >    `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: 386 ms at a ward-year, 1.13 s at 100 000);
