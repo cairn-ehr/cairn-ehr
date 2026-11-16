@@ -26,7 +26,7 @@ use cairn_node::db;
 use cairn_node::patient::register::register_patient_returning_event;
 use cairn_node::patient::search::search_patients;
 use cairn_node::terminal_service::registration::{serve_one, Served, NEW_MATCH_REFUSAL};
-use cairn_patient_search::{CandidateList, SearchQuery};
+use cairn_patient_search::{bound_for_prompt, CandidateList, SearchQuery, PROMPT_CAP};
 use common::{cs, owner_and_window, service_login, setup};
 use std::time::Duration;
 use tokio_postgres::Client;
@@ -170,6 +170,31 @@ async fn an_honest_request_registers_and_settles_registered() {
         serve_one(&mut r.service, &r.sk, NODE).await.unwrap(),
         Served::Idle
     );
+}
+
+/// The window attests only the PROMPT it showed: the closest `PROMPT_CAP` people, never the
+/// whole search (ADR-0075). The service must compare the same cut, or the sixth namesake reads
+/// as "a new match" on nearly every common-name registration, and searching again never helps.
+#[tokio::test]
+async fn six_namesakes_register_when_the_clerk_saw_the_bounded_five() {
+    let Some(mut r) = rig().await else { return };
+    for _ in 0..PROMPT_CAP + 1 {
+        seed_chart(&mut r, "Ann Nguyen").await;
+    }
+    let q = query("Ann Nguyen");
+    let found = search_patients(&r.owner, &q, TODAY).await.unwrap();
+    assert_eq!(found.people.len(), PROMPT_CAP + 1);
+    // Exactly what the window's prompt would have shown and signed.
+    let shown = bound_for_prompt(&found).as_list().clone();
+    assert_eq!(shown.people.len(), PROMPT_CAP);
+    let id = submit(&r.window, "Ann Nguyen", &q, &shown).await;
+
+    let served = serve_one(&mut r.service, &r.sk, NODE).await.unwrap();
+    assert!(
+        matches!(served, Served::Registered { request, .. } if request == id),
+        "the clerk saw the closest five, which is all a prompt shows: {served:?}"
+    );
+    assert_eq!(charts(&r.owner).await, PROMPT_CAP as i64 + 2);
 }
 
 #[tokio::test]

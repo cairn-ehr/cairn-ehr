@@ -12,9 +12,10 @@
 //! # Why the service re-runs the search
 //!
 //! The window's login can write any request by raw SQL, so its "I searched and was shown these
-//! charts" is only a claim. The service runs the same search again and refuses if it finds a
-//! chart the request does not name ([`unseen_candidates`]). That catches a forged "saw no one",
-//! and also a near-match that appeared after the clerk's screen was drawn.
+//! charts" is only a claim. The service runs the same search again, cuts it to the prompt the
+//! window would have shown (`bound_for_prompt`, the window's own function), and refuses if that
+//! prompt holds a chart the request does not name ([`unseen_candidates`]). That catches a forged
+//! "saw no one", and also a near-match that appeared after the clerk's screen was drawn.
 //!
 //! # Which failures settle and which do not
 //!
@@ -30,7 +31,7 @@ use crate::patient::register_tx::register_patient_in_tx;
 use crate::patient::search::search_patients;
 use anyhow::Context;
 use cairn_event::SigningKey;
-use cairn_patient_search::{name_tokens, CandidateList, SearchQuery};
+use cairn_patient_search::{bound_for_prompt, name_tokens, CandidateList, SearchQuery};
 use std::collections::HashSet;
 use tokio_postgres::{Client, Transaction};
 use uuid::Uuid;
@@ -53,8 +54,12 @@ pub enum Served {
     Refused { request: Uuid, reason: String },
 }
 
-/// The charts the fresh search found that the request's displayed list does not name: the
-/// ones the clerk never had the chance to recognise. **Pure.**
+/// The charts in `fresh` that the request's displayed list does not name: the ones the clerk
+/// never had the chance to recognise. **Pure.**
+///
+/// `fresh` is the re-run search's BOUNDED prompt, never the whole search: the window shows and
+/// attests only the closest `PROMPT_CAP` people (ADR-0075), so an uncut list would call the
+/// sixth namesake "new" on nearly every common-name registration, and no re-search could cure it.
 ///
 /// A chart that was displayed but is no longer found is NOT unseen: the clerk saw it and judged
 /// it, so it costs them nothing (design D6).
@@ -173,7 +178,11 @@ pub async fn serve_one(
             let fresh = search_patients(&tx, &query, &today)
                 .await
                 .context("re-running the request's search")?;
-            if unseen_candidates(&fresh, &displayed).is_empty() {
+            // The same cut the window's prompt made. Safe at the cut only because the ranking is
+            // total (`rank_candidates` breaks every tie on the chart id), so an unchanged record
+            // yields the same five in the same order here as on the clerk's screen.
+            let prompt = bound_for_prompt(&fresh);
+            if unseen_candidates(prompt.as_list(), &displayed).is_empty() {
                 register_on_savepoint(&tx, sk, node_origin, name.as_deref(), &query, &displayed)
                     .await?
             } else {
