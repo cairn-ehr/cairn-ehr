@@ -1263,6 +1263,27 @@ pub async fn owner_and_window(base: &str) -> (Client, Client) {
     (owner, window)
 }
 
+/// A login granted `cairn_terminal_service` (#909), the way [`window_login`] makes the window's:
+/// for a suite that runs a door or `terminal_service::registration::serve_one` as the role the
+/// node's terminal service really holds. Promoted from `terminal_service_doors.rs` when
+/// `terminal_service_registration.rs` needed it too. Guarded like `window_login`'s: a role is
+/// cluster-wide, while the serial guard's lock is per-database.
+pub async fn service_login(owner: &Client, cs: &str) -> String {
+    owner
+        .batch_execute(
+            "DO $$ BEGIN \
+               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_terminal_service_probe') THEN \
+                 CREATE ROLE cairn_terminal_service_probe LOGIN; \
+               END IF; \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$; \
+             GRANT cairn_terminal_service TO cairn_terminal_service_probe;",
+        )
+        .await
+        .expect("the terminal service's probe login");
+    format!("{cs} user=cairn_terminal_service_probe")
+}
+
 /// The display name [`note_setup`] gives its human author — what a signed note's grade must
 /// read back as ("signed by …").
 pub const NOTE_AUTHOR: &str = "Dr Ada Notewriter";

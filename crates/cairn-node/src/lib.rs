@@ -32,6 +32,7 @@ pub mod sensitivity;
 pub mod shred;
 pub mod supervision_admin;
 pub mod sync;
+pub mod terminal_service;
 pub mod transport;
 pub mod ui_timing;
 pub mod vault;

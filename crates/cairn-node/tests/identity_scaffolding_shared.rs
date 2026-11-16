@@ -240,6 +240,8 @@ fn derivation_finds_the_expected_helpers() {
             // `note_setup` (sign-in slice 3a): `note_sign.rs` and `note_read.rs` share it.
             // `expect_as_window` (slice 3a): promoted from `window_role_grants.rs` when its
             // note walk moved to `window_role_grants_notes.rs`.
+            // `service_login` (#909): `terminal_service_doors.rs` and
+            // `terminal_service_registration.rs` both act as the terminal service.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -256,6 +258,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn person_chart_trust(",
             "async fn register_pair(",
             "async fn seed_proposal(",
+            "async fn service_login(",
             "async fn submit_attested(",
             "async fn submit_link_event(",
             "async fn submit_medication_with_raw_safety(",

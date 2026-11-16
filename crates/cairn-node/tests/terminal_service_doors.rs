@@ -23,29 +23,10 @@
 mod common;
 
 use cairn_node::db;
-use common::{cs, db_msg, owner_and_window};
+use common::{cs, db_msg, owner_and_window, service_login};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::Client;
 use uuid::Uuid;
-
-/// A login granted `cairn_terminal_service`, the way `window_login` makes the window's. Kept in
-/// this suite (not `tests/common`) because no other suite acts as the service yet. Guarded like
-/// `window_login`'s: a role is cluster-wide, while the serial guard's lock is per-database.
-async fn service_login(owner: &Client, cs: &str) -> String {
-    owner
-        .batch_execute(
-            "DO $$ BEGIN \
-               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_terminal_service_probe') THEN \
-                 CREATE ROLE cairn_terminal_service_probe LOGIN; \
-               END IF; \
-             EXCEPTION WHEN duplicate_object THEN NULL; \
-             END $$; \
-             GRANT cairn_terminal_service TO cairn_terminal_service_probe;",
-        )
-        .await
-        .expect("the terminal service's probe login");
-    format!("{cs} user=cairn_terminal_service_probe")
-}
 
 /// A fresh connection as the terminal service.
 async fn service(owner: &Client, base: &str) -> Client {
