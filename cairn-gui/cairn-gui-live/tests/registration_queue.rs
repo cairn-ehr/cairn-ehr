@@ -237,3 +237,83 @@ async fn a_lost_connection_after_submit_is_outcome_unknown() {
         "the request is still pending: a service could register it until its deadline"
     );
 }
+
+/// R11 (#909). The submit is the registration's commit point: once sent, the request may be in
+/// the queue whatever reply comes back, and the service would register it. So a submit that
+/// gets no answer is `OutcomeUnknown` and spends the search, exactly as a lost COMMIT is (#815).
+///
+/// The seam: a second owner session holds `registration_request` locked, so the window's submit
+/// is certainly blocked inside the door (`pg_stat_activity` says it waits on a lock) when its
+/// backend is terminated. Only then is the lock released.
+#[tokio::test]
+async fn a_submit_whose_reply_is_lost_is_outcome_unknown() {
+    let Some(cs) = common::cs() else { return };
+    let (reader, _guard) = common::connect(&cs).await;
+    let (_sk, kid) = common::setup(&reader).await;
+    let mut locker = cairn_node::db::connect(&cs)
+        .await
+        .expect("a second owner session");
+    let victim = common::connect_for_live(&cs).await;
+    let pid: i32 = victim
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let live = LiveData::new(victim, &common::identity(ORIGIN, &kid));
+
+    let lock = locker.transaction().await.unwrap();
+    lock.batch_execute("LOCK TABLE registration_request IN ACCESS EXCLUSIVE MODE")
+        .await
+        .unwrap();
+
+    let mut store = TokenStore::new();
+    let token = store
+        .record(
+            SearchQuery::new("Queue Submit Lost", Some("1970-02-03"), &[]),
+            bound_for_prompt(&common::nothing_found()),
+        )
+        .expect("a token");
+    let attested = store.take(token).expect("redeemable");
+
+    // Cut the window's backend once its submit is blocked on the lock.
+    let cut = async {
+        for _ in 0..250 {
+            let waiting: bool = reader
+                .query_one(
+                    "SELECT coalesce((SELECT wait_event_type = 'Lock' FROM pg_stat_activity \
+                     WHERE pid = $1), false)",
+                    &[&pid],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting {
+                reader
+                    .execute("SELECT pg_terminate_backend($1)", &[&pid])
+                    .await
+                    .unwrap();
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the window's submit never blocked on the lock");
+    };
+    let (outcome, ()) = tokio::join!(live.register(attested, Some("Queue Submit Lost")), cut);
+    lock.rollback().await.unwrap();
+
+    match store.settle(outcome) {
+        Err((DataError::OutcomeUnknown(text), Restored::Consumed)) => assert!(
+            text.contains("may yet register it"),
+            "the clerk is told the request may have gone in: {text}"
+        ),
+        Err((error, restored)) => panic!(
+            "a submit with no answer MAY have queued the request, so it must arrive as \
+             OutcomeUnknown and spend the search; it arrived as {error:?}, {restored:?}"
+        ),
+        Ok(id) => panic!("the submit was cut, yet registration returned {id}"),
+    }
+    assert!(
+        store.take(token).is_err(),
+        "the spent search licenses nothing"
+    );
+}

@@ -88,8 +88,13 @@ impl PatientRegistration for LiveData {
 }
 
 impl LiveData {
-    /// Put the request in db/083's queue. Until this answers, nothing is queued, so a failure
-    /// here registered nothing and is classified like any other call's (verdict or outage).
+    /// Put the request in db/083's queue. The submit is the registration's COMMIT point: once
+    /// it is sent, the row may be in the queue whatever answer comes back (an autocommit INSERT
+    /// whose reply is lost, or a backend that commits it after the window gave up), and the
+    /// service would then register it. So a submit failure that is not a verdict is
+    /// `OutcomeUnknown` ([`submit_failure`], #815), as a lost COMMIT is. Reading the request's
+    /// status afterwards would prove nothing: "not found" can still turn into "registered".
+    /// The `today` read and the lock come first and send nothing, so their failures are plain.
     ///
     /// `today` is the DATABASE's date, the clock the window's searches use (`LiveData::today`):
     /// the service re-runs the search as of it.
@@ -110,7 +115,7 @@ impl LiveData {
             &today,
         )
         .await
-        .map_err(|e| data_error_from(&db.explain(e)))
+        .map_err(|e| submit_failure(request, data_error_from(&db.explain(e))))
     }
 
     /// Wait for a submitted request to settle: poll every `POLL`, and at `DEADLINE` expire it
@@ -165,6 +170,16 @@ fn settled(status: RequestStatus) -> Result<Uuid, DataError> {
     }
 }
 
+/// A failed submit's answer. **Pure.** A verdict (the door refused, deciding nothing was
+/// queued) stays what it is; anything else may have queued the request, so the chart may come
+/// to exist (#815).
+fn submit_failure(request: Uuid, e: DataError) -> DataError {
+    match e {
+        DataError::Unavailable(_) => may_be_registered(request, &e),
+        verdict => verdict,
+    }
+}
+
 /// `e` struck after the request was queued, so the chart may exist (#815). **Pure.**
 fn may_be_registered(request: Uuid, e: &DataError) -> DataError {
     let cause = match e {
@@ -206,6 +221,24 @@ mod tests {
             settled(RequestStatus::Pending),
             Err(DataError::OutcomeUnknown(_))
         ));
+    }
+
+    /// R11: a submit is the commit point. An outage there may have queued the request; a verdict
+    /// queued nothing and keeps its own cause.
+    #[test]
+    fn a_failed_submit_is_unknown_unless_it_was_a_verdict() {
+        let request = Uuid::now_v7();
+        assert!(matches!(
+            submit_failure(request, DataError::Unavailable("connection closed".into())),
+            DataError::OutcomeUnknown(t) if t.contains("connection closed")
+        ));
+        for verdict in [
+            DataError::Refused("different inputs".into()),
+            DataError::NotProvisioned("refused".into()),
+            DataError::Stale("changed".into()),
+        ] {
+            assert_eq!(submit_failure(request, verdict.clone()), verdict);
+        }
     }
 
     /// After submit, even an outage or a refusal may hide a registration: never retried live.
