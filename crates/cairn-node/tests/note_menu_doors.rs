@@ -231,9 +231,9 @@ async fn the_window_may_call_both_and_public_may_not() {
 }
 
 /// #1138 item 7: "due", "stuck" and the spent word each have ONE definition. The menu used to copy
-/// db/067's expressions and the three save/take doors repeated one CASE; a change to one copy would
-/// make the menu and the chart (or two doors) disagree. Read from the catalogue, so it checks what
-/// the database runs, not what a file says.
+/// db/067's expressions and the four save/take/discard doors repeated one CASE; a change to one
+/// copy would make the menu and the chart (or two doors) disagree. Read from the catalogue, so it
+/// checks what the database runs, not what a file says.
 #[tokio::test]
 async fn due_stuck_and_the_spent_word_each_have_one_definition() {
     db_gated!();
@@ -278,6 +278,7 @@ async fn due_stuck_and_the_spent_word_each_have_one_definition() {
         "cairn_note_draft_part_save",
         "cairn_note_draft_take",
         "cairn_note_draft_addendum_part_save",
+        "cairn_note_draft_discard",
     ] {
         let src = body(door).await;
         assert!(

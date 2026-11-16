@@ -385,6 +385,29 @@ async fn the_window_role_holds_execute_and_no_table_privilege() {
         !gate_reachable,
         "cairn_window must not EXECUTE cairn_med_draft_gate"
     );
+    // A node that ran the old db/078 (which granted it) loses the grant on its next replay. In a
+    // transaction rolled back, so a failure here never leaves the grant on the shared database.
+    owner
+        .batch_execute(
+            "BEGIN; GRANT EXECUTE ON FUNCTION              cairn_med_draft_gate(text, uuid, uuid, text, text) TO cairn_window;",
+        )
+        .await
+        .unwrap();
+    owner
+        .batch_execute(include_str!("../../../db/078_medication_draft_list.sql"))
+        .await
+        .unwrap();
+    let after_replay: bool = owner
+        .query_one(
+            "SELECT has_function_privilege('cairn_window', \
+             'cairn_med_draft_gate(text, uuid, uuid, text, text)', 'EXECUTE')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    owner.batch_execute("ROLLBACK").await.unwrap();
+    assert!(!after_replay, "the replay revokes an old node's grant");
     assert!(!owner
         .query_one(
             "SELECT has_table_privilege('cairn_window', 'medication_draft_line', 'SELECT')",

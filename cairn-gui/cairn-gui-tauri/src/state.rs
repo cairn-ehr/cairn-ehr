@@ -325,8 +325,9 @@ impl AppState {
     ///
     /// The steps (`crate::signer` has the rules):
     /// 1. [`decide`] under the session lock. A held key that serves is touched (using it is
-    ///    activity), then re-checked with the lock released: one that was re-keyed or repudiated
-    ///    elsewhere is wiped and the act asks for a passphrase (#1138, `held_if_still_current`).
+    ///    activity), then re-checked with the lock released: one that was re-keyed, repudiated or
+    ///    expired elsewhere is wiped and the act asks for a passphrase (#1138,
+    ///    `held_if_still_current`).
     /// 2. A typed passphrase first WIPES any held key, whatever the vault then says: someone
     ///    new is at the keyboard, and a mistyped passphrase must not leave the last person's
     ///    key signing the next act that carries none. Another person's staff ID with no
@@ -422,9 +423,11 @@ impl AppState {
     }
 
     /// A held key signs only while the vault would still release it (#1138 item 1): one that was
-    /// re-keyed or repudiated at another terminal is wiped here, and the act asks for the
+    /// re-keyed, repudiated or expired at another terminal is wiped here, and the act asks for the
     /// passphrase (a re-keyed person's new one releases the new key). A check that cannot be made
-    /// lets the key sign: the floor still refuses a stale key, and the cause goes to stderr for IT.
+    /// refuses the act as a fault ("ask IT"), as the passphrase path does, and keeps the key (a
+    /// blip must not cost a passphrase). Never "sign anyway": the floor refuses a re-keyed or
+    /// repudiated key, but never reads the site's expiry, so this check is that rule's only door.
     async fn held_if_still_current(
         &self,
         (key, kid): (cairn_event::SigningKey, String),
@@ -446,9 +449,9 @@ impl AppState {
             }
             Err(e) => {
                 eprintln!(
-                    "the held key's currency could not be checked, so it signs as held: {e:#}"
+                    "the held key's currency could not be checked, so it did not sign: {e:#}"
                 );
-                Ok((key, kid))
+                Err(KeyRefusal::Fault)
             }
         }
     }

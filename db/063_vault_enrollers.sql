@@ -447,10 +447,12 @@ RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_t
 $$;
 
 -- Whether a key the window already HOLDS may still sign (#1138 item 1): the release door's two
--- admission checks (db/061: current in actor_current, as a human; not past the site's expiry for an
--- unconfirmed key), asked with no passphrase. A re-key or a repudiation at another terminal leaves a
--- held key in this window's memory; asked on each use, the window wipes it and asks for the
--- passphrase instead of signing what the floor will refuse. Reveals only yes or no for a key id.
+-- admission checks (db/061: current in actor_current; not past the site's expiry for an unconfirmed
+-- key), asked with no passphrase, plus `kind = 'human'` of its own (every vault member is one, so
+-- it only narrows). A re-key, a repudiation or an expiry at another terminal leaves a held key in
+-- this window's memory; asked on each use, the window wipes it and asks for the passphrase instead
+-- of signing what the floor (or, for the expiry, only the release door) would refuse. Reveals only
+-- yes or no for a key id.
 CREATE OR REPLACE FUNCTION cairn_vault_key_may_sign(p_key text)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT EXISTS (SELECT 1 FROM actor_current a WHERE a.signing_key_id = p_key AND a.kind = 'human')

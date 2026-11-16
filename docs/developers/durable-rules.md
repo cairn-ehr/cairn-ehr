@@ -13,25 +13,31 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 **⇒ THE MILESTONE REVIEW'S MINORS (#1138) — do not undo.**
 - **A held key is re-checked on every use** (`AppState::held_if_still_current`, door `cairn_vault_key_may_sign`,
   db/063: the release door's admission, current and not expired, asked with no passphrase). Stale means wiped, and
-  the act gets `NeedCredential`. A check that cannot be made lets the key sign, because the floor still refuses a stale
-  key. **Tempting wrong fixes:** make `UseHeld` DB-free again "for speed" (a key re-keyed or repudiated elsewhere then
-  keeps "Signed in for the next act", and a medication list tells its own writer "only they can sign it"); answer a
-  stale key with `NotCurrent` (a re-keyed person HAS a current key, and their passphrase releases it). Pins:
+  the act gets `NeedCredential`. A check that cannot be made refuses the act as `Fault` and keeps the key. **Tempting
+  wrong fixes:** make `UseHeld` DB-free again "for speed" (a key re-keyed or repudiated elsewhere then keeps "Signed
+  in for the next act", and a medication list tells its own writer "only they can sign it"); answer a stale key with
+  `NotCurrent` (a re-keyed person HAS a current key, and their passphrase releases it); let a failed check sign "since
+  the floor refuses a stale key" (the floor never reads the site's expiry for an unconfirmed key: this check and the
+  release door are its only enforcement). Pins:
   `notes_review_db_tests.rs::a_held_key_repudiated_elsewhere_is_forgotten_on_its_next_use`,
+  `notes_review_db_tests.rs::a_held_key_whose_currency_cannot_be_checked_does_not_sign`,
   `vault_key_may_sign.rs`, `state_tests.rs::only_the_stale_key_is_forgotten`.
 - **A wrong passphrase names the staff ID it was tried against** (`KeyRefusal::Wrong { staff_id }`). A prefilled ID is
   who's here's, so a passer-by's own passphrase is a counted guess against that person. Pin:
   `signer_tests.rs::refusal_sentences_never_echo_the_passphrase`.
 - **A draft's due time, its "stuck" test and a spent draft's word each have ONE SQL definition**
-  (`cairn_note_draft_due`, `cairn_note_draft_stuck` in db/067; `cairn_note_draft_spent_word` in db/066). **Tempting
-  wrong fix:** inline one "for speed" in the person menu (db/073) or a door. The menu and the chart then disagree
-  the day the rule changes. Pin: `note_menu_doors.rs::due_stuck_and_the_spent_word_each_have_one_definition` (read
+  (`cairn_note_draft_due`, `cairn_note_draft_stuck` in db/067; `cairn_note_draft_spent_word` in db/066, read by the
+  save, take, discard and addendum doors). **Tempting wrong fix:** inline one "for speed" in the person menu (db/073)
+  or a door. The menu and the chart then disagree the day the rule changes. Pin: `note_menu_doors.rs::due_stuck_and_the_spent_word_each_have_one_definition` (read
   from `pg_proc`).
 - **`cairn_med_draft_gate` is the owner's alone.** Each door reaches it as its definer, and db/078 revokes it from
   `cairn_window`. Pin: `medication_draft_list_store.rs::the_window_role_holds_execute_and_no_table_privilege`.
-- **While the drug allergies are "not yet asked", every draft line carries the note
-  `DRUG_ALLERGIES_NOT_YET_ASKED`.** Only a note: the tick and reason rules read the status itself. Pin:
-  `med_list_db_tests.rs::not_yet_asked_hand_ticks_sign`.
+- **While the drug allergies, as read, are "not yet asked", every draft line carries the note
+  `DRUG_ALLERGIES_NOT_YET_ASKED`.** Only a note: the tick and reason rules read the status itself. **Tempting wrong
+  fix:** note it from `judge`'s `status` whenever it says `NotYetAsked`. Unread (the linked charts changed), that is a
+  stand-in, and the note would be false for a patient whose allergies are recorded. Pins:
+  `med_list_db_tests.rs::not_yet_asked_hand_ticks_sign`,
+  `med_list_judge.rs::tests::the_not_yet_asked_note_only_when_read_and_not_asked`.
 
 **⇒ LEAVING A CHART WAITS FOR EVERY ACT IN FLIGHT (#1130, #1137) — do not undo** (`src-ui/leave_chart.js`).
 - **A chart leaves the screen only through `closeChart`, which first awaits `signsSettled()`.** Waiting comes BEFORE

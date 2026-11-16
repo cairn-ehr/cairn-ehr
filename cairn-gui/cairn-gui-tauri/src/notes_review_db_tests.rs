@@ -308,3 +308,39 @@ async fn a_held_key_repudiated_elsewhere_is_forgotten_on_its_next_use() {
         "the stale key is wiped"
     );
 }
+
+/// #1138 item 1, the check that cannot be made: the window's connection is cut between two uses
+/// of a held key. The act is refused as a fault ("ask IT"), as the passphrase path refuses one,
+/// and the key is NOT wiped (a blip must not cost a passphrase). Not "sign as held": the floor
+/// never reads the site's expiry for an unconfirmed key, so this check is its only enforcement.
+#[tokio::test]
+async fn a_held_key_whose_currency_cannot_be_checked_does_not_sign() {
+    let Some((_g, owner, state, _, _)) = supervised_note().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let now = crate::state::Now::read;
+    state
+        .signer_for_act(credential("sue"), now())
+        .await
+        .unwrap();
+    assert_eq!(state.key_status(now()).await.as_deref(), Some("sue"));
+    // The serial guard is held: the only window connection is this test's own.
+    owner
+        .execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+              WHERE usename = 'cairn_window_probe'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state.signer_for_act(None, now()).await.err(),
+        Some(crate::signer::KeyRefusal::Fault)
+    );
+    assert_eq!(
+        state.key_status(now()).await.as_deref(),
+        Some("sue"),
+        "a fault is not a stale key: the hold survives"
+    );
+}

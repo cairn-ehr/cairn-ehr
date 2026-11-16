@@ -67,6 +67,10 @@ async fn a_held_key_may_sign_only_while_the_release_door_would_release_it() {
         !may_sign(&c, ANURSE).await,
         "an expired unconfirmed key no longer signs"
     );
+    // The expiry is for UNCONFIRMED keys only: a confirmed one as old still signs, or every held
+    // key would be wiped on its next use once a site set an expiry.
+    age_key(&c, BWONG, 31).await;
+    assert!(may_sign(&c, BWONG).await, "a confirmed key never expires");
 
     // A key the registry never enrolled.
     assert!(!may_sign(&c, 250).await);

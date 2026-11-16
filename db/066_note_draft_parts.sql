@@ -87,6 +87,18 @@ DROP FUNCTION IF EXISTS cairn_note_draft_save(uuid, uuid, text, text, timestampt
 DROP FUNCTION IF EXISTS cairn_note_drafts(uuid);
 DROP FUNCTION IF EXISTS cairn_note_draft_spend(uuid, uuid);
 
+-- The word a SPENT draft answers with, or NULL while it is open: 'discarded' (db/069), 'committed'
+-- (a timer's commit, db/067 — never this window's Sign) or 'spent' (a Sign). One definition for
+-- every draft door (db/066's save and take, db/069's discard, db/070's addendum save), so they
+-- never disagree (#1138).
+-- Not a definer: each caller is one, and holds the draft's lock when it asks.
+CREATE OR REPLACE FUNCTION cairn_note_draft_spent_word(p_draft uuid) RETURNS text
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
+    SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'
+                WHEN s.by_timer THEN 'committed' ELSE 'spent' END
+      FROM note_draft_spent s WHERE s.draft_id = p_draft;
+$$;
+
 -- Save writer p_writer's text into draft p_draft of p_patient, held by p_terminal. Answers
 -- 'saved' | 'spent' (signed) | 'committed' (the quarantine timer put it in unsigned, db/067) |
 -- 'discarded' (thrown away with an audit record, db/069) |
@@ -101,17 +113,6 @@ DROP FUNCTION IF EXISTS cairn_note_draft_spend(uuid, uuid);
 -- if the text or stated time changed; otherwise a non-empty text appends part tail+1 (an empty one
 -- makes no part — a colleague clicking in and out writes nothing). A new draft always gets part 1.
 -- Every write stamps the part's and the header's last_keystroke and leaves a revision row.
--- The word a SPENT draft answers with, or NULL while it is open: 'discarded' (db/069), 'committed'
--- (a timer's commit, db/067 — never this window's Sign) or 'spent' (a Sign). One definition for
--- every draft door (db/066's save and take, db/070's addendum save), so they never disagree (#1138).
--- Not a definer: each caller is one, and holds the draft's lock when it asks.
-CREATE OR REPLACE FUNCTION cairn_note_draft_spent_word(p_draft uuid) RETURNS text
-LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
-    SELECT CASE WHEN s.discarded_by IS NOT NULL THEN 'discarded'
-                WHEN s.by_timer THEN 'committed' ELSE 'spent' END
-      FROM note_draft_spent s WHERE s.draft_id = p_draft;
-$$;
-
 CREATE OR REPLACE FUNCTION cairn_note_draft_part_save(
     p_draft uuid, p_patient uuid, p_terminal text, p_writer text, p_narrative text,
     p_stated_time timestamptz)

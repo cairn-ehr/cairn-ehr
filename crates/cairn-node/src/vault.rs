@@ -336,7 +336,7 @@ pub async fn staff_id_taken(db: &Client, staff_id: &str) -> anyhow::Result<bool>
 
 /// May key `kid`, which the window already holds, still sign? The release door's admission checks
 /// (current; not past the site's expiry for an unconfirmed key) with no passphrase: the window asks
-/// on each use of a held key, so a re-key or repudiation at another terminal wipes it here (#1138).
+/// on each use of a held key, and wipes one re-keyed, repudiated or expired elsewhere (#1138).
 pub async fn key_may_sign(db: &Client, kid: &str) -> anyhow::Result<bool> {
     let row = db
         .query_one("SELECT cairn_vault_key_may_sign($1)", &[&kid])

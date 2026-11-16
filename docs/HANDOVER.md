@@ -345,6 +345,11 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 - **⇒ A finding's "fix size" is a claim: check it against every symptom the finding names.** Item 1 proposed "wipe the
   held key when the floor refuses it". But its second symptom (a list's "only they can sign it") is said BEFORE the
   floor, so only a re-check on use reaches both.
+- **⇒ "The floor still refuses it" must be checked for EVERY rule the fallback covers (finalcheck).** The held-key
+  check first failed open on that claim, which held for re-key and repudiation but not for the site's expiry, which
+  no floor function reads. It now refuses as `Fault`. The same pass found a "not yet asked" note fed by a stand-in
+  status (false when the linked charts changed) and a fourth copy of the spent word (db/069). Filed: #1149 (the
+  item-7 guard sees only named doors), #1150 (the line editor's check lacks the note), #1151 (a wipe says no reason).
 
 ### 2026-11-15 (fourth) — the whole-milestone review (#1128–#1139)
 - **⇒ Per-slice reviews cannot see seams.** Five passes, one question each traced through every layer (who signs ·
