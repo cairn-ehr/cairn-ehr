@@ -783,7 +783,8 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// # Why a DELIBERATE refusal cannot be misread as local here
 ///
 /// It would be, if a door ever raised a verdict with `USING ERRCODE` in one of the classes
-/// above. None does today (no `USING ERRCODE` appears anywhere in `db/`), and the rule
+/// above. None does today (the one `USING ERRCODE` in `db/` is db/083's P0002 for an unknown
+/// registration request, on doors no apply path calls, and not a verdict), and the rule
 /// that keeps it so is written down where it was learned: `db/001_envelope.sql` states, in
 /// the comment above `cairn_decode_hex_or_raise` (#228), that **the P0001 is a contract, not
 /// an accident of using `RAISE EXCEPTION`** — because the node pull loop
