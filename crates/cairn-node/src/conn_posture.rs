@@ -206,8 +206,8 @@ pub fn schema_verdict(stamp: Option<&SchemaStamp>, who: &str, verb: &str) -> Res
     }
     match stamp {
         Some(s) if s.version > ours => Err(format!(
-            "This window is older than the node's database (generation {} against {ours}). \
-             Install the window that matches the node.",
+            "This {who} is older than the node's database (generation {} against {ours}). \
+             Install the {who} that matches the node.",
             s.version
         )),
         // Same generation, different build (hash or loader): any other cairn-node would stamp

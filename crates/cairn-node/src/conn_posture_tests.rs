@@ -144,14 +144,52 @@ fn a_same_generation_mismatch_names_the_cairn_node_built_with_this_window() {
     assert!(!older.contains("built with this window"), "{older}");
 }
 
-/// The terminal service's refusal names ITS verb and itself, never the window's.
+/// The terminal service's refusal names ITS verb and itself, never the window's: for an
+/// unprepared database, one stamped by another build, and one NEWER than the service.
 #[test]
 fn the_service_refusal_names_the_service_verb() {
     let e = super::schema_verdict(None, "terminal service", "provision-terminal-service-role")
         .unwrap_err();
     assert!(e.contains("provision-terminal-service-role") && e.contains("this terminal service"));
+    let v = embedded_schema_version();
+    let h = embedded_schema_hash().to_vec();
+    let same = stamp(v, LOADER_BUILD, None);
+    let newer = stamp(v + 1, LOADER_BUILD, Some(h));
+    let mut said = vec![e];
+    for s in [&same, &newer] {
+        said.push(
+            super::schema_verdict(
+                Some(s),
+                "terminal service",
+                "provision-terminal-service-role",
+            )
+            .unwrap_err(),
+        );
+    }
     assert!(
-        !e.contains("window") && !e.contains("provision-window-role"),
-        "{e}"
+        said[2].contains("This terminal service is older"),
+        "{}",
+        said[2]
+    );
+    for e in said {
+        assert!(
+            !e.contains("window") && !e.contains("provision-window-role"),
+            "{e}"
+        );
+    }
+}
+
+/// The window's newer-database refusal is unchanged, word for word.
+#[test]
+fn the_windows_newer_database_text_is_unchanged() {
+    let v = embedded_schema_version();
+    let s = stamp(v + 1, LOADER_BUILD, Some(embedded_schema_hash().to_vec()));
+    assert_eq!(
+        window_schema_verdict(Some(&s)).unwrap_err(),
+        format!(
+            "This window is older than the node's database (generation {} against {v}). \
+             Install the window that matches the node.",
+            v + 1
+        )
     );
 }

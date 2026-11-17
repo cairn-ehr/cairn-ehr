@@ -3824,14 +3824,16 @@ Steps: registration paper *N* = 3 (search, decide no match, write the card) → 
 request and the service's re-run are machine steps. **A figure outside its budget, or an `M > N`, is the finding:
 file an issue, and never adjust the budget.**
 
-**Setup.** As section 0, then build this checkout's `cairn-node` (the service refuses a database stamped by another
-build) and provision the service's own login with the owner's connection. Its password goes into a connection string,
-so no spaces or quotes:
+**Setup.** As section 0, then, **from the repository root** (not `cairn-gui/`, where section 3 leaves you), build this
+checkout's `cairn-node` (the service refuses a database stamped by another build) and provision the service's own
+login with the owner's connection. Its password goes into a connection string and into the plist's XML below, so no
+spaces, quotes, `&` or `<`:
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 cargo build --release -p cairn-node
 export CAIRN_NODE_BIN="${CARGO_TARGET_DIR:-$PWD/target}/release/cairn-node"
-export CAIRN_TERMINAL_SERVICE_DB_PASSWORD='…'     # no spaces or quotes
+export CAIRN_TERMINAL_SERVICE_DB_PASSWORD='…'     # no spaces, quotes, & or <
 "$CAIRN_NODE_BIN" --conn "$CONN" provision-terminal-service-role --role cairn_terminal_service_login
 export SERVICE_CONN="host=127.0.0.1 port=$MPORT user=cairn_terminal_service_login password=$CAIRN_TERMINAL_SERVICE_DB_PASSWORD dbname=cairn_measure"
 ```
@@ -3863,8 +3865,9 @@ SVC="gui/$(id -u)/org.cairn-ehr.terminal-service"
 svc_start() { launchctl bootstrap "gui/$(id -u)" "$PLIST"; }
 svc_stop()  { launchctl bootout "$SVC"; }
 svc_kill()  { launchctl kill SIGKILL "$SVC"; }     # launchd restarts it
-svc_log()   { tail -f /tmp/cairn-terminal-service.log; }
 ```
+
+Its log, in a second terminal (a shell function would not reach that terminal): `tail -f /tmp/cairn-terminal-service.log`.
 
 On Linux (systemd), as a user unit (a production node uses a system unit with `User=` and an `EnvironmentFile=` of
 mode 0600):
@@ -3890,14 +3893,14 @@ systemctl --user daemon-reload
 svc_start() { systemctl --user start cairn-terminal-service; }
 svc_stop()  { systemctl --user stop cairn-terminal-service; }
 svc_kill()  { systemctl --user kill -s KILL cairn-terminal-service; }   # Restart=on-failure brings it back
-svc_log()   { journalctl --user -fu cairn-terminal-service; }
 ```
+
+Its log, in a second terminal: `journalctl --user -fu cairn-terminal-service`.
 
 Then:
 
 ```bash
-svc_start
-svc_log      # in a second terminal: "terminal service running"
+svc_start    # its log (second terminal, above) says "terminal service running"
 reqs() { psql "$CONN" -c "SELECT request_id, name, status, patient_id, left(refusal, 40) AS refusal, settled_at - submitted_at AS took FROM registration_request ORDER BY submitted_at"; }
 ```
 
@@ -3907,14 +3910,15 @@ reqs() { psql "$CONN" -c "SELECT request_id, name, status, patient_id, left(refu
 Launch the window as section 8 does (no `--patient`), with no `--key`. Passing `--key` is now refused by the window's
 own argument parser, which is the check that it is gone.
 
-**Measurement 1 — Register with the service running (the added round trip ≤ 0.5 s median).** Register five fresh
-names, each with its own date of birth, through the front door. Five runs, more if the figures spread.
+**Measurement 1 — Register with the service running (the added round trip ≤ 0.5 s median).** Note when it starts,
+`M1_START=$(psql "$CONN" -Atc "SELECT now()")`, so the figures below count this measurement's requests only. Register
+five fresh names, each with its own date of birth, through the front door. Five runs, more if the figures spread.
 
 - [ ] Each opens its chart, as before this slice. `reqs` lists each as `registered`, with its chart.
 - [ ] Read the median and the slowest:
 
   ```bash
-  psql "$CONN" -c "SELECT count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM settled_at - submitted_at)) AS median_s, max(extract(epoch FROM settled_at - submitted_at)) AS max_s FROM registration_request WHERE status = 'registered'"
+  psql "$CONN" -c "SELECT count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM settled_at - submitted_at)) AS median_s, max(extract(epoch FROM settled_at - submitted_at)) AS max_s FROM registration_request WHERE status = 'registered' AND submitted_at >= '$M1_START'"
   ```
 
   The figure against the budget is `median_s` plus 0.2 s (the window reads the request every 200 ms). Also record the
@@ -3960,27 +3964,33 @@ SQL
 - [ ] As the window's login, `SELECT * FROM cairn_registration_claim()` is refused (permission denied): only the
       service may claim.
 
+**Writers for Measurements 5 and 6.** Section 20 Measurement 4 removes `nurse-a`'s member row on this rig, and every
+draft she writes after that is stuck, which STUCK's sentence would hide. So write these drafts as `dr-b` (section 19
+enrolled both from the window), or as `nurse-a` only if section 20 Measurement 4 has not been run. Use a chart with no
+other open draft (`due` lists them).
+
 **Measurement 5 — a draft past its quarantine goes in within 60 s, with no window open.** Section 20's setup
-(quarantine two minutes, its `due` and `went` helpers). As `nurse-a` on chart A, write `obs stable`, note `due`, then
+(quarantine two minutes, its `due` and `went` helpers). As `dr-b` on chart A, write `obs stable`, note `due`, then
 **quit the window**. Watch `went` with `\watch 1`. Five runs.
 
 - [ ] Record the seconds from `due` to the note's row (budget ≤ 60 s). The note is node-signed, `drafted` for
-      nurse-a, and read "went in unsigned" once the window is opened again.
+      dr-b, and read "went in unsigned" once the window is opened again.
 
-**Measurement 6 — a draft that would not go in.**
+**Measurement 6 — a draft that would not go in.** In this order: the stuck step last, because it removes a member.
 
-- [ ] **Failed.** `svc_stop`. Leave a draft on chart A past `due`, then record a failure as the service would:
-      `psql "$CONN" -c "INSERT INTO note_draft_commit_failure (draft, failed_at) SELECT draft_id, now() FROM note_draft WHERE patient_id = '<chart A>'"`.
-      Open chart A: the draft reads "overdue — could not go into the record by itself (the node's last try failed; the
-      cause is in the terminal service's log); sign it, or tell the site's operator". `svc_start`: about a minute later
-      (its first commit tick is 60 s after it starts) the note goes in (`went`) and
+- [ ] **Overdue, not failed.** `svc_stop`. As `dr-b`, leave a draft on chart A past `due`, with no failure recorded:
+      it reads "overdue — not in the record yet; the node's terminal service puts it in unsigned at its next check".
+- [ ] **Failed.** With the service still stopped, record a failure for THAT draft as the service would, its id from
+      `due`: `psql "$CONN" -c "INSERT INTO note_draft_commit_failure (draft, failed_at) VALUES ('<the draft>', now())"`.
+      Open chart A again: the draft reads "overdue — could not go into the record by itself (the node's last try
+      failed; the cause is in the terminal service's log); sign it, or tell the site's operator". `svc_start`: about a
+      minute later (its first commit tick is 60 s after it starts) the note goes in (`went`) and
       `SELECT count(*) FROM note_draft_commit_failure` reads 0.
-- [ ] **Overdue, not failed.** With the service stopped and no failure recorded, an overdue draft reads "overdue — not
-      in the record yet; the node's terminal service puts it in unsigned at its next check".
-- [ ] **Stuck.** Section 20 Measurement 4's stuck draft (nurse-a's member row removed), with the service running.
-      After its tick `note_draft_commit_failure` holds that draft, yet the window shows the STUCK sentence ("overdue,
-      but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes in once
-      they are enrolled again"), never the failed one: stuck wins. `svc_log` says the draft once, not every minute.
+- [ ] **Stuck.** Section 20 Measurement 4's stuck draft (`nurse-a`'s, then her member row removed), with the service
+      running. After its tick `note_draft_commit_failure` holds that draft, yet the window shows the STUCK sentence
+      ("overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes
+      in once they are enrolled again"), never the failed one: stuck wins. The service's log says the draft once, not
+      every minute.
 
 **Results (fill in).**
 

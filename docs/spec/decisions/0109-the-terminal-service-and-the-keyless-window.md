@@ -45,14 +45,17 @@ drops the key, the one on the database's machine included (design D8).
 
 2. **`cairn-node terminal-service` does the two acts** (design D1). It refuses a database on another machine
    (`require_local`). It loads the node key without a prompt (`load_signing_key(&cli.key, false)`: a sealed key needs
-   `CAIRN_KEY_PASSPHRASE`). Its login cannot replay DDL, so it checks the schema stamp and names
-   `provision-terminal-service-role` when the stamp is not its build's. Its loop serves registration requests every
-   250 ms (up to 50 per pass), commits overdue drafts every 60 s, and purges old requests every hour. No job's error
-   ends the loop. A lost connection is reopened after a 1 s back-off. If its first connection fails at startup, it
-   exits with an error, so it runs under launchd or systemd with restart-on-failure (RUNBOOK §38). Its stderr names
-   requests, drafts and patients by id only. Its own lines carry no name, note text or clerk's refusal words; a database
-   error adds its SQLSTATE and primary message, never DETAIL or HINT. A job's repeated identical failure is said once,
-   until it changes or the job succeeds.
+   `CAIRN_KEY_PASSPHRASE`). Its login cannot replay DDL, so it checks the schema stamp: a database not yet prepared,
+   or prepared by another build, is refused naming `provision-terminal-service-role`, and a newer database is refused
+   as needing the service built to match it. Its loop serves registration requests every 250 ms (up to 50 per pass),
+   commits overdue drafts every 60 s, and purges old requests every hour. No job's error ends the loop. A lost
+   connection is reopened after a 1 s back-off. If its first connection fails at startup, it exits with an error, so
+   it runs under launchd or systemd with restart-on-failure (RUNBOOK §38). Its stderr names requests, drafts and
+   patients by id only. Its own lines carry no name, note text or clerk's refusal words; a database error adds its
+   SQLSTATE and primary message, never DETAIL or HINT (the primary message is the database's own sentence, and a floor
+   refusal may word it with a value). A job's repeated identical failure (serving requests, the commit tick's listing,
+   the purge) is said once, until it changes or the job succeeds. A draft whose commit fails is said on every commit
+   tick, a stuck draft once per process, and a failed reconnect once a second.
 
 3. **It has its own login, provisioned like the window's.** db/083 creates `cairn_terminal_service`, a `NOLOGIN` group
    granted `cairn_window` (never `cairn_node`), plus the queue's service doors below.
@@ -87,12 +90,12 @@ drops the key, the one on the database's machine included (design D8).
    `register_patient` keeps its own transaction for the CLI.
    - **It compares the bounded prompt, not the whole search.** It refuses when the fresh bounded prompt (`PROMPT_CAP`
      = 5) names a chart that the request's `displayed` does not. `bound_for_prompt` is the window's own function,
-     moved to `cairn-patient-search` so both binaries use one copy. The design's D6 said "any candidate the
-     displayed list does not name", which was wrong: the window shows and attests only the bounded prompt, and that
-     prompt is cut on about 92% of registrations (ADR-0075), so an uncut compare would refuse nearly every
-     registration of a common name. The cut is safe because `rank_candidates` is a total order (ties break on the
-     chart id), so an unchanged record yields the five the clerk saw. A displayed chart that the re-run no longer
-     finds is not a refusal.
+     moved to `cairn-patient-search` so both binaries use one copy. The design's D6 said "any candidate the displayed
+     list does not name", which was wrong: the window shows and attests only the bounded prompt, and that prompt is
+     cut on about 92% of registrations (ADR-0075), so an uncut compare would refuse nearly every registration of a
+     common name. The cut is safe because `rank_candidates` is a total order (ties break on the chart id), so an
+     unchanged record yields the five people (rows) the clerk saw. A displayed chart that the re-run no longer finds
+     is not a refusal.
    - **The name must be the one searched for.** A request whose `name` does not give its query's `name_tokens` is
      refused, or a forger could search for nobody and register somebody. The window builds its query from the same
      typed name, so this refuses nothing the window sends.
@@ -118,8 +121,8 @@ drops the key, the one on the database's machine included (design D8).
 
 7. **The quarantine commit runs on the service's tick** (design D7). `terminal_service::commit::commit_tick` runs
    ADR-0089's `commit_overdue` on each overdue draft of every chart, each in its own transaction. The window's tick
-   and its commit before every notes read are gone, so a draft just past due can still show as a draft for up to one
-   tick. The service writes a per-draft fact, `note_draft_commit_failure` (db/083), through
+   and its commit before every notes read are gone, so a draft just past due can still read overdue for up to one tick
+   while the service runs. The service writes a per-draft fact, `note_draft_commit_failure` (db/083), through
    `cairn_note_draft_commit_failed`, which only it may call. It records a failure for a commit that errs and for a
    stuck draft, and clears it for a draft that went in or was not written (not due, locked, gone). The fact carries no
    cause, and it goes with its draft (`ON DELETE CASCADE`). The door ignores only `foreign_key_violation`, so a draft
@@ -163,8 +166,8 @@ machine, measured in RUNBOOK §38. The timed commit asks no act of anyone, as be
 - **One service per node is assumed.** A second is harmless: `SKIP LOCKED` lets one register and the other pass over.
 - **Registration and the timed commit need the service.** With it stopped, every Register press waits the full 10 s
   before it says the service did not answer. That is slower than paper, where a card can always be written, and no
-  chart can be registered until an operator starts it. Overdue drafts wait, safe, read "overdue — not in the record
-  yet".
+  window can register a chart until an operator starts it (the owner's `cairn-node patient-register` still can).
+  Overdue drafts wait, safe, read "overdue — not in the record yet".
 - **"Fails the same way until an operator acts" can be untrue.** A service that was only slow, or restarting, may
   answer the next press. The sentence is not changed in this slice.
 - **Slice B's gateway must refuse any login that is a member of `cairn_terminal_service`.** That group inherits
@@ -172,10 +175,10 @@ machine, measured in RUNBOOK §38. The timed commit asks no act of anyone, as be
   failure doors.
 - **Head-of-line blocking (#1153).** A request that fails every time with an error that is not a refusal is retried
   on every pass and holds the queue behind it until its deadline.
-- **Backups.** Cairn's backup and export paths copy no whole tables, so `registration_request` and
-  `note_draft_commit_failure` are outside them. An operator's own `pg_dump` copies them, typed names included. While
-  the service runs, its hourly purge deletes a request a day after it settled or expired, or a day after its
-  deadline.
+- **Backups.** Neither `registration_request` nor `note_draft_commit_failure` is in a backup or a local-state export:
+  a backup carries signed events only (ADR-0026), and the local-state export reads only its own named tables, neither
+  of these. An operator's own `pg_dump` copies them, typed names included. While the service runs, its hourly purge
+  deletes a request a day after it settled or expired, or a day after its deadline.
 - **The window and the service must be built in lockstep.** `name_tokens`, `rank_candidates` and the prompt's bound
   live in `cairn-patient-search`, but the window and the service are separate binaries. If one build changes any of
   them, the service's bounded prompt can differ from the clerk's screen: it may then refuse a registration the clerk

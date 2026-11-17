@@ -156,21 +156,16 @@
 >    `command_registry_tests.rs` now fails on a registered command the webview never calls (it reads `invoke("`,
 >    `sendJudgement("`, `superuserAct("`, and fails on a call or row it cannot read); the CLI's `--help` says it checks no allergies (the medium fix — signing
 >    `warning_override` from the CLI — is not built). **#1138 MERGED 2026-11-16** in PR
->    [#1148](https://github.com/cairn-ehr/cairn-ehr/pull/1148): items 1, 2, 4, 7, 8 built (a held key is re-checked
->    on each use; the wrong-passphrase sentence names the ID; one SQL helper each for due/stuck/the spent word; the
->    draft gate owner-only; a "not yet asked" note on draft lines); 5 accepted (ADR-0098 d21); 9 commented on #1077.
->    **Rulings owed: #1146** (item 3, a hold release past a new allergy) and **#1147** (item 6, no audit trail on site
->    policy). #1109 widened.
->    **#909 slice A BUILT 2026-11-17, draft PR #1152**
+>    [#1148](https://github.com/cairn-ehr/cairn-ehr/pull/1148): items 1, 2, 4, 7, 8 built; 5 accepted (ADR-0098 d21);
+>    9 commented on #1077. **Rulings owed: #1146** (item 3, a hold release past a new allergy) and **#1147** (item 6,
+>    no audit trail on site policy). #1109 widened. **#909 slice A BUILT 2026-11-17, draft PR #1152**
 >    ([ADR-0109](spec/decisions/0109-the-terminal-service-and-the-keyless-window.md)): no window holds the node key;
->    `cairn-node terminal-service` registers from a request queue (re-running the search against the BOUNDED prompt)
->    and runs the commit tick, with a per-draft failed fact; filed **#1153**. **⇒ NEXT: final review + CI, merge**;
->    then slice B's plan (the gateway), slice C's rollout brainstorm. **Otherwise:** sign-in
->    **slice 4** (the emergency key, design §5.6 — its own ADR, brainstorm first); the order of **#909** vs **slice 5**
->    (either gates a multi-terminal pilot) and of **#912**; **#1021**'s obligations projection and Pi figures (figures
->    `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: 386 ms at a ward-year, 1.13 s at 100 000);
->    or the standing gate's next whole-project review. Design
->    §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**. Slice 3's design:
+>    `cairn-node terminal-service` registers from a queue (re-running the search against the BOUNDED prompt) and runs
+>    the commit tick; filed **#1153**. **⇒ NEXT: final review + CI, merge**; then slice B's plan (the gateway), slice
+>    C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design §5.6, brainstorm first);
+>    **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac figures); or the next
+>    whole-project review. Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**,
+>    **#964**. Slice 3's design:
 >    [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930; it also carries the per-note "unconfirmed" marker and #918's display half).
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
