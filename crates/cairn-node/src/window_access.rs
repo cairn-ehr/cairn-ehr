@@ -154,10 +154,18 @@ impl LoginGroup {
     }
 
     /// What the login is called in a message.
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             LoginGroup::Window => "window",
             LoginGroup::TerminalService => "terminal-service",
+        }
+    }
+
+    /// The environment variable the login's password is read from.
+    pub fn password_env(&self) -> &'static str {
+        match self {
+            LoginGroup::Window => "CAIRN_WINDOW_DB_PASSWORD",
+            LoginGroup::TerminalService => "CAIRN_TERMINAL_SERVICE_DB_PASSWORD",
         }
     }
 }

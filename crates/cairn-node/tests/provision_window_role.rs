@@ -344,12 +344,28 @@ async fn reading_the_access_rules_without_the_power_names_the_schema_owner() {
     assert!(why.contains("as the schema owner"), "{why}");
 }
 
-/// The verb must refuse before it mutates: each step appears in this order in its match arm.
+/// The verbs must refuse before they mutate: each step appears in this order in the one function
+/// both verbs' arms call (and each arm is only that call).
+
 #[test]
 fn the_verb_refuses_before_it_mutates_in_source_order() {
     let src = include_str!("../src/main.rs");
-    let arm = &src[src.find("Cmd::ProvisionWindowRole { role } =>").unwrap()..];
-    let arm = &arm[..arm.find("Cmd::Status {").unwrap()];
+    for (cmd, group) in [
+        ("Cmd::ProvisionWindowRole { role } =>", "LoginGroup::Window"),
+        (
+            "Cmd::ProvisionTerminalServiceRole { role } =>",
+            "LoginGroup::TerminalService",
+        ),
+    ] {
+        let arm = &src[src.find(cmd).unwrap()..];
+        let arm = &arm[..arm[1..].find("Cmd::").unwrap() + 1];
+        assert!(
+            arm.contains("provision_login_verb") && arm.contains(group),
+            "{cmd}"
+        );
+    }
+    let arm = &src[src.find("async fn provision_login_verb").unwrap()..];
+    let arm = &arm[..arm.find("\n}\n").unwrap()];
     let mut at = 0;
     for needle in [
         "require_local",
@@ -358,7 +374,7 @@ fn the_verb_refuses_before_it_mutates_in_source_order() {
         "hba_file_is_stale",
         "hba_verdict",
         "connect_and_load_schema",
-        "provision_window_login",
+        "provision_login(",
     ] {
         let i = arm[at..]
             .find(needle)

@@ -114,7 +114,29 @@ async fn purge(client: &Client) {
     }
 }
 
-/// Run the service forever on `conn`, reopening it after a loss. Never returns.
+/// One iteration's work: each due job once. No job's error escapes (it is logged).
+pub async fn run_jobs(
+    client: &mut Client,
+    sk: &SigningKey,
+    origin: &str,
+    d: &Due,
+    said: &mut HashSet<Uuid>,
+) {
+    if d.requests {
+        serve_requests(client, sk, origin).await;
+    }
+    if d.commits {
+        if let Err(e) = commit_tick(client, sk, origin, said).await {
+            eprintln!("the commit tick failed: {}", primary_message(&e));
+        }
+    }
+    if d.purge {
+        purge(client).await;
+    }
+}
+
+/// Run the service forever on `conn`, reopening it after a loss. Never returns. The reconnect
+/// and back-off path is not covered by a test (it needs a killed backend); `run_jobs` is.
 pub async fn run(conn: &str, sk: &SigningKey, origin: &str) -> anyhow::Result<()> {
     let mut said: HashSet<Uuid> = HashSet::new();
     let mut client = crate::db::connect(conn).await?;
@@ -132,17 +154,7 @@ pub async fn run(conn: &str, sk: &SigningKey, origin: &str) -> anyhow::Result<()
         }
         let now = Instant::now();
         let d = due(now, &schedule);
-        if d.requests {
-            serve_requests(&mut client, sk, origin).await;
-        }
-        if d.commits {
-            if let Err(e) = commit_tick(&mut client, sk, origin, &mut said).await {
-                eprintln!("the commit tick failed: {}", primary_message(&e));
-            }
-        }
-        if d.purge {
-            purge(&client).await;
-        }
+        run_jobs(&mut client, sk, origin, &d, &mut said).await;
         schedule.mark(&d, now);
         tokio::time::sleep(REQUEST_TICK).await;
     }

@@ -143,3 +143,15 @@ fn a_same_generation_mismatch_names_the_cairn_node_built_with_this_window() {
     let older = window_schema_verdict(Some(&stamp(v - 1, LOADER_BUILD, Some(h)))).unwrap_err();
     assert!(!older.contains("built with this window"), "{older}");
 }
+
+/// The terminal service's refusal names ITS verb and itself, never the window's.
+#[test]
+fn the_service_refusal_names_the_service_verb() {
+    let e = super::schema_verdict(None, "terminal service", "provision-terminal-service-role")
+        .unwrap_err();
+    assert!(e.contains("provision-terminal-service-role") && e.contains("this terminal service"));
+    assert!(
+        !e.contains("window") && !e.contains("provision-window-role"),
+        "{e}"
+    );
+}
