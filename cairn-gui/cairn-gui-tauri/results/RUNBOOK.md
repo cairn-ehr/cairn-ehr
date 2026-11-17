@@ -3906,6 +3906,8 @@ reqs() { psql "$CONN" -c "SELECT request_id, name, status, patient_id, left(refu
 
 - [ ] `svc_kill`: the log says "terminal service running" again, within about 10 s (launchd throttles a restart to
       one per 10 s; systemd's `RestartSec=1`): the supervisor restarted it.
+- [ ] With the window's login, `CAIRN_CONN="$WINDOW_CONN" "$CAIRN_NODE_BIN" --key "$NODE_KEY" terminal-service` exits at
+      once, refusing the login and naming `provision-terminal-service-role`; it never says "running".
 
 Launch the window as section 8 does (no `--patient`), with no `--key`. Passing `--key` is now refused by the window's
 own argument parser, which is the check that it is gone.
@@ -3971,7 +3973,8 @@ other open draft (`due` lists them).
 
 **Measurement 5 — a draft past its quarantine goes in within 60 s, with no window open.** Section 20's setup
 (quarantine two minutes, its `due` and `went` helpers). As `dr-b` on chart A, write `obs stable`, note `due`, then
-**quit the window**. Watch `went` with `\watch 1`. Five runs.
+**quit the window**. Watch `went` with `\watch 1`. Five runs. (A tick commits at most 20 drafts, so a larger
+backlog drains at 20 a minute; one draft is well inside that.)
 
 - [ ] Record the seconds from `due` to the note's row (budget ≤ 60 s). The note is node-signed, `drafted` for
       dr-b, and read "went in unsigned" once the window is opened again.
@@ -3979,7 +3982,11 @@ other open draft (`due` lists them).
 **Measurement 6 — a draft that would not go in.** In this order: the stuck step last, because it removes a member.
 
 - [ ] **Overdue, not failed.** `svc_stop`. As `dr-b`, leave a draft on chart A past `due`, with no failure recorded:
-      it reads "overdue — not in the record yet; the node's terminal service puts it in unsigned at its next check".
+      within three minutes of `due` it reads "overdue — not in the record yet; the node's terminal service puts it in
+      unsigned at its next check".
+- [ ] **Not put in.** With the service still stopped, open chart A again more than three minutes past `due`: the same
+      draft reads "overdue — the node's terminal service has not put it in the record; sign it, or tell the site's
+      operator".
 - [ ] **Failed.** With the service still stopped, record a failure for THAT draft as the service would, its id from
       `due`: `psql "$CONN" -c "INSERT INTO note_draft_commit_failure (draft, failed_at) VALUES ('<the draft>', now())"`.
       Open chart A again: the draft reads "overdue — could not go into the record by itself (the node's last try

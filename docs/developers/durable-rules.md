@@ -20,6 +20,12 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `NOWAIT`). **Tempting wrong fixes:** skip a locked row "so the window never hangs", or time the expire out in the
   window and read the timeout as "expired". Either tells the clerk "nothing was saved" for a chart the service is
   committing that moment. Pin: `terminal_service_doors.rs::expire_waits_behind_a_claim_and_then_reports_registered`.
+- **Every `serve_one` takes the registration lock first** (`REGISTRATION_LOCK`, "CARNRG", a transaction-scoped
+  advisory lock, before the claim). It is what makes two services safe: without it, two requests for one new patient
+  claimed by two services both search before either commits, and the record gets a duplicate. **Tempting wrong
+  fix:** drop it "because `SKIP LOCKED` already stops a double registration" (that guards one request, not two
+  requests for one patient), or take it after the claim (a waiting service would hold a request). Pin:
+  `terminal_service_registration.rs::two_servers_two_requests_for_one_patient_register_one_chart`.
 - **The claim compares the deadline with `clock_timestamp()`, never `now()`.** `now()` is the service transaction's
   start, so a long transaction would claim a row already past its deadline.
 - **The window never holds `NodeKey::Full`**, never names `keystore::`, `load_signing_key`, `CAIRN_KEY_PASSPHRASE` or

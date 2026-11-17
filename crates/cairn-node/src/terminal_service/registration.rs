@@ -16,7 +16,14 @@
 //! window would have shown (`bound_for_prompt`, the window's own function), and refuses if that
 //! prompt holds a chart the request does not name ([`unseen_candidates`]), or if the request
 //! calls complete a search the node finds incomplete. That catches a forged "saw no one", and
-//! also a near-match that appeared after the clerk's screen was drawn.
+//! also a near-match that appeared after the clerk's screen was drawn, a chart another request
+//! registered a moment earlier included ([`REGISTRATION_LOCK`]).
+//!
+//! The check is bounded by the prompt's cut (ADR-0075): it sees only the closest `PROMPT_CAP`
+//! people. With five or more equal-rank namesakes on a name-only query, a chart registered a
+//! moment earlier ranks below them (ties break on the chart id, and the newest id is the
+//! largest), so it is not seen and a duplicate can still be made. The clerk's own screen has the
+//! same cut, so this is the funnel's limit, not the service's.
 //!
 //! # Which failures settle and which do not
 //!

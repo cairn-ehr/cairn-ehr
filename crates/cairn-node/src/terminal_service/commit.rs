@@ -107,7 +107,7 @@ fn failure_cause(e: &tokio_postgres::Error) -> String {
 }
 
 /// One pass over every chart: commit each overdue draft in its own transaction (at most
-/// [`MAX_DRAFTS_PER_TICK`], the rest wait for the next tick: [`this_tick`]), then record the
+/// [`MAX_DRAFTS_PER_TICK`], the rest wait for the next tick: `this_tick`), then record the
 /// outcome. A draft that errs or is stuck (its writer has no key) is recorded failed; one that
 /// went in or was not written (not due, locked, gone) is cleared. One draft's
 /// failure never stops the others. Only the listing's own failure is `Err`.

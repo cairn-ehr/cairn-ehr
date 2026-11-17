@@ -161,11 +161,11 @@
 >    no audit trail on site policy). #1109 widened. **#909 slice A BUILT 2026-11-17, draft PR #1152**
 >    ([ADR-0109](spec/decisions/0109-the-terminal-service-and-the-keyless-window.md)): no window holds the node key;
 >    `cairn-node terminal-service` registers from a queue (re-running the search against the BOUNDED prompt) and runs
->    the commit tick; filed **#1153**. **⇒ NEXT: final review + CI, merge**; then slice B's plan (the gateway), slice
->    C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design §5.6, brainstorm first);
->    **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac figures); or the next
->    whole-project review. Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred (#979), 4–5 are **#965**,
->    **#964**. Slice 3's design:
+>    the commit tick; filed **#1153**, **#1154**, **#1155**. **⇒ NEXT: final review + CI, merge**; then slice B's
+>    plan (the gateway), slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
+>    §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac
+>    figures); or the next whole-project review. Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred
+>    (#979), 4–5 are **#965**, **#964**. Slice 3's design:
 >    [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930; it also carries the per-note "unconfirmed" marker and #918's display half).
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK

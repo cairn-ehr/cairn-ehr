@@ -8,7 +8,8 @@
 //!
 //! The window and this process meet only inside the database, through db/083's doors: the
 //! window writes a registration REQUEST, this process serves it ([`registration::serve_one`]).
-//! The loop that calls it and the CLI verb come later (#909 slice A, Task 7).
+//! [`run::run`] is the loop that calls it and [`commit::commit_tick`]; [`startup::check`] runs
+//! once before it, from the `cairn-node terminal-service` verb.
 
 pub mod commit;
 pub mod registration;
