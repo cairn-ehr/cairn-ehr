@@ -33,10 +33,11 @@ fn window_code() -> Vec<(String, String)> {
 fn the_window_never_loads_the_node_key() {
     for (name, code) in window_code() {
         for token in [
-            "keystore::load",
+            "keystore::",
             "NodeKey::Full",
-            "\"--key\"",
-            "key: std::path::PathBuf",
+            "&cli.key", // not `cli.key_hold_seconds`
+            "CAIRN_KEY_PASSPHRASE",
+            "load_signing_key",
         ] {
             assert!(!code.contains(token), "{name} contains `{token}`");
         }

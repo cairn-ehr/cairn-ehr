@@ -28,7 +28,7 @@ const STUCK_NOT_DUE: &str = "cannot go into the record by itself — a writer of
      enrolled on this node; it can go in only once they are enrolled again";
 
 /// The drafts on `patient`'s chart whose last commit the node's service recorded as failed. A read
-/// that fails is logged (draft-free: patient id and the primary message only) and answers none, so
+/// that fails is logged (draft-free: patient id, SQLSTATE and primary message only, never DETAIL) and answers none, so
 /// the notes still read and the pane shows no FAILED rather than no notes.
 pub async fn failed_drafts(
     db: &(impl tokio_postgres::GenericClient + Sync),
@@ -37,7 +37,10 @@ pub async fn failed_drafts(
     match cairn_node::note::commit::drafts_commit_failed(db, patient).await {
         Ok(set) => set,
         Err(e) => {
-            eprintln!("could not read which drafts failed to commit on {patient}: {e}");
+            eprintln!(
+                "could not read which drafts failed to commit on {patient}: {}",
+                cairn_node::terminal_service::commit::primary_message(&e)
+            );
             HashSet::new()
         }
     }
