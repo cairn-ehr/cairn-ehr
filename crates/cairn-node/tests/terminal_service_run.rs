@@ -4,10 +4,9 @@ mod common;
 
 use cairn_node::db;
 use cairn_node::note::draft::save_part;
-use cairn_node::terminal_service::run::{run_jobs, Due};
+use cairn_node::terminal_service::run::{run_jobs, Due, JobState};
 use cairn_patient_search::{CandidateList, SearchQuery};
 use common::{cs, owner_and_window, service_login};
-use std::collections::HashSet;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -45,7 +44,7 @@ async fn a_requests_iteration_registers_a_waiting_request() {
         requests: true,
         ..Due::default()
     };
-    run_jobs(&mut service, &sk, "run-test", &d, &mut HashSet::new()).await;
+    run_jobs(&mut service, &sk, "run-test", &d, &mut JobState::default()).await;
     let status: String = window
         .query_one(
             "SELECT status FROM cairn_registration_status($1::text::uuid)",
@@ -99,7 +98,7 @@ async fn a_commits_iteration_commits_an_overdue_draft() {
         commits: true,
         ..Due::default()
     };
-    run_jobs(&mut service, &sk, "run-test", &d, &mut HashSet::new()).await;
+    run_jobs(&mut service, &sk, "run-test", &d, &mut JobState::default()).await;
     let n: i64 = owner
         .query_one(
             "SELECT count(*) FROM clinical_note WHERE patient_id = $1::text::uuid",

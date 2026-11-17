@@ -77,68 +77,103 @@ pub fn due(now: Instant, last: &Schedule) -> Due {
 
 /// Serve requests until none is waiting (or the cap). A refusal is logged WITHOUT its reason,
 /// which can quote a typed date of birth.
-async fn serve_requests(client: &mut Client, sk: &SigningKey, origin: &str) {
+async fn serve_requests(client: &mut Client, sk: &SigningKey, origin: &str) -> Result<(), String> {
     for _ in 0..MAX_SERVED_PER_TICK {
         match serve_one(client, sk, origin).await {
-            Ok(Served::Idle) => return,
+            Ok(Served::Idle) => return Ok(()),
             Ok(Served::Registered { request, patient }) => {
                 eprintln!("request {request} registered as patient {patient}")
             }
             Ok(Served::Refused { request, .. }) => eprintln!("request {request} refused"),
             Err(e) => {
-                eprintln!(
+                return Err(format!(
                     "serving a registration request failed: {}",
                     primary_message(&e)
-                );
-                return;
+                ))
             }
         }
     }
+    Ok(())
 }
 
-async fn purge(client: &Client) {
-    match client
+async fn purge(client: &Client) -> Result<(), String> {
+    let r = client
         .query_one("SELECT cairn_registration_purge()", &[])
         .await
-    {
-        Ok(r) => {
-            let n: i32 = r.get(0);
-            if n > 0 {
-                eprintln!("purged {n} old registration requests");
-            }
+        .map_err(|e| {
+            format!(
+                "purging registration requests failed: {}",
+                primary_message(&e.into())
+            )
+        })?;
+    let n: i32 = r.get(0);
+    if n > 0 {
+        eprintln!("purged {n} old registration requests");
+    }
+    Ok(())
+}
+
+/// What the loop remembers between iterations: the stuck drafts already said, and each job's
+/// last logged failure, so a failure that persists is said once, not every 250 ms.
+#[derive(Default)]
+pub struct JobState {
+    said: HashSet<Uuid>,
+    last: [Option<String>; 3],
+}
+
+/// The line to log for this outcome, or `None` if it repeats the last one logged in `slot`.
+/// Success clears the slot, so the same failure after a recovery is said again. **Pure.**
+fn fresh_failure(slot: &mut Option<String>, outcome: Result<(), String>) -> Option<String> {
+    match outcome {
+        Ok(()) => {
+            *slot = None;
+            None
         }
-        Err(e) => eprintln!(
-            "purging registration requests failed: {}",
-            primary_message(&e.into())
-        ),
+        Err(line) if slot.as_ref() == Some(&line) => None,
+        Err(line) => {
+            *slot = Some(line.clone());
+            Some(line)
+        }
     }
 }
 
-/// One iteration's work: each due job once. No job's error escapes (it is logged).
+/// One iteration's work: each due job once. No job's error escapes (it is logged, once per
+/// distinct failure).
 pub async fn run_jobs(
     client: &mut Client,
     sk: &SigningKey,
     origin: &str,
     d: &Due,
-    said: &mut HashSet<Uuid>,
+    state: &mut JobState,
 ) {
+    let JobState { said, last } = state;
     if d.requests {
-        serve_requests(client, sk, origin).await;
+        let r = serve_requests(client, sk, origin).await;
+        log(fresh_failure(&mut last[0], r));
     }
     if d.commits {
-        if let Err(e) = commit_tick(client, sk, origin, said).await {
-            eprintln!("the commit tick failed: {}", primary_message(&e));
-        }
+        let r = commit_tick(client, sk, origin, said)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("the commit tick failed: {}", primary_message(&e)));
+        log(fresh_failure(&mut last[1], r));
     }
     if d.purge {
-        purge(client).await;
+        let r = purge(client).await;
+        log(fresh_failure(&mut last[2], r));
+    }
+}
+
+fn log(line: Option<String>) {
+    if let Some(l) = line {
+        eprintln!("{l}");
     }
 }
 
 /// Run the service forever on `conn`, reopening it after a loss. Never returns. The reconnect
 /// and back-off path is not covered by a test (it needs a killed backend); `run_jobs` is.
 pub async fn run(conn: &str, sk: &SigningKey, origin: &str) -> anyhow::Result<()> {
-    let mut said: HashSet<Uuid> = HashSet::new();
+    let mut state = JobState::default();
     let mut client = crate::db::connect(conn).await?;
     let mut schedule = Schedule::new(Instant::now());
     loop {
@@ -154,7 +189,7 @@ pub async fn run(conn: &str, sk: &SigningKey, origin: &str) -> anyhow::Result<()
         }
         let now = Instant::now();
         let d = due(now, &schedule);
-        run_jobs(&mut client, sk, origin, &d, &mut said).await;
+        run_jobs(&mut client, sk, origin, &d, &mut state).await;
         schedule.mark(&d, now);
         tokio::time::sleep(REQUEST_TICK).await;
     }
@@ -182,5 +217,34 @@ mod tests {
         assert!(d.commits && !d.purge);
         let d = due(t0 + Duration::from_secs(3600), &s);
         assert!(d.commits && d.purge);
+    }
+
+    /// Far past every period (a stalled host): the jobs run once, not as a burst.
+    #[test]
+    fn overshoot_runs_each_job_once() {
+        let t0 = Instant::now();
+        let mut s = Schedule::new(t0);
+        let now = t0 + Duration::from_secs(10_000);
+        let d = due(now, &s);
+        assert!(d.requests && d.commits && d.purge);
+        s.mark(&d, now);
+        assert_eq!(due(now, &s), Due::default());
+    }
+
+    #[test]
+    fn a_repeated_failure_is_said_once_and_again_after_recovery() {
+        let mut slot = None;
+        let bad = || Err("boom".to_string());
+        assert_eq!(fresh_failure(&mut slot, bad()), Some("boom".into()));
+        assert_eq!(fresh_failure(&mut slot, bad()), None);
+        assert_eq!(
+            fresh_failure(&mut slot, Err("other".into())),
+            Some("other".into())
+        );
+        assert_eq!(fresh_failure(&mut slot, Ok(())), None);
+        assert_eq!(
+            fresh_failure(&mut slot, Err("other".into())),
+            Some("other".into())
+        );
     }
 }
