@@ -245,8 +245,8 @@ fn the_covers_line_names_the_claims_own_unsigned_parts() {
         &Claim::NotAsked,
         Some("act-a"),
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov3(),
     );
     assert_eq!(pane.drafts[0].covers_line, pane.notes[0].covers_line);
     assert_eq!(pane.drafts[0].covers, pane.notes[0].covers);
@@ -305,8 +305,8 @@ fn no_covers_line_without_a_claim_or_without_parts() {
         &Claim::NotAsked,
         Some("act-a"),
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov3(),
     );
     assert_eq!(pane.drafts[0].covers_line, None);
     assert!(pane.drafts[0].covers.is_empty());

@@ -259,8 +259,8 @@ fn an_addendum_draft_says_what_it_adds_to() {
         &Claim::NotAsked,
         None,
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov(3),
     );
     let lines: Vec<Option<&str>> = pane.drafts.iter().map(|d| d.adding_to.as_deref()).collect();
     assert_eq!(
@@ -279,6 +279,7 @@ fn an_addendum_draft_says_what_it_adds_to() {
         Some("pc-1"),
         &Claim::NotAsked,
         false,
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
         nov(3),
         &Default::default(),

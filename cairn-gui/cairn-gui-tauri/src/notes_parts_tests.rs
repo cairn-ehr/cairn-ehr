@@ -64,6 +64,7 @@ fn only_the_current_writers_tail_is_editable() {
             Some(terminal),
             claim,
             false,
+            utc("2026-11-03T00:00:00Z"),
             &bne(),
             nov(3),
             &Default::default(),
@@ -87,6 +88,7 @@ fn only_the_current_writers_tail_is_editable() {
         Some("pc-1"),
         &named("dr-b"),
         false,
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
         nov(3),
         &Default::default(),
@@ -116,6 +118,7 @@ fn an_unknown_tail_stays_editable_for_dont_know() {
         Some("pc-1"),
         &Claim::Unknown,
         false,
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
         nov(3),
         &Default::default(),
@@ -130,6 +133,7 @@ fn an_unknown_tail_stays_editable_for_dont_know() {
             Some("pc-1"),
             &named("dr-b"),
             false,
+            utc("2026-11-03T00:00:00Z"),
             &bne(),
             nov(3),
             &Default::default()
@@ -150,6 +154,7 @@ fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
         Some("pc-1"),
         &Claim::NotAsked,
         false,
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
         nov(3),
         &Default::default(),
@@ -166,6 +171,7 @@ fn a_draft_says_when_it_was_started_and_last_typed_and_where() {
         Some("pc-1"),
         &Claim::NotAsked,
         false,
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
         nov(4),
         &Default::default(),
@@ -223,8 +229,8 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
         &Claim::NotAsked,
         None,
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov(3),
     );
     let row = &pane.notes[0];
     assert_eq!(row.text, "BP <90");
@@ -251,8 +257,8 @@ fn the_pane_words_each_note_and_any_withheld_ones() {
         &Claim::NotAsked,
         None,
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov(3),
     );
     assert_eq!(none.withheld_sentence, None);
 }
@@ -291,6 +297,7 @@ fn a_stated_time_with_seconds_survives_reopening() {
         Some("pc-1"),
         &Claim::Unknown,
         false,
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
         nov(3),
         &Default::default(),
@@ -319,8 +326,8 @@ fn without_a_terminal_id_no_draft_is_here() {
         &Claim::Unknown,
         None,
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov(3),
     );
     assert_eq!(pane.drafts.len(), 1);
     assert!(!pane.drafts[0].here);
@@ -349,8 +356,8 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
         &dr_b,
         None,
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov(3),
     );
     assert_eq!(pane.claim.kind, "named");
     assert_eq!(pane.claim.staff_id.as_deref(), Some("dr-b"));
@@ -362,8 +369,8 @@ fn the_pane_names_the_claim_it_chose_the_editable_part_for() {
         &Claim::NotAsked,
         None,
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov(3),
     );
     assert_eq!(nobody.claim.kind, "not-asked");
     assert_eq!(nobody.claim.staff_id, None);
@@ -458,8 +465,8 @@ fn the_pane_lists_discard_markers() {
         &Claim::NotAsked,
         None,
         &Default::default(),
+        utc("2026-11-03T00:00:00Z"),
         &bne(),
-        nov(3),
     );
     assert_eq!(pane.discards.len(), 1);
     assert!(pane.withheld_sentence.is_some());

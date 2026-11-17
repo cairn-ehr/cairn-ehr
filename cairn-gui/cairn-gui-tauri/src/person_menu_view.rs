@@ -163,7 +163,7 @@ where
         Why::Draft { due, stuck, .. } => {
             let today = now.with_timezone(tz).date_naive();
             // The menu has no node-clock `overdue` or window-side `failed` (ADR-0095 Not-guaranteed (d)).
-            due_words(*due, *due <= now, *stuck, false, tz, today)
+            due_words(*due, *due <= now, *stuck, false, now, tz, today)
         }
         Why::WentInUnsigned => UNSIGNED.into(),
         Why::KeyRepudiated => REPUDIATED.into(),

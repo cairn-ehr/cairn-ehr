@@ -16,7 +16,7 @@ use cairn_node::note::compound::compounds;
 use cairn_node::note::draft::{DraftPart, NoteDraft};
 use cairn_node::note::read::{DiscardMarker, NoteRow, PatientNoteList};
 use cairn_node::note::view::{instant, part_byline, time_words};
-use chrono::{NaiveDate, TimeZone};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -51,11 +51,12 @@ pub struct NotePane {
     pub claim: ClaimView,
 }
 
-/// The read as the pane shows it, in zone `tz` with `today` its date, the editable part chosen for
+/// The read as the pane shows it, at `now` in zone `tz`, the editable part chosen for
 /// `claim`; `claim_actor`: that claim's actor, read beside the notes (`None` with no named claim
 /// or one this node cannot place), for the "also covers" line (`compound::covers_of`); `opened`:
 /// the chart on screen (only its notes can be added to); `failed`: the drafts whose last commit
-/// in this window failed (`commit::due_words`). Pure.
+/// by the node's terminal service failed, and `now` the window's clock (`commit::due_words`).
+/// Pure.
 #[allow(clippy::too_many_arguments)] // each is one independent input of the pane's words
 pub(crate) fn note_pane<Tz: TimeZone>(
     list: PatientNoteList,
@@ -64,12 +65,13 @@ pub(crate) fn note_pane<Tz: TimeZone>(
     claim: &Claim,
     claim_actor: Option<&str>,
     failed: &HashSet<Uuid>,
+    now: DateTime<Utc>,
     tz: &Tz,
-    today: NaiveDate,
 ) -> NotePane
 where
     Tz::Offset: std::fmt::Display,
 {
+    let today = now.with_timezone(tz).date_naive();
     let withheld_sentence =
         withheld_words(list.withheld_on_linked, list.discards_withheld_on_linked);
     let grouped = compounds(list.notes);
@@ -90,7 +92,7 @@ where
         .iter()
         .map(|d| {
             let failed = failed.contains(&d.draft_id);
-            draft_view(d, terminal, claim, failed, tz, today, &shown)
+            draft_view(d, terminal, claim, failed, now, tz, today, &shown)
         })
         .collect();
     NotePane {
@@ -288,14 +290,17 @@ fn adding_to_line(
     })
 }
 
-/// One draft's words, its parts, and which part the current claim may edit. `failed`: this
-/// window's last commit of it failed; `shown`: every note part the pane shows → its note's view
+/// One draft's words, its parts, and which part the current claim may edit. `failed`: the node's
+/// terminal service's last commit of it failed; `now`: the window's clock, for how long it has
+/// been overdue (`commit::due_words`); `shown`: every note part the pane shows → its note's view
 /// (`adding_to_line`, and the "also covers" line it repeats).
+#[allow(clippy::too_many_arguments)] // each is one independent input of the draft's words
 pub(crate) fn draft_view<Tz: TimeZone>(
     draft: &NoteDraft,
     terminal: Option<&str>,
     claim: &Claim,
     failed: bool,
+    now: DateTime<Utc>,
     tz: &Tz,
     today: NaiveDate,
     shown: &HashMap<Uuid, &CompoundView>,
@@ -319,6 +324,7 @@ where
         draft.overdue,
         draft.stuck,
         failed,
+        now,
         tz,
         today,
     ));

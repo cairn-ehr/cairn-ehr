@@ -20,31 +20,60 @@ fn due_words_before_and_after() {
     // 20:40 UTC is 06:40 the next morning in Brisbane.
     let due = utc("2026-11-02T20:40:00Z");
     assert_eq!(
-        due_words(due, false, false, false, &bne(), today),
+        due_words(due, false, false, false, due, &bne(), today),
         "goes into the record unsigned at 06:40 if nobody types in it"
     );
     assert_eq!(
-        due_words(due, true, false, false, &bne(), today),
+        due_words(due, true, false, false, due, &bne(), today),
         "overdue — not in the record yet; the node's terminal service puts it in unsigned at its next check"
     );
     assert_eq!(
-        due_words(due, true, true, true, &bne(), today),
+        due_words(due, true, true, true, due, &bne(), today),
         "overdue, but cannot go into the record by itself — a writer of it is no longer \
          enrolled on this node; it goes in once they are enrolled again"
     );
     // PR #981 review F1: a draft whose last commit failed says so, and asks for a Sign — never
     // "tries again", which a failure that repeats every pass would make a broken promise.
     assert_eq!(
-        due_words(due, true, false, true, &bne(), today),
+        due_words(due, true, false, true, due, &bne(), today),
         "overdue — could not go into the record by itself (the node's last try failed; the cause is \
          in the terminal service's log); sign it, or tell the site's operator"
     );
     // Final review I1: stuck wins even before it falls due — a stuck draft never goes in at
     // its due time, so it must never say it will.
     assert_eq!(
-        due_words(due, false, true, true, &bne(), today),
+        due_words(due, false, true, true, due, &bne(), today),
         "cannot go into the record by itself — a writer of it is no longer enrolled on this \
          node; it can go in only once they are enrolled again"
+    );
+}
+
+/// Final review F2 (ruling R16). An overdue draft still on the chart past three of the service's
+/// commit ticks has not been put in by a service that would have run three times: it is not
+/// running, or not reaching it. The window cannot see the service, so it stops promising "its
+/// next check" and asks for a Sign instead. Exactly three ticks is still the ordinary wait.
+#[test]
+fn an_overdue_draft_past_three_ticks_is_not_put_in() {
+    let today = NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
+    let due = utc("2026-11-02T20:40:00Z");
+    let ticks = chrono::TimeDelta::from_std(COMMIT_TICK * 3).unwrap();
+    let words = |now, stuck, failed| due_words(due, true, stuck, failed, now, &bne(), today);
+    let at_three = due + ticks;
+    let past_three = at_three + chrono::TimeDelta::seconds(1);
+    assert_eq!(words(at_three, false, false), OVERDUE);
+    assert_eq!(
+        words(past_three, false, false),
+        "overdue — the node's terminal service has not put it in the record; sign it, or tell \
+         the site's operator"
+    );
+    // Precedence: stuck > failed > not put in > overdue.
+    assert_eq!(words(past_three, false, true), FAILED);
+    assert_eq!(words(past_three, true, true), STUCK);
+    assert_eq!(words(past_three, true, false), STUCK);
+    // Not overdue on the node's clock (the window's clock runs ahead): never "not put in".
+    assert_eq!(
+        due_words(due, false, false, false, past_three, &bne(), today),
+        "goes into the record unsigned at 06:40 if nobody types in it"
     );
 }
 

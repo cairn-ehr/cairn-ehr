@@ -202,7 +202,6 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
     .await
     .map_err(|e| chart_read_failed(db.explain(e)))?;
     // The window supplies the zone (ruling R10): the node never knows the terminal's.
-    let today = Utc::now().with_timezone(&chrono::Local).date_naive();
     Ok(note_pane(
         list,
         patient,
@@ -210,8 +209,8 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
         &claim,
         claim_actor.as_deref(),
         &failed,
+        Utc::now(),
         &chrono::Local,
-        today,
     ))
 }
 

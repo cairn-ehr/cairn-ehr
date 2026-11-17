@@ -4,6 +4,7 @@
 //! commit. All that is left here is what the pane SAYS of an open draft (`due_words`) and the
 //! read of which drafts the service's last try failed (`failed_drafts`, from db/083's fact).
 use cairn_node::note::view::instant;
+use cairn_node::terminal_service::run::COMMIT_TICK;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -18,6 +19,15 @@ const OVERDUE: &str =
 /// nobody keeps, and an abandoned draft has no other way in, so the clinician is told to act.
 const FAILED: &str = "overdue — could not go into the record by itself (the node's last try \
      failed; the cause is in the terminal service's log); sign it, or tell the site's operator";
+/// Said of an overdue draft, neither stuck nor failed, still on the chart more than three of the
+/// service's commit ticks past its due time (final review F2, ruling R16): a running service would
+/// have tried it three times, and the window cannot see the service, so it no longer promises "its
+/// next check" — the service may not be running at all — and asks for a Sign.
+const NOT_PUT_IN: &str = "overdue — the node's terminal service has not put it in the record; \
+     sign it, or tell the site's operator";
+/// How many of the service's commit ticks an overdue draft may wait before [`NOT_PUT_IN`].
+const TICKS_BEFORE_NOT_PUT_IN: u32 = 3;
+
 /// Said of a STUCK draft: a writer has no vault key, so every commit rolls it back. Not "sign it":
 /// a Sign refuses the same draft (`SignRefusal::NoSuchWriter`), so only re-enrolling them helps.
 const STUCK: &str = "overdue, but cannot go into the record by itself — a writer of it is no \
@@ -50,22 +60,29 @@ pub async fn failed_drafts(
 /// wins whether or not it is due: such a draft never goes in by itself ([`STUCK`] once
 /// `overdue`, else [`STUCK_NOT_DUE`]). Otherwise: at its `due` time if nobody types in it; or,
 /// `overdue` (the node decided, on its own clock), [`FAILED`] when the service's last commit of
-/// it failed, else [`OVERDUE`]. Pure.
+/// it failed, [`NOT_PUT_IN`] when `now` (the window's clock) is more than
+/// [`TICKS_BEFORE_NOT_PUT_IN`] commit ticks past `due`, else [`OVERDUE`]. Pure.
 pub(crate) fn due_words<Tz: TimeZone>(
     due: DateTime<Utc>,
     overdue: bool,
     stuck: bool,
     failed: bool,
+    now: DateTime<Utc>,
     tz: &Tz,
     today: NaiveDate,
 ) -> String
 where
     Tz::Offset: std::fmt::Display,
 {
+    // A negative wait (the window's clock behind the node's) does not convert: not late.
+    let late = (now - due)
+        .to_std()
+        .is_ok_and(|waited| waited > COMMIT_TICK * TICKS_BEFORE_NOT_PUT_IN);
     match (overdue, stuck) {
         (true, true) => STUCK.into(),
         (false, true) => STUCK_NOT_DUE.into(),
         (true, false) if failed => FAILED.into(),
+        (true, false) if late => NOT_PUT_IN.into(),
         (true, false) => OVERDUE.into(),
         (false, false) => format!(
             "goes into the record unsigned at {} if nobody types in it",
