@@ -6,14 +6,12 @@
 //! decision of which are due, so the pacing is unit-tested without a clock or a database.
 //! No job's error ends the loop (an unattended service that stops serves nothing); a lost
 //! connection is reopened after a 1 s back-off. Log lines carry ids and primary messages only.
-use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use cairn_event::SigningKey;
 use tokio_postgres::Client;
-use uuid::Uuid;
 
-use super::commit::{commit_tick, primary_message};
+use super::commit::{commit_tick, primary_message, CommitMemory};
 use super::registration::{serve_one, Served};
 
 const REQUEST_TICK: Duration = Duration::from_millis(250);
@@ -113,11 +111,11 @@ async fn purge(client: &Client) -> Result<(), String> {
     Ok(())
 }
 
-/// What the loop remembers between iterations: the stuck drafts already said, and each job's
-/// last logged failure, so a failure that persists is said once, not every 250 ms.
+/// What the loop remembers between iterations: the commit tick's memory, and each job's last
+/// logged failure, so a failure that persists is said once, not every 250 ms.
 #[derive(Default)]
 pub struct JobState {
-    said: HashSet<Uuid>,
+    commits: CommitMemory,
     last: [Option<String>; 3],
 }
 
@@ -146,13 +144,13 @@ pub async fn run_jobs(
     d: &Due,
     state: &mut JobState,
 ) {
-    let JobState { said, last } = state;
+    let JobState { commits, last } = state;
     if d.requests {
         let r = serve_requests(client, sk, origin).await;
         log(fresh_failure(&mut last[0], r));
     }
     if d.commits {
-        let r = commit_tick(client, sk, origin, said)
+        let r = commit_tick(client, sk, origin, commits)
             .await
             .map(|_| ())
             .map_err(|e| format!("the commit tick failed: {}", primary_message(&e)));

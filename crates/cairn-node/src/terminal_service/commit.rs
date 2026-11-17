@@ -19,6 +19,38 @@ use uuid::Uuid;
 
 use crate::note::commit::{commit_overdue, overdue_drafts, CommitOutcome, CommitReport};
 
+/// The most drafts one tick tries (final review F5, ruling R18). Each is its own sealed, signed
+/// transaction, and the registration requests wait while the tick runs, so a backlog (a service
+/// that was down for a day) is drained at this many a minute rather than in one long pass.
+pub const MAX_DRAFTS_PER_TICK: usize = 20;
+
+/// What the service's loop remembers between ticks. Owned by the caller for the life of its
+/// loop; nothing here is global state.
+#[derive(Debug, Default)]
+pub struct CommitMemory {
+    /// The stuck drafts already said on stderr, so each is said once per run, not every minute.
+    said: HashSet<Uuid>,
+    /// The drafts whose last try did not go in (stuck, or an error): tried after the others.
+    failing: HashSet<Uuid>,
+}
+
+/// The drafts this tick tries, from the listing `listed` (oldest due first): at most
+/// [`MAX_DRAFTS_PER_TICK`], with the drafts in `failing` moved after the others. **Pure.**
+///
+/// WHY FAILING LAST. A stuck draft stays overdue until its writer is enrolled again, and a draft
+/// whose commit errs may err on every pass. Oldest first alone would let twenty such drafts,
+/// being the oldest, fill every tick for ever while newer drafts never went in. They are still
+/// tried whenever the tick has room, so one that recovers goes in.
+fn this_tick(listed: Vec<Uuid>, failing: &HashSet<Uuid>) -> Vec<Uuid> {
+    let (again, fresh): (Vec<Uuid>, Vec<Uuid>) =
+        listed.into_iter().partition(|d| failing.contains(d));
+    fresh
+        .into_iter()
+        .chain(again)
+        .take(MAX_DRAFTS_PER_TICK)
+        .collect()
+}
+
 /// The drafts in `stuck` not yet in `said`, which now holds them too.
 fn newly_stuck(said: &mut HashSet<Uuid>, stuck: Vec<Uuid>) -> Vec<Uuid> {
     stuck.into_iter().filter(|d| said.insert(*d)).collect()
@@ -74,22 +106,22 @@ fn failure_cause(e: &tokio_postgres::Error) -> String {
     }
 }
 
-/// One pass over every chart: commit each overdue draft in its own transaction, then record the
+/// One pass over every chart: commit each overdue draft in its own transaction (at most
+/// [`MAX_DRAFTS_PER_TICK`], the rest wait for the next tick: [`this_tick`]), then record the
 /// outcome. A draft that errs or is stuck (its writer has no key) is recorded failed; one that
 /// went in or was not written (not due, locked, gone) is cleared. One draft's
 /// failure never stops the others. Only the listing's own failure is `Err`.
 ///
-/// `said` is the caller's set of stuck drafts already said on stderr: the caller owns it for the
-/// life of its loop, so each stuck draft is said once per run, not every minute, and nothing
-/// here is global state.
+/// `memory` is the caller's [`CommitMemory`], kept across ticks.
 pub async fn commit_tick(
     client: &mut Client,
     node_sk: &SigningKey,
     node_origin: &str,
-    said: &mut HashSet<Uuid>,
+    memory: &mut CommitMemory,
 ) -> anyhow::Result<CommitReport> {
     let mut report = CommitReport::default();
-    for draft in overdue_drafts(client, None).await? {
+    let listed = overdue_drafts(client, None).await?;
+    for draft in this_tick(listed, &memory.failing) {
         let outcome = commit_overdue(client, node_sk, draft, node_origin).await;
         match &outcome {
             Ok(CommitOutcome::Committed(_)) => note_failed(client, draft, false).await,
@@ -102,9 +134,18 @@ pub async fn commit_tick(
                 note_failed(client, draft, true).await;
             }
         }
+        let went_in_or_skipped = matches!(
+            outcome,
+            Ok(CommitOutcome::Committed(_) | CommitOutcome::NothingWritten)
+        );
+        if went_in_or_skipped {
+            memory.failing.remove(&draft);
+        } else {
+            memory.failing.insert(draft);
+        }
         report.record(draft, outcome);
     }
-    for draft in newly_stuck(said, report.stuck.clone()) {
+    for draft in newly_stuck(&mut memory.said, report.stuck.clone()) {
         eprintln!(
             "draft {draft} is overdue but cannot go into the record: a writer of it is no \
              longer enrolled on this node"
@@ -116,6 +157,19 @@ pub async fn commit_tick(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tick_takes_twenty_with_the_failing_last() {
+        let listed: Vec<Uuid> = (0..25).map(Uuid::from_u128).collect();
+        assert_eq!(this_tick(listed.clone(), &HashSet::new()), listed[..20]);
+        // The five oldest failed last time: the twenty after them go first.
+        let failing: HashSet<Uuid> = listed[..5].iter().copied().collect();
+        assert_eq!(this_tick(listed.clone(), &failing), listed[5..]);
+        // With room, the failing are tried too, after the others, in the listing's order.
+        let few = listed[..7].to_vec();
+        let order: Vec<Uuid> = listed[5..7].iter().chain(&listed[..5]).copied().collect();
+        assert_eq!(this_tick(few, &failing), order);
+    }
 
     #[test]
     fn a_stuck_draft_is_said_once() {

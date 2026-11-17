@@ -15,9 +15,10 @@ use cairn_node::db;
 use cairn_node::note::draft::save_part;
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::view::NoteGrade;
-use cairn_node::terminal_service::commit::{commit_tick, failure_line};
+use cairn_node::terminal_service::commit::{
+    commit_tick, failure_line, CommitMemory, MAX_DRAFTS_PER_TICK,
+};
 use common::{cs, owner_and_window, service_login};
-use std::collections::HashSet;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -116,7 +117,7 @@ async fn an_overdue_draft_goes_in_node_signed() {
     let draft = Uuid::now_v7();
     save_aged(&r.owner, draft, r.chart, Some("notewriter"), 400).await;
 
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut CommitMemory::default())
         .await
         .unwrap();
 
@@ -135,7 +136,7 @@ async fn a_not_yet_due_draft_is_untouched() {
     let draft = Uuid::now_v7();
     save_aged(&r.owner, draft, r.chart, Some("notewriter"), 0).await;
 
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut CommitMemory::default())
         .await
         .unwrap();
 
@@ -180,7 +181,7 @@ async fn a_failing_commit_is_recorded_and_a_later_success_clears_it() {
         .await
         .unwrap();
 
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut CommitMemory::default())
         .await
         .unwrap();
     assert_eq!(report.stuck, vec![draft]);
@@ -189,7 +190,7 @@ async fn a_failing_commit_is_recorded_and_a_later_success_clears_it() {
 
     // She is enrolled again: the next tick puts it in and the fact goes.
     r.owner.execute(enrol, &[&a_kid]).await.unwrap();
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut CommitMemory::default())
         .await
         .unwrap();
     assert_eq!(report.committed, 1);
@@ -251,11 +252,46 @@ async fn a_skipped_draft_clears_its_old_failed_fact() {
         .await
         .unwrap();
 
-    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut HashSet::new())
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut CommitMemory::default())
         .await
         .unwrap();
 
     assert_eq!(report.committed, 0, "the held draft was skipped");
     assert!(failed_on(&r.window, r.chart).await.is_empty());
     holder.rollback().await.unwrap();
+}
+
+/// Final review F5 (ruling R18). A backlog (a service down for a day, a ward's worth of
+/// abandoned drafts) must not hold the loop for minutes while registrations wait behind it: one
+/// tick commits at most `MAX_DRAFTS_PER_TICK`, oldest due first, and leaves the rest for the
+/// next tick, so a backlog drains at 20 a minute.
+#[tokio::test]
+async fn a_backlog_goes_in_twenty_drafts_a_tick() {
+    let Some(mut r) = rig().await else { return };
+    let mut drafts = Vec::new();
+    for age in 0..=MAX_DRAFTS_PER_TICK as i32 {
+        let draft = Uuid::now_v7();
+        // The first is the youngest; each later one was typed a minute earlier.
+        save_aged(&r.owner, draft, r.chart, Some("notewriter"), 400 + age).await;
+        drafts.push(draft);
+    }
+
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut CommitMemory::default())
+        .await
+        .unwrap();
+    assert_eq!(report.committed, MAX_DRAFTS_PER_TICK);
+    let open: Vec<String> = r
+        .owner
+        .query("SELECT draft_id::text FROM note_draft", &[])
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(open, vec![drafts[0].to_string()], "the youngest waits");
+
+    let report = commit_tick(&mut r.service, &r.sk, ORIGIN, &mut CommitMemory::default())
+        .await
+        .unwrap();
+    assert_eq!(report.committed, 1, "the next tick takes the rest");
 }

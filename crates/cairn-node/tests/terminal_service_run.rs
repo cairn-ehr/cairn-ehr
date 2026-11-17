@@ -5,6 +5,7 @@ mod common;
 use cairn_node::db;
 use cairn_node::note::draft::save_part;
 use cairn_node::terminal_service::run::{run_jobs, Due, JobState};
+use cairn_node::terminal_service::startup::{can_claim, grant_verdict};
 use cairn_patient_search::{CandidateList, SearchQuery};
 use common::{cs, owner_and_window, service_login};
 use uuid::Uuid;
@@ -108,4 +109,36 @@ async fn a_commits_iteration_commits_an_overdue_draft() {
         .unwrap()
         .get(0);
     assert_eq!(n, 1);
+}
+
+/// Final review F4 (b). The service checks at startup that its login can claim requests: a
+/// window login (or any login without `cairn_terminal_service`) would otherwise start, say
+/// "running", and fail every 250 ms while clerks' registrations time out. The refusal names the
+/// owner step that makes the right login.
+#[tokio::test]
+async fn a_window_login_is_refused_as_the_terminal_service() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (owner, window) = owner_and_window(&base).await;
+    let service = db::connect(&service_login(&owner, &base).await)
+        .await
+        .unwrap();
+
+    assert!(
+        !can_claim(&window).await.unwrap(),
+        "the window cannot claim"
+    );
+    let refusal = grant_verdict(can_claim(&window).await.unwrap()).unwrap_err();
+    assert!(
+        refusal.contains("provision-terminal-service-role"),
+        "{refusal}"
+    );
+    assert!(
+        can_claim(&service).await.unwrap(),
+        "the service's login can"
+    );
+    assert!(grant_verdict(can_claim(&service).await.unwrap()).is_ok());
 }

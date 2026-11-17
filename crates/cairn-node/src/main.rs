@@ -3065,7 +3065,8 @@ async fn run() -> anyhow::Result<()> {
                 "provision-terminal-service-role",
             )
             .map_err(|e| anyhow::anyhow!(e))?;
-            let origin = cairn_node::identity::load_local(&db).await?.node_id_hex;
+            // Then the login can claim requests and the key is the node's own (final review F4).
+            let origin = cairn_node::terminal_service::startup::check(&db, &sk).await?;
             drop(db);
             eprintln!("terminal service running");
             cairn_node::terminal_service::run::run(&cli.conn, &sk, &origin).await?;
