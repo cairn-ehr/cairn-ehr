@@ -14,8 +14,9 @@
 //! The window's login can write any request by raw SQL, so its "I searched and was shown these
 //! charts" is only a claim. The service runs the same search again, cuts it to the prompt the
 //! window would have shown (`bound_for_prompt`, the window's own function), and refuses if that
-//! prompt holds a chart the request does not name ([`unseen_candidates`]). That catches a forged
-//! "saw no one", and also a near-match that appeared after the clerk's screen was drawn.
+//! prompt holds a chart the request does not name ([`unseen_candidates`]), or if the request
+//! calls complete a search the node finds incomplete. That catches a forged "saw no one", and
+//! also a near-match that appeared after the clerk's screen was drawn.
 //!
 //! # Which failures settle and which do not
 //!
@@ -199,7 +200,12 @@ pub async fn serve_one(
             // total (`rank_candidates` breaks every tie on the chart id), so an unchanged record
             // yields the same five in the same order here as on the clerk's screen.
             let prompt = bound_for_prompt(&fresh);
-            if unseen_candidates(prompt.as_list(), &displayed).is_empty() {
+            // Final review F3 (ruling R17): the attestation copies the DISPLAYED list's
+            // `incomplete`, so a request that says "complete" over a search the node finds
+            // incomplete would have the node sign a false "complete". Refused as stale: the
+            // clerk's search again shows the warning, and that registration attests it.
+            let falsely_complete = fresh.incomplete && !displayed.incomplete;
+            if unseen_candidates(prompt.as_list(), &displayed).is_empty() && !falsely_complete {
                 register_on_savepoint(&tx, sk, node_origin, name.as_deref(), &query, &displayed)
                     .await?
             } else {

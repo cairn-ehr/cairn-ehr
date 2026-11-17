@@ -10,6 +10,7 @@
 //!
 //! * an honest request registers once, and its row says which chart it made;
 //! * a forged "saw no one" is refused while someone matches, and no chart is made;
+//! * a request calling complete a search the node finds incomplete is refused;
 //! * a request past its deadline is never served;
 //! * a request the service cannot read is refused (never left to loop), and the next is served;
 //! * a floor refusal settles `refused` with the floor's words;
@@ -382,6 +383,66 @@ async fn two_servers_register_once() {
         Served::Registered { request, .. } if request == held
     ));
     assert_eq!(charts(&r.owner).await, 2);
+}
+
+/// Final review F3 (ruling R17). A chart matched by its MRN alone, with no name on file, makes
+/// the search INCOMPLETE ("a candidate could not be read"): a clerk shown it is warned the list
+/// cannot be trusted as "no match". A request naming that chart but claiming the search was
+/// complete would have the node sign `incomplete: false` over a search it found incomplete. The
+/// service refuses it with the new-match words; the clerk's search again shows the warning, and
+/// the registration that follows attests it honestly.
+#[tokio::test]
+async fn a_request_claiming_a_complete_search_the_node_finds_incomplete_is_refused() {
+    let Some(mut r) = rig().await else { return };
+    let mrn = [("MRN".to_string(), "A1".to_string())];
+    let nameless = register_patient_returning_event(
+        &mut r.owner,
+        &r.sk,
+        &r.kid,
+        NODE,
+        None,
+        &SearchQuery::new("", None, &mrn),
+        &CandidateList::empty(),
+    )
+    .await
+    .unwrap()
+    .value;
+    let q = SearchQuery::new("Ann Nguyen", None, &mrn);
+    let found = search_patients(&r.owner, &q, TODAY).await.unwrap();
+    assert!(
+        found.incomplete,
+        "the nameless chart cannot be read: {found:?}"
+    );
+    assert_eq!(found.displayed_charts(), vec![nameless]);
+    // Every chart the node would show is named, so nothing is unseen; only the claim is false.
+    let shown = CandidateList {
+        incomplete: false,
+        incomplete_reason: None,
+        ..bound_for_prompt(&found).as_list().clone()
+    };
+    let id = submit(&r.window, "Ann Nguyen", &q, &shown).await;
+
+    assert_eq!(
+        serve_one(&mut r.service, &r.sk, NODE).await.unwrap(),
+        Served::Refused {
+            request: id,
+            reason: NEW_MATCH_REFUSAL.into()
+        }
+    );
+    assert_eq!(charts(&r.owner).await, 1, "no chart was made");
+
+    // Searched again, the clerk is shown the incomplete list and attests it: that registers.
+    let honest = submit(
+        &r.window,
+        "Ann Nguyen",
+        &q,
+        bound_for_prompt(&found).as_list(),
+    )
+    .await;
+    assert!(matches!(
+        serve_one(&mut r.service, &r.sk, NODE).await.unwrap(),
+        Served::Registered { request, .. } if request == honest
+    ));
 }
 
 /// The backend pid of `c`, to watch in `pg_stat_activity`.
