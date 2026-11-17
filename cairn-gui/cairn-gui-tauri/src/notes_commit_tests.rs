@@ -234,3 +234,28 @@ async fn a_stuck_draft_reads_stuck() {
         pane.drafts[0].words
     );
 }
+
+/// A failed-set read that cannot run (the window lacks the door) never blocks the notes: the
+/// draft is still listed, with no FAILED. The grant is restored for the next test.
+#[tokio::test]
+async fn a_failed_set_read_that_fails_still_reads_the_notes() {
+    let Some((_guard, owner, state, chart)) = an_overdue_draft().await else {
+        return;
+    };
+    owner
+        .batch_execute(
+            "REVOKE EXECUTE ON FUNCTION cairn_note_drafts_commit_failed(uuid) FROM cairn_window",
+        )
+        .await
+        .unwrap();
+    let pane = note_list_impl(&state, &chart.to_string()).await;
+    owner
+        .batch_execute(
+            "GRANT EXECUTE ON FUNCTION cairn_note_drafts_commit_failed(uuid) TO cairn_window",
+        )
+        .await
+        .unwrap();
+    let pane = pane.expect("the chart still reads");
+    assert_eq!(pane.drafts.len(), 1);
+    assert!(!pane.drafts[0].words.contains("could not go into"));
+}
