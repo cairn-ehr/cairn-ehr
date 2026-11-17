@@ -161,11 +161,11 @@
 >    draft gate owner-only; a "not yet asked" note on draft lines); 5 accepted (ADR-0098 d21); 9 commented on #1077.
 >    **Rulings owed: #1146** (item 3, a hold release past a new allergy) and **#1147** (item 6, no audit trail on site
 >    policy). #1109 widened.
->    **#909 PICKED 2026-11-16 — design DRAFTED, awaiting the maintainer's approval:**
->    [`superpowers/specs/2026-11-16-pinned-terminal-link-909-design.md`](superpowers/specs/2026-11-16-pinned-terminal-link-909-design.md)
->    (a Cairn gateway on the database's machine, pinned both ways; no window holds the node key — registration and
->    the timed commit move to a node-side service; the rollout's own no-disruption slice needs its own brainstorm,
->    design §6). Next: approval → writing-plans. **Otherwise the maintainer picks:** sign-in
+>    **#909 slice A BUILT 2026-11-17, draft PR #1152**
+>    ([ADR-0109](spec/decisions/0109-the-terminal-service-and-the-keyless-window.md)): no window holds the node key;
+>    `cairn-node terminal-service` registers from a request queue (re-running the search against the BOUNDED prompt)
+>    and runs the commit tick, with a per-draft failed fact; filed **#1153**. **⇒ NEXT: final review + CI, merge**;
+>    then slice B's plan (the gateway), slice C's rollout brainstorm. **Otherwise:** sign-in
 >    **slice 4** (the emergency key, design §5.6 — its own ADR, brainstorm first); the order of **#909** vs **slice 5**
 >    (either gates a multi-terminal pilot) and of **#912**; **#1021**'s obligations projection and Pi figures (figures
 >    `crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`: 386 ms at a ward-year, 1.13 s at 100 000);
@@ -174,7 +174,7 @@
 >    [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930; it also carries the per-note "unconfirmed" marker and #918's display half).
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
->    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27**, **§28**, **§29** (allergies), **§30**, **§31** (charting), **§32** (the de-label offer), **§33** (From: and set-aside versions), **§34** (restore and checked), **§35** (the warning threshold), **§36** (a stat dose given and entered in error), **§37** (drug names in the pick); #838's
+>    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27**, **§28**, **§29** (allergies), **§30**, **§31** (charting), **§32** (the de-label offer), **§33** (From: and set-aside versions), **§34** (restore and checked), **§35** (the warning threshold), **§36** (a stat dose given and entered in error), **§37** (drug names in the pick), **§38** (the terminal service: Register's round trip ≤ 0.5 s); #838's
 >    **§15** (incl. #861's current-line check); **§14** (c) (the cause on screen; a refused reopen offers no retry; the
 >    front door's top line clears) and (d) (no waiting bar on an ordinary press; a locked `medication_statement` →
 >    "Waiting…", cut off by 15 s, and since #893 the outcome says the window cut it off). **#894** needs the satellite

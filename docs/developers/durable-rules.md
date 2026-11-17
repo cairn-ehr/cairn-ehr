@@ -10,6 +10,48 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #909 SLICE A — THE TERMINAL SERVICE AND THE KEYLESS WINDOW (ADR-0109, db/083) — do not undo.**
+- **The claim IS the row lock.** `cairn_registration_claim` returns a row `FOR UPDATE SKIP LOCKED`, and the service
+  registers and settles it in that same transaction. **Tempting wrong fix:** a `claimed` status (or a `claimed_at`
+  column) committed first "so a crash is visible". A crash then leaves a half-claimed row that nobody serves and
+  nobody may expire. Pins: `terminal_service_registration.rs::a_dropped_transaction_leaves_the_request_pending`,
+  `two_servers_register_once`.
+- **Expire blocks behind the claim.** `cairn_registration_expire` takes the row lock and WAITS (no `SKIP LOCKED`, no
+  `NOWAIT`). **Tempting wrong fixes:** skip a locked row "so the window never hangs", or time the expire out in the
+  window and read the timeout as "expired". Either tells the clerk "nothing was saved" for a chart the service is
+  committing that moment. Pin: `terminal_service_doors.rs::expire_waits_behind_a_claim_and_then_reports_registered`.
+- **The claim compares the deadline with `clock_timestamp()`, never `now()`.** `now()` is the service transaction's
+  start, so a long transaction would claim a row already past its deadline.
+- **The window never holds `NodeKey::Full`**, never names `keystore::`, `load_signing_key`, `CAIRN_KEY_PASSPHRASE` or
+  `&cli.key`, and runs no `commit_overdue` / `run_ticks`. **Tempting wrong fix:** give the local window its key back
+  "so a single-machine clinic needs no service" (design D8 chose one window shape). Pins:
+  `cairn-gui-tauri/src/node_key_guard_tests.rs` (`the_window_never_loads_the_node_key`,
+  `the_window_runs_no_quarantine_commit`).
+- **`register_request::DEADLINE` equals db/083's `interval '10 seconds'`.** A shorter wait expires requests the
+  service could still serve; a longer one waits on a request it no longer claims. Change both together. Pin:
+  `register_request.rs::tests::deadline_matches_db_083`.
+- **The failed-commit fact is per draft, in the database** (`note_draft_commit_failure`, written only by the service's
+  tick), never window memory. **Tempting wrong fix:** bring back `AppState::commit_failed`: the window no longer runs
+  the commit, so it would never see a failure. Stuck still wins over failed in `due_words`. Pins:
+  `terminal_service_commit.rs::a_failing_commit_is_recorded_and_a_later_success_clears_it`,
+  `a_skipped_draft_clears_its_old_failed_fact`, `notes_commit_tests.rs::a_draft_the_service_failed_on_says_so`.
+- **The service compares the re-run search's BOUNDED prompt** (`bound_for_prompt`, `PROMPT_CAP` = 5) with
+  `displayed`, never the uncut list (ADR-0109 decision 5; the design's D6 wording was wrong). **Tempting wrong fix:**
+  compare everything the search found "to be safe". That refuses nearly every registration of a common name, since
+  the prompt is cut on about 92% of them (ADR-0075). Pins:
+  `terminal_service_registration.rs::six_namesakes_register_when_the_clerk_saw_the_bounded_five`,
+  `a_forged_saw_no_one_is_refused_when_someone_matches`.
+- **`name_tokens`, `rank_candidates` and the prompt's bound change in lockstep between the window and the service.**
+  All three live in `cairn-patient-search`, but they are two binaries, and the schema stamp does not compare that
+  code. Ship a change to any of them to the window and the service together.
+- **Every failure after the submit is outcome-unknown** (#815): the submit is the window's commit point. A submit
+  that fails as an outage is unknown too; only a verdict stays itself. **Tempting wrong fix:** map a poll's lost
+  connection to `Unavailable` ("retry"): the service may register the request a moment later and the retry makes a
+  second chart. Pins: `cairn-gui-live/src/funnel.rs`'s `a_failed_submit_is_unknown_unless_it_was_a_verdict`,
+  `a_failure_after_submit_is_an_unknown_outcome_keeping_its_cause`.
+- **Slice B's gateway must refuse any login that is a member of `cairn_terminal_service`.** It inherits `cairn_window`,
+  so a window-membership test alone admits it, and it holds the claim, settle, purge and failure doors.
+
 **⇒ THE MILESTONE REVIEW'S MINORS (#1138) — do not undo.**
 - **A held key is re-checked on every use** (`AppState::held_if_still_current`, door `cairn_vault_key_may_sign`,
   db/063: the release door's admission, current and not expired, asked with no passphrase). Stale means wiped, and

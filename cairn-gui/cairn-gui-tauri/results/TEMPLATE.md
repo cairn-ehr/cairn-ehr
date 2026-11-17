@@ -387,12 +387,12 @@ observed \_\_ · finishing elsewhere with nobody named 1 → 2 → observed \_\_
 
 ## A draft left untouched goes in unsigned (GUI sign-in slice 3b-2a, runbook §20)
 
-Quarantine set: \_\_ minutes · `--idle-lock-minutes`: \_\_ · the window holds the node key: \_\_
+Quarantine set: \_\_ minutes · `--idle-lock-minutes`: \_\_ · the terminal service running (ADR-0109): \_\_
 
 | What | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|
 | The tick: `due` → the note in `clinical_note`, window on another chart | | | | ≤ 60 s | |
-| A chart open that commits first | | | | single-chart open + 200 ms | |
+| A chart open that commits first (retired by ADR-0109: the window commits nothing) | | | | — | |
 | The same chart open with no draft (the baseline) | | | | — | |
 
 Steps: walking away paper *N* = 0 → forced *M* = 0 → observed \_\_ · reading a note that went in unsigned 0 → 0 →
@@ -403,7 +403,7 @@ observed \_\_.
 | Before due: "goes into the record unsigned at HH:MM if nobody types in it", matching `due` | | |
 | Two writers: two node-signed notes, `drafted` + `recorded`, the second `addendum-to` the first; `by_timer` | | |
 | Read "written by ?Nurse A · went in unsigned"; never "signed by" | | |
-| The open commits first; with no `--key` the chart reads and the draft says overdue | | |
+| Service stopped: the chart reads and the draft says overdue (ADR-0109) | | |
 | Typing into a committed draft: the committed sentence, a new draft; after editing the saved text, all kept | | |
 | Sign on a committed draft: "had already gone into the record unsigned — nothing was signed" | | |
 | Stuck: kept, nothing in, the stuck sentence; before due the no-time stuck sentence; stderr once | | |
@@ -1042,3 +1042,25 @@ Steps: on paper *N* = 1 act → observed \_\_ picks and \_\_ Signs.
 | Accessibility check | Verdict | Notes |
 |---|---|---|
 | VoiceOver reads an arrow row (and whether it says the arrow) | | |
+
+## The terminal service and the keyless window (#909 slice A, runbook §38)
+
+Supervisor: launchd / systemd · the node key sealed: yes / no
+
+| Figure | n | median | slowest | Budget | Inside? |
+|---|---|---|---|---|---|
+| Added round trip: `median_s` + 0.2 s | | | | ≤ 0.5 s | |
+| Press of *Register* → chart header (stopwatch, context) | | | | — | |
+| Register with the service stopped → the sentence | | | | — (≈ 10 s) | |
+| A draft's `due` → its note's row, no window open | | | | ≤ 60 s | |
+
+Steps: registration paper *N* = 3 → observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| A killed service is restarted by the supervisor | | |
+| Service stopped: the not-running sentence, no chart, the same on a second press | | |
+| Stopped mid-registration: one outcome, and the window says the one `reqs` shows (5 runs) | | |
+| A forged "saw no one" by `psql` as the window's login is refused | | |
+| The window's login cannot claim | | |
+| FAILED, OVERDUE and STUCK each read as above; stuck wins | | |

@@ -1,6 +1,6 @@
 # A thin terminal on another machine: the pinned terminal link (#909) — design
 
-**Date:** 2026-11-16 · **Status:** approved by the maintainer 2026-11-16, awaiting a plan ·
+**Date:** 2026-11-16 · **Status:** approved by the maintainer 2026-11-16; slice A built (PR #1152) ·
 **Closes (when built):** [#909](https://github.com/cairn-ehr/cairn-ehr/issues/909) ·
 **Amends (by a new ADR, never an edit):** [ADR-0084](../../spec/decisions/0084-the-window-never-holds-the-owners-keys.md)
 (D5, "a remote database is refused") and [ADR-0089](../../spec/decisions/0089-the-quarantine-commit-and-the-asserted-grade.md)
@@ -178,10 +178,19 @@ HLC outside it, so it is refactored to run inside a caller's transaction; the CL
 
 **The service re-runs the search before it signs (maintainer, 2026-11-16).** Under R2 anyone holding the window
 login's password and an admitted terminal could send a false attested search by raw SQL ("searched, saw no one"),
-and db/045 checks only its shape. So the service runs the same search for the request's query and **refuses** if it
-finds any candidate the request's `displayed` list does not name. That refusal also catches a near-match that
+and db/045 checks only its shape. So the service runs the same search for the request's query, cuts it to the
+**bounded prompt** the window shows (`bound_for_prompt`, `PROMPT_CAP` = 5, one function both use), and **refuses** if
+that prompt names any candidate the request's `displayed` list does not. That refusal also catches a near-match that
 appeared after the screen was drawn; the window says "a new possible match has appeared, search again". A
 displayed candidate the re-run no longer finds is not a refusal.
+
+> [!NOTE]
+> **Amended 2026-11-17 (slice A's build, ADR-0109).** This paragraph first said the service refuses on "any
+> candidate" its re-run finds that `displayed` does not name. That was wrong: the window displays and attests only
+> the bounded prompt, which is cut on about 92% of registrations (ADR-0075), so comparing the uncut search would have
+> refused nearly every registration of a common name. The comparison is safe at the cut because the ranking is a
+> total order (ties break on the chart id). The service also refuses a request whose name is not the one its query was
+> built from, or a forger could search for nobody and register somebody.
 Rules:
 - The wire and the events are unchanged: node-signed, `{node, recorded}`, as today.
 - Idempotent by request id: a re-sent request returns the first outcome and never registers twice.
