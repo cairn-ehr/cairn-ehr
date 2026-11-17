@@ -140,7 +140,7 @@ async fn provision_login_verb(
     let db = cairn_node::db::connect_and_load_schema(conn).await?;
     let password = match given {
         Some(p) => Some(p),
-        None if !wa::role_exists(&db, &role).await? => {
+        None if !wa::role_exists(&db, role).await? => {
             // Twice: a typo here makes a login nobody can use, and a re-run would not ask.
             let first = Zeroizing::new(rpassword::prompt_password(format!(
                 "password for {role}: "
@@ -158,7 +158,7 @@ async fn provision_login_verb(
     if password.as_ref().is_some_and(|p| p.trim().is_empty()) {
         anyhow::bail!("no password provided (spaces alone are not one)");
     }
-    wa::provision_login(&db, &role, password.as_ref().map(|p| p.as_str()), group).await?;
+    wa::provision_login(&db, role, password.as_ref().map(|p| p.as_str()), group).await?;
     let how = if password.is_some() {
         "password set"
     } else {
