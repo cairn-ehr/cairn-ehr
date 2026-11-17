@@ -150,7 +150,7 @@ drops the key, the one on the database's machine included (design D8).
      service's log); sign it, or tell the site's operator"
    - "overdue — the node's terminal service has not put it in the record; sign it, or tell the site's operator",
      once the window's clock is more than three commit ticks (`COMMIT_TICK`, 60 s) past the draft's due time: a
-     running service would have tried it three times, and the window cannot see whether one runs.
+     running service with no backlog would have tried it three times, and the window cannot see whether one runs.
 
    **Its first "not guaranteed" bullet now reads:** only a running terminal service with an open connection commits.
    While none runs, a draft waits, safe, and every reader sees it overdue. Drafts still never sync.
@@ -176,13 +176,13 @@ machine, measured in RUNBOOK §38. The timed commit asks no act of anyone, as be
 
 ## What is not guaranteed
 
-- **One service per node is assumed.** A second is harmless: the registration lock makes the two take turns, and
-  `SKIP LOCKED` lets one claim a request while the other passes over it.
+- **One service per node is assumed.** A second is harmless: the registration lock makes the two take turns, the
+  second waiting until the first commits.
 - **Registration and the timed commit need the service.** With it stopped, every Register press waits the full 10 s
   before it says the service did not answer. That is slower than paper, where a card can always be written, and no
   window can register a chart until an operator starts it (the owner's `cairn-node patient-register` still can). Overdue
-  drafts wait, safe, read "overdue — not in the record yet", and, three commit ticks past due, that the service has not
-  put them in.
+  drafts wait, safe, read "overdue — not in the record yet", and, more than three commit ticks past due, that the
+  service has not put them in.
 - **"Fails the same way until an operator acts" can be untrue.** A service that was only slow, or restarting, may
   answer the next press. The sentence is not changed in this slice (#1155).
 - **The not-put-in sentence reads the window's clock against the node's due time.** A window clock minutes fast says it

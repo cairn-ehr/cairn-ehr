@@ -20,9 +20,9 @@ const OVERDUE: &str =
 const FAILED: &str = "overdue — could not go into the record by itself (the node's last try \
      failed; the cause is in the terminal service's log); sign it, or tell the site's operator";
 /// Said of an overdue draft, neither stuck nor failed, still on the chart more than three of the
-/// service's commit ticks past its due time (final review F2, ruling R16): a running service would
-/// have tried it three times, and the window cannot see the service, so it no longer promises "its
-/// next check" — the service may not be running at all — and asks for a Sign.
+/// service's commit ticks past its due time (final review F2, ruling R16): a running service with no
+/// backlog would have tried it three times, and the window cannot see the service, so it no longer
+/// promises "its next check" — the service may not be running at all — and asks for a Sign.
 const NOT_PUT_IN: &str = "overdue — the node's terminal service has not put it in the record; \
      sign it, or tell the site's operator";
 /// How many of the service's commit ticks an overdue draft may wait before [`NOT_PUT_IN`].
