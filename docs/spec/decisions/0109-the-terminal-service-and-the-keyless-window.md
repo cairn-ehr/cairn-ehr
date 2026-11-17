@@ -55,9 +55,10 @@ drops the key, the one on the database's machine included (design D8).
    so it runs under launchd or systemd with restart-on-failure (RUNBOOK §38). Its stderr names requests, drafts and
    patients by id only. Its own lines carry no name, note text or clerk's refusal words; a database error adds its
    SQLSTATE and primary message, never DETAIL or HINT (the primary message is the database's own sentence, and a floor
-   refusal may word it with a value). A job's repeated identical failure (serving requests, the commit tick's listing,
-   the purge) is said once, until it changes or the job succeeds. A draft whose commit fails is said on every commit
-   tick, a stuck draft once per process, and a failed reconnect once a second.
+   refusal may word it with a value). One exception, until #1154 is fixed: an HLC tick error reaches the service already
+   flattened to text by `db::next_hlc`, DETAIL and HINT included. A job's repeated identical failure (serving requests,
+   the commit tick's listing, the purge) is said once, until it changes or the job succeeds. A draft whose commit fails
+   is said each time the commit tick tries it, a stuck draft once per process, and a failed reconnect once a second.
 
 3. **It has its own login, provisioned like the window's.** db/083 creates `cairn_terminal_service`, a `NOLOGIN` group
    granted `cairn_window` (never `cairn_node`), plus the queue's service doors below.
@@ -106,14 +107,16 @@ drops the key, the one on the database's machine included (design D8).
    - **A re-run search that is incomplete, with no unseen chart, still registers if the request's displayed list is
      incomplete too.** A request that calls it complete is refused with the new-match words, so the node never signs
      `incomplete: false` over a search it found incomplete; the clerk's search again shows the warning.
-   - **Verdicts settle `refused`; accidents stay pending.** A refusal at decode (unreadable, a NUL, a name that is not
-     the one searched for), a new match, the floor's P0001 and a refusal decided in Rust before any SQL (a date of
-     birth that no precision fits) each settle `refused` with the window's words. Any other error rolls the
-     transaction back and leaves the request pending, to be tried again on every pass until its deadline (#1153).
-   - **Two services register once.** `SKIP LOCKED` lets one claim a row while the other passes over it
-     (`two_servers_register_once`). The registration lock makes registrations take turns across services: a second
-     request for the same new patient is searched only after the first commits, and is refused as a new match
-     (`two_servers_two_requests_for_one_patient_register_one_chart`), within the bounded prompt's reach (ADR-0075).
+   - **Verdicts settle `refused`; accidents stay pending.** A refusal at decode (unreadable, a NUL, more people
+     "displayed" than `PROMPT_CAP`, a name that is not the one searched for), a new match, the floor's P0001 and a
+     refusal decided in Rust before any SQL (a date of birth that no precision fits) each settle `refused` with the
+     window's words. Any other error rolls the transaction back and leaves the request pending, to be tried again on
+     every pass until its deadline (#1153).
+   - **Two services register once.** Each service takes the registration lock before it claims, so registrations take
+     turns across services: the second waits for the first to commit, then finds the row settled
+     (`two_servers_register_once`). A second request for the same new patient is therefore searched only after the
+     first commits, and is refused as a new match (`two_servers_two_requests_for_one_patient_register_one_chart`),
+     within the bounded prompt's reach (ADR-0075). `SKIP LOCKED` passes over a row a window's `expire` has locked.
 
 6. **The window waits, and is never told "nothing was saved" for a request that may yet go in.** `LiveData::register`
    makes a `Uuid::new_v4` id, reads `today` from the database (`current_date`), submits, reads the status every 200
@@ -124,7 +127,8 @@ drops the key, the one on the database's machine included (design D8).
    request reads "Nothing was saved, and pressing Register again fails the same way until an operator acts:
    registration needs the node's terminal service (cairn-node terminal-service), which did not answer". The submit is
    the window's commit point: a submit that fails as an outage (not a verdict), and any failure after the submit,
-   reads as "not known" (`OutcomeUnknown`, #815).
+   reads as "not known" (`OutcomeUnknown`, #815). The exception is a submit the server answered with an ERROR: it is one
+   autocommit statement, so that answer means nothing was queued, and it stays a plain outage.
 
 7. **The quarantine commit runs on the service's tick** (design D7). `terminal_service::commit::commit_tick` runs
    ADR-0089's `commit_overdue` on each overdue draft of every chart, each in its own transaction, at most
@@ -149,8 +153,9 @@ drops the key, the one on the database's machine included (design D8).
    - "overdue — could not go into the record by itself (the node's last try failed; the cause is in the terminal
      service's log); sign it, or tell the site's operator"
    - "overdue — the node's terminal service has not put it in the record; sign it, or tell the site's operator",
-     once the window's clock is more than three commit ticks (`COMMIT_TICK`, 60 s) past the draft's due time: a
-     running service with no backlog would have tried it three times, and the window cannot see whether one runs.
+     once the database's clock, read with the notes, is more than three commit ticks (`COMMIT_TICK`, 60 s) past the
+     draft's due time: a running service with no backlog would have tried it three times, and the window cannot see
+     whether one runs.
 
    **Its first "not guaranteed" bullet now reads:** only a running terminal service with an open connection commits.
    While none runs, a draft waits, safe, and every reader sees it overdue. Drafts still never sync.
@@ -185,11 +190,13 @@ machine, measured in RUNBOOK §38. The timed commit asks no act of anyone, as be
   service has not put them in.
 - **"Fails the same way until an operator acts" can be untrue.** A service that was only slow, or restarting, may
   answer the next press. The sentence is not changed in this slice (#1155).
-- **The not-put-in sentence reads the window's clock against the node's due time.** A window clock minutes fast says it
-  early, a slow one late.
 - **Slice B's gateway must refuse any login that is a member of `cairn_terminal_service`.** That group inherits
   `cairn_window`, so a test for window membership alone would pass it, and it holds the claim, settle, purge and
   failure doors.
+- **The re-search guards the queue, not every way in (#1159).** A window login inherits `cairn_agent`, which may run
+  `submit_event`, and db/045 has no signer rule for a registration. So a raw-SQL window session holding a clinician's
+  released key may be able to submit a registration directly, with any search attestation. Not a regression (the
+  window held the node key before), but the guarantee of decision 5 holds only for requests sent through db/083.
 - **Head-of-line blocking (#1153).** A request that fails every time with an error that is not a refusal is retried on
   every pass and holds the queue behind it until its deadline. A refusal raised by the HLC tick would be such an error,
   because `db::next_hlc` drops the SQLSTATE (#1154); the tick raises none today.

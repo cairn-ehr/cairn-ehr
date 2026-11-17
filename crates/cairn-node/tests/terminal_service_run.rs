@@ -5,7 +5,7 @@ mod common;
 use cairn_node::db;
 use cairn_node::note::draft::save_part;
 use cairn_node::terminal_service::run::{run_jobs, Due, JobState};
-use cairn_node::terminal_service::startup::{can_claim, grant_verdict};
+use cairn_node::terminal_service::startup::{can_claim, check, grant_verdict};
 use cairn_patient_search::{CandidateList, SearchQuery};
 use common::{cs, owner_and_window, service_login};
 use uuid::Uuid;
@@ -115,6 +115,31 @@ async fn a_commits_iteration_commits_an_overdue_draft() {
 /// window login (or any login without `cairn_terminal_service`) would otherwise start, say
 /// "running", and fail every 250 ms while clerks' registrations time out. The refusal names the
 /// owner step that makes the right login.
+/// F4's key half, end to end as the service's own login: `check` passes the node's key and
+/// answers its origin, and refuses any other enrolled key (a clinician's, say) naming both kids,
+/// which would otherwise sign every registration and timed commit as the wrong identity.
+#[tokio::test]
+async fn startup_accepts_the_nodes_own_key_and_refuses_another() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (owner, _window) = owner_and_window(&base).await;
+    db::reset_node_federation_tables(&owner).await.unwrap();
+    let (node_sk, node_kid, other_sk, other_kid) = common::medication_setup(&owner).await;
+    let origin = cairn_node::identity::provision(&owner, &node_sk, &node_kid, "ts", "127.0.0.1:0")
+        .await
+        .unwrap();
+    let service = db::connect(&service_login(&owner, &base).await)
+        .await
+        .unwrap();
+
+    assert_eq!(check(&service, &node_sk).await.unwrap(), origin);
+    let e = check(&service, &other_sk).await.unwrap_err().to_string();
+    assert!(e.contains(&other_kid) && e.contains(&node_kid), "{e}");
+}
+
 #[tokio::test]
 async fn a_window_login_is_refused_as_the_terminal_service() {
     let Some(base) = cs() else {

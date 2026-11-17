@@ -45,8 +45,10 @@ impl PatientRegistration for LiveData {
     /// Register through the node's terminal service (#909): submit a request, then poll it until
     /// the service settles it or its deadline passes. See `cairn_node::patient::register_request`.
     ///
-    /// The connection is locked per call (submit, each poll, expire), never across a wait, so
-    /// the chart commands sharing it are not held up for the seconds a registration may take.
+    /// The connection is locked per call (submit, each poll, expire), never across the poll
+    /// sleeps, so the chart commands sharing it are not held up for the seconds a registration may
+    /// take. The one exception: `expire` holds it while it waits behind a service that is
+    /// registering this very request, which lasts as long as that registration.
     async fn register(
         &self,
         attested: AttestedSearch,
@@ -91,8 +93,8 @@ impl LiveData {
     /// Put the request in db/083's queue. The submit is the registration's COMMIT point: once
     /// it is sent, the row may be in the queue whatever answer comes back (an autocommit INSERT
     /// whose reply is lost, or a backend that commits it after the window gave up), and the
-    /// service would then register it. So a submit failure that is not a verdict is
-    /// `OutcomeUnknown` ([`submit_failure`], #815), as a lost COMMIT is. Reading the request's
+    /// service would then register it. So a submit failure that is neither a verdict nor an
+    /// answered ERROR is `OutcomeUnknown` ([`submit_failure`], #815), as a lost COMMIT is. Reading the request's
     /// status afterwards would prove nothing: "not found" can still turn into "registered".
     /// The `today` read and the lock come first and send nothing, so their failures are plain.
     ///
@@ -115,7 +117,10 @@ impl LiveData {
             &today,
         )
         .await
-        .map_err(|e| submit_failure(request, data_error_from(&db.explain(e))))
+        .map_err(|e| {
+            let answered = cairn_node::db_diagnosis::answered_with_error(&e);
+            submit_failure(request, data_error_from(&db.explain(e)), answered)
+        })
     }
 
     /// Wait for a submitted request to settle: poll every `POLL`, and at `DEADLINE` expire it
@@ -171,12 +176,17 @@ fn settled(status: RequestStatus) -> Result<Uuid, DataError> {
 }
 
 /// A failed submit's answer. **Pure.** A verdict (the door refused, deciding nothing was
-/// queued) stays what it is; anything else may have queued the request, so the chart may come
+/// queued) stays what it is, and so does an outage the server `answered` with an ERROR: the
+/// submit is one autocommit statement, so that answer means its INSERT rolled back. Anything
+/// else (a lost reply, a dropped connection) may have queued the request, so the chart may come
 /// to exist (#815).
-fn submit_failure(request: Uuid, e: DataError) -> DataError {
+///
+/// `answered` is sound here only because the window's request id is fresh: the door answers
+/// `pending` from that one statement, and `submit` never goes on to read the status.
+fn submit_failure(request: Uuid, e: DataError, answered: bool) -> DataError {
     match e {
-        DataError::Unavailable(_) => may_be_registered(request, &e),
-        verdict => verdict,
+        DataError::Unavailable(_) if !answered => may_be_registered(request, &e),
+        other => other,
     }
 }
 
@@ -229,7 +239,7 @@ mod tests {
     fn a_failed_submit_is_unknown_unless_it_was_a_verdict() {
         let request = Uuid::now_v7();
         assert!(matches!(
-            submit_failure(request, DataError::Unavailable("connection closed".into())),
+            submit_failure(request, DataError::Unavailable("connection closed".into()), false),
             DataError::OutcomeUnknown(t) if t.contains("connection closed")
         ));
         for verdict in [
@@ -237,8 +247,17 @@ mod tests {
             DataError::NotProvisioned("refused".into()),
             DataError::Stale("changed".into()),
         ] {
-            assert_eq!(submit_failure(request, verdict.clone()), verdict);
+            assert_eq!(submit_failure(request, verdict.clone(), false), verdict);
         }
+    }
+
+    /// A submit the server ANSWERED with an ERROR (a statement timeout, say) rolled its one
+    /// autocommit INSERT back: nothing was queued, so it is a plain outage, never "may yet
+    /// register" — that would tell the clerk a chart may exist when it certainly does not.
+    #[test]
+    fn an_answered_submit_error_queued_nothing() {
+        let e = DataError::Unavailable("canceling statement due to statement timeout".into());
+        assert_eq!(submit_failure(Uuid::now_v7(), e.clone(), true), e);
     }
 
     /// After submit, even an outage or a refusal may hide a registration: never retried live.

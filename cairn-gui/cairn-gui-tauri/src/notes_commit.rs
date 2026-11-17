@@ -60,7 +60,7 @@ pub async fn failed_drafts(
 /// wins whether or not it is due: such a draft never goes in by itself ([`STUCK`] once
 /// `overdue`, else [`STUCK_NOT_DUE`]). Otherwise: at its `due` time if nobody types in it; or,
 /// `overdue` (the node decided, on its own clock), [`FAILED`] when the service's last commit of
-/// it failed, [`NOT_PUT_IN`] when `now` (the window's clock) is more than
+/// it failed, [`NOT_PUT_IN`] when `now` (the database's clock, as `overdue` is) is more than
 /// [`TICKS_BEFORE_NOT_PUT_IN`] commit ticks past `due`, else [`OVERDUE`]. Pure.
 pub(crate) fn due_words<Tz: TimeZone>(
     due: DateTime<Utc>,
@@ -74,7 +74,7 @@ pub(crate) fn due_words<Tz: TimeZone>(
 where
     Tz::Offset: std::fmt::Display,
 {
-    // A negative wait (the window's clock behind the node's) does not convert: not late.
+    // A negative wait (a `now` before `due`) does not convert: not late.
     let late = (now - due)
         .to_std()
         .is_ok_and(|waited| waited > COMMIT_TICK * TICKS_BEFORE_NOT_PUT_IN);

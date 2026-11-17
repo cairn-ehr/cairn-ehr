@@ -39,7 +39,7 @@ use crate::patient::register_tx::register_patient_in_tx;
 use crate::patient::search::search_patients;
 use anyhow::Context;
 use cairn_event::SigningKey;
-use cairn_patient_search::{bound_for_prompt, name_tokens, CandidateList, SearchQuery};
+use cairn_patient_search::{bound_for_prompt, name_tokens, CandidateList, SearchQuery, PROMPT_CAP};
 use std::collections::HashSet;
 use tokio_postgres::{Client, Transaction};
 use uuid::Uuid;
@@ -67,7 +67,8 @@ pub const REGISTRATION_LOCK: i64 = 0x4341_524E_5247;
 /// sentence, so it is not log text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Served {
-    /// No pending, unexpired request was waiting (or another service holds the only one).
+    /// No pending, unexpired request was waiting (or a window's `expire` holds the only one's
+    /// row lock; another service never shows here, as the registration lock makes this one wait).
     Idle,
     /// The request made chart `patient`.
     Registered { request: Uuid, patient: Uuid },
@@ -96,8 +97,11 @@ pub fn unseen_candidates(fresh: &CandidateList, displayed: &CandidateList) -> Ve
 /// Read a request's jsonb columns back into the types the window wrote them from, and refuse,
 /// with the window's words, a request that could never register. **Pure.**
 ///
-/// Three refusals, each decided before any SQL so the request settles instead of looping:
+/// Four refusals, each decided before any SQL so the request settles instead of looping:
 /// - a query or list that does not parse;
+/// - a displayed list longer than `PROMPT_CAP` people: no prompt shows more, and the node signs
+///   that the clerk saw every one of them, so a longer list is an over-claim it must not sign
+///   (ADR-0075). The re-search below checks only the other direction (someone unseen);
 /// - a NUL character: Postgres text cannot hold one, and the error it raises is not a floor
 ///   refusal, so it would leave the request pending until it expired (controller ruling R7). The
 ///   request row's own columns cannot carry a NUL either today; this keeps the rule here, where
@@ -127,6 +131,13 @@ fn decode_request(
         return Err(
             "this registration request carries a NUL character, which the record cannot \
              hold — type the details again"
+                .to_string(),
+        );
+    }
+    if displayed.people.len() > PROMPT_CAP {
+        return Err(
+            "this registration request claims more people were shown than any prompt shows \
+             — search again"
                 .to_string(),
         );
     }
@@ -411,6 +422,18 @@ mod tests {
                 .unwrap_err()
                 .contains("NUL"));
         }
+    }
+
+    /// The node signs that the clerk saw every person in `displayed`, and no prompt shows more
+    /// than `PROMPT_CAP`: a longer list is an over-claim the node must not sign (ADR-0075).
+    #[test]
+    fn a_displayed_list_longer_than_the_prompt_is_refused() {
+        let (q, _) = wire("Ann");
+        let at_cap = serde_json::to_string(&list(&ids(PROMPT_CAP))).unwrap();
+        assert!(decode_request(Some("Ann"), &q, &at_cap).is_ok());
+        let over = serde_json::to_string(&list(&ids(PROMPT_CAP + 1))).unwrap();
+        let e = decode_request(Some("Ann"), &q, &over).unwrap_err();
+        assert!(e.contains("more people"), "{e}");
     }
 
     /// The search the service re-runs is the request's QUERY, while the chart is registered

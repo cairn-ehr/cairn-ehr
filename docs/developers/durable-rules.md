@@ -51,10 +51,11 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   All three live in `cairn-patient-search`, but they are two binaries, and the schema stamp does not compare that
   code. Ship a change to any of them to the window and the service together.
 - **Every failure after the submit is outcome-unknown** (#815): the submit is the window's commit point. A submit
-  that fails as an outage is unknown too; only a verdict stays itself. **Tempting wrong fix:** map a poll's lost
-  connection to `Unavailable` ("retry"): the service may register the request a moment later and the retry makes a
-  second chart. Pins: `cairn-gui-live/src/funnel.rs`'s `a_failed_submit_is_unknown_unless_it_was_a_verdict`,
-  `a_failure_after_submit_is_an_unknown_outcome_keeping_its_cause`.
+  that fails as an outage is unknown too; only a verdict, or an ERROR the server answered to that one autocommit
+  statement (its INSERT rolled back), stays itself. **Tempting wrong fix:** map a poll's lost connection to
+  `Unavailable` ("retry"): the service may register the request a moment later and the retry makes a second chart.
+  Pins: `cairn-gui-live/src/funnel.rs`'s `a_failed_submit_is_unknown_unless_it_was_a_verdict`,
+  `an_answered_submit_error_queued_nothing`, `a_failure_after_submit_is_an_unknown_outcome_keeping_its_cause`.
 - **Slice B's gateway must refuse any login that is a member of `cairn_terminal_service`.** It inherits `cairn_window`,
   so a window-membership test alone admits it, and it holds the claim, settle, purge and failure doors.
 

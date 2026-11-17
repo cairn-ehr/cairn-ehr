@@ -55,7 +55,7 @@ pub struct NotePane {
 /// `claim`; `claim_actor`: that claim's actor, read beside the notes (`None` with no named claim
 /// or one this node cannot place), for the "also covers" line (`compound::covers_of`); `opened`:
 /// the chart on screen (only its notes can be added to); `failed`: the drafts whose last commit
-/// by the node's terminal service failed, and `now` the window's clock (`commit::due_words`).
+/// by the node's terminal service failed, and `now` the database's clock (`commit::due_words`).
 /// Pure.
 #[allow(clippy::too_many_arguments)] // each is one independent input of the pane's words
 pub(crate) fn note_pane<Tz: TimeZone>(
@@ -291,7 +291,7 @@ fn adding_to_line(
 }
 
 /// One draft's words, its parts, and which part the current claim may edit. `failed`: the node's
-/// terminal service's last commit of it failed; `now`: the window's clock, for how long it has
+/// terminal service's last commit of it failed; `now`: the database's clock, for how long it has
 /// been overdue (`commit::due_words`); `shown`: every note part the pane shows → its note's view
 /// (`adding_to_line`, and the "also covers" line it repeats).
 #[allow(clippy::too_many_arguments)] // each is one independent input of the draft's words

@@ -62,8 +62,9 @@ pub use connection::{
 /// through the SAME connection ([`LiveData::sharing`]), so "which node am I" is answered once
 /// per window rather than once per connection. If a later slice puts two windows
 /// on one `LiveData`, the second one waits for each call the first makes. A registration holds
-/// the connection only per call (submit, each poll, expire), never across its wait, so it does
-/// not shut the chart commands out for the seconds the node's terminal service may take.
+/// the connection only per call (submit, each poll, expire), never across its poll sleeps, so it
+/// does not shut the chart commands out for the seconds the node's terminal service may take
+/// (only an `expire` waiting behind the service's own registration of the request holds it).
 ///
 /// The window's connection is reopened when it is lost (#807, [`NodeConnection::reopening`]);
 /// one made by [`LiveData::new`] is not ([`NodeConnection::fixed`]).

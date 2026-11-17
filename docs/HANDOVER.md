@@ -161,7 +161,8 @@
 >    no audit trail on site policy). #1109 widened. **#909 slice A BUILT 2026-11-17, draft PR #1152**
 >    ([ADR-0109](spec/decisions/0109-the-terminal-service-and-the-keyless-window.md)): no window holds the node key;
 >    `cairn-node terminal-service` registers from a queue (re-running the search against the BOUNDED prompt) and runs
->    the commit tick; filed **#1153**–**#1156**. Final review done and fixed. **⇒ NEXT: maintainer review, merge, RUNBOOK
+>    the commit tick; filed **#1153**–**#1159** (#1159: the re-search guards only the queue). Final review and finalcheck
+>    done and fixed. **⇒ NEXT: maintainer review, merge, RUNBOOK
 >    §38**; then slice B's plan (the gateway; any login can take the registration advisory lock, and the owner's
 >    `patient-register` takes none), slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
 >    §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac
@@ -170,7 +171,7 @@
 >    [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930; it also carries the per-note "unconfirmed" marker and #918's display half).
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
->    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27**, **§28**, **§29** (allergies), **§30**, **§31** (charting), **§32** (the de-label offer), **§33** (From: and set-aside versions), **§34** (restore and checked), **§35** (the warning threshold), **§36** (a stat dose given and entered in error), **§37** (drug names in the pick), **§38** (the terminal service: Register's round trip ≤ 0.5 s); #838's
+>    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27**, **§28**, **§29** (allergies), **§30**, **§31** (charting), **§32** (the de-label offer), **§33** (From: and set-aside versions), **§34** (restore and checked), **§35** (the warning threshold), **§36** (a stat dose given and entered in error), **§37** (drug names in the pick), **§38** (the terminal service: the round trip it adds to Register ≤ 0.5 s median); #838's
 >    **§15** (incl. #861's current-line check); **§14** (c) (the cause on screen; a refused reopen offers no retry; the
 >    front door's top line clears) and (d) (no waiting bar on an ordinary press; a locked `medication_statement` →
 >    "Waiting…", cut off by 15 s, and since #893 the outcome says the window cut it off). **#894** needs the satellite

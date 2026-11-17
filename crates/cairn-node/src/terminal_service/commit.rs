@@ -59,7 +59,8 @@ fn newly_stuck(said: &mut HashSet<Uuid>, stuck: Vec<Uuid>) -> Vec<Uuid> {
 /// One stderr line for a draft whose commit failed: its id, the SQLSTATE if the database gave
 /// one, and the error's PRIMARY message only. Never DETAIL, HINT or context (Postgres puts row
 /// values there), never note text, never a patient name. A non-database error says its outermost
-/// sentence only. Pure.
+/// sentence only (an HLC tick error is one, and `db::next_hlc` has already flattened its DETAIL
+/// and HINT into that sentence until #1154 is fixed). Pure.
 pub fn failure_line(draft: Uuid, e: &anyhow::Error) -> String {
     format!(
         "draft {draft} is overdue but could not go into the record: {}",
@@ -69,7 +70,9 @@ pub fn failure_line(draft: Uuid, e: &anyhow::Error) -> String {
 
 /// An error's PRIMARY message (with the SQLSTATE if it came from the database) and nothing else:
 /// never DETAIL, HINT or context, which Postgres fills with row values. The one renderer every
-/// log line of the terminal service uses; never `{e:#}` or `{e:?}`. Pure.
+/// log line of the terminal service uses; never `{e:#}` or `{e:?}`. An error that is not a
+/// `tokio_postgres::Error` gives its outermost sentence: see [`failure_line`] for the HLC case.
+/// Pure.
 pub fn primary_message(e: &anyhow::Error) -> String {
     let db = e
         .chain()

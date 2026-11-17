@@ -288,3 +288,20 @@ async fn a_failed_set_read_that_fails_still_reads_the_notes() {
     assert_eq!(pane.drafts.len(), 1);
     assert!(!pane.drafts[0].words.contains("could not go into"));
 }
+
+/// The pane's "now" is the DATABASE's, the clock the node decided `overdue` on: with the window's
+/// own clock minutes behind (an offline site without NTP), [`NOT_PUT_IN`] would come that late and
+/// [`OVERDUE`] would promise "its next check" for a service that is not running. No behavioural
+/// test can tell two clocks apart on one machine, so the read's source is checked.
+#[test]
+fn the_notes_read_takes_its_now_from_the_database() {
+    let read = include_str!("notes.rs");
+    assert!(
+        !read.contains("Utc::now()"),
+        "notes.rs reads the window's clock"
+    );
+    assert!(
+        read.contains("SELECT now()"),
+        "notes.rs reads the database's clock"
+    );
+}

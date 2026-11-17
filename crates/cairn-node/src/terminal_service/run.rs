@@ -5,7 +5,8 @@
 //! clerk's registration feels instant; commits every minute; purge hourly). [`due`] is the pure
 //! decision of which are due, so the pacing is unit-tested without a clock or a database.
 //! No job's error ends the loop (an unattended service that stops serves nothing); a lost
-//! connection is reopened after a 1 s back-off. Log lines carry ids and primary messages only.
+//! connection is reopened after a 1 s back-off. Log lines carry ids and primary messages only
+//! (`commit::primary_message`; one known exception until #1154, an HLC tick error).
 use std::time::{Duration, Instant};
 
 use cairn_event::SigningKey;

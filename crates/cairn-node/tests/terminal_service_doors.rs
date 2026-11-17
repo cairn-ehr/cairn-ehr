@@ -292,6 +292,17 @@ async fn expire_changes_only_a_pending_request() {
     );
     assert_eq!(expire(&window, done).await, "registered");
     assert_eq!(expire(&window, refused).await, "refused");
+    // The window's Rust door reads a request the service settled first as ITS outcome, never as
+    // `Expired`: that would tell the clerk "the service did not answer" over a chart that exists.
+    use cairn_node::patient::register_request::{expire as expire_door, RequestStatus};
+    assert!(matches!(
+        expire_door(&window, done).await.unwrap(),
+        RequestStatus::Registered(_)
+    ));
+    assert_eq!(
+        expire_door(&window, refused).await.unwrap(),
+        RequestStatus::Refused("a new possible match".into())
+    );
     // An expired request is never claimed, and its settle is refused.
     assert!(claim(&svc).await.is_empty());
     assert!(settle_registered(&svc, waiting).await.is_err());
