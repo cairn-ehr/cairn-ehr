@@ -243,10 +243,10 @@ pub struct AppState {
     /// (`cairn_gui_live::LiveData::sharing`), so the window describes one node. Reopened when
     /// it is lost (#807), so a Postgres restart no longer needs a window restart.
     pub db: Option<std::sync::Arc<cairn_gui_live::NodeConnection>>,
-    /// The NODE's key — holds custody of every sealed body (ADR-0052) regardless of who
-    /// signed the content. Distinct from the clinician's key in `session`. `None` in
-    /// fixture mode.
-    pub node_sk: Option<cairn_event::SigningKey>,
+    /// The NODE's public id (its kid) — the `recorded` contributor of every write. The window
+    /// holds NO secret key (#909): an act that needs the node's own signature runs on its
+    /// terminal service. `None` in fixture mode.
+    pub node_kid: Option<String>,
     pub node_origin: String,
     /// The chart this window is open on, if any — `None` shows the front door (the funnel).
     /// Chart commands resolve it only through `AppState::displayed_patient` (`funnel::window`),
@@ -272,11 +272,6 @@ pub struct AppState {
     /// Who the terminal says is at the keyboard, their recent people and bookmarks, and the idle
     /// re-lock interval — in memory only (`crate::whos_here`).
     pub whos_here: tokio::sync::Mutex<crate::whos_here::Here>,
-    /// The drafts whose LAST quarantine commit in this window failed (`notes::commit`), so the
-    /// pane says the commit failed rather than promising another try. Cleared by a try that did
-    /// not fail. shortcut: a failed draft later signed or discarded stays listed until the window
-    /// closes; harmless (nothing reads an id no draft has), bounded by the drafts seen.
-    pub commit_failed: tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>,
 }
 
 impl AppState {

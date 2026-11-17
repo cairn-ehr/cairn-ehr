@@ -47,7 +47,7 @@ pub(crate) mod parts;
 #[path = "notes_compound.rs"]
 pub(crate) mod compound;
 
-/// The quarantine commit's runner: the tick, the pre-read commit, the due words (`notes_commit.rs`).
+/// The quarantine commit as the pane says it: the due words, the failed set (`notes_commit.rs`).
 #[path = "notes_commit.rs"]
 pub(crate) mod commit;
 
@@ -175,14 +175,11 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             claim: crate::whos_here::claim_view(&claim),
         });
     };
-    // Overdue drafts go in FIRST, so the pane never shows one the next tick takes away. Its
-    // answer is ignored: a commit that cannot run never blocks the read (Review Focus 5). What it
-    // failed to commit is in `commit_failed`, which the pane's words read.
-    let _ = commit::commit_overdue_impl(state, Some(patient), true).await;
-    let failed = state.commit_failed.lock().await.clone();
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
     let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;
+    // Which drafts the node's service failed to commit; a failed read shows none (never blocks).
+    let failed = commit::failed_drafts(&*db, patient).await;
     let staff_id = match &claim {
         Claim::Named { staff_id, .. } => Some(staff_id.as_str()),
         Claim::NotAsked | Claim::Unknown => None,
@@ -314,9 +311,9 @@ pub async fn note_sign_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
 
     let started = Instant::now();
@@ -342,7 +339,7 @@ pub async fn note_sign_impl(
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        cairn_node::note::sign::sign_note(&mut db, NodeKey::Full(node_sk), &input, &author)
+        cairn_node::note::sign::sign_note(&mut db, NodeKey::Public(node_kid), &input, &author)
             .await
             .map_err(|e| db.explain(e))
     };

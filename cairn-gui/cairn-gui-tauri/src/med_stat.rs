@@ -161,11 +161,10 @@ pub async fn med_stat_give_impl(
         human_sk: &human_sk,
         human_kid: &human_kid,
     };
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let signed = {
         let mut db = state
             .db
@@ -176,8 +175,8 @@ pub async fn med_stat_give_impl(
         let origin = state.node_origin.as_str();
         give_stat(
             &mut db,
-            NodeKey::Full(node_sk),
-            &node_kid,
+            NodeKey::Public(node_kid),
+            node_kid,
             origin,
             patient,
             medication,
@@ -271,11 +270,10 @@ pub async fn med_stat_strike_impl(
         human_sk: &human_sk,
         human_kid: &human_kid,
     };
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let signed = {
         let mut db = state
             .db
@@ -286,8 +284,8 @@ pub async fn med_stat_strike_impl(
         let origin = state.node_origin.as_str();
         let struck = strike_given(
             &mut db,
-            NodeKey::Full(node_sk),
-            &node_kid,
+            NodeKey::Public(node_kid),
+            node_kid,
             origin,
             patient,
             given_id,

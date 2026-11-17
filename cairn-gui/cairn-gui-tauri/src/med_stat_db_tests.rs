@@ -264,7 +264,7 @@ async fn give_on_a_linked_charts_line_is_refused() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let node_sk = state.node_sk.as_ref().unwrap();
+    let node_sk = &crate::notes::review::db_tests::fixture_node_key();
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let (other, _, _) = cairn_node::john_doe::register_john_doe(
         &mut owner,
@@ -433,7 +433,7 @@ async fn striking_one_of_two_gives_does_not_say_waiting_again() {
         human_sk: &sk,
         human_kid: &kid,
     };
-    let node_sk = state.node_sk.as_ref().unwrap();
+    let node_sk = &crate::notes::review::db_tests::fixture_node_key();
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     cairn_node::medication::stat_give::give_stat(
         &mut owner,
@@ -472,7 +472,7 @@ async fn striking_a_give_beside_a_real_stop_does_not_say_waiting_again() {
         human_sk: &sk,
         human_kid: &kid,
     };
-    let node_sk = state.node_sk.as_ref().unwrap();
+    let node_sk = &crate::notes::review::db_tests::fixture_node_key();
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let stop = cairn_node::medication::CeaseMedicationInput {
         stopped: None,

@@ -15,6 +15,20 @@ use zeroize::Zeroizing;
 
 const ORIGIN: &str = "notes-review-test-node";
 
+/// The fixture node's secret seed. The window under test holds only the node's kid (#909), but
+/// the fixtures that play the node or a peer (register a chart, assert a medication) still sign
+/// with the real key, so the fixture keeps it here, never in `AppState`.
+static NODE_SEED: std::sync::Mutex<Option<[u8; 32]>> = std::sync::Mutex::new(None);
+
+/// The fixture node's key, as the last `supervised_note` made it.
+pub(crate) fn fixture_node_key() -> cairn_event::SigningKey {
+    let seed = NODE_SEED
+        .lock()
+        .unwrap()
+        .expect("supervised_note ran first");
+    cairn_event::SigningKey::from_bytes(&seed)
+}
+
 /// A test passphrase built at runtime (house rule 6: no credential literal in a test).
 fn pass(word: &str) -> String {
     [word, "review", "battery"].join("-")
@@ -176,7 +190,8 @@ pub(crate) async fn supervised_note() -> Option<(
     state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
         window_db,
     )));
-    state.node_sk = Some(node_sk);
+    *NODE_SEED.lock().unwrap() = Some(node_sk.to_bytes());
+    state.node_kid = Some(node_kid.clone());
     state.node_origin = ORIGIN.into();
     state.key_hold = std::time::Duration::from_secs(600);
     state.whos_here.lock().await.pick(Claim::Named {

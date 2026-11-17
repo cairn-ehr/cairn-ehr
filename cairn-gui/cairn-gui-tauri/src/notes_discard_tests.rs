@@ -336,7 +336,7 @@ async fn note_discard_impl_discards_under_the_window_login() {
     state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
         cairn_node::db::connect(&window).await.unwrap(),
     )));
-    state.node_sk = Some(node_sk);
+    state.node_kid = Some(node_kid.clone());
     state.node_origin = "notes-discard-test-node".into();
     state.key_hold = std::time::Duration::from_secs(600);
     state.session.lock().await.key = Some(crate::state::SessionKey::new(

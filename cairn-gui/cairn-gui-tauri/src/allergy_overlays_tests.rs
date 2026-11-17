@@ -69,7 +69,7 @@ async fn linked_entry(
         .signer_for_act(None, crate::state::Now::read())
         .await
         .unwrap();
-    let node_sk = state.node_sk.as_ref().unwrap();
+    let node_sk = &crate::notes::review::db_tests::fixture_node_key();
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let origin = state.node_origin.clone();
     let (other, _, _) = cairn_node::john_doe::register_john_doe(

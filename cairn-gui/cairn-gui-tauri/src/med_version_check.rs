@@ -90,11 +90,10 @@ pub async fn med_version_check_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let author = AuthorParams {
         human_sk: &human_sk,
         human_kid: &human_kid,
@@ -114,8 +113,8 @@ pub async fn med_version_check_impl(
         let origin = state.node_origin.as_str();
         check_version(
             &mut db,
-            NodeKey::Full(node_sk),
-            &node_kid,
+            NodeKey::Public(node_kid),
+            node_kid,
             origin,
             patient,
             &check,

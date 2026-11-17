@@ -52,15 +52,10 @@ async fn save_aged(c: &Client, draft: Uuid, chart: Uuid, writer: Option<&str>, m
 
 /// What the window's notes read lists as failed on `chart`, as the window.
 async fn failed_on(window: &Client, chart: Uuid) -> Vec<Uuid> {
-    window
-        .query(
-            "SELECT d::text FROM cairn_note_drafts_commit_failed($1::text::uuid) d",
-            &[&chart.to_string()],
-        )
+    cairn_node::note::commit::drafts_commit_failed(window, chart)
         .await
         .unwrap()
-        .iter()
-        .map(|r| r.get::<_, String>(0).parse().unwrap())
+        .into_iter()
         .collect()
 }
 

@@ -16,8 +16,6 @@ use std::path::Path;
 const EXEMPT: &[&str] = &[
     // Records what a gesture cost; its error goes to stderr only, never to the screen.
     "record_timing",
-    // notes_commit.rs: only hands the guard back; its caller, `commit_overdue_impl`, explains.
-    "hold",
     // allergy_check.rs: the drug list is optional, so any failure reading it, a cut included,
     // is "no drug list" (`available: false`, lines "not checked"); its error goes to stderr only.
     "drug_search_impl",

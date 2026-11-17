@@ -116,7 +116,7 @@ async fn note_sign_off_impl_signs_off_under_the_window_login() {
     state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
         cairn_node::db::connect(&window).await.unwrap(),
     )));
-    state.node_sk = Some(node_sk);
+    state.node_kid = Some(node_kid.clone());
     state.node_origin = ORIGIN.into();
     state.key_hold = std::time::Duration::from_secs(600);
     state.whos_here.lock().await.pick(Claim::Named {
