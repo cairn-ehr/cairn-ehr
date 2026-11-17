@@ -40,6 +40,19 @@ use uuid::Uuid;
 pub const NEW_MATCH_REFUSAL: &str =
     "a new possible match has appeared since the search — search again";
 
+/// The advisory-lock key every [`serve_one`] takes first: the ASCII of "CARNRG" (CARN for Cairn,
+/// RG for registration), the same naming as db/018's CARNLK and db/033's CARNMR.
+///
+/// WHY A LOCK ACROSS SERVICES (final review F1, ruling R15). Two requests for the same new
+/// patient can be claimed by two services at once. Each re-runs its search before either has
+/// committed, so neither sees the other's chart, and both register: a duplicate. The claim's row
+/// lock cannot stop it (the two claims are two rows), and the node's HLC row lock comes only at
+/// the first tick, after both searches. Taking this one lock as the transaction's FIRST
+/// statement makes registrations take turns, node-wide: the second service waits until the
+/// first has committed, so its search (a fresh snapshot, READ COMMITTED) finds the first's chart
+/// and refuses. Taken before the claim, so a waiting service holds no request in the meantime.
+pub const REGISTRATION_LOCK: i64 = 0x4341_524E_5247;
+
 /// What one [`serve_one`] call did.
 ///
 /// `reason` is written for the WINDOW (it is what the clerk reads) and may carry the floor's own
@@ -139,7 +152,7 @@ enum Outcome {
     Refused(String),
 }
 
-/// Take one request off db/083's queue and serve it, in one transaction: claim → decode →
+/// Take one request off db/083's queue and serve it, in one transaction: lock → claim → decode →
 /// re-run the search → register on a savepoint → settle → commit. See the module doc for which
 /// failures settle `refused` and which return `Err` with the request left pending.
 ///
@@ -154,6 +167,10 @@ pub async fn serve_one(
         .transaction()
         .await
         .context("opening the registration transaction")?;
+    // First, before the claim: see REGISTRATION_LOCK for why registrations take turns.
+    tx.execute("SELECT pg_advisory_xact_lock($1)", &[&REGISTRATION_LOCK])
+        .await
+        .context("taking the registration lock")?;
     let Some(row) = tx
         .query_opt(
             "SELECT request_id::text, name, query::text, displayed::text, today \

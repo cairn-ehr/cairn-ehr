@@ -14,6 +14,8 @@
 //! * a request the service cannot read is refused (never left to loop), and the next is served;
 //! * a floor refusal settles `refused` with the floor's words;
 //! * two services at once register a request once (the claim is `FOR UPDATE SKIP LOCKED`);
+//! * two requests for one new patient, served by two services at once, make one chart (the
+//!   registration lock, `REGISTRATION_LOCK`);
 //! * a service that fails mid-transaction leaves the request pending, served once later.
 //!
 //! Each test runs `serve_one` as a login granted `cairn_terminal_service`, the role the real
@@ -380,6 +382,90 @@ async fn two_servers_register_once() {
         Served::Registered { request, .. } if request == held
     ));
     assert_eq!(charts(&r.owner).await, 2);
+}
+
+/// The backend pid of `c`, to watch in `pg_stat_activity`.
+async fn pid_of(c: &Client) -> i32 {
+    c.query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// Final review F1 (ruling R15). Two clerks register the same new patient at once (two windows,
+/// or one press resent), and two services are running. Both clerks searched before either chart
+/// existed, so both requests honestly say "saw no one". Without one lock across services, both
+/// searches run before either registration commits (the HLC row lock comes only at the first
+/// tick), neither sees the other's chart, and the record gets a duplicate. With the
+/// registration lock, the second service waits for the first to commit, searches after it, and
+/// refuses: "a new possible match has appeared".
+///
+/// Deterministic, not timing-based: a third session holds the node's HLC row, so the first
+/// service to get going parks on it with its search already run, and the test releases it only
+/// once BOTH services are parked on a lock (without the registration lock, both park on the
+/// HLC row, each search done; with it, the second parks on the registration lock, unsearched).
+#[tokio::test]
+async fn two_servers_two_requests_for_one_patient_register_one_chart() {
+    let Some(r) = rig().await else { return };
+    let q = query("Ann Nguyen");
+    let first = submit(&r.window, "Ann Nguyen", &q, &CandidateList::empty()).await;
+    let second = submit(&r.window, "Ann Nguyen", &q, &CandidateList::empty()).await;
+
+    let mut holder = db::connect(&r.base).await.unwrap();
+    let hold = holder.transaction().await.unwrap();
+    hold.query_one("SELECT wall FROM node_hlc_tick()", &[])
+        .await
+        .unwrap();
+
+    let mut services = Vec::new();
+    let mut pids = Vec::new();
+    for c in [r.service, connect_service(&r.owner, &r.base).await] {
+        pids.push(pid_of(&c).await);
+        let sk = r.sk.clone();
+        services.push(tokio::spawn(async move {
+            let mut c = c;
+            serve_one(&mut c, &sk, NODE).await
+        }));
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let parked: i64 = hold
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                  WHERE pid = ANY($1) AND wait_event_type = 'Lock'",
+                &[&pids],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if parked == 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "both services never parked on a lock within 5s ({parked} did)"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    hold.rollback().await.unwrap();
+
+    let mut served = Vec::new();
+    for s in services {
+        served.push(s.await.unwrap().unwrap());
+    }
+    served.sort_by_key(|s| matches!(s, Served::Refused { .. }));
+    assert!(
+        matches!(&served[..], [Served::Registered { .. }, Served::Refused { reason, .. }]
+                 if reason == NEW_MATCH_REFUSAL),
+        "one registers, the other sees its chart and refuses: {served:?}"
+    );
+    assert_eq!(charts(&r.owner).await, 1, "one chart, never a duplicate");
+    let mut settled = [
+        outcome(&r.window, first).await.0,
+        outcome(&r.window, second).await.0,
+    ];
+    settled.sort();
+    assert_eq!(settled, ["refused".to_string(), "registered".to_string()]);
 }
 
 /// A NOLOGIN role that can claim, settle and search (the search runs as its caller), but not tick the node's clock, so the
