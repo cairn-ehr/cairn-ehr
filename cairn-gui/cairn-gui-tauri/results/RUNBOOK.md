@@ -3985,7 +3985,7 @@ other open draft (`due` lists them).
       Open chart A again: the draft reads "overdue — could not go into the record by itself (the node's last try
       failed; the cause is in the terminal service's log); sign it, or tell the site's operator". `svc_start`: about a
       minute later (its first commit tick is 60 s after it starts) the note goes in (`went`) and
-      `SELECT count(*) FROM note_draft_commit_failure` reads 0.
+      `SELECT count(*) FROM note_draft_commit_failure WHERE draft = '<the draft>'` reads 0.
 - [ ] **Stuck.** Section 20 Measurement 4's stuck draft (`nurse-a`'s, then her member row removed), with the service
       running. After its tick `note_draft_commit_failure` holds that draft, yet the window shows the STUCK sentence
       ("overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes
