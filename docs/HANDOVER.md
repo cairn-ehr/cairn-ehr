@@ -162,7 +162,9 @@
 >    ([ADR-0109](spec/decisions/0109-the-terminal-service-and-the-keyless-window.md)): no window holds the node key;
 >    `cairn-node terminal-service` registers from a queue (re-running the search against the BOUNDED prompt) and runs
 >    the commit tick; filed **#1153**–**#1159** (#1159: the re-search guards only the queue). Final review and finalcheck
->    done and fixed. **⇒ NEXT: maintainer review, merge, RUNBOOK
+>    done and fixed. **Time-sensitive:** RUSTSEC-2026-0543 (chrono unmaintained) is ignored in both `deny.toml` trees until
+>    2027-02-18 (**#1160**, migrate off chrono); and **#389**'s glib ignore is `review-by 2026-11-21`, after which
+>    `advisory_ignore_review_dates.rs` fails every gate until it is re-decided. **⇒ NEXT: maintainer review, merge, RUNBOOK
 >    §38**; then slice B's plan (the gateway; any login can take the registration advisory lock, and the owner's
 >    `patient-register` takes none), slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
 >    §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac

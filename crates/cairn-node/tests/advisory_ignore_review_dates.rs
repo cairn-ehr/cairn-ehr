@@ -38,13 +38,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// How many suppressed advisories the repo carries today (2026-08-21).
+/// How many suppressed advisories the repo carries today (2026-11-18: RUSTSEC-2024-0429, plus
+/// RUSTSEC-2026-0543 in both trees' deny.toml, #1160).
 ///
 /// A liveness floor on the *scan*, in the shape `cargo_lockfiles_tracked.rs` established: without
 /// it, a scan that found no `deny.toml` at all — a moved file, a renamed config — would pass for
 /// the same reason a clean repo passes. Dropping to zero suppressions is good news and should be
 /// a conscious edit here.
-const IGNORES_TODAY: usize = 1;
+const IGNORES_TODAY: usize = 3;
 
 /// The repository root, as git reports it.
 fn repo_root() -> PathBuf {
