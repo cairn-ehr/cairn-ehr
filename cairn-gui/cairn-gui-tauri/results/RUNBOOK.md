@@ -90,6 +90,12 @@ When the measurement is done: `"$PGBIN/pg_ctl" -D "$MDATA" stop && rm -rf "$MDAT
    The connection must be on this machine (`127.0.0.1`, `localhost` or a socket): the window refuses any other host.
    A window started with `CAIRN_CONN="$CONN"` still opens and reads, but every signature and "Enrol staff" is refused with
    "more access than a window may have", and the reason is printed on the terminal's stderr.
+4. **The window holds no node key, so registration and the timed commit of a note draft run in the node's terminal
+   service** ([ADR-0109](../../../docs/spec/decisions/0109-the-terminal-service-and-the-keyless-window.md), #909). The
+   window takes no `--key`. Provision the service's login and start it as section 38's setup does, and leave it
+   running for every section that registers a chart from the window (section 8 and the sections that copy its launch)
+   or waits on a draft's timer (section 20). Without it, a Register press waits 10 s and then says the service did not
+   answer. The `cairn-node` lines below still take `--key "$NODE_KEY"`: the CLI signs with the node key itself.
 
 ## 1. Enrol the clinician who will sign
 
@@ -177,7 +183,7 @@ timing a gesture over a chart the node already says is incomplete.
 cd cairn-gui
 CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
     --patient "$PATIENT" \
-    --key "$NODE_KEY" --key-hold-seconds 900
+    --key-hold-seconds 900
 ```
 
 `--release` matters: a debug build measures the compiler's tempo, not the design's.
@@ -284,7 +290,7 @@ SEED
 reported separately and never merged):
 
 ```bash
-CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- --key "$NODE_KEY"
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri
 cargo run --release -p cairn-gui-tauri -- --mock
 ```
 
@@ -325,7 +331,7 @@ cnode patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-
 cd cairn-gui
 CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
     --patient "$PATIENT" \
-    --key "$NODE_KEY" --key-hold-seconds 900
+    --key-hold-seconds 900
 ```
 
 **`--mock`** (no database; the fixture's second chart is reachable by typing a fragment of its
@@ -404,7 +410,7 @@ cnode link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" \
-    --key "$NODE_KEY" --key-hold-seconds 900
+    --key-hold-seconds 900
 ```
 
 Open A and unlink **B–C**, the link on the list that does not touch the chart you opened. **Note:**
@@ -483,7 +489,7 @@ uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CON
 cd cairn-gui
 CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" \
-    --key "$NODE_KEY" --key-hold-seconds 900
+    --key-hold-seconds 900
 ```
 
 **Measurement 1 — review and judge.** Start the stopwatch at the press of **Review** on the banner
@@ -583,7 +589,7 @@ Emery Elmsworth|1965-05-15
 SEED
 uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
 cd cairn-gui
-CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- --key "$NODE_KEY" --key-hold-seconds 900
+CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- --key-hold-seconds 900
 ```
 
 The front door shows **"Possible duplicates (5)"** below the registration form (more if section 11's
@@ -678,7 +684,7 @@ cnode unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" \
-    --key "$NODE_KEY" --key-hold-seconds 900
+    --key-hold-seconds 900
 ```
 
 `cairn_chart_set_doubts` over the three charts must print one `separated` row for A–C.
@@ -1530,7 +1536,9 @@ an `M > N` case:** paper's unsigned entry is in the folder at once, Cairn's only
 outside its budget, or an `M > N`, is the finding — file an issue; never adjust the budget.**
 
 **Setup.** Section 19's setup (`nurse-a` and `dr-b` enrolled from the window) and **two** charts, A and B (the
-section 2 chart and one more). Launch as section 3, which passes `--key "$NODE_KEY"`. Set the quarantine to two minutes at the console, and put it back at the end:
+section 2 chart and one more). Launch as section 3, with the node's terminal service running (section 38's setup):
+since [ADR-0109](../../../docs/spec/decisions/0109-the-terminal-service-and-the-keyless-window.md) the service commits
+overdue drafts, never the window. Set the quarantine to two minutes at the console, and put it back at the end:
 
 ```bash
 cnode note-set-quarantine --minutes 2     # prints: a draft left untouched for 2 minutes goes into the record unsigned
@@ -1556,6 +1564,12 @@ the log in a second terminal with `\watch 1` on `went`'s query. Five runs.
       the second's reads empty).
 - [ ] Open chart A: two notes, read "written by ?Nurse A · went in unsigned" and "written by ?Dr B · went in
       unsigned". No "signed by" anywhere on them.
+
+> [!NOTE]
+> **Measurement 2 is retired (ADR-0109).** The window no longer commits before a chart read, so an overdue draft
+> reads "overdue — not in the record yet; the node's terminal service puts it in unsigned at its next check" until the
+> service's next tick (≤ 60 s). Section 38 Measurement 5 times that tick with no window open. The text below is kept
+> as it was run before.
 
 **Measurement 2 — a chart open that commits first (≤ the single-chart open + 200 ms).** Quit the window so no tick
 runs. Leave a draft on chart A until `due` says `overdue` is true. Relaunch on chart B, then open chart A from a list
@@ -1586,7 +1600,7 @@ two ticks.
 - [ ] After `due` and two ticks: the draft is still there (`parts`), nothing went in (`went`), and it reads "… ·
       overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes in
       once they are enrolled again".
-- [ ] The window's stderr says the draft once, not at every tick.
+- [ ] The terminal service's stderr says the draft once, not at every tick (before ADR-0109: the window's).
 
 **Keyboard and screen reader, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
@@ -3786,3 +3800,231 @@ amoxicillin, and every earlier section's pick behaves as before.
   (`a_drug_found_by_another_name_reads_name_arrow_drug`).
 
 `TEMPLATE.md` carries a matching block (*Drug names in the pick*).
+
+## 38. The terminal service and the keyless window (#909 slice A, ADR-0109)
+
+What changed: no window holds the node's signing key, and the window takes no `--key`. The two acts the node itself
+signs from the window, registering a patient and the timed commit of an abandoned note draft, run in
+`cairn-node terminal-service` on the database's machine. The window writes a registration request and waits for the
+service's answer; the service commits overdue drafts every minute whether or not any window is open.
+
+Paper counterpart: the clerk searches the card index, finds no card, writes a new card and files it; an entry left
+unsigned on the progress sheet is in the folder without anyone acting. **Live only**: a `--mock` window neither
+registers through the service nor holds drafts.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Register, service running: the added round trip | the request's `submitted_at` | its `settled_at`, plus one 200 ms window poll | **≤ 0.5 s median** |
+| Register, service stopped | the press of *Register* | the not-running sentence | — (record; about 10 s, a stated cost) |
+| A draft past due goes in, no window open | the draft's `due` | its note's row in `clinical_note` | **≤ 60 s** |
+
+Steps: registration paper *N* = 3 (search, decide no match, write the card) → forced *M* = 3 → target *K* = 3; the
+request and the service's re-run are machine steps. **A figure outside its budget, or an `M > N`, is the finding:
+file an issue, and never adjust the budget.**
+
+**Setup.** As section 0, then, **from the repository root** (not `cairn-gui/`, where section 3 leaves you), build this
+checkout's `cairn-node` (the service refuses a database stamped by another build) and provision the service's own
+login with the owner's connection. Its password goes into a connection string and into the plist's XML below, so no
+spaces, quotes, `&` or `<`:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+cargo build --release -p cairn-node
+export CAIRN_NODE_BIN="${CARGO_TARGET_DIR:-$PWD/target}/release/cairn-node"
+export CAIRN_TERMINAL_SERVICE_DB_PASSWORD='…'     # no spaces, quotes, & or <
+"$CAIRN_NODE_BIN" --conn "$CONN" provision-terminal-service-role --role cairn_terminal_service_login
+export SERVICE_CONN="host=127.0.0.1 port=$MPORT user=cairn_terminal_service_login password=$CAIRN_TERMINAL_SERVICE_DB_PASSWORD dbname=cairn_measure"
+```
+
+**Run it under a supervisor, with restart-on-failure.** The service exits with an error if its first connection
+fails at startup; after that it reopens a lost connection itself. The rig's node key was made with
+`--insecure-plaintext`; a sealed key also needs `CAIRN_KEY_PASSPHRASE` in the service's environment (the service never
+prompts). Both files below hold a password: keep them readable by their owner only.
+
+On macOS (launchd), as a user agent:
+
+```bash
+PLIST="$HOME/Library/LaunchAgents/org.cairn-ehr.terminal-service.plist"
+( umask 077; cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>org.cairn-ehr.terminal-service</string>
+  <key>ProgramArguments</key><array>
+    <string>$CAIRN_NODE_BIN</string><string>--key</string><string>$NODE_KEY</string><string>terminal-service</string>
+  </array>
+  <key>EnvironmentVariables</key><dict><key>CAIRN_CONN</key><string>$SERVICE_CONN</string></dict>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardErrorPath</key><string>/tmp/cairn-terminal-service.log</string>
+</dict></plist>
+EOF
+)
+SVC="gui/$(id -u)/org.cairn-ehr.terminal-service"
+svc_start() { launchctl bootstrap "gui/$(id -u)" "$PLIST"; }
+svc_stop()  { launchctl bootout "$SVC"; }
+svc_kill()  { launchctl kill SIGKILL "$SVC"; }     # launchd restarts it
+```
+
+Its log, in a second terminal (a shell function would not reach that terminal): `tail -f /tmp/cairn-terminal-service.log`.
+
+On Linux (systemd), as a user unit (a production node uses a system unit with `User=` and an `EnvironmentFile=` of
+mode 0600):
+
+```bash
+UNIT="$HOME/.config/systemd/user/cairn-terminal-service.service"
+mkdir -p "$(dirname "$UNIT")"
+( umask 077; cat > "$UNIT" <<EOF
+[Unit]
+Description=Cairn terminal service (#909)
+
+[Service]
+Environment="CAIRN_CONN=$SERVICE_CONN"
+ExecStart=$CAIRN_NODE_BIN --key $NODE_KEY terminal-service
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=default.target
+EOF
+)
+systemctl --user daemon-reload
+svc_start() { systemctl --user start cairn-terminal-service; }
+svc_stop()  { systemctl --user stop cairn-terminal-service; }
+svc_kill()  { systemctl --user kill -s KILL cairn-terminal-service; }   # Restart=on-failure brings it back
+```
+
+Its log, in a second terminal: `journalctl --user -fu cairn-terminal-service`.
+
+Then:
+
+```bash
+svc_start    # its log (second terminal, above) says "terminal service running"
+reqs() { psql "$CONN" -c "SELECT request_id, name, status, patient_id, left(refusal, 40) AS refusal, settled_at - submitted_at AS took FROM registration_request ORDER BY submitted_at"; }
+```
+
+- [ ] `svc_kill`: the log says "terminal service running" again, within about 10 s (launchd throttles a restart to
+      one per 10 s; systemd's `RestartSec=1`): the supervisor restarted it.
+- [ ] With the window's login, `CAIRN_CONN="$WINDOW_CONN" "$CAIRN_NODE_BIN" --key "$NODE_KEY" terminal-service` exits at
+      once, refusing the login and naming `provision-terminal-service-role`; it never says "running".
+
+Launch the window as section 8 does (no `--patient`), with no `--key`. Passing `--key` is now refused by the window's
+own argument parser, which is the check that it is gone.
+
+**Measurement 1 — Register with the service running (the added round trip ≤ 0.5 s median).** Note when it starts,
+`M1_START=$(psql "$CONN" -Atc "SELECT now()")`, so the figures below count this measurement's requests only. Register
+five fresh names, each with its own date of birth, through the front door. Five runs, more if the figures spread.
+
+- [ ] Each opens its chart, as before this slice. `reqs` lists each as `registered`, with its chart.
+- [ ] Read the median and the slowest:
+
+  ```bash
+  psql "$CONN" -c "SELECT count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM settled_at - submitted_at)) AS median_s, max(extract(epoch FROM settled_at - submitted_at)) AS max_s FROM registration_request WHERE status = 'registered' AND submitted_at >= '$M1_START'"
+  ```
+
+  The figure against the budget is `median_s` plus 0.2 s (the window reads the request every 200 ms). Also record the
+  stopwatch from the press of *Register* to the chart's header, for context.
+
+**Measurement 2 — Register with the service stopped.** `svc_stop`, then register a fresh name.
+
+- [ ] After about 10 s (record it) the outcome reads "Nothing was saved, and pressing Register again fails the same way
+      until an operator acts: registration needs the node's terminal service (cairn-node terminal-service), which did
+      not answer". `reqs` shows the request `expired`, and
+      `psql "$CONN" -Atc "SELECT count(*) FROM patient_registration"` is unchanged.
+- [ ] Press *Register* again: the same sentence after the same wait, and no chart.
+- [ ] `svc_start`, press *Register*: the chart opens, once (one new `patient_registration` row).
+
+**Measurement 3 — the service stops in the middle of a registration.** Hold the node's clock row so the service
+blocks inside its registration, in a separate `psql "$CONN"` session: `BEGIN; SELECT * FROM hlc_state FOR UPDATE;`.
+Press *Register* on a fresh name. Within 3 s, `svc_kill`; then `ROLLBACK;` in the held session within 3 s more.
+
+- [ ] Exactly one of: the chart opens (the restarted service registered it before its deadline), or the not-running
+      sentence (the window expired it). If the window's answer took longer than 15 s it may instead read "Whether this
+      registration was recorded is NOT known"; record which. `reqs` agrees with what the window said: `registered`
+      with one chart, or `expired` with none. Never "Nothing was saved" with a chart in `patient_registration`.
+- [ ] Repeat five times and record each outcome.
+
+**Measurement 4 — a forged search is refused.** Take the first request of a name registered in Measurement 1 (its
+displayed list cannot name that chart, which did not exist yet), and send it again under a new id as the window's own
+login. Its claim of what the clerk was shown is now false, since that chart exists:
+
+```bash
+NAME='<a Measurement 1 name>'     # no apostrophes
+Q=$(psql "$CONN" -Atc "SELECT query::text FROM registration_request WHERE name = '$NAME' ORDER BY submitted_at LIMIT 1")
+D=$(psql "$CONN" -Atc "SELECT displayed::text FROM registration_request WHERE name = '$NAME' ORDER BY submitted_at LIMIT 1")
+R=$(uuidgen | tr 'A-Z' 'a-z')
+psql "$WINDOW_CONN" -v r="$R" -v n="$NAME" -v q="$Q" -v d="$D" <<'SQL'
+SELECT cairn_registration_submit(:'r'::uuid, :'n', :'q'::jsonb, :'d'::jsonb, current_date::text);
+SELECT pg_sleep(1);
+SELECT status, refusal FROM cairn_registration_status(:'r'::uuid);
+SQL
+```
+
+- [ ] The last line reads `refused` and "a new possible match has appeared since the search — search again", and no
+      chart was added.
+- [ ] As the window's login, `SELECT * FROM cairn_registration_claim()` is refused (permission denied): only the
+      service may claim.
+
+**Writers for Measurements 5 and 6.** Section 20 Measurement 4 removes `nurse-a`'s member row on this rig, and every
+draft she writes after that is stuck, which STUCK's sentence would hide. So write these drafts as `dr-b` (section 19
+enrolled both from the window), or as `nurse-a` only if section 20 Measurement 4 has not been run. Use a chart with no
+other open draft (`due` lists them).
+
+**Measurement 5 — a draft past its quarantine goes in within 60 s, with no window open.** Section 20's setup
+(quarantine two minutes, its `due` and `went` helpers). As `dr-b` on chart A, write `obs stable`, note `due`, then
+**quit the window**. Watch `went` with `\watch 1`. Five runs. (A tick commits at most 20 drafts, so a larger
+backlog drains at 20 a minute; one draft is well inside that.)
+
+- [ ] Record the seconds from `due` to the note's row (budget ≤ 60 s). The note is node-signed, `drafted` for
+      dr-b, and read "went in unsigned" once the window is opened again.
+
+**Measurement 6 — a draft that would not go in.** In this order: the stuck step last, because it removes a member.
+
+- [ ] **Overdue, not failed.** `svc_stop`. As `dr-b`, leave a draft on chart A past `due`, with no failure recorded:
+      within three minutes of `due` it reads "overdue — not in the record yet; the node's terminal service puts it in
+      unsigned at its next check".
+- [ ] **Not put in.** With the service still stopped, open chart A again more than three minutes past `due`: the same
+      draft reads "overdue — the node's terminal service has not put it in the record; sign it, or tell the site's
+      operator".
+- [ ] **Failed.** With the service still stopped, record a failure for THAT draft as the service would, its id from
+      `due`: `psql "$CONN" -c "INSERT INTO note_draft_commit_failure (draft, failed_at) VALUES ('<the draft>', now())"`.
+      Open chart A again: the draft reads "overdue — could not go into the record by itself (the node's last try
+      failed; the cause is in the terminal service's log); sign it, or tell the site's operator". `svc_start`: about a
+      minute later (its first commit tick is 60 s after it starts) the note goes in (`went`) and
+      `SELECT count(*) FROM note_draft_commit_failure WHERE draft = '<the draft>'` reads 0.
+- [ ] **Stuck.** Section 20 Measurement 4's stuck draft (`nurse-a`'s, then her member row removed), with the service
+      running. After its tick `note_draft_commit_failure` holds that draft, yet the window shows the STUCK sentence
+      ("overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes
+      in once they are enrolled again"), never the failed one: stuck wins. The service's log says the draft once, not
+      every minute.
+
+**Results (fill in).**
+
+| Figure | n | median | slowest | Budget | Inside? |
+|---|---|---|---|---|---|
+| Added round trip: `median_s` + 0.2 s | | | | ≤ 0.5 s | |
+| Press of *Register* → chart header (stopwatch, context) | | | | — | |
+| Register with the service stopped → the sentence | | | | — (≈ 10 s) | |
+| A draft's `due` → its note's row, no window open | | | | ≤ 60 s | |
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| A killed service is restarted by the supervisor | | |
+| Service stopped: the not-running sentence, no chart, the same on a second press | | |
+| Stopped mid-registration: one outcome, and the window says the one `reqs` shows (5 runs) | | |
+| A forged "saw no one" by `psql` as the window's login is refused | | |
+| The window's login cannot claim | | |
+| FAILED, OVERDUE and STUCK each read as above; stuck wins | | |
+
+**Where it is pinned.**
+- **The doors:** `crates/cairn-node/tests/terminal_service_doors.rs` (the expire behind a claim, the window's missing
+  doors, the purge) and `register_in_tx.rs`.
+- **The service:** `terminal_service_registration.rs` (the bounded compare, a forged search, a poison request, two
+  services, a dropped transaction), `terminal_service_commit.rs`, `terminal_service_run.rs`,
+  `provision_terminal_service_role.rs`; the unit tests of `terminal_service/{registration,run,commit}.rs` and
+  `patient/register_request.rs` (`deadline_matches_db_083`).
+- **The window:** `cairn-gui-live/tests/registration_queue.rs` and `funnel.rs`'s tests; `cairn-gui-tauri`'s
+  `node_key_guard_tests.rs` and `notes_commit_tests.rs` (DB-gated window tests run locally only, #905).
+
+`TEMPLATE.md` carries a matching block (*The terminal service and the keyless window*).

@@ -11,6 +11,7 @@
 use cairn_event::medication::{CodingClaim, SubstanceCoding};
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -1204,7 +1205,7 @@ async fn a_ceased_thread_leaves_the_worklist() {
     // clinical identity questions, not an archive audit.
     cairn_node::medication::cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,

@@ -14,6 +14,7 @@ use cairn_event::generate_key;
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::draft::{open_drafts, save_part, SaveOutcome};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{sign_note, SignNoteInput, SignRefusal};
@@ -77,7 +78,7 @@ async fn a_signed_note_is_attested_and_spends_its_draft() {
 
     let signed = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "chest clear"),
         &author,
     )
@@ -129,10 +130,15 @@ async fn sign_takes_the_text_sent_with_it_not_the_last_autosave() {
     let draft = autosave(&c, chart, "BP <9").await;
     let typed = "BP <90, [L] arm (R)\n[ref]: discharge letter \\";
 
-    sign_note(&mut c, &node_sk, &input(draft, chart, typed), &author)
-        .await
-        .unwrap()
-        .expect("signs");
+    sign_note(
+        &mut c,
+        NodeKey::Full(&node_sk),
+        &input(draft, chart, typed),
+        &author,
+    )
+    .await
+    .unwrap()
+    .expect("signs");
 
     let stored: String = c
         .query_one(
@@ -168,7 +174,7 @@ async fn a_second_sign_of_the_same_draft_is_refused_spent_and_writes_one_note() 
 
     sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "abdomen soft"),
         &author,
     )
@@ -177,7 +183,7 @@ async fn a_second_sign_of_the_same_draft_is_refused_spent_and_writes_one_note() 
     .expect("the first sign signs");
     let again = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "abdomen soft"),
         &author,
     )
@@ -219,7 +225,7 @@ async fn a_sign_from_another_terminal_or_chart_is_refused_and_leaves_the_draft()
             SignRefusal::Elsewhere,
         ),
     ] {
-        let refused = sign_note(&mut c, &node_sk, &attempt, &author)
+        let refused = sign_note(&mut c, NodeKey::Full(&node_sk), &attempt, &author)
             .await
             .unwrap();
         assert_eq!(refused.err(), Some(expected), "{who}");
@@ -263,7 +269,7 @@ async fn an_empty_note_is_refused_before_the_database() {
 
     let out = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(Uuid::now_v7(), chart, " \n\t "),
         &author,
     )
@@ -301,7 +307,7 @@ async fn a_failed_submit_leaves_the_draft_in_place() {
 
     let refused = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "second text"),
         &stranger,
     )
@@ -328,7 +334,7 @@ async fn a_failed_submit_leaves_the_draft_in_place() {
     };
     sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "second text"),
         &author,
     )
@@ -360,7 +366,7 @@ async fn no_stated_time_signs_recording_started_as_t_effective() {
 
     sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "reviewed overnight"),
         &author,
     )
@@ -412,7 +418,7 @@ async fn a_stated_time_signs_as_t_effective() {
     let mut sent = input(draft, chart, "seen at 03:00");
     sent.stated = Some(stated);
 
-    sign_note(&mut c, &node_sk, &sent, &author)
+    sign_note(&mut c, NodeKey::Full(&node_sk), &sent, &author)
         .await
         .unwrap()
         .expect("signs");
@@ -453,7 +459,7 @@ async fn a_backward_clock_step_does_not_make_a_draft_unsignable() {
 
     sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "written after the step"),
         &author,
     )

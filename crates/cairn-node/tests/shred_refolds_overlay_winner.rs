@@ -20,6 +20,7 @@ use cairn_node::medication::{
     build_cease_body, cease_medication, code_medication, reconcile_medications,
     separate_medications, CeaseMedicationInput, CodeMedicationInput, ReconcileInput,
 };
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::{build_shred_body, shred_event};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -50,9 +51,19 @@ async fn stop(
         stopped_precision: None,
         reason: Some(reason),
     };
-    cease_medication(c, sk, kid, "test-node", p, med, &input, None, None)
-        .await
-        .unwrap()
+    cease_medication(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        p,
+        med,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap()
 }
 
 /// A peer's PLAINTEXT stop of `med` under `p`, admitted through the sync door (which takes a

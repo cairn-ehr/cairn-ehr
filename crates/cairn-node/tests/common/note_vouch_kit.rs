@@ -19,6 +19,7 @@ use cairn_event::{
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_and_sign;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::commit::{commit_overdue, CommitOutcome};
 use cairn_node::note::draft::{save_part, SaveOutcome};
 use cairn_node::note::sign::{sign_note, SignNoteInput};
@@ -159,7 +160,7 @@ pub async fn signed_part(
         addendum_to: None,
         also_vouches: &[],
     };
-    sign_note(c, node_sk, &input, author)
+    sign_note(c, NodeKey::Full(node_sk), &input, author)
         .await
         .unwrap()
         .expect("the part is signed")

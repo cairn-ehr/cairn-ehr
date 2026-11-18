@@ -41,6 +41,7 @@ use cairn_node::medication::{
     AssertMedicationInput, AttestParams, AuthorParams, CeaseMedicationInput,
     WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use cairn_patient_search::SearchQuery;
 use common::{
     assert_not_denied, cs, enroll_human, expect_as_window, link_assertion_event, owner_and_window,
@@ -351,8 +352,15 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     assert!(!list.rows.is_empty(), "the asserted line is listed");
 
     let shown = ChartSet::single(patient);
-    let r =
-        sign_off_medication_list(&mut window, &sk, ORIGIN, &attest, patient, Some(&shown)).await;
+    let r = sign_off_medication_list(
+        &mut window,
+        NodeKey::Full(&sk),
+        ORIGIN,
+        &attest,
+        patient,
+        Some(&shown),
+    )
+    .await;
     assert_not_denied("medication::signoff::sign_off_medication_list", &r);
     r.expect("the sign-off is recorded");
 
@@ -363,7 +371,7 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     };
     let r = withhold_medication(
         &mut window,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         ORIGIN,
         patient,
@@ -377,7 +385,7 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
 
     let r = release_medication_holds(
         &mut window,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         ORIGIN,
         patient,
@@ -397,7 +405,7 @@ async fn the_windows_medication_writes_run_under_its_own_login() {
     };
     let r = cease_medication(
         &mut window,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         ORIGIN,
         patient,
@@ -444,12 +452,21 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
         corrects: None,
         coding: None,
     };
-    let r = sign::sign_allergy(&mut window, &sk, &kid, ORIGIN, patient, &entry, &author).await;
+    let r = sign::sign_allergy(
+        &mut window,
+        NodeKey::Full(&sk),
+        &kid,
+        ORIGIN,
+        patient,
+        &entry,
+        &author,
+    )
+    .await;
     assert_not_denied("allergy::sign::sign_allergy", &r);
     let target = r.expect("the entry is recorded").to_string();
     let r = sign::sign_allergy_none(
         &mut window,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         ORIGIN,
         patient,
@@ -467,9 +484,16 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
         date: Onset::NotKnown,
         text: None,
     };
-    let r =
-        sign::sign_allergy_challenge(&mut window, &sk, &kid, ORIGIN, patient, &challenge, &author)
-            .await;
+    let r = sign::sign_allergy_challenge(
+        &mut window,
+        NodeKey::Full(&sk),
+        &kid,
+        ORIGIN,
+        patient,
+        &challenge,
+        &author,
+    )
+    .await;
     assert_not_denied("allergy::sign::sign_allergy_challenge", &r);
     r.expect("the de-label is recorded");
     let retraction = cairn_event::allergy_overlay::AllergyRetraction {
@@ -478,7 +502,7 @@ async fn the_windows_allergy_calls_run_under_its_own_login() {
     };
     let r = sign::sign_allergy_retraction(
         &mut window,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         ORIGIN,
         patient,

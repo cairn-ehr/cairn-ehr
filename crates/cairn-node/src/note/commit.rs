@@ -80,6 +80,24 @@ pub async fn overdue_drafts(
         .collect()
 }
 
+/// The drafts on `patient`'s chart whose LAST quarantine commit failed, as the terminal service
+/// recorded it (db/083's failure fact; #909). The window can no longer run the commit, so this is
+/// how it learns a draft would not go in. Readable by `cairn_window`.
+pub async fn drafts_commit_failed(
+    client: &(impl GenericClient + Sync),
+    patient: Uuid,
+) -> anyhow::Result<std::collections::HashSet<Uuid>> {
+    let rows = client
+        .query(
+            "SELECT d::text FROM cairn_note_drafts_commit_failed($1::text::uuid) d",
+            &[&patient.to_string()],
+        )
+        .await?;
+    rows.iter()
+        .map(|r| Ok(r.get::<_, String>(0).parse()?))
+        .collect()
+}
+
 /// Commit draft `draft` if it is overdue, as node-signed note events (see the module doc), in
 /// one transaction. `node_origin` is the HLC's origin (`identity::load_local`'s `node_id_hex`).
 /// `Err` is a database failure or a floor refusal, which wrote nothing — unless the commit's

@@ -76,7 +76,8 @@ fn a_stale_hba_file_is_refused() {
 
 #[test]
 fn existing_role_refusals() {
-    use super::{existing_role_refusal as r, RoleFacts};
+    use super::{existing_role_refusal, LoginGroup, RoleFacts};
+    let r = |f: &RoleFacts, p: Option<&str>| existing_role_refusal(f, p, LoginGroup::Window);
     let ok = RoleFacts {
         can_login: true,
         has_attribute_power: false,

@@ -11,6 +11,7 @@ use cairn_event::medication::Charting;
 use cairn_node::db;
 use cairn_node::medication::draft::{chart_draft_line, read_draft_lines};
 use cairn_node::medication::{AssertMedicationInput, AuthorParams};
+use cairn_node::node_key::NodeKey;
 use common::note_setup;
 use serde_json::json;
 use tokio_postgres::Client;
@@ -80,7 +81,7 @@ async fn sign(
     };
     chart_draft_line(
         c,
-        &keys.0,
+        NodeKey::Full(&keys.0),
         &keys.1,
         "test-node",
         chart,

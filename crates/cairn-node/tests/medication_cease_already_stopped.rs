@@ -14,6 +14,7 @@ use cairn_node::medication::{
     already_stopped_note, cease_medication, not_known_whether_current, not_known_whether_stopped,
     reconcile_medications, still_current_note, CeaseMedicationInput, ReconcileInput,
 };
+use cairn_node::node_key::NodeKey;
 use uuid::Uuid;
 
 mod common;
@@ -39,9 +40,19 @@ async fn a_line_already_stopped_earns_the_note_with_the_earlier_reason() {
         stopped_precision: None,
         reason: Some("angioedema"),
     };
-    cease_medication(&mut c, &sk, &kid, "test-node", p, med, &input, None, None)
-        .await
-        .unwrap();
+    cease_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        med,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let note = already_stopped_note(&c, p, med)
         .await
         .unwrap()
@@ -91,9 +102,19 @@ async fn a_thread_already_stopped_on_a_line_still_current_says_both() {
         stopped_precision: Some("year"),
         reason: Some("angioedema"),
     };
-    cease_medication(&mut c, &sk, &kid, "test-node", p, x, &stop, None, None)
-        .await
-        .unwrap();
+    cease_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        x,
+        &stop,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let note = already_stopped_note(&c, p, x)
         .await
@@ -170,9 +191,19 @@ async fn a_thread_whose_latest_stop_gave_no_reason_still_names_the_earlier_one()
             stopped_precision: Some("year"),
             reason,
         };
-        cease_medication(&mut c, &sk, &kid, "test-node", p, x, &stop, None, None)
-            .await
-            .unwrap();
+        cease_medication(
+            &mut c,
+            NodeKey::Full(&sk),
+            &kid,
+            "test-node",
+            p,
+            x,
+            &stop,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     }
     let note = already_stopped_note(&c, p, x).await.unwrap().unwrap();
     assert!(!note.contains("no reason was recorded"), "{note}");

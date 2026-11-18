@@ -27,6 +27,7 @@ use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::signoff::{sign_off_medication_list, SignOffOutcome, StoppedLine};
 use cairn_node::medication::{assert_medication, AssertMedicationInput, AttestParams};
+use cairn_node::node_key::NodeKey;
 use common::{attestation_count, cs, medication_setup as setup};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -141,9 +142,16 @@ async fn sign_off_with_switch_on_line_2(
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
-        .await
-        .expect("a sign-off that signed a line reports it, never an Err");
+    let out = sign_off_medication_list(
+        &mut c,
+        NodeKey::Full(&sk),
+        "origin-a",
+        &params,
+        patient,
+        None,
+    )
+    .await
+    .expect("a sign-off that signed a line reports it, never an Err");
 
     let look = db::connect(base).await.unwrap();
     look.batch_execute(DROP_KILL_SWITCH).await.unwrap();

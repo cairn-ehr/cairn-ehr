@@ -14,6 +14,7 @@ use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, reconcile_medications,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ReconcileInput, SubstanceCoding,
 };
+use cairn_node::node_key::NodeKey;
 use common::{cs, medication_setup as setup, submit_link_event, submit_registration};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -180,7 +181,7 @@ async fn a_never_linked_chart_reads_exactly_as_before() {
     let ceased = assert_one(&mut c, &sk, &kid, p, "penicillin").await;
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         p,
@@ -507,7 +508,7 @@ async fn a_group_reaching_outside_only_through_an_orphan_cessation_is_a_hazard()
     let orphan = Uuid::now_v7();
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "origin-a",
         other,

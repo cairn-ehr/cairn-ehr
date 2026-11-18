@@ -6,12 +6,13 @@
 //! door only, a withhold on a ceased line or a release of something that is not a hold on
 //! this thread, or of a hold that has already ended (#843, ADR-0082 — refused here first, as a
 //! stale picture, so the caller re-reads).
+use crate::node_key::NodeKey;
 use cairn_event::medication::{
     medication_withhold_body, medication_withhold_release_body,
     render_medication_withhold_release_twin, render_medication_withhold_twin, HoldUntil,
     MedicationWithhold, MedicationWithholdRelease,
 };
-use cairn_event::{EventBody, Hlc, SigningKey};
+use cairn_event::{EventBody, Hlc};
 use uuid::Uuid;
 
 const MEDICATION_WITHHOLD_SCHEMA_VERSION: &str = "clinical.medication-withhold/1";
@@ -204,7 +205,7 @@ async fn ended_holds(
 #[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/author, mirrors cease_medication
 pub async fn withhold_medication(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -221,7 +222,7 @@ pub async fn withhold_medication(
     let event_id = Uuid::now_v7();
     let mut body = build_withhold_body(event_id, medication_id, patient, input, node_kid, hlc);
     body.t_effective = started;
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, None).await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node, body, author, None).await?;
     Ok(event_id)
 }
 
@@ -229,7 +230,7 @@ pub async fn withhold_medication(
 #[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/holds/reason/author
 pub async fn release_medication_holds(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -264,8 +265,7 @@ pub async fn release_medication_holds(
     );
     body.t_effective = Some(released.clone());
     let submitted =
-        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, None)
-            .await;
+        crate::medication::sealed_submit::seal_sign_submit(client, node, body, author, None).await;
     let Err(e) = submitted else {
         return Ok(event_id);
     };

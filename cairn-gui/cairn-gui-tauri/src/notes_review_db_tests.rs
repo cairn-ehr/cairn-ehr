@@ -9,10 +9,25 @@
 use super::*;
 use crate::notes::note_list_impl;
 use crate::whos_here::Claim;
+use cairn_node::node_key::NodeKey;
 use cairn_node::vault::{bootstrap_superuser, enrol_member, release_for_act, NewMember, Purpose};
 use zeroize::Zeroizing;
 
 const ORIGIN: &str = "notes-review-test-node";
+
+/// The fixture node's secret seed. The window under test holds only the node's kid (#909), but
+/// the fixtures that play the node or a peer (register a chart, assert a medication) still sign
+/// with the real key, so the fixture keeps it here, never in `AppState`.
+static NODE_SEED: std::sync::Mutex<Option<[u8; 32]>> = std::sync::Mutex::new(None);
+
+/// The fixture node's key, as the last `supervised_note` made it.
+pub(crate) fn fixture_node_key() -> cairn_event::SigningKey {
+    let seed = NODE_SEED
+        .lock()
+        .unwrap()
+        .expect("supervised_note ran first");
+    cairn_event::SigningKey::from_bytes(&seed)
+}
 
 /// A test passphrase built at runtime (house rule 6: no credential literal in a test).
 fn pass(word: &str) -> String {
@@ -164,17 +179,19 @@ pub(crate) async fn supervised_note() -> Option<(
         human_sk: &bea_sk,
         human_kid: &bea_kid,
     };
-    let part = cairn_node::note::sign::sign_note(&mut owner, &node_sk, &input, &author)
-        .await
-        .unwrap()
-        .expect("Bea's note signs")
-        .event_id;
+    let part =
+        cairn_node::note::sign::sign_note(&mut owner, NodeKey::Full(&node_sk), &input, &author)
+            .await
+            .unwrap()
+            .expect("Bea's note signs")
+            .event_id;
 
     let mut state = AppState::mock(Some(chart));
     state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
         window_db,
     )));
-    state.node_sk = Some(node_sk);
+    *NODE_SEED.lock().unwrap() = Some(node_sk.to_bytes());
+    state.node_kid = Some(node_kid.clone());
     state.node_origin = ORIGIN.into();
     state.key_hold = std::time::Duration::from_secs(600);
     state.whos_here.lock().await.pick(Claim::Named {

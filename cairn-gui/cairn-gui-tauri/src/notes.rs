@@ -27,6 +27,7 @@ use crate::signer::Credential;
 use crate::state::{AppState, Now};
 use crate::whos_here::Claim;
 use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::sign::SignRefusal;
 use chrono::{DateTime, Utc};
 use parts::{note_pane, others_have_text, NotePane};
@@ -46,7 +47,7 @@ pub(crate) mod parts;
 #[path = "notes_compound.rs"]
 pub(crate) mod compound;
 
-/// The quarantine commit's runner: the tick, the pre-read commit, the due words (`notes_commit.rs`).
+/// The quarantine commit as the pane says it: the due words, the failed set (`notes_commit.rs`).
 #[path = "notes_commit.rs"]
 pub(crate) mod commit;
 
@@ -174,37 +175,38 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
             claim: crate::whos_here::claim_view(&claim),
         });
     };
-    // Overdue drafts go in FIRST, so the pane never shows one the next tick takes away. Its
-    // answer is ignored: a commit that cannot run never blocks the read (Review Focus 5). What it
-    // failed to commit is in `commit_failed`, which the pane's words read.
-    let _ = commit::commit_overdue_impl(state, Some(patient), true).await;
-    let failed = state.commit_failed.lock().await.clone();
     // Not `terminal_of`: a read never waits for the id. Unset, no draft reads as this terminal's.
     let terminal = state.terminal_id.get().map(String::as_str);
     let mut db = db.lock().await?;
+    // Which drafts the node's service failed to commit; a failed read shows none (never blocks).
+    let failed = commit::failed_drafts(&*db, patient).await;
     let staff_id = match &claim {
         Claim::Named { staff_id, .. } => Some(staff_id.as_str()),
         Claim::NotAsked | Claim::Unknown => None,
     };
     // ONE snapshot (ruling R12): the notes and the drafts are two statements, and a sign
     // committing between them would show the clinician neither the note nor its draft. The
-    // claim's actor is read in it too, so the "also covers" line matches the parts it names.
-    let (list, claim_actor) = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
-        let list = cairn_node::note::read::list_patient_notes(tx, patient).await?;
-        let actor: Option<String> = match staff_id {
-            // NULL for a staff id this node cannot place: then nothing is covered.
-            Some(s) => tx
-                .query_one("SELECT cairn_note_staff_actor($1)", &[&s])
-                .await?
-                .get(0),
-            None => None,
-        };
-        Ok((list, actor))
-    })
-    .await
-    .map_err(|e| chart_read_failed(db.explain(e)))?;
+    // claim's actor is read in it too, so the "also covers" line matches the parts it names. And
+    // the pane's "now": the node decided `overdue` on ITS clock, so how late a draft is must be
+    // measured on that clock too, never the window's (#909 review: a window minutes behind would
+    // promise "its next check" that long after the service stopped).
+    let (list, claim_actor, now) =
+        cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
+            let list = cairn_node::note::read::list_patient_notes(tx, patient).await?;
+            let now: chrono::DateTime<Utc> = tx.query_one("SELECT now()", &[]).await?.get(0);
+            let actor: Option<String> = match staff_id {
+                // NULL for a staff id this node cannot place: then nothing is covered.
+                Some(s) => tx
+                    .query_one("SELECT cairn_note_staff_actor($1)", &[&s])
+                    .await?
+                    .get(0),
+                None => None,
+            };
+            Ok((list, actor, now))
+        })
+        .await
+        .map_err(|e| chart_read_failed(db.explain(e)))?;
     // The window supplies the zone (ruling R10): the node never knows the terminal's.
-    let today = Utc::now().with_timezone(&chrono::Local).date_naive();
     Ok(note_pane(
         list,
         patient,
@@ -212,8 +214,8 @@ pub async fn note_list_impl(state: &AppState, patient_id: &str) -> Result<NotePa
         &claim,
         claim_actor.as_deref(),
         &failed,
+        now,
         &chrono::Local,
-        today,
     ))
 }
 
@@ -313,9 +315,9 @@ pub async fn note_sign_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
 
     let started = Instant::now();
@@ -341,7 +343,7 @@ pub async fn note_sign_impl(
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        cairn_node::note::sign::sign_note(&mut db, node_sk, &input, &author)
+        cairn_node::note::sign::sign_note(&mut db, NodeKey::Public(node_kid), &input, &author)
             .await
             .map_err(|e| db.explain(e))
     };

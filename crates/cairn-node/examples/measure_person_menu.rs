@@ -73,6 +73,7 @@ use anyhow::Context;
 use cairn_event::SigningKey;
 use cairn_node::medication::snapshot::in_snapshot;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::menu_read::read_menus;
 use cairn_node::note::sign::{sign_note, SignNoteInput};
 use cairn_node::patient::register::register_patient;
@@ -337,7 +338,9 @@ async fn main() -> anyhow::Result<()> {
                 human_sk: &s.sk,
                 human_kid: &s.kid,
             };
-            if let Err(refusal) = sign_note(&mut db, &node_sk, &input, &author).await? {
+            if let Err(refusal) =
+                sign_note(&mut db, NodeKey::Full(&node_sk), &input, &author).await?
+            {
                 anyhow::bail!("note {signed} was refused: {refusal:?}");
             }
             signed += 1;

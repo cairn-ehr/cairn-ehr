@@ -18,6 +18,7 @@ use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use serde_json::Value;
 use tokio_postgres::Client;
@@ -101,7 +102,7 @@ async fn chart_with_both(c: &mut Client, term: &str) -> (Node, Uuid, Uuid) {
         let hlc = db::next_hlc(c, &node_kid).await.unwrap();
         let id = Uuid::now_v7();
         let body = allergy_body(id, patient, &node_kid, hlc, types, payload, twin);
-        let recorded = seal_sign_submit(c, &node_sk, body, Some(&author), None)
+        let recorded = seal_sign_submit(c, NodeKey::Full(&node_sk), body, Some(&author), None)
             .await
             .unwrap_or_else(|e| panic!("the strict door admits a {} body: {e:#}", types.0));
         assert_eq!(recorded, id);

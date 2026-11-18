@@ -196,7 +196,7 @@ pub async fn attest_thread_in_tx(
 /// is always the NODE's, never the human attester's (`params.human_sk`) — the
 /// `node_unwrap_key` singleton holds exactly one key regardless of who signs.
 ///
-/// `_node_sk` — DELIBERATELY UNUSED, deliberately KEPT. It used to be the key this
+/// `_node` — DELIBERATELY UNUSED, deliberately KEPT. It used to be the key this
 /// function derived-and-registered the node's unwrap key from; ADR-0066 decision 6 deleted
 /// that use, and nothing in this path signs with the node key (the attestation event is
 /// signed by `params.human_sk`). It stays in the signature because dropping it would also
@@ -210,7 +210,7 @@ pub async fn attest_thread_in_tx(
 /// view (see cairn_medication_thread_commitment in db/034). That gate is Tasks 8/9's job.
 pub async fn attest_medication_thread(
     client: &mut tokio_postgres::Client,
-    _node_sk: &SigningKey,
+    _node: &SigningKey,
     node_origin: &str,
     params: &AttestParams<'_>,
     patient: Uuid,

@@ -35,7 +35,7 @@ impl AppState {
     pub fn mock(patient: Option<Uuid>) -> Self {
         AppState {
             db: None,
-            node_sk: None,
+            node_kid: None,
             node_origin: String::new(),
             chart: tokio::sync::Mutex::new(patient.map(OpenChart::by_id)),
             funnel_backend: FunnelBackend::Mock(MockData::with_fixtures()),
@@ -49,7 +49,6 @@ impl AppState {
             whos_here: tokio::sync::Mutex::new(crate::whos_here::Here::new(
                 crate::whos_here::DEFAULT_IDLE_LOCK,
             )),
-            commit_failed: Default::default(),
         }
     }
 
@@ -146,7 +145,7 @@ mod tests {
     fn fixture_mode_has_no_connection_and_a_mock_backend() {
         let state = AppState::mock(None);
         assert!(state.is_mock());
-        assert!(state.node_sk.is_none());
+        assert!(state.node_kid.is_none());
         assert!(matches!(state.funnel_backend, FunnelBackend::Mock(_)));
     }
 }

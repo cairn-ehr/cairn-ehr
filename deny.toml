@@ -71,6 +71,19 @@ yanked = "deny"
 unmaintained = "workspace"
 unsound = "all"
 
+[[advisories.ignore]]
+# RUSTSEC-2026-0543 — `chrono` is UNMAINTAINED (all versions). Not a vulnerability: no unsound
+# code, no CVE, just no maintainer. It fails this gate only because `unmaintained = "workspace"`
+# surfaces a crate WE depend on directly, which is the point of that setting. chrono is direct in
+# cairn-node, cairn-gui-tauri and cairn-gui-tab-medications (timestamps and the panes' zones).
+# Exit condition: migrate those three to a maintained crate (the advisory recommends jiff, and
+# tokio-postgres has `with-jiff-0_2`), then drop this entry and its twin in the other tree's
+# deny.toml and lower IGNORES_TODAY in advisory_ignore_review_dates.rs. Issue #1160.
+#
+# DO NOT silently extend this ignore to cover other advisories. One entry, one id, one rationale.
+id = "RUSTSEC-2026-0543"
+reason = "chrono unmaintained (no vulnerability); direct in cairn-node and two cairn-gui crates; migration tracked in issue #1160. Ruled by the maintainer 2026-11-18. review-by 2027-02-18"
+
 [bans]
 # Duplicate transitive versions are HYGIENE, not a safety failure — and the ones that remain
 # after #11's convergence are upstream-blocked. This gate currently reports five duplicates

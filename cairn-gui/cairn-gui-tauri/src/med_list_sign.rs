@@ -60,6 +60,7 @@ use crate::write_failure::{key_locked, node_cannot_write};
 use cairn_event::medication::ChartedAs;
 use cairn_node::medication::draft::{self, DraftLine, SpendRefused};
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use std::collections::BTreeSet;
 use std::time::Instant;
 use uuid::Uuid;
@@ -198,9 +199,9 @@ pub async fn med_list_sign_impl(
     let mut versions = 0;
     let started = Instant::now();
     if !to_sign.is_empty() || !plan.alone.is_empty() {
-        let node_sk = state
-            .node_sk
-            .as_ref()
+        let node_kid = state
+            .node_kid
+            .as_deref()
             .ok_or_else(|| node_cannot_write("no node key"))?;
         // Read before the key, so a failed read never spends a passphrase; compared after it.
         let writer_kid = match &writer {
@@ -224,7 +225,7 @@ pub async fn med_list_sign_impl(
         let mut lines = to_sign.into_iter();
         while let Some((j, verdict)) = lines.next() {
             let with = plan.with.remove(&j.line.line_id).unwrap_or_default();
-            let signed = sign_line(state, node_sk, list, j, verdict, &with, &restores, &author);
+            let signed = sign_line(state, node_kid, list, j, verdict, &with, &restores, &author);
             match signed.await.map_err(|e| line_failure(&e)) {
                 Ok(n) => {
                     plan.charted(j.line.line_id);
@@ -261,7 +262,7 @@ pub async fn med_list_sign_impl(
                 plan.keep(v, NOT_TRIED);
                 continue;
             }
-            match sign_alone(state, node_sk, list, v, med, &author)
+            match sign_alone(state, node_kid, list, v, med, &author)
                 .await
                 .map_err(|e| line_failure(&e))
             {
@@ -312,7 +313,7 @@ pub async fn med_list_sign_impl(
 #[allow(clippy::too_many_arguments)] // the list, the line, its verdict, its versions, the signer
 async fn sign_line(
     state: &AppState,
-    node_sk: &cairn_event::SigningKey,
+    node_kid: &str,
     (patient, terminal, writer): (Uuid, &str, Option<&str>),
     j: &Judged,
     (charted_as, reason): (ChartedAs, Option<&str>),
@@ -339,7 +340,6 @@ async fn sign_line(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!("{}", e.text))?;
     let charting = charting(charted_as, &j.read, &components, reason, &against);
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let mut db = state
         .db
         .as_ref()
@@ -348,8 +348,8 @@ async fn sign_line(
         .await?;
     draft::chart_draft_line(
         &mut db,
-        node_sk,
-        &node_kid,
+        NodeKey::Public(node_kid),
+        node_kid,
         &state.node_origin,
         patient,
         terminal,

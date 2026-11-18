@@ -276,11 +276,10 @@ async fn a_cut_off_command_says_the_window_cut_it_off() {
 async fn a_cut_off_search_says_the_window_cut_it_off() {
     let Some(cs) = common::cs() else { return };
     let (mut reader, _guard) = common::connect(&cs).await;
-    let (sk, _kid) = common::setup(&reader).await;
+    let (_sk, kid) = common::setup(&reader).await;
     let live = LiveData::sharing(
         Arc::new(watched(&cs).await),
-        sk,
-        &common::identity("gui-live-origin"),
+        &common::identity("gui-live-origin", &kid),
     );
 
     let lock = reader.transaction().await.expect("a transaction");

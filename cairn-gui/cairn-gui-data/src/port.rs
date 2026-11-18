@@ -9,8 +9,9 @@
 //!   permanently records the search that licensed it (ADR-0061).
 //!
 //! The UI still signs nothing itself (§9.6): `register` hands an already-paired
-//! `AttestedSearch` to an implementation that owns the key, and the in-DB floor is the real
-//! enforcement either way (principle 12).
+//! `AttestedSearch` to an implementation, which (live, since #909) asks the node's terminal
+//! service to register and sign it; the in-DB floor is the real enforcement either way
+//! (principle 12).
 use cairn_gui_funnel::{AttestedSearch, RegistrationFailure};
 use cairn_gui_tab::PatientRef;
 use cairn_patient_search::{CandidateList, SearchQuery};

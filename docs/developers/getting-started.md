@@ -191,11 +191,14 @@ cargo run -p cairn-gui-tauri -- --mock
    any `trust` rule in `pg_hba.conf` — use `scram-sha-256`);
 3. `cairn-node … vault-bootstrap-superuser` and `vault-set-terminal-passphrase` (the first staff
    member of the key vault, [ADR-0083](../spec/decisions/0083-the-human-key-vault.md));
-4. `CAIRN_CONN="<the window's connection string>" cargo run --release -p cairn-gui-tauri -- --key <node key>`.
+4. `cairn-node … provision-terminal-service-role`, then `cairn-node --key <node key> terminal-service`
+   left running under launchd or systemd (it registers patients and commits overdue drafts for the
+   window, which holds no node key, [ADR-0109](../spec/decisions/0109-the-terminal-service-and-the-keyless-window.md));
+5. `CAIRN_CONN="<the window's connection string>" cargo run --release -p cairn-gui-tauri`.
 
 The exact, tested commands — including a throwaway `scram-sha-256` cluster and the server-logging
 settings that must be checked so a passphrase never reaches a log — are in
-`cairn-gui/cairn-gui-tauri/results/RUNBOOK.md` §0 and §16. Start there rather than improvising; the
+`cairn-gui/cairn-gui-tauri/results/RUNBOOK.md` §0, §16 and §38. Start there rather than improvising; the
 window refuses several plausible-looking shortcuts on purpose (a remote host, an over-privileged
 login, a database prepared by a different build), and each refusal tells you which.
 

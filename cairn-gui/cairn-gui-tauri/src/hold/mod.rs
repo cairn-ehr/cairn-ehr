@@ -24,6 +24,7 @@ use crate::write_failure::{
     UnknownThread,
 };
 use cairn_event::medication::HoldUntil;
+use cairn_node::node_key::NodeKey;
 use outcome::{all_shown_gone, release_outcome, withhold_outcome};
 use std::time::Instant;
 use uuid::Uuid;
@@ -148,11 +149,10 @@ pub async fn withhold_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
     let started = Instant::now();
     let result = {
@@ -177,8 +177,8 @@ pub async fn withhold_impl(
         };
         cairn_node::medication::withhold_medication(
             &mut db,
-            node_sk,
-            &node_kid,
+            NodeKey::Public(node_kid),
+            node_kid,
             &state.node_origin,
             thread_chart,
             medication_id,
@@ -296,11 +296,10 @@ pub async fn release_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
     let started = Instant::now();
     let mut released = 0usize;
@@ -326,8 +325,8 @@ pub async fn release_impl(
             Err(lost) => Err(anyhow::Error::from(lost)),
             Ok(mut db) => cairn_node::medication::release_medication_holds(
                 &mut db,
-                node_sk,
-                &node_kid,
+                NodeKey::Public(node_kid),
+                node_kid,
                 &state.node_origin,
                 thread_chart,
                 medication_id,

@@ -72,7 +72,7 @@ async fn record(state: &AppState, chart: Uuid, entry: EntryInput, coding: Option
 
 /// A current medication on `chart`, coded to the moiety `moiety` when given (shown as `term`).
 async fn medication(owner: &mut Client, state: &AppState, chart: Uuid, term: &str, moiety: Uuid) {
-    let sk = state.node_sk.as_ref().unwrap();
+    let sk = &crate::notes::review::db_tests::fixture_node_key();
     let kid = hex::encode(sk.verifying_key().to_bytes());
     let code = moiety.to_string();
     let input = AssertMedicationInput {

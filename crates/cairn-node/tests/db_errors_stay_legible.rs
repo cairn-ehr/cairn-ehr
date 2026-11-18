@@ -745,6 +745,9 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/note/commit.rs",
     "crates/cairn-node/src/note/discard.rs",
     "crates/cairn-node/src/note/vouch.rs",
+    // terminal_service/registration.rs: serve_one registers a request and settles it in one
+    // transaction (#909); a lost commit may have made the chart.
+    "crates/cairn-node/src/terminal_service/registration.rs",
 ];
 
 /// Commits inside a MARKED file that write no event, so there is nothing to double: how many,

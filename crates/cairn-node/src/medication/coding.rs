@@ -9,6 +9,7 @@
 //!
 //! Offline-first, like every other medication verb: neither the thread being coded nor the
 //! event being corrected has to be present locally — both may replicate later, or never.
+use crate::node_key::NodeKey;
 use cairn_event::medication::{
     medication_coding_body, medication_coding_correction_body,
     render_medication_coding_correction_twin, render_medication_coding_twin, CodingClaim,
@@ -181,8 +182,14 @@ pub async fn code_medication(
         safety,
     );
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door.
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-        .await?;
+    crate::medication::sealed_submit::seal_sign_submit(
+        client,
+        NodeKey::Full(node_sk),
+        body,
+        author,
+        attest,
+    )
+    .await?;
     Ok(event_id)
 }
 
@@ -212,8 +219,14 @@ pub async fn correct_medication_coding(
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let body = build_coding_correction_body(event_id, medication_id, patient, input, node_kid, hlc);
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-        .await?;
+    crate::medication::sealed_submit::seal_sign_submit(
+        client,
+        NodeKey::Full(node_sk),
+        body,
+        author,
+        attest,
+    )
+    .await?;
     Ok(event_id)
 }
 

@@ -197,7 +197,15 @@ fn rows_say_what_state_and_how_to_open() {
     assert_eq!(draft.open_label, format!("Open note: Ann Jones, {when}"));
     assert_eq!(
         draft.state,
-        crate::notes::commit::due_words(at(10), true, true, false, &utc(), at(12).date_naive())
+        crate::notes::commit::due_words(
+            at(10),
+            true,
+            true,
+            false,
+            at(12),
+            &utc(),
+            at(12).date_naive()
+        )
     );
     assert_eq!(own.rows[1].what, "Progress note");
     assert_eq!(own.rows[1].focus, format!("part:{p}"));

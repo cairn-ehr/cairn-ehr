@@ -417,6 +417,12 @@ Two infrastructure invariants — and their realization — underpin point-of-ca
 > above resolves when nobody signs).
 > A window that holds the node key commits it, on a one-minute tick while its connection is open and before every
 > chart read (which may reopen a lost connection); with no such window it waits, shown overdue.
+>
+> **Since #909 slice A** ([ADR-0109](decisions/0109-the-terminal-service-and-the-keyless-window.md), `db/083`, no wire
+> change) no window holds the node key. The node's terminal service (`cairn-node terminal-service`, on the database's
+> machine) commits overdue drafts on its own one-minute tick and records per draft whether the last try failed, which
+> the window reads; the window commits nothing, before a read or otherwise. With the service stopped a draft waits,
+> shown overdue. The same service registers patients from the window's requests, re-running the search first.
 
 ## 3.11 Notifications as projections, responsibility-routing, and acknowledgment
 > Resolves former open question §11.10 — see [ADR-0009](decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md), canonical design [identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor). Minimal data-model commitments; the clinical model and the *why* live there and in the ADR.

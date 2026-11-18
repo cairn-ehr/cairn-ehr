@@ -18,6 +18,7 @@ mod note_vouch_kit;
 
 use cairn_event::SigningKey;
 use cairn_node::db;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::compound::{compounds, CompoundNote};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{sign_note, SignNoteInput};
@@ -58,7 +59,7 @@ async fn sign_as(c: &mut Client, node_sk: &SigningKey, chart: Uuid, m: &Member) 
         addendum_to: None,
         also_vouches: &[],
     };
-    sign_note(c, node_sk, &input, &m.author())
+    sign_note(c, NodeKey::Full(node_sk), &input, &m.author())
         .await
         .unwrap()
         .expect("the note signs")
@@ -206,7 +207,7 @@ db_test!(
             addendum_to: Some(p),
             also_vouches: &[p],
         };
-        sign_note(&mut c, &node_sk, &input, &sam.author())
+        sign_note(&mut c, NodeKey::Full(&node_sk), &input, &sam.author())
             .await
             .unwrap()
             .expect("Sam's addendum signs and vouches the earlier part");

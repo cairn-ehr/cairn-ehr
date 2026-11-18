@@ -519,6 +519,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "082_medication_given",
         include_str!("../../../db/082_medication_given.sql"),
     ),
+    // db/083 (#909 slice A): the terminal service's role, the registration request queue, and
+    // the per-draft failed-commit fact.
+    (
+        "083_terminal_service",
+        include_str!("../../../db/083_terminal_service.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

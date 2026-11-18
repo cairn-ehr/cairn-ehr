@@ -1,7 +1,7 @@
-//! Tests for `notes_commit.rs`, the window as the quarantine commit's runner: the due words
-//! (pure), fixture mode committing nothing, the tick spawned once (a source guard on `main.rs`),
-//! and — DB-gated on `CAIRN_TEST_PG`, run locally (#905: CI never runs these) — a chart read that
-//! commits its overdue draft first, and one that still reads when the commit cannot run or fails.
+//! Tests for `notes_commit.rs`: the due words (pure) and — DB-gated on `CAIRN_TEST_PG`, run locally
+//! (#905: CI never runs these) — that a chart read says what the node's terminal service did: an
+//! overdue draft waits for it, a draft it failed to commit says so, and a failed-set read that
+//! cannot run never blocks the notes. The window itself commits nothing (#909).
 use super::*;
 use crate::notes::note_list_impl;
 use crate::notes::tests::{bne, utc};
@@ -20,116 +20,69 @@ fn due_words_before_and_after() {
     // 20:40 UTC is 06:40 the next morning in Brisbane.
     let due = utc("2026-11-02T20:40:00Z");
     assert_eq!(
-        due_words(due, false, false, false, &bne(), today),
+        due_words(due, false, false, false, due, &bne(), today),
         "goes into the record unsigned at 06:40 if nobody types in it"
     );
     assert_eq!(
-        due_words(due, true, false, false, &bne(), today),
-        "overdue — not in the record yet; the window tries again at every check to put it in unsigned"
+        due_words(due, true, false, false, due, &bne(), today),
+        "overdue — not in the record yet; the node's terminal service puts it in unsigned at its next check"
     );
     assert_eq!(
-        due_words(due, true, true, true, &bne(), today),
+        due_words(due, true, true, true, due, &bne(), today),
         "overdue, but cannot go into the record by itself — a writer of it is no longer \
          enrolled on this node; it goes in once they are enrolled again"
     );
     // PR #981 review F1: a draft whose last commit failed says so, and asks for a Sign — never
     // "tries again", which a failure that repeats every pass would make a broken promise.
     assert_eq!(
-        due_words(due, true, false, true, &bne(), today),
-        "overdue — could not go into the record by itself (the window's last try failed; the \
-         cause is in its log); sign it, or tell the site's operator"
+        due_words(due, true, false, true, due, &bne(), today),
+        "overdue — could not go into the record by itself (the node's last try failed; the cause is \
+         in the terminal service's log); sign it, or tell the site's operator"
     );
     // Final review I1: stuck wins even before it falls due — a stuck draft never goes in at
     // its due time, so it must never say it will.
     assert_eq!(
-        due_words(due, false, true, true, &bne(), today),
+        due_words(due, false, true, true, due, &bne(), today),
         "cannot go into the record by itself — a writer of it is no longer enrolled on this \
          node; it can go in only once they are enrolled again"
     );
 }
 
-/// Review M2: the tick says each stuck draft once per window run, not every minute.
+/// Final review F2 (ruling R16). An overdue draft still on the chart past three of the service's
+/// commit ticks has not been put in by a service that would have run three times: it is not
+/// running, or not reaching it. The window cannot see the service, so it stops promising "its
+/// next check" and asks for a Sign instead. Exactly three ticks is still the ordinary wait.
 #[test]
-fn a_stuck_draft_is_said_once() {
-    let (a, b) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
-    let mut said = std::collections::HashSet::new();
-    assert_eq!(newly_stuck(&mut said, vec![a]), vec![a]);
-    assert_eq!(newly_stuck(&mut said, vec![a, b]), vec![b]);
-    assert!(newly_stuck(&mut said, vec![a, b]).is_empty());
-}
-
-/// PR #981 review F2: a tick that stops running says so once, and once when it runs again.
-#[test]
-fn a_paused_tick_is_said_once_each_way() {
-    let mut paused = false;
-    assert_eq!(pause_change(&mut paused, true), None, "running stays quiet");
-    assert!(pause_change(&mut paused, false).is_some_and(|l| l.contains("paused")));
+fn an_overdue_draft_past_three_ticks_is_not_put_in() {
+    let today = NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
+    let due = utc("2026-11-02T20:40:00Z");
+    let ticks = chrono::TimeDelta::from_std(COMMIT_TICK * 3).unwrap();
+    let words = |now, stuck, failed| due_words(due, true, stuck, failed, now, &bne(), today);
+    let at_three = due + ticks;
+    let past_three = at_three + chrono::TimeDelta::seconds(1);
+    assert_eq!(words(at_three, false, false), OVERDUE);
     assert_eq!(
-        pause_change(&mut paused, false),
-        None,
-        "said once, not a minute"
+        words(past_three, false, false),
+        "overdue — the node's terminal service has not put it in the record; sign it, or tell \
+         the site's operator"
     );
-    assert!(pause_change(&mut paused, true).is_some_and(|l| l.contains("running again")));
-    assert_eq!(pause_change(&mut paused, true), None);
-}
-
-/// Review I2 and M1, pinned in the source (no behavioural test sees a hold's extent): the pass
-/// lists under one short hold and takes ONE HOLD PER DRAFT, inside the loop — never one hold
-/// for the whole pass, which would keep a clinician's press waiting behind every draft — and the
-/// tick never reopens a lost connection (the next press does).
-#[test]
-fn each_draft_is_its_own_hold_and_the_tick_never_reopens() {
-    let src = include_str!("notes_commit.rs");
-    let pass = crate::source_guard::rust_fn(src, "commit_overdue_impl");
-    assert!(!pass.contains("commit_overdue_drafts("), "{pass}");
-    let each = crate::source_guard::position(pass, "for draft in drafts {");
-    let held = &pass[each..];
-    assert!(
-        crate::source_guard::position(held, "hold(db, may_reopen)")
-            < crate::source_guard::position(held, "commit_overdue(&mut"),
-        "{pass}"
+    // Precedence: stuck > failed > not put in > overdue.
+    assert_eq!(words(past_three, false, true), FAILED);
+    assert_eq!(words(past_three, true, true), STUCK);
+    assert_eq!(words(past_three, true, false), STUCK);
+    // Not overdue on the node's clock (the window's clock runs ahead): never "not put in".
+    assert_eq!(
+        due_words(due, false, false, false, past_three, &bne(), today),
+        "goes into the record unsigned at 06:40 if nobody types in it"
     );
-    let hold = crate::source_guard::rust_fn(src, "hold");
-    assert!(hold.contains("lock_if_open()"), "{hold}");
-    let tick = crate::source_guard::rust_fn(src, "run_ticks");
-    assert!(
-        tick.contains("commit_overdue_impl(&app.state::<AppState>(), None, false)"),
-        "{tick}"
-    );
-}
-
-#[tokio::test]
-async fn fixture_mode_commits_nothing() {
-    let id = uuid::Uuid::now_v7();
-    for may_reopen in [false, true] {
-        let mock = AppState::mock(Some(id));
-        assert!(commit_overdue_impl(&mock, None, may_reopen).await.is_none());
-        assert!(commit_overdue_impl(&mock, Some(id), may_reopen)
-            .await
-            .is_none());
-    }
-}
-
-/// The tick is a Rust task, spawned ONCE in setup: never a webview timer (WebKit throttles a
-/// hidden window's timers), and never twice (two passes would only race each other's door).
-#[test]
-fn the_tick_is_spawned_once_in_setup() {
-    let main = include_str!("main.rs");
-    let spawn = "tauri::async_runtime::spawn(notes::commit::run_ticks(app.handle().clone()));";
-    assert_eq!(main.matches("run_ticks(").count(), 1, "one spawn");
-    let setup = &main[crate::source_guard::position(main, ".setup(|app| {")..];
-    let end = crate::source_guard::position(setup, "Ok(())");
-    assert!(setup[..end].contains(spawn), "spawned in setup: {setup}");
 }
 
 /// A chart with ONE overdue draft (quarantine 30 min, the draft typed 31 min ago) by the
 /// enrolled writer `notewriter`, and the window's state over the window's own login, open on that
-/// chart. `node_key`: whether the state holds the node key (without it the runner does nothing).
+/// chart. The window holds no node key (#909): nothing here commits the draft.
 /// Returns the serial guard (bind it, or another suite interleaves its TRUNCATE), the owner's
 /// client, the state and the chart. `None` (self-skip) without `CAIRN_TEST_PG`.
-async fn an_overdue_draft(
-    node_key: bool,
-) -> Option<(impl Sized, tokio_postgres::Client, AppState, uuid::Uuid)> {
+async fn an_overdue_draft() -> Option<(impl Sized, tokio_postgres::Client, AppState, uuid::Uuid)> {
     let Ok(cs) = std::env::var("CAIRN_TEST_PG") else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return None;
@@ -236,89 +189,60 @@ async fn an_overdue_draft(
     state.db = Some(std::sync::Arc::new(cairn_gui_live::NodeConnection::fixed(
         cairn_node::db::connect(&window).await.unwrap(),
     )));
-    state.node_sk = node_key.then_some(node_sk);
+    state.node_kid = Some(node_kid);
     state.node_origin = ORIGIN.into();
     Some((guard, owner, state, chart))
 }
 
-/// Review Focus 5: a window that cannot commit (here: no node key) never blocks the read. The
-/// draft is still listed, and says it is overdue.
+/// An overdue draft the service has not reached reads as waiting for it, and is still listed.
 #[tokio::test]
-async fn a_window_without_the_node_key_still_reads() {
-    let Some((_guard, _owner, state, chart)) = an_overdue_draft(false).await else {
+async fn an_overdue_draft_waits_for_the_service() {
+    let Some((_guard, _owner, state, chart)) = an_overdue_draft().await else {
         return;
     };
     let pane = note_list_impl(&state, &chart.to_string())
         .await
         .expect("the chart reads");
-    assert!(pane.notes.is_empty(), "nothing went in");
+    assert!(pane.notes.is_empty(), "the window committed nothing");
     assert_eq!(pane.drafts.len(), 1);
     assert!(
         pane.drafts[0]
             .words
-            .ends_with(" · overdue — not in the record yet; the window tries again at every check to put it in unsigned"),
+            .ends_with(" · overdue — not in the record yet; the node's terminal service puts it in unsigned at its next check"),
         "{}",
         pane.drafts[0].words
     );
 }
 
-/// Review Focus 5, with a commit that really FAILS (PR #981 review): the node key was never
-/// enrolled, so the floor refuses the note mid-transaction. The read on the SAME connection still
-/// works, the draft is kept, and it says its commit failed — not "tries again" (review F1).
+/// A draft the service's last try failed on (db/083's fact) says so, and asks for a Sign.
 #[tokio::test]
-async fn a_failed_commit_never_blocks_the_read() {
-    let Some((_guard, _owner, mut state, chart)) = an_overdue_draft(true).await else {
+async fn a_draft_the_service_failed_on_says_so() {
+    let Some((_guard, owner, state, chart)) = an_overdue_draft().await else {
         return;
     };
-    state.node_sk = Some(cairn_event::generate_key().unwrap().0);
-    let report = commit_overdue_impl(&state, Some(chart), true)
-        .await
-        .expect("the commit was asked");
-    assert_eq!(report.failed.len(), 1, "{report:?}");
-    let pane = note_list_impl(&state, &chart.to_string())
-        .await
-        .expect("the chart reads");
-    assert!(pane.notes.is_empty(), "nothing went in");
-    assert_eq!(pane.drafts.len(), 1, "the draft is kept");
-    assert!(
-        pane.drafts[0].words.ends_with(" · overdue — could not go into the record by itself (the window's last try failed; the cause is in its log); sign it, or tell the site's operator"),
-        "{}",
-        pane.drafts[0].words
-    );
-}
-
-/// Opening a chart commits its overdue drafts BEFORE the read: the pane shows the note that went
-/// in unsigned, and no draft — never a draft the next tick is about to take away.
-#[tokio::test]
-async fn opening_a_chart_commits_its_overdue_draft_first() {
-    let Some((_guard, owner, state, chart)) = an_overdue_draft(true).await else {
-        return;
-    };
-    let pane = note_list_impl(&state, &chart.to_string())
-        .await
-        .expect("the chart reads");
-    assert!(pane.drafts.is_empty(), "the draft went in");
-    assert_eq!(pane.notes.len(), 1);
-    assert_eq!(pane.notes[0].text, "obs stable overnight");
-    let list = cairn_node::note::read::list_patient_notes(&owner, chart)
+    owner
+        .execute(
+            "SELECT cairn_note_draft_commit_failed(draft_id, true) FROM note_draft",
+            &[],
+        )
         .await
         .unwrap();
-    assert_eq!(
-        list.notes[0].grade,
-        cairn_node::note::view::NoteGrade::WentInUnsigned
-    );
+    let pane = note_list_impl(&state, &chart.to_string())
+        .await
+        .expect("the chart reads");
+    assert_eq!(pane.drafts.len(), 1, "the draft is kept");
     assert!(
-        pane.notes[0].byline.contains("went in unsigned"),
+        pane.drafts[0].words.ends_with(" · overdue — could not go into the record by itself (the node's last try failed; the cause is in the terminal service's log); sign it, or tell the site's operator"),
         "{}",
-        pane.notes[0].byline
+        pane.drafts[0].words
     );
 }
 
-/// Review I1: a draft whose named writer has left the vault is STUCK — the pre-read commit rolls
-/// it back every time — and the pane says so, with what makes it go in, never "it goes in".
+/// Stuck is computed from the writer, never from the failure fact: a stuck draft reads stuck
+/// whether or not the service marked it.
 #[tokio::test]
 async fn a_stuck_draft_reads_stuck() {
-    let Some((_guard, owner, state, chart)) = an_overdue_draft(true).await else {
+    let Some((_guard, owner, state, chart)) = an_overdue_draft().await else {
         return;
     };
     owner
@@ -337,5 +261,47 @@ async fn a_stuck_draft_reads_stuck() {
         pane.drafts[0].words.ends_with(" · overdue, but cannot go into the record by itself — a writer of it is no longer enrolled on this node; it goes in once they are enrolled again"),
         "{}",
         pane.drafts[0].words
+    );
+}
+
+/// A failed-set read that cannot run (the window lacks the door) never blocks the notes: the
+/// draft is still listed, with no FAILED. The grant is restored for the next test.
+#[tokio::test]
+async fn a_failed_set_read_that_fails_still_reads_the_notes() {
+    let Some((_guard, owner, state, chart)) = an_overdue_draft().await else {
+        return;
+    };
+    owner
+        .batch_execute(
+            "REVOKE EXECUTE ON FUNCTION cairn_note_drafts_commit_failed(uuid) FROM cairn_window",
+        )
+        .await
+        .unwrap();
+    let pane = note_list_impl(&state, &chart.to_string()).await;
+    owner
+        .batch_execute(
+            "GRANT EXECUTE ON FUNCTION cairn_note_drafts_commit_failed(uuid) TO cairn_window",
+        )
+        .await
+        .unwrap();
+    let pane = pane.expect("the chart still reads");
+    assert_eq!(pane.drafts.len(), 1);
+    assert!(!pane.drafts[0].words.contains("could not go into"));
+}
+
+/// The pane's "now" is the DATABASE's, the clock the node decided `overdue` on: with the window's
+/// own clock minutes behind (an offline site without NTP), [`NOT_PUT_IN`] would come that late and
+/// [`OVERDUE`] would promise "its next check" for a service that is not running. No behavioural
+/// test can tell two clocks apart on one machine, so the read's source is checked.
+#[test]
+fn the_notes_read_takes_its_now_from_the_database() {
+    let read = include_str!("notes.rs");
+    assert!(
+        !read.contains("Utc::now()"),
+        "notes.rs reads the window's clock"
+    );
+    assert!(
+        read.contains("SELECT now()"),
+        "notes.rs reads the database's clock"
     );
 }

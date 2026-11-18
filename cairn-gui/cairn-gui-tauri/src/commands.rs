@@ -33,6 +33,7 @@ use crate::write_failure::{
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{elsewhere_report, PatientMedicationList};
+use cairn_node::node_key::NodeKey;
 use std::time::Instant;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -379,9 +380,9 @@ pub async fn sign_off_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
 
     // Timed around the WRITE only. The clinician's reading time is measured by the operator
@@ -402,7 +403,7 @@ pub async fn sign_off_impl(
         };
         let mut outcome = cairn_node::medication::signoff::sign_off_medication_list(
             &mut db,
-            node_sk,
+            NodeKey::Public(node_kid),
             &state.node_origin,
             &params,
             patient,
@@ -577,11 +578,10 @@ pub async fn cease_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
     let started = Instant::now();
     let mut ceased = 0usize;
@@ -612,8 +612,8 @@ pub async fn cease_impl(
             Err(lost) => Err(anyhow::Error::from(lost)),
             Ok(mut db) => cairn_node::medication::cease_medication(
                 &mut db,
-                node_sk,
-                &node_kid,
+                NodeKey::Public(node_kid),
+                node_kid,
                 &state.node_origin,
                 thread_chart,
                 medication_id,

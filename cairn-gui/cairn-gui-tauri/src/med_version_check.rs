@@ -23,6 +23,7 @@ use cairn_event::medication::SourceNote;
 use cairn_node::medication::version_settle::{check_version, VersionCheck};
 use cairn_node::medication::version_settle_read::version_for_restore;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use uuid::Uuid;
 
 /// Whose outcome is NOT known when the commit got no answer (`failure_named`).
@@ -89,11 +90,10 @@ pub async fn med_version_check_impl(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| key_locked(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
-    let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let author = AuthorParams {
         human_sk: &human_sk,
         human_kid: &human_kid,
@@ -112,7 +112,13 @@ pub async fn med_version_check_impl(
             .await?;
         let origin = state.node_origin.as_str();
         check_version(
-            &mut db, node_sk, &node_kid, origin, patient, &check, &author,
+            &mut db,
+            NodeKey::Public(node_kid),
+            node_kid,
+            origin,
+            patient,
+            &check,
+            &author,
         )
         .await
         .map_err(|e| db.explain(e))

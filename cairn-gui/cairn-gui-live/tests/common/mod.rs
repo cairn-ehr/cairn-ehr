@@ -149,6 +149,9 @@ pub async fn window_login(owner: &Client, cs: &str) -> String {
 /// `patient_id`/`subject`/`low`/`high`) before writing that suite, rather than after debugging
 /// it. Tracked as [#658](https://github.com/cairn-ehr/cairn-ehr/issues/658).
 ///
+/// `registration_request` (db/083) is cleared too: a request a previous test left pending (its
+/// window gone) would otherwise be served by the next test's service, into that test's record.
+///
 /// `quote_ident` rather than bare interpolation: the names come from `pg_class`, so they are
 /// real identifiers already, but quoting keeps the generated SQL obviously safe to a reader.
 pub async fn setup(c: &Client) -> (SigningKey, String) {
@@ -165,7 +168,7 @@ pub async fn setup(c: &Client) -> (SigningKey, String) {
            IF tables IS NULL THEN \
              RAISE EXCEPTION 'no per-patient projection found — has the schema loaded?'; \
            END IF; \
-           EXECUTE 'TRUNCATE ' || tables || ', actor_event CASCADE'; \
+           EXECUTE 'TRUNCATE ' || tables || ', actor_event, registration_request CASCADE'; \
          END $$;",
     )
     .await
@@ -194,18 +197,79 @@ pub async fn setup(c: &Client) -> (SigningKey, String) {
     (sk, kid)
 }
 
-/// The node identity a `LiveData` is built with, carrying `origin` as its `node_id_hex`.
+/// The node identity a `LiveData` is built with, carrying `origin` as its `node_id_hex` and
+/// `kid` (hex of the node's verifying key) as its `pubkey_hex`, the key the window names (#909:
+/// it holds no secret key, only this).
 ///
 /// `LiveData::new` takes the whole `Identity` precisely so a caller cannot hand it
 /// `fingerprint` or `address` by mistake (see its doc), which means a test needs one too. The
-/// three unused fields are blank rather than plausible: nothing in this crate reads them, and
+/// two unused fields are blank rather than plausible: nothing in this crate reads them, and
 /// a blank is honest where a fabricated hex string would invite someone to assert on it.
-pub fn identity(origin: &str) -> cairn_node::identity::Identity {
+pub fn identity(origin: &str, kid: &str) -> cairn_node::identity::Identity {
     cairn_node::identity::Identity {
         node_id_hex: origin.to_string(),
-        pubkey_hex: String::new(),
+        pubkey_hex: kid.to_string(),
         fingerprint: String::new(),
         address: String::new(),
+    }
+}
+
+/// A login granted db/083's `cairn_terminal_service`, the role the node's terminal service
+/// holds (#909). DUPLICATED from `crates/cairn-node/tests/common/mod.rs`'s `service_login`, for
+/// the reason [`window_login`] gives; keep the copies identical.
+pub async fn service_login(owner: &Client, cs: &str) -> String {
+    owner
+        .batch_execute(
+            "DO $$ BEGIN \
+               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_terminal_service_probe') THEN \
+                 CREATE ROLE cairn_terminal_service_probe LOGIN; \
+               END IF; \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$; \
+             GRANT cairn_terminal_service TO cairn_terminal_service_probe;",
+        )
+        .await
+        .expect("the terminal service's probe login");
+    format!("{cs} user=cairn_terminal_service_probe")
+}
+
+/// The node's terminal service, standing in for `cairn-node terminal-service` (#909): since the
+/// window holds no node key, a registration through the port goes in only while one runs.
+/// Started by [`serve`]; stop it with [`Service::stop`].
+pub struct Service {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// Start a terminal service that signs with `sk` (stamping `origin` on its clocks): a task that
+/// calls `serve_one` in a loop, on its own connection as [`service_login`]'s login, until
+/// stopped. An idle or failed turn sleeps briefly, so the loop never spins.
+pub async fn serve(owner: &Client, cs: &str, sk: SigningKey, origin: &str) -> Service {
+    use cairn_node::terminal_service::registration::{serve_one, Served};
+    use std::sync::atomic::Ordering;
+    let mut client = cairn_node::db::connect(&service_login(owner, cs).await)
+        .await
+        .expect("the terminal service's connection");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (flag, origin) = (stop.clone(), origin.to_string());
+    let task = tokio::spawn(async move {
+        while !flag.load(Ordering::Relaxed) {
+            if !matches!(
+                serve_one(&mut client, &sk, &origin).await,
+                Ok(Served::Registered { .. } | Served::Refused { .. })
+            ) {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+    });
+    Service { stop, task }
+}
+
+impl Service {
+    /// Stop the loop after its current turn, and wait for it.
+    pub async fn stop(self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.task.await.expect("the terminal service task");
     }
 }
 

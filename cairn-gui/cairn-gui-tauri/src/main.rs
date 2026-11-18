@@ -83,6 +83,8 @@ mod med_version_check;
 #[cfg(test)]
 mod med_versions_settle_webview_tests;
 #[cfg(test)]
+mod node_key_guard_tests;
+#[cfg(test)]
 mod node_lock_explains_tests;
 mod notes;
 #[cfg(test)]
@@ -146,16 +148,12 @@ struct Cli {
     )]
     conn: String,
 
-    /// The NODE's signing key — holds custody of every sealed body it writes (ADR-0052).
-    #[arg(long, env = "CAIRN_KEY", default_value = "node.key")]
-    key: std::path::PathBuf,
-
     /// How long a clinician's key stays held after an act, so their next act needs no
     /// passphrase (spec §5.4 "key hold"). 0, the default, is a SHARED terminal: every act
     /// carries a staff ID and passphrase. A personal workstation may hold up to 900 s (the
     /// idle timeout). The clinician's key itself comes from the node's vault per act; it is
-    /// never a file this window opens. Distinct from `--key`: the node seals and holds
-    /// custody, the human authors and vouches (ADR-0053).
+    /// never a file this window opens. The node seals and holds custody, the
+    /// human authors and vouches (ADR-0053).
     #[arg(long, default_value = "0", value_parser = signer::parse_key_hold)]
     key_hold_seconds: std::time::Duration,
 
@@ -208,8 +206,6 @@ fn main() -> anyhow::Result<()> {
             let id = terminal_id_or_ephemeral(app.path().app_config_dir());
             // `set` fails only if already set, and nothing else sets it.
             let _ = app.state::<AppState>().terminal_id.set(id);
-            // The quarantine commit's tick (slice 3b-2a): a Rust task, so a hidden window ticks.
-            tauri::async_runtime::spawn(notes::commit::run_ticks(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -309,11 +305,10 @@ fn terminal_id_or_ephemeral(dir: tauri::Result<std::path::PathBuf>) -> String {
 /// Refuse a remote database, check (never load) the schema stamp, and read this node's identity —
 /// everything a writing window needs before it shows anything.
 ///
-/// The node key is loaded UP FRONT and fails the launch if it cannot be: a window that
-/// opens and only discovers at sign-off time that it can never seal anything has wasted
-/// the clinician's review.
+/// The window holds NO node secret key (#909): only the node's public id, read here. What the
+/// node itself must sign runs on its terminal service.
 ///
-/// Whether that key may AUTHOR is NOT asked here, and a "no" never fails the launch: reading a
+/// Whether the node may AUTHOR is NOT asked here, and a "no" never fails the launch: reading a
 /// chart needs no actor. The front door asks on every `funnel_status` and says, in the chrome,
 /// what an operator must do (`FunnelBackend::provisioning`, #654 option 2, #882).
 async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
@@ -331,10 +326,6 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     }
     let identity = cairn_node::identity::load_local(&checker).await?;
     drop(checker);
-    let node_sk = cairn_node::keystore::load(
-        &cli.key,
-        std::env::var("CAIRN_KEY_PASSPHRASE").ok().as_deref(),
-    )?;
     // ONE connection, shared by the chart commands and the funnel's live port, reopened from
     // the same string if it is lost (#807), and cut off when a command holds it too long (#875).
     // Opened apart from the schema load above, which hands back no handle on its task to cut.
@@ -342,10 +333,10 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     let db = std::sync::Arc::new(
         cairn_gui_live::NodeConnection::reopening(client, task, cli.conn.clone()).await?,
     );
-    let live = cairn_gui_live::LiveData::sharing(db.clone(), node_sk.clone(), &identity);
+    let live = cairn_gui_live::LiveData::sharing(db.clone(), &identity);
     Ok(AppState {
         db: Some(db),
-        node_sk: Some(node_sk),
+        node_kid: Some(identity.pubkey_hex.clone()),
         node_origin: identity.node_id_hex,
         chart: tokio::sync::Mutex::new(cli.patient.map(funnel::window::OpenChart::by_id)),
         funnel_backend: funnel::backend::FunnelBackend::Live(live),
@@ -356,6 +347,5 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         // Filled in `main`'s setup hook, which alone can name the config directory.
         terminal_id: std::sync::OnceLock::new(),
         whos_here: tokio::sync::Mutex::new(whos_here::Here::new(cli.idle_lock_minutes)),
-        commit_failed: Default::default(),
     })
 }

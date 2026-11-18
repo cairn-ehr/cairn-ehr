@@ -8,6 +8,7 @@ use super::*;
 use crate::allergies::{allergy_list_impl, allergy_none_impl, allergy_record_impl, EntryInput};
 use crate::funnel::view::{Recorded, Retry};
 use crate::notes::review::db_tests::{credential, here_as, supervised_note};
+use cairn_node::node_key::NodeKey;
 
 /// A complete entry, as the form sends it.
 fn entry(term: &str) -> EntryInput {
@@ -68,7 +69,7 @@ async fn linked_entry(
         .signer_for_act(None, crate::state::Now::read())
         .await
         .unwrap();
-    let node_sk = state.node_sk.as_ref().unwrap();
+    let node_sk = &crate::notes::review::db_tests::fixture_node_key();
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
     let origin = state.node_origin.clone();
     let (other, _, _) = cairn_node::john_doe::register_john_doe(
@@ -91,7 +92,13 @@ async fn linked_entry(
     let read =
         crate::allergies::entry_before_the_key(&typed, crate::allergies::local_today()).unwrap();
     let theirs = cairn_node::allergy::sign::sign_allergy(
-        owner, node_sk, &node_kid, &origin, other, &read, &author,
+        owner,
+        NodeKey::Full(node_sk),
+        &node_kid,
+        &origin,
+        other,
+        &read,
+        &author,
     )
     .await
     .unwrap();

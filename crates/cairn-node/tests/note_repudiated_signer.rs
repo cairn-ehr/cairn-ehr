@@ -13,6 +13,7 @@ mod common;
 mod note_vouch_kit;
 
 use cairn_node::db;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::compound::{compounds, CompoundNote};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::sign::{sign_note, SignNoteInput};
@@ -59,7 +60,7 @@ async fn sign_as(c: &mut Client, w: &Ward, m: &Member) -> Uuid {
         addendum_to: None,
         also_vouches: &[],
     };
-    sign_note(c, &w.node_sk, &input, &m.author())
+    sign_note(c, NodeKey::Full(&w.node_sk), &input, &m.author())
         .await
         .unwrap()
         .expect("the note signs")

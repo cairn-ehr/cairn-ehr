@@ -14,6 +14,7 @@ use cairn_node::medication::{
     assert_medication, cease_medication, withhold_medication, AssertMedicationInput,
     CeaseMedicationInput, WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -162,9 +163,19 @@ pub async fn cease(
         stopped_precision: stopped.map(|_| "year"),
         reason: None,
     };
-    cease_medication(c, sk, kid, "test-node", p, med, &input, None, None)
-        .await
-        .unwrap();
+    cease_medication(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        p,
+        med,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 }
 
 /// Withhold through the orchestrator ("until reviewed"); returns the withhold's event id.
@@ -178,7 +189,7 @@ pub async fn withhold(
 ) -> Uuid {
     withhold_medication(
         c,
-        sk,
+        NodeKey::Full(sk),
         kid,
         "test-node",
         p,

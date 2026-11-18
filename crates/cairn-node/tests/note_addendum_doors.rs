@@ -22,6 +22,7 @@ use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::{AssertMedicationInput, AuthorParams};
+use cairn_node::node_key::NodeKey;
 use common::{note_setup, owner_and_window, submit_registration};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -87,7 +88,7 @@ async fn signed_note(
     };
     let target = target.map(|t| t.to_string());
     let body = note_body(Uuid::now_v7(), patient, k, hlc, target.as_deref());
-    seal_sign_submit(c, &k.node_sk, body, Some(&author), None).await
+    seal_sign_submit(c, NodeKey::Full(&k.node_sk), body, Some(&author), None).await
 }
 
 /// `note_setup` plus one signed note on its chart (the target every draft below adds to).

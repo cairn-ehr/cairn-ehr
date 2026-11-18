@@ -8,6 +8,7 @@ use cairn_node::medication::{
     assert_medication, assert_medication_returning_event, build_assert_body, cease_medication,
     AssertMedicationInput, CeaseMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -371,7 +372,7 @@ async fn cease_flips_current_to_past() {
 
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -411,7 +412,7 @@ async fn orphan_cessation_has_no_row_then_resolves_on_assert_arrival() {
     // Cessation authored BEFORE its assert exists locally (offline-first).
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -524,7 +525,7 @@ async fn ceasing_one_clears_the_flag() {
     // Resolution needs no new event type — cease the redundant thread.
     cease_medication(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,

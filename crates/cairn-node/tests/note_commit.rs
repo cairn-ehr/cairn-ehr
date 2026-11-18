@@ -19,6 +19,7 @@ use cairn_event::generate_key;
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::commit::{
     commit_overdue, commit_overdue_drafts, overdue_drafts, CommitOutcome,
 };
@@ -584,7 +585,9 @@ async fn a_sign_after_the_timer_is_refused_committed() {
         also_vouches: &[],
     };
 
-    let out = sign_note(&mut c, &node_sk, &input, &author).await.unwrap();
+    let out = sign_note(&mut c, NodeKey::Full(&node_sk), &input, &author)
+        .await
+        .unwrap();
 
     assert_eq!(out.err(), Some(SignRefusal::Committed));
     assert_eq!(note_count(&c, chart).await, 1, "nothing more was written");

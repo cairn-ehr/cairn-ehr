@@ -7,6 +7,7 @@
 //! `seal_sign_submit`, which rewrites the contributors to `[human authored, node recorded]`, signs
 //! and submits through the strict door. This file commits nothing itself, so it is not a
 //! `MARKED_COMMIT_SITES` entry; the commit is `sealed_submit.rs`'s.
+use crate::node_key::NodeKey;
 use cairn_event::allergy::{
     allergy_none_payload, allergy_payload, render_allergy_none_twin, render_allergy_twin,
     AllergyEntry, NoneScope, ALLERGY_EVENT_TYPE, ALLERGY_NONE_EVENT_TYPE,
@@ -18,7 +19,7 @@ use cairn_event::allergy_overlay::{
     ALLERGY_CHALLENGE_EVENT_TYPE, ALLERGY_CHALLENGE_SCHEMA_VERSION, ALLERGY_RETRACTION_EVENT_TYPE,
     ALLERGY_RETRACTION_SCHEMA_VERSION,
 };
-use cairn_event::{EventBody, Hlc, SigningKey};
+use cairn_event::{EventBody, Hlc};
 use uuid::Uuid;
 
 use crate::medication::sealed_submit::seal_sign_submit;
@@ -53,7 +54,7 @@ fn body(
 /// Sign one allergy entry on `patient`'s chart under `author`; returns the new event's id.
 pub async fn sign_allergy(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -69,13 +70,13 @@ pub async fn sign_allergy(
         allergy_payload(entry),
         render_allergy_twin(entry),
     );
-    seal_sign_submit(client, node_sk, b, Some(author), None).await
+    seal_sign_submit(client, node, b, Some(author), None).await
 }
 
 /// Sign a "none known" statement of `scope` on `patient`'s chart; its "asked" time is its HLC wall.
 pub async fn sign_allergy_none(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -91,14 +92,14 @@ pub async fn sign_allergy_none(
         allergy_none_payload(scope),
         render_allergy_none_twin(scope),
     );
-    seal_sign_submit(client, node_sk, b, Some(author), None).await
+    seal_sign_submit(client, node, b, Some(author), None).await
 }
 
 /// Sign a de-label by challenge on `patient`'s chart: "tolerated this substance on this date". The
 /// floor (db/075) refuses a target that is not an allergy entry on the same chart.
 pub async fn sign_allergy_challenge(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -117,14 +118,14 @@ pub async fn sign_allergy_challenge(
         allergy_challenge_payload(challenge),
         render_allergy_challenge_twin(challenge),
     );
-    seal_sign_submit(client, node_sk, b, Some(author), None).await
+    seal_sign_submit(client, node, b, Some(author), None).await
 }
 
 /// Sign an entered-in-error withdrawal on `patient`'s chart. Its target may be an entry, a "none
 /// known" statement or a de-label on the same chart, never another withdrawal (db/075).
 pub async fn sign_allergy_retraction(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    node: NodeKey<'_>,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
@@ -143,5 +144,5 @@ pub async fn sign_allergy_retraction(
         allergy_retraction_payload(retraction),
         render_allergy_retraction_twin(retraction),
     );
-    seal_sign_submit(client, node_sk, b, Some(author), None).await
+    seal_sign_submit(client, node, b, Some(author), None).await
 }

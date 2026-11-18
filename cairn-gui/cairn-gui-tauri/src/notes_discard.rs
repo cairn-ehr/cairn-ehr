@@ -17,6 +17,7 @@ use crate::link::judgement_view::{refused, stale};
 use crate::signer::{Credential, KeyRefusal};
 use crate::state::{AppState, Now};
 use crate::write_failure::{key_locked, node_cannot_write, node_failure};
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::discard::{DiscardOutcome, DiscardRefusal};
 use chrono::{DateTime, Utc};
 use std::time::Instant;
@@ -229,9 +230,9 @@ async fn discard_attempt(
         .signer_for_act(credential, Now::read())
         .await
         .map_err(|r| discard_key_refused(&r))?;
-    let node_sk = state
-        .node_sk
-        .as_ref()
+    let node_kid = state
+        .node_kid
+        .as_deref()
         .ok_or_else(|| node_cannot_write("no node key"))?;
 
     let started = Instant::now();
@@ -257,9 +258,14 @@ async fn discard_attempt(
             human_sk: &human_sk,
             human_kid: &human_kid,
         };
-        cairn_node::note::discard::discard_draft(&mut db, node_sk, &input, &author)
-            .await
-            .map_err(|e| db.explain(e))
+        cairn_node::note::discard::discard_draft(
+            &mut db,
+            NodeKey::Public(node_kid),
+            &input,
+            &author,
+        )
+        .await
+        .map_err(|e| db.explain(e))
     };
     // ONE write, so one outcome: discarded, refused (nothing written), NOT known (#814), or an
     // ordinary failure returned as the node's own sentence.

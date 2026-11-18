@@ -17,6 +17,7 @@ use cairn_node::chart_link::canonical_pair;
 use cairn_node::db;
 use cairn_node::medication::snapshot::in_snapshot;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::draft::{open_drafts, save_part, take_draft, SaveOutcome, TakeOutcome};
 use cairn_node::note::read::{list_patient_notes, PatientNoteList};
 use cairn_node::note::sign::{sign_note, SignNoteInput};
@@ -83,7 +84,7 @@ async fn the_windows_note_calls_run_under_its_own_login() {
             addendum_to: None,
             also_vouches: &[],
         };
-        let r = sign_note(&mut window, &sk, &input, &author).await;
+        let r = sign_note(&mut window, NodeKey::Full(&sk), &input, &author).await;
         expect_as_window("note::sign::sign_note", r).expect("the note is signed");
     }
     // One draft left UNSIGNED on A, with a stated time, so the snapshot read below decodes a
@@ -277,7 +278,7 @@ async fn the_windows_discard_runs_under_its_own_login() {
         addendum_to: None,
         also_vouches: &[],
     };
-    let r = discard_draft(&mut window, &sk, &input, &author).await;
+    let r = discard_draft(&mut window, NodeKey::Full(&sk), &input, &author).await;
     let out = expect_as_window("note::discard::discard_draft", r);
     assert!(matches!(out, Ok(DiscardOutcome::Recorded(_))), "{out:?}");
 
@@ -319,7 +320,7 @@ async fn the_windows_addendum_doors_run_under_its_own_login() {
         addendum_to: None,
         also_vouches: &[],
     };
-    let r = sign_note(&mut window, &sk, &input, &author).await;
+    let r = sign_note(&mut window, NodeKey::Full(&sk), &input, &author).await;
     let root = expect_as_window("note::sign::sign_note", r)
         .expect("the root note is signed")
         .event_id;

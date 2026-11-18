@@ -26,6 +26,7 @@ use cairn_node::medication::{
     build_assert_body, build_cease_body, build_dose_change_body, build_withhold_body, AttestParams,
     CeaseMedicationInput, ChangeDoseInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -365,7 +366,7 @@ async fn a_sign_off_outcome_carries_the_lines_elsewhere() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "test-node", &params, a, None)
+    let out = sign_off_medication_list(&mut c, NodeKey::Full(&sk), "test-node", &params, a, None)
         .await
         .unwrap();
     assert!(out.attested.is_empty() && out.total_rows == 0, "{out:?}");
@@ -374,7 +375,7 @@ async fn a_sign_off_outcome_carries_the_lines_elsewhere() {
     // The attesting path too: with a drug of A's own to sign, "signed 1" must still carry the
     // line elsewhere, or the signer reads it as the whole of A's medications.
     let own = add_med(&mut c, &sk, &kid, a).await;
-    let out = sign_off_medication_list(&mut c, &sk, "test-node", &params, a, None)
+    let out = sign_off_medication_list(&mut c, NodeKey::Full(&sk), "test-node", &params, a, None)
         .await
         .unwrap();
     assert_eq!(out.attested, vec![own], "{out:?}");

@@ -112,6 +112,19 @@ unsound = "all"
 id = "RUSTSEC-2024-0429"
 reason = "glib 0.18.5 unsoundness (crash-only, Linux-only, unreachable from Cairn code); a transitive ceiling from tauri 2.11.5's webkit2gtk/GTK3 stack, NOT a pin of ours — patched only in glib >= 0.20, which GTK3 bindings never reach. Clears when Tauri's Linux backend moves to GTK4/webkitgtk-6.0. Tracked in issue #389. review-by 2026-11-21"
 
+
+[[advisories.ignore]]
+# RUSTSEC-2026-0543 — `chrono` is UNMAINTAINED (all versions). Not a vulnerability: no unsound
+# code, no CVE, just no maintainer. It fails this gate only because `unmaintained = "workspace"`
+# surfaces a crate WE depend on directly, which is the point of that setting. chrono is direct in
+# cairn-node, cairn-gui-tauri and cairn-gui-tab-medications (timestamps and the panes' zones).
+# Exit condition: migrate those three to a maintained crate (the advisory recommends jiff, and
+# tokio-postgres has `with-jiff-0_2`), then drop this entry and its twin in the other tree's
+# deny.toml and lower IGNORES_TODAY in advisory_ignore_review_dates.rs. Issue #1160.
+#
+# DO NOT silently extend this ignore to cover other advisories. One entry, one id, one rationale.
+id = "RUSTSEC-2026-0543"
+reason = "chrono unmaintained (no vulnerability); direct in cairn-node and two cairn-gui crates; migration tracked in issue #1160. Ruled by the maintainer 2026-11-18. review-by 2027-02-18"
 [bans]
 # Duplicate transitive versions are HYGIENE, not a safety failure, and a webview stack carries
 # more of them than a server tree does. Warn (visible in CI logs) rather than fail — the same

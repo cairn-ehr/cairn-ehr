@@ -743,7 +743,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     .unwrap();
     cease_medication(
         &mut a,
-        &sk_d,
+        cairn_node::node_key::NodeKey::Full(&sk_d),
         &kid_d,
         "node-a",
         patient,

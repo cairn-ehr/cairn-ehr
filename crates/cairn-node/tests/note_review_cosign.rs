@@ -17,6 +17,7 @@ mod note_vouch_kit;
 
 use cairn_event::SigningKey;
 use cairn_node::db;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::compound::{compounds, CompoundNote};
 use cairn_node::note::read::list_patient_notes;
 use cairn_node::note::review::{can_review, review_note};
@@ -58,7 +59,7 @@ async fn sign_as(
         addendum_to: to,
         also_vouches: &[],
     };
-    sign_note(c, node_sk, &input, &m.author())
+    sign_note(c, NodeKey::Full(node_sk), &input, &m.author())
         .await
         .unwrap()
         .expect("the note signs")

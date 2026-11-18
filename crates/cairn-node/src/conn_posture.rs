@@ -194,29 +194,35 @@ pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureF
 /// loader's own skip test would pass. A database newer than this window is told apart from one
 /// not yet prepared, because the remedies differ (install a newer window vs. run the owner step).
 pub fn window_schema_verdict(stamp: Option<&SchemaStamp>) -> Result<(), String> {
+    schema_verdict(stamp, "window", "provision-window-role")
+}
+
+/// [`window_schema_verdict`] for any process that cannot replay DDL: `who` is what it is called
+/// in the refusal ("window", "terminal service"), `verb` the owner step that prepares the database.
+pub fn schema_verdict(stamp: Option<&SchemaStamp>, who: &str, verb: &str) -> Result<(), String> {
     let ours = embedded_schema_version();
     if replay_can_be_skipped(stamp, ours, LOADER_BUILD, &embedded_schema_hash()) {
         return Ok(());
     }
     match stamp {
         Some(s) if s.version > ours => Err(format!(
-            "This window is older than the node's database (generation {} against {ours}). \
-             Install the window that matches the node.",
+            "This {who} is older than the node's database (generation {} against {ours}). \
+             Install the {who} that matches the node.",
             s.version
         )),
         // Same generation, different build (hash or loader): any other cairn-node would stamp
         // its own build again, so only the one built with this window can satisfy it.
         Some(s) if s.version == ours => Err(format!(
             "The node's database was prepared by a different build (generation {ours}, but not \
-             this window's build). At the node, run provision-window-role with the cairn-node \
-             built with this window and the owner's connection, then start this window again."
+             this {who}'s build). At the node, run {verb} with the cairn-node \
+             built with this {who} and the owner's connection, then start this {who} again."
         )),
         _ => {
             let db = stamp.map_or("none".to_string(), |s| s.version.to_string());
             Err(format!(
-                "The node's database has not been prepared for this window (generation {db} \
-                 against {ours}). At the node, run cairn-node provision-window-role with the \
-                 owner's connection, then start this window again."
+                "The node's database has not been prepared for this {who} (generation {db} \
+                 against {ours}). At the node, run cairn-node {verb} with the \
+                 owner's connection, then start this {who} again."
             ))
         }
     }

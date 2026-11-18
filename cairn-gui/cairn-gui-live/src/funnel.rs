@@ -1,12 +1,18 @@
 //! The two port implementations. Each is a thin adapter over a `cairn-node` orchestrator:
-//! resolve the connection, call, map the error. **No clinical logic lives here** — the same
-//! rule `commands.rs` follows one layer up, and for the same reason: a rule that lives in an
-//! adapter is a rule no test goes looking for.
+//! resolve the connection, call, map the error. (Registration's "orchestrator" is a request
+//! to the node's terminal service, and waiting for its answer, #909.) **No clinical logic
+//! lives here** — the same rule `commands.rs` follows one layer up, and for the same reason: a
+//! rule that lives in an adapter is a rule no test goes looking for.
 use crate::error::data_error_from;
 use crate::LiveData;
 use cairn_gui_data::port::{DataError, PatientRegistration, PatientSearch};
 use cairn_gui_funnel::AttestedSearch;
+use cairn_node::patient::register_request::{
+    self as request_door, next_step, Next, RequestStatus, DEADLINE, POLL, SERVICE_NOT_RUNNING,
+};
+use cairn_node::terminal_service::registration::NEW_MATCH_REFUSAL;
 use cairn_patient_search::{CandidateList, SearchQuery};
+use std::time::Instant;
 use uuid::Uuid;
 
 // `async fn` in the impl of an RPITIT trait method is allowed, and is what clippy asks for
@@ -36,52 +42,239 @@ impl PatientSearch for LiveData {
 }
 
 impl PatientRegistration for LiveData {
+    /// Register through the node's terminal service (#909): submit a request, then poll it until
+    /// the service settles it or its deadline passes. See `cairn_node::patient::register_request`.
+    ///
+    /// The connection is locked per call (submit, each poll, expire), never across the poll
+    /// sleeps, so the chart commands sharing it are not held up for the seconds a registration may
+    /// take. The one exception: `expire` holds it while it waits behind a service that is
+    /// registering this very request, which lasts as long as that registration.
     async fn register(
         &self,
         attested: AttestedSearch,
         name: Option<&str>,
     ) -> Result<Uuid, (DataError, AttestedSearch)> {
-        // A lost connection hands the attestation back too, for the reason given below.
-        let mut db = match self.db.lock().await {
-            Ok(db) => db,
-            Err(lost) => return Err((lost.into(), attested)),
-        };
         // The query and the list come out of ONE value that has no public constructor, so this
         // call cannot be handed a pair that were never together — which is the whole reason
-        // `AttestedSearch` exists (see `cairn_gui_funnel::token`).
+        // `AttestedSearch` exists (see `cairn_gui_funnel::token`). They are submitted as is:
+        // the bounded list the clerk was shown, never re-derived.
         //
-        // `name` is NOT protected that way, and this adapter cannot make it so. It is an
-        // argument unrelated to `attested`, and `register_patient`'s own doc says the same of
-        // its types: a caller could attest a search for "Smith" while asserting the name
-        // "Jones" and it would sign both without complaint. The tests in this crate DELIBERATELY
-        // diverge the two — registering "Kowalczyk Newcomer" against a search for "Kowalczyk" —
-        // to prove this port preserves what it is handed rather than reconciling it.
+        // `name` is NOT protected that way. The invariant that it is the raw typed string the
+        // query was built from belongs to the WINDOW (`NamedAttestation`, slice 2c), and the
+        // terminal service refuses a request whose name is not the one its query was built
+        // from, so a diverged pair cannot be registered either way.
         //
-        // The invariant that `name` is the raw typed string the query was built from belongs
-        // to the WINDOW: one name field feeding `SearchQuery::new` and this argument alike.
-        // That is what `port.rs` means by "the funnel satisfies it by construction", and since
-        // slice 2c it is `cairn_gui_funnel::FunnelSession`'s job: the name is stored with the
-        // search it ran on and handed back bound to it (`NamedAttestation`).
-        let outcome = cairn_node::patient::register::register_patient(
-            &mut db,
-            &self.node_sk,
-            &self.node_kid,
-            &self.node_origin,
-            name,
-            attested.query(),
-            attested.displayed(),
-        )
-        .await;
+        // A fresh random id per press: any window login can read a request by id, and an id is
+        // idempotent only until db/083's purge, so it is never derived or reused.
+        let request = Uuid::new_v4();
 
-        // The attestation goes BACK inside the error, and that is not decoration:
+        // The attestation goes BACK inside every error, and that is not decoration:
         // `TokenStore::restore` needs exactly this value to put the search back after a failed
         // write, and nothing else in the program can obtain one. Losing it here makes the
         // clerk re-search, which is the design's *"Register fails. The form keeps its
         // values."* broken — and it strands the token store in-flight, which latches it closed
         // until the window reloads.
-        match outcome {
-            Ok(id) => Ok(id),
-            Err(e) => Err((data_error_from(&db.explain(e)), attested)),
+        let submitted = match self.submit_request(request, &attested, name).await {
+            Ok(status) => status,
+            Err(e) => return Err((e, attested)),
+        };
+        match self
+            .await_settled(request, submitted)
+            .await
+            .and_then(settled)
+        {
+            Ok(chart) => Ok(chart),
+            Err(e) => Err((e, attested)),
+        }
+    }
+}
+
+impl LiveData {
+    /// Put the request in db/083's queue. The submit is the registration's COMMIT point: once
+    /// it is sent, the row may be in the queue whatever answer comes back (an autocommit INSERT
+    /// whose reply is lost, or a backend that commits it after the window gave up), and the
+    /// service would then register it. So a submit failure that is neither a verdict nor an
+    /// answered ERROR is `OutcomeUnknown` ([`submit_failure`], #815), as a lost COMMIT is. Reading the request's
+    /// status afterwards would prove nothing: "not found" can still turn into "registered".
+    /// The `today` read and the lock come first and send nothing, so their failures are plain.
+    ///
+    /// `today` is the DATABASE's date, the clock the window's searches use (`LiveData::today`):
+    /// the service re-runs the search as of it.
+    async fn submit_request(
+        &self,
+        request: Uuid,
+        attested: &AttestedSearch,
+        name: Option<&str>,
+    ) -> Result<RequestStatus, DataError> {
+        let today = self.today().await?;
+        let db = self.db.lock().await?;
+        request_door::submit(
+            &*db,
+            request,
+            name,
+            attested.query(),
+            attested.displayed(),
+            &today,
+        )
+        .await
+        .map_err(|e| {
+            let answered = cairn_node::db_diagnosis::answered_with_error(&e);
+            submit_failure(request, data_error_from(&db.explain(e)), answered)
+        })
+    }
+
+    /// Wait for a submitted request to settle: poll every `POLL`, and at `DEADLINE` expire it
+    /// once. `expire` may block while the service is registering the request; that wait is
+    /// never timed out here (the connection's own watchdog may cut it, and then the outcome is
+    /// unknown, as below).
+    ///
+    /// From submit on, the service may register the request at any moment until its deadline,
+    /// so ANY failure here means the chart MAY exist (#815): it is `OutcomeUnknown`, never an
+    /// outage the clerk would retry into a second chart.
+    async fn await_settled(
+        &self,
+        request: Uuid,
+        mut status: RequestStatus,
+    ) -> Result<RequestStatus, DataError> {
+        let unknown = |e: DataError| may_be_registered(request, &e);
+        let since = Instant::now();
+        loop {
+            status = match next_step(&status, since.elapsed(), DEADLINE) {
+                Next::Done(settled) => return Ok(settled),
+                Next::Wait => {
+                    tokio::time::sleep(POLL).await;
+                    let db = self.db.lock().await.map_err(|l| unknown(l.into()))?;
+                    request_door::status(&*db, request)
+                        .await
+                        .map_err(|e| unknown(data_error_from(&db.explain(e))))?
+                }
+                Next::Expire => {
+                    let db = self.db.lock().await.map_err(|l| unknown(l.into()))?;
+                    request_door::expire(&*db, request)
+                        .await
+                        .map_err(|e| unknown(data_error_from(&db.explain(e))))?
+                }
+            };
+        }
+    }
+}
+
+/// A settled request as the port's answer. **Pure.** The new-match refusal is `Stale` (the
+/// record changed since the clerk's search: search again), any other refusal is the service's
+/// verdict in its own words, and an expired request is the node not serving registrations (only
+/// an operator can mend that). `Pending` never reaches here; if it did, it is unknown.
+fn settled(status: RequestStatus) -> Result<Uuid, DataError> {
+    match status {
+        RequestStatus::Registered(chart) => Ok(chart),
+        RequestStatus::Refused(t) if t == NEW_MATCH_REFUSAL => Err(DataError::Stale(t)),
+        RequestStatus::Refused(t) => Err(DataError::Refused(t)),
+        RequestStatus::Expired => Err(DataError::NotProvisioned(SERVICE_NOT_RUNNING.into())),
+        RequestStatus::Pending => Err(DataError::OutcomeUnknown(
+            "the registration request is still pending".into(),
+        )),
+    }
+}
+
+/// A failed submit's answer. **Pure.** A verdict (the door refused, deciding nothing was
+/// queued) stays what it is, and so does an outage the server `answered` with an ERROR: the
+/// submit is one autocommit statement, so that answer means its INSERT rolled back. Anything
+/// else (a lost reply, a dropped connection) may have queued the request, so the chart may come
+/// to exist (#815).
+///
+/// `answered` is sound here only because the window's request id is fresh: the door answers
+/// `pending` from that one statement, and `submit` never goes on to read the status.
+fn submit_failure(request: Uuid, e: DataError, answered: bool) -> DataError {
+    match e {
+        DataError::Unavailable(_) if !answered => may_be_registered(request, &e),
+        other => other,
+    }
+}
+
+/// `e` struck after the request was queued, so the chart may exist (#815). **Pure.**
+fn may_be_registered(request: Uuid, e: &DataError) -> DataError {
+    let cause = match e {
+        DataError::NotFound => "not found",
+        DataError::Unavailable(t)
+        | DataError::Refused(t)
+        | DataError::NotProvisioned(t)
+        | DataError::Stale(t)
+        | DataError::OutcomeUnknown(t) => t,
+    };
+    DataError::OutcomeUnknown(format!(
+        "registration request {request} went to the node's terminal service, which may yet \
+         register it, and then: {cause}"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mapping the window's sentences hang on (#909): each settled outcome has its own cause.
+    #[test]
+    fn each_settled_outcome_is_its_own_answer() {
+        let chart = Uuid::now_v7();
+        assert_eq!(settled(RequestStatus::Registered(chart)), Ok(chart));
+        assert_eq!(
+            settled(RequestStatus::Refused(NEW_MATCH_REFUSAL.into())),
+            Err(DataError::Stale(NEW_MATCH_REFUSAL.into()))
+        );
+        assert_eq!(
+            settled(RequestStatus::Refused("not enrolled".into())),
+            Err(DataError::Refused("not enrolled".into()))
+        );
+        assert_eq!(
+            settled(RequestStatus::Expired),
+            Err(DataError::NotProvisioned(SERVICE_NOT_RUNNING.into()))
+        );
+        assert!(matches!(
+            settled(RequestStatus::Pending),
+            Err(DataError::OutcomeUnknown(_))
+        ));
+    }
+
+    /// R11: a submit is the commit point. An outage there may have queued the request; a verdict
+    /// queued nothing and keeps its own cause.
+    #[test]
+    fn a_failed_submit_is_unknown_unless_it_was_a_verdict() {
+        let request = Uuid::now_v7();
+        assert!(matches!(
+            submit_failure(request, DataError::Unavailable("connection closed".into()), false),
+            DataError::OutcomeUnknown(t) if t.contains("connection closed")
+        ));
+        for verdict in [
+            DataError::Refused("different inputs".into()),
+            DataError::NotProvisioned("refused".into()),
+            DataError::Stale("changed".into()),
+        ] {
+            assert_eq!(submit_failure(request, verdict.clone(), false), verdict);
+        }
+    }
+
+    /// A submit the server ANSWERED with an ERROR (a statement timeout, say) rolled its one
+    /// autocommit INSERT back: nothing was queued, so it is a plain outage, never "may yet
+    /// register" — that would tell the clerk a chart may exist when it certainly does not.
+    #[test]
+    fn an_answered_submit_error_queued_nothing() {
+        let e = DataError::Unavailable("canceling statement due to statement timeout".into());
+        assert_eq!(submit_failure(Uuid::now_v7(), e.clone(), true), e);
+    }
+
+    /// After submit, even an outage or a refusal may hide a registration: never retried live.
+    #[test]
+    fn a_failure_after_submit_is_an_unknown_outcome_keeping_its_cause() {
+        let request = Uuid::now_v7();
+        for e in [
+            DataError::Unavailable("connection closed".into()),
+            DataError::NotProvisioned("connection closed".into()),
+        ] {
+            let DataError::OutcomeUnknown(t) = may_be_registered(request, &e) else {
+                panic!("{e:?} after submit must be an unknown outcome");
+            };
+            assert!(
+                t.contains("connection closed") && t.contains(&request.to_string()),
+                "{t}"
+            );
         }
     }
 }

@@ -237,6 +237,7 @@ nav:
       - ADR-0106 · Drug names in the pick: spec/decisions/0106-drug-names-in-the-pick.md
       - ADR-0107 · The supervision record on the node's HLC: spec/decisions/0107-supervision-on-the-nodes-hlc.md
       - ADR-0108 · The human doors are the window's role's: spec/decisions/0108-the-human-doors-are-the-windows-role.md
+      - ADR-0109 · The terminal service and the keyless window: spec/decisions/0109-the-terminal-service-and-the-keyless-window.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

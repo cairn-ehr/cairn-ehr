@@ -7,6 +7,7 @@
 //! payload by [`build_charted_body`]. db/077's floor judges them and its projection
 //! (`medication_charting`) keeps them per thread; [`read_charting`] reads that projection.
 use super::assert::{build_charted_body, validate_term, AssertMedicationInput};
+use crate::node_key::NodeKey;
 use anyhow::Context;
 use cairn_event::medication::Charting;
 use cairn_event::SigningKey;
@@ -45,9 +46,14 @@ pub async fn chart_medication(
     // payload.medication_id), and rewrites the body to human-signed authorship when
     // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). It returns the
     // content event's id, the one its lost commit names; the thread id rides beside it.
-    let recorded =
-        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-            .await?;
+    let recorded = crate::medication::sealed_submit::seal_sign_submit(
+        client,
+        NodeKey::Full(node_sk),
+        body,
+        author,
+        attest,
+    )
+    .await?;
     Ok(crate::db_diagnosis::Committed {
         value: medication_id,
         event_id: recorded,

@@ -11,6 +11,7 @@ use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::snapshot::in_snapshot;
 use cairn_node::medication::{cease_medication, CeaseMedicationInput};
+use cairn_node::node_key::NodeKey;
 
 mod common;
 #[path = "common/medication_kit.rs"]
@@ -37,7 +38,7 @@ async fn a_stop_committed_after_the_read_began_is_not_seen() {
         };
         cease_medication(
             &mut colleague,
-            &sk,
+            NodeKey::Full(&sk),
             &kid,
             "test-node",
             p,

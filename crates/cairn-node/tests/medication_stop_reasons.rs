@@ -21,6 +21,7 @@ use cairn_node::medication::{
     cease_medication, reconcile_medications, still_current_note, CeaseMedicationInput,
     ReconcileInput,
 };
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -44,9 +45,19 @@ async fn stop(
         stopped_precision: None,
         reason,
     };
-    cease_medication(c, sk, kid, "test-node", p, med, &input, None, None)
-        .await
-        .unwrap()
+    cease_medication(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        p,
+        med,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap()
 }
 
 /// The one line on `p`'s list: (the reason it shows, every other reason).
@@ -159,9 +170,19 @@ async fn a_line_kept_current_by_a_sibling_still_shows_the_stopped_threads_reason
             stopped_precision: Some("year"),
             reason: Some(reason),
         };
-        cease_medication(&mut c, &sk, &kid, "test-node", p, x, &stop, None, None)
-            .await
-            .unwrap();
+        cease_medication(
+            &mut c,
+            NodeKey::Full(&sk),
+            &kid,
+            "test-node",
+            p,
+            x,
+            &stop,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     }
     let list = list_patient_medications(&c, p).await.unwrap();
     let row = &list.rows[0];
@@ -394,9 +415,19 @@ async fn a_line_that_reads_current_keeps_its_stop_reasons_out_of_the_ceased_fiel
         stopped_precision: Some("year"),
         reason: Some("angioedema"),
     };
-    cease_medication(&mut c, &sk, &kid, "test-node", p, x, &dated, None, None)
-        .await
-        .unwrap();
+    cease_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        x,
+        &dated,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let list = list_patient_medications(&c, p).await.unwrap();
     assert_eq!(list.rows[0].status, MedicationStatus::Active);
     assert_eq!(reasons(&c, p).await, (None, vec![]));

@@ -6,6 +6,7 @@ use cairn_event::allergy::{
 use cairn_node::allergy::sign::{sign_allergy, sign_allergy_none};
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use uuid::Uuid;
 
 mod common;
@@ -36,9 +37,17 @@ async fn signing_an_entry_records_human_authorship() {
         corrects: None,
         coding: None,
     };
-    let id = sign_allergy(&mut c, &node_sk, &node_kid, "n", patient, &entry, &author)
-        .await
-        .unwrap();
+    let id = sign_allergy(
+        &mut c,
+        NodeKey::Full(&node_sk),
+        &node_kid,
+        "n",
+        patient,
+        &entry,
+        &author,
+    )
+    .await
+    .unwrap();
     let n: i64 = c
         .query_one(
             "SELECT count(*) FROM clinical_allergy WHERE event_id = $1::text::uuid",
@@ -95,7 +104,7 @@ async fn signing_none_known_records_its_scope() {
     };
     let id = sign_allergy_none(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         patient,

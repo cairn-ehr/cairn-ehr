@@ -16,6 +16,7 @@ use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -77,7 +78,7 @@ async fn chart_with_one_note(c: &mut Client, typed: &str) -> (Node, Uuid, String
     };
     let recorded = seal_sign_submit(
         c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         note_body(event_id, patient, &node_kid, hlc, &a),
         Some(&author),
         None,

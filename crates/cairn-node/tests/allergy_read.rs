@@ -6,6 +6,7 @@ use cairn_node::allergy::read::list_patient_allergies;
 use cairn_node::allergy::sign::{sign_allergy, sign_allergy_none};
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::shred::shred_event;
 use uuid::Uuid;
 
@@ -38,7 +39,7 @@ async fn two_linked(base: &str) -> (tokio_postgres::Client, Uuid, Uuid, Uuid, Uu
     };
     let ea = sign_allergy(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         a,
@@ -49,7 +50,7 @@ async fn two_linked(base: &str) -> (tokio_postgres::Client, Uuid, Uuid, Uuid, Uu
     .unwrap();
     let ex = sign_allergy(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         x,
@@ -144,7 +145,7 @@ async fn rows_carry_chart_scope_and_a_recorded_time_near_now() {
     };
     let ea = sign_allergy(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         a,
@@ -153,9 +154,17 @@ async fn rows_carry_chart_scope_and_a_recorded_time_near_now() {
     )
     .await
     .unwrap();
-    let en = sign_allergy_none(&mut c, &node_sk, &node_kid, "n", a, NoneScope::All, &author)
-        .await
-        .unwrap();
+    let en = sign_allergy_none(
+        &mut c,
+        NodeKey::Full(&node_sk),
+        &node_kid,
+        "n",
+        a,
+        NoneScope::All,
+        &author,
+    )
+    .await
+    .unwrap();
     let got = list_patient_allergies(&c, a).await.unwrap();
     let n = &got.none[0];
     assert_eq!((n.event_id, n.chart, n.scope.as_str()), (en, a, "all"));
@@ -185,7 +194,7 @@ async fn an_allergy_event_this_node_cannot_read_is_counted() {
     };
     let ea = sign_allergy(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         a,
@@ -196,7 +205,7 @@ async fn an_allergy_event_this_node_cannot_read_is_counted() {
     .unwrap();
     let en = sign_allergy_none(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         a,
@@ -205,9 +214,17 @@ async fn an_allergy_event_this_node_cannot_read_is_counted() {
     )
     .await
     .unwrap();
-    let kept = sign_allergy_none(&mut c, &node_sk, &node_kid, "n", a, NoneScope::All, &author)
-        .await
-        .unwrap();
+    let kept = sign_allergy_none(
+        &mut c,
+        NodeKey::Full(&node_sk),
+        &node_kid,
+        "n",
+        a,
+        NoneScope::All,
+        &author,
+    )
+    .await
+    .unwrap();
     assert_eq!(list_patient_allergies(&c, a).await.unwrap().unreadable, 0);
 
     for id in [ea, en] {
@@ -249,7 +266,7 @@ async fn an_unreadable_event_on_a_linked_chart_is_counted() {
     };
     let ex = sign_allergy(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &node_kid,
         "n",
         x,

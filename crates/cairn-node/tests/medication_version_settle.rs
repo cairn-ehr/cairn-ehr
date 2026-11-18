@@ -20,6 +20,7 @@ use cairn_node::medication::version_settle_read::{
     read_settlements, version_for_restore, Settlement,
 };
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use common::{submit_registration, NOTE_AUTHOR};
 use uuid::Uuid;
 use version_settle_kit::*;
@@ -321,7 +322,7 @@ async fn a_non_human_signer_is_never_named() {
     };
     check_version(
         &mut r.c,
-        &r.nsk,
+        NodeKey::Full(&r.nsk),
         &r.nkid,
         "test-node",
         r.chart,

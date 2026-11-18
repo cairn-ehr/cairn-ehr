@@ -26,6 +26,7 @@ use cairn_node::medication::{
     build_assert_body, build_release_body, build_withhold_body, reconcile_medications,
     release_medication_holds, withhold_medication, ReconcileInput, WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -44,9 +45,18 @@ async fn withhold_err(
     med: Uuid,
     input: &WithholdMedicationInput<'_>,
 ) -> String {
-    let err = withhold_medication(c, sk, kid, "test-node", patient, med, input, None)
-        .await
-        .expect_err("the withhold must be refused");
+    let err = withhold_medication(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        patient,
+        med,
+        input,
+        None,
+    )
+    .await
+    .expect_err("the withhold must be refused");
     format!("{err:#}")
 }
 
@@ -59,9 +69,19 @@ async fn release_err(
     med: Uuid,
     ids: &[Uuid],
 ) -> String {
-    let err = release_medication_holds(c, sk, kid, "test-node", p, med, ids, None, None)
-        .await
-        .expect_err("the release must be refused");
+    let err = release_medication_holds(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        p,
+        med,
+        ids,
+        None,
+        None,
+    )
+    .await
+    .expect_err("the release must be refused");
     format!("{err:#}")
 }
 
@@ -281,7 +301,7 @@ async fn a_release_of_a_standing_withhold_is_recorded() {
 
     let rid = release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,
@@ -500,7 +520,7 @@ async fn a_blank_or_null_release_reason_is_refused_by_the_floor() {
 
     let err = release_medication_holds(
         &mut c,
-        &sk,
+        NodeKey::Full(&sk),
         &kid,
         "test-node",
         patient,

@@ -20,6 +20,7 @@ use cairn_node::db;
 use cairn_node::medication::{
     release_medication_holds, withhold_medication, WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -154,9 +155,18 @@ async fn a_hold_from_now_is_in_force_now_even_when_the_hlc_runs_ahead() {
         from: None,
         until: HoldUntil::At(&until),
     };
-    let timed = withhold_medication(&mut c, &sk, &kid, "test-node", p, med, &input, None)
-        .await
-        .expect("a 1 h hold from now is admitted under a 2 h HLC skew");
+    let timed = withhold_medication(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        med,
+        &input,
+        None,
+    )
+    .await
+    .expect("a 1 h hold from now is admitted under a 2 h HLC skew");
     let rows = holds_now(&c, med).await;
     assert!(
         rows.contains(&(timed.to_string(), false)),
@@ -180,9 +190,19 @@ async fn a_release_ends_the_hold_now_even_when_the_hlc_runs_ahead() {
     assert_eq!(holds_now(&c, med).await, vec![(w.to_string(), false)]);
     let _clock = ratchet_clock_ahead(&c, &base).await;
 
-    let r = release_medication_holds(&mut c, &sk, &kid, "test-node", p, med, &[w], None, None)
-        .await
-        .expect("the release is admitted");
+    let r = release_medication_holds(
+        &mut c,
+        NodeKey::Full(&sk),
+        &kid,
+        "test-node",
+        p,
+        med,
+        &[w],
+        None,
+        None,
+    )
+    .await
+    .expect("the release is admitted");
     assert!(
         holds_now(&c, med).await.is_empty(),
         "a release takes effect now — not 2 h from now at the HLC wall"

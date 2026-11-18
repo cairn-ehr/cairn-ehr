@@ -19,6 +19,7 @@ use cairn_event::generate_key;
 use cairn_event::SigningKey;
 use cairn_node::db;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use cairn_node::note::commit::{commit_overdue, CommitOutcome};
 use cairn_node::note::compound::compounds;
 use cairn_node::note::draft::{open_drafts, save_part, SaveOutcome};
@@ -77,7 +78,7 @@ async fn root_note(
     let draft = Uuid::now_v7();
     sign_note(
         c,
-        node_sk,
+        NodeKey::Full(node_sk),
         &input(draft, chart, "chest clear", None),
         author,
     )
@@ -189,7 +190,7 @@ async fn signing_an_addendum_names_the_root() {
 
     let ids = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "BP now 120/80", Some(root)),
         &author,
     )
@@ -219,7 +220,7 @@ async fn sign_takes_the_target_from_the_header_not_the_window() {
 
     let ids = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "adding", None),
         &author,
     )
@@ -241,7 +242,7 @@ async fn sign_inside_the_debounce_still_makes_an_addendum() {
 
     let ids = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "pulses present", Some(root)),
         &author,
     )
@@ -264,7 +265,7 @@ async fn a_two_writer_addendum_chains_part_two_to_part_one() {
 
     let ids = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "plan: review", Some(root)),
         &author,
     )
@@ -356,8 +357,8 @@ async fn two_addenda_signed_at_once_both_join_the_note() {
     let in_two = input(two, chart, "second addendum", Some(root));
 
     let (x, y) = tokio::join!(
-        sign_note(&mut c, &node_sk, &in_one, &author),
-        sign_note(&mut other, &node_sk, &in_two, &author)
+        sign_note(&mut c, NodeKey::Full(&node_sk), &in_one, &author),
+        sign_note(&mut other, NodeKey::Full(&node_sk), &in_two, &author)
     );
 
     for out in [x, y] {
@@ -384,7 +385,7 @@ async fn an_addendum_target_on_another_chart_refuses_the_sign() {
 
     let out = sign_note(
         &mut c,
-        &node_sk,
+        NodeKey::Full(&node_sk),
         &input(draft, chart, "wrong chart", Some(elsewhere)),
         &author,
     )

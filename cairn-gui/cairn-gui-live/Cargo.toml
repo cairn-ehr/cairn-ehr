@@ -25,17 +25,19 @@ publish = false
 cairn-gui-data = { path = "../cairn-gui-data" }
 cairn-gui-funnel = { path = "../cairn-gui-funnel" }
 cairn-node = { path = "../../crates/cairn-node" }
-cairn-event = { path = "../../crates/cairn-event" }
 cairn-patient-search = { path = "../../crates/cairn-patient-search" }
 # `time`: a reopen attempt that gets no answer gives up (`connection.rs`, #807); `rt`: the
 # watchdog that cuts off a command holding the connection too long is a spawned task (#875).
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 tokio-postgres = "0.7"
 anyhow = "1"
-uuid = { version = "1", features = ["v7"] }
-hex = "0.4"
+# `v4`: a registration request id is fully random (any window login can read a request by id).
+uuid = { version = "1", features = ["v4", "v7"] }
 
 [dev-dependencies]
+# The suites sign fixtures and name keys; the window itself holds no key (#909).
+cairn-event = { path = "../../crates/cairn-event" }
+hex = "0.4"
 # Builds a `ChartSet` for the stale-record classifier test (a public domain producer).
 cairn-medication-view = { path = "../../crates/cairn-medication-view" }
 # The suites are async and talk to a real node, so they need a runtime with a reactor.

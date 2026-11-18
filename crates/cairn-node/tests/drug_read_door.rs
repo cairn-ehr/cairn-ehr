@@ -27,6 +27,7 @@ use cairn_event::{EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::sealed_submit::seal_sign_submit;
 use cairn_node::medication::AuthorParams;
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
@@ -412,7 +413,7 @@ async fn sign_coded(
         human_sk: &chart.human_sk,
         human_kid: &chart.human_kid,
     };
-    seal_sign_submit(c, &chart.node_sk, body, Some(&author), None).await?;
+    seal_sign_submit(c, NodeKey::Full(&chart.node_sk), body, Some(&author), None).await?;
     Ok(id)
 }
 

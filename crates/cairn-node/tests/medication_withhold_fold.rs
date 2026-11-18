@@ -19,6 +19,7 @@ use cairn_node::medication::{
     build_release_body, build_withhold_body, reconcile_medications, release_medication_holds,
     separate_medications, withhold_medication, ReconcileInput, WithholdMedicationInput,
 };
+use cairn_node::node_key::NodeKey;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -87,7 +88,7 @@ async fn timed(
         from: Some(from),
         until: HoldUntil::At(until),
     };
-    withhold_medication(c, sk, kid, "test-node", p, med, &input, None)
+    withhold_medication(c, NodeKey::Full(sk), kid, "test-node", p, med, &input, None)
         .await
         .expect("the timed withhold is admitted")
 }
@@ -106,15 +107,25 @@ async fn open_ended(
         from: Some(from),
         until: HoldUntil::Reviewed,
     };
-    withhold_medication(c, sk, kid, "test-node", p, med, &input, None)
+    withhold_medication(c, NodeKey::Full(sk), kid, "test-node", p, med, &input, None)
         .await
         .expect("the open-ended withhold is admitted")
 }
 
 async fn release(c: &mut Client, sk: &SigningKey, kid: &str, p: Uuid, med: Uuid, ids: &[Uuid]) {
-    release_medication_holds(c, sk, kid, "test-node", p, med, ids, None, None)
-        .await
-        .expect("the release is admitted");
+    release_medication_holds(
+        c,
+        NodeKey::Full(sk),
+        kid,
+        "test-node",
+        p,
+        med,
+        ids,
+        None,
+        None,
+    )
+    .await
+    .expect("the release is admitted");
 }
 
 #[tokio::test]

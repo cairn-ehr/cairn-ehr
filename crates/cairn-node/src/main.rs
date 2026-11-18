@@ -1,4 +1,5 @@
 use anyhow::Context;
+use cairn_node::node_key::NodeKey;
 use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::net::SocketAddr;
@@ -98,6 +99,86 @@ fn load_signing_key(
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// The body of both `provision-*-role` verbs: they differ only in the group role, the password
+/// variable and the wording, all carried by [`cairn_node::window_access::LoginGroup`]. Every
+/// refusal (the password, a remote database, a trusting cluster, the role) comes before the
+/// first mutation; `tests/provision_window_role.rs` pins that source order for this function.
+async fn provision_login_verb(
+    conn: &str,
+    role: &str,
+    group: cairn_node::window_access::LoginGroup,
+) -> anyhow::Result<()> {
+    use cairn_node::window_access as wa;
+    // Order matters: refuse the cluster BEFORE anything is mutated (the schema load is a
+    // mutation). The role name and an existing role are judged after the load, inside
+    // provision_login, still before any of ITS DDL.
+    let (env, label) = (group.password_env(), group.label());
+    let unchanged = format!("the {label} login was not created or changed");
+    let given = match std::env::var(env) {
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{env} is not valid text; {unchanged}")
+        }
+        // Set but empty is a mistake (a failed `$(cat file)`), never "keep the old one".
+        Ok(p) if p.trim().is_empty() => anyhow::bail!(
+            "{env} is set but empty; give the password, or unset it \
+             (a new login is then asked for one, an existing login keeps its own); \
+             {unchanged}"
+        ),
+        Ok(p) => Some(Zeroizing::new(p)),
+    };
+    cairn_node::conn_posture::require_local(conn)?;
+    let owner = cairn_node::db::connect(conn).await?;
+    let rules = wa::read_hba_rules(&owner).await?;
+    wa::hba_freshness(wa::hba_file_is_stale(&owner).await?).map_err(|e| anyhow::anyhow!(e))?;
+    for w in wa::hba_verdict(&rules).map_err(|e| anyhow::anyhow!(e))? {
+        eprintln!("warning: {w}");
+    }
+    drop(owner);
+    let db = cairn_node::db::connect_and_load_schema(conn).await?;
+    let password = match given {
+        Some(p) => Some(p),
+        None if !wa::role_exists(&db, role).await? => {
+            // Twice: a typo here makes a login nobody can use, and a re-run would not ask.
+            let first = Zeroizing::new(rpassword::prompt_password(format!(
+                "password for {role}: "
+            ))?);
+            let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
+            if first != again {
+                anyhow::bail!(
+                    "the two entries differ; the {label} login was not created or changed"
+                );
+            }
+            Some(first)
+        }
+        None => None,
+    };
+    if password.as_ref().is_some_and(|p| p.trim().is_empty()) {
+        anyhow::bail!("no password provided (spaces alone are not one)");
+    }
+    wa::provision_login(&db, role, password.as_ref().map(|p| p.as_str()), group).await?;
+    let how = if password.is_some() {
+        "password set"
+    } else {
+        "password unchanged"
+    };
+    match group {
+        wa::LoginGroup::Window => println!(
+            "window login '{role}' provisioned and granted cairn_window ({how})\n\
+             start the window with CAIRN_CONN=\"<this connection> user={role} password=…\" \
+             in its environment, not --conn: a command-line argument is visible to every \
+             account on this machine"
+        ),
+        wa::LoginGroup::TerminalService => println!(
+            "terminal-service login '{role}' provisioned and granted cairn_terminal_service ({how})\n\
+             start the service with CAIRN_CONN=\"<this connection> user={role} password=…\" \
+             in its environment, not --conn: a command-line argument is visible to every \
+             account on this machine:  cairn-node terminal-service"
+        ),
+    }
+    Ok(())
 }
 
 /// Load a human attester key — for every human-attested verb (`identify-patient --link`,
@@ -1639,6 +1720,17 @@ enum Cmd {
         #[arg(long, default_value = "cairn_window_login")]
         role: String,
     },
+    /// Install or upgrade the terminal service's own database login (#909): the same refusals
+    /// and order as `provision-window-role`, granted `cairn_terminal_service`. The password comes
+    /// from `CAIRN_TERMINAL_SERVICE_DB_PASSWORD`, or for a NEW login a prompt.
+    ProvisionTerminalServiceRole {
+        #[arg(long, default_value = "cairn_terminal_service_login")]
+        role: String,
+    },
+    /// Run the node-side service that registers patients for, and commits overdue note drafts
+    /// of, the reference window (#909). Unattended: needs `CAIRN_KEY_PASSPHRASE` for a sealed
+    /// key, never prompts. Connect as the login `provision-terminal-service-role` made.
+    TerminalService,
     /// Print this node's honest assembly state (peers, keystore health, DR escrow stub).
     Status {
         /// Operational passphrase (else `CAIRN_KEY_PASSPHRASE`). OPTIONAL, and never
@@ -2954,65 +3046,30 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::ProvisionWindowRole { role } => {
             use cairn_node::window_access as wa;
-            // Order matters: refuse the cluster BEFORE anything is mutated (the schema load is a
-            // mutation). The role name and an existing role are judged after the load, inside
-            // provision_window_login, still before any of ITS DDL.
-            let unchanged = "the window login was not created or changed";
-            let given = match std::env::var("CAIRN_WINDOW_DB_PASSWORD") {
-                Err(std::env::VarError::NotPresent) => None,
-                Err(std::env::VarError::NotUnicode(_)) => {
-                    anyhow::bail!("CAIRN_WINDOW_DB_PASSWORD is not valid text; {unchanged}")
-                }
-                // Set but empty is a mistake (a failed `$(cat file)`), never "keep the old one".
-                Ok(p) if p.trim().is_empty() => anyhow::bail!(
-                    "CAIRN_WINDOW_DB_PASSWORD is set but empty; give the password, or unset it \
-                     (a new login is then asked for one, an existing login keeps its own); \
-                     {unchanged}"
-                ),
-                Ok(p) => Some(Zeroizing::new(p)),
-            };
+            provision_login_verb(&cli.conn, &role, wa::LoginGroup::Window).await?
+        }
+        Cmd::ProvisionTerminalServiceRole { role } => {
+            use cairn_node::window_access as wa;
+            provision_login_verb(&cli.conn, &role, wa::LoginGroup::TerminalService).await?
+        }
+        Cmd::TerminalService => {
+            // Refuse a remote database BEFORE any connection; then the key (never prompt: an
+            // unattended process), then the schema stamp (this login cannot replay DDL).
             cairn_node::conn_posture::require_local(&cli.conn)?;
-            let owner = cairn_node::db::connect(&cli.conn).await?;
-            let rules = wa::read_hba_rules(&owner).await?;
-            wa::hba_freshness(wa::hba_file_is_stale(&owner).await?)
-                .map_err(|e| anyhow::anyhow!(e))?;
-            for w in wa::hba_verdict(&rules).map_err(|e| anyhow::anyhow!(e))? {
-                eprintln!("warning: {w}");
-            }
-            drop(owner);
-            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
-            let password = match given {
-                Some(p) => Some(p),
-                None if !wa::role_exists(&db, &role).await? => {
-                    // Twice: a typo here makes a login nobody can use, and a re-run would not ask.
-                    let first = Zeroizing::new(rpassword::prompt_password(format!(
-                        "password for {role}: "
-                    ))?);
-                    let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
-                    if first != again {
-                        anyhow::bail!(
-                            "the two entries differ; the window login was not created or changed"
-                        );
-                    }
-                    Some(first)
-                }
-                None => None,
-            };
-            if password.as_ref().is_some_and(|p| p.trim().is_empty()) {
-                anyhow::bail!("no password provided (spaces alone are not one)");
-            }
-            wa::provision_window_login(&db, &role, password.as_ref().map(|p| p.as_str())).await?;
-            println!(
-                "window login '{role}' provisioned and granted cairn_window ({})\n\
-                 start the window with CAIRN_CONN=\"<this connection> user={role} password=…\" \
-                 in its environment, not --conn: a command-line argument is visible to every \
-                 account on this machine",
-                if password.is_some() {
-                    "password set"
-                } else {
-                    "password unchanged"
-                }
-            );
+            let sk = load_signing_key(&cli.key, false)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let stamp = cairn_node::db::read_schema_stamp(&db).await?;
+            cairn_node::conn_posture::schema_verdict(
+                stamp.as_ref(),
+                "terminal service",
+                "provision-terminal-service-role",
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            // Then the login can claim requests and the key is the node's own (final review F4).
+            let origin = cairn_node::terminal_service::startup::check(&db, &sk).await?;
+            drop(db);
+            eprintln!("terminal service running");
+            cairn_node::terminal_service::run::run(&cli.conn, &sk, &origin).await?;
         }
         Cmd::Status { passphrase } => {
             let db = cairn_node::db::connect(&cli.conn).await?;
@@ -5407,7 +5464,7 @@ async fn run() -> anyhow::Result<()> {
             };
             let event_id = cairn_node::medication::cease_medication(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &node_kid,
                 &id.node_id_hex,
                 patient,
@@ -5459,7 +5516,7 @@ async fn run() -> anyhow::Result<()> {
             let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::withhold_medication(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &node_kid,
                 &id.node_id_hex,
                 patient,
@@ -5489,7 +5546,7 @@ async fn run() -> anyhow::Result<()> {
             let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::release_medication_holds(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &node_kid,
                 &id.node_id_hex,
                 patient,
@@ -5986,7 +6043,7 @@ async fn run() -> anyhow::Result<()> {
 
             let out = cairn_node::medication::signoff::sign_off_medication_list(
                 &mut db,
-                &node_sk,
+                NodeKey::Full(&node_sk),
                 &id.node_id_hex,
                 &params,
                 patient,

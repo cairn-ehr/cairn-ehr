@@ -23,10 +23,15 @@ cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-0000000
 
 # Against a real node: the front door, or straight onto one chart with --patient. The connection is
 # the WINDOW's own login (cairn-node provision-window-role), passed in the environment, never --conn
-# on a shared machine: a command-line argument is visible to every account (`ps`).
+# on a shared machine: a command-line argument is visible to every account (`ps`). The window takes
+# no --key: it holds no node key (ADR-0109).
 CAIRN_CONN="$WINDOW_CONN" cargo run --release -p cairn-gui-tauri -- \
-    --key node.key [--key-hold-seconds 900] [--patient <uuid>]
+    [--key-hold-seconds 900] [--patient <uuid>]
 ```
+
+Registration and the timed commit of a note draft need the node's terminal service
+(`cairn-node terminal-service`, on the database's machine, under launchd or systemd): see
+[`results/RUNBOOK.md`](results/RUNBOOK.md) §38.
 
 Setting up a node for the window — the cluster, `init`, `provision-window-role`, the first superuser —
 is [`results/RUNBOOK.md`](results/RUNBOOK.md) §0 and §16, and the developer manual's *Getting started*
