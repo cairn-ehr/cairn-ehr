@@ -165,8 +165,10 @@
 >    done and fixed. **Time-sensitive:** RUSTSEC-2026-0543 (chrono unmaintained) is ignored in both `deny.toml` trees until
 >    2027-02-18 (**#1160**, migrate off chrono); **#389**'s glib ignore was re-decided 2026-11-20 to the same date (its exit
 >    condition moved: gtk 0.19 + webkit2gtk 3 exist on glib 0.22; no tauri uses them yet). **⇒ NEXT: RUNBOOK §38** (a
->    human); slice B's plan (the gateway; any login can take the registration advisory lock, and the owner's
->    `patient-register` takes none), slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
+>    human); **slice B's plan is WRITTEN, awaiting the maintainer's review** (2026-11-20,
+>    [`superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md`](superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md):
+>    the gateway, the trust set, the ceremony, the window's `Link`; the advisory lock becomes a row lock the window
+>    cannot take, and the CLI's `patient-register` takes it too); then build it, then slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
 >    §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac
 >    figures); or the next whole-project review. Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred
 >    (#979), 4–5 are **#965**, **#964**. Slice 3's design:
