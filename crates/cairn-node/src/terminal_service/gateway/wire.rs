@@ -81,7 +81,7 @@ fn startup_params(body: &[u8]) -> Result<Vec<(String, String)>, &'static str> {
         .strip_suffix(&[0])
         .ok_or("startup: unterminated value")?;
     let items: Vec<&[u8]> = body.split(|b| *b == 0).collect();
-    if items.len() % 2 != 0 {
+    if !items.len().is_multiple_of(2) {
         return Err("startup: odd key/value count");
     }
     items
