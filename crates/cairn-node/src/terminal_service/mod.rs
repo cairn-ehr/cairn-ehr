@@ -12,6 +12,7 @@
 //! once before it, from the `cairn-node terminal-service` verb.
 
 pub mod commit;
+pub mod gateway;
 pub mod registration;
 pub mod run;
 pub mod startup;
