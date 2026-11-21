@@ -81,24 +81,33 @@ unsound = "all"
 # rustc optimises away entirely, so `CStr::from_ptr` then dereferences NULL. Impact is a CRASH
 # (CVSS VC:N/VI:L/VA:N — no disclosure, no data corruption), on Linux only, since the whole GTK
 # stack is absent on macOS and Windows. No Cairn code calls it: nothing in this repo references
-# `glib` at all (re-verified 2026-08-21), so reachability is entirely inside the GTK/webkit
+# `glib` at all (re-verified 2026-11-21), so reachability is entirely inside the GTK/webkit
 # stack we do not drive directly.
 #
 # WE DO NOT PIN glib. No Cairn manifest mentions it. 0.18.5 is a transitive CEILING:
 #
 #     cairn-gui-tauri → tauri "2" (resolves 2.11.5; 2.12.7 is the latest 2.x, same ceiling)
-#       → wry/tao/muda → webkit2gtk 2.0.2 (requires gtk ^0.18.0, glib ^0.18.0)
-#         → gtk 0.18.2 (requires glib ^0.18)
+#       → tauri itself, tauri-runtime(-wry), wry → webkit2gtk 2.0.2 (gtk ^0.18.0, glib ^0.18.0)
+#       → the same plus tao and muda → gtk 0.18.2 (requires glib ^0.18)
 #
 # THE EXIT CONDITION HAS MOVED TWICE; re-check it against crates.io, never against this text.
-# 2026-08-21 it read "no GTK3 binding will ever reach glib >= 0.20; wait for Tauri on GTK4". That
-# was true then and is false now: re-verified 2026-11-20, GTK3 bindings continued —
-# `gtk` 0.19.0 and `webkit2gtk` 3.0.0 both sit on glib 0.22, which carries the fix.
+# 2026-08-21 it read "no GTK3 binding will ever reach glib >= 0.20; wait for Tauri on GTK4". Its
+# first half was true then and is false now: re-verified 2026-11-20, GTK3 bindings continued —
+# `gtk` 0.19.0 and `webkit2gtk` 3.0.0 both sit on glib 0.22, which carries the fix. Its second
+# half still stands as a route: tauri 3.0.0-alpha.6 offers an optional `gtk4` backend (glib 0.22)
+# beside its optional gtk 0.18 one.
 #
-# THE REAL EXIT CONDITION (2026-11-20): wry/tao/muda — and so tauri — depending on gtk 0.19 /
-# webkit2gtk 3. None does yet: tauri 2.12.7, tauri 3.0.0-alpha.6 and wry 0.57.3 all still
-# require gtk 0.18 (wry pins webkit2gtk =2.0.2). When one does: bump, drop this entry, confirm
-# `cargo deny --manifest-path cairn-gui/Cargo.toml check` is green without it, close #389.
+# THE REAL EXIT CONDITION (2026-11-21) is mechanical, not "one crate moved": EVERY GTK path out
+# of tauri must leave glib 0.18, by either route (gtk 0.19 + webkit2gtk 3, or gtk4). Moving one
+# of tauri, tauri-runtime-wry, wry, tao or muda alone leaves glib 0.18 in the tree; today all of
+# them still require gtk ^0.18 (wry 0.57.3 pins webkit2gtk =2.0.2). The test, after a tauri bump:
+#
+#     cargo tree --manifest-path cairn-gui/Cargo.toml --target all -e normal | grep 'glib v0.1'
+#
+# prints nothing. `--target all` is not optional: glib is Linux-only, so on a Mac the bare command
+# prints nothing even while the advisory stands. Then drop this entry, confirm `cargo deny
+# --manifest-path cairn-gui/Cargo.toml check` is green without it, lower IGNORES_TODAY in
+# advisory_ignore_review_dates.rs, and close #389.
 #
 # Bounded in time because cargo-deny 0.19.9 has no `expires` field (it accepts only `id` and
 # `reason`), so an ignore is permanent by default — an open-ended suppression of a security
@@ -109,7 +118,7 @@ unsound = "all"
 # DO NOT silently extend this ignore to cover other advisories. One entry, one id, one rationale:
 # a second finding that arrives under this block's cover is a finding nobody assessed.
 id = "RUSTSEC-2024-0429"
-reason = "glib 0.18.5 unsoundness (crash-only, Linux-only, unreachable from Cairn code); a transitive ceiling from tauri's webkit2gtk 2/gtk 0.18 stack, NOT a pin of ours — patched in glib >= 0.20. Clears when wry/tao/muda move to gtk 0.19 + webkit2gtk 3 (both on glib 0.22, published; no tauri uses them yet). Tracked in issue #389. Re-decided by the maintainer 2026-11-20. review-by 2027-02-18"
+reason = "glib 0.18.5 unsoundness (crash-only, Linux-only, unreachable from Cairn code); a transitive ceiling from tauri's webkit2gtk 2/gtk 0.18 stack, NOT a pin of ours — patched in glib >= 0.20. Clears when a tauri release resolves with no glib 0.18 in cairn-gui/Cargo.lock (via gtk 0.19 + webkit2gtk 3, or gtk4; none does yet). Tracked in issue #389. Re-decided by the maintainer 2026-11-20. review-by 2027-02-18"
 
 
 [[advisories.ignore]]

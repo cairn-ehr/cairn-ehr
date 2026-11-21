@@ -8,12 +8,13 @@
 //! asks whether the reasoning still holds.
 //!
 //! That is the silent-gate shape this repo keeps finding (#442, #446): a gate that supplies
-//! reassurance without re-earning it. The cost is not hypothetical. The one ignore in this repo,
+//! reassurance without re-earning it. The cost is not hypothetical. The first ignore in this repo,
 //! RUSTSEC-2024-0429, carried an exit condition — *"remove when Tauri's Linux backend moves to
-//! gtk-rs 0.20+"* — that was **unreachable**: the `gtk` crate's terminal release is 0.18.2
-//! (2024-12-09), because gtk-rs archived the GTK3 bindings and moved to the separate `gtk4`
-//! crate. A reader following that sentence would check for a gtk-rs 0.20 that will never ship,
-//! see nothing, and re-defer — forever, silently, with a green check each time.
+//! gtk-rs 0.20+"* — that looked **unreachable** when this guard was written (2026-08-21): the
+//! `gtk` crate's last release was then 0.18.2 (2024-12-09), and gtk-rs appeared to have moved on
+//! to the separate `gtk4` crate. A reader following that sentence would have checked for a gtk-rs
+//! 0.20 that was not coming, seen nothing, and re-deferred — forever, silently, with a green check
+//! each time.
 //!
 //! The date then earned its keep: the re-read it forced on 2026-11-20 found the corrected
 //! rationale stale too — GTK3 bindings had continued (`gtk` 0.19.0 and `webkit2gtk` 3.0.0, on glib
