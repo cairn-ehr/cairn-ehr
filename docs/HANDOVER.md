@@ -165,7 +165,7 @@
 >    done and fixed. **Time-sensitive:** RUSTSEC-2026-0543 (chrono unmaintained) is ignored in both `deny.toml` trees until
 >    2027-02-18 (**#1160**, migrate off chrono); **#389**'s glib ignore was re-decided 2026-11-20 to the same date (its exit
 >    condition moved: gtk 0.19 + webkit2gtk 3 exist on glib 0.22; no tauri uses them yet). **⇒ NEXT: RUNBOOK §38** (a
->    human); **slice B's plan is WRITTEN and finalchecked, awaiting the maintainer's review** (2026-11-20/21, PR #1162,
+>    human); **slice B's plan is APPROVED (PR #1162 merged 2026-11-20); its build is IN PROGRESS on `feat/909-slice-b-pinned-gateway`** (
 >    [`superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md`](superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md):
 >    the gateway, the trust set, the ceremony, the window's `Link`; the advisory lock becomes a row lock the window
 >    cannot take, and the CLI's `patient-register` takes it too; a revoke cancels the terminal's running statement).
