@@ -15,6 +15,10 @@
 //! crate. A reader following that sentence would check for a gtk-rs 0.20 that will never ship,
 //! see nothing, and re-defer — forever, silently, with a green check each time.
 //!
+//! The date then earned its keep: the re-read it forced on 2026-11-20 found the corrected
+//! rationale stale too — GTK3 bindings had continued (`gtk` 0.19.0 and `webkit2gtk` 3.0.0, on glib
+//! 0.22), so the exit condition moved again. `cairn-gui/deny.toml` carries the current one.
+//!
 //! An expiry does not fix a wrong rationale. What it does is force someone to *read* the
 //! rationale again, on a date, with the advisory in front of them.
 //!
