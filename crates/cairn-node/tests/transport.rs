@@ -74,7 +74,45 @@ async fn terminal_refuses_an_unpinned_gateway() {
 async fn gateway_refuses_a_tls12_only_client() {
     let (gw, gw_id) = cairn_event::generate_key().unwrap();
     let (term, term_id) = cairn_event::generate_key().unwrap();
-    let server = transport::gateway_server_config(&gw, pin(&term_id)).unwrap();
     let client = transport::tls12_only_client_config_for_tests(&term, pin(&gw_id)).unwrap();
+    // Positive control: the same TLS 1.2 client DOES handshake against default
+    // versions, so the failure below can only be the gateway's version pin.
+    let lax = transport::server_config(&gw, pin(&term_id)).unwrap();
+    transport::test_handshake(lax, client.clone())
+        .await
+        .unwrap();
+    let server = transport::gateway_server_config(&gw, pin(&term_id)).unwrap();
     assert!(transport::test_handshake(server, client).await.is_err());
+}
+
+/// The test-only TLS 1.2 builder must never gain a production caller.
+#[test]
+fn tls12_test_builder_has_no_production_caller() {
+    fn walk(dir: &std::path::Path, hits: &mut usize) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, hits);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                *hits += text.matches("tls12_only_client_config_for_tests").count();
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut hits = 0;
+    for group in ["crates", "cairn-gui"] {
+        for krate in std::fs::read_dir(root.join(group))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            walk(&krate.path().join("src"), &mut hits);
+        }
+    }
+    // Exactly one occurrence: the definition itself.
+    assert_eq!(
+        hits, 1,
+        "tls12_only_client_config_for_tests used outside tests"
+    );
 }
