@@ -462,6 +462,12 @@ pub async fn register_patient_returning_event(
     // ONE transaction for every event this call authors — the #350 fix: a registration with
     // no matching demographic facts is exactly the half-registered state to avoid.
     let tx = client.transaction().await?;
+    // Registrations take turns, node-wide (db/084): a second registration of the same person
+    // must search AFTER the first has committed, or both find nobody and make a duplicate. Taken
+    // HERE, not in `register_patient_in_tx`, because the terminal service's `serve_one` calls
+    // that body inside a transaction that already holds the turn. Held until commit.
+    tx.query_one("SELECT cairn_registration_take_turn()", &[])
+        .await?;
     let done = super::register_tx::register_patient_in_tx(
         &tx,
         sk,

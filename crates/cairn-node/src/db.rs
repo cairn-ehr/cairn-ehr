@@ -525,6 +525,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "083_terminal_service",
         include_str!("../../../db/083_terminal_service.sql"),
     ),
+    // db/084 (#909 slice B): the terminal trust set, the gateway record, and the registration
+    // turn (a row lock only the service and the owner can take).
+    (
+        "084_terminal_gateway",
+        include_str!("../../../db/084_terminal_gateway.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

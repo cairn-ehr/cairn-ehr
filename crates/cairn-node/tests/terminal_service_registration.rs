@@ -16,7 +16,7 @@
 //! * a floor refusal settles `refused` with the floor's words;
 //! * two services at once register a request once (the claim is `FOR UPDATE SKIP LOCKED`);
 //! * two requests for one new patient, served by two services at once, make one chart (the
-//!   registration lock, `REGISTRATION_LOCK`);
+//!   registration turn, db/084's `cairn_registration_take_turn`);
 //! * a service that fails mid-transaction leaves the request pending, served once later.
 //!
 //! Each test runs `serve_one` as a login granted `cairn_terminal_service`, the role the real
@@ -458,13 +458,13 @@ async fn pid_of(c: &Client) -> i32 {
 /// existed, so both requests honestly say "saw no one". Without one lock across services, both
 /// searches run before either registration commits (the HLC row lock comes only at the first
 /// tick), neither sees the other's chart, and the record gets a duplicate. With the
-/// registration lock, the second service waits for the first to commit, searches after it, and
+/// registration turn, the second service waits for the first to commit, searches after it, and
 /// refuses: "a new possible match has appeared".
 ///
 /// Deterministic, not timing-based: a third session holds the node's HLC row, so the first
 /// service to get going parks on it with its search already run, and the test releases it only
-/// once BOTH services are parked on a lock (without the registration lock, both park on the
-/// HLC row, each search done; with it, the second parks on the registration lock, unsearched).
+/// once BOTH services are parked on a lock (without the registration turn, both park on the
+/// HLC row, each search done; with it, the second parks on the registration turn, unsearched).
 #[tokio::test]
 async fn two_servers_two_requests_for_one_patient_register_one_chart() {
     let Some(r) = rig().await else { return };
@@ -556,7 +556,7 @@ async fn a_dropped_transaction_leaves_the_request_pending() {
     r.owner
         .batch_execute(&format!(
             "CREATE ROLE {NO_CLOCK} NOLOGIN;
-             GRANT EXECUTE ON FUNCTION cairn_registration_claim(),
+             GRANT EXECUTE ON FUNCTION cairn_registration_claim(), cairn_registration_take_turn(boolean),
                  cairn_registration_settle(uuid, text, uuid, uuid, text),
                  cairn_search_candidates(text[], text, jsonb) TO {NO_CLOCK};
              GRANT SELECT ON patient_identifier, patient_demographic, patient_name TO {NO_CLOCK};"
