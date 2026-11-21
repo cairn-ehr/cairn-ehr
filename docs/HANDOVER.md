@@ -158,17 +158,18 @@
 >    `warning_override` from the CLI — is not built). **#1138 MERGED 2026-11-16** in PR
 >    [#1148](https://github.com/cairn-ehr/cairn-ehr/pull/1148): items 1, 2, 4, 7, 8 built; 5 accepted (ADR-0098 d21);
 >    9 commented on #1077. **Rulings owed: #1146** (item 3, a hold release past a new allergy) and **#1147** (item 6,
->    no audit trail on site policy). #1109 widened. **#909 slice A MERGED 2026-11-16 in PR #1152**
+>    no audit trail on site policy). #1109 widened. **#909 slice A MERGED 2026-11-18 in PR #1152**
 >    ([ADR-0109](spec/decisions/0109-the-terminal-service-and-the-keyless-window.md)): no window holds the node key;
 >    `cairn-node terminal-service` registers from a queue (re-running the search against the BOUNDED prompt) and runs
 >    the commit tick; filed **#1153**–**#1159** (#1159: the re-search guards only the queue). Final review and finalcheck
 >    done and fixed. **Time-sensitive:** RUSTSEC-2026-0543 (chrono unmaintained) is ignored in both `deny.toml` trees until
 >    2027-02-18 (**#1160**, migrate off chrono); **#389**'s glib ignore was re-decided 2026-11-20 to the same date (its exit
 >    condition moved: gtk 0.19 + webkit2gtk 3 exist on glib 0.22; no tauri uses them yet). **⇒ NEXT: RUNBOOK §38** (a
->    human); **slice B's plan is WRITTEN, awaiting the maintainer's review** (2026-11-20,
+>    human); **slice B's plan is WRITTEN and finalchecked, awaiting the maintainer's review** (2026-11-20/21, PR #1162,
 >    [`superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md`](superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md):
 >    the gateway, the trust set, the ceremony, the window's `Link`; the advisory lock becomes a row lock the window
->    cannot take, and the CLI's `patient-register` takes it too); then build it, then slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
+>    cannot take, and the CLI's `patient-register` takes it too; a revoke cancels the terminal's running statement).
+>    Then build it, then slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
 >    §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac
 >    figures); or the next whole-project review. Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred
 >    (#979), 4–5 are **#965**, **#964**. Slice 3's design:
