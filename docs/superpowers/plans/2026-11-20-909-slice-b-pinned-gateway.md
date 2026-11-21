@@ -58,7 +58,7 @@ Read ADR-0109's "What is not guaranteed" first: two of its bullets are this slic
 - Guards:
   - Every new definer function gets `REVOKE ALL … FROM PUBLIC`. `floor_execute_grants.rs` does **not** see these
     (it checks only its named families), so `terminal_gateway_doors.rs` asserts it for each of them itself.
-  - `window_role_grants.rs::the_windows_reads_and_registration_run_under_its_own_login` **changes**: it registers on
+  - `window_role_grants.rs::the_windows_reads_run_under_its_own_login_and_registration_is_refused` **changes**: it registers on
     a window login today, and after Task 1 the window cannot take the turn. That is intended: since ADR-0109 the
     window registers only through the queue. The test now pins that a window's direct `register_patient` is refused
     with `42501` (this closes the Rust path around the queue, not raw `submit_event`, which stays #1159). The other

@@ -42,11 +42,17 @@ GRANT SELECT ON terminal_trust TO cairn_terminal_service;
 -- sha256 of the 32 key bytes, as five upper-case 4-hex groups joined by '-'. Must equal
 -- cairn_event::short_fingerprint (a test pins it).
 CREATE OR REPLACE FUNCTION cairn_terminal_fingerprint(p_pubkey text)
-RETURNS text LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT concat_ws('-', substr(h, 1, 4), substr(h, 5, 4), substr(h, 9, 4), substr(h, 13, 4),
-                     substr(h, 17, 4))
-      FROM (SELECT upper(encode(substring(sha256(decode(p_pubkey, 'hex')) FROM 1 FOR 10), 'hex'))
-                   AS h) x;
+RETURNS text LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+    h text;
+BEGIN
+    IF p_pubkey IS NULL OR p_pubkey !~ '^[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION 'a terminal key is 64 lower-case hex digits';
+    END IF;
+    h := upper(encode(substring(sha256(decode(p_pubkey, 'hex')) FROM 1 FOR 10), 'hex'));
+    RETURN concat_ws('-', substr(h, 1, 4), substr(h, 5, 4), substr(h, 9, 4), substr(h, 13, 4),
+                     substr(h, 17, 4));
+END;
 $$;
 
 -- The gateway reports that key p_pubkey just connected. An unknown key is recorded `pending`; a
@@ -55,6 +61,9 @@ $$;
 CREATE OR REPLACE FUNCTION cairn_terminal_attempt(p_pubkey text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
+    IF p_pubkey IS NULL OR p_pubkey !~ '^[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION 'a terminal key is 64 lower-case hex digits';
+    END IF;
     INSERT INTO terminal_trust (terminal_pubkey, fingerprint, status, first_seen, last_seen)
     VALUES (p_pubkey, cairn_terminal_fingerprint(p_pubkey), 'pending',
             clock_timestamp(), clock_timestamp())
@@ -169,6 +178,10 @@ BEGIN
         RETURN false;
     END IF;
     PERFORM 1 FROM registration_turn FOR UPDATE;
+    -- Fail closed: a deleted turn row would lock nothing and let registrations run in parallel.
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'the registration turn row is missing; refusing to register without it';
+    END IF;
     RETURN true;
 END;
 $$;

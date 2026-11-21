@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 const TODAY: &str = "2026-11-20";
 const NODE: &str = "n";
-/// The window's old advisory-lock key (slice A's `REGISTRATION_LOCK`, now deleted): a window that
+/// The window's old advisory-lock key (slice A's advisory-lock key, CARNRG, now unused): a window that
 /// still holds it must no longer be able to stop a registration.
 const OLD_WINDOW_LOCK: i64 = 0x4341_524E_5247;
 
@@ -99,6 +99,18 @@ async fn status_of(owner: &Client, key: &str) -> Option<String> {
         .await
         .unwrap()
         .map(|r| r.get(0))
+}
+
+/// `(decided_by, decided_at)` as text, to compare a decision before and after.
+async fn decision(owner: &Client, key: &str) -> (Option<String>, Option<String>) {
+    let row = owner
+        .query_one(
+            "SELECT decided_by, decided_at::text FROM terminal_trust WHERE terminal_pubkey = $1",
+            &[&key],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1))
 }
 
 /// The window writes a registration request for `name` (nobody displayed: an empty search).
@@ -240,6 +252,20 @@ async fn revoke_then_admit_is_refused() {
         .unwrap_err();
     assert_eq!(code_of(&e), "P0001");
     assert_eq!(status_of(&r.owner, &key).await.as_deref(), Some("revoked"));
+    // Revoking a revoked terminal is idempotent: same key, first decision kept.
+    let before = decision(&r.owner, &key).await;
+    let again: String = r
+        .owner
+        .query_one("SELECT cairn_terminal_revoke($1)", &[&fp])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(again, key);
+    assert_eq!(
+        decision(&r.owner, &key).await,
+        before,
+        "first decision kept"
+    );
     // Revoke of an unknown fingerprint raises too.
     let e = r
         .owner
@@ -260,10 +286,77 @@ async fn the_window_role_cannot_read_the_trust_set_or_take_the_turn() {
         "SELECT count(*) FROM terminal_gateway",
         "SELECT cairn_registration_take_turn()",
         "SELECT cairn_terminal_attempt('00')",
+        "SELECT cairn_terminal_admit('0000-0000-0000-0000-0000', 'x')",
+        "SELECT cairn_terminal_revoke('0000-0000-0000-0000-0000')",
+        "INSERT INTO terminal_trust (terminal_pubkey, fingerprint, status, first_seen, last_seen) \
+         VALUES (repeat('a', 64), 'x', 'active', now(), now())",
     ] {
         let e = r.window.query_one(sql, &[]).await.unwrap_err();
         assert_eq!(code_of(&e), "42501", "{sql}");
     }
+}
+
+/// The service's login may read the trust set and report attempts, and nothing more: admitting,
+/// revoking and writing the tables are the owner's alone (nobody on the network admits itself).
+#[tokio::test]
+async fn the_service_role_cannot_admit_revoke_or_write() {
+    let Some(r) = rig().await else { return };
+    let key = terminal_key(5);
+    attempt(&r.service, &key).await;
+    let fp = short_fingerprint(&key).unwrap();
+    for sql in [
+        format!("SELECT cairn_terminal_admit('{fp}', 'x')"),
+        format!("SELECT cairn_terminal_revoke('{fp}')"),
+        format!("SELECT cairn_terminal_lock_one('{fp}')"),
+        "INSERT INTO terminal_trust (terminal_pubkey, fingerprint, status, first_seen, last_seen) \
+         VALUES (repeat('b', 64), 'x', 'active', now(), now())"
+            .to_string(),
+        "UPDATE terminal_trust SET status = 'active'".to_string(),
+        "INSERT INTO terminal_gateway (upstream, checked_at, checked_by) \
+         VALUES ('u', now(), 'x')"
+            .to_string(),
+    ] {
+        let e = r.service.execute(sql.as_str(), &[]).await.unwrap_err();
+        assert_eq!(code_of(&e), "42501", "{sql}");
+    }
+    assert_eq!(status_of(&r.owner, &key).await.as_deref(), Some("pending"));
+}
+
+/// A malformed key is a clear verdict (P0001), not an incidental decode error.
+#[tokio::test]
+async fn a_malformed_key_is_refused_clearly() {
+    let Some(r) = rig().await else { return };
+    for bad in ["zz", "ABCD", &"a".repeat(63)] {
+        let e = r
+            .service
+            .execute("SELECT cairn_terminal_attempt($1)", &[&bad])
+            .await
+            .unwrap_err();
+        assert_eq!(code_of(&e), "P0001", "{bad}");
+        let e = r
+            .owner
+            .query_one("SELECT cairn_terminal_fingerprint($1)", &[&bad])
+            .await
+            .unwrap_err();
+        assert_eq!(code_of(&e), "P0001", "{bad}");
+    }
+}
+
+/// A missing turn row must fail closed: a silent no-lock would let registrations run in parallel.
+#[tokio::test]
+async fn a_missing_turn_row_fails_closed() {
+    let Some(r) = rig().await else { return };
+    r.owner
+        .batch_execute("BEGIN; DELETE FROM registration_turn")
+        .await
+        .unwrap();
+    let e = r
+        .owner
+        .query_one("SELECT cairn_registration_take_turn()", &[])
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&e), "P0001");
+    r.owner.batch_execute("ROLLBACK").await.unwrap();
 }
 
 /// Connection A (a plain connection as the owner) holds the registration turn in an open

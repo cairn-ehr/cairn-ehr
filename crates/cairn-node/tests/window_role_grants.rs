@@ -92,9 +92,10 @@ fn a_repeated_user_keeps_the_last_value() {
 }
 
 /// The search funnel, the chart's reads, the duplicate banner and worklist, the gesture
-/// timer and the node's own standing — every READ the window makes, plus registration.
+/// timer and the node's own standing — every READ the window makes. Registration is NOT a window
+/// act (db/084): the window's direct call is refused, and the owner makes the chart the walk reads.
 #[tokio::test]
-async fn the_windows_reads_and_registration_run_under_its_own_login() {
+async fn the_windows_reads_run_under_its_own_login_and_registration_is_refused() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
