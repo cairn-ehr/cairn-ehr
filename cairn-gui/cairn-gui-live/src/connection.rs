@@ -63,12 +63,19 @@
 //!   passes it through [`ConnectionGuard::explain`] while it still holds the guard (`cut_off.rs`;
 //!   pinned for every lock by `cairn-gui-tauri`'s `node_lock_explains_tests.rs`).
 //!
-//! The reopen uses `cairn_node::db::connect_with_task`, not `connect_and_load_schema`: the schema
+//! The reopen goes back through the SAME [`Link`] the window launched on (#909 slice B): on this
+//! machine `Link::Local`, which is `cairn_node::db::connect_with_task`; from another machine the
+//! pinned TLS link to the node's gateway, so a reopen can never fall back to a clear-text connect.
+//! A terminal the node no longer admits is refused by the link itself, and that refusal reads as
+//! [`Refusal::Client`] with the link's own sentence naming the operator.
+//!
+//! The reopen never calls `connect_and_load_schema`: the schema
 //! was checked (never loaded) at launch, the window's own login cannot replay it (ADR-0084), and
 //! replaying every `db/*.sql` file takes locks a read never needs (#726). It also skips the
 //! deferred-event re-adjudication `connect_and_load_schema` runs; since ADR-0084 so does the
 //! window's launch, and only the one-off loader verbs still run it (#912).
 use cairn_gui_data::port::DataError;
+use cairn_node::terminal_link::Link;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -154,8 +161,9 @@ impl From<ConnectionLost> for DataError {
 /// One node connection, shared through an `Arc` and taken with [`NodeConnection::lock`].
 pub struct NodeConnection {
     held: Mutex<Held>,
-    /// Where to reopen from. `None` for [`NodeConnection::fixed`]: that one is never replaced.
-    reopen_from: Option<String>,
+    /// Where to reopen from, and the link to reopen through. `None` for
+    /// [`NodeConnection::fixed`]: that one is never replaced.
+    reopen_from: Option<(String, Link)>,
     /// How long a guard may be held before its connection is cut off (#875).
     answer_within: Duration,
 }
@@ -291,17 +299,30 @@ impl NodeConnection {
     /// A connection that is reopened, from `conn`, when it is lost, and cut off when a command
     /// holds it past [`ANSWER_WITHIN`](Self::ANSWER_WITHIN). The window's. `task` is the
     /// client's connection task (`cairn_node::db::connect_with_task`). Asks the server which
-    /// backend `client` is, so a reopen after a cut can end it (`Backend`).
+    /// backend `client` is, so a reopen after a cut can end it (`Backend`). For a node on this
+    /// machine: [`reopening_via`](Self::reopening_via) with `Link::Local`.
     pub async fn reopening(
         client: Client,
         task: AbortHandle,
         conn: String,
     ) -> Result<Self, tokio_postgres::Error> {
+        Self::reopening_via(client, task, conn, Link::Local).await
+    }
+
+    /// [`reopening`](Self::reopening), reopened through `link`: the link `client` itself was
+    /// opened through (`cairn_node::terminal_link::prepare`), so a window that reached its node
+    /// through the pinned link never reopens around it.
+    pub async fn reopening_via(
+        client: Client,
+        task: AbortHandle,
+        conn: String,
+        link: Link,
+    ) -> Result<Self, tokio_postgres::Error> {
         let backend = Backend::of(&client).await?;
         Ok(Self::new(
             client,
             Some(Cutter::new(task, backend)),
-            Some(conn),
+            Some((conn, link)),
         ))
     }
 
@@ -318,7 +339,7 @@ impl NodeConnection {
         self
     }
 
-    fn new(client: Client, cutter: Option<Cutter>, reopen_from: Option<String>) -> Self {
+    fn new(client: Client, cutter: Option<Cutter>, reopen_from: Option<(String, Link)>) -> Self {
         Self {
             held: Mutex::new(Held {
                 client,
@@ -338,8 +359,8 @@ impl NodeConnection {
     pub async fn lock(&self) -> Result<ConnectionGuard<'_>, ConnectionLost> {
         let mut held = self.held.lock().await;
         if held.is_lost() {
-            if let Some(conn) = &self.reopen_from {
-                held.reopen(conn).await?;
+            if let Some((conn, link)) = &self.reopen_from {
+                held.reopen(conn, link).await?;
             }
         }
         Ok(self.watched(held))
@@ -452,7 +473,7 @@ impl Held {
     /// logged either way (the loss itself by the connection task, or by the watchdog for a cut:
     /// an aborted task logs nothing); a press the backoff skips is not, its error goes to the
     /// caller only.
-    async fn reopen(&mut self, conn: &str) -> Result<(), ConnectionLost> {
+    async fn reopen(&mut self, conn: &str, link: &Link) -> Result<(), ConnectionLost> {
         let now = Instant::now();
         if let Some(last) = &self.last_failed {
             if !may_retry(Some(last.at), now) {
@@ -461,7 +482,7 @@ impl Held {
             }
         }
         let cut_off = self.cutter.as_ref().filter(|c| c.was_cut());
-        let attempt = open_after(conn, cut_off.map(|c| &c.backend));
+        let attempt = open_after(conn, link, cut_off.map(|c| &c.backend));
         let (cause, refused) =
             match tokio::time::timeout(NodeConnection::REOPEN_WITHIN, attempt).await {
                 Ok(Ok((fresh, cutter))) => {
@@ -473,7 +494,8 @@ impl Held {
                 }
                 Ok(Err(e)) => {
                     // `db::connect`'s own error keeps the server's code beside its text (#880),
-                    // and marks a refusal the client library raised itself, which has none (#884).
+                    // and marks a refusal the client library raised itself, which has none (#884);
+                    // the pinned link's own refusals (not admitted, another key) are marked so too.
                     let refused = e
                         .downcast_ref::<cairn_node::db::ConnectFailed>()
                         .and_then(|f| {
@@ -501,11 +523,15 @@ impl Held {
     }
 }
 
-/// A fresh connection on `conn`, with its cutter. When the client it replaces was CUT OFF, its
-/// backend is ended first (`Backend::end_on`), so the first read on the fresh one is final.
-/// Inside the reopen's timeout: a fresh client given up on is dropped, which closes it.
-async fn open_after(conn: &str, cut_off: Option<&Backend>) -> anyhow::Result<(Client, Cutter)> {
-    let (client, task) = cairn_node::db::connect_with_task(conn).await?;
+/// A fresh connection on `conn` through `link`, with its cutter. When the client it replaces was
+/// CUT OFF, its backend is ended first (`Backend::end_on`), so the first read on the fresh one is
+/// final. Inside the reopen's timeout: a fresh client given up on is dropped, which closes it.
+async fn open_after(
+    conn: &str,
+    link: &Link,
+    cut_off: Option<&Backend>,
+) -> anyhow::Result<(Client, Cutter)> {
+    let (client, task) = link.connect_with_task(conn).await?;
     if let Some(old) = cut_off {
         old.end_on(&client).await?;
     }
@@ -568,8 +594,10 @@ fn lost_text(cause: &str, refused: Option<Refusal>, skipped: Option<Duration>) -
         }
     };
     match refused {
+        // A cause that is already a sentence (the pinned link's refusals are) keeps one stop.
         Some(r) => format!(
-            "{head}: {cause}. {}{REMEDY_JOIN}{OPERATOR_REMEDY}",
+            "{head}: {}. {}{REMEDY_JOIN}{OPERATOR_REMEDY}",
+            cause.strip_suffix('.').unwrap_or(cause),
             r.clause()
         ),
         None => format!("{head}: {cause}"),

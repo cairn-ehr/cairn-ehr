@@ -1633,8 +1633,10 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   DDL. `trust` is refused whatever its line's type or database; `peer` without a map only warns. No override flag, for
   this refusal or for `require_local`. Pins: `the_verb_refuses_before_it_mutates_in_source_order`,
   `the_verb_refuses_a_trusting_cluster_and_changes_nothing`,
-  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`; the window's own launch refuses a remote
-  database first (`the_remote_refusal_comes_before_any_connect`).
+  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`; the window's own launch chooses its link
+  first, refusing a remote database without the pinned link (#909 slice B), and connects only through that link
+  (`every_launch_connect_goes_through_the_prepared_link`, `the_window_cli_has_no_flag_that_skips_the_pin`); its
+  reopen goes back through the same link (`pinned_reopen.rs`).
 
 **⇒ GUI SIGN-IN SLICE 1 — THE HUMAN KEY VAULT (ADR-0083, db/061) — do not undo** (pins:
 `crates/cairn-node/tests/vault_floor.rs`, `vault_lib.rs`, `secret32_conversions_are_named.rs`;

@@ -116,6 +116,7 @@ mod state;
 mod superuser_panel;
 mod supervision_panel;
 mod terminal_id;
+mod terminal_launch;
 #[cfg(test)]
 mod waiting_webview_tests;
 mod whos_here;
@@ -147,6 +148,17 @@ struct Cli {
         default_value = "host=/tmp dbname=cairn"
     )]
     conn: String,
+
+    /// This terminal's own directory (its key and the node's pin), for a node on ANOTHER machine:
+    /// the window then reaches it only through the node's gateway, over the pinned TLS link
+    /// (#909 slice B). Left out for a node on this machine.
+    #[arg(long)]
+    terminal_dir: Option<std::path::PathBuf>,
+
+    /// The node's fingerprint as its operator reads it out from `gateway-setup`, given once, at
+    /// this terminal's first launch, to pin the node's key. A stored pin is never replaced by it.
+    #[arg(long)]
+    node_fingerprint: Option<String>,
 
     /// How long a clinician's key stays held after an act, so their next act needs no
     /// passphrase (spec §5.4 "key hold"). 0, the default, is a SHARED terminal: every act
@@ -302,8 +314,9 @@ fn terminal_id_or_ephemeral(dir: tauri::Result<std::path::PathBuf>) -> String {
     })
 }
 
-/// Refuse a remote database, check (never load) the schema stamp, and read this node's identity —
-/// everything a writing window needs before it shows anything.
+/// Choose the link (local, or pinned to a remote node's gateway), check (never load) the schema
+/// stamp, and read this node's identity — everything a writing window needs before it shows
+/// anything.
 ///
 /// The window holds NO node secret key (#909): only the node's public id, read here. What the
 /// node itself must sign runs on its terminal service.
@@ -312,14 +325,21 @@ fn terminal_id_or_ephemeral(dir: tauri::Result<std::path::PathBuf>) -> String {
 /// chart needs no actor. The front door asks on every `funnel_status` and says, in the chrome,
 /// what an operator must do (`FunnelBackend::provisioning`, #654 option 2, #882).
 async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
-    // Refuse a remote database BEFORE any connect: this window sends passphrases and signing
-    // keys over the connection (#899).
-    cairn_node::conn_posture::require_local(&cli.conn)?;
+    // Choose the link BEFORE any connect: this window sends passphrases and signing keys over
+    // the connection (#899), so a remote database is reached only through the node's gateway
+    // over the pinned TLS link, and refused without a terminal directory (#909 slice B).
+    let link = cairn_node::terminal_link::prepare(
+        &cli.conn,
+        cli.terminal_dir.as_deref(),
+        cli.node_fingerprint.as_deref(),
+    )
+    .await?;
     // The window's own login cannot replay DDL (db/062), so it CHECKS the stamp the owner's
     // install/upgrade step left instead of loading the schema (#898). That also means it no
     // longer runs the deferred-event re-adjudication connect_and_load_schema did on every connect;
     // serve/run do not run it either; only one-off loader verbs do (#912).
-    let checker = cairn_node::db::connect(&cli.conn).await?;
+    let checker =
+        terminal_launch::first_connect(&link, &cli.conn, cli.terminal_dir.as_deref()).await?;
     let stamp = cairn_node::db::read_schema_stamp(&checker).await?;
     if let Err(refusal) = cairn_node::conn_posture::window_schema_verdict(stamp.as_ref()) {
         anyhow::bail!(refusal);
@@ -327,11 +347,11 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     let identity = cairn_node::identity::load_local(&checker).await?;
     drop(checker);
     // ONE connection, shared by the chart commands and the funnel's live port, reopened from
-    // the same string if it is lost (#807), and cut off when a command holds it too long (#875).
-    // Opened apart from the schema load above, which hands back no handle on its task to cut.
-    let (client, task) = cairn_node::db::connect_with_task(&cli.conn).await?;
+    // the same string through the same link if it is lost (#807), and cut off when a command
+    // holds it too long (#875). Opened apart from the check above, which keeps no task handle.
+    let (client, task) = link.connect_with_task(&cli.conn).await?;
     let db = std::sync::Arc::new(
-        cairn_gui_live::NodeConnection::reopening(client, task, cli.conn.clone()).await?,
+        cairn_gui_live::NodeConnection::reopening_via(client, task, cli.conn.clone(), link).await?,
     );
     let live = cairn_gui_live::LiveData::sharing(db.clone(), &identity);
     Ok(AppState {
