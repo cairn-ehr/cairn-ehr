@@ -560,9 +560,14 @@ const SCHEMA: &[(&str, &str)] = &[
 /// would only mean something if opens were logged too — which would put a line in the log
 /// for every healthy cycle in order to sharpen one failure line.
 pub fn connection_label(conn: &str) -> String {
-    let Ok(cfg) = conn.parse::<tokio_postgres::Config>() else {
-        return "the database (connection string unparseable)".to_string();
-    };
+    match conn.parse::<tokio_postgres::Config>() {
+        Ok(cfg) => label_of(&cfg),
+        Err(_) => "the database (connection string unparseable)".to_string(),
+    }
+}
+
+/// [`connection_label`] of an already-parsed config. Pure.
+fn label_of(cfg: &tokio_postgres::Config) -> String {
     let db = cfg.get_dbname().unwrap_or("<no dbname>");
     let host = match cfg.get_hosts().first() {
         Some(tokio_postgres::config::Host::Tcp(h)) => h.clone(),
@@ -622,6 +627,18 @@ impl ConnectFailed {
     /// without this flag a caller would read them as an outage.
     pub fn refused_by_client(&self) -> bool {
         self.refused_by_client
+    }
+
+    /// The terminal's pinned link refused on its own (#909 slice B): the gateway did not admit
+    /// this terminal, or the node presented a key other than the pinned one. Neither changes on
+    /// a retry, so it is a client refusal (an operator must act), with no SQLSTATE: no server
+    /// answered in Postgres's protocol. `message` must not carry the connection string.
+    pub(crate) fn refused_by_link(message: String) -> Self {
+        Self {
+            text: message,
+            sqlstate: None,
+            refused_by_client: true,
+        }
     }
 }
 
@@ -687,11 +704,29 @@ pub async fn connect_with_task(conn: &str) -> anyhow::Result<(Client, tokio::tas
     // half added by the PR #472 review, which caught that this door — where the
     // no-`DbError` failures overwhelmingly live — was the one it served worst).
     let legible = |e: tokio_postgres::Error| anyhow::Error::new(ConnectFailed::from(&e));
+    let cfg: tokio_postgres::Config = conn.parse().map_err(legible)?;
+    open(cfg, NoTls).await.map_err(legible)
+}
+
+/// Connect with `cfg` over `tls` and spawn the connection's task: the one door every link opens
+/// through, the local one ([`connect_with_task`], `NoTls`) and the terminal's pinned one
+/// (`terminal_link::connector`), so each gets the #875 dead-peer settings and the logged death.
+///
+/// It hands back the raw `tokio_postgres::Error` so each caller words it: the pinned link must
+/// read the TLS failure inside it (a refused terminal, a pin mismatch) before it becomes a
+/// [`ConnectFailed`], whose text drops the error's source.
+pub(crate) async fn open<T>(
+    mut cfg: tokio_postgres::Config,
+    tls: T,
+) -> Result<(Client, tokio::task::AbortHandle), tokio_postgres::Error>
+where
+    T: tokio_postgres::tls::MakeTlsConnect<tokio_postgres::Socket>,
+    T::Stream: Send + 'static,
+{
     // #875: probe for a peer that vanished silently, so a dead socket closes the client
     // instead of hanging the next query (see the `cairn-db-keepalive` crate).
-    let mut cfg: tokio_postgres::Config = conn.parse().map_err(legible)?;
     cairn_db_keepalive::detect_dead_peers(&mut cfg);
-    let (client, connection) = cfg.connect(NoTls).await.map_err(legible)?;
+    let (client, connection) = cfg.connect(tls).await?;
     // #474 item 4: this task is the ONLY place a mid-session connection death is ever
     // reported (a watchdog cut-off, #875, is logged by the window's watchdog: an aborted task
     // runs nothing), and `let _ = connection.await;` hid every one of them. The deaths that
@@ -708,12 +743,12 @@ pub async fn connect_with_task(conn: &str) -> anyhow::Result<(Client, tokio::tas
     // an operator told "the reason arrives here" would be puzzled by it otherwise.
     // A SILENT death (a pulled cable, a powered-off host) sends not even an EOF: it
     // arrives here only once the keepalives above give up, as a timed-out I/O error (#875).
-    // (Not listed among the causes: a TLS teardown. This connection is opened `NoTls`
-    // on the `cfg.connect(NoTls)` call above; PR #478 review, finding 11.)
+    // A TLS teardown is among the causes only for the terminal's pinned link; the local link
+    // is opened `NoTls` (PR #478 review, finding 11).
     //
     // A clean close returns `Ok(())` — it happens whenever the client is dropped — so a
     // healthy node logs nothing here and the line is never noise.
-    let label = connection_label(conn);
+    let label = label_of(&cfg);
     let task = tokio::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("{}", connection_ended_line(&label, &e));
@@ -1216,21 +1251,35 @@ mod tests {
 
     /// `cairn-db-keepalive`'s tests pin the settings, not that anyone applies them: a client's
     /// socket options cannot be read back from outside. So pin this call site by source (#875).
+    /// The settings are applied in [`open`], the one door both links connect through.
     #[test]
     fn db_connect_applies_the_dead_peer_settings() {
-        let src = include_str!("db.rs");
-        let body_of = |signature: &str| {
+        let body_of = |src: &'static str, signature: &str| -> &'static str {
             let start = src.find(signature).expect("the function exists");
             &src[start..start + src[start..].find("\n}\n").expect("its body ends")]
         };
+        let db = include_str!("db.rs");
         assert!(
-            body_of("pub async fn connect_with_task(conn: &str)")
+            body_of(db, "pub(crate) async fn open<T>(")
                 .contains("cairn_db_keepalive::detect_dead_peers(&mut cfg)"),
-            "db::connect_with_task must apply the dead-peer settings (#875)"
+            "db::open must apply the dead-peer settings (#875)"
         );
         assert!(
-            body_of("pub async fn connect(conn: &str)").contains("connect_with_task(conn)"),
+            body_of(db, "pub async fn connect_with_task(conn: &str)").contains("open(cfg, NoTls)"),
+            "db::connect_with_task must open through db::open, so it gets them"
+        );
+        assert!(
+            body_of(db, "pub async fn connect(conn: &str)").contains("connect_with_task(conn)"),
             "db::connect must open through connect_with_task, so it gets them too"
+        );
+        let connector = include_str!("terminal_link/connector.rs");
+        let pinned_arm = &connector[connector
+            .find("Link::Pinned(tls) =>")
+            .expect("connector.rs has the Pinned arm")..];
+        let pinned_arm = &pinned_arm[..pinned_arm.find("\n        }\n").expect("the arm ends")];
+        assert!(
+            pinned_arm.contains("db::open("),
+            "the terminal's pinned link must open through db::open, so it gets them too"
         );
     }
 
