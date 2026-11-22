@@ -4,7 +4,7 @@
 //! `SSLRequest`/`GSSENCRequest`, then the startup or cancel packet inside TLS) and writes only a
 //! refusal. Everything here takes bytes in and gives bytes or a verdict out, so it is unit-tested
 //! without a socket. Protocol reference:
-//! https://www.postgresql.org/docs/current/protocol-message-formats.html
+//! <https://www.postgresql.org/docs/current/protocol-message-formats.html>
 
 /// Magic "protocol code" of an `SSLRequest` (message length 8).
 const SSL_CODE: u32 = 80_877_103;
