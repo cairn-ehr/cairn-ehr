@@ -12,8 +12,11 @@
 //! 2. TLS 1.3 only, mutual. The server certificate is the node's identity; the client
 //!    certificate's Ed25519 key must be `active` in the terminal trust set. No fallback verifier.
 //! 3. Inside TLS, read the `StartupMessage` (or a `CancelRequest`, forwarded as is). Forward a
-//!    startup only for a login that belongs to `cairn_window`, is not over-powered, and names the
-//!    node's own database; anything else gets a Postgres-shaped `ErrorResponse` naming no role.
+//!    startup only for a login that is a `cairn_window` member, not a member of
+//!    `cairn_terminal_service` (the service's own login), not over-powered, naming the node's own
+//!    database, and carrying only the keys `user`, `database`, `client_encoding` and
+//!    `application_name` (so `replication`, `options` and any GUC-setting key refuse). Anything
+//!    else gets a Postgres-shaped `ErrorResponse` naming no role.
 //! 4. Open a connection to Postgres by the route the local window already uses, replay the
 //!    startup, and pipe both directions until either side closes. SCRAM still runs end to end.
 //! 5. TCP keepalive on the LAN side, so a vanished terminal's session ends and frees its locks.

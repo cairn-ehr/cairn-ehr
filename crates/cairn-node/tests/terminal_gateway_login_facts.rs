@@ -38,4 +38,23 @@ async fn login_facts_for_window_service_and_unknown_roles() {
     assert!(read_login_facts(&owner, "x'; DROP TABLE event_log; --")
         .await
         .is_err());
+
+    // A window login that is also over-powered (it can read the server's files) is flagged.
+    owner
+        .batch_execute(
+            "DROP ROLE IF EXISTS cairn_overpowered_probe_909; \
+             CREATE ROLE cairn_overpowered_probe_909 LOGIN; \
+             GRANT cairn_window TO cairn_overpowered_probe_909; \
+             GRANT pg_read_server_files TO cairn_overpowered_probe_909",
+        )
+        .await
+        .unwrap();
+    let facts = read_login_facts(&owner, "cairn_overpowered_probe_909").await;
+    owner
+        .batch_execute("DROP ROLE IF EXISTS cairn_overpowered_probe_909")
+        .await
+        .unwrap();
+    let o = facts.unwrap();
+    assert!(o.window_member);
+    assert!(cairn_node::conn_posture::over_powered(&o.posture).is_some());
 }

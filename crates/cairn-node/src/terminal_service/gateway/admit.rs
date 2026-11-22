@@ -35,6 +35,9 @@ pub struct LoginFacts {
 /// `Err` (checked first: `pg_has_role` on an unknown name would also error, but less legibly);
 /// the caller refuses on any `Err`.
 pub async fn read_login_facts(db: &Client, user: &str) -> anyhow::Result<LoginFacts> {
+    // shortcut: an unknown role returns after one query, a known one after two, so existence leaks
+    // by timing to an already mutually-authenticated terminal; upgrade if the gateway ever faces
+    // unauthenticated peers at this step.
     let row = db
         .query_opt(
             "SELECT rolcanlogin, \
@@ -66,12 +69,17 @@ pub fn startup_verdict(s: &Startup, node_db: &str, facts: &LoginFacts) -> Result
         Some(d) if d != node_db => return Err("the startup names another database"),
         Some(_) => {}
     }
-    if s.get("replication").is_some() {
-        return Err("the startup asks for a replication connection");
-    }
-    // `options` can set `-c role=…` and other GUCs after this vetting; a window never sends it.
-    if s.get("options").is_some() {
-        return Err("the startup carries connection options");
+    // ALLOW-LIST, not a deny-list: Postgres applies every startup key other than user, database,
+    // options, replication and `_pq_.*` as a GUC at connect (case-insensitive), so a bare
+    // `role=…` does what `options=-c role=…` does, after we vetted the login. Only what the
+    // window's driver sends passes; `replication` (the plan's named refusal), `options` and
+    // anything else refuse.
+    const ALLOWED_KEYS: [&str; 4] = ["user", "database", "client_encoding", "application_name"];
+    if s.params
+        .iter()
+        .any(|(k, _)| !ALLOWED_KEYS.contains(&k.as_str()))
+    {
+        return Err("the startup carries a parameter a window never sends");
     }
     if !facts.can_login {
         return Err("the role is not a login");
@@ -138,7 +146,15 @@ mod tests {
         assert!(v(startup(&[("database", "node")])).is_err(), "no user");
         assert!(v(startup(&[("user", "w")])).is_err(), "no database");
         assert!(v(startup(&[("user", "w"), ("database", "other")])).is_err());
-        for extra in ["replication", "options"] {
+        // Postgres reads any other startup key as a GUC set at connect, so all of these refuse.
+        for extra in [
+            "replication",
+            "options",
+            "role",
+            "ROLE",
+            "search_path",
+            "_pq_.foo",
+        ] {
             let s = startup(&[("user", "w"), ("database", "node"), (extra, "x")]);
             assert!(v(s).is_err(), "{extra} must be refused");
         }
