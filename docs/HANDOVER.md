@@ -168,9 +168,9 @@
 >    `terminal-service --gateway-listen`, TLS 1.3 pinned both ways against the node-local trust set; the owner's
 >    `gateway-setup`, `admit-terminal`, `revoke-terminal` (final; ends the terminal's sessions and cancels their
 >    statements) and `list-terminals`; the registration lock is now the `registration_turn` row lock the window cannot
->    take. Its final whole-branch review is done and fixed in one wave (a gateway restart now ends every session and
->    cancels its running statement, so a revoke reaches them all); it **awaits the full gate, and #1163 stays draft
->    until then.** Filed **#1164**
+>    take. Its final whole-branch review is done, and its fixes re-reviewed clean (a gateway restart now ends every
+>    session and cancels, best-effort, its running statement); **CI is the full gate: #1163 leaves draft once it is
+>    green, and merging is the maintainer's call.** Filed **#1164**
 >    (`cairn-gui-live/src/connection.rs` is 650 lines: a verbatim split) and, from the review, **#1165**–**#1170**
 >    (no per-terminal session cap · one host can hold all 128 pre-startup slots · no SCRAM test through the gateway ·
 >    no cut-off-reopen test through the pinned link · rustls close_notify log noise · a typed not-admitted marker).
