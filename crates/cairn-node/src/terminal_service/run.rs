@@ -176,8 +176,8 @@ fn log(line: Option<String>) {
 /// and back-off path is not covered by a test (it needs a killed backend); `run_jobs` is.
 ///
 /// With `gateway` (`--gateway-listen`), the terminal gateway runs beside the jobs as its own
-/// task, restarted whenever it ends (`gateway::serve::run_gateway_forever`); it never takes the
-/// job loop down.
+/// task, restarted whenever it ends, a panic included (`supervise`); it never takes the job
+/// loop down.
 pub async fn run(
     conn: &str,
     sk: &SigningKey,
@@ -185,8 +185,12 @@ pub async fn run(
     gateway: Option<std::net::SocketAddr>,
 ) -> anyhow::Result<()> {
     if let Some(listen) = gateway {
-        let forever = super::gateway::serve::run_gateway_forever(listen, sk.clone(), conn.into());
-        tokio::spawn(forever);
+        let (sk, conn) = (sk.clone(), conn.to_string());
+        let start = move || {
+            let (sk, conn) = (sk.clone(), conn.clone());
+            async move { super::gateway::serve::run_gateway(listen, &sk, &conn).await }
+        };
+        tokio::spawn(supervise(start, |line| eprintln!("{line}")));
     }
     let mut state = JobState::default();
     let mut client = crate::db::connect(conn).await?;
@@ -207,6 +211,68 @@ pub async fn run(
         run_jobs(&mut client, sk, origin, &d, &mut state).await;
         schedule.mark(&d, now);
         tokio::time::sleep(REQUEST_TICK).await;
+    }
+}
+
+/// Identical gateway failures in a row are logged once, then once per this many more (about a
+/// minute at the 1 s back-off), so a port in use or a missing route does not flood the log.
+const RESTART_SUMMARY_EVERY: u64 = 60;
+/// A gateway that ran this long was healthy: its next failure is news even if it repeats.
+const HEALTHY_RUN: Duration = Duration::from_secs(60);
+
+/// What [`supervise`] remembers between restarts: the last failure and how often it repeated.
+#[derive(Default)]
+struct Restarts {
+    last: Option<String>,
+    repeats: u64,
+}
+
+/// The line to log for a gateway that ended with `why`, or `None` for a repeat. **Pure.**
+fn restart_line(r: &mut Restarts, why: String) -> Option<String> {
+    if r.last.as_ref() != Some(&why) {
+        *r = Restarts {
+            last: Some(why.clone()),
+            repeats: 0,
+        };
+        return Some(why);
+    }
+    r.repeats += 1;
+    r.repeats.is_multiple_of(RESTART_SUMMARY_EVERY).then(|| {
+        format!(
+            "{why} (again, {} more times since it was first logged)",
+            r.repeats
+        )
+    })
+}
+
+/// Run the terminal gateway (`start()`) for ever beside the job loop: whenever it ends, with an
+/// error at startup OR A PANIC, log why (`log`, once per distinct failure) and start it again
+/// after [`RECONNECT_BACKOFF`]. Each run is its own task, so a panic inside the gateway is a
+/// `JoinError` here, not the end of the supervisor. Never returns.
+async fn supervise<F, Fut>(mut start: F, mut log: impl FnMut(String))
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    let mut restarts = Restarts::default();
+    loop {
+        let began = Instant::now();
+        let why = match tokio::spawn(start()).await {
+            Ok(Ok(())) => "the terminal gateway stopped".to_string(),
+            Ok(Err(e)) => format!(
+                "the terminal gateway could not run: {}",
+                primary_message(&e)
+            ),
+            Err(j) if j.is_panic() => "the terminal gateway panicked".to_string(),
+            Err(_) => "the terminal gateway was cancelled".to_string(),
+        };
+        if began.elapsed() >= HEALTHY_RUN {
+            restarts = Restarts::default();
+        }
+        if let Some(line) = restart_line(&mut restarts, why) {
+            log(format!("{line}; restarting it"));
+        }
+        tokio::time::sleep(RECONNECT_BACKOFF).await;
     }
 }
 
@@ -261,5 +327,62 @@ mod tests {
             fresh_failure(&mut slot, Err("other".into())),
             Some("other".into())
         );
+    }
+
+    #[test]
+    fn a_repeated_gateway_failure_is_logged_once_then_summarised() {
+        let mut r = Restarts::default();
+        let port = || "port in use".to_string();
+        assert_eq!(restart_line(&mut r, port()), Some(port()));
+        let lines: Vec<String> = (0..RESTART_SUMMARY_EVERY)
+            .filter_map(|_| restart_line(&mut r, port()))
+            .collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "one summary per {RESTART_SUMMARY_EVERY} repeats: {lines:?}"
+        );
+        assert!(
+            lines[0].contains("port in use") && lines[0].contains("60"),
+            "{lines:?}"
+        );
+        assert_eq!(
+            restart_line(&mut r, "no route".into()),
+            Some("no route".into())
+        );
+    }
+
+    /// A gateway that panics is restarted, as one that fails to start is.
+    #[tokio::test]
+    async fn a_panicking_gateway_is_restarted() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::{Arc, Mutex};
+        let runs = Arc::new(AtomicU32::new(0));
+        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (r, l) = (runs.clone(), lines.clone());
+        let start = move || {
+            let n = r.fetch_add(1, Ordering::SeqCst) + 1;
+            async move {
+                match n {
+                    1 => panic!("a gateway bug"),
+                    2 => Err(anyhow::anyhow!("no route")),
+                    _ => std::future::pending().await,
+                }
+            }
+        };
+        let task = tokio::spawn(supervise(start, move |line| l.lock().unwrap().push(line)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runs.load(Ordering::SeqCst) < 3 {
+            assert!(
+                Instant::now() < deadline,
+                "not restarted: {:?}",
+                lines.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        task.abort();
+        let lines = lines.lock().unwrap();
+        assert!(lines[0].contains("panicked"), "{lines:?}");
+        assert!(lines[1].contains("no route"), "{lines:?}");
     }
 }

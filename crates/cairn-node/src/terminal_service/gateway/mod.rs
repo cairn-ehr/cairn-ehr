@@ -21,12 +21,14 @@
 //!    startup, and pipe both directions until either side closes. SCRAM still runs end to end.
 //! 5. TCP keepalive on the LAN side, so a vanished terminal's session ends and frees its locks.
 //!
-//! The submodules: [`wire`] (pure byte-level parsing and encoding), [`admit`] (step 3's verdict:
-//! who may pass, and which refusals are transient), [`upstream`] (step 4's route to Postgres, and
-//! the owner verb that checks and records it), [`trust`] (the live trust set step 2 pins
-//! against), [`sessions`] (open sessions, so a revoke ends them), [`serve`] (the accept loop, one
-//! connection's walk through the steps, and the 1 s tick) and [`pipe`] (the bytes once decided).
+//! The submodules: [`accept`] (the flood limits, accept errors, keepalive), [`wire`] (pure
+//! byte-level parsing and encoding), [`admit`] (step 3's verdict: who may pass, and which
+//! refusals are transient), [`upstream`] (step 4's route to Postgres, and the owner verb that
+//! checks and records it), [`trust`] (the live trust set step 2 pins against), [`sessions`] (open
+//! sessions, so a revoke ends them), [`serve`] (the accept loop, one connection's walk through the
+//! steps, and the 1 s tick) and [`pipe`] (the bytes once decided).
 
+pub mod accept;
 pub mod admit;
 pub mod pipe;
 pub mod serve;

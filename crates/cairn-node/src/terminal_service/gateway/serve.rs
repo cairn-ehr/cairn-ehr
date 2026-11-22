@@ -26,7 +26,6 @@
 //! (the split is `admit::judge`).
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -39,6 +38,10 @@ use tokio_postgres::Client;
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
+use super::accept::{
+    keepalive, next_connection, AcceptErrors, PRE_STARTUP_ACTIVE, PRE_STARTUP_DEADLINE,
+    PRE_STARTUP_TOTAL,
+};
 use super::admit::{judge, read_login_facts, DbUnavailable, Refusal, NOT_NOW};
 use super::pipe::{close_gently, pipe, send_cancel};
 use super::sessions::Sessions;
@@ -46,17 +49,10 @@ use super::trust::TerminalTrust;
 use super::upstream::{self, AsyncReadWrite, Upstream};
 use super::wire::{error_response, inside, opening, Inside, Opening, Startup, MAX_STARTUP};
 use crate::terminal_service::commit::primary_message;
-use crate::terminal_service::run::{fresh_failure, RECONNECT_BACKOFF};
+use crate::terminal_service::run::fresh_failure;
 
-/// A connection's whole budget before startup, counted from `accept`.
-pub const PRE_STARTUP_DEADLINE: Duration = Duration::from_secs(10);
-/// Connections walking the pre-startup steps at once.
-pub const PRE_STARTUP_ACTIVE: usize = 64;
-/// Connections before startup in all (walking or waiting); one more is closed at once.
-pub const PRE_STARTUP_TOTAL: usize = 128;
 /// The trust-set refresh and revoke sweep period.
 pub const TICK: Duration = Duration::from_secs(1);
-const ACCEPT_ERROR_PAUSE: Duration = Duration::from_millis(100);
 
 /// The gateway's own database connection, replaced by the tick when it drops.
 struct GatewayDb {
@@ -94,7 +90,7 @@ struct Gateway {
     db: GatewayDb,
     sessions: Sessions,
     permits: Semaphore,
-    accept_errors: AtomicU64,
+    accept_errors: AcceptErrors,
 }
 
 /// Bind `listen` and run the gateway on it ([`run_gateway_on`]).
@@ -143,7 +139,7 @@ pub async fn run_gateway_on(
         },
         sessions: Sessions::default(),
         permits: Semaphore::new(PRE_STARTUP_ACTIVE),
-        accept_errors: AtomicU64::new(0),
+        accept_errors: AcceptErrors::default(),
     });
     eprintln!("terminal gateway listening on {}", listener.local_addr()?);
     // One future: dropping it (the job loop's supervisor, a test) stops the tick as well.
@@ -154,51 +150,29 @@ pub async fn run_gateway_on(
     Ok(())
 }
 
-/// Run [`run_gateway`] for ever, restarting it after `RECONNECT_BACKOFF` (1 s) whenever it ends. The
-/// terminal service spawns this beside its job loop; nothing here can end the job loop.
-pub async fn run_gateway_forever(listen: SocketAddr, sk: SigningKey, conn: String) {
-    loop {
-        match run_gateway(listen, &sk, &conn).await {
-            Ok(()) => eprintln!("the terminal gateway stopped; restarting it"),
-            Err(e) => eprintln!(
-                "the terminal gateway could not run: {}; retrying",
-                primary_message(&e)
-            ),
-        }
-        tokio::time::sleep(RECONNECT_BACKOFF).await;
-    }
-}
-
 async fn accept_loop(listener: TcpListener, gw: Arc<Gateway>) {
     let slots = Arc::new(Semaphore::new(PRE_STARTUP_TOTAL));
     loop {
-        match listener.accept().await {
-            Ok((tcp, peer)) => {
-                let accepted = Instant::now();
-                // All 128 taken: closed at once, with no reply (dropping it closes it).
-                let Ok(slot) = slots.clone().try_acquire_owned() else {
-                    continue;
-                };
-                let gw = gw.clone();
-                tokio::spawn(async move {
-                    let deadline = tokio::time::Instant::from_std(accepted + PRE_STARTUP_DEADLINE);
-                    match tokio::time::timeout_at(deadline, pre_startup(&gw, tcp, peer)).await {
-                        Ok(Outcome::Admitted(a)) => {
-                            drop(slot);
-                            session(&gw, *a, peer).await;
-                        }
-                        // The slot is held through the (bounded) gentle close: it counts sockets.
-                        Ok(Outcome::Refused(s)) => close_gently(s).await,
-                        Ok(Outcome::Dropped) | Err(_) => {}
-                    }
-                });
+        // An accept error (EMFILE, ENFILE, …) is counted and paused on inside, never returned.
+        let (tcp, peer) = next_connection(|| listener.accept(), &gw.accept_errors).await;
+        let accepted = Instant::now();
+        // All 128 taken: closed at once, with no reply (dropping it closes it).
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            continue;
+        };
+        let gw = gw.clone();
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::from_std(accepted + PRE_STARTUP_DEADLINE);
+            match tokio::time::timeout_at(deadline, pre_startup(&gw, tcp, peer)).await {
+                Ok(Outcome::Admitted(a)) => {
+                    drop(slot);
+                    session(&gw, *a, peer).await;
+                }
+                // The slot is held through the (bounded) gentle close: it counts sockets.
+                Ok(Outcome::Refused(s)) => close_gently(s).await,
+                Ok(Outcome::Dropped) | Err(_) => {}
             }
-            Err(_) => {
-                // EMFILE, ENFILE, …: counted into the 1 s summary, then a pause, never the end.
-                gw.accept_errors.fetch_add(1, Ordering::Relaxed);
-                tokio::time::sleep(ACCEPT_ERROR_PAUSE).await;
-            }
-        }
+        });
     }
 }
 
@@ -267,8 +241,10 @@ async fn pre_startup(gw: &Gateway, mut tcp: TcpStream, peer: SocketAddr) -> Outc
     let user = startup.get("user").unwrap_or_default().to_string();
     if let Err(r) = vet(gw, &startup).await {
         eprintln!(
-            "terminal gateway: refused login '{user}' from {peer} [{}]: {}",
-            r.sqlstate, r.why
+            "terminal gateway: refused login {} from {peer} [{}]: {}",
+            shown(&user),
+            r.sqlstate,
+            r.why
         );
         return refuse(tls, r.sqlstate, r.message).await;
     }
@@ -312,7 +288,8 @@ async fn vet(gw: &Gateway, s: &Startup) -> Result<(), Refusal> {
 async fn session(gw: &Gateway, a: Admitted, peer: SocketAddr) {
     let Admitted { tls, up, key, user } = a;
     let fp = short_fingerprint(&key).unwrap_or_default();
-    eprintln!("terminal session opened: peer {peer}, terminal {fp}, login '{user}'");
+    let user = shown(&user);
+    eprintln!("terminal session opened: peer {peer}, terminal {fp}, login {user}");
     // The pipe task needs its own registration, which needs the task's abort handle: hand the
     // guard in after spawning.
     let (tx, rx) = oneshot::channel();
@@ -329,7 +306,7 @@ async fn session(gw: &Gateway, a: Admitted, peer: SocketAddr) {
         Err(j) if j.is_cancelled() => "ended: the terminal is no longer admitted".to_string(),
         Err(_) => "ended: the pipe failed".to_string(),
     };
-    eprintln!("terminal session closed: peer {peer}, terminal {fp}, login '{user}': {cause}");
+    eprintln!("terminal session closed: peer {peer}, terminal {fp}, login {user}: {cause}");
 }
 
 /// The 1 s tick, for ever. A failing step is logged once per distinct failure; the summary of
@@ -348,11 +325,8 @@ async fn tick(gw: &Gateway, trust: &TerminalTrust, mut attempts: mpsc::Receiver<
         if refused > 0 {
             eprintln!("terminal gateway: {refused} unadmitted handshakes refused");
         }
-        let errors = gw.accept_errors.swap(0, Ordering::Relaxed);
-        if errors > 0 {
-            eprintln!(
-                "terminal gateway: {errors} connections could not be accepted (out of file descriptors?)"
-            );
+        if let Some((n, last)) = gw.accept_errors.take() {
+            eprintln!("terminal gateway: {n} connections could not be accepted (the last: {last})");
         }
     }
 }
@@ -398,23 +372,6 @@ async fn sweep(
     Ok(())
 }
 
-/// LAN-side dead-peer detection (Global Constraints' numbers, shared with the window's link).
-fn keepalive(tcp: &TcpStream) -> std::io::Result<()> {
-    use cairn_db_keepalive::{KEEPALIVE_IDLE, KEEPALIVE_INTERVAL, KEEPALIVE_RETRIES};
-    // shortcut: interval/retries compile on Linux, Android, macOS, BSDs and Windows only; gate
-    // them if Cairn ever targets another OS.
-    let ka = socket2::TcpKeepalive::new()
-        .with_time(KEEPALIVE_IDLE)
-        .with_interval(KEEPALIVE_INTERVAL)
-        .with_retries(KEEPALIVE_RETRIES);
-    let s = socket2::SockRef::from(tcp);
-    s.set_tcp_keepalive(&ka)?;
-    // What ends a terminal that vanished with a result in flight; Linux (and Android) only.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    s.set_tcp_user_timeout(Some(cairn_db_keepalive::TCP_USER_TIMEOUT))?;
-    Ok(())
-}
-
 async fn read8(tcp: &mut TcpStream) -> Option<[u8; 8]> {
     let mut b = [0u8; 8];
     tcp.read_exact(&mut b).await.ok().map(|_| b)
@@ -438,4 +395,22 @@ async fn read_packet(tls: &mut TlsStream<TcpStream>) -> Option<Vec<u8>> {
 fn peer_key(tls: &TlsStream<TcpStream>) -> Option<String> {
     let cert = tls.get_ref().1.peer_certificates()?.first()?;
     crate::transport::peer_pubkey_hex(cert).ok()
+}
+
+/// A client-supplied string (the startup's `user`) as it may appear in the log: quoted, with
+/// newlines and control characters escaped, so a crafted login cannot forge log lines. **Pure.**
+fn shown(client_text: &str) -> String {
+    format!("{client_text:?}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_crafted_login_cannot_forge_a_log_line() {
+        let s = shown("w\nterminal session opened: peer 10.0.0.9\u{1b}[2K");
+        assert!(!s.contains('\n') && !s.contains('\u{1b}'), "{s}");
+        assert_eq!(shown("cairn_window_probe"), "\"cairn_window_probe\"");
+    }
 }

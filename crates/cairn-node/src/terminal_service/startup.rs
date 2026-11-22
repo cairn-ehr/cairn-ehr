@@ -11,6 +11,7 @@
 use cairn_event::SigningKey;
 use tokio_postgres::Client;
 
+use super::gateway::admit::read_login_facts;
 use crate::node_key::NodeKey;
 
 /// Refuse a loaded key that is not this node's own signing key. Kids are public keys, so the
@@ -55,8 +56,8 @@ pub async fn can_claim(db: &Client) -> anyhow::Result<bool> {
 pub fn gateway_verdict(can_read: bool, has_route: bool) -> Result<(), String> {
     if !can_read {
         return Err(
-            "This login cannot run the terminal gateway (it has no SELECT on terminal_trust and \
-             terminal_gateway). At the node, run cairn-node provision-terminal-service-role with \
+            "This login cannot run the terminal gateway (it needs SELECT on terminal_trust and \
+             terminal_gateway, EXECUTE on cairn_terminal_attempt, and to read login facts). At the node, run cairn-node provision-terminal-service-role with \
              the owner's connection, and start the terminal service as the login it makes."
                 .to_string(),
         );
@@ -73,14 +74,20 @@ pub fn gateway_verdict(can_read: bool, has_route: bool) -> Result<(), String> {
 
 /// [`gateway_verdict`] on `db`. The route is read only once the grant is known to be there.
 pub async fn check_gateway(db: &Client) -> anyhow::Result<()> {
-    let can_read: bool = db
+    // Every grant the gateway uses at run time, checked once here: missing at run time, each
+    // would surface only as refusals the window retries for ever (a facts read that fails in the
+    // database is judged transient, `admit::judge`).
+    let granted: bool = db
         .query_one(
             "SELECT has_table_privilege('terminal_trust', 'SELECT') \
-                AND has_table_privilege('terminal_gateway', 'SELECT')",
+                AND has_table_privilege('terminal_gateway', 'SELECT') \
+                AND has_function_privilege('cairn_terminal_attempt(text)', 'EXECUTE')",
             &[],
         )
         .await?
         .get(0);
+    let me: String = db.query_one("SELECT current_user::text", &[]).await?.get(0);
+    let can_read = granted && read_login_facts(db, &me).await.is_ok();
     let has_route = can_read
         && db
             .query_one("SELECT EXISTS (SELECT 1 FROM terminal_gateway)", &[])

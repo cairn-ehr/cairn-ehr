@@ -93,11 +93,6 @@ impl TerminalTrust {
         Ok(fresh)
     }
 
-    /// Has a refresh ever succeeded?
-    pub fn loaded(&self) -> bool {
-        self.active.read().map(|s| s.is_some()).unwrap_or(false)
-    }
-
     /// The refused handshakes since the last call, resetting the count (for the 1 s summary).
     pub fn take_refused(&self) -> u64 {
         self.refused.swap(0, Ordering::Relaxed)
@@ -150,7 +145,6 @@ mod tests {
     #[test]
     fn before_the_first_load_no_key_passes_and_none_is_recorded() {
         let (trust, mut rx) = TerminalTrust::new();
-        assert!(!trust.loaded());
         assert!(!trust.store()("aa"));
         assert!(rx.try_recv().is_err(), "not recorded as an attempt");
         assert_eq!(
@@ -159,6 +153,6 @@ mod tests {
             "not counted as an unadmitted handshake"
         );
         trust.replace(set(&["aa"]));
-        assert!(trust.loaded() && trust.store()("aa"));
+        assert!(trust.store()("aa"), "after a load, the same key passes");
     }
 }
