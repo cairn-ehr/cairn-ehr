@@ -53,12 +53,18 @@ pub fn render(rows: &[TerminalRow]) -> String {
         .join("\n")
 }
 
+/// A door's refusal as the operator should read it: its own message, never `db error`.
+fn door_refusal(e: tokio_postgres::Error) -> anyhow::Error {
+    anyhow::anyhow!(super::commit::primary_message(&e.into()))
+}
+
 /// Admit a pending terminal under `label`. The door's refusal (unknown, ambiguous, not pending,
 /// no label) is returned as its own error, reaching the operator through `primary_message`.
 pub async fn admit(db: &Client, fingerprint: &str, label: &str) -> anyhow::Result<String> {
     let fp = normalise_fingerprint(fingerprint).map_err(|e| anyhow::anyhow!(e))?;
     db.query_one("SELECT cairn_terminal_admit($1, $2)", &[&fp, &label])
-        .await?;
+        .await
+        .map_err(door_refusal)?;
     Ok(format!(
         "terminal {fp} admitted as {label:?}; it can connect from its next attempt"
     ))
@@ -68,7 +74,8 @@ pub async fn admit(db: &Client, fingerprint: &str, label: &str) -> anyhow::Resul
 pub async fn revoke(db: &Client, fingerprint: &str) -> anyhow::Result<String> {
     let fp = normalise_fingerprint(fingerprint).map_err(|e| anyhow::anyhow!(e))?;
     db.query_one("SELECT cairn_terminal_revoke($1)", &[&fp])
-        .await?;
+        .await
+        .map_err(door_refusal)?;
     Ok(format!(
         "terminal {fp} revoked; its open sessions close within 2 s and any statement it is \
          running is cancelled"
