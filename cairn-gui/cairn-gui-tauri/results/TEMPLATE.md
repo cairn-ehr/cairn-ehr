@@ -1064,3 +1064,30 @@ Steps: registration paper *N* = 3 → observed \_\_.
 | A forged "saw no one" by `psql` as the window's login is refused | | |
 | The window's login cannot claim | | |
 | FAILED, OVERDUE and STUCK each read as above; stuck wins | | |
+
+## The pinned terminal gateway (#909 slice B, runbook §39)
+
+Node: ___ · terminal: ___ · LAN: wired / other · `ping` median: ___ ms
+
+| Figure | n | local median | remote median | remote − local | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| Open a chart (stopwatch or recording) | 10 + 10 | | | | ≤ 0.2 s | |
+| Sign a note (`note-sign` p50) | 10 + 10 | | | | ≤ 0.2 s | |
+| A revoke → the idle session's backend gone | | | | | ≤ 2 s | |
+| A revoke → the running statement's backend gone | | | | | ≤ 2 s | |
+
+Steps: paper *N* = 0 → observed \_\_.
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| No route: the service exits naming `gateway-setup` | | |
+| `gateway-setup` succeeds on a `scram-sha-256` cluster, prints the fingerprint, and Postgres is not restarted or reloaded | | |
+| `gateway-setup` refuses a remote route and a non-superuser | | |
+| `gateway-setup` on a database with no schema: its exact text | | |
+| The ceremony: both fingerprints typed; the wrong one refused and no pin written; files at 0700/0600 | | |
+| Admitted: the window opens and reads through the gateway | | |
+| The gateway's own connection down: 57P03, an outage, never "not admitted" | | |
+| The service stopped: an outage; it comes back by itself | | |
+| Another key at the node's address: refused at launch, no override | | |
+| Revoked: the reopen names the operator; re-admitting the old key refused | | |
+| A revoke cancels a running statement; nothing is signed | | |

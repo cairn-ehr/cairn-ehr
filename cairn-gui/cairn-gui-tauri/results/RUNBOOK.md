@@ -4028,3 +4028,258 @@ backlog drains at 20 a minute; one draft is well inside that.)
   `node_key_guard_tests.rs` and `notes_commit_tests.rs` (DB-gated window tests run locally only, #905).
 
 `TEMPLATE.md` carries a matching block (*The terminal service and the keyless window*).
+
+## 39. The pinned terminal gateway (#909 slice B, ADR-0110)
+
+What changed: a window on ANOTHER machine of the facility's network can read and sign. It reaches the node's database
+only through a gateway inside the terminal service (`terminal-service --gateway-listen`), over TLS 1.3 pinned in both
+directions: the terminal pins the node's key at its first launch, from a fingerprint typed in, and the node admits
+only terminals its operator has admitted. The gateway pipes each admitted connection to Postgres over loopback, so
+Postgres is never restarted, reloaded or reconfigured, and still listens only to its own machine. A revoke ends the
+terminal's open sessions, and cancels what they are running.
+
+Paper counterpart: a clinician at a ward desk reading and writing the chart that was carried to them. **This section
+needs two machines** on one wired LAN: the node (section 0's rig, with section 38's service) and a **terminal**, a
+second machine with this checkout, where the window is built and run. **Live only.**
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Open a chart: remote median minus local median (ten each) | the press on the front door's row | the chart's identity header | **≤ 0.2 s** |
+| Sign a note: remote median minus local median (ten each) | `ui_gesture_timing`'s `note-sign` p50, per machine | | **≤ 0.2 s** |
+| A revoke ends the terminal's open session | `revoke-terminal` returns | its backend is gone | **≤ 2 s** |
+
+Steps: paper *N* = 0 extra acts to read or sign at a remote desk → forced *M* = 0 → target *K* = 0. The one-time
+ceremony per terminal is an operator's, not a clinical workflow. **A figure outside its budget, or an `M > N`, is the
+finding: file an issue, and never adjust the budget.**
+
+**Setup, on the node.** As sections 0 and 38, with section 38's supervised service running. This build adds `db/084`,
+and the window and the service each refuse a database prepared by another build, so rebuild `cairn-node` from this
+checkout, re-run section 0's `provision-window-role` and section 38's `provision-terminal-service-role` with the
+owner's connection, and `svc_stop; svc_start`. Then choose the gateway's port and note the node's LAN address:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+export GW_PORT=5543 NODE_IP=<the node machine's address on the LAN>
+psql "$CONN" -Atc "SELECT pg_postmaster_start_time(), pg_conf_load_time(), current_setting('listen_addresses')" > /tmp/pg-before.txt
+```
+
+**Step 1 — the gateway refuses to start with no route recorded.** Run it once in the foreground (the supervised one
+stays as it is):
+
+```bash
+CAIRN_CONN="$SERVICE_CONN" "$CAIRN_NODE_BIN" --key "$NODE_KEY" terminal-service --gateway-listen "0.0.0.0:$GW_PORT"
+```
+
+- [ ] It exits at once, never saying "running": "No gateway route is recorded, so --gateway-listen has nowhere to
+      forward to. As the owner, run cairn-node gateway-setup --upstream <127.0.0.1:5432 or the socket path>."
+
+**Step 2 — `gateway-setup` on a cluster that trusts no one.** Section 0's cluster is `scram-sha-256` on every line.
+**This is the only place its success path runs**: the test cluster (`CAIRN_TEST_PG`) is `trust`, which the verb
+refuses, so the tests reach only its refusals and the record step on its own.
+
+```bash
+"$CAIRN_NODE_BIN" --conn "$CONN" gateway-setup --upstream "127.0.0.1:$MPORT"
+```
+
+- [ ] It prints `node fingerprint: XXXX-XXXX-XXXX-XXXX-XXXX` and no warning. Write it down as `NODE_FP`.
+- [ ] `psql "$CONN" -c "SELECT * FROM terminal_gateway"` shows one row: upstream `127.0.0.1:5533`, `checked_by` your
+      owner login.
+- [ ] Postgres was not touched: rerun the setup's `psql … pg_postmaster_start_time() …` line into `/tmp/pg-after.txt`,
+      and `diff /tmp/pg-before.txt /tmp/pg-after.txt` prints nothing (no restart, no reload, `listen_addresses`
+      unchanged).
+- [ ] A remote route: `… gateway-setup --upstream 10.0.0.5:5432` fails with "'10.0.0.5:5432' is not a loopback
+      address (127.0.0.1 or ::1)".
+- [ ] Not a superuser: `"$CAIRN_NODE_BIN" --conn "$WINDOW_CONN" gateway-setup --upstream "127.0.0.1:$MPORT"` fails
+      with "could not read this server's access rules; run this step as the schema owner, who must be a database
+      superuser for it", and `terminal_gateway` is unchanged.
+- [ ] **A database with no schema loaded** (carried from the build's review: no test reaches it, because the test
+      cluster refuses earlier). It must fail legibly and write nothing:
+
+  ```bash
+  psql "$CONN" -c "CREATE DATABASE cairn_empty"
+  "$CAIRN_NODE_BIN" --conn "host=127.0.0.1 port=$MPORT user=$USER password=$OWNER_PW dbname=cairn_empty" gateway-setup --upstream "127.0.0.1:$MPORT"
+  psql "$CONN" -c "DROP DATABASE cairn_empty"
+  ```
+
+  Expected, from the code (not yet seen run): `Error: db error`, then `Caused by:` and `ERROR: relation "local_node"
+  does not exist`. Record the text exactly. A bare `db error` with no cause is a finding, and so is a sentence that
+  names no next step (today it names the missing table but not `cairn-node init`): file it.
+
+**Step 3 — run the gateway under the supervisor.** `svc_stop`, then write section 38's plist again with
+`<string>--gateway-listen</string><string>0.0.0.0:$GW_PORT</string>` after `<string>terminal-service</string>`
+(systemd: `ExecStart=$CAIRN_NODE_BIN --key $NODE_KEY terminal-service --gateway-listen 0.0.0.0:$GW_PORT`, then
+`systemctl --user daemon-reload`), and `svc_start`. On macOS, allow incoming connections for `cairn-node` if the
+firewall asks.
+
+- [ ] Its log says "terminal service running", then "terminal gateway listening on 0.0.0.0:5543".
+- [ ] `svc_kill`: after the restart the log says "terminal gateway listening on 0.0.0.0:5543" again.
+
+**Step 4 — the ceremony, on the terminal.** Build this checkout there, and give the window a connection string that
+names the NODE's address and the gateway's port (its password is the window login's, from section 0):
+
+```bash
+export TERM_DIR="$HOME/.cairn-terminal-measure"
+export REMOTE_CONN="host=<NODE_IP> port=5543 user=cairn_window_login password=<the window login's password> dbname=cairn_measure"
+cd cairn-gui
+CAIRN_CONN="$REMOTE_CONN" cargo run --release -p cairn-gui-tauri
+```
+
+- [ ] With no flag, the launch is refused: "the node's database is on another machine (<NODE_IP>), and this
+      connection would carry passphrases and signing keys in clear text. … To reach it from this machine through the
+      node's gateway, start with --terminal-dir <dir> and, the first time, --node-fingerprint <the node's
+      fingerprint>."
+- [ ] With `-- --terminal-dir "$TERM_DIR"` only: "this terminal has not pinned the node yet: start it once with
+      --node-fingerprint <fingerprint>, as the node's operator reads it out from gateway-setup." `ls "$TERM_DIR"`
+      shows no `terminal.key`.
+- [ ] With `-- --terminal-dir "$TERM_DIR" --node-fingerprint <NODE_FP with one digit changed>`: "the node at
+      <NODE_IP>:5543 did not present a key with the fingerprint … Check the fingerprint with the node's operator.",
+      and no `node.pin` is written.
+- [ ] With the right `NODE_FP` **typed** (never pasted from a message someone else sent): the launch ends with "this
+      terminal is not admitted by the node (it may be new, or it may have been revoked). Ask the node's operator: …",
+      then "At the node, its operator runs:" and `cairn-node admit-terminal <TERM_FP> --label "<where this terminal
+      is>"`. Note `TERM_FP`. `ls -la "$TERM_DIR"`: the directory `drwx------`, `terminal.key` and `node.pin` both
+      `-rw-------`.
+
+Back on the node:
+
+- [ ] `"$CAIRN_NODE_BIN" --conn "$CONN" list-terminals` shows one line,
+      `<TERM_FP>  pending   (no label)  last seen …`. The service's log says "terminal gateway: N unadmitted
+      handshakes refused" (at most one such line a second, not one per attempt).
+- [ ] `"$CAIRN_NODE_BIN" --conn "$CONN" admit-terminal <TERM_FP, typed as the terminal shows it> --label "ward desk"`
+      prints `terminal <TERM_FP> admitted as "ward desk"; it can connect from its next attempt`.
+
+On the terminal, `CAIRN_CONN="$REMOTE_CONN" cargo run --release -p cairn-gui-tauri -- --terminal-dir "$TERM_DIR"`:
+
+- [ ] The window opens on the front door. The node's log says "terminal session opened: peer <the terminal's
+      address>:…, terminal <TERM_FP>, login "cairn_window_login"".
+- [ ] Find a section 8 name and open the chart: it reads as on the node's own window.
+
+**Measurement 1 — chart open and Sign, local and remote (each ≤ 0.2 s slower at the median).** First record the
+link's round trip for context: `ping -c 10 <NODE_IP>` on the terminal. Then, the same chart and the same writer
+(`dr-b`, section 19) on both machines, the node's own window first (`CAIRN_CONN="$WINDOW_CONN"`, no flags), then the
+terminal's. Only one window open at a time. Before each machine's set, reset the Sign row (a rig only: it is a running
+estimate): `psql "$CONN" -c "DELETE FROM ui_gesture_timing WHERE gesture_kind = 'note-sign'"`.
+
+- [ ] **Open a chart**, ten times on each machine: from the press on the front door's row to the chart's identity
+      header. A stopwatch is coarse at this size; a screen recording read frame by frame is better. Record both
+      medians.
+- [ ] **Sign a note**, ten times on each machine: a one-line progress note, signed. After each set,
+      `psql "$CONN" -c "SELECT n, p50_ms, p95_ms FROM ui_gesture_timing WHERE gesture_kind = 'note-sign'"`. Record
+      `p50_ms` per machine.
+- [ ] The budget is the remote median minus the local one, for each gesture.
+
+**Measurement 2 — the gateway's own connection drops** (Review Focus 5; this stops the service's job loop too, which
+reconnects by itself). With the terminal's window open on a chart, on the node:
+
+```bash
+psql "$CONN" -c "ALTER ROLE cairn_terminal_service_login NOLOGIN"
+psql "$CONN" -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'cairn_terminal_service_login'"
+```
+
+- [ ] A press on the terminal still reads: an open session does not need the gateway's own connection.
+- [ ] Kill the terminal window's session too, so its next press reopens: `psql "$CONN" -c "SELECT
+      pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'cairn_window_login'"`. Press anything that
+      reads: it says "connection to the node was lost and could not be reopened: connecting to the database: the
+      node's terminal gateway cannot check logins right now; try again shortly [57P03]". It is an outage, not a
+      refusal: it names no operator, and a second press within 2 s says "press again in … s to retry".
+- [ ] `psql "$CONN" -c "ALTER ROLE cairn_terminal_service_login LOGIN"`; within a few seconds a press reads again.
+      The window was never told it is not admitted.
+
+**Measurement 3 — the service stopped.** `svc_stop`.
+
+- [ ] On the terminal, the next press says "connection to the node was lost and could not be reopened: connecting to
+      the database: error connecting to server: Connection refused (os error …)" (61 on macOS, 111 on Linux): an
+      outage, naming no operator. The node's own window still reads and signs.
+- [ ] `svc_start`: a few seconds later a press on the terminal reads again.
+
+**Measurement 4 — another key at the node's address.** To the terminal, a node that presents a key other than its
+pin is the same whoever it is, so replace the pin. Quit the terminal's window, then:
+
+```bash
+cp "$TERM_DIR/node.pin" "$TERM_DIR/node.pin.real"
+( umask 077; openssl rand -hex 32 > "$TERM_DIR/node.pin" )
+CAIRN_CONN="$REMOTE_CONN" cargo run --release -p cairn-gui-tauri -- --terminal-dir "$TERM_DIR"
+```
+
+- [ ] The launch is refused: "the node presented a different key than this terminal pinned (or could not prove it
+      holds the pinned one), so nothing was sent to it. If the node's key really changed, ask the node's operator
+      before deleting this terminal's node.pin to pin it again." No session opens in the node's log.
+- [ ] Adding `--node-fingerprint "$NODE_FP"` does not override it: "this terminal already pinned a node whose
+      fingerprint is not …, and a pin is never replaced by a flag. …".
+- [ ] `mv "$TERM_DIR/node.pin.real" "$TERM_DIR/node.pin"`: the launch opens the window again.
+
+**Measurement 5 — a revoke during an open chart (≤ 2 s, then refused).** Last, because revoked is final. Quit the
+node's own window (its backend would be counted below too). With the terminal's window open on a chart, on the node,
+in one terminal:
+
+```bash
+psql "$CONN" -c "SELECT clock_timestamp(), count(*) FROM pg_stat_activity WHERE usename = 'cairn_window_login'" -c '\watch 0.5'
+```
+
+and in another:
+`psql "$CONN" -Atc "SELECT clock_timestamp()"; "$CAIRN_NODE_BIN" --conn "$CONN" revoke-terminal <TERM_FP>`.
+
+- [ ] It prints `terminal <TERM_FP> revoked; its open sessions close within 2 s and any statement it is running is
+      cancelled`, and the count reaches 0 within 2 s of the time printed before it. The node's log says "terminal
+      session closed: …, terminal <TERM_FP>, login "cairn_window_login": ended: the terminal is no longer admitted".
+- [ ] The terminal's window learns it at its next press: "connection to the node was lost and could not be reopened:
+      this terminal is not admitted by the node (it may be new, or it may have been revoked). Ask the node's operator:
+      a new terminal is admitted with cairn-node admit-terminal <TERM_FP> --label "<where this terminal is>"; a
+      revoked terminal needs a new terminal key. This workstation could not complete the sign-in the node asked for,
+      so pressing again fails the same way until an operator acts." A second press says it "tried nothing" and the
+      same refusal, with no "press again" offer.
+- [ ] `"$CAIRN_NODE_BIN" --conn "$CONN" admit-terminal <TERM_FP> --label again` fails: "terminal <TERM_FP> is revoked
+      and cannot be admitted (only a pending one can) [P0001]". `list-terminals` shows it `revoked`.
+
+**Measurement 6 — a revoke while a statement is running.** The terminal needs a new key: quit its window,
+`rm "$TERM_DIR/terminal.key"`, launch it with `--terminal-dir` again (refused as not admitted, naming a NEW
+fingerprint), admit that one at the node, and launch again. Open a chart and write a one-line note. In a separate
+`psql "$CONN"` session on the node, hold the node's clock row: `BEGIN; SELECT * FROM hlc_state FOR UPDATE;`. Press
+*Sign* on the terminal: it waits. Note `psql "$CONN" -Atc "SELECT count(*) FROM clinical_note"`. Then, within 10 s of
+the press, revoke the new fingerprint as in Measurement 5, with the `\watch` running.
+
+- [ ] Before the revoke, the `\watch` shows the terminal's backend; `pg_stat_activity` reads it `active`, waiting on a
+      `Lock`. Within 2 s of the revoke the count reaches 0, while the held session still holds the row: the
+      cancel ended it, not the socket.
+- [ ] `ROLLBACK;` in the held session. `clinical_note`'s count is unchanged, and the terminal never says the note was
+      signed. Record exactly what it says.
+
+**Results (fill in).**
+
+| Figure | n | local median | remote median | remote − local | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| Open a chart (stopwatch or recording) | 10 + 10 | | | | ≤ 0.2 s | |
+| Sign a note (`note-sign` p50) | 10 + 10 | | | | ≤ 0.2 s | |
+| A revoke → the idle session's backend gone | | | | | ≤ 2 s | |
+| A revoke → the running statement's backend gone | | | | | ≤ 2 s | |
+| `ping` round trip, terminal → node (context) | 10 | | | | — | |
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| No route: the service exits naming `gateway-setup` | | |
+| `gateway-setup` succeeds on a `scram-sha-256` cluster, prints the fingerprint, and Postgres is not restarted or reloaded | | |
+| `gateway-setup` refuses a remote route and a non-superuser | | |
+| `gateway-setup` on a database with no schema: its exact text | | |
+| The ceremony: both fingerprints typed; the wrong one refused and no pin written; files at 0700/0600 | | |
+| Admitted: the window opens and reads through the gateway | | |
+| The gateway's own connection down: 57P03, an outage, never "not admitted" | | |
+| The service stopped: an outage; it comes back by itself | | |
+| Another key at the node's address: refused at launch, no override | | |
+| Revoked: the reopen names the operator; re-admitting the old key refused | | |
+| A revoke cancels a running statement; nothing is signed | | |
+
+**Where it is pinned.**
+- **The doors:** `crates/cairn-node/tests/terminal_gateway_doors.rs` (the trust set, the 64-row cap, admit and
+  revoke, the turn, the window's and the service's missing grants).
+- **The gateway:** `terminal_gateway_e2e.rs` (admitted reads, unadmitted recorded pending, revoke within 2 s with a
+  running statement and idle in a transaction, 28000 for the service's login, no reply to plain text, 57P03 while its
+  connection is down, the 65th waits, the 10 s deadline, the 129th closed), `terminal_gateway_e2e_refusals.rs`,
+  `terminal_gateway_login_facts.rs`, `terminal_service_gateway_check.rs`, `gateway_setup.rs` and
+  `terminal_admin_verbs.rs`; the unit tests of `terminal_service/gateway/` and `terminal_service/run.rs`.
+- **The terminal:** `terminal_link.rs`, `transport.rs` and the unit tests of `terminal_link/`;
+  `cairn-gui-live/tests/pinned_reopen.rs`; `cairn-gui-tauri`'s `launch_posture_tests.rs` and `terminal_launch.rs`
+  (DB-gated window tests run locally only, #905).
+
+`TEMPLATE.md` carries a matching block (*The pinned terminal gateway*).
