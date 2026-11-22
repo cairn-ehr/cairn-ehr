@@ -61,6 +61,11 @@ async fn admit_then_list_shows_active_with_label_and_revoke_shows_revoked() {
     assert_eq!(list(&owner).await.unwrap()[0].status, "revoked");
 }
 
+/// What the operator sees: the error's own Display (main prints it), not a downcast.
+fn shown(e: &anyhow::Error) -> String {
+    e.to_string()
+}
+
 #[tokio::test]
 async fn refusals_carry_the_doors_own_text() {
     let Some((_g, owner)) = rig().await else {
@@ -71,13 +76,75 @@ async fn refusals_carry_the_doors_own_text() {
     let e = admit(&owner, "0000-0000-0000-0000-0000", "x")
         .await
         .unwrap_err();
-    let msg = cairn_node::terminal_service::commit::primary_message(&e);
-    assert!(msg.contains("no terminal has the fingerprint"), "{msg}");
+    assert!(shown(&e).contains("no terminal has the fingerprint"), "{e}");
+    let e = revoke(&owner, "0000-0000-0000-0000-0000")
+        .await
+        .unwrap_err();
+    assert!(shown(&e).contains("no terminal has the fingerprint"), "{e}");
 
     let e = admit(&owner, &fp, "  ").await.unwrap_err();
-    let msg = cairn_node::terminal_service::commit::primary_message(&e);
-    assert!(msg.contains("needs a label"), "{msg}");
+    assert!(shown(&e).contains("needs a label"), "{e}");
 
     let e = revoke(&owner, "nonsense").await.unwrap_err();
-    assert!(e.to_string().contains("20 hex digits"), "{e}");
+    assert!(shown(&e).contains("20 hex digits"), "{e}");
+}
+
+#[tokio::test]
+async fn revoke_is_idempotent_and_only_a_pending_terminal_can_be_admitted() {
+    let Some((_g, owner)) = rig().await else {
+        return;
+    };
+    let fp = pending(&owner, 3).await;
+    admit(&owner, &fp, "a").await.unwrap();
+
+    let e = admit(&owner, &fp, "b").await.unwrap_err(); // active
+    assert!(shown(&e).contains("only a pending one can"), "{e}");
+
+    revoke(&owner, &fp).await.unwrap();
+    revoke(&owner, &fp).await.unwrap(); // already revoked: a no-op, not an error
+    let e = admit(&owner, &fp, "b").await.unwrap_err(); // revoked
+    assert!(shown(&e).contains("only a pending one can"), "{e}");
+}
+
+#[tokio::test]
+async fn list_is_newest_seen_first() {
+    let Some((_g, owner)) = rig().await else {
+        return;
+    };
+    let first = pending(&owner, 4).await;
+    let second = pending(&owner, 5).await;
+    let order = |rows: &[cairn_node::terminal_service::terminals::TerminalRow]| {
+        rows.iter()
+            .map(|r| r.fingerprint.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        order(&list(&owner).await.unwrap()),
+        vec![second.clone(), first.clone()]
+    );
+
+    // The older one is seen again: it is now the newest.
+    let key: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(4));
+    owner
+        .execute("SELECT cairn_terminal_attempt($1)", &[&hex::encode(key)])
+        .await
+        .unwrap();
+    assert_eq!(order(&list(&owner).await.unwrap()), vec![first, second]);
+}
+
+#[tokio::test]
+async fn list_failure_reads_as_the_database_message() {
+    let Some((_g, owner)) = rig().await else {
+        return;
+    };
+    // A table this login cannot read: SET ROLE to a role without SELECT (42501).
+    owner
+        .batch_execute("CREATE ROLE t8_noread NOLOGIN")
+        .await
+        .ok();
+    owner.batch_execute("SET ROLE t8_noread").await.unwrap();
+    let r = list(&owner).await;
+    owner.batch_execute("RESET ROLE").await.unwrap();
+    let e = r.unwrap_err();
+    assert!(shown(&e).contains("permission denied"), "{e}");
 }

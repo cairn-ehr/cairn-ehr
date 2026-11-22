@@ -53,7 +53,7 @@ pub fn render(rows: &[TerminalRow]) -> String {
         .join("\n")
 }
 
-/// A door's refusal as the operator should read it: its own message, never `db error`.
+/// A database failure (a door's refusal, or a failed read) as the operator should read it: its own message, never `db error`.
 fn door_refusal(e: tokio_postgres::Error) -> anyhow::Error {
     anyhow::anyhow!(super::commit::primary_message(&e.into()))
 }
@@ -87,10 +87,11 @@ pub async fn list(db: &Client) -> anyhow::Result<Vec<TerminalRow>> {
     let rows = db
         .query(
             "SELECT fingerprint, status, label, last_seen::text FROM terminal_trust \
-             ORDER BY last_seen DESC",
+             ORDER BY last_seen DESC, fingerprint",
             &[],
         )
-        .await?;
+        .await
+        .map_err(door_refusal)?;
     Ok(rows
         .iter()
         .map(|r| TerminalRow {
