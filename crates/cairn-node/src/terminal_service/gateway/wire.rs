@@ -84,16 +84,20 @@ fn startup_params(body: &[u8]) -> Result<Vec<(String, String)>, &'static str> {
     if !items.len().is_multiple_of(2) {
         return Err("startup: odd key/value count");
     }
-    items
-        .chunks(2)
-        .map(|kv| {
-            if kv[0].is_empty() {
-                return Err("startup: empty key");
-            }
-            let s = |x: &[u8]| String::from_utf8(x.to_vec()).map_err(|_| "startup: not UTF-8");
-            Ok((s(kv[0])?, s(kv[1])?))
-        })
-        .collect()
+    let mut params: Vec<(String, String)> = Vec::new();
+    for kv in items.chunks(2) {
+        if kv[0].is_empty() {
+            return Err("startup: empty key");
+        }
+        let s = |x: &[u8]| String::from_utf8(x.to_vec()).map_err(|_| "startup: not UTF-8");
+        let (k, v) = (s(kv[0])?, s(kv[1])?);
+        // Postgres honours the LAST duplicate but `get` would vet the first: refuse the ambiguity.
+        if params.iter().any(|(pk, _)| *pk == k) {
+            return Err("startup: duplicate key");
+        }
+        params.push((k, v));
+    }
+    Ok(params)
 }
 
 /// Parse the packet read inside TLS. `packet` is the WHOLE message, length prefix included.
@@ -124,6 +128,11 @@ pub fn inside(packet: &[u8]) -> Result<Inside, &'static str> {
 
 /// A Postgres `ErrorResponse` ('E'): severity `FATAL`, SQLSTATE and message, terminated.
 pub fn error_response(sqlstate: &str, message: &str) -> Vec<u8> {
+    // Fields are NUL-terminated on the wire, so an embedded NUL would corrupt the framing.
+    debug_assert!(
+        !sqlstate.contains('\0') && !message.contains('\0'),
+        "NUL in error field"
+    );
     let mut body = Vec::new();
     for (tag, text) in [
         (b'S', "FATAL"),
@@ -312,5 +321,90 @@ mod tests {
         let n = (want.len() - 1) as u32;
         want[1..5].copy_from_slice(&n.to_be_bytes());
         assert_eq!(error_response("28000", "x"), want);
+    }
+
+    /// Wrap a raw body (after the length) into a packet with a correct length field.
+    fn packet(body: &[u8]) -> Vec<u8> {
+        let mut p = ((body.len() + 4) as u32).to_be_bytes().to_vec();
+        p.extend_from_slice(body);
+        p
+    }
+
+    #[test]
+    fn duplicate_keys_are_refused() {
+        // Postgres honours the LAST duplicate; the gateway vets the first. Refuse both ways.
+        for key in ["user", "database"] {
+            let p = startup(196_608, &[(key, "a"), (key, "b")]);
+            assert!(inside(&p).is_err(), "duplicate {key}");
+        }
+    }
+
+    #[test]
+    fn max_startup_boundary() {
+        let sized = |n: usize| {
+            // Fixed overhead: 8 header + "user\0w\0" 7 + "application_name\0" 17 + value NUL + final NUL.
+            let pad = n - (8 + 7 + 17 + 1 + 1);
+            let app = "x".repeat(pad);
+            startup(196_608, &[("user", "w"), ("application_name", &app)])
+        };
+        assert_eq!(sized(MAX_STARTUP).len(), MAX_STARTUP);
+        assert!(inside(&sized(MAX_STARTUP)).is_ok());
+        assert_eq!(sized(MAX_STARTUP + 1).len(), MAX_STARTUP + 1);
+        assert!(inside(&sized(MAX_STARTUP + 1)).is_err());
+    }
+
+    #[test]
+    fn short_inputs_are_refused_not_panicked() {
+        for n in [0usize, 3, 4, 7] {
+            assert!(inside(&vec![0u8; n]).is_err(), "{n} bytes");
+        }
+    }
+
+    #[test]
+    fn more_refusals() {
+        // Right code, wrong length: not an SSLRequest.
+        let mut p = pair(SSL_CODE);
+        p[..4].copy_from_slice(&9u32.to_be_bytes());
+        assert_eq!(opening(p), Opening::Other);
+        let mut p = pair(GSS_CODE);
+        p[..4].copy_from_slice(&9u32.to_be_bytes());
+        assert_eq!(opening(p), Opening::Other);
+        // Protocol major 4.
+        assert!(inside(&startup(262_144, &[("user", "w")])).is_err());
+        // Cancel whose length field disagrees with its size.
+        let mut c = cancel_request(&[7u8; 8]);
+        c[3] += 1;
+        assert!(inside(&c).is_err());
+        // Empty key.
+        let mut b = 196_608u32.to_be_bytes().to_vec();
+        b.extend_from_slice(b"\0v\0\0");
+        assert!(inside(&packet(&b)).is_err());
+        // Empty parameter list is fine.
+        let mut b = 196_608u32.to_be_bytes().to_vec();
+        b.push(0);
+        let Ok(Inside::Startup(s)) = inside(&packet(&b)) else {
+            panic!("not a startup")
+        };
+        assert!(s.params.is_empty());
+        // backend_key: key below the floor, and trailing bytes after the message.
+        assert_eq!(backend_key(&k_msg_sized(3)), None);
+        let mut m = k_msg(4);
+        m.push(0);
+        assert_eq!(backend_key(&m), None);
+        // frame: a length field below 4.
+        assert_eq!(frame(&[b'K', 0, 0, 0, 3, 0, 0, 0]), None);
+    }
+
+    fn k_msg_sized(key_len: usize) -> Vec<u8> {
+        let mut m = vec![b'K'];
+        m.extend_from_slice(&((8 + key_len) as u32).to_be_bytes());
+        m.extend(std::iter::repeat_n(1u8, 4 + key_len));
+        m
+    }
+
+    #[test]
+    #[should_panic(expected = "NUL")]
+    fn error_response_refuses_nul_in_arguments() {
+        error_response("28000", "a\0b");
     }
 }
