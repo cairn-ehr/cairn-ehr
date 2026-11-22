@@ -44,7 +44,7 @@ use super::accept::{
 };
 use super::admit::{judge, read_login_facts, DbUnavailable, Refusal, NOT_NOW};
 use super::pipe::{close_gently, pipe, send_cancel};
-use super::sessions::Sessions;
+use super::sessions::{CloseOnDrop, Sessions};
 use super::trust::TerminalTrust;
 use super::upstream::{self, AsyncReadWrite, Upstream};
 use super::wire::{error_response, inside, opening, Inside, Opening, Startup, MAX_STARTUP};
@@ -142,6 +142,9 @@ pub async fn run_gateway_on(
         accept_errors: AcceptErrors::default(),
     });
     eprintln!("terminal gateway listening on {}", listener.local_addr()?);
+    // However this run ends (a panic included), its sessions end with it: no later run's sweep
+    // sees them, so left open a revoke could never end them (`sessions.rs`, final review I1).
+    let _close = CloseOnDrop(gw.sessions.clone());
     // One future: dropping it (the job loop's supervisor, a test) stops the tick as well.
     tokio::select! {
         () = accept_loop(listener, gw.clone()) => {}
@@ -303,6 +306,9 @@ async fn session(gw: &Gateway, a: Admitted, peer: SocketAddr) {
     let cause = match task.await {
         Ok(Ok(())) => "closed".to_string(),
         Ok(Err(e)) => format!("ended: {e}"),
+        Err(j) if j.is_cancelled() && gw.sessions.is_closed() => {
+            "ended: the gateway's run ended (it is restarted)".to_string()
+        }
         Err(j) if j.is_cancelled() => "ended: the terminal is no longer admitted".to_string(),
         Err(_) => "ended: the pipe failed".to_string(),
     };

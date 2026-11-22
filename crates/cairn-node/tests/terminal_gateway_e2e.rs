@@ -131,6 +131,27 @@ async fn a_revoke_ends_the_open_session_within_2_s() {
     r.finish().await;
 }
 
+/// A run that ends (a panic, which the supervisor restarts) must take its sessions with it: the
+/// next run's sweep never sees them, so a later revoke could not end them (final review I1).
+#[tokio::test]
+async fn a_session_ends_when_its_gateway_run_ends() {
+    let Some(r) = rig().await else { return };
+    let (t, _) = r.admitted_terminal().await;
+    let c = r.window(&t).await;
+    let pid = pid_of(&c).await;
+    r.end_run();
+    let ended = Instant::now();
+    while r.backend_alive(pid).await {
+        assert!(
+            ended.elapsed() < Duration::from_secs(2),
+            "the session outlived its gateway run by 2 s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(c.query_one("SELECT 1", &[]).await.is_err());
+    r.finish().await;
+}
+
 #[tokio::test]
 async fn a_revoke_ends_an_idle_in_transaction_session() {
     const LOCK: i64 = 0x0909_7E57;

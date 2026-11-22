@@ -145,6 +145,12 @@ impl Rig {
             .unwrap();
     }
 
+    /// End the gateway's run as a panic in it would (the supervisor then starts a fresh run),
+    /// leaving the listener closed. `finish` still cleans up.
+    pub fn end_run(&self) {
+        self.gateway.abort();
+    }
+
     pub async fn backend_alive(&self, pid: i32) -> bool {
         self.owner
             .query_one(
