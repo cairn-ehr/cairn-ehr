@@ -9,7 +9,8 @@
   [#1163](https://github.com/cairn-ehr/cairn-ehr/pull/1163). Design (maintainer-approved 2026-11-16):
   `docs/superpowers/specs/2026-11-16-pinned-terminal-link-909-design.md` (D2–D5, and §5's restore question); plan:
   `docs/superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md`. Filed by the build:
-  [#1164](https://github.com/cairn-ehr/cairn-ehr/issues/1164).
+  [#1164](https://github.com/cairn-ehr/cairn-ehr/issues/1164), and by its final review #1165 to #1170 ("What is not
+  guaranteed").
 - **Supersedes in part:** [ADR-0084](0084-the-window-never-holds-the-owners-keys.md) decision 5 (a remote database
   is refused) for the window's launch only; [ADR-0109](0109-the-terminal-service-and-the-keyless-window.md) decision
   5's registration lock (its first sentence and its bullet "Two services register once") and the first and last
@@ -102,7 +103,8 @@ machine.
      comes back only with a new key.
    - `cairn-node revoke-terminal <fingerprint>` revokes the one pending or active row with it. Revoking a revoked one
      is a no-op.
-   - `cairn-node list-terminals` lists every row, most recently seen first.
+   - `cairn-node list-terminals` lists every row, most recently seen first: an admitted terminal was last seen
+     when it last connected, a refused one when it last tried.
 
    Each refuses a database on another machine (`require_local`). A typed fingerprint may use either letter case and
    leave out the dashes. The fingerprint is `cairn_event::short_fingerprint`: the first 10 bytes (80 bits) of the
@@ -111,9 +113,11 @@ machine.
 
    **The gateway holds the set in memory, refreshed every 1 s** (designer's call). Design D3 said the service "reads
    it per handshake", but rustls judges a client certificate synchronously, inside the handshake, where no database
-   read can be awaited. The handshake reads the in-memory copy. A key it refuses is queued (64 deep, dropped when
-   full, never awaited) for the next tick to record through `cairn_terminal_attempt`. **A failed refresh keeps the
-   last set**: a stale set beats an empty one, which would shut every admitted terminal out over a database hiccup.
+   read can be awaited. The handshake reads the in-memory copy. Every key it judges is queued (64 deep, dropped when
+   full, never awaited) for the next tick to record through `cairn_terminal_attempt`: a refused key as an attempt,
+   an active one only for its `last_seen`. Only refused handshakes are counted in the 1 s log line. **A failed refresh
+   keeps the last set**: a stale set beats an empty one, which would shut every admitted terminal out over a database
+   hiccup.
    Until its first load succeeds the gateway accepts nothing, and its handshake check refuses every key and records
    none.
 
@@ -127,6 +131,13 @@ machine.
    The watch ends at the first `ReadyForQuery` or `ErrorResponse`, and a session whose server sends more than 64 KiB
    without one whole message is closed. Pinned: a running statement ends within 2 s of the revoke, and an
    idle-in-transaction session's locks are released within 5 s.
+
+   **No session outlives the run that sweeps it.** Only a run's own tick sweeps its sessions, and a run can end (a
+   panic, which the supervisor restarts) while its sessions still pipe. So however a run ends, every session it piped
+   is aborted, and a startup admitted afterwards by a connection still walking the steps under it is aborted as it
+   opens (`sessions::CloseOnDrop`). A restart therefore ends every open remote session, which the window's reopen
+   brings back through the new run, and a revoke reaches every session there is. Pinned:
+   `terminal_gateway_e2e.rs::a_session_ends_when_its_gateway_run_ends`.
 
 6. **`gateway-setup` checks the route once and records it** (design D2 step 4, D4 step 1).
    `cairn-node gateway-setup --upstream <route>` runs with the owner's connection, who must be a database superuser
@@ -207,8 +218,10 @@ machine.
    - **ADR-0109 decision 5's first sentence now reads:** `serve_one` takes the registration turn
      (`cairn_registration_take_turn(true)`, a row lock) as its first statement, then claims a request, and so on as
      written. **Its bullet "Two services register once" now reads:** each service takes the turn before it claims,
-     and the CLI takes it too, so registrations take turns node-wide: the second waits for the first to commit, then
-     finds the row settled. The rest of the bullet stands.
+     and the CLI takes it too, so registrations take turns node-wide: the second waits for the first to commit. The
+     protection is one-way. A service searches after it takes the turn, so it finds a chart the first registration
+     made; the CLI's `patient-register` has already searched before it takes the turn, so a CLI registration racing
+     a service's can still make a duplicate. The rest of the bullet stands.
    - **ADR-0109's first "not guaranteed" bullet now reads:** one service per node is assumed. A second is harmless:
      the registration turn makes the two take turns, the second waiting until the first commits. Each runs its own
      gateway only if given `--gateway-listen`, on its own address.
@@ -223,12 +236,12 @@ machine.
     access. A whole-database copy made outside Cairn is the exception ("What is not guaranteed").
 
 **Paper-parity.** The paper counterpart is a clinician at a ward desk reading and writing the chart that was carried
-to them. Paper *N* = 0 extra human acts to read or sign at a remote desk → forced *M* = 0 per act → target *K* = 0:
-the link is set up once per terminal by an operator, which is not a clinical workflow (design §7), and every later
-read or sign is the same press as on the database's machine. Registration stays 3 → 3 → 3 (ADR-0109). The budget:
-on a wired facility LAN, opening a chart and pressing Sign each take at most 0.2 s longer at the median through the
-gateway than on the database's machine, measured in RUNBOOK §39, the first slice to expose it. Two new launch
-sentences, not admitted and another key, are for an operator, not a clinician.
+to them. Paper *N* = 0 extra human acts to read or sign at a remote desk → forced *M* = 0 per act → target *K* =
+0: the link is set up once per terminal by an operator, which is not a clinical workflow (design §7), and every
+later read or sign is the same press as on the database's machine. Registration stays 3 → 3 → 3 (ADR-0109). The
+budget: on a wired facility LAN, opening a chart and pressing Sign each take at most 0.2 s longer at the median
+through the gateway than on the database's machine, measured in RUNBOOK §39, the first slice to expose it. Two new
+launch sentences, not admitted and another key, are for an operator, not a clinician.
 
 ## Consequences
 
@@ -246,8 +259,9 @@ sentences, not admitted and another key, are for an operator, not a clinician.
 ## What is not guaranteed
 
 - **The service is a single point for remote terminals.** With it stopped, or its gateway restarting, they have no
-  database. The window on the database's machine still reads and signs, but cannot register or commit drafts on the
-  timer (ADR-0109).
+  database, and a gateway restart ends every open remote session (decision 5); the window's reopen brings it back,
+  though no test yet cuts a session off and reopens it through the pinned link (#1168). The window on the
+  database's machine still reads and signs, but cannot register or commit drafts on the timer (ADR-0109).
 - **A Postgres restart still disconnects every terminal**, remote or local (slice 5 is the answer). The window's
   reopen brings it back.
 - **A stolen, still-admitted terminal holds its key and the window login's password until it is revoked.** Signing
@@ -274,6 +288,14 @@ sentences, not admitted and another key, are for an operator, not a clinician.
   replay takes locks (#726, #875), a window of an older build is refused by a newer database (ADR-0084 decision 2),
   and the service must be running before any window depends on it. **This slice must not ship to a site until slice
   C, the rollout, is settled** (design §6).
+- **No cap per terminal or per host.** One admitted terminal may open any number of sessions (#1165), and one LAN
+  host may hold all 128 pre-startup slots, each for up to 10 s and again as soon as it is freed, shutting every
+  other terminal out while it does (#1166).
+- **SCRAM through the gateway has no automated test** (#1167): the test cluster is `trust`, so only RUNBOOK §39
+  shows a password login passing end to end.
+- **The window tells "not admitted" from other refusals by its wording** (#1170), not by a typed marker. An ordinary
+  close (a revoke, a killed backend) logs rustls's "peer closed connection without sending TLS close_notify" and its
+  docs URL on both sides, which reads as alarming for a normal close (#1169).
 - **`connection.rs` is over the 500-line house limit** (650 lines; its verbatim split is #1164).
 
 Pins: `crates/cairn-node/tests/{terminal_gateway_doors,terminal_gateway_e2e,terminal_gateway_e2e_refusals,

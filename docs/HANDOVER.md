@@ -168,9 +168,12 @@
 >    `terminal-service --gateway-listen`, TLS 1.3 pinned both ways against the node-local trust set; the owner's
 >    `gateway-setup`, `admit-terminal`, `revoke-terminal` (final; ends the terminal's sessions and cancels their
 >    statements) and `list-terminals`; the registration lock is now the `registration_turn` row lock the window cannot
->    take. It **awaits the controller's final whole-branch review and the full gate, and #1163 stays draft until
->    then.** Filed **#1164** (`cairn-gui-live/src/connection.rs` is 650 lines, over the 500-line rule: a verbatim
->    split). **⇒ NEXT after it merges: slice C's rollout brainstorm** (design §6). **Slice B must not ship to a site
+>    take. Its final whole-branch review is done and fixed in one wave (a gateway restart now ends every session, so a
+>    revoke reaches them all); it **awaits the full gate, and #1163 stays draft until then.** Filed **#1164**
+>    (`cairn-gui-live/src/connection.rs` is 650 lines: a verbatim split) and, from the review, **#1165**–**#1170**
+>    (no per-terminal session cap · one host can hold all 128 pre-startup slots · no SCRAM test through the gateway ·
+>    no cut-off-reopen test through the pinned link · rustls close_notify log noise · a typed not-admitted marker).
+>    **⇒ NEXT after it merges: slice C's rollout brainstorm** (design §6). **Slice B must not ship to a site
 >    until slice C is settled.** RUNBOOK §38 and §39 (two machines) are owed by a human. **Otherwise:** sign-in
 >    **slice 4** (the emergency key, design §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and
 >    Pi figures (ROADMAP has the Mac figures); or the next whole-project review. Design §10's findings 1–2 are decided
