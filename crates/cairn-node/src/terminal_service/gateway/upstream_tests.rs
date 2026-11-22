@@ -93,3 +93,46 @@ fn md5_and_password_warn_on_the_chosen_route_and_trust_still_refuses() {
     .unwrap_err();
     assert!(e.contains("line 6"), "{e}");
 }
+
+#[test]
+fn parse_refuses_dot_dot_segments_and_a_trailing_slash() {
+    assert!(parse("/x/../y/.s.PGSQL.5432").is_err());
+    assert!(parse("/run/postgresql/.s.PGSQL.5432/").is_err());
+}
+
+#[test]
+fn parse_refuses_mapped_wildcard_and_named_hosts() {
+    for s in [
+        "[::ffff:10.0.0.5]:5432",
+        "[::ffff:127.0.0.1]:5432",
+        "0.0.0.0:5432",
+        "localhost:5432",
+    ] {
+        assert!(parse(s).is_err(), "{s}");
+    }
+}
+
+#[test]
+fn a_socket_route_refuses_ident_cert_and_mapped_peer_and_warns_on_md5() {
+    let sock = parse("/tmp/.s.PGSQL.5432").unwrap();
+    for m in ["ident", "cert"] {
+        let e = route_verdict(&[rule(8, "local", m)], &sock).unwrap_err();
+        assert!(e.contains("pg_hba.conf:8"), "{m}: {e}");
+    }
+    let mut mapped = rule(8, "local", "peer");
+    mapped.options = Some(vec!["map=x".into()]);
+    assert!(route_verdict(&[mapped], &sock)
+        .unwrap_err()
+        .contains("pg_hba.conf:8"));
+    let w = route_verdict(&[rule(4, "local", "md5")], &sock).unwrap();
+    assert_eq!(w.len(), 1, "{w:?}");
+}
+
+#[test]
+fn a_local_peer_line_does_not_affect_a_tcp_route() {
+    let w = route_verdict(
+        &[rule(1, "local", "peer")],
+        &parse("127.0.0.1:5432").unwrap(),
+    );
+    assert!(w.is_ok());
+}

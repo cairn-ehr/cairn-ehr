@@ -11,7 +11,7 @@
 use crate::identity::load_local;
 use crate::window_access::{hba_file_is_stale, hba_verdict, read_hba_rules, HbaRule};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_postgres::Client;
 
@@ -42,6 +42,12 @@ impl std::fmt::Display for Upstream {
 pub fn parse(s: &str) -> Result<Upstream, String> {
     if s.starts_with('/') {
         let p = PathBuf::from(s);
+        // `..` could point the route anywhere; a trailing `/` makes the socket a directory.
+        if s.ends_with('/') || p.components().any(|c| c == Component::ParentDir) {
+            return Err(format!(
+                "'{s}' must be a plain absolute path to the socket file (no '..', no trailing '/')"
+            ));
+        }
         let port = p
             .file_name()
             .and_then(|n| n.to_str())
@@ -93,12 +99,12 @@ pub fn route_verdict(rules: &[HbaRule], up: &Upstream) -> Result<Vec<String>, St
         match up {
             // peer/ident/cert and the rest would let the gateway's OS user in with no password.
             Upstream::Unix(_) if r.kind == "local" => {
-                if !matches!(m, "scram-sha-256" | "md5" | "password" | "reject") {
+                if matches!(m, "md5" | "password") {
+                    warnings.push(weak_hash(&at, &r.kind, m));
+                } else if !matches!(m, "scram-sha-256" | "reject") {
                     refusals.push(format!(
                         "{at}: a 'local' line uses '{m}', which lets the gateway's own operating-system user in without the window's password. Change it to scram-sha-256 (or use a loopback TCP route), reload the server yourself, and run this again; this command never changes or reloads Postgres."
                     ));
-                } else if m != "scram-sha-256" && m != "reject" {
-                    warnings.push(weak_hash(&at, &r.kind, m));
                 }
             }
             Upstream::Tcp(_)
