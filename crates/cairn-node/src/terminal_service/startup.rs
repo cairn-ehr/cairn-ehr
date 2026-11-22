@@ -57,7 +57,8 @@ pub fn gateway_verdict(can_read: bool, has_route: bool) -> Result<(), String> {
     if !can_read {
         return Err(
             "This login cannot run the terminal gateway (it needs SELECT on terminal_trust and \
-             terminal_gateway, EXECUTE on cairn_terminal_attempt, and to read login facts). At the node, run cairn-node provision-terminal-service-role with \
+             terminal_gateway, EXECUTE on cairn_terminal_attempt, and to read login facts). At the \
+             node, run cairn-node provision-terminal-service-role with \
              the owner's connection, and start the terminal service as the login it makes."
                 .to_string(),
         );

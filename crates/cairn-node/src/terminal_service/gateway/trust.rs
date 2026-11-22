@@ -11,7 +11,9 @@
 //! admitted"), it queues the key on a bounded channel so the tick can record it as a `pending`
 //! attempt (an operator then sees it and can admit it), and it bumps a counter the tick logs
 //! once a second. A full queue drops the key: a LAN host flooding fresh keys costs the gateway
-//! nothing, and db/084 keeps only the 64 newest pending rows anyway.
+//! nothing, and db/084 keeps only the 64 newest pending rows anyway. An ACTIVE key is queued too
+//! (never counted): the same door only touches a known row's `last_seen`, so `list-terminals`
+//! shows when an admitted terminal last connected, not when it was last refused (final review M2).
 //!
 //! Two states are kept apart on purpose (controller ruling R2):
 //! * NEVER LOADED (`None`): the closure accepts no key and records nothing, because "the
@@ -29,7 +31,7 @@ use tokio_postgres::Client;
 
 use crate::transport::TrustStore;
 
-/// How many refused keys may wait to be recorded. Matches db/084's cap on pending rows.
+/// How many seen keys may wait to be recorded. Matches db/084's cap on pending rows.
 pub const ATTEMPT_QUEUE: usize = 64;
 
 /// The live trust set, the attempt queue's sending end and the refused-handshake counter.
@@ -55,7 +57,8 @@ impl TerminalTrust {
     }
 
     /// The closure the gateway's TLS server config pins client keys with: `true` for an active
-    /// key. Any other key is queued (if there is room) and counted, then refused. A poisoned
+    /// key. Every key is queued (if there is room) for its `last_seen`; any other key is also
+    /// counted, then refused. A poisoned
     /// lock fails closed, as `sync::trust_store_from_set` does.
     pub fn store(&self) -> TrustStore {
         let me = self.clone();
@@ -65,7 +68,10 @@ impl TerminalTrust {
                 .read()
                 .map(|s| s.as_ref().map(|s| s.contains(key)));
             match verdict {
-                Ok(Some(true)) => true,
+                Ok(Some(true)) => {
+                    let _ = me.attempts.try_send(key.to_string());
+                    true
+                }
                 Ok(Some(false)) => {
                     // `try_send`, never `send`: the handshake must not wait on the queue.
                     let _ = me.attempts.try_send(key.to_string());
@@ -119,7 +125,14 @@ mod tests {
         trust.replace(set(&["aa"]));
         let store = trust.store();
         assert!(store("aa"), "an active key passes");
-        assert!(rx.try_recv().is_err(), "an active key is not an attempt");
+        // Queued too, so its last_seen is touched (list-terminals, final review M2), but it is
+        // not a refused handshake.
+        assert_eq!(rx.try_recv().unwrap(), "aa");
+        assert_eq!(
+            trust.take_refused(),
+            0,
+            "an active key is not counted as refused"
+        );
         assert!(!store("bb"), "an unknown key is refused");
         assert_eq!(rx.try_recv().unwrap(), "bb");
         assert_eq!(trust.take_refused(), 1);

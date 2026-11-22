@@ -203,6 +203,9 @@ mod tests {
             "options",
             "role",
             "ROLE",
+            // Postgres matches `user` and `database` case-sensitively: these are GUCs (T4).
+            "User",
+            "Database",
             "search_path",
             "_pq_.foo",
         ] {

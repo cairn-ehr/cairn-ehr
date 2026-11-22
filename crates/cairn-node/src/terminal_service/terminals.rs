@@ -53,7 +53,8 @@ pub fn render(rows: &[TerminalRow]) -> String {
         .join("\n")
 }
 
-/// A database failure (a door's refusal, or a failed read) as the operator should read it: its own message, never `db error`.
+/// A database failure (a door's refusal, or a failed read) as the operator should read it: its
+/// own message, never `db error`.
 fn door_refusal(e: tokio_postgres::Error) -> anyhow::Error {
     anyhow::anyhow!(super::commit::primary_message(&e.into()))
 }

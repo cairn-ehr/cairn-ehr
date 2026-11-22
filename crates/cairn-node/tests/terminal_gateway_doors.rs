@@ -4,9 +4,8 @@
 //! WHY THESE TESTS EXIST. Slice B lets a window on another machine reach the node's Postgres
 //! through a pinned mTLS gateway. The gateway's login (`cairn_terminal_service`) may only READ
 //! the trust set and REPORT an attempt; approving a terminal is the owner's act, so nobody who
-//! can reach the network can admit itself. And slice A's registration advisory lock, which ANY
-//! login could take, becomes a row lock only the service (and the owner's CLI) can take, so a
-//! window cannot hold it to starve registration. These tests pin each of those edges.
+//! can reach the network can admit itself. Slice A's advisory lock, takeable by ANY login, is now
+//! a row lock only the service and the owner's CLI take, so no window can starve registration.
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`. Test keys are computed
 //! at runtime (house rule 6).
@@ -24,8 +23,7 @@ use uuid::Uuid;
 
 const TODAY: &str = "2026-11-20";
 const NODE: &str = "n";
-/// The window's old advisory-lock key (slice A's advisory-lock key, CARNRG, now unused): a window that
-/// still holds it must no longer be able to stop a registration.
+/// Slice A's advisory-lock key (CARNRG, now unused): a window holding it stops no registration.
 const OLD_WINDOW_LOCK: i64 = 0x4341_524E_5247;
 
 struct Rig {
@@ -359,8 +357,7 @@ async fn a_missing_turn_row_fails_closed() {
     r.owner.batch_execute("ROLLBACK").await.unwrap();
 }
 
-/// Connection A (a plain connection as the owner) holds the registration turn in an open
-/// transaction; returns it so the caller commits when ready.
+/// Connection A (the owner) holds the turn in an open transaction, returned for the caller to end.
 async fn hold_turn(base: &str) -> Client {
     let a = db::connect(base).await.unwrap();
     a.batch_execute("BEGIN").await.unwrap();

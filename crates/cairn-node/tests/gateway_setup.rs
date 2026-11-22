@@ -94,3 +94,20 @@ async fn a_trusting_cluster_and_a_non_superuser_are_refused_and_nothing_is_writt
     assert!(msg.contains("superuser"), "{msg}");
     assert_eq!(rows(&db).await, before);
 }
+
+/// On a database whose Cairn schema is not loaded, the refusal names the step to take, not only
+/// `relation "local_node" does not exist` (final review C1). An empty `search_path` stands in for
+/// an unloaded schema: `local_node` is then found nowhere.
+#[tokio::test]
+async fn an_unloaded_schema_names_cairn_node_init() {
+    let Some(cs) = common::cs() else {
+        eprintln!("skipped: no CAIRN_TEST_PG");
+        return;
+    };
+    let db = cairn_node::db::test_serial_guard(&cs).await.unwrap();
+    db.batch_execute("SET search_path = ''").await.unwrap();
+    let up = parse("127.0.0.1:5432").unwrap();
+    let e = record_gateway(&db, &up, &[]).await.expect_err("no schema");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("cairn-node init"), "{msg}");
+}

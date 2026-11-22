@@ -70,9 +70,10 @@ pub fn failure_line(draft: Uuid, e: &anyhow::Error) -> String {
 
 /// An error's PRIMARY message (with the SQLSTATE if it came from the database) and nothing else:
 /// never DETAIL, HINT or context, which Postgres fills with row values. The one renderer every
-/// log line of the terminal service uses; never `{e:#}` or `{e:?}`. An error that is not a
-/// `tokio_postgres::Error` gives its outermost sentence: see [`failure_line`] for the HLC case.
-/// Pure.
+/// log line of the terminal service uses; never `{e:#}` or `{e:?}`. An error that is not from the
+/// database gives its outermost sentence and its first I/O or connection-level cause (final
+/// review I2: "listening on …: Address already in use", "…: connection closed"); see
+/// [`failure_line`] for the HLC case. Pure.
 pub fn primary_message(e: &anyhow::Error) -> String {
     let db = e
         .chain()
@@ -80,7 +81,16 @@ pub fn primary_message(e: &anyhow::Error) -> String {
         .and_then(|e| e.as_db_error());
     match db {
         Some(db) => format!("{} [{}]", db.message(), db.code().code()),
-        None => e.to_string(),
+        // Not `{e:#}`: a plain message deeper in the chain may be a DETAIL that
+        // `legible_db_error` flattened into text. An I/O or connection error carries no row.
+        None => match e
+            .chain()
+            .skip(1)
+            .find(|c| c.is::<std::io::Error>() || c.is::<tokio_postgres::Error>())
+        {
+            Some(cause) => format!("{e}: {cause}"),
+            None => e.to_string(),
+        },
     }
 }
 
@@ -172,6 +182,26 @@ mod tests {
         let few = listed[..7].to_vec();
         let order: Vec<Uuid> = listed[5..7].iter().chain(&listed[..5]).copied().collect();
         assert_eq!(this_tick(few, &failing), order);
+    }
+
+    /// A non-database failure keeps the cause that says what went wrong (a port in use), while a
+    /// plain message deeper in the chain, which may be a flattened DETAIL, stays out (I2).
+    #[test]
+    fn a_non_database_error_says_its_io_cause_and_nothing_flattened() {
+        use anyhow::Context;
+        let in_use = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        let e = Err::<(), _>(in_use)
+            .context("listening for terminals on 0.0.0.0:5433")
+            .unwrap_err();
+        let line = primary_message(&e);
+        assert!(
+            line.starts_with("listening for terminals on 0.0.0.0:5433: "),
+            "{line}"
+        );
+        assert!(line.contains(&std::io::Error::from(std::io::ErrorKind::AddrInUse).to_string()));
+        let flattened = anyhow::anyhow!("inserting: duplicate key. DETAIL: Key (dob)=(1970-01-01)")
+            .context("serving a request");
+        assert_eq!(primary_message(&flattened), "serving a request");
     }
 
     #[test]

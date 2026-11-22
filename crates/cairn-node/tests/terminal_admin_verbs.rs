@@ -139,9 +139,9 @@ async fn list_failure_reads_as_the_database_message() {
     };
     // A table this login cannot read: SET ROLE to a role without SELECT (42501).
     owner
-        .batch_execute("CREATE ROLE t8_noread NOLOGIN")
+        .batch_execute("DROP ROLE IF EXISTS t8_noread; CREATE ROLE t8_noread NOLOGIN")
         .await
-        .ok();
+        .unwrap();
     owner.batch_execute("SET ROLE t8_noread").await.unwrap();
     let r = list(&owner).await;
     owner.batch_execute("RESET ROLE").await.unwrap();

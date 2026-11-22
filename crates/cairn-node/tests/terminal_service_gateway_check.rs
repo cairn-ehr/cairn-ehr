@@ -2,12 +2,15 @@
 //! --gateway-listen`'s startup check: the service's own login with a recorded route passes; a
 //! login missing any grant the gateway uses at run time, and a node with no route, are refused
 //! naming the owner's step. A grant missing at run time would otherwise surface only as every
-//! window's startup being refused, over and over, as if transient.
+//! window's startup being refused, over and over, as if transient. And a grant lost AFTER the
+//! check: `TerminalTrust::refresh` then fails, and keeps the set it last loaded.
 //!
 //! DB-gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 mod common;
 
 use cairn_node::db;
+use cairn_node::terminal_service::commit::primary_message;
+use cairn_node::terminal_service::gateway::trust::TerminalTrust;
 use cairn_node::terminal_service::startup::check_gateway;
 use common::{cs, service_login, window_login};
 
@@ -78,4 +81,58 @@ async fn check_gateway_passes_the_service_and_refuses_each_missing_piece() {
         no_execute.contains("cairn_terminal_attempt"),
         "{no_execute}"
     );
+}
+
+/// A role with no grant at all: `SET ROLE` to it makes the refresh's one read fail (42501).
+const NOREAD: &str = "cairn_gw_refresh_probe";
+
+/// A failed refresh returns its error AND keeps the set it loaded last: stale beats empty, which
+/// would shut every admitted terminal out over a lost grant or a database hiccup (final review C2).
+#[tokio::test]
+async fn a_refresh_whose_read_fails_errs_and_keeps_the_last_set() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let owner = db::connect_and_load_schema(&base).await.unwrap();
+    let bytes: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(1));
+    let key = hex::encode(bytes);
+    owner
+        .batch_execute(&format!(
+            "TRUNCATE terminal_trust; SELECT cairn_terminal_attempt('{key}'); \
+             SELECT cairn_terminal_admit(cairn_terminal_fingerprint('{key}'), 'c2'); \
+             DROP ROLE IF EXISTS {NOREAD}; CREATE ROLE {NOREAD} NOLOGIN; \
+             GRANT {NOREAD} TO CURRENT_USER"
+        ))
+        .await
+        .unwrap();
+    let (trust, _attempts) = TerminalTrust::new();
+    let admits = trust.store();
+    assert!(trust.refresh(&owner).await.unwrap().contains(&key));
+    assert!(admits(&key), "loaded: the key is admitted");
+
+    // SET ROLE in its own statement, checked, never folded into a batch with BEGIN.
+    owner
+        .batch_execute(&format!("SET ROLE {NOREAD}"))
+        .await
+        .unwrap();
+    let who: String = owner
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(who, NOREAD);
+    let failed = trust.refresh(&owner).await;
+    owner.batch_execute("RESET ROLE").await.unwrap();
+    owner
+        .batch_execute(&format!(
+            "TRUNCATE terminal_trust; DROP ROLE IF EXISTS {NOREAD}"
+        ))
+        .await
+        .unwrap();
+
+    let e = failed.expect_err("the refresh's own read fails");
+    assert!(primary_message(&e).contains("[42501]"), "{e:#}");
+    assert!(admits(&key), "the last set is kept: stale beats empty");
 }

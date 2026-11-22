@@ -253,6 +253,20 @@ mod tests {
         }
     }
 
+    /// Group and others may READ the directory (0755, a common umask's default): only write
+    /// access lets them swap a file in (final review T6).
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_0755_terminal_directory_is_accepted() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let files = TerminalFiles::at(dir.path());
+        files.write_pin(&pin_of(6)).unwrap();
+        assert_eq!(files.read_pin().unwrap(), Some(pin_of(6)));
+        files.load_or_create_key().unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_pin_file_others_can_write_is_refused() {

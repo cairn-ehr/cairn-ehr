@@ -8,8 +8,9 @@
 //! * the accept loop: each connection gets a task that walks D2's steps in order
 //!   (`pre_startup`) and, if the startup is admitted, pipes it (`session`, `pipe.rs`);
 //! * the 1 s tick (`tick`): refresh the trust set, end the sessions of every terminal no longer
-//!   active (and cancel what their backends are running), record refused keys as `pending`
-//!   attempts, log one summary line, reconnect the gateway's own connection if it dropped.
+//!   active (and cancel what their backends are running), record each key seen (an unknown one
+//!   as a `pending` attempt, a known one's `last_seen`), log one summary line, reconnect the
+//!   gateway's own connection if it dropped.
 //!
 //! THE FLOOD LIMITS (Review Focus 2). Before startup a connection holds one of 128 slots from
 //! `accept` until it closes; with all 128 taken a new one is closed at once, so idle sockets

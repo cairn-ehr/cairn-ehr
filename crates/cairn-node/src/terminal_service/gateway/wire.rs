@@ -402,6 +402,8 @@ mod tests {
         m
     }
 
+    // The guard is a `debug_assert!`: under `--release` nothing panics (final review T3a).
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "NUL")]
     fn error_response_refuses_nul_in_arguments() {

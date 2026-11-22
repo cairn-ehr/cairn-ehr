@@ -19,7 +19,7 @@ const REQUEST_TICK: Duration = Duration::from_millis(250);
 /// How often overdue drafts are committed (the window's old tick, moved here).
 pub const COMMIT_TICK: Duration = Duration::from_secs(60);
 const PURGE_TICK: Duration = Duration::from_secs(3600);
-pub(super) const RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
+const RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
 /// A burst of requests is drained in one tick, but never so many that a commit tick starves.
 const MAX_SERVED_PER_TICK: usize = 50;
 

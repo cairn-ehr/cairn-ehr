@@ -10,6 +10,7 @@
 
 use crate::identity::load_local;
 use crate::window_access::{hba_file_is_stale, hba_verdict, read_hba_rules, HbaRule};
+use anyhow::Context;
 use std::net::SocketAddr;
 use std::path::{Component, PathBuf};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -63,9 +64,12 @@ pub fn parse(s: &str) -> Result<Upstream, String> {
     }
     match s.parse::<SocketAddr>() {
         Ok(a) if a.ip().is_loopback() => Ok(Upstream::Tcp(a)),
-        Ok(_) => Err(format!("'{s}' is not a loopback address (127.0.0.1 or ::1)")),
+        Ok(_) => Err(format!(
+            "'{s}' is not a loopback address (127.0.0.1 or ::1)"
+        )),
         Err(_) => Err(format!(
-            "'{s}' is neither host:port on loopback (127.0.0.1:5432, [::1]:5432) nor an absolute path to .s.PGSQL.<port>"
+            "'{s}' is neither host:port on loopback (127.0.0.1:5432, [::1]:5432) nor an absolute \
+             path to .s.PGSQL.<port>"
         )),
     }
 }
@@ -103,7 +107,11 @@ pub fn route_verdict(rules: &[HbaRule], up: &Upstream) -> Result<Vec<String>, St
                     warnings.push(weak_hash(&at, &r.kind, m));
                 } else if !matches!(m, "scram-sha-256" | "reject") {
                     refusals.push(format!(
-                        "{at}: a 'local' line uses '{m}', which lets the gateway's own operating-system user in without the window's password. Change it to scram-sha-256 (or use a loopback TCP route), reload the server yourself, and run this again; this command never changes or reloads Postgres."
+                        "{at}: a 'local' line uses '{m}', which lets the gateway's own \
+                         operating-system user in without the window's password. Change it to \
+                         scram-sha-256 (or use a loopback TCP route), reload the server \
+                         yourself, and run this again; this command never changes or reloads \
+                         Postgres."
                     ));
                 }
             }
@@ -115,7 +123,10 @@ pub fn route_verdict(rules: &[HbaRule], up: &Upstream) -> Result<Vec<String>, St
             {
                 if matches!(m, "ident" | "gss" | "sspi") {
                     refusals.push(format!(
-                        "{at}: a '{}' line uses '{m}', which does not make the window's password the credential. Change it to scram-sha-256, reload the server yourself, and run this again; this command never changes or reloads Postgres.",
+                        "{at}: a '{}' line uses '{m}', which does not make the window's \
+                         password the credential. Change it to scram-sha-256, reload the server \
+                         yourself, and run this again; this command never changes or reloads \
+                         Postgres.",
                         r.kind
                     ));
                 } else if m == "md5" || m == "password" {
@@ -143,7 +154,11 @@ pub async fn record_gateway(
     up: &Upstream,
     warnings: &[String],
 ) -> anyhow::Result<String> {
-    let node = load_local(db).await?;
+    // On a database the schema was never loaded into, the read fails with only
+    // `relation "local_node" does not exist`: name the step (final review C1).
+    let node = load_local(db)
+        .await
+        .context("reading this node's identity (a database not yet set up: run cairn-node init)")?;
     db.execute(
         "INSERT INTO terminal_gateway (upstream, checked_at, checked_by) \
          VALUES ($1, now(), session_user::text) \
@@ -169,7 +184,8 @@ pub async fn gateway_setup(db: &Client, up: &Upstream) -> anyhow::Result<String>
     let rules = read_hba_rules(db).await?;
     if hba_file_is_stale(db).await? {
         anyhow::bail!(
-            "the access rules (pg_hba.conf or a file it includes) changed since the server last read them; reload the server yourself, and run this again"
+            "the access rules (pg_hba.conf or a file it includes) changed since the server last \
+             read them; reload the server yourself, and run this again"
         );
     }
     let warnings = route_verdict(&rules, up).map_err(|e| anyhow::anyhow!(e))?;
