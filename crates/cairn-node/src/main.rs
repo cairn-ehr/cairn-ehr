@@ -1727,10 +1727,36 @@ enum Cmd {
         #[arg(long, default_value = "cairn_terminal_service_login")]
         role: String,
     },
+    /// Check that this node's Postgres access rules make the terminal gateway's route safe
+    /// (SCRAM end to end, no peer/ident/trust shortcut), record the route, and print the node's
+    /// fingerprint for the terminal ceremony (#909). Run as the OWNER (a superuser: it reads
+    /// pg_hba_file_rules). Never changes or reloads Postgres.
+    GatewaySetup {
+        /// `127.0.0.1:5432`, `[::1]:5432`, or `/path/.s.PGSQL.5432`.
+        #[arg(long)]
+        upstream: String,
+    },
+    /// Approve a terminal that has tried to connect, by the fingerprint shown at the terminal
+    /// (any letter case, dashes optional), giving it a label (#909). Owner only.
+    AdmitTerminal {
+        fingerprint: String,
+        #[arg(long)]
+        label: String,
+    },
+    /// Revoke a terminal for good: its open sessions close within 2 s (#909). Owner only.
+    RevokeTerminal { fingerprint: String },
+    /// List every terminal that has tried to connect, newest first, with its status (#909).
+    ListTerminals,
     /// Run the node-side service that registers patients for, and commits overdue note drafts
     /// of, the reference window (#909). Unattended: needs `CAIRN_KEY_PASSPHRASE` for a sealed
     /// key, never prompts. Connect as the login `provision-terminal-service-role` made.
-    TerminalService,
+    TerminalService {
+        /// Also run the terminal gateway on this `addr:port` (e.g. `0.0.0.0:5433`), through
+        /// which remote windows reach this node's Postgres over pinned mutual TLS (#909). Needs
+        /// the route `gateway-setup` records. No default: without it, no gateway runs.
+        #[arg(long)]
+        gateway_listen: Option<std::net::SocketAddr>,
+    },
     /// Print this node's honest assembly state (peers, keystore health, DR escrow stub).
     Status {
         /// Operational passphrase (else `CAIRN_KEY_PASSPHRASE`). OPTIONAL, and never
@@ -3052,7 +3078,36 @@ async fn run() -> anyhow::Result<()> {
             use cairn_node::window_access as wa;
             provision_login_verb(&cli.conn, &role, wa::LoginGroup::TerminalService).await?
         }
-        Cmd::TerminalService => {
+        Cmd::GatewaySetup { upstream } => {
+            use cairn_node::terminal_service::gateway::upstream as gw;
+            let up = gw::parse(&upstream).map_err(|e| anyhow::anyhow!(e))?;
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!("{}", gw::gateway_setup(&db, &up).await?);
+        }
+        Cmd::AdmitTerminal { fingerprint, label } => {
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!(
+                "{}",
+                cairn_node::terminal_service::terminals::admit(&db, &fingerprint, &label).await?
+            );
+        }
+        Cmd::RevokeTerminal { fingerprint } => {
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!(
+                "{}",
+                cairn_node::terminal_service::terminals::revoke(&db, &fingerprint).await?
+            );
+        }
+        Cmd::ListTerminals => {
+            use cairn_node::terminal_service::terminals as t;
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!("{}", t::render(&t::list(&db).await?));
+        }
+        Cmd::TerminalService { gateway_listen } => {
             // Refuse a remote database BEFORE any connection; then the key (never prompt: an
             // unattended process), then the schema stamp (this login cannot replay DDL).
             cairn_node::conn_posture::require_local(&cli.conn)?;
@@ -3067,9 +3122,12 @@ async fn run() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!(e))?;
             // Then the login can claim requests and the key is the node's own (final review F4).
             let origin = cairn_node::terminal_service::startup::check(&db, &sk).await?;
+            if gateway_listen.is_some() {
+                cairn_node::terminal_service::startup::check_gateway(&db).await?;
+            }
             drop(db);
             eprintln!("terminal service running");
-            cairn_node::terminal_service::run::run(&cli.conn, &sk, &origin).await?;
+            cairn_node::terminal_service::run::run(&cli.conn, &sk, &origin, gateway_listen).await?;
         }
         Cmd::Status { passphrase } => {
             let db = cairn_node::db::connect(&cli.conn).await?;

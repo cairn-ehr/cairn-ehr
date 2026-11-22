@@ -60,6 +60,21 @@ fn a_client_refusal_is_not_said_to_be_the_nodes() {
     }
 }
 
+/// #909 slice B: the pinned link's refusals are whole sentences, full stop included; the text
+/// that adds the refusal's clause after them must not double it ("key.. This workstation").
+#[test]
+fn a_cause_that_is_a_sentence_keeps_one_full_stop() {
+    let cause = "this terminal is not admitted by the node. Ask the node's operator.";
+    for skipped in [None, Some(Duration::from_millis(500))] {
+        let text = lost_text(cause, Some(Refusal::Client), skipped);
+        assert!(!text.contains(".."), "{text}");
+        assert!(
+            text.contains(&format!("operator. {}", Refusal::Client.clause())),
+            "{text}"
+        );
+    }
+}
+
 /// #876: the cause reaches the screen, and a press the backoff skipped says so instead of
 /// reading like a fresh failure.
 #[test]

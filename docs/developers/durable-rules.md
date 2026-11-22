@@ -10,6 +10,84 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #909 SLICE B — THE PINNED TERMINAL GATEWAY (ADR-0110, db/084) — do not undo.**
+- **No fallback verifier, and TLS 1.3 only, on both ends.** `transport::gateway_server_config` and
+  `terminal_client_config` pin a key or refuse; neither accepts a certificate any other way, and neither offers
+  TLS 1.2. `server_config` / `client_config` (sync) keep their versions. **Tempting wrong fix:** a CA-checking
+  fallback "for sites with real certificates", or TLS 1.2 "for an old terminal". Pins: `transport.rs`'s
+  `gateway_refuses_a_tls12_only_client` (with its positive control), `gateway_refuses_an_unpinned_terminal`,
+  `terminal_refuses_an_unpinned_gateway`.
+- **The startup check refuses on any read error, and only a key not in the set is `access_denied`.** A facts read that
+  fails in the database, or a gateway connection that is closed, is 57P03 after the handshake ("cannot check logins
+  right now"), never forwarded and never 28000 or `access_denied`, so an outage never tells an admitted terminal to
+  re-admit itself. **Tempting wrong fix:** forward "because the login was fine a second ago", or refuse with 28000 "to
+  be safe". Pins: `admit::tests::a_check_that_could_not_be_made_is_transient_and_a_no_is_28000`,
+  `terminal_gateway_e2e.rs::startups_are_refused_while_the_gateways_db_connection_is_down`.
+- **Startup keys are an ALLOW-LIST** (`user`, `database`, `client_encoding`, `application_name`), and a repeated key
+  refuses. Postgres applies any other key as a setting after the login was vetted, so a bare `role=…` would undo
+  the check. **Tempting wrong fix:** a deny-list of `options` and `replication`, or "let psql through". Pins:
+  `admit::tests::startup_shape_refusals`, `wire::tests::duplicate_keys_are_refused`.
+- **A `cairn_terminal_service` member is refused even though it is a `cairn_window` member.** Pins:
+  `terminal_gateway_e2e.rs::the_service_login_is_refused_with_28000_and_the_fixed_message`,
+  `terminal_gateway_e2e_refusals.rs::an_overpowered_window_login_is_refused_with_28000`.
+- **The turn is a row lock, never an advisory lock, and the idle poll never takes it** (`p_if_pending = true`
+  returns false with nothing locked when no request is claimable; a row lock writes WAL and the poll runs every
+  250 ms). Pins: `terminal_gateway_doors.rs::an_idle_serve_one_takes_no_turn`,
+  `a_held_turn_blocks_the_service_but_a_window_advisory_lock_does_not`.
+- **A revoke cancels as well as closes.** The sweep aborts the session AND sends Postgres the `CancelRequest` built
+  from the `BackendKeyData` the pipe saw. **Tempting wrong fix:** drop the cancel "because closing the socket ends
+  the backend": a backend running a statement (or waiting on a lock) notices a gone client only when it next reads
+  or writes. Pin: `terminal_gateway_e2e.rs::a_revoke_ends_the_open_session_within_2_s` (red with the cancel
+  disabled); also `a_revoke_ends_an_idle_in_transaction_session`.
+- **A failed trust refresh keeps the last set, and the gateway accepts nothing before its first load.** **Tempting
+  wrong fix:** clear the set on a failed read "to be safe": every admitted terminal would be shut out by a database
+  hiccup. Pins: `trust::tests::before_the_first_load_no_key_passes_and_none_is_recorded`;
+  `terminal_gateway_e2e.rs::startups_are_refused_while_the_gateways_db_connection_is_down` pins the outcome (the
+  admitted terminal gets 57P03, never "not admitted");
+  `terminal_service_gateway_check.rs::a_refresh_whose_read_fails_errs_and_keeps_the_last_set` fails `refresh`'s own
+  read (`SET ROLE` to a grantless role, 42501) and pins that the set it loaded last still admits.
+- **No session outlives the gateway run that sweeps it.** Only a run's own tick sweeps its `Sessions`; the run holds
+  `sessions::CloseOnDrop`, so however it ends (a panic, which `run::supervise` restarts) every session it piped is
+  aborted AND its running statement cancelled (best-effort, on a spawned task: `Drop` never blocks), and one
+  admitted afterwards under it is aborted as it opens. Each session's closing cause is recorded by whoever aborted
+  it, at that moment. **Tempting wrong fixes:** drop the guard "because a restart is rare and ending healthy
+  sessions is rude" (an orphaned session is swept by nobody, so a revoke never ends it), or drop the cancel "because
+  a run's end revokes nobody" (a running statement keeps its backend and its locks until it next writes, and no
+  later revoke knows it). Pins: `terminal_gateway_e2e.rs::a_session_ends_when_its_gateway_run_ends` (red without the
+  guard), `a_running_statement_ends_when_its_gateway_run_ends` (red without the cancel),
+  `sessions::tests::a_closed_table_aborts_its_sessions_and_every_later_one`.
+- **The handshake queues an active key too, and counts only refusals.** The tick records it through
+  `cairn_terminal_attempt`, which only touches a known row's `last_seen`, so `list-terminals`' "last seen" is an
+  admitted terminal's last connect. **Tempting wrong fix:** queue only refused keys "to keep the queue for
+  strangers": an active terminal then reads as last seen at its last refusal. Pin:
+  `trust::tests::an_unknown_key_is_refused_queued_and_counted`.
+- **A non-database error's log line keeps only an I/O or connection-level cause** (`commit::primary_message`: "…:
+  Address already in use", "…: connection closed"). **Tempting wrong fix:** `{e:#}` "for the whole chain":
+  `legible_db_error` flattens DETAIL, row values included, into plain anyhow messages, which `{e:#}` would print.
+  Pin: `commit::tests::a_non_database_error_says_its_io_cause_and_nothing_flattened`.
+- **A refused connection is closed gently** (`pipe::close_gently`: shut the write half, drain for at most 1 s).
+  **Tempting wrong fix:** just drop the socket: a reset can discard the alert, and the window would read a refusal
+  as an outage. Pins: `terminal_gateway_e2e.rs::a_plain_text_startup_gets_no_reply` (a clean EOF),
+  `terminal_gateway_e2e_refusals.rs::after_a_revoke_the_windows_reopen_is_refused_as_not_admitted`.
+- **The trust set, the gateway record and the turn are never granted to `cairn_window`**, and only the owner admits
+  or revokes. **Revoked is final:** an attempt never re-pends a decided row, and admit refuses a revoked one. Pins:
+  `terminal_gateway_doors.rs::the_window_role_cannot_read_the_trust_set_or_take_the_turn`,
+  `the_service_role_cannot_admit_revoke_or_write`, `revoke_then_admit_is_refused`,
+  `an_attempt_records_pending_and_never_changes_a_decided_row`.
+- **`sslmode` is forced to `require` (and `sslnegotiation` to `postgres`) on a pinned link**, whatever the string
+  says, and no window flag skips the pin. Pins:
+  `terminal_link.rs::a_pinned_link_overrides_sslmode_and_sslnegotiation`,
+  `launch_posture_tests.rs::the_window_cli_has_no_flag_that_skips_the_pin`.
+- **The pin is written only after a completed handshake**, and is never replaced by a flag. The fingerprint only
+  recognises the node once; the pin is its full key, signed for in the handshake. Pins:
+  `terminal_link.rs::pin_from_fingerprint_captures_the_key_only_after_the_handshake`,
+  `prepare_tests.rs::the_first_launch_writes_the_pin_only_after_the_node_is_recognised`,
+  `a_wrong_fingerprint_at_first_launch_writes_no_pin`,
+  `a_pin_and_a_fingerprint_that_disagree_are_refused_with_the_remedy`.
+- **`gateway-setup` never edits, reloads or restarts Postgres, and every check comes before its one write.** Pin:
+  `gateway_setup.rs::a_trusting_cluster_and_a_non_superuser_are_refused_and_nothing_is_written`. Its success path on
+  a `scram-sha-256` cluster is RUNBOOK §39's (the test cluster is `trust`).
+
 **⇒ #909 SLICE A — THE TERMINAL SERVICE AND THE KEYLESS WINDOW (ADR-0109, db/083) — do not undo.**
 - **The claim IS the row lock.** `cairn_registration_claim` returns a row `FOR UPDATE SKIP LOCKED`, and the service
   registers and settles it in that same transaction. **Tempting wrong fix:** a `claimed` status (or a `claimed_at`
@@ -20,12 +98,18 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `NOWAIT`). **Tempting wrong fixes:** skip a locked row "so the window never hangs", or time the expire out in the
   window and read the timeout as "expired". Either tells the clerk "nothing was saved" for a chart the service is
   committing that moment. Pin: `terminal_service_doors.rs::expire_waits_behind_a_claim_and_then_reports_registered`.
-- **Every `serve_one` takes the registration lock first** (`REGISTRATION_LOCK`, "CARNRG", a transaction-scoped
-  advisory lock, before the claim). It is what makes two services safe: without it, two requests for one new patient
-  claimed by two services both search before either commits, and the record gets a duplicate. **Tempting wrong
-  fix:** drop it "because `SKIP LOCKED` already stops a double registration" (that guards one request, not two
-  requests for one patient), or take it after the claim (a waiting service would hold a request). Pin:
-  `terminal_service_registration.rs::two_servers_two_requests_for_one_patient_register_one_chart`.
+- **Every `serve_one` takes the registration turn first** (`cairn_registration_take_turn(true)`, db/084's
+  `registration_turn` row lock, before the claim; since #909 slice B, ADR-0110 decision 8), and the CLI's
+  `register_patient` always takes it. For the CLI the protection is one-way: `patient-register` searches before it
+  takes the turn, so a service registration that waits for it re-searches and finds its chart, but not the reverse
+  (ADR-0110 decision 9). It is what makes two services safe: without it, two requests for one new
+  patient claimed by two services both search before either commits, and the record gets a duplicate. **Tempting
+  wrong fixes:** drop it "because `SKIP LOCKED` already stops a double registration" (that guards one request, not
+  two requests for one patient), take it after the claim (a waiting service would hold a request), or make it an
+  advisory lock again (any login can take one, the window's included, and hold it to starve registration). Pins:
+  `terminal_service_registration.rs::two_servers_two_requests_for_one_patient_register_one_chart`,
+  `terminal_gateway_doors.rs::a_held_turn_blocks_the_service_but_a_window_advisory_lock_does_not`,
+  `cli_registration_takes_the_turn`.
 - **The claim compares the deadline with `clock_timestamp()`, never `now()`.** `now()` is the service transaction's
   start, so a long transaction would claim a row already past its deadline.
 - **The window never holds `NodeKey::Full`**, never names `keystore::`, `load_signing_key`, `CAIRN_KEY_PASSPHRASE` or
@@ -1633,8 +1717,10 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   DDL. `trust` is refused whatever its line's type or database; `peer` without a map only warns. No override flag, for
   this refusal or for `require_local`. Pins: `the_verb_refuses_before_it_mutates_in_source_order`,
   `the_verb_refuses_a_trusting_cluster_and_changes_nothing`,
-  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`; the window's own launch refuses a remote
-  database first (`the_remote_refusal_comes_before_any_connect`).
+  `an_existing_role_that_is_not_a_window_login_is_refused_and_untouched`; the window's own launch chooses its link
+  first, refusing a remote database without the pinned link (#909 slice B), and connects only through that link
+  (`every_launch_connect_goes_through_the_prepared_link`, `the_window_cli_has_no_flag_that_skips_the_pin`); its
+  reopen goes back through the same link (`pinned_reopen.rs`).
 
 **⇒ GUI SIGN-IN SLICE 1 — THE HUMAN KEY VAULT (ADR-0083, db/061) — do not undo** (pins:
 `crates/cairn-node/tests/vault_floor.rs`, `vault_lib.rs`, `secret32_conversions_are_named.rs`;

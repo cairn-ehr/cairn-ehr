@@ -81,6 +81,7 @@
 //! what keeps this the only place it happens.
 
 use crate::db_diagnosis::Committed;
+use anyhow::Context;
 use cairn_event::demographics::{
     dob_assertion_body, identifier_assertion_body, name_assertion_body, render_dob_twin,
     render_identifier_twin, render_name_twin, IdentifierAssertion,
@@ -423,12 +424,13 @@ pub fn build_identifier_body(
 /// function's TYPES enforces that — a caller could structurally attest a search for "Smith"
 /// while asserting the name "Jones", and this function would sign both without complaint
 /// (the twelfth founding principle again: the type system permits the illegal state; only a
-/// disciplined caller prevents it). Two callers today, each satisfying it by construction:
+/// disciplined caller prevents it). One caller today, satisfying it by construction:
 /// `main.rs`'s `PatientRegister` handler (through [`register_patient_returning_event`], which
 /// holds this body) builds `name` and `query` from the SAME `name: String`
-/// CLI argument, one line apart; and the reference window (`cairn-gui-live`'s registration
-/// port) is handed both by `cairn_gui_funnel::FunnelSession`, which stores the raw name WITH
-/// the search it ran on. A future caller must preserve that.
+/// CLI argument, one line apart. Only the owner's CLI calls this (it takes the registration
+/// turn, which a window's login may not); the reference window registers through the request
+/// queue the terminal service serves, which re-checks the name against the query (ADR-0109).
+/// A future caller must preserve that.
 ///
 /// Returns the minted `patient_id`; care can proceed against it immediately, as with
 /// `register_john_doe`.
@@ -462,6 +464,16 @@ pub async fn register_patient_returning_event(
     // ONE transaction for every event this call authors — the #350 fix: a registration with
     // no matching demographic facts is exactly the half-registered state to avoid.
     let tx = client.transaction().await?;
+    // Registrations take turns, node-wide (db/084), held until commit. The protection is ONE-WAY
+    // (final review M3): the terminal service searches after it takes the turn, so a service
+    // registration that waited here finds this chart; but this caller (the CLI's
+    // `patient-register`) has already searched before it takes the turn, so a CLI registration
+    // racing a service one can still make a duplicate. Taken HERE, not in
+    // `register_patient_in_tx`, because `serve_one` calls that body inside a transaction that
+    // already holds the turn.
+    tx.query_one("SELECT cairn_registration_take_turn()", &[])
+        .await
+        .context("taking the registration turn")?;
     let done = super::register_tx::register_patient_in_tx(
         &tx,
         sk,

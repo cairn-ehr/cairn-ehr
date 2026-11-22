@@ -55,7 +55,7 @@ pub fn node_cert(
 
 /// Pull the 32 raw Ed25519 bytes out of a presented cert's SPKI and hex-encode
 /// them — the same string the trust set keys on (== `verifying_key` hex).
-fn peer_pubkey_hex(cert: &CertificateDer<'_>) -> Result<String, Error> {
+pub(crate) fn peer_pubkey_hex(cert: &CertificateDer<'_>) -> Result<String, Error> {
     let (_, parsed) = x509_parser::parse_x509_certificate(cert.as_ref())
         .map_err(|_| Error::InvalidCertificate(CertificateError::BadEncoding))?;
     // Pin the SPKI ALGORITHM before reading the 32 bytes (review hardening): assert the key
@@ -220,8 +220,28 @@ fn provider() -> Arc<CryptoProvider> {
         .clone()
 }
 
+/// TLS protocol versions a config may negotiate.
+type Versions = [&'static rustls::SupportedProtocolVersion];
+
 /// Server side of mTLS: present the node cert, require + pin the client cert.
 pub fn server_config(sk: &SigningKey, trust: TrustStore) -> anyhow::Result<Arc<ServerConfig>> {
+    pinned_server_config(sk, trust, rustls::DEFAULT_VERSIONS)
+}
+
+/// The gateway's server config: as [`server_config`] but TLS 1.3 ONLY, so a
+/// remote terminal can never negotiate down to 1.2 (#909 slice B).
+pub fn gateway_server_config(
+    sk: &SigningKey,
+    trust: TrustStore,
+) -> anyhow::Result<Arc<ServerConfig>> {
+    pinned_server_config(sk, trust, &[&rustls::version::TLS13])
+}
+
+fn pinned_server_config(
+    sk: &SigningKey,
+    trust: TrustStore,
+    versions: &Versions,
+) -> anyhow::Result<Arc<ServerConfig>> {
     let provider = provider();
     let (cert, key) = node_cert(sk)?;
     let verifier = Arc::new(PinnedClientVerifier {
@@ -229,7 +249,7 @@ pub fn server_config(sk: &SigningKey, trust: TrustStore) -> anyhow::Result<Arc<S
         provider: provider.clone(),
     });
     let mut cfg = ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
+        .with_protocol_versions(versions)?
         .with_client_cert_verifier(verifier)
         .with_single_cert(vec![cert], key)?;
     // Pinning is a per-handshake decision against the LIVE trust set. A *resumed*
@@ -245,6 +265,33 @@ pub fn server_config(sk: &SigningKey, trust: TrustStore) -> anyhow::Result<Arc<S
 
 /// Client side of mTLS: present the node cert, pin the server cert.
 pub fn client_config(sk: &SigningKey, trust: TrustStore) -> anyhow::Result<Arc<ClientConfig>> {
+    pinned_client_config(sk, trust, rustls::DEFAULT_VERSIONS)
+}
+
+/// The terminal's client config: TLS 1.3 ONLY, presents the terminal key and
+/// pins the node's key through `node_pin`.
+pub fn terminal_client_config(
+    terminal_sk: &SigningKey,
+    node_pin: TrustStore,
+) -> anyhow::Result<Arc<ClientConfig>> {
+    pinned_client_config(terminal_sk, node_pin, &[&rustls::version::TLS13])
+}
+
+/// Test-only: a pinned client restricted to TLS 1.2, to prove the gateway
+/// refuses it. Not for production use.
+#[doc(hidden)]
+pub fn tls12_only_client_config_for_tests(
+    sk: &SigningKey,
+    trust: TrustStore,
+) -> anyhow::Result<Arc<ClientConfig>> {
+    pinned_client_config(sk, trust, &[&rustls::version::TLS12])
+}
+
+fn pinned_client_config(
+    sk: &SigningKey,
+    trust: TrustStore,
+    versions: &Versions,
+) -> anyhow::Result<Arc<ClientConfig>> {
     let provider = provider();
     let (cert, key) = node_cert(sk)?;
     let verifier = Arc::new(PinnedServerVerifier {
@@ -252,7 +299,7 @@ pub fn client_config(sk: &SigningKey, trust: TrustStore) -> anyhow::Result<Arc<C
         provider: provider.clone(),
     });
     let mut cfg = ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
+        .with_protocol_versions(versions)?
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_client_auth_cert(vec![cert], key)?;

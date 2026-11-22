@@ -97,20 +97,17 @@
 >   `db/081`, the warning threshold, `cairn-node medication-set-warning-threshold`; rulings Q1–Q3): #1102 · #1103 ·
 >   #1104 · #1105; RUNBOOK §35.
 >
-> **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01; design
-> `superpowers/specs/2026-11-01-window-connection-posture-898-899-design.md`, plan of the same date,
-> [ADR-0084](spec/decisions/0084-the-window-never-holds-the-owners-keys.md), spec **v0.86**, `db/062`,
-> `SCHEMA_GENERATION` **62**). The window runs on its own login (`cairn_window`: inherits `cairn_agent`, never
-> `cairn_node`), never loads the schema (a stamp mismatch refuses the launch), refuses a database on another machine
-> (no TLS exists, so no override), and `release_for_act` refuses — before any passphrase is sent — over a connection
-> that is over-powered through ANY role it is a member of. **`cairn-node provision-window-role --role <name>`** is the
-> one owner step for install AND upgrade; it refuses a cluster with any `trust` rule or an unreloaded `pg_hba.conf`.
-> **⚠️ RUNBOOK §0 changed:** the measurement cluster must use `scram-sha-256` (provisioning refuses `trust`), and every
-> window launch uses `$WINDOW_CONN`. Tests are unaffected (they log in as a probe role, never through the verb).
+> **#898 + #899 MERGED in PR [#911](https://github.com/cairn-ehr/cairn-ehr/pull/911)** (2026-11-01,
+> [ADR-0084](spec/decisions/0084-the-window-never-holds-the-owners-keys.md), `db/062`): the window's own login
+> (`cairn_window`), no schema load, no release over an over-powered login; `cairn-node provision-window-role` is the
+> one owner step for install AND upgrade and refuses any `trust` rule. **⚠️ RUNBOOK §0:** the measurement cluster is
+> `scram-sha-256`, and every window launch uses `$WINDOW_CONN`. Since ADR-0110 a remote database is "local, or
+> pinned".
 >
 > > [!WARNING]
-> > **NOT YET GUARANTEED — gates on any pilot:** until **#909** (pinned, installer-generated TLS) or slice 5 (every
-> > terminal its own node) lands, a facility has ONE usable terminal: the one on the database's machine. **#912**: no
+> > **NOT YET GUARANTEED — gates on any pilot:** until **#909** slice B (built, PR #1163, ADR-0110) ships, which waits
+> > on slice C (the rollout), or slice 5 (every terminal its own node) lands, a facility has ONE usable terminal: the
+> > one on the database's machine. **#912**: no
 > > long-running process re-adjudicates deferred events (the window's launch used to, incidentally). **#910**: a
 > > Cairn-installed Postgres (brainstorm first). From PR #911's second review: **#914** (say "cannot sign" at launch, not at the first signature) · **#915** (the posture check's routes are a hand-kept list) · **#916** (small robustness residuals); #913 was fixed in the PR. **Slice 5's design must answer** (design §4; and since 2026-11-04 how a draft reaches the facility's other terminal-nodes, partitioned case included — drafts never sync, **#963**): synced sealed blobs on a
 > > stolen terminal disk can be guessed offline, and the attempt counter is per node. Open from slice 1: **#900**
@@ -164,19 +161,33 @@
 >    the commit tick; filed **#1153**–**#1159** (#1159: the re-search guards only the queue). Final review and finalcheck
 >    done and fixed. **Time-sensitive:** RUSTSEC-2026-0543 (chrono unmaintained) is ignored in both `deny.toml` trees until
 >    2027-02-18 (**#1160**, migrate off chrono); **#389**'s glib ignore was re-decided 2026-11-20 to the same date (its exit
->    condition moved: gtk 0.19 + webkit2gtk 3 exist on glib 0.22; no tauri uses them yet). **⇒ NEXT: RUNBOOK §38** (a
->    human); **slice B's plan is WRITTEN and finalchecked, awaiting the maintainer's review** (2026-11-20/21, PR #1162,
->    [`superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md`](superpowers/plans/2026-11-20-909-slice-b-pinned-gateway.md):
->    the gateway, the trust set, the ceremony, the window's `Link`; the advisory lock becomes a row lock the window
->    cannot take, and the CLI's `patient-register` takes it too; a revoke cancels the terminal's running statement).
->    Then build it, then slice C's rollout brainstorm. **Otherwise:** sign-in **slice 4** (the emergency key, design
->    §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and Pi figures (ROADMAP has the Mac
->    figures); or the next whole-project review. Design §10's findings 1–2 are decided (ADR-0088), 3 is deferred
->    (#979), 4–5 are **#965**, **#964**. Slice 3's design:
+>    condition moved: gtk 0.19 + webkit2gtk 3 exist on glib 0.22; no tauri uses them yet).
+>    **#909 slice B (the pinned gateway) is BUILT, Tasks 1–10, on PR #1163** (`feat/909-slice-b-pinned-gateway`;
+>    plan PR #1162; [ADR-0110](spec/decisions/0110-the-pinned-terminal-gateway.md), spec **v0.112**, `db/084`,
+>    `SCHEMA_GENERATION` **84**): a window on another machine reaches the database only through
+>    `terminal-service --gateway-listen`, TLS 1.3 pinned both ways against the node-local trust set; the owner's
+>    `gateway-setup`, `admit-terminal`, `revoke-terminal` (final; ends the terminal's sessions and cancels their
+>    statements) and `list-terminals`; the registration lock is now the `registration_turn` row lock the window cannot
+>    take. Its final whole-branch review is done, and its fixes re-reviewed clean (a gateway restart now ends every
+>    session and cancels, best-effort, its running statement). The finalcheck review then fixed more: a lost
+>    `terminal.key` beside a pin is refused, never re-minted; the gateway's own connection has a 1 s `lock_timeout`
+>    (one shared client serves the tick and every login's facts read); connections dropped before startup get a
+>    per-tick summary line; any non-SCRAM TCP auth method warns; four more test pins. **Merging is the maintainer's
+>    call.** Filed **#1164**
+>    (`cairn-gui-live/src/connection.rs` is 650 lines: a verbatim split) and, from the review, **#1165**–**#1170**
+>    (no per-terminal session cap · one host can hold all 128 pre-startup slots · no SCRAM test through the gateway ·
+>    no cut-off-reopen test through the pinned link · rustls close_notify log noise · a typed not-admitted marker),
+>    then **#1171** (key-file mode unchecked off Unix; `close_gently`'s unbounded shutdown) and **#1172** (low-rated
+>    end-to-end test pins).
+>    **⇒ NEXT after it merges: slice C's rollout brainstorm** (design §6). **Slice B must not ship to a site
+>    until slice C is settled.** RUNBOOK §38 and §39 (two machines) are owed by a human. **Otherwise:** sign-in
+>    **slice 4** (the emergency key, design §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and
+>    Pi figures (ROADMAP has the Mac figures); or the next whole-project review. Design §10's findings 1–2 are decided
+>    (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**. Slice 3's design:
 >    [`superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md`](superpowers/specs/2026-11-03-sign-in-slice-3-notes-drafts-and-whos-here-design.md)
 >    (PR #930; it also carries the per-note "unconfirmed" marker and #918's display half).
 >    Owed by a human: switch the measurement cluster to `scram-sha-256` before the next RUNBOOK run (§0); **RUNBOOK
->    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27**, **§28**, **§29** (allergies), **§30**, **§31** (charting), **§32** (the de-label offer), **§33** (From: and set-aside versions), **§34** (restore and checked), **§35** (the warning threshold), **§36** (a stat dose given and entered in error), **§37** (drug names in the pick), **§38** (the terminal service: the round trip it adds to Register ≤ 0.5 s median); #838's
+>    §16** (sign ≤ 3 s, next-nurse switch, VoiceOver/keyboard on the strip, the terminal lock), **§17**, **§18**, **§19**, **§20**, **§21**, **§22**, **§23**, **§24**, **§25**, **§26**, **§27**, **§28**, **§29** (allergies), **§30**, **§31** (charting), **§32** (the de-label offer), **§33** (From: and set-aside versions), **§34** (restore and checked), **§35** (the warning threshold), **§36** (a stat dose given and entered in error), **§37** (drug names in the pick), **§38** (the terminal service: the round trip it adds to Register ≤ 0.5 s median), **§39** (the pinned gateway, two machines: chart open and Sign ≤ 0.2 s slower remote, a revoke ≤ 2 s, `gateway-setup`'s success path); #838's
 >    **§15** (incl. #861's current-line check); **§14** (c) (the cause on screen; a refused reopen offers no retry; the
 >    front door's top line clears) and (d) (no waiting bar on an ordinary press; a locked `medication_statement` →
 >    "Waiting…", cut off by 15 s, and since #893 the outcome says the window cut it off). **#894** needs the satellite
@@ -211,7 +222,7 @@
 >    `cairn_test`'s fixtures).
 >
 > **⇒ DURABLE RULES — READ BEFORE TOUCHING THE CODE THEY NAME:**
-> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (#1138, charting 3, charting 2, batch charting 3, 2b, 2a, batch charting 1, charting 1b, charting 1a, allergy 3, allergy 2, allergy 1, sign-in 3c-3c, 3c-3a, 3c-3b, 3c-2, 3c-1, 3b-2b, 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
+> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (#909 slice B, #909 slice A, #1138, charting 3, charting 2, batch charting 3, 2b, 2a, batch charting 1, charting 1b, charting 1a, allergy 3, allergy 2, allergy 1, sign-in 3c-3c, 3c-3a, 3c-3b, 3c-2, 3c-1, 3b-2b, 3b-2a, 3b-1, 3a, 2, 1, #898/#899, #745·#752·#740, R7, R6, R5b,
 > R5a, #725, R4, R3, R1b, R2a, R2b-1, R2b-2, R1, the funnel) and the **eighteen traps**, each with its pin and its
 > tempting wrong fix. A slice that adds rules adds its block there, not here.
 >
@@ -313,11 +324,11 @@ milestone-scoped review 2026-11-15 (#1128–#1139); the next whole-project pass 
 
 ---
 
-**Session date:** 2026-11-16 (#1145 found merged; #1138's nine minors: five built, two commented, two split out as #1146 + #1147; PR [#1148](https://github.com/cairn-ehr/cairn-ehr/pull/1148)) · 2026-11-15, fifth session (#1130 + #1137 built, PR [#1142](https://github.com/cairn-ehr/cairn-ehr/pull/1142); its finalcheck fixed the allergy-words gap and filed #1143 + #1144) · 2026-11-15, fourth session (#1126 found merged; the whole-milestone review → #1128–#1139 filed;
+**Session date:** 2026-11-20 → 11-22 (#909 slice B planned, PR #1162, then built by SDD, Tasks 1–10, draft PR [#1163](https://github.com/cairn-ehr/cairn-ehr/pull/1163); #1164 filed) · 2026-11-17/18 (#909 slice A, PR #1152, ADR-0109) · 2026-11-16 (#1145 found merged; #1138's nine minors: five built, two commented, two split out as #1146 + #1147; PR [#1148](https://github.com/cairn-ehr/cairn-ehr/pull/1148)) · 2026-11-15, fifth session (#1130 + #1137 built, PR [#1142](https://github.com/cairn-ehr/cairn-ehr/pull/1142); its finalcheck fixed the allergy-words gap and filed #1143 + #1144) · 2026-11-15, fourth session (#1126 found merged; the whole-milestone review → #1128–#1139 filed;
 #1128, #1129 (ADR-0108, spec v0.110) and #1131 fixed inline, PR [#1140](https://github.com/cairn-ehr/cairn-ehr/pull/1140)) · 2026-11-15, third session (#1124 found merged; HANDOVER condensed; #1125 fixed inline, PR [#1126](https://github.com/cairn-ehr/cairn-ehr/pull/1126) — db/052's restore door merges past an unstamped supervision row's fallback stamp and refuses a stamp on a non-supervision op; no ADR, no wire change, `SCHEMA_GENERATION` 82) · 2026-11-15, second session (#1121 found merged; #1014 planned → built inline, PR [#1124](https://github.com/cairn-ehr/cairn-ehr/pull/1124), ADR-0107) · 2026-11-15 (#1106 found merged; charting slice 3 (drug names) planned with rulings R1–R3 → built inline, PR [#1121](https://github.com/cairn-ehr/cairn-ehr/pull/1121); drugref#244 filed) · 2026-11-14, third session (#1101 found merged; charting slice 2 planned with rulings Q1–Q4 → SDD Tasks 1–7 + a whole-branch review on draft PR [#1106](https://github.com/cairn-ehr/cairn-ehr/pull/1106); #1107–#1112 filed) · 2026-11-14, second session (#1098 found merged; batch-charting slice 3 planned → built inline, PR [#1101](https://github.com/cairn-ehr/cairn-ehr/pull/1101); #1102 filed) · 2026-11-14 (#1088 merged; slice 2b planned → SDD Tasks 1–8, Tasks 1–3 merged mid-session in PR [#1096](https://github.com/cairn-ehr/cairn-ehr/pull/1096), Tasks 4–8 on draft PR [#1098](https://github.com/cairn-ehr/cairn-ehr/pull/1098); #1097 filed) · 2026-11-13 (#1086 merged; batch-charting slice 2's wire brainstormed → designed → slice 2a planned → built by SDD, PR [#1088](https://github.com/cairn-ehr/cairn-ehr/pull/1088); #1089 + #1090 filed; final check: #1091–#1095 filed) · 2026-11-12 (charting slice 1b brainstormed → designed → built, PR [#1086](https://github.com/cairn-ehr/cairn-ehr/pull/1086), merged the same day; #1084 + #1085 filed) · 2026-11-11 (batch charting slice 1's Task 7 after its merge: ADR-0100, spec v0.102, RUNBOOK §31, a whole-slice review; #1081 + #1082 filed; PR [#1083](https://github.com/cairn-ehr/cairn-ehr/pull/1083)) · 2026-11-11 (#1072 batch charting brainstormed → design approved → slice 1 planned, draft PR [#1078](https://github.com/cairn-ehr/cairn-ehr/pull/1078)) · 2026-11-11 (charting slice 1a plan → SDD, Tasks 1–7 + final fix wave on draft PR [#1066](https://github.com/cairn-ehr/cairn-ehr/pull/1066); #1067–#1073 filed) · 2026-11-10 (#1052 merged; #1065 + drugref#231 filed; charting-a-medication brainstorm) · 2026-11-08 (#1021 measured; key facts once per key; keep rule) · 2026-11-07 (3c-3c plan → SDD, 7 tasks + final fix wave, PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)) · 2026-11-07 (3c-3a plan → SDD, Tasks 1–9 + final fix wave, PR [#1013](https://github.com/cairn-ehr/cairn-ehr/pull/1013)) · 2026-11-07 (3c-3 design; 3c-3b, PR [#1006](https://github.com/cairn-ehr/cairn-ehr/pull/1006)) · 2026-11-06 (3c-2, PR [#1000](https://github.com/cairn-ehr/cairn-ehr/pull/1000)) · 2026-11-05 (3c-1, PR [#992](https://github.com/cairn-ehr/cairn-ehr/pull/992)) · 2026-11-04/05 (3b-2b, PR [#984](https://github.com/cairn-ehr/cairn-ehr/pull/984); 3b-2a, PR [#981](https://github.com/cairn-ehr/cairn-ehr/pull/981); 3b-1, PR [#966](https://github.com/cairn-ehr/cairn-ehr/pull/966)) · 2026-11-03 (slice 3a, PR [#931](https://github.com/cairn-ehr/cairn-ehr/pull/931); slice 3 design, PR [#930](https://github.com/cairn-ehr/cairn-ehr/pull/930)) · 2026-11-01/02 (slice 2, PRs #917 + #920; #926, PR #928; #898 + #899, PR #911) · 2026-10-31 (sign-in slice 1, PR #897) · earlier (PRs #724–#895, 2026-10-04 → 10-31; R1–R3, the funnel, DR): ROADMAP. ·
-**Spec:** **v0.110** (newest ADR-0108, PR #1140, db/061 + db/062 + db/063 + db/072 in place; v0.109 ADR-0107, PR #1124, db/004 + db/052 + db/072 in place; #1125 needed no ADR — a db/052 fix in place, meeting ADR-0107 decision 4's stated purpose; v0.108 ADR-0106, PR #1121, `db/076` in place; v0.107 ADR-0105, PR #1106, `db/082`; v0.106 ADR-0104, PR #1101, `db/081`; v0.105 ADR-0103, PRs #1096/#1098, `db/080`; v0.104 ADR-0102, PR #1088, `db/079`; v0.103 ADR-0101, PR #1086, `db/075` in place, no new file; v0.102 ADR-0100, PR #1078, `db/078`; v0.101 ADR-0099, PR #1066, `db/077`; v0.100 ADR-0098, PR #1052, `db/076`; v0.99 ADR-0097, PR #1038, `db/075`; v0.98 ADR-0096, PR #1026, `db/074`; v0.97 ADR-0095, PR #1019, `db/073`; v0.96 ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
+**Spec:** **v0.112** (newest ADR-0110, PR #1163, `db/084`; v0.111 ADR-0109, PR #1152, `db/083`; v0.110 ADR-0108, PR #1140, db/061 + db/062 + db/063 + db/072 in place; v0.109 ADR-0107, PR #1124, db/004 + db/052 + db/072 in place; #1125 needed no ADR — a db/052 fix in place, meeting ADR-0107 decision 4's stated purpose; v0.108 ADR-0106, PR #1121, `db/076` in place; v0.107 ADR-0105, PR #1106, `db/082`; v0.106 ADR-0104, PR #1101, `db/081`; v0.105 ADR-0103, PRs #1096/#1098, `db/080`; v0.104 ADR-0102, PR #1088, `db/079`; v0.103 ADR-0101, PR #1086, `db/075` in place, no new file; v0.102 ADR-0100, PR #1078, `db/078`; v0.101 ADR-0099, PR #1066, `db/077`; v0.100 ADR-0098, PR #1052, `db/076`; v0.99 ADR-0097, PR #1038, `db/075`; v0.98 ADR-0096, PR #1026, `db/074`; v0.97 ADR-0095, PR #1019, `db/073`; v0.96 ADR-0094, PR #1013, `db/072`; v0.95 ADR-0093, PR #1006, no SQL change; v0.94 ADR-0092, PR #1000; v0.93 ADR-0091, PR #992; v0.92 ADR-0090, PR #984; v0.91 ADR-0089, PR #981; v0.90 ADR-0088; v0.89 ADR-0087; v0.88 ADR-0086; v0.87 ADR-0085; v0.86 ADR-0084; v0.85 ADR-0083; #857 and #861 needed no ADR — a projection-side fix, no wire change;
 [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
-wording only) · **`SCHEMA_GENERATION`:** **82** (`db/082`, PR #1106, with db/005 + db/020 + db/031 + db/037 + db/039 + db/048 + db/060 + db/077 + db/079 + db/080 in place; 81 `db/081`, PR #1101; 80 `db/080`, PRs #1096/#1098, with db/031 + db/037 + db/048 + db/078 + db/079 in place; 79 `db/079`, PR #1088, with db/031 + db/037 + db/048 + db/077 + db/078 in place; 78 unchanged by PR #1086, whose `db/075` edit is in place; `db/078`, PR #1078; `db/077`, PR #1066, with db/031 + db/037 + db/044 in place and its search door in db/076 §5; `db/076`, PR #1052, with db/074 + db/041 + db/042 in place; `db/075`, PR #1038; `db/074`, PR #1026; `db/073`, PR #1019; `db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
+wording only) · **`SCHEMA_GENERATION`:** **84** (`db/084`, PR #1163; 83 `db/083`, PR #1152; 82 `db/082`, PR #1106, with db/005 + db/020 + db/031 + db/037 + db/039 + db/048 + db/060 + db/077 + db/079 + db/080 in place; 81 `db/081`, PR #1101; 80 `db/080`, PRs #1096/#1098, with db/031 + db/037 + db/048 + db/078 + db/079 in place; 79 `db/079`, PR #1088, with db/031 + db/037 + db/048 + db/077 + db/078 in place; 78 unchanged by PR #1086, whose `db/075` edit is in place; `db/078`, PR #1078; `db/077`, PR #1066, with db/031 + db/037 + db/044 in place and its search door in db/076 §5; `db/076`, PR #1052, with db/074 + db/041 + db/042 in place; `db/075`, PR #1038; `db/074`, PR #1026; `db/073`, PR #1019; `db/072`, PR #1013, which also edits db/004 and db/052 in place; `db/071`, PR #1000, which also edits db/037 and db/044 in place; `db/070`, PR #992, which also edits db/064 and db/065 in place; `db/068` + `db/069`, PR #984, which also edits db/037, db/044, db/065 and db/066 in place; `db/067`, PR #981, which also edits db/065 and db/066 in place; `db/066`, PR #966; `db/064` + `db/065`, PR #931, which also edits db/044 and db/037 in place; `db/063`, PRs #917/#920; `db/062`, PR #911; `db/061` PR #897; `db/060`, PR #860; R6 and R7 edit db/054, R7 db/056, in place) · **Phase:** architecture
 complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
 row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
 a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and a
@@ -346,6 +357,20 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
 arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
+
+### 2026-11-20 → 11-22 — #909 slice B, the pinned gateway (plan PR #1162, build draft PR #1163)
+- **⇒ At a protocol door, allow-list what passes.** The plan refused `options` and `replication`; Postgres applies
+  every other startup key as a setting AFTER the login was vetted, so a bare `role=…` did what `options=-c role=…`
+  does. A repeated key was a second hole (Postgres honours the last, the vetter read the first).
+- **⇒ A transient condition must never wear a permanent refusal's code** ("cannot check now" is 57P03, never 28000 or
+  `access_denied`), and a socket dropped with unread data can turn a refusal into an outage: close it gently.
+- **⇒ Closing a socket does not stop a busy backend**: it notices a gone client only at its next read or write, so a
+  revoke also cancels.
+- **⇒ A `trust` test cluster cannot reach a verb that refuses `trust`**: `gateway-setup`'s success path is RUNBOOK
+  §39's, and the ADR says so rather than imply a test.
+- **⇒ A fixture that builds half a state can hide the defect it should catch (finalcheck).** `pinned_dir()` wrote a
+  pin with no key, and its test passed only because the code minted a fresh key beside an old pin: a second identity
+  while the old key stayed admitted. RUNBOOK §39 Measurement 6 leaned on the same path (`rm terminal.key`).
 
 ### 2026-11-16 — #1138, the review's nine minors
 - **⇒ A finding's "fix size" is a claim: check it against every symptom the finding names.** Item 1 proposed "wipe the
@@ -386,70 +411,41 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 - **Process.** A merged PR is checked against its PLAN's task list, never its title (#1078 merged without Task 7). A
   push reporting a new branch means the PR merged mid-session (#1096). Fact-check an ADR's sentences before review.
 
-### 2026-11-08 — #1021: the person menu measured at scale, 5–6× cut, then a keep rule
+### 2026-11-06 → 11-08 — slices 3c-2, 3c-3b, 3c-3a, 3c-3c (PRs #1000, #1006, #1013, #1019) and #1021, condensed 2026-11-22
 
-Rig `examples/measure_person_menu.rs` (seeds a ward through `sign_note` in stages; `--measure-only` re-times a node,
-`--later-days 8` reads it as a ward's steady state); figures in
-`crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`. Final state: the lib + 30 note/supervision DB
-suites (756 tests, none skipped) and the GUI tree's DB-gated `--bins` (787) green. Finalcheck review then made the
-keep rule's two hand-kept contracts structural: `MenuRead` carries `read_at` (`menu_for`/`counts` take no `now`, so
-they cannot judge at an instant the read did not cut at), and a unit test pins its `'repudiated'` to
-`vouch_read::CONFIRMATION_WORDS` as `signer_of` reads them; plus a test for the co-sign half of the drafted term.
-- **⇒ Profile before choosing the big fix.** The issue's proposed fix was a new projection. `track_functions` showed
-  88% of the cost was ~0.9 M calls of `SECURITY DEFINER` key doors (never inlined; 1.4 M with the per-part attester
-  door) for **40** distinct keys: a CTE fixed that without touching meaning. Prove "identical" with `EXCEPT ALL` both ways on the big fixture before the rewrite.
-- **⇒ A time limit on what is OWED hides it; a time limit on what is SHOWN is free.** The maintainer proposed
-  cutoffs (1 month mandatory, 1 week optional). Group 3 already had the week (Rust-side, now pushed into SQL); a cutoff
-  on groups 1–2 would drop an unsigned or un-co-signed note from "Waiting for you" at day 31, and a monthly-synced
-  clinic's notes would arrive already expired. The lossless form is a SUPERSET keep rule, each term traced to a group.
-- **⇒ Mutation-check a superset filter, and check the mutation tool too.** The 30-days-on re-read pins each term
-  (removing any one fails a test). The first mutation run replaced terms with `FALSE`, orphaning `$2`/`$3`, so every
-  test failed on a parameter-type error, not the filter: use `(FALSE AND term)`.
-- **⇒ Fact-check your own figures** before they land: a nested function's *total* double-counts (94% → 88% self time),
-  and a ratio projected from one statement under-shot the composed read (0.9 s projected, 1.05 s measured).
+Each plan → SDD with a final review (3c-3c's ADR fact-check found 1 false + 8 imprecise sentences); RUNBOOK §23–§26
+owed (human). #1021's rig is `examples/measure_person_menu.rs`, its figures
+`crates/cairn-node/results/2026-11-08-person-menu-reads-macos-m3max.md`; `MenuRead` carries `read_at`.
+- **⇒ Profile before choosing the big fix** (#1021: 88% of the cost was ~0.9 M calls of definer key doors for 40 keys,
+  fixed by a CTE; prove "identical" with `EXCEPT ALL` both ways). **A time limit on what is OWED hides it; one on what
+  is SHOWN is free** (a SUPERSET keep rule, each term traced to a group). **Mutation-check a superset filter, and the
+  mutation tool too** (`(FALSE AND term)`, not `FALSE`). **Fact-check your own figures** (a nested total
+  double-counts).
+- **⇒ Two clocks in one comparison is a finding, even when each is right** (#1014). A fallback must accept what the
+  floor can ADMIT; "who wrote it" has one predicate per question (`writer_actor` vs `writer_signature`); walk an
+  overlay BEFORE and AFTER its repair (#1009); a test filter is a claim about which tests ran; a new act can break an
+  invariant the old acts only implied (`signInFlight()`; the medication pane still is not, #1002); a Review Focus test
+  must set up that focus's scenario; a plan's outcome sentence is a claim about every state.
+- **⇒ A count belongs to a person: hide it the moment the claim changes**; a budget's fixture must reach the cliff;
+  grep the payload before adding a field; a plan's "one exception" to a house rule is a plan defect.
 
-### 2026-11-07 — slice 3c-3c (PR [#1019](https://github.com/cairn-ehr/cairn-ehr/pull/1019)), condensed
+### 2026-10-31 → 11-05 — sign-in slices 1 → 3c-1, condensed 2026-11-22
 
-Plan → SDD, 7 tasks, five fix rounds, an ADR fact-check (1 false + 8 imprecise sentences), whole-branch review.
-- **⇒ A count belongs to a person: hide it the moment the claim changes**, before the new read.
-- **⇒ A budget's fixture must be able to reach the cliff** (60 notes could not; #1021 above).
-- **⇒ Grep the payload before adding a field**; **a plan's "one exception" to a house rule is a plan defect**;
-  **"as on the chart" is a claim about the sort KEY, not only the tie-break.**
-
-### 2026-11-06/07 — slices 3c-2 (PR #1000), 3c-3b (PR #1006), 3c-3a (PR #1013)
-
-Condensed 2026-11-07; each plan → SDD, a final review, one fix wave; RUNBOOK §23–§25 owed (human).
-- **⇒ Two clocks in one comparison is a finding, even when each is right** (#1014). **A fallback must accept what the
-  floor can ADMIT on that part**, or it nags forever. **"Who wrote it" has one predicate per question**
-  (`writer_actor` vs `writer_signature`). **The controller's own copy is a claim too.**
-- **⇒ Walk an overlay BEFORE and AFTER its repair** (#1009). **A test filter is a claim about which tests ran**
-  (`--bins notes_` matched nothing yet printed "passed"). **The floor's identity helpers answer different questions**
-  (`cairn_note_key_actor` ignores repudiation; `cairn_key_confirmation` names it).
-- **⇒ A new act can break an invariant the old acts only implied** (`signInFlight()`; the medication pane still is
-  not, #1002). **A Review Focus test must set up that focus's scenario** (key and claim must differ). **A defensive
-  applier must hold the floor's closed vocabularies.** **A plan's outcome sentence is a claim about every state.**
-
-### 2026-10-31 → 11-05 — sign-in slices 1 → 3c-1, condensed 2026-11-15
-
-PRs #897 (slice 1), #895 (#893), #911 (#898 + #899), #917 + #920 (2), #931 (3a), #966 (3b-1), #981 (3b-2a), #984
-(3b-2b), #992 (3c-1). Each was plan → SDD with every task reviewed. Its rulings are in its ADR (0083–0091) and its
-durable-rules block. Slice 2's two real cases (a junior's password sent to an inbox; a locum's Friday-night start)
-turned "re-key by token" into in-person enrolment. 3c-1's PR review added `DiscardOutcome::NeverSaved` and ADR-0091
-(g) and commented #994, #946, #995, #996; slice 1 filed #898–#902; #911 filed #909, #910, #912.
-- **⇒ Pin WHEN a condition is evaluated, not only its TEXT**, and walk every path that leaves the editor (#970). A
-  plan's copy borrowed from a sibling gesture is a claim about THIS gesture (Sign's leftover is #986). A signature
-  proves "this key signed A discard", not "this one": bind to an instant the door mints under the lock (residual
-  #987). A door that delegates must not leave a half-made row; take a persisted fact from where it is persisted.
-- **⇒ "Spent by a note" means "by THIS transaction's note"** (`xmin`; no savepoint). Blank is `cairn_twin_is_present`,
-  never `btrim(…) <> ''`; "own part" is by key, not by text. An escape is a wire decision, and so is the twin of an
-  escaped text. Fact-checking the ADR is a code review (it found four window gaps the task reviews passed).
-- **⇒ A transactional counter is no throttle against a raw-SQL client** (`BEGIN; guess; ROLLBACK;`): count in state a
-  rollback cannot undo, BEFORE revealing anything. Check WHICH role the client connects as (#898) and every role the
-  login is a MEMBER of; a definer calling helpers by bare name runs whoever can `CREATE` in `public` (db/062 revokes
-  it). An issue's suggested fix is a claim; a permission walk on EMPTY data proves nothing; an aborted
-  tokio-postgres task gives every pending query `Error::closed()` (#893).
+PRs #897 (1), #895 (#893), #911 (#898 + #899), #917 + #920 (2), #931 (3a), #966 (3b-1), #981 (3b-2a), #984 (3b-2b),
+#992 (3c-1); rulings in ADR-0083–0091 and their durable-rules blocks. Slice 2's two real cases (a junior's password
+sent to an inbox; a locum's Friday-night start) turned "re-key by token" into in-person enrolment. 3c-1's review
+commented #994, #946, #995, #996; slice 1 filed #898–#902; #911 filed #909, #910, #912.
+- **⇒ Pin WHEN a condition is evaluated, not only its TEXT** (#970); a plan's copy borrowed from a sibling gesture is
+  a claim about THIS gesture (#986); bind a signature to an instant the door mints under the lock (#987); a door that
+  delegates must not leave a half-made row. "Spent by a note" means by THIS transaction's note (`xmin`); blank is
+  `cairn_twin_is_present`, never `btrim(…) <> ''`; an escape is a wire decision; fact-checking an ADR is a code
+  review.
+- **⇒ A transactional counter is no throttle against a raw-SQL client** (`BEGIN; guess; ROLLBACK;`): count where a
+  rollback cannot undo, BEFORE revealing anything. Check every role the login is a MEMBER of (#898); a definer calling
+  helpers by bare name runs whoever can `CREATE` in `public`; a permission walk on EMPTY data proves nothing; an
+  aborted tokio-postgres task gives every pending query `Error::closed()` (#893).
 - **Mechanics:** a harness background job can be SIGTERMed (exit 143): run the 2 h gate detached in a worktree pinned
-  to the PR head. A second scratch DB set (`cairn_sdd/2/3` on :5532) lets DB work run beside the gate.
+  to the PR head; a second scratch DB set (`cairn_sdd/2/3` on :5532) lets DB work run beside it.
 
 ### 2026-10-04 → 10-30 — R4–R7, cloud passes, #797, the W, interrupted commits, the lost connection (PRs #724–#890)
 
@@ -462,18 +458,16 @@ them:** #220 · #427 · #585 (nothing reads Postgres notices) · #712 · #718 ·
 - **⇒ A timeout around a tokio-postgres call does not free the connection**: abort the connection TASK and
   `pg_terminate_backend` the old backend; a timeout around a call with its own must be LONGER. A deferred trigger
   that sleeps makes COMMIT the slow statement.
-- **⇒ Route a cause by TYPE end to end** (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); a new
-  meaning gets a new field, not a status-dependent reading of an old one; a `From` impl makes `?` compile where it is
-  wrong. **An outcome that MAY have written settles like a success**; a floor `P0001` carries no scope — re-ask it,
-  never parse it (#855). The logical clock is not a wall clock (#803). Two humans with the same determinants are ONE
-  actor (#152).
-- **⇒ Walk every remedy, absence or future-event sentence through every state it is shown in**; a remedy that names a
+- **⇒ Route a cause by TYPE end to end** (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); a `From`
+  impl makes `?` compile where it is wrong; **an outcome that MAY have written settles like a success**; a floor
+  `P0001` carries no scope — re-ask it, never parse it (#855); the logical clock is not a wall clock (#803); two
+  humans with the same determinants are ONE actor (#152).
+- **⇒ Walk every remedy, absence or future-event sentence through every state it is shown in**; a remedy naming a
   command is a claim (run it, name the LIGHTEST, #787); count steps against the as-built window (#754); read the
-  design's filter against its issue (#700); diagnose before choosing a fix (#725, `EXPLAIN ANALYZE`).
-- **⇒ "Never over-erase" is half a rule**: a scrub of a winner-takes-all projection owes a re-fold. A new projection
-  beside a one-winner one needs a second apply fn, a generation bump, the shred delete, BOTH registry counts.
-- **⇒ Check a mutation APPLIED before trusting the green after it**; walk the OLD code with the same script; webview JS
-  is pinned without a JS runner (`source_guard::js_fn`). A real mouse finds what `element.click()` cannot.
+  design's filter against its issue (#700); diagnose before choosing a fix (#725). **"Never over-erase" is half a
+  rule** (a winner-takes-all scrub owes a re-fold; a new projection beside a one-winner one needs a second apply fn, a
+  generation bump, the shred delete, BOTH registry counts). **Check a mutation APPLIED before trusting the green**;
+  webview JS is pinned by `source_guard::js_fn`; a real mouse finds what `element.click()` cannot.
 - **⇒ #726: a connect replays the schema only when it changed** (ADR-0080; tests call `db::force_schema_replay`).
   Also: a case-mapping change on one side of a subset invariant breaks it (#775); COMMITTED IS NOT VOUCHED (#556); a
   judgement carries what was compared (#708); an unknown outcome is its own ROOT marker (#713); a per-row lock cannot
@@ -534,19 +528,14 @@ Code workspace: `/crates` (`cairn-db-keepalive`, `cairn-event`, `cairn-keystore`
 - **⇒ Eval 0005 follow-ups (CockroachDB lessons), accepted 2026-11-03 — epic [#933](https://github.com/cairn-ehr/cairn-ehr/issues/933).**
   Order: the **syncnemesis** convergence harness first ([#934](https://github.com/cairn-ehr/cairn-ehr/issues/934),
   plan `superpowers/plans/2026-11-03-syncnemesis-harness.md`, slices S0–S6), then **F1**
-  ([#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)). F1: the HLC drift ceiling trusts the local clock, so a
-  node running behind refuses honest node-plane events, revocations included, and mints corrections below their
-  targets. It also aborts a DR restore onto a box whose clock is behind (db/009). And once a clock regresses
-  more than 24 h below the node's own HLC, the node refuses its *own* clinical writes (db/005). That last one
-  surfaced in the PR #932 review, and #935 now carries it as consequence 4, with tests (d)/(e) and design
-  option D. The eval's peer-median remedy does **not** cover it, since an offline node has no peers to ask, so
-  #935's option D (a local-door rule) is open. Its reproduction comes free in harness slices S4/S5.
-
-  **Decision owed before S4 step 2 (plan D7, options A/B/C; B recommended):** where the per-node clock skew
-  lives. A redefined `cairn_wall_ms()` cannot survive, because `cairn-sync` replays every migration on every
-  connect. Nor does extending the #726 replay-skip to cairn-sync fix it: `node_schema` holds one stamp naming
-  one loader, so cairn-node and cairn-sync would hand it back and forth and both keep replaying. ADR threads
-  #937–#939; engineering #936, #940–#943.
+  ([#935](https://github.com/cairn-ehr/cairn-ehr/issues/935)): the HLC drift ceiling trusts the local clock, so a node
+  running behind refuses honest node-plane events (revocations included), mints corrections below their targets,
+  aborts a DR restore onto a box whose clock is behind (db/009), and, more than 24 h behind its own HLC, refuses its
+  *own* clinical writes (db/005; PR #932's review, #935's consequence 4 and option D, a local-door rule, since an
+  offline node has no peers to ask). **Decision owed before S4 step 2 (plan D7, options A/B/C; B recommended):** where
+  the per-node clock skew lives (a redefined `cairn_wall_ms()` does not survive `cairn-sync`'s replay, and the #726
+  replay-skip does not fit one `node_schema` stamp shared by two loaders). ADR threads #937–#939; engineering #936,
+  #940–#943.
 - **⇒ The repair path: the open repair-path issues** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a

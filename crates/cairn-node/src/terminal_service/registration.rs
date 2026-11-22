@@ -17,7 +17,7 @@
 //! prompt holds a chart the request does not name ([`unseen_candidates`]), or if the request
 //! calls complete a search the node finds incomplete. That catches a forged "saw no one", and
 //! also a near-match that appeared after the clerk's screen was drawn, a chart another request
-//! registered a moment earlier included ([`REGISTRATION_LOCK`]).
+//! registered a moment earlier included (the registration turn, db/084).
 //!
 //! The check is bounded by the prompt's cut (ADR-0075): it sees only the closest `PROMPT_CAP`
 //! people. With five or more equal-rank namesakes on a name-only query, a chart registered a
@@ -48,19 +48,6 @@ use uuid::Uuid;
 pub const NEW_MATCH_REFUSAL: &str =
     "a new possible match has appeared since the search — search again";
 
-/// The advisory-lock key every [`serve_one`] takes first: the ASCII of "CARNRG" (CARN for Cairn,
-/// RG for registration), the same naming as db/018's CARNLK and db/033's CARNMR.
-///
-/// WHY A LOCK ACROSS SERVICES (final review F1, ruling R15). Two requests for the same new
-/// patient can be claimed by two services at once. Each re-runs its search before either has
-/// committed, so neither sees the other's chart, and both register: a duplicate. The claim's row
-/// lock cannot stop it (the two claims are two rows), and the node's HLC row lock comes only at
-/// the first tick, after both searches. Taking this one lock as the transaction's FIRST
-/// statement makes registrations take turns, node-wide: the second service waits until the
-/// first has committed, so its search (a fresh snapshot, READ COMMITTED) finds the first's chart
-/// and refuses. Taken before the claim, so a waiting service holds no request in the meantime.
-pub const REGISTRATION_LOCK: i64 = 0x4341_524E_5247;
-
 /// What one [`serve_one`] call did.
 ///
 /// `reason` is written for the WINDOW (it is what the clerk reads) and may carry the floor's own
@@ -68,7 +55,7 @@ pub const REGISTRATION_LOCK: i64 = 0x4341_524E_5247;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Served {
     /// No pending, unexpired request was waiting (or a window's `expire` holds the only one's
-    /// row lock; another service never shows here, as the registration lock makes this one wait).
+    /// row lock; another service never shows here, as the registration turn makes this one wait).
     Idle,
     /// The request made chart `patient`.
     Registered { request: Uuid, patient: Uuid },
@@ -186,10 +173,31 @@ pub async fn serve_one(
         .transaction()
         .await
         .context("opening the registration transaction")?;
-    // First, before the claim: see REGISTRATION_LOCK for why registrations take turns.
-    tx.execute("SELECT pg_advisory_xact_lock($1)", &[&REGISTRATION_LOCK])
+    // First, before the claim: registrations take turns, node-wide (db/084's row lock).
+    //
+    // WHY A TURN ACROSS SERVICES (final review F1, ruling R15). Two requests for the same new
+    // patient can be claimed by two services at once. Each re-runs its search before either has
+    // committed, so neither sees the other's chart, and both register: a duplicate. The claim's
+    // row lock cannot stop it (two claims are two rows), and the node's HLC row lock comes only
+    // at the first tick, after both searches. Holding the turn makes the second wait until the
+    // first has committed, so its search (a fresh READ COMMITTED snapshot) finds the chart.
+    //
+    // It is a ROW lock behind a door only this role and the owner can call, not slice A's
+    // advisory lock, which any login (a window's included) could hold to starve registration.
+    // `true` = "only if a request is waiting": the 250 ms poll must not write WAL on an idle
+    // node. A request that lands just after a `false` waits one poll; under the turn the claim
+    // below is the real check. `register_patient_in_tx` takes no turn: this call holds it.
+    let took_turn: bool = tx
+        .query_one("SELECT cairn_registration_take_turn(true)", &[])
         .await
-        .context("taking the registration lock")?;
+        .context("taking the registration turn")?
+        .get(0);
+    if !took_turn {
+        tx.rollback()
+            .await
+            .context("closing an idle registration transaction")?;
+        return Ok(Served::Idle);
+    }
     let Some(row) = tx
         .query_opt(
             "SELECT request_id::text, name, query::text, displayed::text, today \

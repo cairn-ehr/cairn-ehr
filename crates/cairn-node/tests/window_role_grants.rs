@@ -92,15 +92,16 @@ fn a_repeated_user_keeps_the_last_value() {
 }
 
 /// The search funnel, the chart's reads, the duplicate banner and worklist, the gesture
-/// timer and the node's own standing — every READ the window makes, plus registration.
+/// timer and the node's own standing — every READ the window makes. Registration is NOT a window
+/// act (db/084): the window's direct call is refused, and the owner makes the chart the walk reads.
 #[tokio::test]
-async fn the_windows_reads_and_registration_run_under_its_own_login() {
+async fn the_windows_reads_run_under_its_own_login_and_registration_is_refused() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
     let _g = db::test_serial_guard(&base).await.unwrap();
-    let (owner, mut window) = owner_and_window(&base).await;
+    let (mut owner, mut window) = owner_and_window(&base).await;
     let (sk, kid) = setup(&owner, &TABLES).await;
     assert_is_the_window(&window).await;
 
@@ -133,7 +134,10 @@ async fn the_windows_reads_and_registration_run_under_its_own_login() {
     let found = cairn_node::patient::search::search_patients(&window, &query, &today).await;
     let found = expect_as_window("patient::search::search_patients (empty)", found);
     assert!(found.people.is_empty(), "nothing is registered yet");
-    let registered = cairn_node::patient::register::register_patient(
+    // Registration is no longer a window act (db/084): it takes the registration turn, which only
+    // the terminal service and the owner may take, so the window's direct call is refused with
+    // 42501. (The window registers through a request the service serves: slice A.)
+    let refused = cairn_node::patient::register::register_patient(
         &mut window,
         &sk,
         &kid,
@@ -143,7 +147,26 @@ async fn the_windows_reads_and_registration_run_under_its_own_login() {
         &found,
     )
     .await;
-    let p = expect_as_window("patient::register::register_patient", registered);
+    let denied = refused
+        .expect_err("the window must not register directly")
+        .chain()
+        .find_map(|c| c.downcast_ref::<tokio_postgres::Error>()?.code().cloned());
+    assert_eq!(
+        denied,
+        Some(tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    // The chart the rest of the walk reads is the owner's (the CLI's path).
+    let p = cairn_node::patient::register::register_patient(
+        &mut owner,
+        &sk,
+        &kid,
+        ORIGIN,
+        Some("Window Probe"),
+        &query,
+        &found,
+    )
+    .await
+    .expect("the owner registers the probe chart");
 
     // A second chart, a machine link between them and an open proposal, so the chart reads
     // below have an edge, a standing link and a duplicate entry to find.
