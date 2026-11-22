@@ -39,27 +39,40 @@ fn the_window_never_loads_the_schema() {
 /// #909 slice B: a window reaches a remote node only through the pinned link, so its launch
 /// connects only through the `Link` that `terminal_link::prepare` returned, never by the plain
 /// door, and `prepare` (which refuses a remote string with no terminal directory) runs first.
+/// `terminal_launch.rs`, which makes the first connect, is read too.
 #[test]
 fn every_launch_connect_goes_through_the_prepared_link() {
     let body = rust_fn(MAIN, "build_live_state");
     assert!(position(body, "terminal_link::prepare(") < position(body, "connect_with_task("));
-    assert!(
-        !body.contains("db::connect"),
-        "a launch connect bypasses the link"
-    );
+    for (name, src) in [
+        ("build_live_state", body),
+        ("terminal_launch.rs", include_str!("terminal_launch.rs")),
+    ] {
+        for door in ["db::connect", "tokio_postgres::connect("] {
+            assert!(
+                !src.contains(door),
+                "{name} connects by `{door}`, around the link"
+            );
+        }
+    }
 }
 
 /// The window's flags can only ADD the pin (`--terminal-dir`, `--node-fingerprint`), never skip
 /// it: no flag turns the pin off, lets a remote string through without it, or sets the TLS mode.
+/// Only the Cli's code lines are read (its doc comments may name the pin they add).
 #[test]
 fn the_window_cli_has_no_flag_that_skips_the_pin() {
     let start = position(MAIN, "struct Cli {");
     let len = MAIN[start..].find("\n}\n").expect("Cli closes");
-    let cli = MAIN[start..start + len]
+    let cli: String = MAIN[start..start + len]
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
         .to_ascii_lowercase()
         .replace('_', "-");
     assert!(cli.contains("terminal-dir"), "the scan reads the real Cli");
-    for flag in ["insecure", "no-pin", "allow-remote", "sslmode"] {
-        assert!(!cli.contains(flag), "Cli carries `{flag}`");
+    for word in ["insecure", "pin", "skip", "tls", "ssl", "allow-remote"] {
+        assert!(!cli.contains(word), "a Cli flag carries `{word}`");
     }
 }

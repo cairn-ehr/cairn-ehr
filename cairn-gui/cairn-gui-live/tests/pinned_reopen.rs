@@ -197,16 +197,18 @@ async fn a_revoked_terminals_reopen_is_a_refusal_naming_the_operator() {
         .await
         .unwrap();
 
-    // The gateway's 1 s tick ends the open session, and refuses the key from then on. Until it
-    // runs the connection stays open; a reopen racing the tick may end as an outage, which is
-    // pressed again once its backoff has passed.
+    // The gateway's 1 s tick refreshes its trust set and THEN ends the revoked key's sessions
+    // (`serve.rs`'s `sweep`), so by the time this connection is lost the key is already refused:
+    // the first reopen must be the refusal. Until the tick runs the connection stays open. A reopen
+    // that reads as an outage is the regression this pins (a window pressed for ever, the
+    // operator never named), so it fails the test rather than being pressed again.
     let deadline = Instant::now() + Duration::from_secs(10);
     let refused = loop {
         match db.lock().await {
             Err(lost) if matches!(DataError::from(lost.clone()), DataError::NotProvisioned(_)) => {
                 break lost
             }
-            Err(_) => tokio::time::sleep(NodeConnection::RETRY_AFTER).await,
+            Err(lost) => panic!("a revoked terminal's reopen read as an outage: {lost}"),
             Ok(_) => tokio::time::sleep(Duration::from_millis(200)).await,
         }
         assert!(

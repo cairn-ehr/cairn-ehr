@@ -54,6 +54,17 @@ impl TerminalFiles {
                 .with_context(|| format!("creating the terminal key {}", path.display()))?;
             return Ok(sk);
         }
+        self.load_key()
+    }
+
+    /// The terminal's EXISTING key, never made: for a caller that only reports (the window's
+    /// not-admitted launch text names this terminal's fingerprint) and must not mint a key, or
+    /// make the directory, as a side effect. Refused like
+    /// [`load_or_create_key`](Self::load_or_create_key) when the directory or the key can be
+    /// reached by other users; an error when either is missing.
+    pub fn load_key(&self) -> anyhow::Result<SigningKey> {
+        refuse_mode(&self.dir, 0o022, DIR_OTHERS_CAN_WRITE)?;
+        let path = self.key_path();
         refuse_mode(
             &path,
             0o077,
@@ -117,14 +128,14 @@ impl TerminalFiles {
         builder
             .create(&self.dir)
             .with_context(|| format!("creating the terminal directory {}", self.dir.display()))?;
-        refuse_mode(
-            &self.dir,
-            0o022,
-            "can be written by other users, who could replace this terminal's node pin or key. \
-             Make it private to this user (chmod 700), then start again",
-        )
+        refuse_mode(&self.dir, 0o022, DIR_OTHERS_CAN_WRITE)
     }
 }
+
+/// Why a terminal directory other users can write is refused (`private_dir`, `load_key`).
+const DIR_OTHERS_CAN_WRITE: &str =
+    "can be written by other users, who could replace this terminal's node pin or key. Make it \
+     private to this user (chmod 700), then start again";
 
 /// Refuse `path` if its mode has any bit of `mask` set (group/other access), saying `problem`.
 /// Refused, not repaired: someone widened it, and only a person can judge what that exposed.
@@ -176,6 +187,21 @@ mod tests {
         }
         let again = files.load_or_create_key().unwrap();
         assert_eq!(made.to_bytes(), again.to_bytes());
+    }
+
+    /// A reader that only reports (the window's launch refusal text) must never mint a key: a
+    /// missing key is an error and leaves the directory as it was; an existing one loads back.
+    #[test]
+    fn loading_without_creating_never_makes_a_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = TerminalFiles::at(dir.path());
+        assert!(files.load_key().is_err());
+        assert!(!dir.path().join("terminal.key").exists());
+        let made = files.load_or_create_key().unwrap();
+        assert_eq!(files.load_key().unwrap().to_bytes(), made.to_bytes());
+        let absent = TerminalFiles::at(&dir.path().join("never-made"));
+        assert!(absent.load_key().is_err());
+        assert!(!dir.path().join("never-made").exists());
     }
 
     #[cfg(unix)]

@@ -120,13 +120,9 @@ impl PinnedTls {
         match rustls_error_in(e).and_then(link_refusal) {
             // A revoked terminal is refused with the same alert as a new one, so the text
             // gives both remedies; the operator knows which this terminal is.
-            Some(LinkRefusal::NotAdmitted) => ConnectFailed::refused_by_link(format!(
-                "this terminal is not admitted by the node (it may be new, or it may have been \
-                 revoked). Ask the node's operator: a new terminal is admitted with cairn-node \
-                 admit-terminal {} --label \"<where this terminal is>\"; a revoked terminal needs \
-                 a new terminal key.",
-                self.terminal_fingerprint
-            )),
+            Some(LinkRefusal::NotAdmitted) => {
+                ConnectFailed::refused_by_link(not_admitted_text(&self.terminal_fingerprint))
+            }
             Some(LinkRefusal::PinMismatch) => ConnectFailed::refused_by_link(
                 "the node presented a different key than this terminal pinned (or could not prove \
                  it holds the pinned one), so nothing was sent to it. If the node's key really \
@@ -142,6 +138,19 @@ impl PinnedTls {
             None => ConnectFailed::from(e),
         }
     }
+}
+
+/// What the link says when the gateway did not admit the terminal with `terminal_fingerprint`.
+/// A revoked terminal is refused with the same alert as a new one, so it gives both remedies.
+/// Public so the window's launch can test its recognition of this refusal against the real
+/// words, not a copy. Pure.
+pub fn not_admitted_text(terminal_fingerprint: &str) -> String {
+    format!(
+        "this terminal is not admitted by the node (it may be new, or it may have been revoked). \
+         Ask the node's operator: a new terminal is admitted with cairn-node admit-terminal \
+         {terminal_fingerprint} --label \"<where this terminal is>\"; a revoked terminal needs a \
+         new terminal key."
+    )
 }
 
 impl MakeTlsConnect<Socket> for PinnedTls {

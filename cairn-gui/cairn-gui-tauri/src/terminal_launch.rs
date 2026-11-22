@@ -27,15 +27,31 @@ pub async fn first_connect(
         return Err(err);
     };
     let refusal = err.downcast_ref::<ConnectFailed>();
-    // shortcut: told apart from the link's other refusals (another key, not a gateway) by its
-    // own words, as `terminal_link::connector` writes them; a typed marker on `ConnectFailed`
-    // is the upgrade if a second reader needs it.
-    if !refusal.is_some_and(|f| f.refused_by_client() && f.to_string().contains("not admitted")) {
+    if !refusal.is_some_and(|f| f.refused_by_client() && says_not_admitted(&f.to_string())) {
         return Err(err);
     }
-    let key = TerminalFiles::at(dir).load_or_create_key()?;
-    let kid = hex::encode(key.verifying_key().to_bytes());
-    anyhow::bail!(launch_refusal(&format!("{err:#}"), &kid)?)
+    // The extra line is a courtesy on top of the refusal: if this terminal's key cannot be read
+    // back (never MADE here: `load_key`), the refusal itself is what the launch reports.
+    let with_command = TerminalFiles::at(dir).load_key().and_then(|key| {
+        launch_refusal(
+            &format!("{err:#}"),
+            &hex::encode(key.verifying_key().to_bytes()),
+        )
+    });
+    match with_command {
+        Ok(text) => Err(anyhow::anyhow!(text)),
+        Err(_) => Err(err),
+    }
+}
+
+/// Is `text` the link's not-admitted refusal (`terminal_link::connector::not_admitted_text`)
+/// rather than one of its other refusals (another key, not a gateway) or a login's? Pure.
+///
+/// shortcut: told apart by the link's own words, pinned against the real sentence by
+/// `the_not_admitted_refusal_is_recognised_by_the_links_own_words`; a typed marker on
+/// `ConnectFailed` is the upgrade if a second reader needs it.
+fn says_not_admitted(text: &str) -> bool {
+    text.contains("is not admitted by the node")
 }
 
 /// The not-admitted launch's text: the link's refusal, then the one command the node's operator
@@ -67,5 +83,22 @@ mod tests {
             )
         );
         assert!(launch_refusal("x", "not a key").is_err());
+    }
+
+    /// The launch tells the not-admitted refusal apart by its words, so it is tested against the
+    /// REAL sentence the link writes (`cairn_node`'s own), not a copy: a reword there that this
+    /// predicate no longer recognises fails here instead of silently dropping the admit line.
+    #[test]
+    fn the_not_admitted_refusal_is_recognised_by_the_links_own_words() {
+        let (_sk, kid) = cairn_event::generate_key().unwrap();
+        let fp = cairn_event::short_fingerprint(&kid).unwrap();
+        let real = cairn_node::terminal_link::connector::not_admitted_text(&fp);
+        assert!(says_not_admitted(&real), "{real}");
+        for other in [
+            "connecting to the database: password authentication failed [28P01]",
+            "connecting to the database: invalid configuration: password missing",
+        ] {
+            assert!(!says_not_admitted(other), "{other}");
+        }
     }
 }
