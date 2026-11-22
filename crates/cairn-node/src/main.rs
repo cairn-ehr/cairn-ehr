@@ -1727,6 +1727,15 @@ enum Cmd {
         #[arg(long, default_value = "cairn_terminal_service_login")]
         role: String,
     },
+    /// Check that this node's Postgres access rules make the terminal gateway's route safe
+    /// (SCRAM end to end, no peer/ident/trust shortcut), record the route, and print the node's
+    /// fingerprint for the terminal ceremony (#909). Run as the OWNER (a superuser: it reads
+    /// pg_hba_file_rules). Never changes or reloads Postgres.
+    GatewaySetup {
+        /// `127.0.0.1:5432`, `[::1]:5432`, or `/path/.s.PGSQL.5432`.
+        #[arg(long)]
+        upstream: String,
+    },
     /// Run the node-side service that registers patients for, and commits overdue note drafts
     /// of, the reference window (#909). Unattended: needs `CAIRN_KEY_PASSPHRASE` for a sealed
     /// key, never prompts. Connect as the login `provision-terminal-service-role` made.
@@ -3051,6 +3060,13 @@ async fn run() -> anyhow::Result<()> {
         Cmd::ProvisionTerminalServiceRole { role } => {
             use cairn_node::window_access as wa;
             provision_login_verb(&cli.conn, &role, wa::LoginGroup::TerminalService).await?
+        }
+        Cmd::GatewaySetup { upstream } => {
+            use cairn_node::terminal_service::gateway::upstream as gw;
+            let up = gw::parse(&upstream).map_err(|e| anyhow::anyhow!(e))?;
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!("{}", gw::gateway_setup(&db, &up).await?);
         }
         Cmd::TerminalService => {
             // Refuse a remote database BEFORE any connection; then the key (never prompt: an
