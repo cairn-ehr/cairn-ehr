@@ -58,8 +58,7 @@ impl TerminalTrust {
 
     /// The closure the gateway's TLS server config pins client keys with: `true` for an active
     /// key. Every key is queued (if there is room) for its `last_seen`; any other key is also
-    /// counted, then refused. A poisoned
-    /// lock fails closed, as `sync::trust_store_from_set` does.
+    /// counted, then refused. A poisoned lock fails closed, as `sync::trust_store_from_set` does.
     pub fn store(&self) -> TrustStore {
         let me = self.clone();
         Arc::new(move |key: &str| {

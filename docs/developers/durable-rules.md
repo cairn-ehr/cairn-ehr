@@ -48,10 +48,14 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   read (`SET ROLE` to a grantless role, 42501) and pins that the set it loaded last still admits.
 - **No session outlives the gateway run that sweeps it.** Only a run's own tick sweeps its `Sessions`; the run holds
   `sessions::CloseOnDrop`, so however it ends (a panic, which `run::supervise` restarts) every session it piped is
-  aborted, and one admitted afterwards under it is aborted as it opens. **Tempting wrong fix:** drop the guard
-  "because a restart is rare and ending healthy sessions is rude": an orphaned session is swept by nobody, so a
-  revoke never ends it. Pins: `terminal_gateway_e2e.rs::a_session_ends_when_its_gateway_run_ends` (red without the
-  guard), `sessions::tests::a_closed_table_aborts_its_sessions_and_every_later_one`.
+  aborted AND its running statement cancelled (best-effort, on a spawned task: `Drop` never blocks), and one
+  admitted afterwards under it is aborted as it opens. Each session's closing cause is recorded by whoever aborted
+  it, at that moment. **Tempting wrong fixes:** drop the guard "because a restart is rare and ending healthy
+  sessions is rude" (an orphaned session is swept by nobody, so a revoke never ends it), or drop the cancel "because
+  a run's end revokes nobody" (a running statement keeps its backend and its locks until it next writes, and no
+  later revoke knows it). Pins: `terminal_gateway_e2e.rs::a_session_ends_when_its_gateway_run_ends` (red without the
+  guard), `a_running_statement_ends_when_its_gateway_run_ends` (red without the cancel),
+  `sessions::tests::a_closed_table_aborts_its_sessions_and_every_later_one`.
 - **The handshake queues an active key too, and counts only refusals.** The tick records it through
   `cairn_terminal_attempt`, which only touches a known row's `last_seen`, so `list-terminals`' "last seen" is an
   admitted terminal's last connect. **Tempting wrong fix:** queue only refused keys "to keep the queue for

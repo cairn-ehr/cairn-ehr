@@ -134,10 +134,13 @@ machine.
 
    **No session outlives the run that sweeps it.** Only a run's own tick sweeps its sessions, and a run can end (a
    panic, which the supervisor restarts) while its sessions still pipe. So however a run ends, every session it piped
-   is aborted, and a startup admitted afterwards by a connection still walking the steps under it is aborted as it
-   opens (`sessions::CloseOnDrop`). A restart therefore ends every open remote session, which the window's reopen
-   brings back through the new run, and a revoke reaches every session there is. Pinned:
-   `terminal_gateway_e2e.rs::a_session_ends_when_its_gateway_run_ends`.
+   is aborted and, as for a revoke, its running statement is sent a `CancelRequest`; a startup admitted afterwards by
+   a connection still walking the steps under it is aborted as it opens, before its backend runs anything
+   (`sessions::CloseOnDrop`). A restart therefore ends every open remote session, which the window's reopen brings
+   back through the new run, and a revoke reaches every session there is. The cancel is best-effort: one that cannot
+   be delivered (the route to Postgres is down too) is logged, and that statement runs until it next writes, as a
+   vanished terminal's does. Pinned: `terminal_gateway_e2e.rs::a_session_ends_when_its_gateway_run_ends` and
+   `a_running_statement_ends_when_its_gateway_run_ends` (red without the cancel).
 
 6. **`gateway-setup` checks the route once and records it** (design D2 step 4, D4 step 1).
    `cairn-node gateway-setup --upstream <route>` runs with the owner's connection, who must be a database superuser

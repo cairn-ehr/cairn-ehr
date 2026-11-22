@@ -16,19 +16,36 @@
 //! WHEN A RUN ENDS (final review I1). Only the run whose tick owns this table sweeps it. A run
 //! that ends (a panic, which `run::supervise` restarts) would leave its sessions piping with no
 //! sweep at all, so a later revoke could never end them. So the run holds a [`CloseOnDrop`]:
-//! dropping the run aborts every session in the table, and a session admitted after that (a
-//! connection task still walking the steps under the old run) is aborted the moment it opens.
+//! dropping the run aborts every session in the table and sends each one's cancel, as a revoke
+//! does (a statement left running would hold its locks until it next wrote, beyond any later
+//! revoke: final review R1). A session admitted after that (a connection task still walking the
+//! steps under the old run) is aborted the moment it opens, before its backend ran anything.
+//!
+//! WHY EACH SESSION ENDED is recorded by whoever aborts it, at that moment ([`REVOKED`] or
+//! [`RUN_ENDED`]), so the closing log line says the cause that really ended it (R2).
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::task::AbortHandle;
+
+use super::pipe::send_cancel;
+use super::upstream::Upstream;
+
+/// The closing line's cause for a session the sweep ended because its key is no longer active.
+pub const REVOKED: &str = "ended: the terminal is no longer admitted";
+/// The closing line's cause for a session its gateway run's end ended.
+pub const RUN_ENDED: &str = "ended: the gateway's run ended (it is restarted)";
+
+/// Why a session was aborted, set once by whoever aborted it.
+pub type EndedBy = Arc<OnceLock<&'static str>>;
 
 /// One open session: whose it is, how to stop it, and how to cancel its backend's statement.
 struct Entry {
     key: String,
     abort: AbortHandle,
     cancel: Option<Vec<u8>>,
+    why: EndedBy,
 }
 
 type Table = Arc<Mutex<HashMap<u64, Entry>>>;
@@ -43,12 +60,41 @@ pub struct Sessions {
     closed: Arc<AtomicBool>,
 }
 
-/// Closes its [`Sessions`] when dropped: what the gateway's run holds for its whole life.
-pub struct CloseOnDrop(pub Sessions);
+/// Closes its [`Sessions`] when dropped, then sends their cancels to `upstream`: what the
+/// gateway's run holds for its whole life.
+pub struct CloseOnDrop {
+    pub sessions: Sessions,
+    pub upstream: Upstream,
+}
 
 impl Drop for CloseOnDrop {
+    /// Never blocks and never panics (it may run during a panic's unwind): the cancels go on a
+    /// spawned task, best-effort, and with no runtime left there is no backend to save.
     fn drop(&mut self) {
-        self.0.close();
+        let cancels = self.sessions.close();
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if cancels.is_empty() {
+            return;
+        }
+        let upstream = self.upstream.clone();
+        rt.spawn(async move {
+            let mut failed = 0;
+            let mut last = None;
+            for c in cancels {
+                if let Err(e) = send_cancel(&upstream, &c).await {
+                    failed += 1;
+                    last = Some(e);
+                }
+            }
+            if let Some(e) = last {
+                eprintln!(
+                    "terminal gateway: {failed} statements of a run that ended could not be \
+                     cancelled (the last: {e})"
+                );
+            }
+        });
     }
 }
 
@@ -56,6 +102,7 @@ impl Drop for CloseOnDrop {
 pub struct SessionGuard {
     table: Table,
     id: u64,
+    why: EndedBy,
 }
 
 impl Sessions {
@@ -63,20 +110,24 @@ impl Sessions {
     /// table (its run has ended) the task is aborted at once instead.
     pub fn open(&self, key: &str, handle: AbortHandle) -> SessionGuard {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let why = EndedBy::default();
         let mut table = lock(&self.table);
         if self.closed.load(Ordering::SeqCst) {
+            let _ = why.set(RUN_ENDED);
             handle.abort();
         } else {
             let entry = Entry {
                 key: key.to_string(),
                 abort: handle,
                 cancel: None,
+                why: why.clone(),
             };
             table.insert(id, entry);
         }
         SessionGuard {
             table: self.table.clone(),
             id,
+            why,
         }
     }
 
@@ -91,31 +142,37 @@ impl Sessions {
             .collect();
         gone.iter()
             .filter_map(|id| table.remove(id))
-            .filter_map(|e| {
-                e.abort.abort();
-                e.cancel
-            })
+            .filter_map(|e| end(e, REVOKED))
             .collect()
     }
 
-    /// Whether [`Sessions::close`] has run (for the session's closing log line).
-    pub fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
-    }
-
     /// Abort every session and refuse all later ones: the run that sweeps this table is over.
-    /// Their cancel requests are not sent: a run's end revokes nobody, and an aborted session's
-    /// idle backend exits at once (a busy one when it next writes, as for a vanished terminal).
-    pub fn close(&self) {
+    /// Returns their cancel requests, which [`CloseOnDrop`] sends: a statement left running
+    /// would keep its backend and its locks until it next wrote.
+    pub fn close(&self) -> Vec<Vec<u8>> {
         let mut table = lock(&self.table);
         self.closed.store(true, Ordering::SeqCst);
-        for (_, e) in table.drain() {
-            e.abort.abort();
-        }
+        table
+            .drain()
+            .filter_map(|(_, e)| end(e, RUN_ENDED))
+            .collect()
     }
 }
 
+/// Record why `e` ended (unless already recorded), abort it, and hand back its cancel request.
+fn end(e: Entry, why: &'static str) -> Option<Vec<u8>> {
+    let _ = e.why.set(why);
+    e.abort.abort();
+    e.cancel
+}
+
 impl SessionGuard {
+    /// Where the session's cause of ending will be recorded: the piping task reads it once the
+    /// pipe is aborted. Take it before handing the guard to the pipe.
+    pub fn ended_by(&self) -> EndedBy {
+        self.why.clone()
+    }
+
     /// Remember the `CancelRequest` bytes for this session's backend (once its key is seen).
     pub fn set_cancel(&self, cancel: Vec<u8>) {
         if let Some(e) = lock(&self.table).get_mut(&self.id) {
@@ -163,23 +220,37 @@ mod tests {
 
         let cancels = sessions.close_all_but(&set(&["aa"]));
         assert_eq!(cancels, vec![vec![1, 2, 3]]);
+        assert_eq!(b.ended_by().get(), Some(&REVOKED));
         assert!(gone.await.unwrap_err().is_cancelled());
         assert!(gone_quiet.await.unwrap_err().is_cancelled());
         tokio::task::yield_now().await;
         assert!(!kept.is_finished(), "an active key's session runs on");
         // Forgotten once closed: the next sweep sends nothing again.
         assert!(sessions.close_all_but(&set(&["aa"])).is_empty());
-        kept.abort();
+        // The run ends just after the revoke: the revoked session's cause stays the revoke (R2).
+        sessions.close();
+        assert_eq!(b.ended_by().get(), Some(&REVOKED));
+        assert!(
+            kept.await.unwrap_err().is_cancelled(),
+            "the run's end aborts the rest"
+        );
     }
 
     #[tokio::test]
     async fn a_closed_table_aborts_its_sessions_and_every_later_one() {
         let sessions = Sessions::default();
         let (open, late) = (forever(), forever());
-        let _a = sessions.open("aa", open.abort_handle());
-        drop(CloseOnDrop(sessions.clone()));
+        let a = sessions.open("aa", open.abort_handle());
+        a.set_cancel(vec![7]);
+        assert_eq!(
+            sessions.close(),
+            vec![vec![7]],
+            "the cancel is handed back to be sent"
+        );
         assert!(open.await.unwrap_err().is_cancelled());
-        let _b = sessions.open("aa", late.abort_handle());
+        assert_eq!(a.ended_by().get(), Some(&RUN_ENDED));
+        let b = sessions.open("aa", late.abort_handle());
+        assert_eq!(b.ended_by().get(), Some(&RUN_ENDED));
         let late = tokio::time::timeout(std::time::Duration::from_secs(1), late).await;
         assert!(late
             .expect("aborted as it opens")

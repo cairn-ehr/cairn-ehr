@@ -35,6 +35,31 @@ async fn idle_sockets(addr: &str, n: usize) -> Vec<TcpStream> {
     v
 }
 
+/// Run `pg_sleep(30)` on `c` and return once it is really running in backend `pid`.
+async fn start_sleep(
+    r: &gateway_rig::Rig,
+    c: Client,
+    pid: i32,
+) -> tokio::task::JoinHandle<Result<tokio_postgres::Row, tokio_postgres::Error>> {
+    let sleeping = tokio::spawn(async move { c.query_one("SELECT pg_sleep(30)", &[]).await });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while r
+        .owner
+        .query_opt(
+            "SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND state = 'active' \
+               AND query LIKE '%pg_sleep(30)%'",
+            &[&pid],
+        )
+        .await
+        .unwrap()
+        .is_none()
+    {
+        assert!(Instant::now() < deadline, "the sleep never started");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    sleeping
+}
+
 /// Read until the peer closes; `Ok(n)` is how many bytes came first.
 async fn read_to_close(s: &mut TcpStream) -> std::io::Result<usize> {
     let mut all = Vec::new();
@@ -97,23 +122,7 @@ async fn a_revoke_ends_the_open_session_within_2_s() {
     let (t, kid) = r.admitted_terminal().await;
     let c = r.window(&t).await;
     let pid = pid_of(&c).await;
-    let sleeping = tokio::spawn(async move { c.query_one("SELECT pg_sleep(30)", &[]).await });
-    // Until the statement is really running in its backend.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while r
-        .owner
-        .query_opt(
-            "SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND state = 'active' \
-               AND query LIKE '%pg_sleep(30)%'",
-            &[&pid],
-        )
-        .await
-        .unwrap()
-        .is_none()
-    {
-        assert!(Instant::now() < deadline, "the sleep never started");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let sleeping = start_sleep(&r, c, pid).await;
     r.revoke(&kid).await;
     let revoked = Instant::now();
     let ended = tokio::time::timeout(Duration::from_secs(2), sleeping)
@@ -149,6 +158,27 @@ async fn a_session_ends_when_its_gateway_run_ends() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(c.query_one("SELECT 1", &[]).await.is_err());
+    r.finish().await;
+}
+
+/// A statement running when the run ends is cancelled too, or its backend (and its locks) would
+/// outlive the session until it next writes, beyond any later revoke (final review R1).
+#[tokio::test]
+async fn a_running_statement_ends_when_its_gateway_run_ends() {
+    let Some(r) = rig().await else { return };
+    let (t, _) = r.admitted_terminal().await;
+    let c = r.window(&t).await;
+    let pid = pid_of(&c).await;
+    let _sleeping = start_sleep(&r, c, pid).await;
+    r.end_run();
+    let ended = Instant::now();
+    while r.backend_alive(pid).await {
+        assert!(
+            ended.elapsed() < Duration::from_secs(5),
+            "the backend still runs its statement 5 s after its gateway run ended (no cancel?)"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     r.finish().await;
 }
 

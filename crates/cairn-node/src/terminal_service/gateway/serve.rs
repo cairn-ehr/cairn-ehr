@@ -120,7 +120,8 @@ pub async fn run_gateway_on(
         .map(|r| r.get(0));
     let Some(route) = route else {
         anyhow::bail!(
-            "no gateway route is recorded: run cairn-node gateway-setup --upstream <route> as the owner"
+            "no gateway route is recorded: run cairn-node gateway-setup --upstream <route> as \
+             the owner"
         );
     };
     let up = upstream::parse(&route).map_err(anyhow::Error::msg)?;
@@ -145,7 +146,10 @@ pub async fn run_gateway_on(
     eprintln!("terminal gateway listening on {}", listener.local_addr()?);
     // However this run ends (a panic included), its sessions end with it: no later run's sweep
     // sees them, so left open a revoke could never end them (`sessions.rs`, final review I1).
-    let _close = CloseOnDrop(gw.sessions.clone());
+    let _close = CloseOnDrop {
+        sessions: gw.sessions.clone(),
+        upstream: gw.upstream.clone(),
+    };
     // One future: dropping it (the job loop's supervisor, a test) stops the tick as well.
     tokio::select! {
         () = accept_loop(listener, gw.clone()) => {}
@@ -303,14 +307,14 @@ async fn session(gw: &Gateway, a: Admitted, peer: SocketAddr) {
             Err(_) => Ok(()),
         }
     });
-    let _ = tx.send(gw.sessions.open(&key, task.abort_handle()));
+    let guard = gw.sessions.open(&key, task.abort_handle());
+    let ended_by = guard.ended_by();
+    let _ = tx.send(guard);
     let cause = match task.await {
         Ok(Ok(())) => "closed".to_string(),
         Ok(Err(e)) => format!("ended: {e}"),
-        Err(j) if j.is_cancelled() && gw.sessions.is_closed() => {
-            "ended: the gateway's run ended (it is restarted)".to_string()
-        }
-        Err(j) if j.is_cancelled() => "ended: the terminal is no longer admitted".to_string(),
+        // The cause recorded by whoever aborted it, at that moment (a revoke or the run's end).
+        Err(j) if j.is_cancelled() => ended_by.get().copied().unwrap_or("ended").to_string(),
         Err(_) => "ended: the pipe failed".to_string(),
     };
     eprintln!("terminal session closed: peer {peer}, terminal {fp}, login {user}: {cause}");
