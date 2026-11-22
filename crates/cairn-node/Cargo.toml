@@ -53,6 +53,9 @@ anyhow = "1"
 # handshake-signature checks to it.
 rustls = "0.23"
 tokio-rustls = "0.26"
+# LAN-side TCP keepalive + TCP_USER_TIMEOUT on the gateway's accepted sockets (#909 slice B); "all" exposes
+# the retry count and the user timeout. MIT OR Apache-2.0.
+socket2 = { version = "0.6", features = ["all"] }
 rcgen = { version = "0.13", default-features = false, features = ["pem", "aws_lc_rs"] }
 x509-parser = "0.16"
 

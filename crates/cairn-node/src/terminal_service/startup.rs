@@ -6,6 +6,8 @@
 //! a key that is not the node's (every event it signs would be refused by the floor, or worse,
 //! signed by the wrong identity), and a login that cannot claim requests (a window login, or the
 //! owner's role mistyped). Each refusal says what to do. The verdicts are pure; [`check`] reads.
+//! With `--gateway-listen`, [`check_gateway`] also refuses a login that cannot read the terminal
+//! trust set and a node with no recorded gateway route (#909 slice B).
 use cairn_event::SigningKey;
 use tokio_postgres::Client;
 
@@ -47,6 +49,46 @@ pub async fn can_claim(db: &Client) -> anyhow::Result<bool> {
     Ok(row.get(0))
 }
 
+/// With `--gateway-listen`: refuse a login that cannot read the terminal trust set (and the
+/// gateway record), then a node with no recorded gateway route. Each names the owner's step.
+/// **Pure.**
+pub fn gateway_verdict(can_read: bool, has_route: bool) -> Result<(), String> {
+    if !can_read {
+        return Err(
+            "This login cannot run the terminal gateway (it has no SELECT on terminal_trust and \
+             terminal_gateway). At the node, run cairn-node provision-terminal-service-role with \
+             the owner's connection, and start the terminal service as the login it makes."
+                .to_string(),
+        );
+    }
+    if !has_route {
+        return Err(
+            "No gateway route is recorded, so --gateway-listen has nowhere to forward to. As the \
+             owner, run cairn-node gateway-setup --upstream <127.0.0.1:5432 or the socket path>."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// [`gateway_verdict`] on `db`. The route is read only once the grant is known to be there.
+pub async fn check_gateway(db: &Client) -> anyhow::Result<()> {
+    let can_read: bool = db
+        .query_one(
+            "SELECT has_table_privilege('terminal_trust', 'SELECT') \
+                AND has_table_privilege('terminal_gateway', 'SELECT')",
+            &[],
+        )
+        .await?
+        .get(0);
+    let has_route = can_read
+        && db
+            .query_one("SELECT EXISTS (SELECT 1 FROM terminal_gateway)", &[])
+            .await?
+            .get::<_, bool>(0);
+    gateway_verdict(can_read, has_route).map_err(anyhow::Error::msg)
+}
+
 /// Both checks on `db`, the grant first (it needs no node identity). Returns the node's origin
 /// (its node id), which the loop stamps on every clock tick.
 pub async fn check(db: &Client, sk: &SigningKey) -> anyhow::Result<String> {
@@ -68,6 +110,21 @@ mod tests {
             e.contains("ab12") && e.contains("cd34") && e.contains("--key"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn a_gateway_needs_the_trust_grant_then_a_recorded_route() {
+        assert!(gateway_verdict(true, true).is_ok());
+        let e = gateway_verdict(false, true).unwrap_err();
+        assert!(
+            e.contains("terminal_trust") && e.contains("provision-terminal-service-role"),
+            "{e}"
+        );
+        // The grant is reported first: without it the route cannot even be read.
+        let e = gateway_verdict(false, false).unwrap_err();
+        assert!(e.contains("provision-terminal-service-role"), "{e}");
+        let e = gateway_verdict(true, false).unwrap_err();
+        assert!(e.contains("gateway-setup") && e.contains("owner"), "{e}");
     }
 
     #[test]

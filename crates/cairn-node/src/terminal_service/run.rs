@@ -19,7 +19,7 @@ const REQUEST_TICK: Duration = Duration::from_millis(250);
 /// How often overdue drafts are committed (the window's old tick, moved here).
 pub const COMMIT_TICK: Duration = Duration::from_secs(60);
 const PURGE_TICK: Duration = Duration::from_secs(3600);
-const RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
+pub(super) const RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
 /// A burst of requests is drained in one tick, but never so many that a commit tick starves.
 const MAX_SERVED_PER_TICK: usize = 50;
 
@@ -122,7 +122,10 @@ pub struct JobState {
 
 /// The line to log for this outcome, or `None` if it repeats the last one logged in `slot`.
 /// Success clears the slot, so the same failure after a recovery is said again. **Pure.**
-fn fresh_failure(slot: &mut Option<String>, outcome: Result<(), String>) -> Option<String> {
+pub(super) fn fresh_failure(
+    slot: &mut Option<String>,
+    outcome: Result<(), String>,
+) -> Option<String> {
     match outcome {
         Ok(()) => {
             *slot = None;
@@ -171,7 +174,20 @@ fn log(line: Option<String>) {
 
 /// Run the service forever on `conn`, reopening it after a loss. Never returns. The reconnect
 /// and back-off path is not covered by a test (it needs a killed backend); `run_jobs` is.
-pub async fn run(conn: &str, sk: &SigningKey, origin: &str) -> anyhow::Result<()> {
+///
+/// With `gateway` (`--gateway-listen`), the terminal gateway runs beside the jobs as its own
+/// task, restarted whenever it ends (`gateway::serve::run_gateway_forever`); it never takes the
+/// job loop down.
+pub async fn run(
+    conn: &str,
+    sk: &SigningKey,
+    origin: &str,
+    gateway: Option<std::net::SocketAddr>,
+) -> anyhow::Result<()> {
+    if let Some(listen) = gateway {
+        let forever = super::gateway::serve::run_gateway_forever(listen, sk.clone(), conn.into());
+        tokio::spawn(forever);
+    }
     let mut state = JobState::default();
     let mut client = crate::db::connect(conn).await?;
     let mut schedule = Schedule::new(Instant::now());

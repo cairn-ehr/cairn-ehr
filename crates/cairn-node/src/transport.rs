@@ -55,7 +55,7 @@ pub fn node_cert(
 
 /// Pull the 32 raw Ed25519 bytes out of a presented cert's SPKI and hex-encode
 /// them — the same string the trust set keys on (== `verifying_key` hex).
-fn peer_pubkey_hex(cert: &CertificateDer<'_>) -> Result<String, Error> {
+pub(crate) fn peer_pubkey_hex(cert: &CertificateDer<'_>) -> Result<String, Error> {
     let (_, parsed) = x509_parser::parse_x509_certificate(cert.as_ref())
         .map_err(|_| Error::InvalidCertificate(CertificateError::BadEncoding))?;
     // Pin the SPKI ALGORITHM before reading the 32 bytes (review hardening): assert the key

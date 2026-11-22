@@ -8,8 +8,13 @@
 //! (pure). The window itself is always told the same fixed message; the `Err` text of the verdict
 //! is for the gateway's log only, because a distinct reply would let a probe learn which role
 //! names exist.
+//!
+//! [`judge`] wraps the two for the gateway: a facts read that could not be made (the gateway's
+//! own database connection is down) is a TRANSIENT refusal (57P03, the window retries), never
+//! the permanent 28000, so an outage of the gateway's connection never reads as "you may not".
 use super::wire::Startup;
 use crate::conn_posture::{over_powered, read_posture_of, PostureFacts};
+use crate::terminal_service::commit::primary_message;
 use anyhow::{bail, Context};
 use tokio_postgres::Client;
 
@@ -94,6 +99,52 @@ pub fn startup_verdict(s: &Startup, node_db: &str, facts: &LoginFacts) -> Result
         return Err(why);
     }
     Ok(())
+}
+
+/// What a transient refusal tells the window (57P03 cannot_connect_now: it retries).
+pub const NOT_NOW: &str =
+    "the node's terminal gateway cannot check logins right now; try again shortly";
+
+/// Why a startup is not forwarded: what the window is told, and why (for the log only).
+pub struct Refusal {
+    pub sqlstate: &'static str,
+    pub message: &'static str,
+    pub why: String,
+}
+
+/// Marks an error as "the gateway could not ask", not "the answer is no".
+#[derive(Debug)]
+pub struct DbUnavailable;
+
+impl std::fmt::Display for DbUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the gateway's database connection is unavailable")
+    }
+}
+
+/// **Pure.** A facts read that failed in the database (or never reached it) is transient: 57P03.
+/// One that failed on its own verdict (the role does not exist) and every verdict refusal is
+/// 28000. Either way nothing is forwarded.
+pub fn judge(facts: anyhow::Result<LoginFacts>, s: &Startup, node_db: &str) -> Result<(), Refusal> {
+    let refused = |why: String| Refusal {
+        sqlstate: "28000",
+        message: REFUSED,
+        why,
+    };
+    match facts {
+        Ok(f) => startup_verdict(s, node_db, &f).map_err(|why| refused(why.to_string())),
+        Err(e)
+            if e.downcast_ref::<DbUnavailable>().is_some()
+                || e.chain().any(|c| c.is::<tokio_postgres::Error>()) =>
+        {
+            Err(Refusal {
+                sqlstate: "57P03",
+                message: NOT_NOW,
+                why: primary_message(&e),
+            })
+        }
+        Err(e) => Err(refused(primary_message(&e))),
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +251,41 @@ mod tests {
             apply(&mut f.posture);
             assert!(startup_verdict(&s, "node", &f).is_err());
         }
+    }
+
+    fn bare_startup() -> Startup {
+        Startup {
+            raw: Vec::new(),
+            params: vec![
+                ("user".into(), "w".into()),
+                ("database".into(), "node".into()),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_check_that_could_not_be_made_is_transient_and_a_no_is_28000() {
+        let down = Err(anyhow::anyhow!("closed")).context(DbUnavailable);
+        assert_eq!(
+            judge(down, &bare_startup(), "node").unwrap_err().sqlstate,
+            "57P03"
+        );
+        let unknown = Err(anyhow::anyhow!(
+            "the startup names a role that does not exist"
+        ));
+        let r = judge(unknown, &bare_startup(), "node").unwrap_err();
+        assert_eq!((r.sqlstate, r.message), ("28000", REFUSED));
+        let service = LoginFacts {
+            can_login: true,
+            window_member: true,
+            service_member: true,
+            posture: no_posture(),
+        };
+        assert_eq!(
+            judge(Ok(service), &bare_startup(), "node")
+                .unwrap_err()
+                .sqlstate,
+            "28000"
+        );
     }
 }
