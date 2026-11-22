@@ -88,9 +88,13 @@ async fn pinned(cfg: &Config, dir: &Path, typed: Option<&str>) -> anyhow::Result
     let pin = match (files.read_pin()?, typed) {
         (Some(pin), None) => pin,
         (Some(pin), Some(typed)) => {
-            let agrees = enrol::normalise_fingerprint(typed)
-                .is_some_and(|want| enrol::has_fingerprint(&pin, &want));
-            if !agrees {
+            let want = enrol::normalise_fingerprint(typed).ok_or_else(|| {
+                anyhow!(
+                    "--node-fingerprint {typed} is not a node fingerprint: 20 hex digits are \
+                     expected, as the node prints them (XXXX-XXXX-XXXX-XXXX-XXXX)."
+                )
+            })?;
+            if !enrol::has_fingerprint(&pin, &want) {
                 bail!(
                     "this terminal already pinned a node whose fingerprint is not {typed}, and a \
                      pin is never replaced by a flag. Ask the node's operator: if the node's key \

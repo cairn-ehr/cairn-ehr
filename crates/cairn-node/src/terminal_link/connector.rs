@@ -44,8 +44,12 @@ pub struct PinnedTls {
 enum LinkRefusal {
     /// The gateway's TLS server rejected this terminal's key (it is not `active` there).
     NotAdmitted,
-    /// The server did not prove it holds the pinned key.
+    /// The server presented an Ed25519 key other than the pinned one, or did not prove it holds
+    /// the pinned one.
     PinMismatch,
+    /// The server's certificate is not an Ed25519 key at all: this is some other TLS service
+    /// (Postgres's own TLS port, for one), not a Cairn node's gateway.
+    NotAGateway,
 }
 
 /// Classify a rustls error seen by the terminal. Pure.
@@ -55,13 +59,18 @@ enum LinkRefusal {
 ///   the `access_denied` alert. With TLS 1.3 the client's handshake has already finished when
 ///   the server judges its certificate, so the alert arrives at the client's FIRST READ (inside
 ///   tokio-postgres's startup), not in `connect`.
-/// * `InvalidCertificate(_)`: only this terminal's own pinned verifier judges certificates, so
-///   this is the server presenting another key (or a non-Ed25519 cert), or failing to sign with
-///   the pinned one. Either way it is not the node this terminal pinned.
+/// * `InvalidCertificate(BadEncoding)`: the pinned verifier's answer to a certificate that is not
+///   an Ed25519 key (`transport::peer_pubkey_hex`), so the address is some other TLS service.
+/// * Any other `InvalidCertificate(_)`: only this terminal's own pinned verifier judges
+///   certificates, so this is the server presenting another key, or failing to sign with the
+///   pinned one. Either way it is not the node this terminal pinned.
 fn link_refusal(e: &rustls::Error) -> Option<LinkRefusal> {
     match e {
         rustls::Error::AlertReceived(AlertDescription::AccessDenied) => {
             Some(LinkRefusal::NotAdmitted)
+        }
+        rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding) => {
+            Some(LinkRefusal::NotAGateway)
         }
         rustls::Error::InvalidCertificate(_) => Some(LinkRefusal::PinMismatch),
         _ => None,
@@ -73,7 +82,9 @@ fn link_refusal(e: &rustls::Error) -> Option<LinkRefusal> {
 /// tokio-rustls hands rustls errors back as `io::Error`s wrapping them, and tokio-postgres wraps
 /// those again (as a TLS error from the handshake, or an I/O error from a later read). An
 /// `io::Error`'s `source()` SKIPS its wrapped error, so each level is unwrapped with `get_ref`.
-fn rustls_error_in<'e>(e: &'e (dyn std::error::Error + 'static)) -> Option<&'e rustls::Error> {
+pub(crate) fn rustls_error_in<'e>(
+    e: &'e (dyn std::error::Error + 'static),
+) -> Option<&'e rustls::Error> {
     let mut level = Some(e);
     while let Some(err) = level {
         if let Some(r) = err.downcast_ref::<rustls::Error>() {
@@ -107,9 +118,13 @@ impl PinnedTls {
     /// exactly what the local link would have said.
     fn refusal(&self, e: &tokio_postgres::Error) -> ConnectFailed {
         match rustls_error_in(e).and_then(link_refusal) {
+            // A revoked terminal is refused with the same alert as a new one, so the text
+            // gives both remedies; the operator knows which this terminal is.
             Some(LinkRefusal::NotAdmitted) => ConnectFailed::refused_by_link(format!(
-                "this terminal is not admitted by the node: at the node, run cairn-node \
-                 admit-terminal {} --label \"<where this terminal is>\", then start again.",
+                "this terminal is not admitted by the node (it may be new, or it may have been \
+                 revoked). Ask the node's operator: a new terminal is admitted with cairn-node \
+                 admit-terminal {} --label \"<where this terminal is>\"; a revoked terminal needs \
+                 a new terminal key.",
                 self.terminal_fingerprint
             )),
             Some(LinkRefusal::PinMismatch) => ConnectFailed::refused_by_link(
@@ -117,6 +132,11 @@ impl PinnedTls {
                  it holds the pinned one), so nothing was sent to it. If the node's key really \
                  changed, ask the node's operator before deleting this terminal's node.pin to pin \
                  it again."
+                    .to_string(),
+            ),
+            Some(LinkRefusal::NotAGateway) => ConnectFailed::refused_by_link(
+                "the server at this address is not a Cairn node's terminal gateway (check the \
+                 port): it answered TLS with a certificate that is not a node key."
                     .to_string(),
             ),
             None => ConnectFailed::from(e),
@@ -252,6 +272,19 @@ mod tests {
         ] {
             assert_eq!(link_refusal(&other), None, "{other:?}");
         }
+    }
+
+    /// A certificate that is not an Ed25519 key (Postgres's own TLS port, say) is not the node
+    /// changing its key: the string names the wrong service, and the text must say so.
+    #[test]
+    fn a_non_ed25519_certificate_is_not_a_gateway() {
+        use rustls::CertificateError;
+        assert_eq!(
+            link_refusal(&rustls::Error::InvalidCertificate(
+                CertificateError::BadEncoding
+            )),
+            Some(LinkRefusal::NotAGateway)
+        );
     }
 
     #[test]

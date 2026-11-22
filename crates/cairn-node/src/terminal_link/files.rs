@@ -25,7 +25,8 @@ fn is_full_key_hex(s: &str) -> bool {
 }
 
 impl TerminalFiles {
-    /// The files in `dir` (created on first write if missing).
+    /// The files in `dir`. Nothing is touched until a method is called; each makes `dir` (0700)
+    /// if it is missing.
     pub fn at(dir: &Path) -> Self {
         Self {
             dir: dir.to_path_buf(),
@@ -46,16 +47,19 @@ impl TerminalFiles {
     /// anyone who read it can present this terminal at the gateway. The operator decides whether
     /// to revoke the terminal; silently tightening the mode would hide the exposure.
     pub fn load_or_create_key(&self) -> anyhow::Result<SigningKey> {
+        self.private_dir()?;
         let path = self.key_path();
         if !path.exists() {
-            std::fs::create_dir_all(&self.dir).with_context(|| {
-                format!("creating the terminal directory {}", self.dir.display())
-            })?;
             let (sk, _kid) = crate::keystore::generate_plaintext(&path)
                 .with_context(|| format!("creating the terminal key {}", path.display()))?;
             return Ok(sk);
         }
-        refuse_a_shared_key_file(&path)?;
+        refuse_mode(
+            &path,
+            0o077,
+            "can be read by other users; anyone who read it can present this terminal. Ask the \
+             node's operator to revoke this terminal, then delete the file so a new key is made",
+        )?;
         crate::keystore::load(&path, None)
             .with_context(|| format!("loading the terminal key {}", path.display()))
     }
@@ -64,12 +68,19 @@ impl TerminalFiles {
     /// A pin file that is not 64 hex digits is an error (never "no pin"): treating it as absent
     /// would let the next launch re-pin from a typed fingerprint without anyone noticing.
     pub fn read_pin(&self) -> anyhow::Result<Option<String>> {
+        self.private_dir()?;
         let path = self.pin_path();
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
+        refuse_mode(
+            &path,
+            0o022,
+            "can be written by other users, who could put their own node's key in it. Ask the \
+             node's operator before deleting it to pin the node again",
+        )?;
         let pin = text.trim();
         if !is_full_key_hex(pin) {
             bail!(
@@ -86,8 +97,7 @@ impl TerminalFiles {
         if !is_full_key_hex(hex) {
             bail!("a node pin must be a full key (64 hex digits)");
         }
-        std::fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating the terminal directory {}", self.dir.display()))?;
+        self.private_dir()?;
         let path = self.pin_path();
         let line = format!("{}\n", hex.to_ascii_lowercase());
         crate::fsio::atomic_write(&path, line.as_bytes(), Some(0o600))
@@ -95,20 +105,40 @@ impl TerminalFiles {
     }
 }
 
-/// Refuse a key file whose mode lets group or others read or write it. Unix only: elsewhere
-/// POSIX modes do not apply.
+impl TerminalFiles {
+    /// Make the terminal directory if it is missing (mode 0700), and refuse one other users can
+    /// write: they could replace `node.pin` with their own node's key, or `terminal.key` with
+    /// theirs. Called before every read and write, so no file is trusted from such a directory.
+    fn private_dir(&self) -> anyhow::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&self.dir)
+            .with_context(|| format!("creating the terminal directory {}", self.dir.display()))?;
+        refuse_mode(
+            &self.dir,
+            0o022,
+            "can be written by other users, who could replace this terminal's node pin or key. \
+             Make it private to this user (chmod 700), then start again",
+        )
+    }
+}
+
+/// Refuse `path` if its mode has any bit of `mask` set (group/other access), saying `problem`.
+/// Refused, not repaired: someone widened it, and only a person can judge what that exposed.
+/// Unix only: elsewhere POSIX modes do not apply.
 #[cfg(unix)]
-fn refuse_a_shared_key_file(path: &Path) -> anyhow::Result<()> {
+fn refuse_mode(path: &Path, mask: u32, problem: &str) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(path)
         .with_context(|| format!("reading {}", path.display()))?
         .permissions()
         .mode();
-    if mode & 0o077 != 0 {
+    if mode & mask != 0 {
         bail!(
-            "the terminal key {} can be read by other users (mode {:o}); anyone who read it can \
-             present this terminal. Ask the node's operator to revoke this terminal, then delete \
-             the file so a new key is made.",
+            "{} {problem} (its mode is {:o}).",
             path.display(),
             mode & 0o777
         );
@@ -117,7 +147,7 @@ fn refuse_a_shared_key_file(path: &Path) -> anyhow::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn refuse_a_shared_key_file(_path: &Path) -> anyhow::Result<()> {
+fn refuse_mode(_path: &Path, _mask: u32, _problem: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -178,5 +208,35 @@ mod tests {
         std::fs::write(dir.path().join("node.pin"), "ABCD-1234\n").unwrap();
         assert!(files.read_pin().is_err());
         assert!(files.write_pin("not hex").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_terminal_directory_others_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let files = TerminalFiles::at(dir.path());
+        files.write_pin(&pin_of(3)).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        for err in [
+            files.read_pin().unwrap_err().to_string(),
+            files.load_or_create_key().unwrap_err().to_string(),
+            files.write_pin(&pin_of(4)).unwrap_err().to_string(),
+        ] {
+            assert!(err.contains("other users"), "{err}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pin_file_others_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let files = TerminalFiles::at(dir.path());
+        files.write_pin(&pin_of(5)).unwrap();
+        let pin = dir.path().join("node.pin");
+        std::fs::set_permissions(&pin, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let err = files.read_pin().unwrap_err().to_string();
+        assert!(err.contains("other users"), "{err}");
     }
 }

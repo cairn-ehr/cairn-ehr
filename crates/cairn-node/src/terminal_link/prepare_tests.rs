@@ -1,6 +1,7 @@
 //! [`super::prepare`]: which link a connection string gets, and every refusal before any network.
-//! None of these cases reaches the network: the only one that would (no pin, a fingerprint
-//! typed) is driven against an in-test gateway in `tests/terminal_link.rs`.
+//! Only the first-launch arm (no pin, a fingerprint typed) dials; it is driven here through
+//! [`super::pinned`] with a loopback string and an in-test gateway, because `prepare` itself would
+//! read a loopback string as local.
 
 use super::*;
 use files::TerminalFiles;
@@ -153,4 +154,63 @@ fn the_link_futures_are_send() {
     let (_, node_kid) = cairn_event::generate_key().unwrap();
     let pinned = Link::Pinned(PinnedTls::new(&terminal, &node_kid).unwrap());
     is_send(pinned.connect_with_task(""));
+}
+
+#[tokio::test]
+async fn a_malformed_fingerprint_beside_a_pin_is_called_malformed() {
+    let (dir, _fp) = pinned_dir();
+    let e = refusal(&remote(), Some(dir.path()), Some("ABCD-1234")).await;
+    assert!(e.contains("20 hex digits"), "{e}");
+    assert!(!e.contains("already pinned"), "{e}");
+}
+
+/// A one-connection gateway on loopback with the node's real TLS config, refusing every
+/// terminal (none is admitted yet). Returns `host=… port=…` for it.
+async fn loopback_gateway(node: &cairn_event::SigningKey) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let trust: crate::transport::TrustStore = std::sync::Arc::new(|_: &str| false);
+    let cfg = crate::transport::gateway_server_config(node, trust).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut tcp, _) = listener.accept().await.unwrap();
+        let mut first8 = [0u8; 8];
+        tcp.read_exact(&mut first8).await.unwrap();
+        tcp.write_all(b"S").await.unwrap();
+        let accepted = tokio_rustls::TlsAcceptor::from(cfg)
+            .accept(tcp)
+            .into_fallible()
+            .await;
+        if let Err((_, mut tcp)) = accepted {
+            let _ = tcp.shutdown().await;
+            let mut rest = Vec::new();
+            let drain = tcp.read_to_end(&mut rest);
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), drain).await;
+        }
+    });
+    format!("host=127.0.0.1 port={port} user=u dbname=d")
+}
+
+#[tokio::test]
+async fn the_first_launch_writes_the_pin_only_after_the_node_is_recognised() {
+    let (node, node_kid) = cairn_event::generate_key().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg: Config = loopback_gateway(&node).await.parse().unwrap();
+    let typed = cairn_event::short_fingerprint(&node_kid).unwrap();
+    let link = pinned(&cfg, dir.path(), Some(&typed)).await.unwrap();
+    assert!(matches!(link, Link::Pinned(_)));
+    let files = TerminalFiles::at(dir.path());
+    assert_eq!(files.read_pin().unwrap(), Some(node_kid));
+    assert!(dir.path().join("terminal.key").exists());
+}
+
+#[tokio::test]
+async fn a_wrong_fingerprint_at_first_launch_writes_no_pin() {
+    let (node, _) = cairn_event::generate_key().unwrap();
+    let (_, other_kid) = cairn_event::generate_key().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg: Config = loopback_gateway(&node).await.parse().unwrap();
+    let typed = cairn_event::short_fingerprint(&other_kid).unwrap();
+    assert!(pinned(&cfg, dir.path(), Some(&typed)).await.is_err());
+    assert_eq!(TerminalFiles::at(dir.path()).read_pin().unwrap(), None);
 }

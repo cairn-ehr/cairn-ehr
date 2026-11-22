@@ -25,6 +25,10 @@ use tokio::net::TcpStream;
 use super::connector::SERVER_NAME;
 use crate::transport::{terminal_client_config, TrustStore};
 
+/// How long the first-launch dial (TCP, `SSLRequest`, TLS handshake) may take in all: the
+/// gateway's own deadline before a startup, so a silent host fails the launch instead of hanging it.
+const DIAL_WITHIN: Duration = Duration::from_secs(10);
+
 /// How long the farewell read may wait for the gateway to close. The pin is already proven by
 /// then; this only bounds a gateway that never hangs up.
 const FAREWELL_WITHIN: Duration = Duration::from_secs(10);
@@ -63,6 +67,16 @@ pub async fn pin_from_fingerprint(
     typed: &str,
     terminal_sk: &SigningKey,
 ) -> anyhow::Result<String> {
+    pin_within(addr, typed, terminal_sk, DIAL_WITHIN).await
+}
+
+/// [`pin_from_fingerprint`] with the dial's deadline as a parameter, so a test can shorten it.
+async fn pin_within(
+    addr: &str,
+    typed: &str,
+    terminal_sk: &SigningKey,
+    within: Duration,
+) -> anyhow::Result<String> {
     let want = normalise_fingerprint(typed).ok_or_else(|| {
         anyhow!(
             "a node fingerprint is 20 hex digits, as the node prints it \
@@ -82,37 +96,36 @@ pub async fn pin_from_fingerprint(
     });
     let config = terminal_client_config(terminal_sk, recognise)?;
 
-    let mut tcp = TcpStream::connect(addr)
-        .await
-        .with_context(|| format!("reaching the node's gateway at {addr}"))?;
-    tcp.write_all(&ssl_request())
-        .await
-        .with_context(|| format!("asking the gateway at {addr} for TLS"))?;
-    let mut answer = [0u8; 1];
-    tcp.read_exact(&mut answer)
-        .await
-        .with_context(|| format!("asking the gateway at {addr} for TLS"))?;
-    if answer[0] != b'S' {
-        bail!("{addr} did not answer as a Cairn node's gateway (it declined TLS)");
-    }
-
-    let name = ServerName::try_from(SERVER_NAME)?;
-    let mut tls = match tokio_rustls::TlsConnector::from(config)
-        .connect(name, tcp)
-        .await
-    {
-        Ok(tls) => tls,
-        Err(e) if captured.lock().unwrap_or_else(|p| p.into_inner()).is_none() => {
-            bail!(
-                "the node at {addr} did not present a key with the fingerprint {typed} ({e}). \
-                 Check the fingerprint with the node's operator."
-            )
+    let dial = async {
+        let mut tcp = TcpStream::connect(addr)
+            .await
+            .with_context(|| format!("reaching the node's gateway at {addr}"))?;
+        tcp.write_all(&ssl_request())
+            .await
+            .with_context(|| format!("asking the gateway at {addr} for TLS"))?;
+        let mut answer = [0u8; 1];
+        tcp.read_exact(&mut answer)
+            .await
+            .with_context(|| format!("asking the gateway at {addr} for TLS"))?;
+        if answer[0] != b'S' {
+            bail!("{addr} did not answer as a Cairn node's gateway (it declined TLS)");
         }
-        Err(e) => bail!(
-            "the node at {addr} presented the fingerprint {typed} but did not prove it holds \
-             that key ({e}); nothing was pinned. Tell the node's operator."
-        ),
+        let name = ServerName::try_from(SERVER_NAME)?;
+        tokio_rustls::TlsConnector::from(config)
+            .connect(name, tcp)
+            .await
+            .map_err(|e| {
+                let captured = captured.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+                anyhow!(handshake_failure(addr, typed, captured, &e))
+            })
     };
+    let mut tls = tokio::time::timeout(within, dial).await.map_err(|_| {
+        anyhow!(
+            "the node's gateway at {addr} did not answer within {} s; nothing was pinned. Check \
+             the address and port with the node's operator.",
+            within.as_secs_f32()
+        )
+    })??;
     // The handshake completed, so the captured key is the one the node signed it with.
     let pin = captured
         .lock()
@@ -127,9 +140,80 @@ pub async fn pin_from_fingerprint(
     Ok(pin)
 }
 
+/// The sentence for a TLS handshake that failed during the first-launch dial. Pure.
+///
+/// `captured` says whether the verifier had already recognised the typed fingerprint. Only a
+/// failed signature after that is a failure to PROVE the key (a server holding the certificate
+/// but not the key); a connection lost or refused after the certificate is just an incomplete
+/// handshake, and is not called impersonation.
+fn handshake_failure(addr: &str, typed: &str, captured: bool, e: &std::io::Error) -> String {
+    let bad_signature = matches!(
+        super::connector::rustls_error_in(e),
+        Some(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::BadSignature
+        ))
+    );
+    match (captured, bad_signature) {
+        (false, _) => format!(
+            "the node at {addr} did not present a key with the fingerprint {typed} ({e}). Check \
+             the fingerprint with the node's operator."
+        ),
+        (true, true) => format!(
+            "the node at {addr} presented the fingerprint {typed} but did not prove it holds that \
+             key ({e}); nothing was pinned. Tell the node's operator."
+        ),
+        (true, false) => format!(
+            "the TLS handshake with the node at {addr} did not complete ({e}); nothing was \
+             pinned. Try again, or check the address with the node's operator."
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A host that accepts TCP and never answers must not hang the first launch.
+    #[tokio::test]
+    async fn a_silent_server_is_given_up_on_at_the_deadline() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let _hold = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            drop(tcp);
+        });
+        let (terminal, _) = cairn_event::generate_key().unwrap();
+        let (_, node_kid) = cairn_event::generate_key().unwrap();
+        let typed = short_fingerprint(&node_kid).unwrap();
+        let dial = pin_within(&addr, &typed, &terminal, Duration::from_millis(200));
+        let err = tokio::time::timeout(Duration::from_secs(5), dial)
+            .await
+            .expect("the dial gave up by its own deadline")
+            .expect_err("nothing answered, so nothing is pinned");
+        assert!(format!("{err:#}").contains("did not answer"), "{err:#}");
+    }
+
+    /// Only a failed signature is called a failure to prove the key; a handshake cut short after
+    /// the certificate arrived is said to be just that.
+    #[test]
+    fn a_failed_handshake_says_what_failed() {
+        use rustls::CertificateError;
+        let io = |e: rustls::Error| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
+        let fp = "ABCD-ABCD-ABCD-ABCD-ABCD";
+        let bad_sig = io(rustls::Error::InvalidCertificate(
+            CertificateError::BadSignature,
+        ));
+        let text = handshake_failure("n:1", fp, true, &bad_sig);
+        assert!(text.contains("did not prove"), "{text}");
+        let cut = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "early eof");
+        let text = handshake_failure("n:1", fp, true, &cut);
+        assert!(text.contains("did not complete"), "{text}");
+        assert!(text.contains("nothing was pinned"), "{text}");
+        assert!(!text.contains("did not prove"), "{text}");
+        let text = handshake_failure("n:1", fp, false, &cut);
+        assert!(text.contains("did not present a key"), "{text}");
+    }
 
     #[test]
     fn a_fingerprint_is_normalised_to_twenty_upper_case_digits() {

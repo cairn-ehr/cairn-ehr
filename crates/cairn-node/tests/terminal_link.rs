@@ -123,6 +123,7 @@ async fn pin_from_fingerprint_captures_the_key_only_after_the_handshake() {
         .await
         .expect_err("a server that cannot prove the key is never pinned");
     assert!(!format!("{err:#}").contains(&node_kid), "{err:#}");
+    assert!(format!("{err:#}").contains("did not prove"), "{err:#}");
 }
 
 #[tokio::test]
@@ -157,6 +158,11 @@ async fn a_pinned_link_maps_access_denied_to_a_refusal() {
         text.contains(&fp),
         "names this terminal's fingerprint: {text}"
     );
+    // A revoked terminal gets the same alert, so the text covers both remedies.
+    assert!(text.contains("operator"), "{text}");
+    assert!(text.contains("cairn-node admit-terminal"), "{text}");
+    assert!(text.contains("revoked"), "{text}");
+    assert!(text.contains("new terminal key"), "{text}");
     assert!(
         refused,
         "a refusal, so the reopen names the operator: {text}"
@@ -174,6 +180,37 @@ async fn a_pin_mismatch_is_a_refusal() {
     let tls = PinnedTls::new(&terminal, &other_kid).unwrap();
     let (text, refused, sqlstate) = pinned_connect_error(tls, &conn_to(&addr)).await;
     assert!(text.contains("different key"), "{text}");
+    assert!(refused, "{text}");
+    assert_eq!(sqlstate, None);
+}
+
+/// A server that answers `S` but presents a non-Ed25519 certificate (Postgres's own TLS port,
+/// for one) is named as the wrong service, not as the node having changed its key.
+#[tokio::test]
+async fn a_server_that_is_not_a_gateway_is_named_as_such() {
+    let key_pair = rcgen::KeyPair::generate().unwrap(); // ECDSA P-256 by default
+    let cert = rcgen::CertificateParams::new(vec!["cairn-node".to_string()])
+        .unwrap()
+        .self_signed(&key_pair)
+        .unwrap();
+    let key = rustls::pki_types::PrivateKeyDer::Pkcs8(key_pair.serialize_der().into());
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let cfg = rustls::ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], key)
+        .unwrap();
+    let (addr, _task) = gateway(Arc::new(cfg)).await;
+    let (terminal, _) = generate_key().unwrap();
+    let (_, node_kid) = generate_key().unwrap();
+    let tls = PinnedTls::new(&terminal, &node_kid).unwrap();
+    let (text, refused, sqlstate) = pinned_connect_error(tls, &conn_to(&addr)).await;
+    assert!(
+        text.contains("not a Cairn node's terminal gateway"),
+        "{text}"
+    );
+    assert!(text.contains("port"), "{text}");
     assert!(refused, "{text}");
     assert_eq!(sqlstate, None);
 }
