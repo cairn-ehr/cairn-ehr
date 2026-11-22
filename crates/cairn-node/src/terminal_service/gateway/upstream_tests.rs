@@ -136,3 +136,22 @@ fn a_local_peer_line_does_not_affect_a_tcp_route() {
     );
     assert!(w.is_ok());
 }
+
+/// The TCP branch is an allow-list like the socket's: a method that is neither SCRAM nor a hash
+/// (ldap, pam, radius, bsd) still makes the window's password the credential, but Postgres
+/// receives it in clear on the loopback leg, so it warns rather than passing in silence (SF6).
+#[test]
+fn any_other_tcp_method_warns_that_the_password_is_not_scram_end_to_end() {
+    let tcp = parse("127.0.0.1:5432").unwrap();
+    for m in ["ldap", "pam", "radius", "bsd"] {
+        let w = route_verdict(&[rule(7, "host", m)], &tcp).unwrap();
+        assert_eq!(w.len(), 1, "{m}: {w:?}");
+        assert!(w[0].contains("pg_hba.conf:7"), "{m}: {w:?}");
+        assert!(
+            w[0].contains(m) && w[0].contains("scram-sha-256"),
+            "{m}: {w:?}"
+        );
+    }
+    let quiet = [rule(7, "host", "scram-sha-256"), rule(8, "host", "reject")];
+    assert!(route_verdict(&quiet, &tcp).unwrap().is_empty());
+}

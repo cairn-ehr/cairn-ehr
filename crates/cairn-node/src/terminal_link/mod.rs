@@ -28,6 +28,7 @@ pub use connector::{Link, PinnedTls};
 use std::path::Path;
 
 use anyhow::{anyhow, bail};
+use cairn_event::SigningKey;
 use tokio_postgres::config::Host;
 use tokio_postgres::Config;
 
@@ -85,8 +86,8 @@ pub async fn prepare(
 /// The remote half of [`prepare`]: read or make the pin, then build the connector.
 async fn pinned(cfg: &Config, dir: &Path, typed: Option<&str>) -> anyhow::Result<Link> {
     let files = TerminalFiles::at(dir);
-    let pin = match (files.read_pin()?, typed) {
-        (Some(pin), None) => pin,
+    let (pin, key) = match (files.read_pin()?, typed) {
+        (Some(pin), None) => (pin, key_beside_pin(&files)?),
         (Some(pin), Some(typed)) => {
             let want = enrol::normalise_fingerprint(typed).ok_or_else(|| {
                 anyhow!(
@@ -102,7 +103,7 @@ async fn pinned(cfg: &Config, dir: &Path, typed: Option<&str>) -> anyhow::Result
                      with the new fingerprint."
                 );
             }
-            pin
+            (pin, key_beside_pin(&files)?)
         }
         (None, None) => bail!(
             "this terminal has not pinned the node yet: start it once with --node-fingerprint \
@@ -112,11 +113,28 @@ async fn pinned(cfg: &Config, dir: &Path, typed: Option<&str>) -> anyhow::Result
             let key = files.load_or_create_key()?;
             let pin = enrol::pin_from_fingerprint(&gateway_addr(cfg)?, typed, &key).await?;
             files.write_pin(&pin)?;
-            pin
+            (pin, key)
         }
     };
-    let key = files.load_or_create_key()?;
     Ok(Link::Pinned(PinnedTls::new(&key, &pin)?))
+}
+
+/// The key a pin was made with, never a new one. A pin is written only after its key exists
+/// (the first-launch arm above), so a pin with no key means the key was LOST (a restore that
+/// skipped it, a quarantine, a partial copy). Minting a new key here would give this terminal a
+/// second identity while the old one, possibly copied off the machine, stays admitted, and
+/// nobody would be told; the operator decides instead.
+fn key_beside_pin(files: &TerminalFiles) -> anyhow::Result<SigningKey> {
+    if !files.key_exists()? {
+        bail!(
+            "this terminal has pinned a node but its key (terminal.key) is missing, so it cannot \
+             prove it is the terminal the node admitted, and a new key is never made beside an \
+             old pin. Ask the node's operator to revoke this terminal's old fingerprint (see \
+             list-terminals); then delete node.pin in the terminal directory and start again \
+             with --node-fingerprint."
+        );
+    }
+    files.load_key()
 }
 
 /// `host:port` of the one TCP host in `cfg` (port 5432 unless named), for the first-launch dial.

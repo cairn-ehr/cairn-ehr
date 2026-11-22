@@ -6,8 +6,8 @@
 //! certificate, the node's full pinned key as the only server key accepted). SCRAM and every
 //! query then run inside that session, end to end with the node's Postgres.
 //!
-//! The one thing added on top is the wording of the two refusals the link itself produces (see
-//! `PinnedTls::refusal`): both must reach the window's reopen as REFUSALS, so it names the
+//! The one thing added on top is the wording of the three refusals the link itself produces (not
+//! admitted, another key, not a gateway: see `PinnedTls::refusal`): each must reach the window's reopen as REFUSALS, so it names the
 //! operator instead of retrying as if the node were down.
 
 use std::future::Future;

@@ -163,8 +163,10 @@ REVOKE ALL ON registration_turn FROM PUBLIC;
 INSERT INTO registration_turn DEFAULT VALUES ON CONFLICT DO NOTHING;
 
 -- Take the registration turn: lock the one row until the caller's transaction ends, so
--- registrations (the service's and the CLI's) run one at a time node-wide; the second one's
--- search then sees the first's chart. With p_if_pending, return false and lock NOTHING when no
+-- registrations (the service's and the CLI's) run one at a time node-wide. The protection is
+-- one-way: the service searches under the turn, so it sees a chart the CLI just made; the CLI
+-- searches BEFORE it takes the turn, so a CLI registration queued behind the service's is not
+-- re-searched (ADR-0110 decision 9). With p_if_pending, return false and lock NOTHING when no
 -- request cairn_registration_claim would return exists: a row lock writes WAL, and the service
 -- polls every 250 ms, so an unconditional turn would be ~4 WAL writes a second on an idle node.
 -- A request arriving just after a false waits one poll; the claim, under the lock, is the

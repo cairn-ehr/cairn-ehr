@@ -162,18 +162,23 @@
 >    done and fixed. **Time-sensitive:** RUSTSEC-2026-0543 (chrono unmaintained) is ignored in both `deny.toml` trees until
 >    2027-02-18 (**#1160**, migrate off chrono); **#389**'s glib ignore was re-decided 2026-11-20 to the same date (its exit
 >    condition moved: gtk 0.19 + webkit2gtk 3 exist on glib 0.22; no tauri uses them yet).
->    **#909 slice B (the pinned gateway) is BUILT, Tasks 1–10, on draft PR #1163** (`feat/909-slice-b-pinned-gateway`;
+>    **#909 slice B (the pinned gateway) is BUILT, Tasks 1–10, on PR #1163** (`feat/909-slice-b-pinned-gateway`;
 >    plan PR #1162; [ADR-0110](spec/decisions/0110-the-pinned-terminal-gateway.md), spec **v0.112**, `db/084`,
 >    `SCHEMA_GENERATION` **84**): a window on another machine reaches the database only through
 >    `terminal-service --gateway-listen`, TLS 1.3 pinned both ways against the node-local trust set; the owner's
 >    `gateway-setup`, `admit-terminal`, `revoke-terminal` (final; ends the terminal's sessions and cancels their
 >    statements) and `list-terminals`; the registration lock is now the `registration_turn` row lock the window cannot
 >    take. Its final whole-branch review is done, and its fixes re-reviewed clean (a gateway restart now ends every
->    session and cancels, best-effort, its running statement); **CI is the full gate: #1163 leaves draft once it is
->    green, and merging is the maintainer's call.** Filed **#1164**
+>    session and cancels, best-effort, its running statement). The finalcheck review then fixed more: a lost
+>    `terminal.key` beside a pin is refused, never re-minted; the gateway's own connection has a 1 s `lock_timeout`
+>    (one shared client serves the tick and every login's facts read); connections dropped before startup get a
+>    per-tick summary line; any non-SCRAM TCP auth method warns; four more test pins. **Merging is the maintainer's
+>    call.** Filed **#1164**
 >    (`cairn-gui-live/src/connection.rs` is 650 lines: a verbatim split) and, from the review, **#1165**–**#1170**
 >    (no per-terminal session cap · one host can hold all 128 pre-startup slots · no SCRAM test through the gateway ·
->    no cut-off-reopen test through the pinned link · rustls close_notify log noise · a typed not-admitted marker).
+>    no cut-off-reopen test through the pinned link · rustls close_notify log noise · a typed not-admitted marker),
+>    then **#1171** (key-file mode unchecked off Unix; `close_gently`'s unbounded shutdown) and **#1172** (low-rated
+>    end-to-end test pins).
 >    **⇒ NEXT after it merges: slice C's rollout brainstorm** (design §6). **Slice B must not ship to a site
 >    until slice C is settled.** RUNBOOK §38 and §39 (two machines) are owed by a human. **Otherwise:** sign-in
 >    **slice 4** (the emergency key, design §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and
@@ -363,6 +368,9 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
   revoke also cancels.
 - **⇒ A `trust` test cluster cannot reach a verb that refuses `trust`**: `gateway-setup`'s success path is RUNBOOK
   §39's, and the ADR says so rather than imply a test.
+- **⇒ A fixture that builds half a state can hide the defect it should catch (finalcheck).** `pinned_dir()` wrote a
+  pin with no key, and its test passed only because the code minted a fresh key beside an old pin: a second identity
+  while the old key stayed admitted. RUNBOOK §39 Measurement 6 leaned on the same path (`rm terminal.key`).
 
 ### 2026-11-16 — #1138, the review's nine minors
 - **⇒ A finding's "fix size" is a claim: check it against every symptom the finding names.** Item 1 proposed "wipe the

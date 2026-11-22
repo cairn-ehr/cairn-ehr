@@ -87,8 +87,10 @@ machine.
    for a permit. Each has **10 s counted from `accept`**, which covers the wait for a permit, the opening, the
    handshake, the startup and opening the route: at 10 s it is dropped. A failed `accept` (`EMFILE`, `ENFILE`) is
    counted and followed by a 100 ms pause, never returned, so it neither busy-loops nor ends the gateway. The log
-   gets one line a second for refused handshakes and one for failed accepts, naming the last error, not one line per
-   attempt. Log lines quote a login name escaped (`{:?}`), so a crafted name cannot forge a line.
+   gets one line a second for refused handshakes, one for failed accepts, and one for connections closed before a
+   startup was forwarded (shed by the slots, out of time, a failed handshake, an unreadable startup), each naming the
+   last, not one line per attempt: a flood is visible without flooding the log. Log lines quote a login name escaped
+   (`{:?}`), so a crafted name cannot forge a line.
 
 4. **The terminal trust set** (db/084, design D3). `terminal_trust` has one row per terminal key the gateway has
    seen: the key, its fingerprint, a label, a status (`pending`, `active` or `revoked`), first and last seen, and who
@@ -115,7 +117,10 @@ machine.
    it per handshake", but rustls judges a client certificate synchronously, inside the handshake, where no database
    read can be awaited. The handshake reads the in-memory copy. Every key it judges is queued (64 deep, dropped when
    full, never awaited) for the next tick to record through `cairn_terminal_attempt`: a refused key as an attempt,
-   an active one only for its `last_seen`. Only refused handshakes are counted in the 1 s log line. **A failed refresh
+   an active one only for its `last_seen`. The gateway's own connection, which the tick and every startup's login-facts
+   read share, has a 1 s `lock_timeout`: an owner who leaves an admit or revoke open inside a transaction holds that
+   key's row, and an unbounded wait for it would stall every window login and the revoke sweep behind it; bounded,
+   the attempt fails and is logged. **A failed refresh
    keeps the last set**: a stale set beats an empty one, which would shut every admitted terminal out over a database
    hiccup.
    Until its first load succeeds the gateway accepts nothing, and its handshake check refuses every key and records
@@ -157,7 +162,9 @@ machine.
      window's password;
    - for loopback TCP, every `host`, `hostssl`, `hostnossl`, `hostgssenc` and `hostnogssenc` line using `ident`, `gss`
      or `sspi` is refused;
-   - `md5` or `password` on a line of the route's type gives a warning, as does ADR-0084's `peer` with no map.
+   - `md5` or `password` on a line of the route's type gives a warning, as does ADR-0084's `peer` with no map. On
+     loopback TCP, so does every other method but `scram-sha-256` and `reject` (`ldap`, `pam`, `radius`, …): the
+     window's password is still the credential, but Postgres receives it in clear on the loopback leg.
 
    Each refusal of a rule names its file and line and says to change it, reload the server, and run the verb again.
    The verb never edits, reloads or restarts Postgres. It then writes the **gateway record** (designer's call):
@@ -177,7 +184,10 @@ machine.
 
    The terminal keeps two files in its directory, which is made at 0700 and refused if group or others can write it:
    `terminal.key`, its own Ed25519 key, made at first launch at 0600, unsealed because the link must open before
-   anyone has typed anything, and refused if group or others have any permission on it; and `node.pin`, the node's
+   anyone has typed anything, and refused if group or others have any permission on it (and **never made beside an
+   existing pin**: a pin is written only after its key, so a pin with no key means the key was lost, and a new one
+   would be a second identity while the old, possibly copied, key stays admitted; the launch is refused and names
+   the operator's revoke); and `node.pin`, the node's
    full public key, refused if group or others can write it. **At first launch** the terminal dials the gateway,
    within one 10 s deadline for the TCP connect, the `SSLRequest` and the handshake. It accepts the server's key only
    if its short fingerprint is the typed one, and **writes the pin only after the handshake has completed**, because

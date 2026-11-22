@@ -88,13 +88,32 @@ pub async fn check_gateway(db: &Client) -> anyhow::Result<()> {
         .await?
         .get(0);
     let me: String = db.query_one("SELECT current_user::text", &[]).await?.get(0);
-    let can_read = granted && read_login_facts(db, &me).await.is_ok();
+    let read = if granted {
+        read_login_facts(db, &me).await.map(drop)
+    } else {
+        Ok(())
+    };
+    let can_read = granted && read.is_ok();
     let has_route = can_read
         && db
             .query_one("SELECT EXISTS (SELECT 1 FROM terminal_gateway)", &[])
             .await?
             .get::<_, bool>(0);
-    gateway_verdict(can_read, has_route).map_err(anyhow::Error::msg)
+    with_read_cause(gateway_verdict(can_read, has_route), read)
+}
+
+/// [`gateway_verdict`]'s answer, with the login-facts read's own error kept under the refusal
+/// when that read is what failed: the provisioning advice is right for a missing grant, but a
+/// dropped connection or a missing relation must still be visible (`{:#}` prints both). **Pure.**
+pub fn with_read_cause(
+    verdict: Result<(), String>,
+    read: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    match (verdict, read) {
+        (Ok(()), _) => Ok(()),
+        (Err(v), Err(e)) => Err(e.context(v)),
+        (Err(v), Ok(())) => Err(anyhow::Error::msg(v)),
+    }
 }
 
 /// Both checks on `db`, the grant first (it needs no node identity). Returns the node's origin
@@ -133,6 +152,23 @@ mod tests {
         assert!(e.contains("provision-terminal-service-role"), "{e}");
         let e = gateway_verdict(true, false).unwrap_err();
         assert!(e.contains("gateway-setup") && e.contains("owner"), "{e}");
+    }
+
+    /// A facts read that FAILED keeps its own error under the verdict: a dropped connection or a
+    /// missing relation must not read as "provision the role" and nothing more (review SF5).
+    #[test]
+    fn a_failed_facts_read_keeps_its_cause_under_the_verdict() {
+        let e = with_read_cause(
+            gateway_verdict(false, true),
+            Err(anyhow::anyhow!("connection closed")),
+        )
+        .unwrap_err();
+        let e = format!("{e:#}");
+        assert!(e.contains("provision-terminal-service-role"), "{e}");
+        assert!(e.contains("connection closed"), "the cause is kept: {e}");
+        assert!(with_read_cause(gateway_verdict(true, true), Ok(())).is_ok());
+        let e = with_read_cause(gateway_verdict(true, false), Ok(())).unwrap_err();
+        assert!(e.to_string().contains("gateway-setup"), "{e}");
     }
 
     #[test]

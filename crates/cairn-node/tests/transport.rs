@@ -116,3 +116,18 @@ fn tls12_test_builder_has_no_production_caller() {
         "tls12_only_client_config_for_tests used outside tests"
     );
 }
+
+/// A resumed TLS 1.3 session skips the client-certificate verifier, so the live trust set would
+/// never be consulted: a revoked terminal holding an old ticket would get back in. The gateway
+/// issues no tickets and caches no sessions, so every handshake pins afresh (review T2).
+#[test]
+fn the_gateway_never_resumes_a_tls_session() {
+    let (gw, _) = cairn_event::generate_key().unwrap();
+    let (_, term_id) = cairn_event::generate_key().unwrap();
+    let cfg = transport::gateway_server_config(&gw, pin(&term_id)).unwrap();
+    assert_eq!(cfg.send_tls13_tickets, 0, "no TLS 1.3 tickets are sent");
+    assert!(
+        !cfg.session_storage.can_cache(),
+        "no session is cached for a stateful resume"
+    );
+}

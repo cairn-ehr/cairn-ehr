@@ -30,13 +30,39 @@ async fn refusal(conn: &str, dir: Option<&Path>, fp: Option<&str>) -> String {
     err
 }
 
-/// A pin file in a fresh directory for a key made at runtime; returns the dir and the key's
-/// short fingerprint.
+/// A terminal directory as the first launch leaves it: the terminal's key, then a pin for a node
+/// key made at runtime. Returns the dir and the node key's short fingerprint.
 fn pinned_dir() -> (tempfile::TempDir, String) {
+    let (dir, kid) = pin_without_key();
+    TerminalFiles::at(dir.path()).load_or_create_key().unwrap();
+    (dir, cairn_event::short_fingerprint(&kid).unwrap())
+}
+
+/// A pin with no `terminal.key` beside it: what a restore that skipped the key leaves. Returns
+/// the dir and the pinned node key.
+fn pin_without_key() -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().unwrap();
     let (_sk, kid) = cairn_event::generate_key().unwrap();
     TerminalFiles::at(dir.path()).write_pin(&kid).unwrap();
-    (dir, cairn_event::short_fingerprint(&kid).unwrap())
+    (dir, kid)
+}
+
+/// A pin is only ever written after the key it was made with (`pinned`'s first-launch arm), so a
+/// pin with no key means the key was LOST. Minting a new one would make a second identity while
+/// the old, possibly copied, key stays admitted; the remedy is the operator's (review SF1).
+#[tokio::test]
+async fn a_pin_whose_key_is_gone_is_refused_and_no_new_key_is_made() {
+    let (dir, kid) = pin_without_key();
+    let fp = cairn_event::short_fingerprint(&kid).unwrap();
+    for typed in [None, Some(fp.as_str())] {
+        let e = refusal(&remote(), Some(dir.path()), typed).await;
+        assert!(e.contains("terminal.key"), "names the missing file: {e}");
+        assert!(e.contains("revoke"), "names the operator's remedy: {e}");
+        assert!(
+            !dir.path().join("terminal.key").exists(),
+            "no new terminal identity was minted ({typed:?})"
+        );
+    }
 }
 
 #[tokio::test]

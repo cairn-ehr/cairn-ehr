@@ -232,20 +232,32 @@ async fn an_admitted_terminal_whose_gateway_hangs_up_is_an_outage() {
 async fn a_pinned_link_overrides_sslmode_and_sslnegotiation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
-    let first8 = tokio::spawn(async move {
+    // A LAN impostor that DECLINES TLS. Under `sslmode=prefer` the client would carry on and send
+    // its startup in clear; only `require` stops dead (review T1: an SSLRequest alone cannot tell
+    // the two apart).
+    let seen = tokio::spawn(async move {
         let (mut tcp, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 8];
-        tcp.read_exact(&mut buf).await.unwrap();
-        buf // dropping the socket closes it without a reply, as the gateway does
+        let mut first8 = [0u8; 8];
+        tcp.read_exact(&mut first8).await.unwrap();
+        tcp.write_all(b"N").await.unwrap();
+        let mut rest = Vec::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tcp.read_to_end(&mut rest),
+        )
+        .await;
+        (first8, rest)
     });
     let (terminal, _) = generate_key().unwrap();
     let (_, node_kid) = generate_key().unwrap();
     let tls = PinnedTls::new(&terminal, &node_kid).unwrap();
     let conn = format!("{} sslmode=disable sslnegotiation=direct", conn_to(&addr));
-    let _ = Link::Pinned(tls).connect_with_task(&conn).await;
-    assert_eq!(
-        first8.await.unwrap(),
-        SSL_REQUEST,
-        "an SSLRequest went first"
+    let got = Link::Pinned(tls).connect_with_task(&conn).await;
+    assert!(got.is_err(), "a server that declines TLS is never used");
+    let (first8, rest) = seen.await.unwrap();
+    assert_eq!(first8, SSL_REQUEST, "an SSLRequest went first");
+    assert!(
+        rest.is_empty(),
+        "nothing followed the declined SSLRequest (a clear-text startup would): {rest:?}"
     );
 }

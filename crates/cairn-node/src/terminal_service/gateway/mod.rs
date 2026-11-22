@@ -15,10 +15,11 @@
 //!    startup only for a login that is a `cairn_window` member, not a member of
 //!    `cairn_terminal_service` (the service's own login), not over-powered, naming the node's own
 //!    database, and carrying only the keys `user`, `database`, `client_encoding` and
-//!    `application_name` (so `replication`, `options` and any GUC-setting key refuse). Anything
-//!    else gets a Postgres-shaped `ErrorResponse` naming no role.
-//! 4. Open a connection to Postgres by the route the local window already uses, replay the
-//!    startup, and pipe both directions until either side closes. SCRAM still runs end to end.
+//!    `application_name` (so `replication`, `options` and any GUC-setting key refuse). A login
+//!    that may not pass gets a Postgres-shaped `ErrorResponse` naming no role; a packet that is
+//!    not a well-formed startup (bad size, broken framing, a repeated key, another protocol) is
+//!    closed with no reply.
+//! 4. Open a connection to Postgres by the route `gateway-setup` recorded, replay the startup, and pipe both directions until either side closes. SCRAM still runs end to end.
 //! 5. TCP keepalive on the LAN side, so a vanished terminal's session ends and frees its locks.
 //!
 //! The submodules: [`accept`] (the flood limits, accept errors, keepalive), [`wire`] (pure

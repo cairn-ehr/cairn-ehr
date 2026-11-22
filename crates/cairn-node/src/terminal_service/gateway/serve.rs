@@ -17,7 +17,12 @@
 //! from one LAN host cannot use up the service's file descriptors. At most 64 of those walk the
 //! steps at once (a permit, held until startup); the rest wait. Each has 10 s counted from
 //! `accept`, the wait included. An `accept` error is counted, never fatal, and followed by a
-//! 100 ms pause so it cannot busy-loop.
+//! 100 ms pause so it cannot busy-loop. A connection the limits shed, or one closed before its
+//! startup was forwarded for any reason but a vetted refusal, is counted too, and the tick logs
+//! one summary line naming the last (so a flood is visible without flooding the log).
+//!
+//! The gateway's own database connection bounds its lock waits (`lock_timeout`): the tick and
+//! every startup's facts read share it, and one wait must not stall them all.
 //!
 //! TWO KINDS OF REFUSAL (controller ruling R2). A key not active in the trust set fails the TLS
 //! handshake with `access_denied`: permanent, the window says "not admitted". Anything the
@@ -40,8 +45,7 @@ use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
 use super::accept::{
-    keepalive, next_connection, AcceptErrors, PRE_STARTUP_ACTIVE, PRE_STARTUP_DEADLINE,
-    PRE_STARTUP_TOTAL,
+    keepalive, next_connection, Tally, PRE_STARTUP_ACTIVE, PRE_STARTUP_DEADLINE, PRE_STARTUP_TOTAL,
 };
 use super::admit::{judge, read_login_facts, DbUnavailable, Refusal, NOT_NOW};
 use super::pipe::{close_gently, pipe, send_cancel};
@@ -76,10 +80,27 @@ impl GatewayDb {
         if !c.is_closed() {
             return Ok(c);
         }
-        let fresh = Arc::new(crate::db::connect(&self.conn).await?);
+        let fresh = Arc::new(open_gateway_db(&self.conn).await?);
         *self.client.write().unwrap_or_else(|p| p.into_inner()) = fresh.clone();
         Ok(fresh)
     }
+}
+
+/// How long a statement on the gateway's own connection may wait for a row lock.
+const GATEWAY_LOCK_TIMEOUT: &str = "1s";
+
+/// Open the gateway's own connection, with its lock waits bounded. The tick and every window
+/// login's facts read share this one connection, so a statement waiting on a row lock (an owner's
+/// admit or revoke left open inside a transaction holds a `terminal_trust` row) would stall them
+/// all, revoke enforcement included. Bounded, the tick's attempt fails, is logged, and the next
+/// statement runs (review SF4).
+async fn open_gateway_db(conn: &str) -> anyhow::Result<Client> {
+    let client = crate::db::connect(conn).await?;
+    client
+        .batch_execute(&format!("SET lock_timeout = '{GATEWAY_LOCK_TIMEOUT}'"))
+        .await
+        .context("bounding the gateway connection's lock waits")?;
+    Ok(client)
 }
 
 /// Everything the connection tasks and the tick share.
@@ -91,7 +112,11 @@ struct Gateway {
     db: GatewayDb,
     sessions: Sessions,
     permits: Semaphore,
-    accept_errors: AcceptErrors,
+    accept_errors: Tally,
+    /// Connections closed before a startup was forwarded, for any reason but a vetted refusal
+    /// (logged on its own) or a peer that simply went away: a flood the limits shed, a failed
+    /// handshake, an unreadable startup (review SF2/SF3).
+    dropped: Tally,
 }
 
 /// Bind `listen` and run the gateway on it ([`run_gateway_on`]).
@@ -109,7 +134,7 @@ pub async fn run_gateway_on(
     sk: &SigningKey,
     conn: &str,
 ) -> anyhow::Result<()> {
-    let client = crate::db::connect(conn).await?;
+    let client = open_gateway_db(conn).await?;
     let (trust, attempts) = TerminalTrust::new();
     // The first load comes BEFORE any accept: until it, every key would be refused as unknown.
     trust.refresh(&client).await?;
@@ -141,7 +166,8 @@ pub async fn run_gateway_on(
         },
         sessions: Sessions::default(),
         permits: Semaphore::new(PRE_STARTUP_ACTIVE),
-        accept_errors: AcceptErrors::default(),
+        accept_errors: Tally::default(),
+        dropped: Tally::default(),
     });
     eprintln!("terminal gateway listening on {}", listener.local_addr()?);
     // However this run ends (a panic included), its sessions end with it: no later run's sweep
@@ -166,6 +192,9 @@ async fn accept_loop(listener: TcpListener, gw: Arc<Gateway>) {
         let accepted = Instant::now();
         // All 128 taken: closed at once, with no reply (dropping it closes it).
         let Ok(slot) = slots.clone().try_acquire_owned() else {
+            gw.dropped.record(format_args!(
+                "{peer}: all {PRE_STARTUP_TOTAL} pre-startup slots were taken"
+            ));
             continue;
         };
         let gw = gw.clone();
@@ -178,7 +207,11 @@ async fn accept_loop(listener: TcpListener, gw: Arc<Gateway>) {
                 }
                 // The slot is held through the (bounded) gentle close: it counts sockets.
                 Ok(Outcome::Refused(s)) => close_gently(s).await,
-                Ok(Outcome::Dropped) | Err(_) => {}
+                Ok(Outcome::Dropped) => {}
+                Err(_) => gw.dropped.record(format_args!(
+                    "{peer}: no startup within {} s",
+                    PRE_STARTUP_DEADLINE.as_secs()
+                )),
             }
         });
     }
@@ -221,19 +254,34 @@ async fn pre_startup(gw: &Gateway, mut tcp: TcpStream, peer: SocketAddr) -> Outc
         };
         first = next;
     }
-    if opening(first) != Opening::Ssl || tcp.write_all(b"S").await.is_err() {
+    if opening(first) != Opening::Ssl {
+        gw.dropped
+            .record(format_args!("{peer}: did not open with an SSLRequest"));
+        return Outcome::Refused(Box::new(tcp));
+    }
+    if tcp.write_all(b"S").await.is_err() {
         return Outcome::Refused(Box::new(tcp));
     }
     // Step 2: mutual TLS 1.3, pinned by the trust set. A refusal has sent its alert already.
     let mut tls = match gw.tls.accept(tcp).into_fallible().await {
         Ok(tls) => tls,
-        Err((_, tcp)) => return Outcome::Refused(Box::new(tcp)),
+        Err((e, tcp)) => {
+            // An unadmitted key lands here too (also counted by the trust set's own summary).
+            gw.dropped
+                .record(format_args!("{peer}: the TLS handshake failed: {e}"));
+            return Outcome::Refused(Box::new(tcp));
+        }
     };
     let Some(key) = peer_key(&tls) else {
+        gw.dropped.record(format_args!(
+            "{peer}: its certificate's key could not be read"
+        ));
         return Outcome::Refused(Box::new(tls));
     };
     // Step 3: one packet, a startup to vet or a cancel to forward.
     let Some(packet) = read_packet(&mut tls).await else {
+        gw.dropped
+            .record(format_args!("{peer}: no readable startup packet"));
         return Outcome::Refused(Box::new(tls));
     };
     let startup = match inside(&packet) {
@@ -244,7 +292,10 @@ async fn pre_startup(gw: &Gateway, mut tcp: TcpStream, peer: SocketAddr) -> Outc
             }
             return Outcome::Refused(Box::new(tls));
         }
-        Err(_) => return Outcome::Refused(Box::new(tls)),
+        Err(why) => {
+            gw.dropped.record(format_args!("{peer}: {why}"));
+            return Outcome::Refused(Box::new(tls));
+        }
     };
     let user = startup.get("user").unwrap_or_default().to_string();
     if let Err(r) = vet(gw, &startup).await {
@@ -264,7 +315,8 @@ async fn pre_startup(gw: &Gateway, mut tcp: TcpStream, peer: SocketAddr) -> Outc
             return refuse(tls, "57P03", NOT_NOW).await;
         }
     };
-    if up.write_all(&startup.raw).await.is_err() {
+    if let Err(e) = up.write_all(&startup.raw).await {
+        eprintln!("terminal gateway: replaying the startup upstream failed for {peer}: {e}");
         return refuse(tls, "57P03", NOT_NOW).await;
     }
     Outcome::Admitted(Box::new(Admitted { tls, up, key, user }))
@@ -338,6 +390,12 @@ async fn tick(gw: &Gateway, trust: &TerminalTrust, mut attempts: mpsc::Receiver<
         }
         if let Some((n, last)) = gw.accept_errors.take() {
             eprintln!("terminal gateway: {n} connections could not be accepted (the last: {last})");
+        }
+        if let Some((n, last)) = gw.dropped.take() {
+            eprintln!(
+                "terminal gateway: {n} connections closed before a startup was forwarded \
+                 (the last: {last})"
+            );
         }
     }
 }

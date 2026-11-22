@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use cairn_event::generate_key;
 use cairn_node::terminal_service::gateway::admit::REFUSED;
-use gateway_rig::{failure, rig, select_one, GATEWAY_LOGIN};
+use gateway_rig::{failure, rig, select_one, Rig, GATEWAY_LOGIN};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_postgres::Client;
@@ -259,12 +259,9 @@ async fn a_plain_text_startup_gets_no_reply() {
     r.finish().await;
 }
 
-#[tokio::test]
-async fn startups_are_refused_while_the_gateways_db_connection_is_down() {
-    let Some(r) = rig().await else { return };
-    let (t, _) = r.admitted_terminal().await;
-    drop(r.window(&t).await);
-    // NOLOGIN first, so the gateway cannot reconnect before the next startup is tried.
+/// Take the gateway's own database connection away and wait until its backend is gone. NOLOGIN
+/// first, so the gateway cannot reconnect until [`gateway_back_online`].
+async fn gateway_offline(r: &Rig) {
     r.owner
         .batch_execute(&format!(
             "ALTER ROLE {GATEWAY_LOGIN} NOLOGIN; \
@@ -292,6 +289,21 @@ async fn startups_are_refused_while_the_gateways_db_connection_is_down() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+async fn gateway_back_online(r: &Rig) {
+    r.owner
+        .batch_execute(&format!("ALTER ROLE {GATEWAY_LOGIN} LOGIN"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn startups_are_refused_while_the_gateways_db_connection_is_down() {
+    let Some(r) = rig().await else { return };
+    let (t, _) = r.admitted_terminal().await;
+    drop(r.window(&t).await);
+    gateway_offline(&r).await;
     let Err(err) = r
         .link(&t)
         .connect_with_task(&r.conn("cairn_window_probe"))
@@ -309,12 +321,66 @@ async fn startups_are_refused_while_the_gateways_db_connection_is_down() {
         !refused,
         "an outage the window retries, not 'not admitted': {text}"
     );
-    r.owner
-        .batch_execute(&format!("ALTER ROLE {GATEWAY_LOGIN} LOGIN"))
-        .await
-        .unwrap();
+    gateway_back_online(&r).await;
     let c = r.window(&t).await; // retries until the gateway has reconnected
     assert_eq!(select_one(&c).await, 1);
+    r.finish().await;
+}
+
+/// A revoke made while the gateway cannot read the database cannot be seen until it can. Until
+/// then the last trust set is kept (an outage ends no session); the first sweep after the
+/// gateway reconnects ends the revoked session (review T4).
+#[tokio::test]
+async fn a_revoke_made_during_the_gateways_outage_ends_the_session_once_it_reconnects() {
+    let Some(r) = rig().await else { return };
+    let (t, kid) = r.admitted_terminal().await;
+    let c = r.window(&t).await;
+    gateway_offline(&r).await;
+    r.revoke(&kid).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        select_one(&c).await,
+        1,
+        "an outage ends no session: the last trust set is kept"
+    );
+    gateway_back_online(&r).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.query_one("SELECT 1", &[]).await.is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the revoked session outlived the gateway's recovery by 5 s"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    r.finish().await;
+}
+
+/// The tick and every window login's facts read share the gateway's one database connection. An
+/// owner who leaves a transaction open holding a terminal's row (an admit or revoke typed in psql
+/// inside BEGIN) makes the tick's next attempt for that key wait on the lock; unbounded, that wait
+/// would stall every later window login behind it, and revoke enforcement with it (review SF4).
+#[tokio::test]
+async fn a_held_trust_row_lock_does_not_stall_window_logins() {
+    let Some(r) = rig().await else { return };
+    let (t, kid) = r.admitted_terminal().await;
+    drop(r.window(&t).await);
+    r.owner
+        .batch_execute(&format!(
+            "BEGIN; SELECT 1 FROM terminal_trust WHERE terminal_pubkey = '{kid}' FOR UPDATE"
+        ))
+        .await
+        .unwrap();
+    // This handshake queues an attempt for the locked key; the next tick's attempt then waits.
+    drop(r.window(&t).await);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let reached = tokio::time::timeout(
+        Duration::from_secs(8),
+        r.link(&t).connect_with_task(&r.conn("cairn_window_probe")),
+    )
+    .await;
+    r.owner.batch_execute("ROLLBACK").await.unwrap();
+    let reached = reached.expect("a window login stalled behind the tick's lock wait");
+    assert!(reached.is_ok(), "{:#}", reached.err().unwrap());
     r.finish().await;
 }
 

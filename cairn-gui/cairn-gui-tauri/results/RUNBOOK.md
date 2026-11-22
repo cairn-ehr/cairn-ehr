@@ -4103,9 +4103,9 @@ refuses, so the tests reach only its refusals and the record step on its own.
   psql "$CONN" -c "DROP DATABASE cairn_empty"
   ```
 
-  Expected, from the code (not yet seen run): `Error: db error`, then `Caused by:` and `ERROR: relation "local_node"
-  does not exist`. Record the text exactly. A bare `db error` with no cause is a finding, and so is a sentence that
-  names no next step (today it names the missing table but not `cairn-node init`): file it.
+  Expected, from the code (not yet seen run): `Error: reading this node's identity (a database not yet set up: run
+  cairn-node init)`, then `Caused by:` and `relation "local_node" does not exist`. Record the text exactly. A bare
+  `db error` with no cause is a finding, and so is a sentence that names no next step: file it.
 
 **Step 3 — run the gateway under the supervisor.** `svc_stop`, then write section 38's plist again with
 `<string>--gateway-listen</string><string>0.0.0.0:$GW_PORT</string>` after `<string>terminal-service</string>`
@@ -4234,11 +4234,19 @@ and in another:
       and cannot be admitted (only a pending one can) [P0001]". `list-terminals` shows it `revoked`.
 
 **Measurement 6 — a revoke while a statement is running.** The terminal needs a new key: quit its window,
-`rm "$TERM_DIR/terminal.key"`, launch it with `--terminal-dir` again (refused as not admitted, naming a NEW
-fingerprint), admit that one at the node, and launch again. Open a chart and write a one-line note. In a separate
-`psql "$CONN"` session on the node, hold the node's clock row: `BEGIN; SELECT * FROM hlc_state FOR UPDATE;`. Press
-*Sign* on the terminal: it waits. Note `psql "$CONN" -Atc "SELECT count(*) FROM clinical_note"`. Then, within 10 s of
-the press, revoke the new fingerprint as in Measurement 5, with the `\watch` running.
+`rm "$TERM_DIR/terminal.key"`, and launch it with `--terminal-dir` again.
+
+- [ ] It is refused BEFORE any dial: "this terminal has pinned a node but its key (terminal.key) is missing, … Ask
+      the node's operator to revoke this terminal's old fingerprint (see list-terminals); then delete node.pin in the
+      terminal directory and start again with --node-fingerprint." `ls "$TERM_DIR"` shows no `terminal.key`: a lost
+      key is never quietly replaced beside an old pin.
+
+Then `rm "$TERM_DIR/node.pin"` and launch with `--terminal-dir "$TERM_DIR" --node-fingerprint <NODE_FP>` (refused as not
+admitted, naming a NEW fingerprint), admit that one at the node, and launch again. Open a chart and write a one-line
+note. In a separate `psql "$CONN"` session on the node, hold the node's clock row:
+`BEGIN; SELECT * FROM hlc_state FOR UPDATE;`. Press *Sign* on the terminal: it waits. Note
+`psql "$CONN" -Atc "SELECT count(*) FROM clinical_note"`. Then, within 10 s of the press, revoke the new fingerprint as
+in Measurement 5, with the `\watch` running.
 
 - [ ] Before the revoke, the `\watch` shows the terminal's backend; `pg_stat_activity` reads it `active`, waiting on a
       `Lock`. Within 2 s of the revoke the count reaches 0, while the held session still holds the row: the

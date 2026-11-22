@@ -49,12 +49,20 @@ impl TerminalFiles {
     pub fn load_or_create_key(&self) -> anyhow::Result<SigningKey> {
         self.private_dir()?;
         let path = self.key_path();
-        if !path.exists() {
+        if !self.key_exists()? {
             let (sk, _kid) = crate::keystore::generate_plaintext(&path)
                 .with_context(|| format!("creating the terminal key {}", path.display()))?;
             return Ok(sk);
         }
         self.load_key()
+    }
+
+    /// Is there a `terminal.key`? An error (never "no") when that cannot be told, so a file the
+    /// process cannot stat is never mistaken for a missing one and replaced.
+    pub fn key_exists(&self) -> anyhow::Result<bool> {
+        let path = self.key_path();
+        path.try_exists()
+            .with_context(|| format!("checking for the terminal key {}", path.display()))
     }
 
     /// The terminal's EXISTING key, never made: for a caller that only reports (the window's

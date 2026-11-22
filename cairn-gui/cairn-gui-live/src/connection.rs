@@ -495,7 +495,7 @@ impl Held {
                 Ok(Err(e)) => {
                     // `db::connect`'s own error keeps the server's code beside its text (#880),
                     // and marks a refusal the client library raised itself, which has none (#884);
-                    // the pinned link's own refusals (not admitted, another key) are marked so too.
+                    // the pinned link's three refusals (`PinnedTls::refusal`) are marked so too.
                     let refused = e
                         .downcast_ref::<cairn_node::db::ConnectFailed>()
                         .and_then(|f| {

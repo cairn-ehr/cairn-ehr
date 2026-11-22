@@ -630,8 +630,8 @@ impl ConnectFailed {
     }
 
     /// The terminal's pinned link refused on its own (#909 slice B): the gateway did not admit
-    /// this terminal, or the node presented a key other than the pinned one. Neither changes on
-    /// a retry, so it is a client refusal (an operator must act), with no SQLSTATE: no server
+    /// this terminal, the node presented a key other than the pinned one, or the server is not a
+    /// Cairn gateway at all. None changes on a retry, so it is a client refusal (an operator must act), with no SQLSTATE: no server
     /// answered in Postgres's protocol. `message` must not carry the connection string.
     pub(crate) fn refused_by_link(message: String) -> Self {
         Self {

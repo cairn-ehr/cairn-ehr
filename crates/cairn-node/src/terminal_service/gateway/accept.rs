@@ -5,7 +5,7 @@
 //! small and tested apart from the accept loop in `serve.rs` that uses them. An `accept` error
 //! (`EMFILE`: the process is out of file descriptors; `ENFILE`: the system is) must neither end
 //! the gateway nor spin: [`next_connection`] counts it, pauses [`ACCEPT_ERROR_PAUSE`] and tries
-//! again, and the 1 s tick logs one summary line naming the last error ([`AcceptErrors::take`]).
+//! again, and the 1 s tick logs one summary line naming the last error ([`Tally::take`]).
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -22,17 +22,20 @@ pub const PRE_STARTUP_TOTAL: usize = 128;
 /// The pause after a failed `accept`, so an exhausted descriptor table cannot busy-loop.
 pub const ACCEPT_ERROR_PAUSE: Duration = Duration::from_millis(100);
 
-/// Failed `accept`s since the last summary, and the text of the last one.
+/// Events since the last summary, and the text of the last one: the 1 s tick turns each tally
+/// into at most one log line, so a flood can never flood the log. The gateway keeps two: failed
+/// `accept`s, and connections closed before a startup was forwarded.
 #[derive(Default)]
-pub struct AcceptErrors {
+pub struct Tally {
     count: AtomicU64,
     last: Mutex<String>,
 }
 
-impl AcceptErrors {
-    fn record(&self, e: &std::io::Error) {
+impl Tally {
+    /// Count one event, `why` becoming the summary's "last".
+    pub fn record(&self, why: impl std::fmt::Display) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        *self.last.lock().unwrap_or_else(|p| p.into_inner()) = e.to_string();
+        *self.last.lock().unwrap_or_else(|p| p.into_inner()) = why.to_string();
     }
 
     /// `(how many, the last error)` since the previous call, or `None` if there were none.
@@ -45,7 +48,7 @@ impl AcceptErrors {
 
 /// The next connection `accept` yields. An error is recorded in `errors` and followed by
 /// [`ACCEPT_ERROR_PAUSE`]; it is never returned, so it can never end the accept loop.
-pub async fn next_connection<F, Fut, T>(mut accept: F, errors: &AcceptErrors) -> T
+pub async fn next_connection<F, Fut, T>(mut accept: F, errors: &Tally) -> T
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = std::io::Result<T>>,
@@ -54,7 +57,7 @@ where
         match accept().await {
             Ok(c) => return c,
             Err(e) => {
-                errors.record(&e);
+                errors.record(e);
                 tokio::time::sleep(ACCEPT_ERROR_PAUSE).await;
             }
         }
@@ -91,7 +94,7 @@ mod tests {
     /// loop goes on to hand back the connection (it does not end, and it does not spin).
     #[tokio::test]
     async fn an_accept_error_is_counted_paused_on_and_never_ends_the_loop() {
-        let errors = AcceptErrors::default();
+        let errors = Tally::default();
         let mut calls = 0;
         let start = std::time::Instant::now();
         let got = next_connection(
@@ -113,5 +116,24 @@ mod tests {
         assert_eq!(n, 3);
         assert_eq!(last, emfile().to_string(), "the summary names the error");
         assert_eq!(errors.take(), None, "the count resets");
+    }
+}
+
+#[cfg(test)]
+mod tally_tests {
+    use super::Tally;
+
+    /// The gateway's other summary (connections closed before a startup was forwarded, review
+    /// SF2/SF3) keeps any displayable reason, not only an `io::Error`.
+    #[test]
+    fn a_tally_counts_any_reason_and_names_the_last() {
+        let t = Tally::default();
+        t.record("10.0.0.9:5000: all 128 pre-startup slots were taken");
+        t.record(format_args!("{}: no startup within 10 s", "10.0.0.9:5001"));
+        assert_eq!(
+            t.take(),
+            Some((2, "10.0.0.9:5001: no startup within 10 s".to_string()))
+        );
+        assert_eq!(t.take(), None, "the count resets");
     }
 }

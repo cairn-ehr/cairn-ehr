@@ -131,6 +131,15 @@ pub fn route_verdict(rules: &[HbaRule], up: &Upstream) -> Result<Vec<String>, St
                     ));
                 } else if m == "md5" || m == "password" {
                     warnings.push(weak_hash(&at, &r.kind, m));
+                } else if !matches!(m, "scram-sha-256" | "reject") {
+                    // ldap, pam, radius, bsd, …: the password is still the credential, but
+                    // Postgres receives it in clear on the loopback leg (an allow-list, like the
+                    // socket's).
+                    warnings.push(format!(
+                        "{at}: '{}' uses {m}, so Postgres receives the window's password in clear \
+                         on the loopback leg; scram-sha-256 keeps it a SCRAM exchange end to end.",
+                        r.kind
+                    ));
                 }
             }
             _ => {}

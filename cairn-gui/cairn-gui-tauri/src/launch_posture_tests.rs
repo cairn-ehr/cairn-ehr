@@ -48,7 +48,8 @@ fn every_launch_connect_goes_through_the_prepared_link() {
         ("build_live_state", body),
         ("terminal_launch.rs", include_str!("terminal_launch.rs")),
     ] {
-        for door in ["db::connect", "tokio_postgres::connect("] {
+        // `reopening(` is the clear-text reopen (`Link::Local`); `reopening_via(` carries the link.
+        for door in ["db::connect", "tokio_postgres::connect(", "reopening("] {
             assert!(
                 !src.contains(door),
                 "{name} connects by `{door}`, around the link"
