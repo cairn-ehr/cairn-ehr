@@ -16,3 +16,4 @@ pub mod gateway;
 pub mod registration;
 pub mod run;
 pub mod startup;
+pub mod terminals;

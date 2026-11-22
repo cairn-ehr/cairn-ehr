@@ -1736,6 +1736,17 @@ enum Cmd {
         #[arg(long)]
         upstream: String,
     },
+    /// Approve a terminal that has tried to connect, by the fingerprint shown at the terminal
+    /// (any letter case, dashes optional), giving it a label (#909). Owner only.
+    AdmitTerminal {
+        fingerprint: String,
+        #[arg(long)]
+        label: String,
+    },
+    /// Revoke a terminal for good: its open sessions close within 2 s (#909). Owner only.
+    RevokeTerminal { fingerprint: String },
+    /// List every terminal that has tried to connect, newest first, with its status (#909).
+    ListTerminals,
     /// Run the node-side service that registers patients for, and commits overdue note drafts
     /// of, the reference window (#909). Unattended: needs `CAIRN_KEY_PASSPHRASE` for a sealed
     /// key, never prompts. Connect as the login `provision-terminal-service-role` made.
@@ -3073,6 +3084,28 @@ async fn run() -> anyhow::Result<()> {
             cairn_node::conn_posture::require_local(&cli.conn)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
             println!("{}", gw::gateway_setup(&db, &up).await?);
+        }
+        Cmd::AdmitTerminal { fingerprint, label } => {
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!(
+                "{}",
+                cairn_node::terminal_service::terminals::admit(&db, &fingerprint, &label).await?
+            );
+        }
+        Cmd::RevokeTerminal { fingerprint } => {
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!(
+                "{}",
+                cairn_node::terminal_service::terminals::revoke(&db, &fingerprint).await?
+            );
+        }
+        Cmd::ListTerminals => {
+            use cairn_node::terminal_service::terminals as t;
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!("{}", t::render(&t::list(&db).await?));
         }
         Cmd::TerminalService { gateway_listen } => {
             // Refuse a remote database BEFORE any connection; then the key (never prompt: an
