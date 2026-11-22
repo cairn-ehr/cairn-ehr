@@ -77,7 +77,8 @@ machine.
    - **LAN-side keepalive** from `cairn_db_keepalive`: 30 s idle, 10 s between probes, 3 probes. On Linux and
      Android the socket also gets a 30 s `TCP_USER_TIMEOUT`, which is what ends a terminal that vanished with a
      result still in flight. When either fires, the pipe ends and the Postgres side is closed, so the vanished
-     terminal's backend exits and releases its locks.
+     terminal's backend exits and releases its locks: at once if it is idle or idle in a transaction, and only when it
+     next reads or writes if it is running a statement (decision 5's cancel is for a revoke, not a vanished terminal).
 
 3. **The flood limits** (designer's calls). A connection holds one of **128** slots from `accept` until it is
    piped or closed; with all 128 taken, a new one is closed at once with no reply, so a LAN host opening idle sockets
@@ -198,10 +199,10 @@ machine.
    registration is refused** (`42501`): since ADR-0109 it registers only through the queue.
 
 9. **What the superseded passages now read.**
-   - **ADR-0084 decision 5's first sentence now reads, for the window's launch:** *a database on another machine is
-     reached only through the pinned link (this ADR's decision 7); without a terminal directory it is refused as
-     before.* The decision is "local, or pinned". It still runs first in the launch, before any connect, and there is
-     still no override flag. `vault-bootstrap-superuser`, `vault-set-terminal-passphrase` and
+   - **ADR-0084 decision 5's first bullet** ("in the window's launch, first, before any connect") **now reads:** *in
+     the window's launch, first, before any connect, a database on another machine is reached only through the pinned
+     link (this ADR's decision 7), and refused as before without a terminal directory.* The decision is "local, or
+     pinned", and there is still no override flag. `vault-bootstrap-superuser`, `vault-set-terminal-passphrase` and
      `provision-window-role` stay local-only, unchanged.
    - **ADR-0109 decision 5's first sentence now reads:** `serve_one` takes the registration turn
      (`cairn_registration_take_turn(true)`, a row lock) as its first statement, then claims a request, and so on as
@@ -214,11 +215,12 @@ machine.
    - **ADR-0109's last "not guaranteed" bullet** ("the local window still connects only to a database on its own
      machine") is no longer true: see the first item.
 
-10. **The trust set is in no backup and no local-state export** (design §5's question, designer's call). A backup
-    carries signed events only (ADR-0026), and the local-state export reads only its own named tables, neither
-    `terminal_trust` nor `terminal_gateway`. After a restore every terminal must be admitted again, and
-    `gateway-setup` run again; a restored node with a new key is refused by every terminal as another key until its
-    operator removes the terminal's pin. A restore is the moment a stolen terminal must not quietly regain access.
+10. **The trust set is in no Cairn backup and no local-state export** (design §5's question, designer's call). A
+    backup carries signed events only (ADR-0026), and the local-state export reads only its own named tables, neither
+    `terminal_trust` nor `terminal_gateway`. After a restore by Cairn's own `restore` every terminal must be admitted
+    again, and `gateway-setup` run again; a restored node with a new key is refused by every terminal as another key
+    until its operator removes the terminal's pin. A restore is the moment a stolen terminal must not quietly regain
+    access. A whole-database copy made outside Cairn is the exception ("What is not guaranteed").
 
 **Paper-parity.** The paper counterpart is a clinician at a ward desk reading and writing the chart that was carried
 to them. Paper *N* = 0 extra human acts to read or sign at a remote desk → forced *M* = 0 per act → target *K* = 0:
@@ -256,6 +258,11 @@ sentences, not admitted and another key, are for an operator, not a clinician.
 - **While the gateway cannot refresh the trust set** (its own connection is down, or the read fails), it keeps the
   last set. A revoke written meanwhile ends that terminal's sessions, and refuses its handshakes, only from the first
   refresh that succeeds. While the gateway's connection is down every new startup is refused with 57P03 anyway.
+- **A whole-database copy brings the trust set back as it was.** Neither `terminal_trust` nor `terminal_gateway` is
+  in a Cairn backup or a local-state export (decision 10), but an operator's own `pg_dump`, or any other copy of the
+  whole database outside Cairn's backup and restore, carries both, `active` rows included. Restoring one readmits
+  every terminal that was active when it was taken, a stolen one included: after such a restore the operator must
+  revoke every lost terminal again (`list-terminals` shows them).
 - **The route is checked when `gateway-setup` runs, not after.** An access rule changed later (a `peer` line added
   for the route, say) is not seen until the verb runs again.
 - **#1159 is now reachable from an admitted terminal.** A window login inherits `cairn_agent`, which may run
