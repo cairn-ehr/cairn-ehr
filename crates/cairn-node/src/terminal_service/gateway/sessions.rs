@@ -19,7 +19,7 @@
 //! dropping the run aborts every session in the table and sends each one's cancel, as a revoke
 //! does (a statement left running would hold its locks until it next wrote, beyond any later
 //! revoke: final review R1). A session admitted after that (a connection task still walking the
-//! steps under the old run) is aborted the moment it opens, before its backend ran anything.
+//! steps under the old run) is aborted the moment it opens, before its backend runs any statement.
 //!
 //! WHY EACH SESSION ENDED is recorded by whoever aborts it, at that moment ([`REVOKED`] or
 //! [`RUN_ENDED`]), so the closing log line says the cause that really ended it (R2).
@@ -69,7 +69,8 @@ pub struct CloseOnDrop {
 
 impl Drop for CloseOnDrop {
     /// Never blocks and never panics (it may run during a panic's unwind): the cancels go on a
-    /// spawned task, best-effort, and with no runtime left there is no backend to save.
+    /// spawned task, best-effort. With no runtime, nothing can send the cancel; the statement
+    /// runs until it next writes, as a vanished terminal's does.
     fn drop(&mut self) {
         let cancels = self.sessions.close();
         let Ok(rt) = tokio::runtime::Handle::try_current() else {

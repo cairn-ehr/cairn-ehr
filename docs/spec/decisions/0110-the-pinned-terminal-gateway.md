@@ -135,10 +135,11 @@ machine.
    **No session outlives the run that sweeps it.** Only a run's own tick sweeps its sessions, and a run can end (a
    panic, which the supervisor restarts) while its sessions still pipe. So however a run ends, every session it piped
    is aborted and, as for a revoke, its running statement is sent a `CancelRequest`; a startup admitted afterwards by
-   a connection still walking the steps under it is aborted as it opens, before its backend runs anything
+   a connection still walking the steps under it is aborted as it opens, before its backend runs any statement
    (`sessions::CloseOnDrop`). A restart therefore ends every open remote session, which the window's reopen brings
-   back through the new run, and a revoke reaches every session there is. The cancel is best-effort: one that cannot
-   be delivered (the route to Postgres is down too) is logged, and that statement runs until it next writes, as a
+   back through the new run, and a revoke reaches every session there is. The cancel is best-effort. One that is sent
+   but cannot reach Postgres (the route is down too) is logged. One that is never sent, because no runtime is left to
+   send it or the runtime shuts down first, is not logged. Either way that statement runs until it next writes, as a
    vanished terminal's does. Pinned: `terminal_gateway_e2e.rs::a_session_ends_when_its_gateway_run_ends` and
    `a_running_statement_ends_when_its_gateway_run_ends` (red without the cancel).
 
