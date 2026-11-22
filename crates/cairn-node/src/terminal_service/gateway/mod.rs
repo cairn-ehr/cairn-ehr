@@ -18,7 +18,9 @@
 //!    startup, and pipe both directions until either side closes. SCRAM still runs end to end.
 //! 5. TCP keepalive on the LAN side, so a vanished terminal's session ends and frees its locks.
 //!
-//! This module tree is built up in tasks; today it holds only [`wire`], the pure byte-level
-//! parsing and encoding every later step uses. Further submodules are added by later tasks.
+//! This module tree is built up in tasks; today it holds [`wire`] (the pure byte-level parsing and
+//! encoding every later step uses) and [`admit`] (step 3's verdict: who may pass). Further
+//! submodules are added by later tasks.
 
+pub mod admit;
 pub mod wire;
