@@ -150,7 +150,10 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
   `(os, arch, platform)` **newer than the installed program's release version** whose generation line fits the
   stamp. This is not gated on C1's "update waiting": a window-only release with the same schema must also be fetched
   (D5). C1's `install_fit` and its `InstallView` then compare the release version as well as the generation line, so
-  the restart path also restarts into a same-schema newer program.
+  the restart path also restarts into a same-schema newer program. The installed program reports its release version
+  through a **new** flag beside `--print-schema-generation`, never by changing that flag's line (C1's durable rule: an
+  older window parses it); a window built before C2 cannot see a same-schema release, so it follows schema changes
+  only until its first C2 install.
 - If one is offered and not already staged, it fetches the artifact chunk by chunk into the staging folder (§4.5),
   together with the manifest, signatures and chain segment, and writes a completion marker last.
 - **No clinical press may wait behind the download.** The window has one shared database connection (#807's design);
