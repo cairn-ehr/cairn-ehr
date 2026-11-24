@@ -162,7 +162,7 @@
 >    done and fixed. **Time-sensitive:** RUSTSEC-2026-0543 (chrono unmaintained) is ignored in both `deny.toml` trees until
 >    2027-02-18 (**#1160**, migrate off chrono); **#389**'s glib ignore was re-decided 2026-11-20 to the same date (its exit
 >    condition moved: gtk 0.19 + webkit2gtk 3 exist on glib 0.22; no tauri uses them yet).
->    **#909 slice B (the pinned gateway) MERGED 2026-11-21 in PR #1163** (`feat/909-slice-b-pinned-gateway`;
+>    **#909 slice B (the pinned gateway) MERGED 2026-11-23 in PR #1163** (`feat/909-slice-b-pinned-gateway`;
 >    plan PR #1162; [ADR-0110](spec/decisions/0110-the-pinned-terminal-gateway.md), spec **v0.112**, `db/084`,
 >    `SCHEMA_GENERATION` **84**): a window on another machine reaches the database only through
 >    `terminal-service --gateway-listen`, TLS 1.3 pinned both ways against the node-local trust set; the owner's
