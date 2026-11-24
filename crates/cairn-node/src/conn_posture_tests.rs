@@ -84,6 +84,7 @@ fn stamp(version: i32, loader: &str, hash: Option<Vec<u8>>) -> SchemaStamp {
         version,
         loader_build: loader.into(),
         schema_hash: hash,
+        window_floor: None,
     }
 }
 

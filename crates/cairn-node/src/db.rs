@@ -531,6 +531,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "084_terminal_gateway",
         include_str!("../../../db/084_terminal_gateway.sql"),
     ),
+    // db/085 (#909 slice C1): the window floor, stamped beside the generation.
+    (
+        "085_window_floor",
+        include_str!("../../../db/085_window_floor.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
@@ -873,6 +878,17 @@ pub struct SchemaStamp {
     pub version: i32,
     pub loader_build: String,
     pub schema_hash: Option<Vec<u8>>,
+    /// The window floor (db/085) — `None` unless it was written for THIS stamp's version
+    /// (cairn-sync restamps the version without touching it) or the columns do not exist yet.
+    pub window_floor: Option<WindowFloor>,
+}
+
+/// The oldest window generation this stamped schema still serves, and what an older window
+/// would miss (db/085; `cairn_event::schema_generation::WINDOW_FLOOR_LEDGER`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowFloor {
+    pub floor: i32,
+    pub reason: Option<String>,
 }
 
 /// May this connect skip the file replay? (#726) **Pure.**
@@ -976,7 +992,10 @@ pub async fn read_schema_stamp(client: &Client) -> anyhow::Result<Option<SchemaS
         client
             .query_opt(
                 "SELECT version, loader_build, \
-                        decode(substr(to_jsonb(n) ->> 'schema_hash', 3), 'hex') \
+                        decode(substr(to_jsonb(n) ->> 'schema_hash', 3), 'hex'), \
+                        (to_jsonb(n) ->> 'window_floor')::int, \
+                        to_jsonb(n) ->> 'window_floor_reason', \
+                        (to_jsonb(n) ->> 'window_floor_for')::int \
                    FROM node_schema n",
                 &[],
             )
@@ -987,10 +1006,22 @@ pub async fn read_schema_stamp(client: &Client) -> anyhow::Result<Option<SchemaS
                     legible_db_error(&e)
                 )
             })?
-            .map(|row| SchemaStamp {
-                version: row.get(0),
-                loader_build: row.get(1),
-                schema_hash: row.get(2),
+            .map(|row| {
+                let version: i32 = row.get(0);
+                // Trust the floor only when it was written for this very version (db/085).
+                let floor: Option<i32> = row.get(3);
+                let floor_for: Option<i32> = row.get(5);
+                SchemaStamp {
+                    version,
+                    loader_build: row.get(1),
+                    schema_hash: row.get(2),
+                    window_floor: floor.filter(|_| floor_for == Some(version)).map(|floor| {
+                        WindowFloor {
+                            floor,
+                            reason: row.get(4),
+                        }
+                    }),
+                }
             })
     } else {
         None
@@ -1146,13 +1177,24 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     if replay {
         client
             .execute(
-                "INSERT INTO node_schema (version, loader_build, schema_hash) VALUES ($1, $2, $3)
+                "INSERT INTO node_schema (version, loader_build, schema_hash,
+                                          window_floor, window_floor_reason, window_floor_for)
+                 VALUES ($1, $2, $3, $4, $5, $1)
                  ON CONFLICT (id) DO UPDATE
                    SET version = EXCLUDED.version,
                        loaded_at = now(),
                        loader_build = EXCLUDED.loader_build,
-                       schema_hash = EXCLUDED.schema_hash",
-                &[&embedded, &LOADER_BUILD, &schema_hash.as_slice()],
+                       schema_hash = EXCLUDED.schema_hash,
+                       window_floor = EXCLUDED.window_floor,
+                       window_floor_reason = EXCLUDED.window_floor_reason,
+                       window_floor_for = EXCLUDED.window_floor_for",
+                &[
+                    &embedded,
+                    &LOADER_BUILD,
+                    &schema_hash.as_slice(),
+                    &cairn_event::schema_generation::WINDOW_FLOOR_GENERATION,
+                    &cairn_event::schema_generation::latest_floor_reason(),
+                ],
             )
             .await
             .map_err(|e| {
@@ -1290,6 +1332,7 @@ mod tests {
             version,
             loader_build: loader.into(),
             schema_hash: hash.map(<[u8]>::to_vec),
+            window_floor: None,
         }
     }
 
