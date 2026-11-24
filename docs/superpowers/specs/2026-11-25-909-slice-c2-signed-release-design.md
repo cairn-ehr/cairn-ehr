@@ -69,14 +69,27 @@ whole release bundle (ADR-0055 decision 6's shape):
 5. Verdicts carry what a refusal needs in practice-manager words (pinned version, needed version, what is missing,
    what to do next; ADR-0055 decision 6, trust-root design §3.5) — never "signature verification failed".
 
-Signatures reuse `cairn-event`'s COSE_Sign1 + Ed25519 with **new, distinct signing contexts** for a root version and a
-release manifest, so no event signature can verify as either (the crate's existing domain separation). Encoding is
-canonical CBOR, as events are (ADR-0015).
+Signatures are COSE_Sign1 + Ed25519 with **new, distinct signing contexts** for a root version and a release
+manifest, added to `cairn-event`'s closed, add-only context registry, so no event signature can verify as either.
+ADR-0055's signatures are **detached** (the content address covers the payload alone), and `cairn-event`'s signer and
+verifier are private and require an attached payload (`cose_sign1_in_context`, `cose_verify1_parsed`), so C2 adds a
+small public detached sign/verify pair to `cairn-event`: a change to a safety-critical crate, reviewed as one (my
+call: one COSE implementation in the tree, not a second in the verifier crate). Encoding is canonical CBOR, as events
+are (ADR-0015).
+
+**One bundle per Cairn release, one channel, one `release_version`** (my call). The bundle's artifact list is typed by
+**kind** (`window`, and later `extension`, `ddl`, `rebuild-recipe`), each kind carrying its own fields: a window
+artifact has no Postgres-major. ADR-0055 makes the bundle shape a day-one commitment, so the kind tag is what lets the
+node's own load gate (#257) add its artifacts later without a new format. The node's intake and the terminal's
+installer both read "newer" as a higher `release_version` on that one channel.
 
 **Manifest content for a window artifact** (the part this slice adds to the bundle shape): per artifact, `os` (`linux`
-only today), `arch` (`x86_64`, `aarch64`), the digest, the byte length, and the window's **generation line** — the exact
+only today), `arch` (`x86_64`, `aarch64`), `platform` (the distribution and release it was built for, because the window
+links the system's WebKitGTK and glibc; Q2), the digest, the byte length, and the window's **generation line** — the exact
 `<generation> <64 hex>` its `--print-schema-generation` prints (C1's durable rule: that line never changes). The node
 and the terminal can then choose an artifact without running it; C1 still runs the installed program before any restart.
+The window artifact also names its **release version**, so a release that changes only the window (same schema) is
+still a newer program (§4.4, open question Q1).
 
 **Out of the verifier in C2:** the transparency inclusion proof is carried in the format but **not verified** (#258
 builds the log); co-signer floors (policy, §7.9); the node's own DDL and extension load (#257's load-gate half). See §6.
@@ -94,7 +107,12 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
   ADR-0026's rungs) and the release key, publish root version 1 with its fingerprint on a second channel. 1-of-1, as
   ADR-0055 decision 8 declares.
 - **The official root version 1 is a file in the repository**, compiled into `cairn-node` and the terminal installer as
-  the default pin, and overridable by provisioning configuration (a root-owned file) for another channel.
+  the default pin, and overridable by provisioning configuration (a root-owned file) for another channel. **Until the
+  genesis ceremony, there is no default pin** (my call): intake and the installer refuse every bundle with a sentence
+  that says no release channel is configured; tests mint their keys at runtime (house rule 6). The slice merges
+  without waiting for the ceremony; the root file lands in its own small PR after it.
+- **CI release builds are new work.** Today CI runs only x86_64 test jobs on ubuntu-24.04 and builds no release
+  artifact; the aarch64 build (native runner or cross) and the artifact publishing are part of this slice's cost.
 
 ### 4.3 The node: intake, store, serve
 
@@ -108,18 +126,24 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
   carries code; ADR-0013's clinical blob tier is not reused for the same reason). It holds the verified bundle's
   manifest, signatures and chain segment, and the window artifacts' bytes. Old releases are pruned; the builder picks
   the rule (e.g. keep the newest two per architecture).
-- **The doors**, granted to `cairn_window`, are new and additive (they enter `db/window_door_surface.txt` like any door):
-  (1) "the release my node offers for `(os, arch)`" — returns the newest stored release whose window generation line
-  fits the node's stamp (C1's `install_fit` rule), with its manifest, signatures and chain segment; (2) "chunk *k* of
-  artifact *d*". Read-only. The node does not decide on the terminal's behalf whether to install: the terminal's
+- **The node keeps every root version it has verified** (small and rare), not only one bundle's chain segment.
+- **The doors**, granted to `cairn_window`, are new and additive (they enter `db/window_door_surface.txt` like any door,
+  so their signatures must be right first time): (1) "the releases my node holds for `(os, arch, platform)`, given that
+  I am pinned at root version *v*" — returns each stored window artifact's release version and generation line, plus
+  the manifest, signatures and the root versions after *v*; (2) "chunk *k* of artifact *d*". Read-only. **The fit is
+  judged in Rust, not SQL** (my call): the window applies C1's `install_fit` to the generation lines the door returns,
+  so the floor rule is never copied into SQL. The node does not decide on the terminal's behalf whether to install: the terminal's
   installer does (§4.5).
 - **Which release, and when, is the node's** (D2): the offer follows what the owner has taken in and the node's own
   stamp. A terminal never gets a window newer than its node's database.
 
 ### 4.4 The window: the courier
 
-- When C1 already says an update is waiting or the window is below the floor, and the installed program is `same`, the
-  window asks the door (§4.3, 1) whether its node offers a fitting release for this machine's `(os, arch)`.
+- On C1's 60 s poll, the window asks the door (§4.3, 1) whether its node holds a release for this machine's
+  `(os, arch, platform)` **newer than the installed program's release version** whose generation line fits the
+  stamp. This is not gated on C1's "update waiting": a window-only release with the same schema must also be fetched
+  (Q1). C1's `install_fit` and its `InstallView` then compare the release version as well as the generation line, so
+  the restart path also restarts into a same-schema newer program.
 - If one is offered and not already staged, it fetches the artifact chunk by chunk into the staging folder (§4.5),
   together with the manifest, signatures and chain segment, and writes a completion marker last.
 - **No clinical press may wait behind the download.** The window has one shared database connection (#807's design);
@@ -140,12 +164,16 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
   the staging folder writable by the window's user group only; the pin, the installed release version and any fork
   incident in a root-owned state directory; the default pin compiled in (§4.2) and an override in `/etc`.
 - On a marker it: (1) verifies the staged bundle with §4.1 against **its own** pin — never against anything the window
-  or node says; (2) checks the artifact's `os`/`arch` match this machine and its release version is newer than the
-  installed one; (3) writes the artifact beside the program, `fsync`s, and **renames it over the program atomically**,
+  or node says; (2) checks the artifact's `os`/`arch`/`platform` match this machine and its release version is newer than the
+  installed one; (2a) **runs the new program with `--print-schema-generation`** (as an unprivileged user, with a
+  timeout) and refuses it unless it prints the manifest's generation line: that proves it loads its libraries on this
+  machine before it replaces anything (my call; a program that cannot start never reaches the swap, so no revert is
+  needed); (3) writes the artifact beside the program, `fsync`s, and **renames it over the program atomically**,
   keeping the previous program as a fallback; (4) records the new version and pin; (5) clears the staging folder.
   Any failure clears the staging folder and leaves the running program and the installed one untouched.
-- **The rename keeps C1 working:** C1's `exe_path` already reads a replaced running program's `(deleted)` path and asks
-  the file now at that path.
+- **The rename keeps C1 working — in code:** C1's `exe_path` reads a replaced running program's `(deleted)` path and
+  asks the file now at that path. That has never been run on a real Linux terminal (RUNBOOK §40 is owed); C2 rests on
+  it, so the plan runs it early on Linux, not last.
 - It writes one short status file the window may read (state + a practice-manager sentence) and logs to the journal.
 - **Caps:** it refuses a staged file larger than a fixed ceiling and the staging folder has a quota, so a compromised
   window can at worst fill a bounded folder.
@@ -193,7 +221,12 @@ loses a step (the restart it leads to is C1's, measured in RUNBOOK §40). The pl
 for one bundle; download time on the LAN for one artifact; the longest press delay measured during a download (budget
 ~200 ms); installer swap time; the end-to-end time from intake to a terminal showing "Update ready".
 
-## 8. Left to the builder
+## 8. Open questions for the maintainer (from the builder check)
+
+- **Q1.** Must a terminal follow a release that changes only the window (same schema)? Proposed **yes** (§4.1, §4.4).
+- **Q2.** Which Linux distribution and release do terminals run?
+
+## 9. Left to the builder
 
 - Crate and binary names; whether the signing tool is a binary of the verifier crate.
 - The exact CBOR field names of the root document and manifest, within ADR-0055's shape and §4.1's window fields.
