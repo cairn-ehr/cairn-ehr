@@ -123,10 +123,10 @@ new program's generation, so a program that would refuse this database is never 
 ### 4.4 Inside the floor: the calm line and Update now
 
 - The window learns the verdict at **launch**, at each **reconnect** (#807, `cairn-gui-live/src/connection.rs`), and
-  on a **new, slower stamp poll** (≈ 60 s) — the upgrade drops no connection, so without a poll a running window
-  would never learn of it. *(Builder check: `lock_state` touches no database today, `commands.rs` ≈145, so this is a
-  new query on the window's one shared connection; my call: its own cadence, not the 10 s lock poll, and it never
-  reopens a lost connection — the reconnect path already checks.)*
+  on a **new, slower stamp poll** (≈ 60 s) — the upgrade drops no connection (corrected — see §10), so without a
+  poll a running window would never learn of it. *(Builder check: `lock_state` touches no database today,
+  `commands.rs` ≈145, so this is a new query on the window's one shared connection; my call: its own cadence, not the
+  10 s lock poll, and it never reopens a lost connection (corrected — see §10) — the reconnect path already checks.)*
 - It shows one calm line: "An update is waiting; it installs when this terminal is next idle." with **Update now**.
   Nothing else changes.
 - **Update now** (D3) and the **idle re-lock** (D2) do the same thing: wait for any act in flight to settle, close the

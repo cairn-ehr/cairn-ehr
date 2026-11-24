@@ -4419,7 +4419,9 @@ time "$NODE_DIR/cairn-node" --conn "$CONN" provision-window-role --role cairn_wi
       250 ms", the pause doubling to 5000 ms and staying there. Record the first line exactly.
 - [ ] Meanwhile, on the window: open a chart, write and Sign a one-line note, open another chart, three times or
       more. Record the longest wait from a press to its outcome. **None waits past 15 s** or is cut off; expect each
-      to wait about 2 s at most, except during the heal, which holds its locks to its end (Measurement 7).
+      to wait about 2 s per lock the replay waits on, longer when a file already holds a lock the press needs (it
+      keeps it through its later waits), and a write longest during the heal, which holds its row locks to its end
+      (Measurement 7).
 - [ ] Once the reader commits, the upgrade completes. Record its `real` time.
       `psql "$CONN" -Atc "SELECT version, window_floor, window_floor_for, window_floor_reason FROM node_schema"` reads
       `86|85|86|this node's update notices`.
@@ -4450,8 +4452,9 @@ is waiting; it installs when this terminal is next idle." and **Update now**.
       as nothing newer). Record each.
 - [ ] **A Sign in flight.** In a separate `psql "$CONN"` session hold the node's clock row
       (`BEGIN; SELECT * FROM hlc_state FOR UPDATE;`), install the other `85` variant, press Sign on a note, then
-      Update now. The window does not restart until the Sign has its outcome (the 15 s cut-off at most). `ROLLBACK;`.
-      Record what the Sign said.
+      Update now. The Sign meets the 15 s cut-off and its line says it did not go through, or that it is not known
+      whether it did: the chart stays on screen with that line, and the window does **not** restart. Record what the
+      Sign said. `ROLLBACK;`, then press Update now again: the window restarts.
 
 **Measurement 4 — the idle restarts.** Install the other `85` variant each time.
 
@@ -4503,10 +4506,11 @@ Then put the floor back:
 
 - [ ] **A symlink-swap install never updates.** Quit the window. `mkdir -p "$WIN_DIR"/{v1,v2}`, copy `85a` into `v1`
       and `85b` into `v2`, `ln -sfn v1 "$WIN_DIR/current"`, and launch `"$WIN_DIR/current/cairn-gui-tauri"` (as above).
-      Swap the link (`ln -sfn v2 "$WIN_DIR/current"`) and press Update now. Expected: "No newer version is installed on
-      this terminal yet — …". Tauri reads the window's path once, when it loads: on Linux it resolves the link to
-      `v1`; on macOS a path through any link reads as no path at all. A site must install by replacing the file at a
-      path with no symlink in it, never by swapping a link.
+      Swap the link (`ln -sfn v2 "$WIN_DIR/current"`) and press Update now. Expected, on Linux: "No newer version is
+      installed on this terminal yet — …" (Tauri resolves the link to `v1` once, when the window loads); on macOS:
+      "This terminal cannot check which version is installed here; restart it once the update is installed." (a path
+      through any link reads as no path at all). No restart either way. A site must install by replacing the file at
+      a path with no symlink in it, never by swapping a link.
 - [ ] **An unsupervised service that exits stays down.** `svc_stop`, then run the service in the foreground:
       `CAIRN_CONN="$SERVICE_CONN" "$NODE_DIR/cairn-node" --key "$NODE_KEY" terminal-service`. In another terminal,
       `psql "$CONN" -c "UPDATE node_schema SET schema_hash = NULL"`. Within 5 s it prints the "schema changed" line
@@ -4531,9 +4535,18 @@ psql -d cairn_heal_probe -c "SELECT l.relation::regclass, l.mode FROM pg_locks l
 ```
 
 - [ ] Record the relations the heal holds stronger than `AccessShareLock`, and its `elapsed_ms` (the script prints it
-      from `reproject_log`). It holds every lock to its end, so a clinical read or write that needs one of them waits
-      that long. Time one read of such a table from the second terminal (`\timing on`). **A wait over 15 s is a
-      finding**: file it, never widen the budget. Then `dropdb cairn_heal_probe`.
+      from `reproject_log`).
+- [ ] Still during step (2), time a WRITE to an existing projection row: one more `dob` assertion for bench patient
+      `…00a`, whose `dob` row the heal re-projects. The heal's upserts (`INSERT … ON CONFLICT DO UPDATE`) lock every row
+      they touch, even one their `WHERE` leaves unchanged, and hold those row locks to the heal's end, so this write
+      waits for the whole heal (a medication Stop or a demographics edit on a node would too); a read does not wait.
+
+      ```bash
+      psql -d cairn_heal_probe -c "\timing on" -c "INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address, body, contributors, signer_key_id, plaintext_twin) VALUES (uuidv7(), '00000000-0000-7000-8000-00000000000a', 'demographic.field.asserted', 'bench-1', 1900000000000, 0, 'bench-node', 'heal-probe'::bytea, '\x1220'::bytea || digest('heal-probe'::bytea, 'sha256'), jsonb_build_object('field', 'dob', 'value', '1970-01-01', 'provenance', 'patient-reported'), '[]'::jsonb, 'bench-key', 'heal probe write')"
+      ```
+
+      Record its time. **Over 15 s is a finding** (design §4.6: the heal holds a clinical table past the cut-off):
+      file it, never widen the budget. Then `dropdb cairn_heal_probe`.
 
 **Measurement 8 — a remote terminal untouched at its lock learns of an upgrade (≤ 75 s).** Its connection runs only
 through the service's gateway, so the service's exit on the new stamp drops it, and nothing at an untouched lock but
@@ -4574,7 +4587,7 @@ for any later section (the warning above).
 | The upgrade's `real` time under the reader (context) | 1 | | | — | |
 | An untouched lock screen → restarted (minutes, context) | 1 | | | — (≤ about 2 min) | |
 | The node back → the waiting window restarted | 1 | | | ≤ 70 s | |
-| The heal's `elapsed_ms`, ~100 k events, and the longest wait of a read behind it | 1 | | | > 15 s is a finding | |
+| The heal's `elapsed_ms`, ~100 k events, and the wait of a write behind it | 1 | | | > 15 s is a finding | |
 
 | Behaviour | Verdict | Notes |
 |---|---|---|
@@ -4584,7 +4597,7 @@ for any later section (the warning above).
 | The calm line within 60 s; nothing else changes | | |
 | Update now: nothing newer → "No newer version is installed…", no restart | | |
 | Update now: too new → "…does not fit this node yet.", no restart | | |
-| A restart waits for a Sign in flight; the draft survives the restart | | |
+| A Sign cut off at 15 s keeps its chart and stops the restart; the draft survives a restart | | |
 | An untouched lock screen restarts; someone typing at it is never restarted under | | |
 | The idle re-lock restarts into a fitting install | | |
 | The node unreachable: "cannot reach the node right now", no restart, nothing closed; restarted and working once it is back | | |
@@ -4599,12 +4612,14 @@ for any later section (the warning above).
 - **The floor and the stamp:** `cairn-event`'s `schema_generation` ledger tests;
   `crates/cairn-node/tests/schema_replay_gate.rs::the_floor_is_stamped_and_read_only_for_its_own_generation`;
   `src/window_floor_tests.rs` (`window_verdict_cases`, `install_fit_cases`).
-- **The doors:** `tests/window_door_surface.rs` (the snapshot and the pure `door_drift`).
+- **The doors:** `tests/window_door_surface.rs` (the snapshot, the pure `door_drift`, and `raise_excuses`: a raise
+  excuses only a snapshot whose `# generation N` predates it).
 - **The replay:** `tests/replay_lock_timeout.rs` (a waiting change lets readers through and lands; the loader's
   connection keeps no `lock_timeout`; a failing file's text is `load_migration`'s) and `src/replay_wait_tests.rs`.
 - **The service:** `tests/terminal_service_stamp.rs` and `terminal_service/run.rs`'s unit tests (the 5 s tick; an
   unread stamp stops the startup, never the loop).
-- **The window:** `cairn-gui-tauri`'s `update_tests.rs` (the printed line, a hung program, the gate, mock) and
-  `update_webview_tests.rs` (the copy, the restart's order, the lock-screen idle period).
+- **The window:** `cairn-gui-tauri`'s `update_tests.rs` (the printed line, the flag read before clap, a hung program,
+  the gate, mock) and `update_webview_tests.rs` (the copy, the restart's order and an act that did not settle well,
+  the lock-screen idle period).
 
 `TEMPLATE.md` carries a matching block (*An upgrade disturbs no one*).

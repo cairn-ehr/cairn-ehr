@@ -20,8 +20,19 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **A new state value the window renders raises the floor**, even though no door vanished. `window_door_surface.rs`
   catches a removed function or column, never a changed meaning (an old window would show a new hold state as an
   active medication). **Tempting wrong fix:** "the door guard passed, so the floor can stay". Pin: none; it is
-  `CONTRIBUTING.md`'s migration checklist line and the ledger entry's reason. While the ledger's last entry is a
-  raise (85 today), the door guard excuses every vanished door, so it bites only from generation 86's entry.
+  `CONTRIBUTING.md`'s migration checklist line and the ledger entry's reason.
+- **A raise excuses a vanished door only while the snapshot predates it.** `db/window_door_surface.txt`'s first line,
+  `# generation N`, is written on every regeneration, and `window_door_surface.rs` excuses vanished doors only when the
+  ledger's last entry raised the floor AND that header is older than `SCHEMA_GENERATION`. Regenerated at 85, the guard
+  bites now, an in-place edit at 85 (ADR-0080) included. **Tempting wrong fix:** drop the header, or excuse on the raise
+  alone, which excuses every door dropped at the raising generation for that generation's whole life. Pins:
+  `window_door_surface.rs::a_raise_excuses_only_a_snapshot_older_than_the_generation`,
+  `the_snapshot_header_names_its_generation`, `only_1_regenerates`.
+- **A raise must not remove a door the open chart uses.** A window below the floor still finishes the chart in hand,
+  on the doors it has, and the guard excuses every door a raise removes. Raise first; remove the door one generation
+  later, listing it in `db/window_not_facing.txt` (no window at or above the floor faces it any more). **Tempting wrong
+  fix:** raise and remove in one generation "because the raise excuses it": the clinician finishing a chart on an old
+  window loses the door mid-chart. Pin: none; review.
 - **The floor counts only when `window_floor_for` equals the stamp's `version`**, and an absent floor means the
   database's own generation. cairn-sync restamps the version without touching the floor. **Tempting wrong fix:**
   read `window_floor` alone. Pin:
@@ -67,16 +78,26 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `an_update_waiting_opens_any_chart`; `update_webview_tests.rs::the_alert_never_closes_the_open_chart`.
 - **A restart asks the installed program first, and waits for every act and the close.** `restartIfFits` calls
   `installed_program` before anything, and `signsSettled` and `closeChart` before `restart_window`; a hung or garbled
-  program reads as not installed. **Tempting wrong fix:** restart at once "because the user pressed Update now": an
-  unchanged program brings the same line back, and a too-new one turns the terminal dark. Pins:
+  program reads as not installed. An act that did not settle well (`SETTLED_WELL`, as `findAnotherPatient` reads it,
+  #1130) keeps its chart and restarts nothing: its outcome is said only on that chart. **Tempting wrong fix:**
+  restart at once "because the user pressed Update now": an unchanged program brings the same line back, and a
+  too-new one turns the terminal dark; or ignore what `signsSettled` returned, which closes a Sign's "not known
+  whether it was recorded" away. Pins:
   `update_webview_tests.rs::a_restart_asks_first`, `a_restart_waits_for_acts_and_the_close`;
   `update_tests.rs::a_hung_program_reads_as_not_installed`, `a_garbled_line_is_not_installed`.
 - **At the terminal lock the poll restarts only after a whole idle period with no touch, checked before AND after
   the installed program answers** (it may take 5 s). Someone typing a passphrase is never restarted under.
   **Tempting wrong fix:** restart whenever the lock shows, or check only before the install check. An Update now
-  press during that attempt joins it (`updatePressed`); it is a touch, and must not make the attempt give up. Pins:
+  press during that attempt joins it (`updatePressed`); it is a touch, and must not make the attempt give up. The
+  restart after the idle re-lock re-checks the same way (`restartIfFits(idleForAWholePeriod)`). Pins:
   `update_webview_tests.rs::the_lock_screen_restart_needs_a_full_idle_period`,
-  `a_press_during_an_idle_attempt_counts`.
+  `a_press_during_an_idle_attempt_counts`, `the_relock_and_the_close_hand_over_once_done`.
+- **`--print-schema-generation` and its `<generation> <64 hex>` line never change, and the flag is read before
+  clap.** An OLDER window runs the NEWER program with it (`update::PRINT_FLAG`), so a renamed flag, a changed line,
+  or clap refusing the arguments first makes every older window read "not installed" for good.
+  `update::asks_for_generation_line(std::env::args_os())` runs before `Cli::parse()`. **Tempting wrong fix:** make it
+  a clap `#[arg(long)]` again "for --help": a required argument a later build adds then stops clap before the flag is
+  seen. Pins: `update_tests.rs::the_print_flag_is_read_before_clap`, `the_printed_line_round_trips`.
 - **The terminal service exits 75 only on a changed stamp, never on an unread one.** At startup an unread stamp
   refuses to start; in the loop it is logged once and the loop carries on. **Tempting wrong fix:** exit on any error
   "to be safe": a dropped connection would restart the service and end every remote session. Pins:

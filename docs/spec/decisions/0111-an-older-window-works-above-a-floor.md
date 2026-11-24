@@ -70,19 +70,21 @@ clinic with no IT replaces them by hand.
    (`conn_posture::schema_verdict`): it is node-side and upgraded with the node (decision 8).
 
 3. **The window's doors stay additive within the floor** (design §4.3, ADR-0021). `db/window_door_surface.txt` is a
-   committed, sorted snapshot of what `cairn_window` can reach after a full load:
-   `fn <regprocedure> -> <result type>` for each `public` function it may `EXECUTE` (`has_function_privilege`, so
-   inheritance from `cairn_agent` and PUBLIC's default `EXECUTE` count), and `col <relation>.<column>` for each
-   `public` column it may `SELECT` (`has_column_privilege`). The test `window_door_surface.rs` compares that snapshot
-   with the catalogue, so a drop-and-recreate with the same signature and result is no change. A vanished entry fails
-   unless it is listed in `db/window_not_facing.txt` with a reason, or the ledger's last entry raised the floor. A
-   new entry fails until the snapshot is regenerated with
-   `CAIRN_REGEN_DOOR_SURFACE=1 cargo test -p cairn-node --test window_door_surface`, which adds new entries and drops
-   a vanished one only under those two exemptions. **Extension-owned objects are excluded** (build-time ruling): a
-   `pg_depend` row of `deptype = 'e'`, everything `cairn_pgx` installs, moves with the extension's version rather
-   than `db/*.sql` and differs between machines. The guard catches a removed door, never a changed meaning:
-   `CONTRIBUTING.md`'s migration checklist says a new state value in anything the window renders raises the floor,
-   and the ledger's reason and the reviewer carry that.
+   committed, sorted snapshot of what `cairn_window` can reach after a full load: `fn <regprocedure> -> <result type>`
+   for each `public` function it may `EXECUTE` (`has_function_privilege`, so inheritance from `cairn_agent` and PUBLIC's
+   default `EXECUTE` count), and `col <relation>.<column>` for each `public` column it may `SELECT`
+   (`has_column_privilege`). The test `window_door_surface.rs` compares that snapshot with the catalogue, so a
+   drop-and-recreate with the same signature and result is no change. A vanished entry fails unless it is listed in
+   `db/window_not_facing.txt` with a reason, or the ledger's last entry raised the floor and the snapshot was recorded
+   at an older generation: its first line, `# generation N`, says which, so once the snapshot is regenerated at the
+   raising generation an in-place edit at that generation (ADR-0080) that drops a door fails like any other. A new entry
+   fails until the snapshot is regenerated with
+   `CAIRN_REGEN_DOOR_SURFACE=1 cargo test -p cairn-node --test window_door_surface` (only `=1` regenerates), which
+   writes today's header, adds new entries and drops a vanished one only under those two exemptions. **Extension-owned
+   objects are excluded** (build-time ruling): a `pg_depend` row of `deptype = 'e'`, everything `cairn_pgx` installs,
+   moves with the extension's version rather than `db/*.sql` and differs between machines. The guard catches a removed
+   door, never a changed meaning: `CONTRIBUTING.md`'s migration checklist says a new state value in anything the window
+   renders raises the floor, and the ledger's reason and the reviewer carry that.
 
 4. **The window learns the verdict at launch and on a 60 s poll** (design §4.4). At launch it reads the stamp on its
    non-loading connection: refused opens nothing, as before; below the floor opens nothing and says "This window is
@@ -96,18 +98,22 @@ clinic with no IT replaces them by hand.
    is **the poll's next tick** (plan-time call): `connection.rs` is over its cap (#1164), so the #807 reopen itself
    checks nothing. **A lost connection or a failed read keeps the last verdict** (build-time ruling): a blip neither
    lifts a below-floor alert nor raises one. The poll also keeps the last stamp it read (`AppState::last_stamp`,
-   seeded at launch). A refusal learned mid-session (another loader restamped the database) reads as below the floor
-   with no reason, the safe direction (build-time ruling). `--mock` reads as current and never restarts.
+   seeded at launch). A refusal learned mid-session (another loader restamped the database, or it was restored to an
+   older generation) is gated as below the floor, the safe direction (build-time ruling), but its alert is the
+   refusal's own sentence, not the below-floor copy. `--mock` reads as current and never restarts.
 
 5. **Inside the floor, the calm line and Update now** (design D2, D3). The window shows "An update is waiting; it
    installs when this terminal is next idle." with **Update now**, and nothing else changes. Update now, the idle
    re-lock and the restarts below all run one sequence (`restartIfFits`). First the window asks the program now
    installed at its own path for its generation (`--print-schema-generation`, which prints `<generation> <64 hex>` and
-   exits, connecting to nothing), with a **5 s** timeout; a program that fails, hangs or prints anything else reads as
-   not installed. It is judged against a stamp read just now, else the last stamp read, and **only a fresh stamp can
-   lead to a restart** (build-time, fix round 2): a window relaunched while the node does not answer would exit at its
-   first connect, and the terminal would be gone. A restart from the lock screen's poll asks again, after that answer,
-   whether nobody has touched the terminal; an Update now press made meanwhile joins that attempt instead. Then:
+   exits, connecting to nothing), with a **5 s** timeout. The flag and its line are a contract across generations, since
+   an older window asks a newer program: neither ever changes, and the program reads the flag from its raw arguments
+   before clap parses anything, so no argument a later build requires or refuses can stop the answer; a program that
+   fails, hangs or prints anything else reads as not installed. It is judged against a stamp read just now, else the
+   last stamp read, and **only a fresh stamp can lead to a restart** (build-time, fix round 2): a window relaunched
+   while the node does not answer would exit at its first connect, and the terminal would be gone. A restart from the
+   lock screen's poll asks again, after that answer, whether nobody has touched the terminal; an Update now press made
+   meanwhile joins that attempt instead. Then:
    - `same` (nothing newer installed, whatever the node says): "No newer version is installed on this terminal yet —
      ask whoever installs Cairn here." and no restart;
    - `does_not_fit` (this database, on a fresh or the cached stamp, would refuse it or tell it to update): "The
@@ -116,14 +122,18 @@ clinic with no IT replaces them by hand.
    - `unreachable` (it fits only the cached stamp, or no stamp has ever been read): "This terminal cannot reach the node
      right now; the update installs once it can." It closes nothing and does not restart; at an idle lock the next
      poll that reads the stamp tries again;
-   - `fits` (on a fresh stamp): every Sign in flight settles, the chart closes with its queued saves awaited, and the
-     window restarts (Tauri's `AppHandle::restart`). The held key and the claim live in the window's memory and go
-     with it.
+   - `unknown_install` (a live window that cannot name its own program's path, the symlink limit below): "This
+     terminal cannot check which version is installed here; restart it once the update is installed." and no restart;
+   - `fits` (on a fresh stamp): the act in flight settles, the chart closes with its queued saves awaited, and the
+     window restarts (Tauri's `AppHandle::restart`). An act that did not settle well (a Sign cut off at 15 s, say)
+     keeps its chart on screen and nothing restarts, as "Find another patient" does (#1130): its outcome is said only
+     there. The held key and the claim live in the window's memory and go with it.
 
-   With an update waiting the sequence runs after the idle re-lock, after a chart close while the terminal lock is
-   showing, and at the terminal lock after a whole idle period with no touch. That last case covers **a terminal
-   nobody has touched since it started** (plan-time call): `idle.js` arms its timer only at a first touch, and
-   `lastActivityAt` starts at the page load. Someone typing a passphrase at the lock is never restarted under.
+   With an update waiting the sequence runs after the idle re-lock (giving up, like the poll's, if someone touches the
+   lock while the installed program answers), after a chart close while the terminal lock is showing, and at the
+   terminal lock after a whole idle period with no touch. That last case covers **a terminal nobody has touched since it
+   started** (plan-time call): `idle.js` arms its timer only at a first touch, and `lastActivityAt` starts at the page
+   load. Someone typing a passphrase at the lock is never restarted under.
 
 6. **Below the floor, the chart in hand is finished and no other is opened** (design §4.5). A persistent alert says
    "This terminal needs its update: it does not show <reason>. Finish what you are doing." with Update now (with no
@@ -136,16 +146,16 @@ clinic with no IT replaces them by hand.
 
 7. **The replay waits for its locks** (design D6, §4.6). `connect_and_load_schema` sets `lock_timeout` to
    `REPLAY_LOCK_TIMEOUT` (`2s`) right AFTER it takes the loader-against-loader advisory lock, so that wait stays
-   blocking, and runs every replayed file, `cairn_readjudicate_deferred()` and the post-upgrade heal through one retry
-   loop (`replay_wait::retry_on_lock_timeout`). Only `55P03` is retried: the loop sends `ROLLBACK` (a timeout inside a
-   file's own `BEGIN` leaves the session aborted, and a bare retry would fail `25P02`), prints one line naming the
-   step and the sessions that **may** be holding the lock, sleeps, and runs the WHOLE step again, indefinitely. The
+   blocking, and runs every replayed file, `cairn_readjudicate_deferred()`, the post-upgrade heal and the stamp through
+   one retry loop (`replay_wait::retry_on_lock_timeout`). Only `55P03` is retried: the loop sends `ROLLBACK` (a timeout
+   inside a file's own `BEGIN` leaves the session aborted, and a bare retry would fail `25P02`), prints one line naming
+   the step and the sessions that **may** be holding the lock, sleeps, and runs the WHOLE step again, indefinitely. The
    pause is 250 ms, doubling, capped at 5 s. Re-running a whole file is safe because every file is already replayed
    whole on every changed connect and so must be idempotent. The blocker line is a heuristic (build-time ruling):
    `pg_blocking_pids` is empty once the timeout has cancelled the wait, so the line lists, oldest first and at most
-   five, the sessions in this database holding a table lock inside a transaction open at least as long as the
-   timeout. A file's other errors keep exactly the text `load_migration` gives them (#467). After the stamp,
-   `RESET lock_timeout`: the loader's client lives on as the daemon's connection.
+   five, the sessions in this database holding a table lock inside a transaction open at least as long as the timeout. A
+   file's other errors keep exactly the text `load_migration` gives them (#467). After the stamp, `RESET lock_timeout`:
+   the loader's client lives on as the daemon's connection.
 
 8. **The terminal service exits for its supervisor on a new schema** (design §4.7). It re-reads the stamp every
    **5 s** (`STAMP_TICK`) with the exact check, so an in-place fix counts too. On a mismatch it prints "the node's
@@ -178,21 +188,26 @@ cut-off during an upgrade; one line of calm text, read once. RUNBOOK §40 measur
 - An upgrade of the node no longer refuses every terminal's next launch. A window at or above the floor keeps working
   and installs the update at its next idle moment, or at Update now; one below it finishes the chart in hand.
 - Every generation bump must say, in the ledger, whether an older window still shows the database correctly.
-- A replay step waits at most ~2 s at a time for a lock, so a clinical read or write queued behind that wait is held
-  about as long. A lock the step already holds is not bounded (the heal, below).
+- A replay step waits at most ~2 s for any ONE lock, so a clinical read or write queued behind that wait is held about
+  as long by it. The bound is per wait: a file's transaction keeps the locks it already holds through its later waits
+  and its own run, and each early retry can give readers another ~2 s stall. A lock the step already holds is not
+  bounded (the heal, below).
 - The terminal service must run under a supervisor that restarts it, or an upgrade stops it.
 
 ## What is still not guaranteed
 
 - **The floor is a human judgement.** Decision 3 catches a removed door, never a changed meaning; a careless ledger
   entry lets a new state through to an old window. The checklist line and review are the defence.
-- **The door guard is vacuous for now.** Its exemption reads the ledger's LAST entry, and the only entry, 85, is a
-  raise, so until generation 86's entry every vanished door is excused, one dropped by an in-place edit at 85
-  included.
+- **A raise excuses every door it removes.** The guard cannot tell a door the open chart uses from any other, so a
+  raise must not remove one: a window below the floor still finishes the chart in hand on it. Raise first, and remove
+  the door one generation later (that generation's guard then needs it in `db/window_not_facing.txt`, since no window
+  at or above the floor faces it).
 - **The floor may rise often**, if most generations add states the window renders; D1 then degrades towards "until a
   natural break" for those generations. The alert says why.
 - **The heal may hold locks longer than any DDL**, and a lock wait restarts the whole heal, which costs a busy node
-  repeated work. RUNBOOK §40 measures its longest lock on the 100 k-event rig; past 15 s it is a finding.
+  repeated work. Its upserts lock every projection row they touch and hold those row locks to its end, so a WRITE to
+  an existing projection row (a Stop on a medication, a demographics edit) waits for the whole heal; a read does not.
+  RUNBOOK §40 measures such a write on the 100 k-event rig; past 15 s it is a finding.
 - **The re-adjudication swallows its lock timeout** (#1175): db/043 runs each promotion inside `EXCEPTION WHEN OTHERS`,
   which records the `55P03` as the marker's `adjudication_error`, so the retry of decision 7 never sees it. The event
   stays deferred until a later loader verb runs (#912). Nothing is lost.
@@ -200,8 +215,8 @@ cut-off during an upgrade; one line of calm text, read once. RUNBOOK §40 measur
   then does nothing useful until someone installs the update. C2 removes this.
 - **A symlink never updates.** Tauri reads the running program's path once, when it loads (`STARTING_BINARY`). On
   Linux it resolves symlinks, so an install that swaps a link leaves the window asking about the old file. On macOS a
-  path with a symlink anywhere in it (`/tmp` is one) reads as no path at all, so that window never finds an install.
-  An install must replace the file, at a path with no symlink in it.
+  path with a symlink anywhere in it (`/tmp` is one) reads as no path at all, so that window says it cannot check
+  which version is installed and never restarts. An install must replace the file, at a path with no symlink in it.
 - **A front door below the floor waits.** With no chart open and the terminal unlocked, nothing restarts until the
   idle re-lock or Update now.
 - **An unsupervised service that exits stays down**, and so do registration, the commit tick and every remote
