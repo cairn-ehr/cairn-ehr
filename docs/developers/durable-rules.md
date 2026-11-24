@@ -38,6 +38,13 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   sequence, not a time bound: it is safe only once no window below the floor can still have a chart open, and nothing
   checks that. **Tempting wrong fix:** raise and remove in one generation "because the raise excuses it": the
   clinician finishing a chart on an old window loses the door mid-chart. Pin: none; review.
+- **A long-lived dev database can fail the door guard on a leftover column** that no `db/*.sql` creates any more. In
+  2026-11, `cairn_test` kept an empty `medication_charting.restores` from an intermediate db/080 commit, so the guard
+  reported it as an unrecorded door. The guard is telling the truth. **Tempting wrong fix:** regenerate the snapshot from
+  that database. That writes the leftover into the snapshot, and every fresh database (CI's included) then fails with a
+  "vanished" door. Instead, check the snapshot against a fresh database (`CREATE DATABASE`, `CREATE EXTENSION cairn_pgx`,
+  then run the test against it). If it passes there, drop the leftover column from the stale database. Pin: CI's fresh
+  database.
 - **The floor counts only when `window_floor_for` equals the stamp's `version`**, and an absent floor means the
   database's own generation. cairn-sync restamps the version without touching the floor. **Tempting wrong fix:**
   read `window_floor` alone. Pin:
