@@ -3113,21 +3113,28 @@ async fn run() -> anyhow::Result<()> {
             cairn_node::conn_posture::require_local(&cli.conn)?;
             let sk = load_signing_key(&cli.key, false)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
-            let stamp = cairn_node::db::read_schema_stamp(&db).await?;
-            cairn_node::conn_posture::schema_verdict(
-                stamp.as_ref(),
-                "terminal service",
-                "provision-terminal-service-role",
-            )
-            .map_err(|e| anyhow::anyhow!(e))?;
+            cairn_node::terminal_service::run::stamp_still_ours(&db).await?;
             // Then the login can claim requests and the key is the node's own (final review F4).
             let origin = cairn_node::terminal_service::startup::check(&db, &sk).await?;
             if gateway_listen.is_some() {
                 cairn_node::terminal_service::startup::check_gateway(&db).await?;
             }
             drop(db);
-            eprintln!("terminal service running");
-            cairn_node::terminal_service::run::run(&cli.conn, &sk, &origin, gateway_listen).await?;
+            eprintln!(
+                "terminal service running (it exits with status 75 when the node's schema \
+                 changes: run it under a supervisor that restarts it)"
+            );
+            use cairn_node::terminal_service::run as svc;
+            if let Err(e) = svc::run(&cli.conn, &sk, &origin, gateway_listen).await {
+                if let Some(changed) = e.downcast_ref::<svc::StampChanged>() {
+                    eprintln!(
+                        "the node's schema changed ({changed}); exiting so the supervisor \
+                         restarts this service with the new build"
+                    );
+                    std::process::exit(svc::SCHEMA_CHANGED_EXIT);
+                }
+                return Err(e);
+            }
         }
         Cmd::Status { passphrase } => {
             let db = cairn_node::db::connect(&cli.conn).await?;
