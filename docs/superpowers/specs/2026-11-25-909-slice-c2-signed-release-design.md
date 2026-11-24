@@ -1,6 +1,6 @@
 # #909 slice C2: a terminal follows its node — the signed window release — design
 
-Status: **draft 2026-11-25**, brainstormed with the maintainer. Parent:
+Status: **draft 2026-11-25, awaiting approval**, brainstormed with the maintainer. Parent:
 [`2026-11-24-909-slice-c1-rollout-design.md`](2026-11-24-909-slice-c1-rollout-design.md) §9 (and its D4). Builds the
 first code of [ADR-0055](../../spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md)
 (issue #257's verifier) on top of [ADR-0110](../../spec/decisions/0110-the-pinned-terminal-gateway.md)'s pinned link and
@@ -28,6 +28,13 @@ root it holds independently of the node.
   node's word for it. (Played back and confirmed: "nothing wrong".)
 - **D3. Terminals are Linux only.** A machine running a full Windows or macOS should run a node instead (sign-in
   slice 5), not be a terminal. No macOS notarisation, no Windows code-signing in this slice.
+- **D5. A terminal follows every window release**, including one that changes only the window with the same schema
+  (a fix to the screen clinicians type their passphrase into must reach every terminal). So a window artifact carries
+  its release version, and C1's install check compares it as well as the generation line (§4.1, §4.4).
+- **D6. One terminal platform: ARM (`aarch64`) on a Raspberry Pi, a minimal Debian-based distribution with long-term
+  support** — terminals are the minimalist answer for ultra-low-resource sites. One platform means one release build
+  per release. Which Debian release that is (the one current Raspberry Pi OS Lite 64-bit is based on, at build time)
+  is the builder's to check; the manifest's `platform` names it, so a later platform is additive.
 - **D4. Approach A** (§3): the bytes come through the existing pinned gateway as database doors; a small root-owned
   installer on the terminal verifies and swaps the program in; C1's restart picks it up.
 
@@ -84,12 +91,12 @@ node's own load gate (#257) add its artifacts later without a new format. The no
 installer both read "newer" as a higher `release_version` on that one channel.
 
 **Manifest content for a window artifact** (the part this slice adds to the bundle shape): per artifact, `os` (`linux`
-only today), `arch` (`x86_64`, `aarch64`), `platform` (the distribution and release it was built for, because the window
-links the system's WebKitGTK and glibc; Q2), the digest, the byte length, and the window's **generation line** — the exact
+only today), `arch` (`aarch64` only today, D6), `platform` (the distribution and release it was built for, because the window
+links the system's WebKitGTK and glibc; D6), the digest, the byte length, and the window's **generation line** — the exact
 `<generation> <64 hex>` its `--print-schema-generation` prints (C1's durable rule: that line never changes). The node
 and the terminal can then choose an artifact without running it; C1 still runs the installed program before any restart.
 The window artifact also names its **release version**, so a release that changes only the window (same schema) is
-still a newer program (§4.4, open question Q1).
+still a newer program (§4.4, D5).
 
 **Out of the verifier in C2:** the transparency inclusion proof is carried in the format but **not verified** (#258
 builds the log); co-signer floors (policy, §7.9); the node's own DDL and extension load (#257's load-gate half). See §6.
@@ -99,7 +106,7 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
 - **A small signing tool** (a binary of the verifier crate, or its own; builder's call) with: make a genesis root
   document; publish root version N+1; assemble a bundle from built artifacts; sign a manifest. It never runs on a node
   and is never built into the window.
-- **Keys never live in CI or on a node.** CI builds the Linux window for `x86_64` and `aarch64` and publishes the
+- **Keys never live in CI or on a node.** CI builds the window for D6's one platform (`aarch64`, Debian) and publishes the
   artifacts and their digests; the steward reviews them and signs the manifest on their own offline machine (the
   "daily pen", ADR-0055 decision 3). A CI that held the release key would make a CI compromise signed code on every
   terminal. Until reproducible builds exist (#259), the steward signs what CI built: stated, not hidden.
@@ -112,7 +119,7 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
   that says no release channel is configured; tests mint their keys at runtime (house rule 6). The slice merges
   without waiting for the ceremony; the root file lands in its own small PR after it.
 - **CI release builds are new work.** Today CI runs only x86_64 test jobs on ubuntu-24.04 and builds no release
-  artifact; the aarch64 build (native runner or cross) and the artifact publishing are part of this slice's cost.
+  artifact; the aarch64 Debian build (native ARM runner, or a Debian arm64 container) and the artifact publishing are part of this slice's cost.
 
 ### 4.3 The node: intake, store, serve
 
@@ -142,7 +149,7 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
 - On C1's 60 s poll, the window asks the door (§4.3, 1) whether its node holds a release for this machine's
   `(os, arch, platform)` **newer than the installed program's release version** whose generation line fits the
   stamp. This is not gated on C1's "update waiting": a window-only release with the same schema must also be fetched
-  (Q1). C1's `install_fit` and its `InstallView` then compare the release version as well as the generation line, so
+  (D5). C1's `install_fit` and its `InstallView` then compare the release version as well as the generation line, so
   the restart path also restarts into a same-schema newer program.
 - If one is offered and not already staged, it fetches the artifact chunk by chunk into the staging folder (§4.5),
   together with the manifest, signatures and chain segment, and writes a completion marker last.
@@ -177,6 +184,10 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
 - It writes one short status file the window may read (state + a practice-manager sentence) and logs to the journal.
 - **Caps:** it refuses a staged file larger than a fixed ceiling and the staging folder has a quota, so a compromised
   window can at worst fill a bounded folder.
+- **A minimal image has no desktop.** A Lite image runs no graphical session, so the first install also brings a
+  single-app kiosk compositor (licence checked before it is chosen) that starts the window at boot. The installer's
+  pre-swap check (2a) runs without a display, which `--print-schema-generation` already allows (it exits before any
+  window opens).
 - **The first C2-capable program is installed by hand** (the C1 way), together with the installer and its units, as a
   package or script the builder chooses. That is the terminal's genesis: from then on it follows its node.
 
@@ -209,6 +220,9 @@ builds the log); co-signer floors (policy, §7.9); the node's own DDL and extens
 - **A 1-of-1 steward root** (ADR-0055 decision 8): the steward's offline machine is the single point of compromise.
 - **Revocation latency:** a terminal that has not seen root version N+1 still honours a release key N+1 rotated out
   (ADR-0055 decision 6, stated there).
+- **Pi resources.** WebKitGTK on a Pi 4/5 is workable; smaller boards are not a target. The download and the
+  pre-swap check run beside a clinician's work on a small machine, so the plan's RUNBOOK section measures press delay
+  on the Pi itself (§7).
 - **A node restored to an older release** may leave a terminal with a newer window than its database; the installer
   refuses to go back, so that terminal needs a hand fix. Rare; recorded in the RUNBOOK.
 - **Genesis is procedural:** a poisoned first hand-install carries a poisoned pin (ADR-0055 decision 7). The
@@ -221,12 +235,7 @@ loses a step (the restart it leads to is C1's, measured in RUNBOOK §40). The pl
 for one bundle; download time on the LAN for one artifact; the longest press delay measured during a download (budget
 ~200 ms); installer swap time; the end-to-end time from intake to a terminal showing "Update ready".
 
-## 8. Open questions for the maintainer (from the builder check)
-
-- **Q1.** Must a terminal follow a release that changes only the window (same schema)? Proposed **yes** (§4.1, §4.4).
-- **Q2.** Which Linux distribution and release do terminals run?
-
-## 9. Left to the builder
+## 8. Left to the builder
 
 - Crate and binary names; whether the signing tool is a binary of the verifier crate.
 - The exact CBOR field names of the root document and manifest, within ADR-0055's shape and §4.1's window fields.
