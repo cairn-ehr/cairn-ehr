@@ -1066,6 +1066,18 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {}", legible_db_error(&e)))?;
+    // #909 C1: from here on a step that waits on a clinical session's lock steps aside after
+    // REPLAY_LOCK_TIMEOUT and retries (replay_wait), so readers never queue behind it for
+    // long. Set only NOW: the advisory wait above is loader-against-loader and stays blocking.
+    client
+        .batch_execute(&format!(
+            "SET lock_timeout = '{}'",
+            crate::replay_wait::REPLAY_LOCK_TIMEOUT
+        ))
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("setting the replay lock timeout: {}", legible_db_error(&e))
+        })?;
     let stamp = read_schema_stamp(&client).await?;
     let recorded: Option<i32> = stamp.as_ref().map(|s| s.version);
     if let Some(recorded) = recorded {
@@ -1091,7 +1103,7 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     let replay = !replay_can_be_skipped(stamp.as_ref(), embedded, LOADER_BUILD, &schema_hash);
     if replay {
         for (name, sql) in SCHEMA.iter() {
-            load_migration(&client, name, sql).await?;
+            crate::replay_wait::run_waiting(&client, name, sql).await?;
         }
     }
     // ADR-0056 decision 4 (#266): RE-ADJUDICATE FIRST, REPROJECT SECOND.
@@ -1114,15 +1126,14 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // Ordered before the stamp for the same reason the heal is (see the long note below): a
     // failure here must leave the recorded generation at its OLD value so the next connect
     // retries the whole replay-then-adjudicate-then-heal sequence.
-    let promoted = client
-        .query(
+    let promoted = crate::replay_wait::retry_on_lock_timeout(&client, "re-adjudication", || {
+        client.query(
             "SELECT promoted_type, promoted_count FROM cairn_readjudicate_deferred()",
             &[],
         )
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!("re-adjudicating deferred events: {}", legible_db_error(&e))
-        })?;
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("re-adjudicating deferred events: {}", legible_db_error(&e)))?;
     // Granting power is never a silent event: an operator who upgrades a node wants to see
     // which types just became live. Empty on a healthy node, so this prints nothing.
     for row in &promoted {
@@ -1160,13 +1171,14 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // and the projections stay SILENTLY stale — the worst failure mode, and the
     // reason this order is load-bearing, not cosmetic.
     if recorded != Some(embedded) {
-        client
-            .execute(
+        crate::replay_wait::retry_on_lock_timeout(&client, "the post-upgrade heal", || {
+            client.execute(
                 "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
                 &[],
             )
-            .await
-            .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {}", legible_db_error(&e)))?;
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {}", legible_db_error(&e)))?;
     }
     // Stamp only AFTER the full replay (and any heal above) succeeded: a
     // half-applied load must not claim the new generation. loaded_at defaults to
@@ -1201,6 +1213,17 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
                 anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e))
             })?;
     }
+    // This client lives on as the daemon's connection: hand it back with the session's own
+    // lock_timeout (RESET honours one set in the connection string). Error paths drop it.
+    client
+        .batch_execute("RESET lock_timeout")
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "resetting the replay lock timeout: {}",
+                legible_db_error(&e)
+            )
+        })?;
     client
         .execute(
             "SELECT pg_advisory_unlock($1)",
