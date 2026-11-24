@@ -8,7 +8,7 @@
 //! [`REPLAY_LOCK_TIMEOUT`] once it holds the loader-against-loader advisory lock, and runs
 //! each replayed file, the re-adjudication and the heal through this module. A wait longer
 //! than the timeout fails with SQLSTATE `55P03`; the queued readers go through; we roll back,
-//! name the likely blockers, sleep a [`backoff`], and try the WHOLE step again — indefinitely,
+//! name the sessions that may be holding it, sleep a [`backoff`], and try the WHOLE step again — indefinitely,
 //! so the owner can decide what to do about a blocker the log names.
 //!
 //! WHY RE-RUNNING A WHOLE FILE IS SAFE. A file's earlier transactions may already have
@@ -26,6 +26,31 @@ use crate::db_diagnosis::legible_db_error;
 /// How long one replay step may wait for a lock before it steps aside and retries. Short
 /// enough that a reader queued behind it is held ~2 s at most; the figure is the builder's.
 pub const REPLAY_LOCK_TIMEOUT: &str = "2s";
+
+/// Bound this session's lock waits for the replay. [`crate::db::connect_and_load_schema`] calls
+/// it right AFTER taking its advisory load lock, so loader-against-loader waits stay blocking.
+/// Its own batch, outside any transaction, so a replayed file's ROLLBACK cannot undo it.
+pub async fn arm(client: &Client) -> anyhow::Result<()> {
+    client
+        .batch_execute(&format!("SET lock_timeout = '{REPLAY_LOCK_TIMEOUT}'"))
+        .await
+        .map_err(|e| anyhow::anyhow!("setting the replay lock timeout: {}", legible_db_error(&e)))
+}
+
+/// Undo [`arm`] once the stamp is written: the loader's client lives on as the daemon's
+/// connection. RESET returns to the session's own default, so a `lock_timeout` given in the
+/// connection string survives.
+pub async fn disarm(client: &Client) -> anyhow::Result<()> {
+    client
+        .batch_execute("RESET lock_timeout")
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "resetting the replay lock timeout: {}",
+                legible_db_error(&e)
+            )
+        })
+}
 
 /// `55P03` (`lock_not_available`) is what a `lock_timeout` raises. Only that one is retried:
 /// any other failure — a deadlock, a statement timeout, a broken file — is reported at once.
@@ -85,7 +110,8 @@ where
     }
 }
 
-/// One line naming the sessions most likely holding the lock we gave up on.
+/// One line naming the sessions that MAY be holding the lock we gave up on — candidates to
+/// look at, never a verdict: an operator must not end a session on this line alone.
 ///
 /// Why not `pg_blocking_pids(pg_backend_pid())`: it lists who blocks a wait IN PROGRESS, and
 /// once the timeout has cancelled our statement we wait on nothing, so it is always empty
@@ -117,7 +143,7 @@ async fn blockers(client: &Client) -> String {
                     format!("{app} (pid {pid}, transaction open {open_for})")
                 })
                 .collect();
-            format!("likely held by: {}", named.join(", "))
+            format!("these sessions may be holding it: {}", named.join(", "))
         }
         Err(e) => format!("could not list the blockers: {}", legible_db_error(&e)),
     }

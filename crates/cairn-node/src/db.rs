@@ -1066,18 +1066,8 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {}", legible_db_error(&e)))?;
-    // #909 C1: from here on a step that waits on a clinical session's lock steps aside after
-    // REPLAY_LOCK_TIMEOUT and retries (replay_wait), so readers never queue behind it for
-    // long. Set only NOW: the advisory wait above is loader-against-loader and stays blocking.
-    client
-        .batch_execute(&format!(
-            "SET lock_timeout = '{}'",
-            crate::replay_wait::REPLAY_LOCK_TIMEOUT
-        ))
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!("setting the replay lock timeout: {}", legible_db_error(&e))
-        })?;
+    // #909 C1: time out lock waits only NOW — the advisory wait above stays blocking.
+    crate::replay_wait::arm(&client).await?;
     let stamp = read_schema_stamp(&client).await?;
     let recorded: Option<i32> = stamp.as_ref().map(|s| s.version);
     if let Some(recorded) = recorded {
@@ -1213,17 +1203,8 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
                 anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e))
             })?;
     }
-    // This client lives on as the daemon's connection: hand it back with the session's own
-    // lock_timeout (RESET honours one set in the connection string). Error paths drop it.
-    client
-        .batch_execute("RESET lock_timeout")
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "resetting the replay lock timeout: {}",
-                legible_db_error(&e)
-            )
-        })?;
+    // After the stamp: the client lives on as the daemon's connection (error paths drop it).
+    crate::replay_wait::disarm(&client).await?;
     client
         .execute(
             "SELECT pg_advisory_unlock($1)",
