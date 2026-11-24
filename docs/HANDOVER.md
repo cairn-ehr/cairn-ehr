@@ -187,7 +187,7 @@
    now on the calm line; the update installs at the idle re-lock; C1 = IT installs, C2 = the terminal fetches a
    signed release from its node, later): design
    [`superpowers/specs/2026-11-24-909-slice-c1-rollout-design.md`](superpowers/specs/2026-11-24-909-slice-c1-rollout-design.md),
-   builder-checked, **awaiting the maintainer's approval → then the plan**. **Slice B must not ship to a site
+   builder-checked and APPROVED 2026-11-24; plan [`superpowers/plans/2026-11-24-909-slice-c1-rollout.md`](superpowers/plans/2026-11-24-909-slice-c1-rollout.md) (8 tasks), **awaiting review → build**. **Slice B must not ship to a site
 >    until slice C is settled.** RUNBOOK §38 and §39 (two machines) are owed by a human. **Otherwise:** sign-in
 >    **slice 4** (the emergency key, design §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and
 >    Pi figures (ROADMAP has the Mac figures); or the next whole-project review. Design §10's findings 1–2 are decided

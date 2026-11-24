@@ -1,6 +1,6 @@
 # #909 slice C1: an upgrade disturbs no one — the window floor, the waiting update, the lock timeout — design
 
-Status: **draft, 2026-11-24**, brainstormed with the maintainer (PR #1173 began it; this session finished it).
+Status: **approved 2026-11-24**, brainstormed with the maintainer (PR #1173 began it; this session finished it).
 Parent: [`2026-11-16-pinned-terminal-link-909-design.md`](2026-11-16-pinned-terminal-link-909-design.md) §6, which
 made the rollout its own slice. Slice C2 (a terminal fetches its new program from its node) is a later slice with its
 own brainstorm (§9).
