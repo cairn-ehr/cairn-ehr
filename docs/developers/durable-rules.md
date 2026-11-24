@@ -43,12 +43,16 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   fix:** retry every error "since the replay is idempotent": a broken file would loop forever. Pins:
   `replay_wait_tests.rs::only_55p03_is_a_lock_timeout`,
   `replay_lock_timeout.rs::a_failing_file_reads_the_same_through_run_waiting_as_through_load_migration`.
-- **`update_state` never reopens a connection, and keeps the last verdict when it cannot read.** It takes the
-  window's one connection with `lock_if_open`; the next act reopens it. A blip must neither lift a below-floor alert
-  nor raise one. **Tempting wrong fixes:** `lock()` "so the poll always has an answer" (a poll then spends the
-  window's reopen attempts), or `current` on a failed read. Pin for `lock_if_open` itself:
-  `cairn-gui-live/tests/reconnect.rs::lock_if_open_never_spends_a_reopen_attempt`. No test pins `update_state`'s use
-  of it or its keep-the-last-verdict branch (each needs a lost connection): review them.
+- **`update_state` REOPENS a lost connection, and keeps the last verdict and stamp when it gets no answer.** It
+  takes the window's one connection with the reopening `lock()` (#807's backoff): the service's exit on a new stamp
+  drops every remote window's connection (its gateway restarts), and an untouched remote terminal at its lock has
+  nothing else that would reopen it, so with `lock_if_open` it would never learn of the upgrade. A lost connection
+  that could not be reopened, or a failed read, changes neither the verdict nor `AppState::last_stamp`; the install
+  check judges against a fresh stamp, else that cached one. **Tempting wrong fixes:** `lock_if_open` "so a poll never
+  spends a reopen attempt" (the review finding that reversed this rule), or `current` on a failed read (a blip would
+  lift a below-floor alert). Pins: `update_tests.rs::a_lost_connection_keeps_the_verdict`,
+  `the_install_check_falls_back_to_the_cached_stamp`, `a_cached_stamp_lets_a_fitting_program_fit`. No test pins
+  that `read_stamp` calls `lock()` rather than `lock_if_open()`: review it.
 - **Below the floor gates only opening a DIFFERENT chart, and registration.** The open chart's re-reads, saves, Sign
   and close never pass `refuse_another_chart`, and the alert never closes the chart. **Tempting wrong fix:** gate
   every database command "to be safe", or close the chart when the alert shows: the clinician must finish the sheet
@@ -60,8 +64,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   unchanged program brings the same line back, and a too-new one turns the terminal dark. Pins:
   `update_webview_tests.rs::a_restart_asks_first`, `a_restart_waits_for_acts_and_the_close`;
   `update_tests.rs::a_hung_program_reads_as_not_installed`, `a_garbled_line_is_not_installed`.
-- **At the terminal lock the poll restarts only after a whole idle period with no touch.** Someone typing a
-  passphrase is never restarted under. **Tempting wrong fix:** restart whenever the lock shows. Pin:
+- **At the terminal lock the poll restarts only after a whole idle period with no touch, checked before AND after
+  the installed program answers** (it may take 5 s). Someone typing a passphrase is never restarted under.
+  **Tempting wrong fix:** restart whenever the lock shows, or check only before the install check. Pin:
   `update_webview_tests.rs::the_lock_screen_restart_needs_a_full_idle_period`.
 - **The terminal service exits 75 only on a changed stamp, never on an unread one.** At startup an unread stamp
   refuses to start; in the loop it is logged once and the loop carries on. **Tempting wrong fix:** exit on any error

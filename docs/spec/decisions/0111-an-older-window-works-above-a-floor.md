@@ -89,19 +89,23 @@ clinic with no IT replaces them by hand.
    older than the node's database can show correctly: it does not show <reason>. Install the window that matches the
    node." (with no reason, "it may not show newer records correctly"); current and update waiting open, and the window
    keeps the verdict. Then `update.js` asks `update_state` once a minute (`UPDATE_POLL_MS = 60000`), and once at
-   startup. It reads the stamp on the window's one shared connection through `lock_if_open`, so **it never reopens a
-   lost connection**. The reconnect re-check is **the poll's next tick** (plan-time call): `connection.rs` is over its
-   cap (#1164), and the upgrade itself drops no connection, so the poll bounds every case at 60 s. **A lost
-   connection or a failed read keeps the last verdict** (build-time ruling): a blip neither lifts a below-floor alert
-   nor raises one. A refusal learned mid-session (another loader restamped the database) reads as below the floor with
-   no reason, the safe direction (build-time ruling). `--mock` reads as current and never restarts.
+   startup. It reads the stamp on the window's one shared connection through `lock()`, so **it reopens a lost
+   connection** (#807, a reopen taking up to 5 s, none tried within 2 s of a failed one). That reopen is needed: the
+   service's exit (decision 8) drops every REMOTE window's connection, which runs only through that service's gateway
+   (ADR-0110), and such a window may sit untouched at its lock with nothing else to reopen it. The reconnect re-check
+   is **the poll's next tick** (plan-time call): `connection.rs` is over its cap (#1164), so the #807 reopen itself
+   checks nothing. **A lost connection or a failed read keeps the last verdict** (build-time ruling): a blip neither
+   lifts a below-floor alert nor raises one. The poll also keeps the last stamp it read (`AppState::last_stamp`,
+   seeded at launch). A refusal learned mid-session (another loader restamped the database) reads as below the floor
+   with no reason, the safe direction (build-time ruling). `--mock` reads as current and never restarts.
 
 5. **Inside the floor, the calm line and Update now** (design D2, D3). The window shows "An update is waiting; it
    installs when this terminal is next idle." with **Update now**, and nothing else changes. Update now, the idle
    re-lock and the restarts below all run one sequence (`restartIfFits`). First the window asks the program now
    installed at its own path for its generation (`--print-schema-generation`, which prints `<generation> <64 hex>` and
    exits, connecting to nothing), with a **5 s** timeout; a program that fails, hangs or prints anything else reads as
-   not installed. Then:
+   not installed. It is judged against a stamp read now, else the last stamp read; with neither it does not fit. A
+   restart from the lock screen's poll asks again, after that answer, whether nobody has touched the terminal. Then:
    - `Same` (nothing newer installed): "No newer version is installed on this terminal yet — ask whoever installs
      Cairn here." and no restart;
    - `DoesNotFit` (this database would refuse it, or tell it to update): "The version installed here does not fit this
@@ -119,8 +123,9 @@ clinic with no IT replaces them by hand.
    reason, "it may not show newer records correctly"). The open chart's re-reads, saves, Sign and close are never
    gated. `crate::update::refuse_another_chart` refuses opening a DIFFERENT chart and **every** registration with
    "This terminal needs its update before it can open another chart."; a registration is refused before anything
-   else is checked. The sequence of decision 5 runs when that chart is closed by hand, after the idle re-lock, or at
-   the terminal lock after a whole idle period.
+   else is checked. The sequence of decision 5 runs whenever that chart closes (`leaveChart`'s success, by hand or
+   by the idle re-lock), after the idle re-lock, or at the terminal lock after a whole idle period; a second run while
+   one is in progress does nothing.
 
 7. **The replay waits for its locks** (design D6, §4.6). `connect_and_load_schema` sets `lock_timeout` to
    `REPLAY_LOCK_TIMEOUT` (`2s`) right AFTER it takes the loader-against-loader advisory lock, so that wait stays
@@ -195,8 +200,11 @@ cut-off during an upgrade; one line of calm text, read once. RUNBOOK §40 measur
 - **An unsupervised service that exits stays down**, and so do registration, the commit tick and every remote
   terminal's gateway with it. A supervisor restarting from a path that still holds the OLD binary gets a service that
   refuses to start, again and again.
-- **A window learns of an upgrade up to 60 s late**, and a restart reuses the launch's arguments, so a window started
-  with `--patient` reopens that chart.
+- **A window learns of an upgrade at its next poll, up to 60 s late.** A remote window, whose connection the
+  service's restart drops, learns at its first poll after the gateway is back, plus that poll's reopen (up to 5 s; a
+  reopen is not tried within 2 s of a failed one). A poll that falls inside the gateway's restart learns nothing, and
+  the next is 60 s later. A restart reuses the launch's arguments, so a window started with `--patient` reopens that
+  chart.
 
 Pins: `cairn-event`'s `schema_generation` ledger tests;
 `crates/cairn-node/src/{window_floor_tests,replay_wait_tests}.rs` and `terminal_service/run.rs`'s unit tests;

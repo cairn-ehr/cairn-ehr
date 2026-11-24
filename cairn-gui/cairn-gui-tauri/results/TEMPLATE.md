@@ -1094,12 +1094,13 @@ Steps: paper *N* = 0 → observed \_\_.
 
 ## An upgrade disturbs no one (#909 slice C1, runbook §40)
 
-Supervisor: launchd / systemd · remote terminal (Measurement 2): ___ · rig events (Measurement 7): ___
+Supervisor: launchd / systemd · remote terminal (Measurements 2 and 8): ___ · rig events (Measurement 7): ___
 
 | Figure | n | median | slowest | Budget | Inside? |
 |---|---|---|---|---|---|
 | Update now → the restarted window's lock, ready | 5 | | | ≤ 10 s | |
 | The service's exit → a remote press reads | | | | ≤ 5 s | |
+| The service's exit → an untouched remote lock restarted | 1 | | | ≤ 75 s | |
 | A clinical press during the upgrade under a 60 s reader | ≥ 9 | | | never past 15 s | |
 | The upgrade's `real` time under the reader (context) | 1 | | | — | |
 | An untouched lock screen → restarted (minutes, context) | 1 | | | — (≤ about 2 min) | |
@@ -1110,7 +1111,7 @@ Steps: paper *N* = 1 → observed \_\_ (idle) / \_\_ (someone working).
 | Behaviour | Verdict | Notes |
 |---|---|---|
 | The service's startup line names status 75 and a supervisor | | |
-| The replay names the long reader and retries until it commits; `lock_timeout` is `0` after | | |
+| The replay names the long reader and retries until it commits | | |
 | The service exits 75 on the new stamp and its supervisor restarts it | | |
 | The calm line within 60 s; nothing else changes | | |
 | Update now: nothing newer → "No newer version is installed…", no restart | | |
@@ -1123,3 +1124,4 @@ Steps: paper *N* = 1 → observed \_\_ (idle) / \_\_ (someone working).
 | Below the floor: a launch is refused, naming the reason | | |
 | A symlink-swap install never updates | | |
 | An unsupervised service that exits stays down | | |
+| An untouched remote terminal at its lock restarts after an upgrade | | |

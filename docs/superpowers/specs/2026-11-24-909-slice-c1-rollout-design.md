@@ -246,8 +246,12 @@ the result.
   exact match would refuse every window after a version bump. The window accepts a stamp whose `loader_build`
   starts with `cairn-node `.
 - **The reconnect re-check is the 60 s poll's next tick** *(plan time)*, not a check inside the #807 reopen (§4.4):
-  `connection.rs` is over its cap (#1164), and the upgrade itself drops no connection, so the poll bounds every case
-  equally.
+  `connection.rs` is over its cap (#1164). **Corrected at build time (Task 8 review):** §4.4's premise that "the
+  upgrade drops no connection" is false for a REMOTE window, whose only link is the terminal service's gateway
+  (ADR-0110), and the service exits on the new stamp (§4.7). So the poll does not "never reopen": `update_state`
+  takes the connection with the reopening `lock()` (#807's 5 s attempt, none within 2 s of a failed one), or an
+  untouched remote terminal at its lock would never learn of the upgrade. A remote window therefore learns at its
+  first poll after the gateway is back.
 - **A never-touched terminal updates too** *(plan time)*. `idle.js` arms its timer only at a first touch, so the
   update also installs when the terminal lock is showing and nobody has touched it for a whole idle period (its clock
   starts at the page load). This replaces §4.5's "or nobody is signed in, it restarts at once": at the lock the window
@@ -256,8 +260,12 @@ the result.
   entry whose floor equals today's. A window two raises behind sees one reason; upgrade that if it ever confuses.
 - **The service checks the stamp every 5 s and exits with status 75** (`EX_TEMPFAIL`) *(plan time; §8 left both to
   the builder)*.
-- **`update_state` keeps the last verdict on a blip** *(build time, controller ruling)*. A lost connection or a
-  failed read returns what the window last knew, not "current", so a below-floor alert never vanishes on a blip.
+- **`update_state` keeps the last verdict on a blip** *(build time, controller ruling)*. A lost connection that
+  could not be reopened, or a failed read, returns what the window last knew, not "current", so a below-floor alert
+  never vanishes on a blip. It also keeps the last stamp read (seeded at launch), and the install check judges a
+  program against a fresh stamp, else that one; only with neither does a program read as not fitting.
+- **The lock-screen restart asks again after the install check** *(build time)*: the installed program may take 5 s
+  to answer, so the poll's restart re-checks that nobody touched the terminal meanwhile.
   A refusal learned mid-session (another loader restamped the database) reads as below the floor with no reason
   (also a build-time ruling): it gates new charts, the safe direction.
 - **Extension-owned objects are excluded from the door snapshot** *(build time, controller ruling)*: a `pg_depend`
