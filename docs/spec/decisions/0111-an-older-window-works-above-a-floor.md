@@ -126,11 +126,12 @@ clinic with no IT replaces them by hand.
    - `unknown_install` (a live window that cannot name its own program's path, the symlink limit below): "This
      terminal cannot check which version is installed here; restart it once the update is installed." and no restart;
    - `fits` (on a fresh stamp): the act in flight settles, the chart closes with its queued saves awaited, and the
-     window restarts (Tauri's `AppHandle::restart`). The act's outcome is taken from the act in flight when the sequence
-     BEGAN, captured before the program is asked: a note's Sign holds the window's one connection, so the install check
-     answers only after that Sign settles, when nothing is in flight any more. An act that did not settle well (a Sign
-     cut off at 15 s, say) keeps its chart on screen and nothing restarts, as "Find another patient" does (#1130): its
-     outcome is said only there. The held key and the claim live in the window's memory and go with it.
+     window restarts (Tauri's `AppHandle::restart`). Two outcomes are read: that of the act in flight when the sequence
+     BEGAN, captured before the program is asked (a note's Sign holds the window's one connection while it writes, so
+     the check may answer once nothing is in flight any more), AND that of any act begun during the check (the program
+     runs up to 5 s without the connection, time enough for a one-click Stop). Either one that did not settle well (a
+     Sign cut off at 15 s, say) keeps its chart on screen and nothing restarts, as "Find another patient" does (#1130):
+     its outcome is said only there. The held key and the claim live in the window's memory and go with it.
 
    With an update waiting the sequence runs after the idle re-lock (giving up, like the poll's, if someone touches the
    lock while the installed program answers), after a chart close while the terminal lock is showing, and at the

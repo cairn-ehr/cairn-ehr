@@ -27,7 +27,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   applies that excuse: check mode fails such a door, saying to regenerate at the raise, and the regeneration bumps the
   header. Regenerated at 85, the guard bites now, an in-place edit at 85 (ADR-0080) included. **Tempting wrong fix:**
   drop the header, excuse on the raise alone, or let check mode pass an excused door, each of which excuses every door
-  dropped at the raising generation for that generation's whole life. Pins:
+  dropped at the raising generation for that generation's whole life. Ordering trap: a regeneration at generation N
+  made BEFORE the ledger's raise at N writes header N, so that raise can no longer excuse a door removed at N; list
+  such a door in `db/window_not_facing.txt`. Pins:
   `window_door_surface.rs::a_raise_excuses_only_a_snapshot_older_than_the_generation`,
   `a_raise_is_applied_only_by_regenerating`, `the_snapshot_header_names_its_generation`, `only_1_regenerates`.
 - **A raise must not remove a door the open chart uses.** A window below the floor still finishes the chart in hand,
@@ -82,12 +84,14 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 - **A restart asks the installed program first, and waits for every act and the close.** `restartIfFits` calls
   `installed_program` before anything, and `signsSettled` and `closeChart` before `restart_window`; a hung or garbled
   program reads as not installed. An act that did not settle well (`SETTLED_WELL`, as `findAnotherPatient` reads it,
-  #1130) keeps its chart and restarts nothing: its outcome is said only on that chart. The act's `signsSettled()`
-  promise is captured BEFORE `installed_program` is asked: a note's Sign holds the window's one connection, so the
-  answer comes only after it settled, when `signInFlight()` is false. **Tempting wrong fix:** restart at once "because
-  the user pressed Update now": an unchanged program brings the same line back, and a too-new one turns the terminal
-  dark; or ignore what `signsSettled` returned, or sample `signInFlight()` after the answer, either of which closes a
-  Sign's "not known whether it was recorded" away. Pins:
+  #1130) keeps its chart and restarts nothing: its outcome is said only on that chart. TWO outcomes are checked: the
+  act in flight when the sequence began, its `signsSettled()` promise captured BEFORE `installed_program` is asked (a
+  note's Sign holds the window's one connection while it writes, so the answer may come once `signInFlight()` is
+  false), and any act begun while the program answered (up to 5 s, without the connection). **Tempting wrong fix:**
+  restart at once "because the user pressed Update now": an unchanged program brings the same line back, and a
+  too-new one turns the terminal dark; or ignore what `signsSettled` returned, sample `signInFlight()` only after the
+  answer, or `await (settling ?? …)`, which never asks about an act begun during the check, so the chart closes over
+  a Sign's "not known whether it was recorded" or a Stop's words. Pins:
   `update_webview_tests.rs::a_restart_asks_first`, `a_restart_waits_for_acts_and_the_close`;
   `update_tests.rs::a_hung_program_reads_as_not_installed`, `a_garbled_line_is_not_installed`.
 - **At the terminal lock the poll restarts only after a whole idle period with no touch, checked before AND after

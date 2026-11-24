@@ -108,8 +108,8 @@ async function pollUpdate() {
 /**
  * Restart into the installed program if it fits this database. Asked first; unchanged or not
  * fitting, say so and keep the chart. Otherwise the idle re-lock's sequence, then the restart —
- * unless the act in flight when this began (or one begun since) did not settle well, which keeps
- * its chart (and its outcome) on screen.
+ * unless the act in flight when this began, or one begun while the program answered, did not
+ * settle well: either keeps its chart (and its outcome) on screen.
  * `stillWanted` is asked again once the program answered (up to 5 s): the idle poll passes its
  * idleness check, so someone who started typing the passphrase meanwhile is not restarted under —
  * unless what they did was press Update now (`updatePressed`), which joins this attempt.
@@ -118,8 +118,9 @@ async function restartIfFits(stillWanted = () => true) {
   if (restarting) return;
   restarting = true;
   try {
-    // Captured BEFORE asking: a note's Sign holds the window's one connection, so the answer
-    // comes only once that Sign has settled, when `signInFlight()` says nothing is in flight.
+    // Captured BEFORE asking: a note's Sign holds the window's one connection while it writes, so
+    // the answer may come once `signInFlight()` has already cleared. This promise still says how
+    // the Sign went (its re-read included).
     const settling = signInFlight() ? signsSettled() : null;
     const installed = await invoke("installed_program");
     if (!updatePressed && !stillWanted()) return;
@@ -127,8 +128,12 @@ async function restartIfFits(stillWanted = () => true) {
       sayUpdate(UPDATE_NOT_NOW[installed.kind] ?? UPDATE_UNREACHABLE);
       return;
     }
-    const outcome = await (settling ?? (signInFlight() ? signsSettled() : null));
-    if (outcome && !SETTLED_WELL.has(outcome)) return;
+    const first = await settling;
+    if (first && !SETTLED_WELL.has(first)) return;
+    // The program ran up to 5 s without the connection: a one-click act (a Stop, an allergy press)
+    // may have begun meanwhile, and its words count as much as the first act's.
+    const later = signInFlight() ? await signsSettled() : null;
+    if (later && !SETTLED_WELL.has(later)) return;
     await closeChart();
     await invoke("restart_window");
   } catch (failure) {

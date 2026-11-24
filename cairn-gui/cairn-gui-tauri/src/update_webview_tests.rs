@@ -47,21 +47,25 @@ fn a_restart_waits_for_acts_and_the_close() {
         "const settling = signInFlight() ? signsSettled() : null;",
     );
     let asked = position(restart, "invoke(\"installed_program\")");
-    let settled = position(
+    // Both checks (second re-review): the act captured before the check, THEN any act begun while
+    // the program answered (up to 5 s without the connection) — a one-click Stop, say. Either one
+    // that did not settle well keeps the chart.
+    let first = position(restart, "const first = await settling;");
+    let first_kept = position(restart, "if (first && !SETTLED_WELL.has(first)) return;");
+    let later = position(
         restart,
-        "const outcome = await (settling ?? (signInFlight() ? signsSettled() : null));",
+        "const later = signInFlight() ? await signsSettled() : null;",
     );
-    let kept = position(
-        restart,
-        "if (outcome && !SETTLED_WELL.has(outcome)) return;",
-    );
+    let later_kept = position(restart, "if (later && !SETTLED_WELL.has(later)) return;");
     let closed = position(restart, "await closeChart();");
     let restarted = position(restart, "invoke(\"restart_window\")");
     assert!(
         captured < asked
-            && asked < settled
-            && settled < kept
-            && kept < closed
+            && asked < first
+            && first < first_kept
+            && first_kept < later
+            && later < later_kept
+            && later_kept < closed
             && closed < restarted,
         "{restart}"
     );
@@ -79,7 +83,7 @@ fn a_restart_asks_first() {
     let fits = position(restart, "if (installed.kind !== \"fits\") {");
     assert!(asked < fits, "{restart}");
     assert!(
-        fits < position(restart, "const outcome = await"),
+        fits < position(restart, "const first = await settling;"),
         "{restart}"
     );
     assert!(fits < position(restart, "await closeChart();"), "{restart}");
