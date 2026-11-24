@@ -212,20 +212,34 @@ pub fn schema_verdict(stamp: Option<&SchemaStamp>, who: &str, verb: &str) -> Res
         )),
         // Same generation, different build (hash or loader): any other cairn-node would stamp
         // its own build again, so only the one built with this window can satisfy it.
-        Some(s) if s.version == ours => Err(format!(
-            "The node's database was prepared by a different build (generation {ours}, but not \
-             this {who}'s build). At the node, run {verb} with the cairn-node \
-             built with this {who} and the owner's connection, then start this {who} again."
+        Some(s) if s.version == ours => Err(different_build_message(ours, who, verb)),
+        _ => Err(not_prepared_message(
+            stamp.map(|s| s.version),
+            ours,
+            who,
+            verb,
         )),
-        _ => {
-            let db = stamp.map_or("none".to_string(), |s| s.version.to_string());
-            Err(format!(
-                "The node's database has not been prepared for this {who} (generation {db} \
-                 against {ours}). At the node, run cairn-node {verb} with the \
-                 owner's connection, then start this {who} again."
-            ))
-        }
     }
+}
+
+/// The refusal for a database stamped by another build at this generation. Shared with
+/// [`crate::window_floor::window_verdict`] so the two cannot drift.
+pub(crate) fn different_build_message(ours: i32, who: &str, verb: &str) -> String {
+    format!(
+        "The node's database was prepared by a different build (generation {ours}, but not \
+         this {who}'s build). At the node, run {verb} with the cairn-node \
+         built with this {who} and the owner's connection, then start this {who} again."
+    )
+}
+
+/// The refusal for a database with no stamp, or one older than this process.
+pub(crate) fn not_prepared_message(db: Option<i32>, ours: i32, who: &str, verb: &str) -> String {
+    let db = db.map_or("none".to_string(), |v| v.to_string());
+    format!(
+        "The node's database has not been prepared for this {who} (generation {db} \
+         against {ours}). At the node, run cairn-node {verb} with the \
+         owner's connection, then start this {who} again."
+    )
 }
 
 #[cfg(test)]
