@@ -1,6 +1,8 @@
 # #909 slice C1: an upgrade disturbs no one — the window floor, the waiting update, the lock timeout — design
 
 Status: **approved 2026-11-24**, brainstormed with the maintainer (PR #1173 began it; this session finished it).
+Amended at plan and build time (§10); built on `feat/909-slice-c1-rollout`, recorded in
+[ADR-0111](../../spec/decisions/0111-an-older-window-works-above-a-floor.md).
 Parent: [`2026-11-16-pinned-terminal-link-909-design.md`](2026-11-16-pinned-terminal-link-909-design.md) §6, which
 made the rollout its own slice. Slice C2 (a terminal fetches its new program from its node) is a later slice with its
 own brainstorm (§9).
@@ -234,3 +236,44 @@ terminal follows. **It must check the release's signature itself, never trust th
 node could push code that captures every clinician's passphrase. That is the terminal's share of the
 signed-release checks in [security §7.6](../../spec/security.md#76-the-software-distribution-plane-signed-releases-and-extension-load),
 none of which is built, and it is safety-critical.
+
+## 10. Amendments made at plan and build time (2026-11-24)
+
+The design above stands as approved; these calls refine it. Each is marked with when it was made. ADR-0111 records
+the result.
+
+- **The loader is checked by name** *(plan time)*. `loader_build` is `cairn-node <CARGO_PKG_VERSION>`, so §4.2's
+  exact match would refuse every window after a version bump. The window accepts a stamp whose `loader_build`
+  starts with `cairn-node `.
+- **The reconnect re-check is the 60 s poll's next tick** *(plan time)*, not a check inside the #807 reopen (§4.4):
+  `connection.rs` is over its cap (#1164), and the upgrade itself drops no connection, so the poll bounds every case
+  equally.
+- **A never-touched terminal updates too** *(plan time)*. `idle.js` arms its timer only at a first touch, so the
+  update also installs when the terminal lock is showing and nobody has touched it for a whole idle period (its clock
+  starts at the page load). This replaces §4.5's "or nobody is signed in, it restarts at once": at the lock the window
+  always waits a whole idle period, so someone typing a passphrase is never restarted under.
+- **The stamped reason is the latest raising entry's** *(plan time)*: the `old_window_misses` of the first ledger
+  entry whose floor equals today's. A window two raises behind sees one reason; upgrade that if it ever confuses.
+- **The service checks the stamp every 5 s and exits with status 75** (`EX_TEMPFAIL`) *(plan time; §8 left both to
+  the builder)*.
+- **`update_state` keeps the last verdict on a blip** *(build time, controller ruling)*. A lost connection or a
+  failed read returns what the window last knew, not "current", so a below-floor alert never vanishes on a blip.
+  A refusal learned mid-session (another loader restamped the database) reads as below the floor with no reason
+  (also a build-time ruling): it gates new charts, the safe direction.
+- **Extension-owned objects are excluded from the door snapshot** *(build time, controller ruling)*: a `pg_depend`
+  row of `deptype = 'e'` moves with `cairn_pgx`'s version, not `db/*.sql`, and differs between machines. An
+  extension's door removal therefore goes unguarded here; the extension has its own version gate.
+- **The service splits an unread stamp by where it is read** *(build time, controller ruling)*. At startup it
+  refuses to start, as before (swallowing it would let the service start unchecked); in the loop it is logged once
+  per distinct message and the loop carries on, so a network blip never restarts the service. Only a verdict that
+  the stamp names another build exits.
+- **The blocker line is a heuristic** *(build time, controller ruling)*. `pg_blocking_pids` is empty once the
+  timeout has cancelled the wait, so §4.6's "which session blocks it" becomes the sessions that MAY be holding the
+  lock: those in this database holding a table lock inside a transaction open at least as long as the timeout.
+- **#1175** *(build time)*: `cairn_readjudicate_deferred()` (db/043) runs each promotion inside
+  `EXCEPTION WHEN OTHERS`, which swallows a `55P03`, so §4.6's retry never sees a re-adjudication's lock timeout. Out
+  of scope here; the event stays deferred and nothing is lost.
+- **Two limits found in the build, for RUNBOOK §40** *(build time)*. An install through a symlink never updates: Tauri
+  reads the program's path once, when it loads, resolving links on Linux and refusing any linked path on macOS. And
+  a front door below the floor, with no chart open and the terminal unlocked, waits for the idle re-lock or Update
+  now (§4.5 said it restarts at once).

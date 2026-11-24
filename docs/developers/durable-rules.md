@@ -10,6 +10,69 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #909 SLICE C1 — AN OLDER WINDOW WORKS ABOVE A FLOOR (ADR-0111, db/085) — do not undo.**
+- **Never reset the floor ledger.** `WINDOW_FLOOR_LEDGER` (`cairn-event`'s `schema_generation.rs`) gains one entry
+  per generation and keeps every earlier one: a floor never falls, and a raise names what an old window misses.
+  **Tempting wrong fix:** start it afresh, or lower a floor "to let an old terminal back in". Pins:
+  `ledger_ends_at_the_current_generation`, `ledger_floor_is_the_constant`, `ledger_is_ordered_and_floors_never_fall`,
+  `a_raise_names_what_an_old_window_misses`, `every_entry_says_why`. A rewrite of past entries that stays ordered
+  passes them all, so review is the only guard against it.
+- **A new state value the window renders raises the floor**, even though no door vanished. `window_door_surface.rs`
+  catches a removed function or column, never a changed meaning (an old window would show a new hold state as an
+  active medication). **Tempting wrong fix:** "the door guard passed, so the floor can stay". Pin: none; it is
+  `CONTRIBUTING.md`'s migration checklist line and the ledger entry's reason. While the ledger's last entry is a
+  raise (85 today), the door guard excuses every vanished door, so it bites only from generation 86's entry.
+- **The floor counts only when `window_floor_for` equals the stamp's `version`**, and an absent floor means the
+  database's own generation. cairn-sync restamps the version without touching the floor. **Tempting wrong fix:**
+  read `window_floor` alone. Pin:
+  `schema_replay_gate.rs::the_floor_is_stamped_and_read_only_for_its_own_generation`.
+- **The window trusts a stamp by the loader's NAME** (`cairn-node `), never its version: `LOADER_BUILD` carries
+  `CARGO_PKG_VERSION`. **Tempting wrong fix:** compare it with this build's `LOADER_BUILD`, which refuses every
+  window after a version bump. Pin: `window_floor_tests.rs::window_verdict_cases`.
+- **`run_waiting` must `ROLLBACK` before retrying.** A `55P03` inside a file's own `BEGIN` leaves the session
+  aborted; a bare retry fails `25P02`, and that is not retried. **Tempting wrong fix:** drop the `ROLLBACK` "because
+  the error already ended the statement". Pin:
+  `replay_lock_timeout.rs::a_waiting_change_lets_readers_through_and_then_lands` (the change must land, and the
+  session answers `SELECT 1` after).
+- **The loader resets `lock_timeout`, and arms it only after the advisory load lock.** The loader's client lives on
+  as the daemon's connection, where a leftover 2 s timeout would fail ordinary statements under contention; and the
+  loader-against-loader wait must stay blocking. **Tempting wrong fix:** put the timeout in the connection string,
+  or arm it before the advisory lock. Pin: `replay_lock_timeout.rs::the_loaders_connection_keeps_no_lock_timeout`
+  (on a replaying and a skipping connect). No test pins the order against the advisory lock.
+- **Only `55P03` is retried**, and a file's other errors keep `load_migration`'s exact text (#467). **Tempting wrong
+  fix:** retry every error "since the replay is idempotent": a broken file would loop forever. Pins:
+  `replay_wait_tests.rs::only_55p03_is_a_lock_timeout`,
+  `replay_lock_timeout.rs::a_failing_file_reads_the_same_through_run_waiting_as_through_load_migration`.
+- **`update_state` never reopens a connection, and keeps the last verdict when it cannot read.** It takes the
+  window's one connection with `lock_if_open`; the next act reopens it. A blip must neither lift a below-floor alert
+  nor raise one. **Tempting wrong fixes:** `lock()` "so the poll always has an answer" (a poll then spends the
+  window's reopen attempts), or `current` on a failed read. Pin for `lock_if_open` itself:
+  `cairn-gui-live/tests/reconnect.rs::lock_if_open_never_spends_a_reopen_attempt`. No test pins `update_state`'s use
+  of it or its keep-the-last-verdict branch (each needs a lost connection): review them.
+- **Below the floor gates only opening a DIFFERENT chart, and registration.** The open chart's re-reads, saves, Sign
+  and close never pass `refuse_another_chart`, and the alert never closes the chart. **Tempting wrong fix:** gate
+  every database command "to be safe", or close the chart when the alert shows: the clinician must finish the sheet
+  in hand. Pins: `update_tests.rs::a_below_floor_window_refuses_another_chart_but_not_its_own`,
+  `an_update_waiting_opens_any_chart`; `update_webview_tests.rs::the_alert_never_closes_the_open_chart`.
+- **A restart asks the installed program first, and waits for every act and the close.** `restartIfFits` calls
+  `installed_program` before anything, and `signsSettled` and `closeChart` before `restart_window`; a hung or garbled
+  program reads as not installed. **Tempting wrong fix:** restart at once "because the user pressed Update now": an
+  unchanged program brings the same line back, and a too-new one turns the terminal dark. Pins:
+  `update_webview_tests.rs::a_restart_asks_first`, `a_restart_waits_for_acts_and_the_close`;
+  `update_tests.rs::a_hung_program_reads_as_not_installed`, `a_garbled_line_is_not_installed`.
+- **At the terminal lock the poll restarts only after a whole idle period with no touch.** Someone typing a
+  passphrase is never restarted under. **Tempting wrong fix:** restart whenever the lock shows. Pin:
+  `update_webview_tests.rs::the_lock_screen_restart_needs_a_full_idle_period`.
+- **The terminal service exits 75 only on a changed stamp, never on an unread one.** At startup an unread stamp
+  refuses to start; in the loop it is logged once and the loop carries on. **Tempting wrong fix:** exit on any error
+  "to be safe": a dropped connection would restart the service and end every remote session. Pins:
+  `terminal_service/run.rs::startup_fails_on_an_unread_or_changed_stamp_and_the_loop_only_on_a_changed_one`,
+  `the_stamp_is_due_every_five_seconds`; `terminal_service_stamp.rs::a_changed_stamp_is_noticed`.
+- **Extension-owned objects stay out of the door snapshot** (`pg_depend` `deptype = 'e'`): they move with
+  `cairn_pgx`'s version, not `db/*.sql`, and differ between machines. **Tempting wrong fix:** include them "for
+  completeness": the snapshot would then fail on any machine with another `cairn_pgx` build. Pin: the catalogue query
+  in `window_door_surface.rs::the_windows_doors_never_vanish_within_the_floor`.
+
 **⇒ #909 SLICE B — THE PINNED TERMINAL GATEWAY (ADR-0110, db/084) — do not undo.**
 - **No fallback verifier, and TLS 1.3 only, on both ends.** `transport::gateway_server_config` and
   `terminal_client_config` pin a key or refuse; neither accepts a certificate any other way, and neither offers
