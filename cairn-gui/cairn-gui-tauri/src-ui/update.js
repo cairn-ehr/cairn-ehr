@@ -67,6 +67,11 @@ function sayUpdate(text) {
   el("update-answer").textContent = text;
 }
 
+/** Nobody has touched the terminal for a whole idle period (once the lock poll said how long). */
+function idleForAWholePeriod() {
+  return idleLockMs > 0 && Date.now() - lastActivityAt >= idleLockMs;
+}
+
 /** Ask the database again; at an untouched lock screen with an update to take, take it. */
 async function pollUpdate() {
   try {
@@ -75,25 +80,23 @@ async function pollUpdate() {
     console.error("the update check could not run", failure);
     return;
   }
-  if (
-    !el("terminal-lock").hidden &&
-    idleLockMs > 0 &&
-    Date.now() - lastActivityAt >= idleLockMs &&
-    updateView.kind !== "current"
-  ) {
-    void restartIfFits();
+  if (!el("terminal-lock").hidden && idleForAWholePeriod() && updateView.kind !== "current") {
+    void restartIfFits(idleForAWholePeriod);
   }
 }
 
 /**
  * Restart into the installed program if it fits this database. Asked first; unchanged or not
  * fitting, say so and keep the chart. Otherwise the idle re-lock's sequence, then the restart.
+ * `stillWanted` is asked again once the program answered (up to 5 s): the idle poll passes its
+ * idleness check, so someone who started typing the passphrase meanwhile is not restarted under.
  */
-async function restartIfFits() {
+async function restartIfFits(stillWanted = () => true) {
   if (restarting) return;
   restarting = true;
   try {
     const installed = await invoke("installed_program");
+    if (!stillWanted()) return;
     if (installed.kind !== "fits") {
       sayUpdate(installed.kind === "same" ? UPDATE_NOT_INSTALLED : UPDATE_DOES_NOT_FIT);
       return;

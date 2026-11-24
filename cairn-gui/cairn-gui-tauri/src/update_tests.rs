@@ -197,3 +197,79 @@ async fn an_installed_program_is_judged_against_the_stamp() {
     );
     assert_eq!(missing.await, InstallFit::Same);
 }
+
+/// A stamp at this window's own generation, stamped by any cairn-node build.
+fn our_stamp() -> SchemaStamp {
+    SchemaStamp {
+        version: embedded_schema_version(),
+        loader_build: "cairn-node 0.0.0".to_string(),
+        schema_hash: Some(hash(4).to_vec()),
+        window_floor: None,
+    }
+}
+
+/// Fix round 1: a poll that could not read (the connection lost and not yet back, a failed read)
+/// keeps what the window last knew, verdict and stamp both; one that read replaces both.
+#[test]
+fn a_lost_connection_keeps_the_verdict() {
+    let state = AppState::mock(None);
+    let below = WindowVerdict::BelowFloor {
+        reason: Some("allergy reactions".into()),
+    };
+    *state.verdict.lock().unwrap() = below.clone();
+    *state.last_stamp.lock().unwrap() = Some(our_stamp());
+    assert_eq!(poll_answer(&state, None).kind, "below_floor");
+    assert_eq!(*state.verdict.lock().unwrap(), below);
+    assert_eq!(*state.last_stamp.lock().unwrap(), Some(our_stamp()));
+
+    let mut newer = our_stamp();
+    newer.version += 1;
+    assert_eq!(poll_answer(&state, Some(Some(our_stamp()))).kind, "current");
+    assert_eq!(*state.verdict.lock().unwrap(), WindowVerdict::Current);
+    assert_eq!(
+        poll_answer(&state, Some(Some(newer.clone()))).kind,
+        "below_floor"
+    );
+    assert_eq!(*state.last_stamp.lock().unwrap(), Some(newer));
+}
+
+/// Fix round 1: the install check judges against a fresh stamp when it can read one, else the
+/// last one read; only with neither is the stamp unknown (an installed program then does not fit).
+#[test]
+fn the_install_check_falls_back_to_the_cached_stamp() {
+    let state = AppState::mock(None);
+    assert_eq!(install_stamp(&state, None), None);
+    *state.last_stamp.lock().unwrap() = Some(our_stamp());
+    assert_eq!(install_stamp(&state, None), Some(our_stamp()));
+    let mut fresh = our_stamp();
+    fresh.version += 1;
+    assert_eq!(
+        install_stamp(&state, Some(Some(fresh.clone()))),
+        Some(fresh)
+    );
+    // A fresh read that found no stamp at all is an answer, not a failure to read.
+    assert_eq!(install_stamp(&state, Some(None)), None);
+}
+
+/// The cached stamp really serves the judgement: a program at the database's generation fits
+/// though the connection is lost.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cached_stamp_lets_a_fitting_program_fit() {
+    let state = AppState::mock(None);
+    let mut newer = our_stamp();
+    newer.version += 1;
+    *state.last_stamp.lock().unwrap() = Some(newer.clone());
+    let line = generation_line(newer.version, hash(4));
+    let stamp = install_stamp(&state, None);
+    let fit = installed_fit(Some("/bin/echo".into()), &[&line], stamp.as_ref()).await;
+    assert_eq!(fit, InstallFit::Fits);
+}
+
+/// `PRINT_FLAG` is the flag clap really parses, so the program a window asks answers it.
+#[test]
+fn the_print_flag_is_the_clis() {
+    use clap::Parser;
+    let cli = crate::Cli::try_parse_from(["cairn-med-list", PRINT_FLAG]).unwrap();
+    assert!(cli.print_schema_generation);
+}

@@ -50,6 +50,7 @@ impl AppState {
                 crate::whos_here::DEFAULT_IDLE_LOCK,
             )),
             verdict: cairn_node::window_floor::WindowVerdict::Current.into(),
+            last_stamp: None.into(),
             // No installed program: fixture mode never restarts (Review Focus 5).
             launched_exe: None,
         }

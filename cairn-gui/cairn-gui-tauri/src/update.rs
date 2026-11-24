@@ -9,7 +9,7 @@
 //!
 //! - **At launch**, [`launch_verdict`] opens the window or refuses it with a sentence.
 //! - **A 60 s poll** (`update.js`), [`update_state`], re-reads the stamp on the window's one
-//!   shared connection, never reopening it, and remembers the verdict in `AppState::verdict`.
+//!   shared connection (reopening it if lost) and remembers the verdict and the stamp.
 //! - **The gate**, [`refuse_another_chart`]: below the floor, opening a DIFFERENT chart and
 //!   registering are refused. The open chart's re-reads, Sign, saves and close never come here.
 //! - **Before a restart**, [`installed_program`] asks the program now installed at this window's
@@ -141,52 +141,72 @@ pub async fn refuse_another_chart(
     }
 }
 
-/// The poll: re-read the stamp and remember the verdict. Fixture mode has no database and is
-/// always `current`. A lost connection is never reopened here (the next act reopens it), and a
-/// read that fails changes nothing: the window says what it last knew, which is `current` unless
-/// the floor was already learned — a blip must not lift a below-floor alert, nor raise one.
-pub async fn update_state_impl(state: &AppState) -> UpdateView {
-    let last = || update_view(&state.verdict.lock().unwrap_or_else(|p| p.into_inner()));
-    let Some(db) = state.db.as_ref() else {
-        return update_view(&WindowVerdict::Current);
-    };
-    let Some(conn) = db.lock_if_open().await else {
-        return last();
-    };
-    let stamp = match read_schema_stamp(&conn).await {
-        Ok(stamp) => stamp,
-        Err(e) => {
-            eprintln!(
-                "the update check could not read the schema stamp: {:#}",
-                conn.explain(e)
-            );
-            return last();
+/// One read of the stamp on the shared connection, reopening it if it was lost (#807, with its
+/// retry backoff). A remote window's only link runs through the terminal service's gateway, which
+/// restarts on an upgrade (exit 75), so without the reopen the window would never learn of the
+/// upgrade. `None` is no answer: fixture mode, a reopen that failed, or a read that failed (each
+/// said on stderr). `Some(None)` is an answer: the database carries no stamp.
+async fn read_stamp(state: &AppState, why: &str) -> Option<Option<SchemaStamp>> {
+    let conn = match state.db.as_ref()?.lock().await {
+        Ok(conn) => conn,
+        Err(lost) => {
+            eprintln!("the {why} could not reach the node: {lost}");
+            return None;
         }
     };
-    drop(conn);
-    let verdict = window_verdict(stamp.as_ref(), embedded_schema_version());
-    let view = update_view(&verdict);
-    *state.verdict.lock().unwrap_or_else(|p| p.into_inner()) = verdict;
-    view
+    match read_schema_stamp(&conn).await {
+        Ok(stamp) => Some(stamp),
+        Err(e) => {
+            eprintln!(
+                "the {why} could not read the schema stamp: {:#}",
+                conn.explain(e)
+            );
+            None
+        }
+    }
 }
 
-/// What the program installed at this window's path would be against the stamp read now. Fixture
-/// mode has no installed path and is always `same`, so it never restarts (Review Focus 5). With
-/// no open connection the stamp is unknown, and an installed program then reads as not fitting.
+/// What a poll's read means for the window. **Pure but for `state`'s two cells.** An answer
+/// replaces the verdict and the stamp it came from; no answer changes nothing, so the window says
+/// what it last knew — a blip must not lift a below-floor alert, nor raise one.
+pub fn poll_answer(state: &AppState, read: Option<Option<SchemaStamp>>) -> UpdateView {
+    let mut verdict = state.verdict.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(stamp) = read {
+        *verdict = window_verdict(stamp.as_ref(), embedded_schema_version());
+        *state.last_stamp.lock().unwrap_or_else(|p| p.into_inner()) = stamp;
+    }
+    update_view(&verdict)
+}
+
+/// The stamp an install check judges against: a fresh answer, else the last stamp read (at launch
+/// or by a poll). `None` only with neither, and an installed program then reads as not fitting.
+pub fn install_stamp(state: &AppState, read: Option<Option<SchemaStamp>>) -> Option<SchemaStamp> {
+    read.unwrap_or_else(|| {
+        state
+            .last_stamp
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    })
+}
+
+/// The poll (`update.js`, once a minute). Fixture mode has no database and is always `current`.
+pub async fn update_state_impl(state: &AppState) -> UpdateView {
+    if state.is_mock() {
+        return update_view(&WindowVerdict::Current);
+    }
+    let read = read_stamp(state, "update check").await;
+    poll_answer(state, read)
+}
+
+/// What the program installed at this window's path would be against the stamp. Fixture mode has
+/// no installed path and is always `same`, so it never restarts (Review Focus 5).
 pub async fn installed_program_impl(state: &AppState) -> InstallView {
-    let stamp = match state.db.as_ref() {
-        None => None,
-        Some(db) => match db.lock_if_open().await {
-            None => None,
-            Some(conn) => read_schema_stamp(&conn).await.unwrap_or_else(|e| {
-                eprintln!(
-                    "the install check could not read the schema stamp: {:#}",
-                    conn.explain(e)
-                );
-                None
-            }),
-        },
+    let read = match state.is_mock() {
+        true => None,
+        false => read_stamp(state, "install check").await,
     };
+    let stamp = install_stamp(state, read);
     install_view(installed_fit(state.launched_exe.clone(), &[PRINT_FLAG], stamp.as_ref()).await)
 }
 

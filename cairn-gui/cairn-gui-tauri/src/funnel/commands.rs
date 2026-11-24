@@ -247,8 +247,9 @@ pub async fn prompt_search_impl(
 ///    invalidate exists for).
 /// 4. The new chart opens only if the front door is still showing (`open_after_registering`).
 ///
-/// Below the window floor nothing is registered at all (`crate::update::refuse_another_chart`),
-/// checked first so the search stays intact for after the update.
+/// Below the window floor nothing is registered at all (`crate::update::refuse_another_chart`).
+/// Checked first, so a refused registration takes nothing from the search store and writes
+/// nothing; the search itself does not outlive the update's restart.
 ///
 /// ⚠️ Cancellation-unsafe (#649, #669): nothing may race this against a timeout or `select!`.
 pub async fn register_impl(

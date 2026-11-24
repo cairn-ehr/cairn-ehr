@@ -56,21 +56,35 @@ fn a_restart_asks_first() {
 
 /// Review Focus 3: at the lock screen the poll restarts only after a whole idle period without a
 /// touch, so someone typing the terminal passphrase is never restarted under; and never before
-/// the lock poll has said how long that period is.
+/// the lock poll has said how long that period is. The installed program can take 5 s to answer,
+/// so the poll's restart asks again after the answer (fix round 1).
 #[test]
 fn the_lock_screen_restart_needs_a_full_idle_period() {
+    let idle = js_fn(UPDATE_JS, "idleForAWholePeriod");
+    assert!(
+        idle.contains("return idleLockMs > 0 && Date.now() - lastActivityAt >= idleLockMs;"),
+        "{idle}"
+    );
     let poll = js_fn(UPDATE_JS, "pollUpdate");
     for needed in [
         "!el(\"terminal-lock\").hidden",
-        "idleLockMs > 0",
-        "Date.now() - lastActivityAt >= idleLockMs",
+        "idleForAWholePeriod()",
         "updateView.kind !== \"current\"",
     ] {
         assert!(
-            position(poll, needed) < position(poll, "restartIfFits()"),
+            position(poll, needed) < position(poll, "restartIfFits(idleForAWholePeriod);"),
             "{needed}"
         );
     }
+    let restart = js_fn(UPDATE_JS, "restartIfFits");
+    assert!(restart.contains("function restartIfFits(stillWanted = () => true) {"));
+    let asked = position(restart, "invoke(\"installed_program\")");
+    let again = position(restart, "if (!stillWanted()) return;");
+    assert!(asked < again, "{restart}");
+    assert!(
+        again < position(restart, "if (installed.kind !== \"fits\") {"),
+        "{restart}"
+    );
     // Only a person resets it (idle.js): set where the idle clock is pushed back, and at load.
     assert!(IDLE_JS.contains("let lastActivityAt = Date.now();"));
     assert!(js_fn(IDLE_JS, "noteActivity").contains("lastActivityAt = Date.now();"));

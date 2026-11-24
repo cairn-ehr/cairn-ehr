@@ -390,6 +390,7 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         terminal_id: std::sync::OnceLock::new(),
         whos_here: tokio::sync::Mutex::new(whos_here::Here::new(cli.idle_lock_minutes)),
         verdict: verdict.into(),
+        last_stamp: stamp.into(),
         // The path Tauri's restart relaunches; unreadable reads as "nothing installed".
         launched_exe: tauri::process::current_binary(&Default::default())
             .ok()
