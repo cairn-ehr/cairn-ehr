@@ -134,6 +134,12 @@ Three things that have bitten us, so they are worth stating outright:
   `cairn_sqltest` it drops and recreates at the start of every run. Pointing a mirror at the shared `cairn_test` by hand used
   to collide with residue left by a finished `cargo test`; pointing one at a real node would have been
   much worse. Use `-f`, not stdin: psql's `\ir` cannot resolve the shared preamble from a piped script.
+- **A `db/*.sql` change that removes or reshapes anything the reference window reaches raises the
+  floor.** `db/window_door_surface.txt` snapshots every function and column `cairn_window` can reach
+  and fails if one vanishes; a new state value in anything the window renders likewise raises the
+  floor — add a `WINDOW_FLOOR_LEDGER` entry (`cairn-event`'s `schema_generation.rs`). A door the window
+  never faced goes in `db/window_not_facing.txt` with a reason; new doors are recorded with
+  `CAIRN_REGEN_DOOR_SURFACE=1 cargo test -p cairn-node --test window_door_surface`.
 - **Renaming any required job means updating branch protection in lockstep.** Because required checks are
   matched by exact name, changing a job's `name:` without updating `main`'s required-checks list orphans
   the old name. If you must rename, coordinate the branch-protection change with a maintainer.

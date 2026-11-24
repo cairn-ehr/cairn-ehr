@@ -1,0 +1,2 @@
+# Window-reachable doors the window never faced, so removing them cannot hurt an older window.
+# Format: <entry exactly as in window_door_surface.txt>  # <reason>

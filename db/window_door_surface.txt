@@ -1,0 +1,891 @@
+col actor_current.actor_id
+col actor_current.kind
+col actor_current.pinned
+col actor_current.recorded_at
+col actor_current.signing_key_id
+col actor_event.signing_key_id
+col actor_key_vouches.actor_id
+col actor_key_vouches.kind
+col actor_key_vouches.signing_key_id
+col attachment_reference_flag.attachment_index
+col attachment_reference_flag.event_id
+col attachment_reference_flag.flag_id
+col attachment_reference_flag.flagged_at
+col attachment_reference_flag.reason
+col attachment_reference_flag.rendition_index
+col chart_dispute.content_address
+col chart_dispute.detail
+col chart_dispute.dispute_id
+col chart_dispute.hlc_counter
+col chart_dispute.hlc_wall
+col chart_dispute.origin
+col chart_dispute.state
+col chart_dispute.subject
+col chart_dispute.updated_at
+col chart_identity_state.content_address
+col chart_identity_state.detail
+col chart_identity_state.hlc_counter
+col chart_identity_state.hlc_wall
+col chart_identity_state.origin
+col chart_identity_state.state
+col chart_identity_state.subject
+col chart_identity_state.updated_at
+col chart_trust.patient_id
+col chart_trust.trust_state
+col clinical_allergy.allergen_kind
+col clinical_allergy.coding
+col clinical_allergy.content_address
+col clinical_allergy.event_id
+col clinical_allergy.hlc_counter
+col clinical_allergy.hlc_wall
+col clinical_allergy.kind
+col clinical_allergy.onset_precision
+col clinical_allergy.onset_value
+col clinical_allergy.origin
+col clinical_allergy.patient_id
+col clinical_allergy.reaction_category
+col clinical_allergy.reaction_text
+col clinical_allergy.refs
+col clinical_allergy.source
+col clinical_allergy.term
+col clinical_allergy_challenge.content_address
+col clinical_allergy_challenge.date_precision
+col clinical_allergy_challenge.date_value
+col clinical_allergy_challenge.event_id
+col clinical_allergy_challenge.hlc_counter
+col clinical_allergy_challenge.hlc_wall
+col clinical_allergy_challenge.origin
+col clinical_allergy_challenge.patient_id
+col clinical_allergy_challenge.target
+col clinical_allergy_challenge.text
+col clinical_allergy_challenge.tolerated_coding
+col clinical_allergy_challenge.tolerated_term
+col clinical_allergy_none.content_address
+col clinical_allergy_none.event_id
+col clinical_allergy_none.hlc_counter
+col clinical_allergy_none.hlc_wall
+col clinical_allergy_none.origin
+col clinical_allergy_none.patient_id
+col clinical_allergy_none.scope
+col clinical_allergy_retraction.content_address
+col clinical_allergy_retraction.event_id
+col clinical_allergy_retraction.hlc_counter
+col clinical_allergy_retraction.hlc_wall
+col clinical_allergy_retraction.origin
+col clinical_allergy_retraction.patient_id
+col clinical_allergy_retraction.target
+col clinical_allergy_retraction.text
+col clinical_note.content_address
+col clinical_note.effective_basis
+col clinical_note.event_id
+col clinical_note.hlc_counter
+col clinical_note.hlc_wall
+col clinical_note.narrative
+col clinical_note.origin
+col clinical_note.patient_id
+col clinical_note.recording_ended
+col clinical_note.recording_started
+col clinical_note.refs
+col clinical_note.t_effective
+col clinical_note_attestation.act
+col clinical_note_attestation.content_address
+col clinical_note_attestation.event_id
+col clinical_note_attestation.hlc_counter
+col clinical_note_attestation.hlc_wall
+col clinical_note_attestation.origin
+col clinical_note_attestation.patient_id
+col clinical_note_attestation.role
+col clinical_note_attestation.signer_key_id
+col clinical_note_attestation.t_effective
+col clinical_note_attestation.target
+col clinical_note_attestation.target_address
+col clinical_note_discard.content_address
+col clinical_note_discard.event_id
+col clinical_note_discard.hlc_counter
+col clinical_note_discard.hlc_wall
+col clinical_note_discard.origin
+col clinical_note_discard.parts
+col clinical_note_discard.patient_id
+col clinical_note_discard.t_effective
+col event_clear.body
+col event_clear.event_id
+col event_clear.twin
+col event_log.actor_id
+col event_log.attachments
+col event_log.attestation
+col event_log.attester_key
+col event_log.body
+col event_log.clock_grade
+col event_log.content_address
+col event_log.contributors
+col event_log.dek_wrapped
+col event_log.event_id
+col event_log.event_type
+col event_log.hlc_counter
+col event_log.hlc_wall
+col event_log.node_origin
+col event_log.patient_id
+col event_log.plaintext_twin
+col event_log.recorded_at
+col event_log.schema_version
+col event_log.sealed
+col event_log.seq
+col event_log.signed_bytes
+col event_log.signer_key_id
+col event_log.t_effective
+col event_twin_provenance.event_id
+col event_twin_provenance.twin_authored
+col event_twin_provenance.verifiable
+col identity_projection_flag.cap
+col identity_projection_flag.content_address
+col identity_projection_flag.flag_id
+col identity_projection_flag.flagged_at
+col identity_projection_flag.observed_size
+col identity_projection_flag.seed
+col link_veto_flag.content_address
+col link_veto_flag.flagged_at
+col link_veto_flag.high
+col link_veto_flag.low
+col local_node.address
+col local_node.id
+col local_node.node_id
+col local_node.signer_key_id
+col match_pending.id
+col match_pending.patient_id
+col match_pending.queued_at
+col match_pending.reason
+col match_proposal.applied_event_id
+col match_proposal.band
+col match_proposal.created_at
+col match_proposal.evidence
+col match_proposal.matcher_version
+col match_proposal.patient_high
+col match_proposal.patient_low
+col match_proposal.score_total
+col match_proposal.status
+col match_proposal.updated_at
+col match_proposal.veto_findings
+col match_proposal_open.band
+col match_proposal_open.created_at
+col match_proposal_open.evidence
+col match_proposal_open.matcher_version
+col match_proposal_open.patient_high
+col match_proposal_open.patient_low
+col match_proposal_open.score_total
+col match_proposal_open.status
+col match_proposal_open.updated_at
+col match_proposal_open.veto_findings
+col match_worker_state.last_drained_at
+col match_worker_state.matcher_version
+col match_worker_state.singleton
+col medication_attestation.attester_kid
+col medication_attestation.content_address
+col medication_attestation.event_id
+col medication_attestation.hlc_counter
+col medication_attestation.hlc_wall
+col medication_attestation.medication_id
+col medication_attestation.origin
+col medication_attestation.patient_id
+col medication_attestation.reviewed_commitment
+col medication_attestation.reviewed_count
+col medication_attestation.updated_at
+col medication_attestation_misfiled.attestation_event_id
+col medication_attestation_misfiled.attester_kid
+col medication_attestation_misfiled.filed_under
+col medication_attestation_misfiled.hlc_counter
+col medication_attestation_misfiled.hlc_wall
+col medication_attestation_misfiled.medication_id
+col medication_attestation_misfiled.thread_chart
+col medication_cessation.content_address
+col medication_cessation.hlc_counter
+col medication_cessation.hlc_wall
+col medication_cessation.medication_id
+col medication_cessation.origin
+col medication_cessation.patient_id
+col medication_cessation.reason
+col medication_cessation.stopped_precision
+col medication_cessation.stopped_value
+col medication_cessation.updated_at
+col medication_cessation_reason.content_address
+col medication_cessation_reason.hlc_counter
+col medication_cessation_reason.hlc_wall
+col medication_cessation_reason.medication_id
+col medication_cessation_reason.origin
+col medication_cessation_reason.reason
+col medication_charting.charted_as
+col medication_charting.components
+col medication_charting.content_address
+col medication_charting.hlc_counter
+col medication_charting.hlc_wall
+col medication_charting.medication_id
+col medication_charting.origin
+col medication_charting.override_against
+col medication_charting.override_reason
+col medication_charting.patient_id
+col medication_charting.route
+col medication_charting.source_detail
+col medication_charting.stat
+col medication_charting.strength
+col medication_charting.updated_at
+col medication_charting.why
+col medication_coding.coding_code
+col medication_coding.coding_display
+col medication_coding.coding_system
+col medication_coding.content_address
+col medication_coding.hlc_counter
+col medication_coding.hlc_wall
+col medication_coding.medication_id
+col medication_coding.origin
+col medication_coding.patient_id
+col medication_coding.struck
+col medication_coding.updated_at
+col medication_coding_system.code_format
+col medication_coding_system.note
+col medication_coding_system.system
+col medication_current_dose.amount
+col medication_current_dose.corrected
+col medication_current_dose.dose_event_id
+col medication_current_dose.effective_precision
+col medication_current_dose.effective_value
+col medication_current_dose.medication_id
+col medication_current_dose.patient_id
+col medication_current_dose.unit
+col medication_dose_correction.amount
+col medication_dose_correction.content_address
+col medication_dose_correction.corrected_dose_event_id
+col medication_dose_correction.dose_corrected
+col medication_dose_correction.effective_corrected
+col medication_dose_correction.effective_precision
+col medication_dose_correction.effective_value
+col medication_dose_correction.hlc_counter
+col medication_dose_correction.hlc_wall
+col medication_dose_correction.info_source
+col medication_dose_correction.medication_id
+col medication_dose_correction.note
+col medication_dose_correction.origin
+col medication_dose_correction.patient_id
+col medication_dose_correction.reason
+col medication_dose_correction.reason_corrected
+col medication_dose_correction.unit
+col medication_dose_correction.updated_at
+col medication_dose_event.amount
+col medication_dose_event.content_address
+col medication_dose_event.dose_event_id
+col medication_dose_event.effective_precision
+col medication_dose_event.effective_value
+col medication_dose_event.hlc_counter
+col medication_dose_event.hlc_wall
+col medication_dose_event.info_source
+col medication_dose_event.is_initial
+col medication_dose_event.medication_id
+col medication_dose_event.origin
+col medication_dose_event.patient_id
+col medication_dose_event.reason
+col medication_dose_event.unit
+col medication_dose_event.updated_at
+col medication_given.completes
+col medication_given.content_address
+col medication_given.event_id
+col medication_given.given_at
+col medication_given.hlc_wall
+col medication_given.medication_id
+col medication_given.patient_id
+col medication_given_retraction.content_address
+col medication_given_retraction.event_id
+col medication_given_retraction.hlc_wall
+col medication_given_retraction.medication_id
+col medication_given_retraction.patient_id
+col medication_given_retraction.target
+col medication_given_retraction.text
+col medication_given_retraction.voids
+col medication_group_attestation.attested_current
+col medication_group_attestation.group_id
+col medication_group_attestation.patient_id
+col medication_group_attestation.stale_members
+col medication_group_attestation.unattested_members
+col medication_group_cessation.group_id
+col medication_group_cessation.patient_id
+col medication_group_cessation.reason
+col medication_group_cessation.stopped_precision
+col medication_group_cessation.stopped_value
+col medication_group_coding_conflict.anchor_count
+col medication_group_coding_conflict.anchors
+col medication_group_coding_conflict.group_id
+col medication_group_cross_patient.group_id
+col medication_group_cross_patient.member_count
+col medication_group_cross_patient.patient_count
+col medication_group_cross_patient.patients
+col medication_group_current_dose.amount
+col medication_group_current_dose.dose_event_id
+col medication_group_current_dose.effective_precision
+col medication_group_current_dose.effective_value
+col medication_group_current_dose.group_id
+col medication_group_current_dose.patient_id
+col medication_group_current_dose.unit
+col medication_group_display.asserted_at
+col medication_group_display.coding_code
+col medication_group_display.coding_display
+col medication_group_display.coding_system
+col medication_group_display.dose_amount
+col medication_group_display.dose_unit
+col medication_group_display.formulation
+col medication_group_display.group_id
+col medication_group_display.info_source
+col medication_group_display.inn_code
+col medication_group_display.patient_id
+col medication_group_display.sig
+col medication_group_display.started_precision
+col medication_group_display.started_value
+col medication_group_display.term
+col medication_group_last_dose.amount
+col medication_group_last_dose.group_id
+col medication_group_last_dose.patient_id
+col medication_group_last_dose.unit
+col medication_group_member.group_id
+col medication_group_member.medication_id
+col medication_group_member.updated_at
+col medication_group_status.group_id
+col medication_group_status.patient_id
+col medication_group_status.status
+col medication_patient_conflict_flag.asserted_patient
+col medication_patient_conflict_flag.content_address
+col medication_patient_conflict_flag.flag_id
+col medication_patient_conflict_flag.flagged_at
+col medication_patient_conflict_flag.medication_id
+col medication_patient_conflict_flag.standing_patient
+col medication_projection_flag.cap
+col medication_projection_flag.content_address
+col medication_projection_flag.flag_id
+col medication_projection_flag.flagged_at
+col medication_projection_flag.observed_size
+col medication_projection_flag.seed
+col medication_reconciliation.content_address
+col medication_reconciliation.high
+col medication_reconciliation.hlc_counter
+col medication_reconciliation.hlc_wall
+col medication_reconciliation.low
+col medication_reconciliation.origin
+col medication_reconciliation.provenance
+col medication_reconciliation.state
+col medication_reconciliation.updated_at
+col medication_restore.content_address
+col medication_restore.event_id
+col medication_restore.medication_id
+col medication_restore.patient_id
+col medication_restore.version_id
+col medication_set_aside.alternative_to
+col medication_set_aside.coding_code
+col medication_set_aside.coding_display
+col medication_set_aside.coding_system
+col medication_set_aside.content_address
+col medication_set_aside.dose_amount
+col medication_set_aside.dose_unit
+col medication_set_aside.event_id
+col medication_set_aside.formulation
+col medication_set_aside.info_source
+col medication_set_aside.patient_id
+col medication_set_aside.route
+col medication_set_aside.sig
+col medication_set_aside.source_detail
+col medication_set_aside.strength
+col medication_set_aside.t_recorded
+col medication_set_aside.term
+col medication_set_aside.version_id
+col medication_set_aside.why
+col medication_set_aside_checked.content_address
+col medication_set_aside_checked.event_id
+col medication_set_aside_checked.info_source
+col medication_set_aside_checked.patient_id
+col medication_set_aside_checked.source_detail
+col medication_set_aside_checked.t_recorded
+col medication_set_aside_checked.version_id
+col medication_set_aside_checked.why
+col medication_statement.content_address
+col medication_statement.dose_amount
+col medication_statement.dose_unit
+col medication_statement.formulation
+col medication_statement.hlc_counter
+col medication_statement.hlc_wall
+col medication_statement.info_source
+col medication_statement.inn_code
+col medication_statement.medication_id
+col medication_statement.origin
+col medication_statement.patient_id
+col medication_statement.sig
+col medication_statement.started_precision
+col medication_statement.started_value
+col medication_statement.term
+col medication_statement.updated_at
+col medication_thread_attestation.attested_counter
+col medication_thread_attestation.attested_wall
+col medication_thread_attestation.attester_kid
+col medication_thread_attestation.medication_id
+col medication_thread_attestation.patient_id
+col medication_thread_attestation.reviewed_count
+col medication_thread_attestation.stale
+col medication_thread_group.group_id
+col medication_thread_group.medication_id
+col medication_thread_group.patient_id
+col medication_thread_stray_chart.asserted_patient
+col medication_thread_stray_chart.medication_id
+col medication_thread_stray_chart.standing_patient
+col medication_withhold.content_address
+col medication_withhold.event_id
+col medication_withhold.hlc_counter
+col medication_withhold.hlc_wall
+col medication_withhold.medication_id
+col medication_withhold.origin
+col medication_withhold.patient_id
+col medication_withhold.reason
+col medication_withhold.starts_at
+col medication_withhold.until_at
+col medication_withhold.until_reviewed
+col medication_withhold.withholder_kid
+col medication_withhold_release.content_address
+col medication_withhold_release.event_id
+col medication_withhold_release.hlc_counter
+col medication_withhold_release.hlc_wall
+col medication_withhold_release.medication_id
+col medication_withhold_release.origin
+col medication_withhold_release.patient_id
+col medication_withhold_release.reason
+col medication_withhold_release.released_at
+col medication_withhold_release.released_event_ids
+col name_repudiation.subject
+col name_repudiation.value
+col node_schema.id
+col node_schema.loaded_at
+col node_schema.loader_build
+col node_schema.schema_hash
+col node_schema.version
+col node_schema.window_floor
+col node_schema.window_floor_for
+col node_schema.window_floor_reason
+col node_unwrap_key.singleton
+col patient_address.asserted_origin
+col patient_address.display
+col patient_address.geo
+col patient_address.last_hlc_count
+col patient_address.last_hlc_wall
+col patient_address.patient_id
+col patient_address.provenance
+col patient_address.provenance_rank
+col patient_address.structured
+col patient_address.updated_at
+col patient_address.use_key
+col patient_address.use_raw
+col patient_address_current.asserted_origin
+col patient_address_current.display
+col patient_address_current.geo
+col patient_address_current.last_hlc_count
+col patient_address_current.last_hlc_wall
+col patient_address_current.patient_id
+col patient_address_current.provenance
+col patient_address_current.provenance_rank
+col patient_address_current.structured
+col patient_address_current.updated_at
+col patient_address_current.use_key
+col patient_address_current.use_raw
+col patient_alias_pool.hlc_counter
+col patient_alias_pool.hlc_wall
+col patient_alias_pool.origin
+col patient_alias_pool.patient_id
+col patient_alias_pool.updated_at
+col patient_alias_pool.value
+col patient_chart.demo_content_address
+col patient_chart.demo_hlc_count
+col patient_chart.demo_hlc_wall
+col patient_chart.demo_origin
+col patient_chart.dob
+col patient_chart.last_activity
+col patient_chart.name
+col patient_chart.note_count
+col patient_chart.patient_id
+col patient_chart.sex
+col patient_chart.updated_at
+col patient_demographic.asserted_hlc_count
+col patient_demographic.asserted_hlc_wall
+col patient_demographic.asserted_origin
+col patient_demographic.content_address
+col patient_demographic.facets
+col patient_demographic.field
+col patient_demographic.patient_id
+col patient_demographic.provenance
+col patient_demographic.provenance_rank
+col patient_demographic.updated_at
+col patient_demographic.value
+col patient_identifier.asserted_hlc_count
+col patient_identifier.asserted_hlc_wall
+col patient_identifier.asserted_origin
+col patient_identifier.content_address
+col patient_identifier.first_seen
+col patient_identifier.match_key
+col patient_identifier.normalized
+col patient_identifier.patient_id
+col patient_identifier.profile
+col patient_identifier.provenance
+col patient_identifier.system
+col patient_identifier.use_type
+col patient_identifier.value
+col patient_link.attested
+col patient_link.confidence
+col patient_link.content_address
+col patient_link.high
+col patient_link.hlc_counter
+col patient_link.hlc_wall
+col patient_link.low
+col patient_link.origin
+col patient_link.provenance
+col patient_link.state
+col patient_link.updated_at
+col patient_medication.asserted_at
+col patient_medication.ceased
+col patient_medication.coding_code
+col patient_medication.coding_display
+col patient_medication.coding_system
+col patient_medication.dose_amount
+col patient_medication.dose_unit
+col patient_medication.formulation
+col patient_medication.info_source
+col patient_medication.inn_code
+col patient_medication.medication_id
+col patient_medication.patient_id
+col patient_medication.reason
+col patient_medication.sig
+col patient_medication.started_precision
+col patient_medication.started_value
+col patient_medication.stopped_precision
+col patient_medication.stopped_value
+col patient_medication.term
+col patient_medication_current.asserted_at
+col patient_medication_current.coding_code
+col patient_medication_current.coding_display
+col patient_medication_current.coding_system
+col patient_medication_current.dose_amount
+col patient_medication_current.dose_unit
+col patient_medication_current.formulation
+col patient_medication_current.info_source
+col patient_medication_current.inn_code
+col patient_medication_current.medication_id
+col patient_medication_current.patient_id
+col patient_medication_current.sig
+col patient_medication_current.started_precision
+col patient_medication_current.started_value
+col patient_medication_current.term
+col patient_medication_dose_history.amount
+col patient_medication_dose_history.corrected
+col patient_medication_dose_history.dose_event_id
+col patient_medication_dose_history.effective_precision
+col patient_medication_dose_history.effective_value
+col patient_medication_dose_history.info_source
+col patient_medication_dose_history.is_initial
+col patient_medication_dose_history.medication_id
+col patient_medication_dose_history.patient_id
+col patient_medication_dose_history.reason
+col patient_medication_dose_history.recorded_at
+col patient_medication_dose_history.unit
+col patient_medication_past.asserted_at
+col patient_medication_past.coding_code
+col patient_medication_past.coding_display
+col patient_medication_past.coding_system
+col patient_medication_past.dose_amount
+col patient_medication_past.dose_unit
+col patient_medication_past.formulation
+col patient_medication_past.info_source
+col patient_medication_past.inn_code
+col patient_medication_past.medication_id
+col patient_medication_past.patient_id
+col patient_medication_past.reason
+col patient_medication_past.sig
+col patient_medication_past.started_precision
+col patient_medication_past.started_value
+col patient_medication_past.stopped_precision
+col patient_medication_past.stopped_value
+col patient_medication_past.term
+col patient_medication_reconciliation_flag.dup_key
+col patient_medication_reconciliation_flag.medication_ids
+col patient_medication_reconciliation_flag.patient_id
+col patient_medication_reconciliation_flag.thread_count
+col patient_medication_uncoded.asserted_at
+col patient_medication_uncoded.medication_id
+col patient_medication_uncoded.patient_id
+col patient_medication_uncoded.previously_struck
+col patient_medication_uncoded.term
+col patient_name.asserted_origin
+col patient_name.last_hlc_count
+col patient_name.last_hlc_wall
+col patient_name.patient_id
+col patient_name.provenance
+col patient_name.provenance_rank
+col patient_name.updated_at
+col patient_name.use_key
+col patient_name.use_raw
+col patient_name.value
+col patient_name_current.asserted_origin
+col patient_name_current.last_hlc_count
+col patient_name_current.last_hlc_wall
+col patient_name_current.patient_id
+col patient_name_current.provenance
+col patient_name_current.provenance_rank
+col patient_name_current.updated_at
+col patient_name_current.use_key
+col patient_name_current.use_raw
+col patient_name_current.value
+col patient_registration.basis
+col patient_registration.class
+col patient_registration.content_address
+col patient_registration.displayed_count
+col patient_registration.first_seen
+col patient_registration.patient_id
+col patient_registration.registered_hlc_count
+col patient_registration.registered_hlc_wall
+col patient_registration.registered_origin
+col patient_registration.search_incomplete
+col patient_registration_current.basis
+col patient_registration_current.class
+col patient_registration_current.content_address
+col patient_registration_current.displayed_count
+col patient_registration_current.patient_id
+col patient_registration_current.registered_hlc_count
+col patient_registration_current.registered_hlc_wall
+col patient_registration_current.registered_origin
+col patient_registration_current.search_incomplete
+col person_chart.demo_content_address
+col person_chart.demo_hlc_count
+col person_chart.demo_hlc_wall
+col person_chart.demo_origin
+col person_chart.dob
+col person_chart.last_activity
+col person_chart.name
+col person_chart.note_count
+col person_chart.patient_id
+col person_chart.person_id
+col person_chart.sex
+col person_chart.updated_at
+col person_chart_trust.demo_content_address
+col person_chart_trust.demo_hlc_count
+col person_chart_trust.demo_hlc_wall
+col person_chart_trust.demo_origin
+col person_chart_trust.dob
+col person_chart_trust.last_activity
+col person_chart_trust.name
+col person_chart_trust.note_count
+col person_chart_trust.patient_id
+col person_chart_trust.person_id
+col person_chart_trust.sex
+col person_chart_trust.trust_state
+col person_chart_trust.updated_at
+col person_member.patient_id
+col person_member.person_id
+col person_member.updated_at
+col safety_class_map.class
+col safety_class_map.code
+col safety_class_map.note
+col safety_class_map.severity
+col safety_class_map.system
+col safety_overclaim_flag.content_address
+col safety_overclaim_flag.emitted_rung
+col safety_overclaim_flag.licensed_rung
+col safety_overclaim_flag.patient_id
+col safety_overclaim_flag.recorded_at
+col sensitivity_assertion.content_address
+col sensitivity_assertion.event_id
+col sensitivity_assertion.first_seen
+col sensitivity_assertion.grade
+col sensitivity_assertion.hlc_counter
+col sensitivity_assertion.hlc_wall
+col sensitivity_assertion.node_origin
+col sensitivity_assertion.patient_id
+col sensitivity_assertion.rationale
+col sensitivity_assertion.source
+col sensitivity_assertion.subject_id
+col sensitivity_assertion.subject_kind
+col sensitivity_category_map.category
+col sensitivity_category_map.grade
+col sensitivity_category_map.note
+col sensitivity_withdrawal.content_address
+col sensitivity_withdrawal.event_id
+col sensitivity_withdrawal.first_seen
+col sensitivity_withdrawal.hlc_counter
+col sensitivity_withdrawal.hlc_wall
+col sensitivity_withdrawal.node_origin
+col sensitivity_withdrawal.patient_id
+col sensitivity_withdrawal.rationale
+col sensitivity_withdrawal.withdraws
+col sensitivity_withdrawal_worklist.content_address
+col sensitivity_withdrawal_worklist.event_id
+col sensitivity_withdrawal_worklist.node_origin
+col sensitivity_withdrawal_worklist.patient_id
+col sensitivity_withdrawal_worklist.rationale
+col sensitivity_withdrawal_worklist.reason
+col sensitivity_withdrawal_worklist.responsible_actor_id
+col sensitivity_withdrawal_worklist.withdraws
+col t_effective_ceiling_flag.clock_grade
+col t_effective_ceiling_flag.content_address
+col t_effective_ceiling_flag.flag_id
+col t_effective_ceiling_flag.flagged_at
+col t_effective_ceiling_flag.hlc_wall
+col t_effective_ceiling_flag.t_effective
+col t_effective_ceiling_flag.verdict
+col ui_gesture_timing.gesture_kind
+col ui_gesture_timing.n
+col ui_gesture_timing.p50_ms
+col ui_gesture_timing.p95_ms
+col ui_gesture_timing.size_bucket
+fn actor_event_is_append_only() -> trigger
+fn blob_note_reference(bytea,text,bigint) -> void
+fn cairn_attachment_flag_health() -> TABLE(event_type text, reason text, flagged bigint, first_flagged timestamp with time zone, last_flagged timestamp with time zone, example_event uuid)
+fn cairn_authorship_bound(jsonb,text,bytea) -> boolean
+fn cairn_blob_present_guard() -> trigger
+fn cairn_by_reference_renditions(jsonb,text) -> TABLE(attachment_index integer, rendition_index integer, rendition jsonb, fault text, fault_detail text)
+fn cairn_ceiling_classify(bigint,text,timestamp with time zone) -> text
+fn cairn_ceiling_upper_ms(bigint,text) -> bigint
+fn cairn_chart_check_pending(uuid) -> boolean
+fn cairn_chart_set_doubts(uuid[]) -> TABLE(low uuid, high uuid, kind text, hlc_wall bigint)
+fn cairn_chart_set_has_doubted_link(uuid[]) -> boolean
+fn cairn_chart_set_unverified_links(uuid[]) -> TABLE(low uuid, high uuid, system text)
+fn cairn_claim_authority(uuid,uuid) -> text
+fn cairn_clear_payload(event_log) -> jsonb
+fn cairn_clock_grade_is_ratified(text) -> boolean
+fn cairn_clock_grade_rank(text) -> integer
+fn cairn_clock_health() -> TABLE(rtc_now timestamp with time zone, hlc_floor timestamp with time zone, behind_by_ms bigint, is_behind boolean, effective_lower_bound timestamp with time zone, default_grade text)
+fn cairn_demographic_field_policy(text) -> text
+fn cairn_dose_effective_sort_key(text,bigint) -> text
+fn cairn_drug_available() -> boolean
+fn cairn_drug_facts(uuid[],uuid[]) -> TABLE(allergen uuid, med uuid, outcome text, match_kind text, group_name text)
+fn cairn_drug_group_status(uuid[]) -> TABLE(group_code uuid, review_status text)
+fn cairn_drug_medication_search(text,integer) -> TABLE(code text, display text, uses bigint, matched text)
+fn cairn_drug_search(text,integer) -> TABLE(system text, code text, display text, matched text)
+fn cairn_duplicate_check_status() -> record
+fn cairn_effective_sensitivity(uuid) -> TABLE(grade text, subject_kind text, content_address bytea)
+fn cairn_event_safety(uuid) -> TABLE(rung text, class text, severity text, event_type text, grade text, subject_kind text)
+fn cairn_event_thread(uuid) -> uuid
+fn cairn_event_type_has_no_thread(text) -> boolean
+fn cairn_field_clash(uuid,uuid,text) -> TABLE(veto_kind text, severity text, subject text, detail text)
+fn cairn_flag_reason_text(text,text) -> text
+fn cairn_guard_medication_patient(uuid,uuid,bytea) -> void
+fn cairn_has_hard_veto(uuid,uuid) -> boolean
+fn cairn_hlc_overlay_wins(bigint,integer,text,bytea,bigint,integer,text,bytea) -> boolean
+fn cairn_hlc_triple_collision(bigint,integer,text,bytea,bigint,integer,text,bytea) -> boolean
+fn cairn_identifier_veto(uuid,uuid) -> TABLE(veto_kind text, severity text, subject text, detail text)
+fn cairn_json_list_or_empty(jsonb) -> jsonb
+fn cairn_json_list_or_raise(jsonb,text,text) -> jsonb
+fn cairn_key_confirmation(text) -> text
+fn cairn_learn_attachment_refs(jsonb) -> void
+fn cairn_link_overlay_wins(boolean,bigint,integer,text,bytea,boolean,bigint,integer,text,bytea) -> boolean
+fn cairn_match_veto(uuid,uuid) -> TABLE(veto_kind text, severity text, subject text, detail text)
+fn cairn_max_component_size() -> integer
+fn cairn_max_event_bytes() -> integer
+fn cairn_max_hlc_drift_ms() -> bigint
+fn cairn_max_medication_group_size() -> integer
+fn cairn_med_draft_from(uuid,text) -> TABLE(preset text, detail text)
+fn cairn_med_draft_from_save(uuid,text,text,text) -> text
+fn cairn_med_draft_line_delete(uuid,uuid,text,text,timestamp with time zone) -> text
+fn cairn_med_draft_line_save(uuid,uuid,text,text,text,text,jsonb,text,boolean,jsonb,boolean,text,text,boolean,text,text,text,text) -> text
+fn cairn_med_draft_lines(uuid,text) -> TABLE(line_id uuid, terminal_id text, seq integer, charted_as text, line_text text, parts jsonb, reason text, hand_ticked boolean, ticked_against jsonb, finished boolean, saved_at timestamp with time zone, typed_drug text, directions text, held boolean, info_source text, source_detail text, why text, set_aside_of text, restores uuid)
+fn cairn_med_draft_restore_add(uuid,uuid,text,text,uuid,text,text,jsonb,text,text) -> text
+fn cairn_med_draft_take(uuid,text,text) -> integer
+fn cairn_med_drafts_by_writer() -> TABLE(writer text, patient_id uuid, lines bigint, newest timestamp with time zone)
+fn cairn_med_ticked_against_ok(jsonb) -> boolean
+fn cairn_medication_duplicate_groups(uuid[]) -> SETOF uuid
+fn cairn_medication_group_holds(uuid[],timestamp with time zone) -> TABLE(group_id uuid, medication_id uuid, withhold_event_id uuid, reason text, starts_at timestamp with time zone, until_at timestamp with time zone, until_reviewed boolean, withholder_kid text, pending boolean)
+fn cairn_medication_hold_ended(uuid,timestamp with time zone) -> text
+fn cairn_medication_hold_release_pending(uuid,timestamp with time zone) -> timestamp with time zone
+fn cairn_medication_restore_lineage(uuid,uuid) -> SETOF uuid
+fn cairn_medication_thread_commitment(uuid) -> bytea
+fn cairn_medication_thread_patient(uuid) -> uuid
+fn cairn_medication_thread_readable_count(uuid) -> bigint
+fn cairn_medication_warning_threshold() -> text
+fn cairn_note_draft_addendum_part_save(uuid,uuid,text,text,text,timestamp with time zone,uuid) -> text
+fn cairn_note_draft_addendum_to(uuid) -> uuid
+fn cairn_note_draft_commit_overdue(uuid,uuid) -> TABLE(patient_id uuid, seq integer, writer text, narrative text, stated_time timestamp with time zone, recording_started timestamp with time zone, last_keystroke timestamp with time zone)
+fn cairn_note_draft_discard(uuid,uuid,text,uuid,text) -> TABLE(outcome text, seq integer, by_discarder boolean, narrative text, stated_time timestamp with time zone, recording_started timestamp with time zone, last_keystroke timestamp with time zone, discarded_at timestamp with time zone)
+fn cairn_note_draft_part_save(uuid,uuid,text,text,text,timestamp with time zone) -> text
+fn cairn_note_draft_parts(uuid) -> TABLE(draft_id uuid, terminal_id text, seq integer, writer text, writer_name text, narrative text, stated_time timestamp with time zone, recording_started timestamp with time zone, last_keystroke timestamp with time zone)
+fn cairn_note_draft_spend_parts(uuid,uuid) -> TABLE(patient_id uuid, seq integer, writer text, narrative text, stated_time timestamp with time zone, recording_started timestamp with time zone, last_keystroke timestamp with time zone)
+fn cairn_note_draft_take(uuid,uuid,text) -> text
+fn cairn_note_drafts_by_writer() -> TABLE(writer text, draft_id uuid, patient_id uuid, due timestamp with time zone, stuck boolean)
+fn cairn_note_drafts_commit_failed(uuid) -> SETOF uuid
+fn cairn_note_drafts_due(uuid) -> TABLE(draft_id uuid, due timestamp with time zone, overdue boolean, stuck boolean)
+fn cairn_note_drafts_overdue(uuid) -> TABLE(draft_id uuid)
+fn cairn_note_key_actor(text) -> text
+fn cairn_note_key_is_human(text) -> boolean
+fn cairn_note_key_role(text) -> text
+fn cairn_note_people() -> TABLE(actor_id text, staff_id text, display_name text, keys text[])
+fn cairn_note_quarantine_minutes() -> integer
+fn cairn_note_signer_name(text) -> text
+fn cairn_note_staff_actor(text) -> text
+fn cairn_note_vouched_attester(uuid) -> text
+fn cairn_patient_attachment_flags(uuid) -> TABLE(event_id uuid, event_type text, attachment_index integer, rendition_index integer, reason text, flagged_at timestamp with time zone)
+fn cairn_patient_deferred_sensitivity(uuid) -> TABLE(event_id uuid, event_type text, admitted_at timestamp with time zone, adjudication_error text)
+fn cairn_patient_safety(uuid) -> TABLE(event_id uuid, rung text, class text, severity text, event_type text, grade text, subject_kind text)
+fn cairn_patient_sealed_medication_without_custody(uuid) -> bigint
+fn cairn_person_charts(uuid) -> SETOF uuid
+fn cairn_projection_dispatch() -> trigger
+fn cairn_prospective_sensitivity(uuid,uuid) -> TABLE(grade text, subject_kind text, content_address bytea)
+fn cairn_provenance_rank(text) -> integer
+fn cairn_recompute_component(uuid,bytea) -> void
+fn cairn_recompute_medication_group(uuid,bytea) -> void
+fn cairn_record_ceiling_flag(bytea,bigint,timestamp with time zone,text,text) -> void
+fn cairn_record_hlc_collision(text,text,bigint,integer,text,bytea,bytea) -> void
+fn cairn_refuse_substitution(bytea,bytea,uuid,text) -> void
+fn cairn_registration_expire(uuid) -> text
+fn cairn_registration_status(uuid) -> TABLE(status text, patient_id uuid, refusal text)
+fn cairn_registration_submit(uuid,text,jsonb,jsonb,text) -> text
+fn cairn_rendition_address(jsonb,text) -> bytea
+fn cairn_rendition_byte_len(jsonb,text) -> bigint
+fn cairn_rendition_media_type(jsonb,text) -> text
+fn cairn_responsibility_bound(jsonb,bytea) -> boolean
+fn cairn_safety_class_candidate(jsonb) -> TABLE(class text, severity text)
+fn cairn_safety_rung_for_rank(integer) -> text
+fn cairn_safety_rung_rank(text) -> integer
+fn cairn_safety_severity_rank(text) -> integer
+fn cairn_search_candidates(text[],text,jsonb) -> TABLE(patient_id uuid, matched_pass text)
+fn cairn_sensitivity_candidate(jsonb) -> TABLE(grade text, category text)
+fn cairn_sensitivity_ceremony_ok(text,jsonb,bytea) -> void
+fn cairn_sensitivity_rank(text) -> integer
+fn cairn_sensitivity_standing(uuid) -> TABLE(content_address bytea, subject_kind text, subject_id uuid, grade text)
+fn cairn_supervision_act(text,text,text,text,bytea) -> void
+fn cairn_supervision_address(text,text,text,bigint) -> bytea
+fn cairn_supervision_prior(text,text,text) -> bigint
+fn cairn_supervision_record() -> TABLE(op text, actor_id text, related_actor text, recorded_at timestamp with time zone, hlc_wall bigint, hlc_counter integer)
+fn cairn_supervision_staff() -> TABLE(staff_id text, display_name text, role text, needs_cosigning boolean, assigner boolean, supervisors text[])
+fn cairn_suppression_author_ok(uuid,bytea) -> boolean
+fn cairn_suppression_target_id(jsonb) -> uuid
+fn cairn_t_effective(text) -> timestamp with time zone
+fn cairn_thread_patient(uuid) -> uuid
+fn cairn_twin_is_present(text) -> boolean
+fn cairn_twin_provenance_of(bytea) -> TABLE(twin_authored boolean, verifiable boolean)
+fn cairn_vault_backoff_seconds(integer) -> integer
+fn cairn_vault_enrol(text,text,text,jsonb,text,bytea,text,text,text,text,bytea) -> bytea
+fn cairn_vault_enrol_address(text,text,text) -> bytea
+fn cairn_vault_enrollers() -> TABLE(staff_id text, display_name text, enroller boolean)
+fn cairn_vault_grant_address(text,boolean,bigint) -> bytea
+fn cairn_vault_grant_prior(text) -> bigint
+fn cairn_vault_hint(text) -> text
+fn cairn_vault_is_enroller(text) -> boolean
+fn cairn_vault_judge_address(text,boolean) -> bytea
+fn cairn_vault_judge_key(text,boolean,text,bytea) -> void
+fn cairn_vault_key_may_sign(text) -> boolean
+fn cairn_vault_member_key(text) -> text
+fn cairn_vault_purpose_allowed(text,boolean,text) -> boolean
+fn cairn_vault_rekey(text,text,text,text,text,text,bytea,text,text,bytea) -> bytea
+fn cairn_vault_rekey_address(text,text,text) -> bytea
+fn cairn_vault_release(text,text,text) -> TABLE(outcome text, seed bytea, signing_key_id text, retry_after_ms bigint)
+fn cairn_vault_replaced_notice(text) -> TABLE(replaced_at timestamp with time zone, approver_display_name text)
+fn cairn_vault_reseal(text,bytea,text,bytea) -> void
+fn cairn_vault_reseal_address(text,bytea) -> bytea
+fn cairn_vault_sequence_name(uuid,text) -> text
+fn cairn_vault_set_enroller(text,boolean,text,bytea) -> void
+fn cairn_vault_staff_id(text) -> text
+fn cairn_vault_staff_id_taken(text) -> boolean
+fn cairn_vault_terminal_phc() -> text
+fn cairn_vault_unconfirmed() -> TABLE(staff_id text, display_name text, signing_key_id text, approver_staff_id text, approved_at timestamp with time zone, doubtful boolean)
+fn cairn_vault_unconfirmed_expires_at(text) -> timestamp with time zone
+fn cairn_whos_here_directory() -> TABLE(staff_id text, display_name text, role text)
+fn event_log_is_append_only() -> trigger
+fn events_by_actor_epoch(text,text) -> TABLE(event_id uuid, event_type text, attribution text)
+fn node_event_is_append_only() -> trigger
+fn node_hlc_tick() -> TABLE(wall bigint, counter integer)
+fn recall_overlay_is_append_only() -> trigger
+fn submit_event(bytea,bytea,bytea,bytea) -> uuid
