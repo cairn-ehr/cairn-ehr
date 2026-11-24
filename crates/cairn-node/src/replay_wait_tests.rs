@@ -23,3 +23,21 @@ fn backoff_doubles_then_caps() {
         assert_eq!(ms(attempt), 5000, "attempt {attempt}");
     }
 }
+
+/// Final review M5: the stamp's INSERT runs while `lock_timeout` is still armed, so a `55P03`
+/// there must be waited out like every other replay step — not fail a replay that already
+/// landed. A source guard: no test can time a blocker between the heal and the stamp.
+#[test]
+fn the_stamp_waits_out_a_lock_timeout_too() {
+    let db = include_str!("db.rs");
+    let stamp = db
+        .find("INSERT INTO node_schema (version, loader_build, schema_hash,")
+        .expect("the stamp's INSERT");
+    let retry = db[..stamp]
+        .rfind("crate::replay_wait::retry_on_lock_timeout(&client, \"the schema stamp\", || {")
+        .expect("the stamp runs through the retry loop");
+    // Nothing but the call itself between the retry and the INSERT.
+    let between = &db[retry..stamp];
+    assert!(!between.contains(';'), "{between}");
+    assert!(stamp < db.find("crate::replay_wait::disarm(&client)").unwrap());
+}

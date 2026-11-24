@@ -1175,10 +1175,22 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // now() on insert; refresh it on conflict so the record always says who
     // touched the schema last, and when. The hash (#726) goes in with it, so the stamp
     // vouches for exactly what was replayed — and a skipped replay writes nothing, since
-    // nothing was touched (and a no-op connect stays write-free).
+    // nothing was touched (and a no-op connect stays write-free). `lock_timeout` is still
+    // armed here, so the stamp waits out a `55P03` like every replay step before it.
     if replay {
-        client
-            .execute(
+        let (hash, floor_reason) = (
+            schema_hash.as_slice(),
+            cairn_event::schema_generation::latest_floor_reason(),
+        );
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] = [
+            &embedded,
+            &LOADER_BUILD,
+            &hash,
+            &cairn_event::schema_generation::WINDOW_FLOOR_GENERATION,
+            &floor_reason,
+        ];
+        crate::replay_wait::retry_on_lock_timeout(&client, "the schema stamp", || {
+            client.execute(
                 "INSERT INTO node_schema (version, loader_build, schema_hash,
                                           window_floor, window_floor_reason, window_floor_for)
                  VALUES ($1, $2, $3, $4, $5, $1)
@@ -1190,18 +1202,11 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
                        window_floor = EXCLUDED.window_floor,
                        window_floor_reason = EXCLUDED.window_floor_reason,
                        window_floor_for = EXCLUDED.window_floor_for",
-                &[
-                    &embedded,
-                    &LOADER_BUILD,
-                    &schema_hash.as_slice(),
-                    &cairn_event::schema_generation::WINDOW_FLOOR_GENERATION,
-                    &cairn_event::schema_generation::latest_floor_reason(),
-                ],
+                &params,
             )
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e))
-            })?;
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e)))?;
     }
     // After the stamp: the client lives on as the daemon's connection (error paths drop it).
     crate::replay_wait::disarm(&client).await?;

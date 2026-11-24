@@ -6,10 +6,10 @@
 //! table queues behind the ALTER — so a single slow report could freeze charting for as long
 //! as it stays open. [`crate::db::connect_and_load_schema`] therefore sets
 //! [`REPLAY_LOCK_TIMEOUT`] once it holds the loader-against-loader advisory lock, and runs
-//! each replayed file, the re-adjudication and the heal through this module. A wait longer
-//! than the timeout fails with SQLSTATE `55P03`; the queued readers go through; we roll back,
-//! name the sessions that may be holding it, sleep a [`backoff`], and try the WHOLE step again — indefinitely,
-//! so the owner can decide what to do about a blocker the log names.
+//! each replayed file, the re-adjudication, the heal and the stamp through this module. A wait
+//! longer than the timeout fails with SQLSTATE `55P03`; the queued readers go through; we roll
+//! back, name the sessions that may be holding it, sleep a [`backoff`], and try the WHOLE step
+//! again — indefinitely, so the owner can decide what to do about a blocker the log names.
 //!
 //! WHY RE-RUNNING A WHOLE FILE IS SAFE. A file's earlier transactions may already have
 //! committed when a later one times out (db/033, db/034, db/079 carry several). That is fine:
@@ -23,8 +23,9 @@ use tokio_postgres::Client;
 
 use crate::db_diagnosis::legible_db_error;
 
-/// How long one replay step may wait for a lock before it steps aside and retries. Short
-/// enough that a reader queued behind it is held ~2 s at most; the figure is the builder's.
+/// How long one replay step may wait for ONE lock before it steps aside and retries. Short
+/// enough that a reader queued behind that wait is held ~2 s by it; locks the step already holds
+/// stay held through its later waits and its own run. The figure is the builder's.
 pub const REPLAY_LOCK_TIMEOUT: &str = "2s";
 
 /// Bound this session's lock waits for the replay. [`crate::db::connect_and_load_schema`] calls
