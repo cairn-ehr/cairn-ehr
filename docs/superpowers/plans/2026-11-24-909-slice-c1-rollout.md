@@ -17,6 +17,12 @@ plain JS (no npm).
 
 **Spec:** [`docs/superpowers/specs/2026-11-24-909-slice-c1-rollout-design.md`](../specs/2026-11-24-909-slice-c1-rollout-design.md)
 
+> [!NOTE]
+> **Executed in PR #1176; this plan is a record, not the build.** Several steps below were wrong as written and the
+> build corrected them: the door-surface exemption (Task 4), the blocker line after a lock timeout (Task 3), where
+> the below-floor gate sits (`open_chart_impl` / `register_impl`, Task 6), and `idle.js` as a classic script (Task 7).
+> The design's §10 and ADR-0111 record what was built. Where this plan and either of those disagree, they win.
+
 ## Global Constraints
 
 - Every doubt resolves toward refusing (NULL floor = exact generation), as design §4.1.
