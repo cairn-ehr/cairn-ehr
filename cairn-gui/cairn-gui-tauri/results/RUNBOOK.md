@@ -4313,6 +4313,7 @@ two machines; the rest runs on the node's machine.
 | Update now → the restarted window | the press | its terminal lock, ready for a passphrase | **≤ 10 s** |
 | The service's restart, seen by a remote window | the service's "schema changed" line | a press on the remote window reads | **≤ 5 s** |
 | A remote terminal untouched at its lock restarts by itself | the service's "schema changed" line | the remote window's new process | **≤ 75 s** (derived below) |
+| A waiting window restarts once the node is back | Postgres's restart | the window's new process | **≤ 70 s** (derived below) |
 | A clinical press during an upgrade under a 60 s reader | the press | its outcome | **never past the 15 s cut-off** |
 | The heal's longest lock, ~100 k events | the heal's start | its end (its locks are held to the end) | stated; **> 15 s is a finding** |
 
@@ -4462,6 +4463,16 @@ is waiting; it installs when this terminal is next idle." and **Update now**.
       field every 30 s for three minutes: it never restarts under you.
 - [ ] **The idle re-lock.** Install the other variant, sign in, open a chart, and leave it: one minute later the
       re-lock closes the chart, shows the lock, and the window restarts.
+- [ ] **The node unreachable: no restart into an outage.** The window has just restarted and sits at its lock,
+      untouched. Install the other variant at once, then stop the node's database within that first minute:
+      `"$PGBIN/pg_ctl" -D "$MDATA" stop -m fast`. After a whole idle minute the next poll cannot read the stamp, so
+      the window judges the install on the stamp it read last and says "This terminal cannot reach the node right
+      now; the update installs once it can." It does not restart (`pgrep -f cairn-gui-tauri` shows the same pid) and
+      closes nothing. Watch two more polls: the same. Press Update now: the same line, no restart. Then start it
+      again, `"$PGBIN/pg_ctl" -D "$MDATA" -o "-p $MPORT" -l "$MDATA.log" start`, and time to the window's restart (a
+      new pid). Budget **≤ 70 s**: the next poll after the database is back (≤ 60 s), its reopen (≤ 5 s) and the
+      installed program's answer (≤ 5 s). Nobody is named on a freshly restarted window and the 10 s lock poll reads
+      no database, so no other command's failed reopen can skip the poll's. Sign in: the window works.
 
 **Measurement 5 — below the floor.** Raise the floor by hand (the service's exact check ignores these columns, so it
 keeps running):
@@ -4529,7 +4540,9 @@ through the service's gateway, so the service's exit on the new stamp drops it, 
 the update poll reopens it. The budget is derived from the code: the gateway's restart (≤ 5 s, Measurement 2), then
 the window's first poll after the gateway is back (polls are 60 s apart, and one that falls inside the restart learns
 nothing), that poll's reopen (up to 5 s; a reopen is never tried within 2 s of a failed one, which at an untouched
-lock only the poll itself could have been), and the installed program's answer (up to 5 s): 5 + 60 + 5 + 5 = 75 s.
+lock only the poll itself could have been: the 10 s lock poll reads no database, and the person menu's 60 s re-read
+runs only while someone is named), and the installed program's answer (up to 5 s): 5 + 60 + 5 + 5 = 75 s. The
+restart needs a stamp read just then, so a terminal that cannot reach the node says it and waits instead.
 A second upgrade, 86 → 87, makes the window old only once it is already waiting at its lock.
 
 On the terminal, copy the two windows from the node (`scp` from `$PROBE/86/` and `$PROBE/87/`), define `install_at`
@@ -4560,6 +4573,7 @@ for any later section (the warning above).
 | A clinical press during the upgrade under a 60 s reader | ≥ 9 | | | never past 15 s | |
 | The upgrade's `real` time under the reader (context) | 1 | | | — | |
 | An untouched lock screen → restarted (minutes, context) | 1 | | | — (≤ about 2 min) | |
+| The node back → the waiting window restarted | 1 | | | ≤ 70 s | |
 | The heal's `elapsed_ms`, ~100 k events, and the longest wait of a read behind it | 1 | | | > 15 s is a finding | |
 
 | Behaviour | Verdict | Notes |
@@ -4573,6 +4587,7 @@ for any later section (the warning above).
 | A restart waits for a Sign in flight; the draft survives the restart | | |
 | An untouched lock screen restarts; someone typing at it is never restarted under | | |
 | The idle re-lock restarts into a fitting install | | |
+| The node unreachable: "cannot reach the node right now", no restart, nothing closed; restarted and working once it is back | | |
 | Below the floor: the alert, the open chart works, another chart and a registration are refused | | |
 | Below the floor: a front door waits for the idle re-lock or Update now | | |
 | Below the floor: a launch is refused, naming the reason | | |

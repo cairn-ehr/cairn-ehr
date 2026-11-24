@@ -263,7 +263,15 @@ the result.
 - **`update_state` keeps the last verdict on a blip** *(build time, controller ruling)*. A lost connection that
   could not be reopened, or a failed read, returns what the window last knew, not "current", so a below-floor alert
   never vanishes on a blip. It also keeps the last stamp read (seeded at launch), and the install check judges a
-  program against a fresh stamp, else that one; only with neither does a program read as not fitting.
+  program against a fresh stamp, else that one.
+- **Only a fresh stamp restarts** *(build time, Tasks 6+7 fix round 2)*. A restart while the node is down would
+  relaunch into a failing first connect, and the window would be gone. So `installed_program` answers a fourth kind,
+  `unreachable`, when a program fits only the cached stamp or no stamp has ever been read; the window says "This
+  terminal cannot reach the node right now; the update installs once it can.", closes nothing and does not restart. A
+  cached stamp that refuses the program still answers `does_not_fit`. Residual: the node can go down between the
+  fresh check and the relaunch, which then fails at launch like any launch against an unreachable node.
+- **An Update now press joins a running idle attempt** *(build time, fix round 2)*: the press is a touch, which
+  would otherwise make the idle poll's re-check abandon the attempt the press wanted.
 - **The lock-screen restart asks again after the install check** *(build time)*: the installed program may take 5 s
   to answer, so the poll's restart re-checks that nobody touched the terminal meanwhile.
   A refusal learned mid-session (another loader restamped the database) reads as below the floor with no reason

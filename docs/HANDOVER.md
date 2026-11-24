@@ -176,14 +176,14 @@
 >    with its §10 plan- and build-time amendments; plan [`superpowers/plans/2026-11-24-909-slice-c1-rollout.md`](superpowers/plans/2026-11-24-909-slice-c1-rollout.md), 8
 >    tasks by SDD; [ADR-0111](spec/decisions/0111-an-older-window-works-above-a-floor.md), spec **v0.113**, `db/085`,
 >    `SCHEMA_GENERATION` **85**): the stamp carries a window floor, so an older window keeps working at or above it (a
->    calm line with Update now; it restarts into a fitting install at the idle re-lock or an untouched lock screen)
->    and below it finishes the chart in hand and opens no other; the window learns at launch and on a 60 s poll that
->    reopens a lost connection (a remote window's drops when the service restarts); a snapshot keeps `cairn_window`'s
->    doors additive; the replay runs under a 2 s `lock_timeout` with retry; the terminal service exits 75 on a new
->    stamp for its supervisor. Filed **#1175** (db/043 swallows the re-adjudication's lock timeout). **⇒ NEXT: the
->    final whole-branch review, then the PR**; then **slice C2's brainstorm** (the terminal fetches a signed release
->    from its node; design §9). **Slice B must not ship to a site until slice C is settled.** RUNBOOK §38, §39 (two
->    machines) and §40 are owed by a human. **Otherwise:** sign-in
+>    calm line with Update now; it restarts into an install that fits a freshly read stamp, at the idle re-lock or an
+>    untouched lock screen) and below it finishes the chart in hand and opens no other; the window learns at launch
+>    and on a 60 s poll that reopens a lost connection (a remote window's drops when the service restarts); a snapshot
+>    keeps `cairn_window`'s doors additive; the replay runs under a 2 s `lock_timeout` with retry; the terminal
+>    service exits 75 on a new stamp for its supervisor. Filed **#1175** (db/043 swallows the re-adjudication's lock
+>    timeout). **⇒ NEXT: the final whole-branch review, then the PR**; then **slice C2's brainstorm** (the terminal
+>    fetches a signed release from its node; design §9). **Slice B must not ship to a site until slice C is settled.**
+>    RUNBOOK §38, §39 (two machines) and §40 are owed by a human. **Otherwise:** sign-in
 >    **slice 4** (the emergency key, design §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and
 >    Pi figures (ROADMAP has the Mac figures); or the next whole-project review. Design §10's findings 1–2 are decided
 >    (ADR-0088), 3 is deferred (#979), 4–5 are **#965**, **#964**. Slice 3's design:

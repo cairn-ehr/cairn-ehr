@@ -1104,6 +1104,7 @@ Supervisor: launchd / systemd · remote terminal (Measurements 2 and 8): ___ · 
 | A clinical press during the upgrade under a 60 s reader | ≥ 9 | | | never past 15 s | |
 | The upgrade's `real` time under the reader (context) | 1 | | | — | |
 | An untouched lock screen → restarted (minutes, context) | 1 | | | — (≤ about 2 min) | |
+| The node back → the waiting window restarted | 1 | | | ≤ 70 s | |
 | The heal's `elapsed_ms`, ~100 k events, and the longest wait of a read behind it | 1 | | | > 15 s is a finding | |
 
 Steps: paper *N* = 1 → observed \_\_ (idle) / \_\_ (someone working).
@@ -1119,6 +1120,7 @@ Steps: paper *N* = 1 → observed \_\_ (idle) / \_\_ (someone working).
 | A restart waits for a Sign in flight; the draft survives the restart | | |
 | An untouched lock screen restarts; someone typing at it is never restarted under | | |
 | The idle re-lock restarts into a fitting install | | |
+| The node unreachable: "cannot reach the node right now", no restart, nothing closed; restarted and working once it is back | | |
 | Below the floor: the alert, the open chart works, another chart and a registration are refused | | |
 | Below the floor: a front door waits for the idle re-lock or Update now | | |
 | Below the floor: a launch is refused, naming the reason | | |

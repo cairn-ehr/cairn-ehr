@@ -104,14 +104,21 @@ clinic with no IT replaces them by hand.
    re-lock and the restarts below all run one sequence (`restartIfFits`). First the window asks the program now
    installed at its own path for its generation (`--print-schema-generation`, which prints `<generation> <64 hex>` and
    exits, connecting to nothing), with a **5 s** timeout; a program that fails, hangs or prints anything else reads as
-   not installed. It is judged against a stamp read now, else the last stamp read; with neither it does not fit. A
-   restart from the lock screen's poll asks again, after that answer, whether nobody has touched the terminal. Then:
-   - `Same` (nothing newer installed): "No newer version is installed on this terminal yet — ask whoever installs
-     Cairn here." and no restart;
-   - `DoesNotFit` (this database would refuse it, or tell it to update): "The version installed here does not fit this
-     node yet." and no restart, so a too-new install never turns a working terminal dark;
-   - `Fits`: every Sign in flight settles, the chart closes with its queued saves awaited, and the window restarts
-     (Tauri's `AppHandle::restart`). The held key and the claim live in the window's memory and go with it.
+   not installed. It is judged against a stamp read just now, else the last stamp read, and **only a fresh stamp can
+   lead to a restart** (build-time, fix round 2): a window relaunched while the node does not answer would exit at its
+   first connect, and the terminal would be gone. A restart from the lock screen's poll asks again, after that answer,
+   whether nobody has touched the terminal; an Update now press made meanwhile joins that attempt instead. Then:
+   - `same` (nothing newer installed, whatever the node says): "No newer version is installed on this terminal yet —
+     ask whoever installs Cairn here." and no restart;
+   - `does_not_fit` (this database, on a fresh or the cached stamp, would refuse it or tell it to update): "The
+     version installed here does not fit this node yet." and no restart, so a too-new install never turns a working
+     terminal dark;
+   - `unreachable` (it fits only the cached stamp, or no stamp has ever been read): "This terminal cannot reach the node
+     right now; the update installs once it can." It closes nothing and does not restart; at an idle lock the next
+     poll that reads the stamp tries again;
+   - `fits` (on a fresh stamp): every Sign in flight settles, the chart closes with its queued saves awaited, and the
+     window restarts (Tauri's `AppHandle::restart`). The held key and the claim live in the window's memory and go
+     with it.
 
    With an update waiting the sequence runs after the idle re-lock, after a chart close while the terminal lock is
    showing, and at the terminal lock after a whole idle period with no touch. That last case covers **a terminal
@@ -203,8 +210,13 @@ cut-off during an upgrade; one line of calm text, read once. RUNBOOK §40 measur
 - **A window learns of an upgrade at its next poll, up to 60 s late.** A remote window, whose connection the
   service's restart drops, learns at its first poll after the gateway is back, plus that poll's reopen (up to 5 s; a
   reopen is not tried within 2 s of a failed one). A poll that falls inside the gateway's restart learns nothing, and
-  the next is 60 s later. A restart reuses the launch's arguments, so a window started with `--patient` reopens that
-  chart.
+  the next is 60 s later. A reopen another command failed within the previous 2 s also skips that poll's: the 10 s
+  lock poll touches no database, but the person menu re-reads every 60 s while someone is named, and a poll that
+  follows its failed reopen learns a minute later. A restart reuses the launch's arguments, so a window started with
+  `--patient` reopens that chart.
+- **The node can still go down between the fresh check and the relaunch.** The check is a few seconds before the
+  restart (the program's answer, every Sign settling, the chart's close); a node lost in that gap makes the relaunched
+  window fail at launch, like any launch against an unreachable node, and it must be started again by hand.
 
 Pins: `cairn-event`'s `schema_generation` ledger tests;
 `crates/cairn-node/src/{window_floor_tests,replay_wait_tests}.rs` and `terminal_service/run.rs`'s unit tests;
