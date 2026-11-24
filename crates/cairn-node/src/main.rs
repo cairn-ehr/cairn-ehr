@@ -3113,8 +3113,8 @@ async fn run() -> anyhow::Result<()> {
             cairn_node::conn_posture::require_local(&cli.conn)?;
             let sk = load_signing_key(&cli.key, false)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
-            use cairn_node::terminal_service::run as stamp;
-            stamp::stamp_at_startup(stamp::stamp_still_ours(&db).await)?;
+            use cairn_node::terminal_service::run as svc;
+            svc::stamp_at_startup(svc::stamp_still_ours(&db).await)?;
             // Then the login can claim requests and the key is the node's own (final review F4).
             let origin = cairn_node::terminal_service::startup::check(&db, &sk).await?;
             if gateway_listen.is_some() {
@@ -3125,7 +3125,6 @@ async fn run() -> anyhow::Result<()> {
                 "terminal service running (it exits with status 75 when the node's schema \
                  changes: run it under a supervisor that restarts it)"
             );
-            use cairn_node::terminal_service::run as svc;
             if let Err(e) = svc::run(&cli.conn, &sk, &origin, gateway_listen).await {
                 if let Some(changed) = e.downcast_ref::<svc::StampChanged>() {
                     eprintln!(

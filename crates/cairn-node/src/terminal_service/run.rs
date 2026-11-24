@@ -102,7 +102,7 @@ impl std::error::Error for StampChanged {}
 /// stamp tick so the two cannot drift. Three outcomes: `Ok(Ok(()))` it does; `Ok(Err(_))` it
 /// does not (the exit-for-the-supervisor case); `Err(_)` the stamp could not be READ (a dropped
 /// connection, a missing grant), which says nothing about the stamp: startup fails on it, the
-/// loop logs it and lets the reconnect path work (see [`stamp_tick`]).
+/// loop logs it and lets the reconnect path work (see `stamp_tick`).
 pub async fn stamp_still_ours(client: &Client) -> anyhow::Result<Result<(), StampChanged>> {
     let stamp = crate::db::read_schema_stamp(client).await?;
     Ok(crate::conn_posture::schema_verdict(
@@ -114,12 +114,22 @@ pub async fn stamp_still_ours(client: &Client) -> anyhow::Result<Result<(), Stam
 }
 
 /// The loop's use of [`stamp_still_ours`]: a changed stamp is an error to return; an unread
-/// stamp is logged and the loop carries on. **Pure.**
-fn stamp_tick(checked: anyhow::Result<Result<(), StampChanged>>) -> Result<(), StampChanged> {
-    checked.unwrap_or_else(|e| {
-        eprintln!("the schema stamp could not be read: {e}");
-        Ok(())
-    })
+/// stamp is logged (once per distinct message, via `slot`) and the loop carries on.
+fn stamp_tick(
+    slot: &mut Option<String>,
+    checked: anyhow::Result<Result<(), StampChanged>>,
+) -> Result<(), StampChanged> {
+    match checked {
+        Err(e) => {
+            let line = format!("the schema stamp could not be read: {e}");
+            log(fresh_failure(slot, Err(line)));
+            Ok(())
+        }
+        Ok(verdict) => {
+            *slot = None;
+            verdict
+        }
+    }
 }
 
 /// Startup's use of [`stamp_still_ours`]: any outcome but "ours" refuses to start. **Pure.**
@@ -227,8 +237,8 @@ fn log(line: Option<String>) {
 
 /// Run the service on `conn`, reopening it after a loss, until the node's schema stamp stops
 /// naming this build: then `Err(StampChanged)` (a connection or startup failure is another
-/// error), so the caller can exit for its supervisor. The reconnect
-/// and back-off path is not covered by a test (it needs a killed backend); `run_jobs` is.
+/// error), so the caller can exit for its supervisor. The reconnect and back-off path is not
+/// covered by a test (it needs a killed backend); `run_jobs` is.
 ///
 /// With `gateway` (`--gateway-listen`), the terminal gateway runs beside the jobs as its own
 /// task, restarted whenever it ends, a panic included (`supervise`); it never takes the job
@@ -250,6 +260,7 @@ pub async fn run(
     let mut state = JobState::default();
     let mut client = crate::db::connect(conn).await?;
     let mut schedule = Schedule::new(Instant::now());
+    let mut unread_stamp = None;
     loop {
         if client.is_closed() {
             tokio::time::sleep(RECONNECT_BACKOFF).await;
@@ -265,7 +276,7 @@ pub async fn run(
         let d = due(now, &schedule);
         run_jobs(&mut client, sk, origin, &d, &mut state).await;
         if d.stamp {
-            stamp_tick(stamp_still_ours(&client).await)?;
+            stamp_tick(&mut unread_stamp, stamp_still_ours(&client).await)?;
         }
         schedule.mark(&d, now);
         tokio::time::sleep(REQUEST_TICK).await;
@@ -365,9 +376,17 @@ mod tests {
         assert!(stamp_at_startup(Ok(Ok(()))).is_ok());
         assert!(stamp_at_startup(unread()).is_err(), "unread must not start");
         assert!(stamp_at_startup(changed()).is_err());
-        assert!(stamp_tick(Ok(Ok(()))).is_ok());
-        assert!(stamp_tick(unread()).is_ok(), "the loop carries on");
-        assert!(stamp_tick(changed()).is_err());
+        let mut slot = None;
+        assert!(stamp_tick(&mut slot, Ok(Ok(()))).is_ok());
+        assert!(
+            stamp_tick(&mut slot, unread()).is_ok(),
+            "the loop carries on"
+        );
+        assert!(
+            slot.is_some(),
+            "the unread line is remembered, so said once"
+        );
+        assert!(stamp_tick(&mut slot, changed()).is_err());
     }
 
     #[test]
