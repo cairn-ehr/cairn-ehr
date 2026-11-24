@@ -34,12 +34,22 @@ fn the_copy_is_the_designs() {
 /// awaited) — the idle re-lock's own sequence — and only then restarts the program. An act that
 /// did not settle well keeps the chart on screen and restarts nothing, as "Find another patient"
 /// and the person menu do (#1130): closing it would erase the only place its outcome is said.
+///
+/// The act's outcome is CAPTURED before the install check (re-review of I1): a note's Sign holds
+/// the window's one connection, so `installed_program` waits behind it and answers only once the
+/// Sign has settled and `signInFlight()` is false again. Sampled after the answer, a Sign cut off
+/// at 15 s would read as nothing in flight, and the chart would close over its outcome.
 #[test]
 fn a_restart_waits_for_acts_and_the_close() {
     let restart = js_fn(UPDATE_JS, "restartIfFits");
+    let captured = position(
+        restart,
+        "const settling = signInFlight() ? signsSettled() : null;",
+    );
+    let asked = position(restart, "invoke(\"installed_program\")");
     let settled = position(
         restart,
-        "const outcome = signInFlight() ? await signsSettled() : null;",
+        "const outcome = await (settling ?? (signInFlight() ? signsSettled() : null));",
     );
     let kept = position(
         restart,
@@ -48,12 +58,15 @@ fn a_restart_waits_for_acts_and_the_close() {
     let closed = position(restart, "await closeChart();");
     let restarted = position(restart, "invoke(\"restart_window\")");
     assert!(
-        settled < kept && kept < closed && closed < restarted,
+        captured < asked
+            && asked < settled
+            && settled < kept
+            && kept < closed
+            && closed < restarted,
         "{restart}"
     );
-    // The same test as leave_chart.js's own (#1130), word for word.
+    // The same test as leave_chart.js's own (#1130).
     let find = js_fn(LEAVE_JS, "findAnotherPatient");
-    assert!(find.contains("const outcome = signInFlight() ? await signsSettled() : null;"));
     assert!(find.contains("if (outcome && !SETTLED_WELL.has(outcome)) return;"));
 }
 
@@ -66,7 +79,7 @@ fn a_restart_asks_first() {
     let fits = position(restart, "if (installed.kind !== \"fits\") {");
     assert!(asked < fits, "{restart}");
     assert!(
-        fits < position(restart, "await signsSettled()"),
+        fits < position(restart, "const outcome = await"),
         "{restart}"
     );
     assert!(fits < position(restart, "await closeChart();"), "{restart}");

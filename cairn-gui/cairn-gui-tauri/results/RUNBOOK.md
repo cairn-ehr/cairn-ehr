@@ -4452,8 +4452,9 @@ is waiting; it installs when this terminal is next idle." and **Update now**.
       as nothing newer). Record each.
 - [ ] **A Sign in flight.** In a separate `psql "$CONN"` session hold the node's clock row
       (`BEGIN; SELECT * FROM hlc_state FOR UPDATE;`), install the other `85` variant, press Sign on a note, then
-      Update now. The Sign meets the 15 s cut-off and its line says it did not go through, or that it is not known
-      whether it did: the chart stays on screen with that line, and the window does **not** restart. Record what the
+      Update now. The install check waits behind the Sign (they share the window's one connection). The Sign meets
+      the 15 s cut-off and its line says it did not go through, or that it is not known whether it did; the check then
+      answers, and the chart stays on screen with that line, and the window does **not** restart. Record what the
       Sign said. `ROLLBACK;`, then press Update now again: the window restarts.
 
 **Measurement 4 — the idle restarts.** Install the other `85` variant each time.

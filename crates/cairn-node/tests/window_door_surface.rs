@@ -6,12 +6,14 @@
 //! failure: `db/window_door_surface.txt` is a committed snapshot of everything the window's
 //! database role (`cairn_window`) can reach, and a snapshot entry that vanishes from the live
 //! catalogue fails the test unless
-//!   (a) it is listed in `db/window_not_facing.txt` (`<entry>  # <reason>` — a door the window
-//!       never faced, so removing it cannot hurt an old window), or
+//!   (a) it is listed in `db/window_not_facing.txt` (`<entry>  # <reason>` — a door used by no
+//!       window at or above the floor, so removing it cannot hurt a window still served), or
 //!   (b) the floor ledger's LAST entry raised the floor (a deliberate, recorded break) AND the
 //!       snapshot was recorded at an older generation than today's. The snapshot's first line,
-//!       `# generation N`, says which: once it is regenerated at the raising generation, an
-//!       in-place edit (ADR-0080) at that generation that drops a door fails like any other.
+//!       `# generation N`, says which. Only a REGENERATION applies (b): check mode fails a door
+//!       (b) would excuse, saying to regenerate, and the regeneration drops it and writes the
+//!       raising generation's header — after which an in-place edit (ADR-0080) at that generation
+//!       that drops a door fails like any other.
 //!
 //! The snapshot has a `# generation N` header, then one sorted line per entry:
 //!   `fn <regprocedure> -> <result type>` for each `public` function `cairn_window` may EXECUTE;
@@ -24,7 +26,8 @@
 //! window_door_surface`: it writes today's header, then (old snapshot + catalogue) minus the
 //! entries the two exemptions allow to go — a vanished entry is never forgotten silently.
 //!
-//! The comparison is the pure `door_drift`, unit-tested below without a database.
+//! The comparison is the pure `door_drift`, and check mode's decision the pure `check_vanished`,
+//! both unit-tested below without a database.
 use cairn_event::schema_generation::{SCHEMA_GENERATION, WINDOW_FLOOR_LEDGER};
 use cairn_node::db;
 use std::collections::BTreeSet;
@@ -47,23 +50,18 @@ struct Drift {
     unrecorded: Vec<String>,
 }
 
-/// Pure comparison. `floor_raised` = [`raise_excuses`] said yes, which excuses every vanished
-/// entry; `not_facing` excuses individual ones.
+/// Pure comparison. `not_facing` excuses individual vanished entries; a raise excuses nothing
+/// here — only a regeneration applies it ([`check_vanished`]).
 fn door_drift(
     snapshot: &BTreeSet<String>,
     catalogue: &BTreeSet<String>,
     not_facing: &BTreeSet<String>,
-    floor_raised: bool,
 ) -> Drift {
-    let vanished = if floor_raised {
-        vec![]
-    } else {
-        snapshot
-            .difference(catalogue)
-            .filter(|e| !not_facing.contains(*e))
-            .cloned()
-            .collect()
-    };
+    let vanished = snapshot
+        .difference(catalogue)
+        .filter(|e| !not_facing.contains(*e))
+        .cloned()
+        .collect();
     Drift {
         vanished,
         unrecorded: catalogue.difference(snapshot).cloned().collect(),
@@ -97,6 +95,26 @@ fn snapshot_generation(text: &str) -> Option<i32> {
 /// raising generation, or with no header, excuses nothing. **Pure.**
 fn raise_excuses(snapshot_generation: Option<i32>, current: i32, last_raised: bool) -> bool {
     last_raised && snapshot_generation.is_some_and(|g| g < current)
+}
+
+/// What CHECK mode says about the vanished entries `not_facing` did not excuse.
+#[derive(Debug, PartialEq)]
+enum Check {
+    Pass,
+    /// A break for old windows: no raise excuses it.
+    Vanished,
+    /// A raise excuses it, but only a regeneration may apply that excuse: it drops the entries
+    /// and bumps the header, so the raise cannot go on excusing doors for its generation's life.
+    RegenerateAtTheRaise,
+}
+
+/// CHECK mode's decision. **Pure.** `raise_excuses` is [`raise_excuses`]'s answer.
+fn check_vanished(vanished: &[String], raise_excuses: bool) -> Check {
+    match (vanished.is_empty(), raise_excuses) {
+        (true, _) => Check::Pass,
+        (false, false) => Check::Vanished,
+        (false, true) => Check::RegenerateAtTheRaise,
+    }
 }
 
 /// Only `CAIRN_REGEN_DOOR_SURFACE=1` regenerates: `=0` must not rewrite the snapshot.
@@ -181,7 +199,16 @@ async fn the_windows_doors_never_vanish_within_the_floor() {
         return;
     }
 
-    let d = door_drift(&snapshot, &catalogue, &not_facing, raised);
+    let d = door_drift(&snapshot, &catalogue, &not_facing);
+    assert_ne!(
+        check_vanished(&d.vanished, raised),
+        Check::RegenerateAtTheRaise,
+        "the floor was raised at generation {SCHEMA_GENERATION}, so these vanished doors are \
+         excused — but only a regeneration applies that, bumping the snapshot's header to the \
+         raise. Run `CAIRN_REGEN_DOOR_SURFACE=1 cargo test -p cairn-node --test \
+         window_door_surface` and commit db/window_door_surface.txt:\n{}",
+        d.vanished.join("\n")
+    );
     assert!(
         d.vanished.is_empty(),
         "doors the window could reach have VANISHED without the floor being raised (an older \
@@ -208,25 +235,27 @@ mod pure {
 
     #[test]
     fn a_vanished_entry_fails_when_the_floor_was_not_raised() {
-        let d = door_drift(&set(&["fn a", "fn b"]), &set(&["fn a"]), &set(&[]), false);
+        let d = door_drift(&set(&["fn a", "fn b"]), &set(&["fn a"]), &set(&[]));
         assert_eq!(d.vanished, vec!["fn b".to_string()]);
     }
 
     #[test]
     fn a_vanished_entry_listed_as_not_facing_passes() {
-        let d = door_drift(
-            &set(&["fn a", "fn b"]),
-            &set(&["fn a"]),
-            &set(&["fn b"]),
-            false,
-        );
+        let d = door_drift(&set(&["fn a", "fn b"]), &set(&["fn a"]), &set(&["fn b"]));
         assert!(d.vanished.is_empty());
     }
 
+    /// Re-review of I3a: CHECK mode never applies the raise's excuse itself. A vanished door
+    /// under a raise fails with "regenerate at the raise", so the only way past it is a
+    /// regeneration, which drops the door AND bumps the header — after which an in-place edit at
+    /// the raising generation that drops another door is no longer excused.
     #[test]
-    fn a_vanished_entry_passes_when_the_floor_was_raised() {
-        let d = door_drift(&set(&["fn a", "fn b"]), &set(&["fn a"]), &set(&[]), true);
-        assert!(d.vanished.is_empty());
+    fn a_raise_is_applied_only_by_regenerating() {
+        let gone = vec!["fn b".to_string()];
+        assert_eq!(check_vanished(&[], false), Check::Pass);
+        assert_eq!(check_vanished(&[], true), Check::Pass);
+        assert_eq!(check_vanished(&gone, false), Check::Vanished);
+        assert_eq!(check_vanished(&gone, true), Check::RegenerateAtTheRaise);
     }
 
     /// Final review I3: a raise excuses vanished doors only for a snapshot recorded BEFORE the
@@ -269,7 +298,7 @@ mod pure {
 
     #[test]
     fn a_new_catalogue_entry_is_unrecorded() {
-        let d = door_drift(&set(&["fn a"]), &set(&["fn a", "fn c"]), &set(&[]), false);
+        let d = door_drift(&set(&["fn a"]), &set(&["fn a", "fn c"]), &set(&[]));
         assert_eq!(d.unrecorded, vec!["fn c".to_string()]);
     }
 }

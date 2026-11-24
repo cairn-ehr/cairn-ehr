@@ -108,7 +108,8 @@ async function pollUpdate() {
 /**
  * Restart into the installed program if it fits this database. Asked first; unchanged or not
  * fitting, say so and keep the chart. Otherwise the idle re-lock's sequence, then the restart —
- * unless the act in flight did not settle well, which keeps its chart (and its outcome) on screen.
+ * unless the act in flight when this began (or one begun since) did not settle well, which keeps
+ * its chart (and its outcome) on screen.
  * `stillWanted` is asked again once the program answered (up to 5 s): the idle poll passes its
  * idleness check, so someone who started typing the passphrase meanwhile is not restarted under —
  * unless what they did was press Update now (`updatePressed`), which joins this attempt.
@@ -117,13 +118,16 @@ async function restartIfFits(stillWanted = () => true) {
   if (restarting) return;
   restarting = true;
   try {
+    // Captured BEFORE asking: a note's Sign holds the window's one connection, so the answer
+    // comes only once that Sign has settled, when `signInFlight()` says nothing is in flight.
+    const settling = signInFlight() ? signsSettled() : null;
     const installed = await invoke("installed_program");
     if (!updatePressed && !stillWanted()) return;
     if (installed.kind !== "fits") {
       sayUpdate(UPDATE_NOT_NOW[installed.kind] ?? UPDATE_UNREACHABLE);
       return;
     }
-    const outcome = signInFlight() ? await signsSettled() : null;
+    const outcome = await (settling ?? (signInFlight() ? signsSettled() : null));
     if (outcome && !SETTLED_WELL.has(outcome)) return;
     await closeChart();
     await invoke("restart_window");

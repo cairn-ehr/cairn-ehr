@@ -75,16 +75,17 @@ clinic with no IT replaces them by hand.
    default `EXECUTE` count), and `col <relation>.<column>` for each `public` column it may `SELECT`
    (`has_column_privilege`). The test `window_door_surface.rs` compares that snapshot with the catalogue, so a
    drop-and-recreate with the same signature and result is no change. A vanished entry fails unless it is listed in
-   `db/window_not_facing.txt` with a reason, or the ledger's last entry raised the floor and the snapshot was recorded
-   at an older generation: its first line, `# generation N`, says which, so once the snapshot is regenerated at the
-   raising generation an in-place edit at that generation (ADR-0080) that drops a door fails like any other. A new entry
-   fails until the snapshot is regenerated with
-   `CAIRN_REGEN_DOOR_SURFACE=1 cargo test -p cairn-node --test window_door_surface` (only `=1` regenerates), which
-   writes today's header, adds new entries and drops a vanished one only under those two exemptions. **Extension-owned
-   objects are excluded** (build-time ruling): a `pg_depend` row of `deptype = 'e'`, everything `cairn_pgx` installs,
-   moves with the extension's version rather than `db/*.sql` and differs between machines. The guard catches a removed
-   door, never a changed meaning: `CONTRIBUTING.md`'s migration checklist says a new state value in anything the window
-   renders raises the floor, and the ledger's reason and the reviewer carry that.
+   `db/window_not_facing.txt` (doors used by no window at or above the floor) with a reason, or the ledger's last entry
+   raised the floor and the snapshot was recorded at an older generation: its first line, `# generation N`, says which.
+   Only a regeneration applies that second excuse: the check fails a door it would excuse, saying to regenerate at the
+   raise, and the regeneration drops the door and writes the raising generation's header, so an in-place edit at that
+   generation (ADR-0080) that drops another door fails like any other. A new entry fails until the snapshot is
+   regenerated with `CAIRN_REGEN_DOOR_SURFACE=1 cargo test -p cairn-node --test window_door_surface` (only `=1`
+   regenerates), which writes today's header, adds new entries and drops a vanished one only under those two exemptions.
+   **Extension-owned objects are excluded** (build-time ruling): a `pg_depend` row of `deptype = 'e'`, everything
+   `cairn_pgx` installs, moves with the extension's version rather than `db/*.sql` and differs between machines. The
+   guard catches a removed door, never a changed meaning: `CONTRIBUTING.md`'s migration checklist says a new state value
+   in anything the window renders raises the floor, and the ledger's reason and the reviewer carry that.
 
 4. **The window learns the verdict at launch and on a 60 s poll** (design §4.4). At launch it reads the stamp on its
    non-loading connection: refused opens nothing, as before; below the floor opens nothing and says "This window is
@@ -125,9 +126,11 @@ clinic with no IT replaces them by hand.
    - `unknown_install` (a live window that cannot name its own program's path, the symlink limit below): "This
      terminal cannot check which version is installed here; restart it once the update is installed." and no restart;
    - `fits` (on a fresh stamp): the act in flight settles, the chart closes with its queued saves awaited, and the
-     window restarts (Tauri's `AppHandle::restart`). An act that did not settle well (a Sign cut off at 15 s, say)
-     keeps its chart on screen and nothing restarts, as "Find another patient" does (#1130): its outcome is said only
-     there. The held key and the claim live in the window's memory and go with it.
+     window restarts (Tauri's `AppHandle::restart`). The act's outcome is taken from the act in flight when the sequence
+     BEGAN, captured before the program is asked: a note's Sign holds the window's one connection, so the install check
+     answers only after that Sign settles, when nothing is in flight any more. An act that did not settle well (a Sign
+     cut off at 15 s, say) keeps its chart on screen and nothing restarts, as "Find another patient" does (#1130): its
+     outcome is said only there. The held key and the claim live in the window's memory and go with it.
 
    With an update waiting the sequence runs after the idle re-lock (giving up, like the poll's, if someone touches the
    lock while the installed program answers), after a chart close while the terminal lock is showing, and at the
@@ -200,8 +203,10 @@ cut-off during an upgrade; one line of calm text, read once. RUNBOOK §40 measur
   entry lets a new state through to an old window. The checklist line and review are the defence.
 - **A raise excuses every door it removes.** The guard cannot tell a door the open chart uses from any other, so a
   raise must not remove one: a window below the floor still finishes the chart in hand on it. Raise first, and remove
-  the door one generation later (that generation's guard then needs it in `db/window_not_facing.txt`, since no window
-  at or above the floor faces it).
+  the door in a later generation, listed in `db/window_not_facing.txt` since no window at or above the floor uses it.
+  "Later" is a sequence, not a time bound: the removal is safe only once no window below the floor can still have a
+  chart open, and nothing checks that. A facility that upgrades twice in an afternoon can still take a door from a
+  chart in hand.
 - **The floor may rise often**, if most generations add states the window renders; D1 then degrades towards "until a
   natural break" for those generations. The alert says why.
 - **The heal may hold locks longer than any DDL**, and a lock wait restarts the whole heal, which costs a busy node
