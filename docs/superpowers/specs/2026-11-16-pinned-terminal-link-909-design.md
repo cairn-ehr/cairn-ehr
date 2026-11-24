@@ -235,11 +235,14 @@ stopped mid-registration, and the timing below.
 
 ## 6. The rollout disturbs no one (maintainer, 2026-11-16: in scope)
 
+**Brainstormed 2026-11-24:** see [`2026-11-24-909-slice-c1-rollout-design.md`](2026-11-24-909-slice-c1-rollout-design.md)
+(slice C1; C2 is its §9).
+
 Delivering this work is itself an upgrade, and today an upgrade can disturb clinical work in three ways:
 1. `connect_and_load_schema` replays every `db/*.sql` whose content changed (ADR-0080), and even a no-op DDL replay
    takes its lock (#726). A lock held past a window command's 15 s cut-off (#875) cuts that window's act.
 2. A window relaunched against an upgraded database before its own binary is upgraded is refused by the stamp check
-   (ADR-0084 decision 2: a newer database refuses the launch). With many terminals the binaries cannot all change at
+   (ADR-0084 decision 4: a newer database refuses the launch). With many terminals the binaries cannot all change at
    one instant.
 3. Moving the runners (D6, D7) needs an order: the service must be up before any window loses its runner, or
    drafts stop committing and remote registration stops.
@@ -247,7 +250,7 @@ Delivering this work is itself an upgrade, and today an upgrade can disturb clin
 **This is its own slice with its own brainstorm**, because (2) runs into an earlier decision. ADR-0084 refused a
 mismatched window to avoid a wrong rendering. Rolling terminals forward without stopping anyone needs a window of
 build N to keep working against a database of build N+1. That is only safe if the additive-only evolution rule
-(ADR-0012) is enough to make an older window's reads correct. Whether to relax ADR-0084 decision 2 that way, how
+(ADR-0012) is enough to make an older window's reads correct. Whether to relax ADR-0084 decision 4 that way, how
 DDL takes its locks (a `lock_timeout` with retry, or an online pattern), and the upgrade order are the maintainer's to
 settle in that brainstorm. **The link and key slices must not ship to a site until it is settled.**
 
