@@ -10,8 +10,9 @@
 //! against a connection that cannot read the sealed keys or write around the floor itself, so a
 //! release over such a connection is refused before any passphrase is sent ([`over_powered`]).
 //!
-//! And a third, for the window's launch: was this database prepared for exactly this build
-//! ([`window_schema_verdict`])? The window's login cannot load the schema itself.
+//! And a third, for the terminal service's start: was this database prepared for exactly this
+//! build ([`schema_verdict`])? Its login cannot load the schema itself. (The window instead
+//! accepts any generation at or above the database's floor, `crate::window_floor`.)
 use crate::db::{
     embedded_schema_hash, embedded_schema_version, replay_can_be_skipped, SchemaStamp, LOADER_BUILD,
 };
@@ -187,18 +188,13 @@ pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureF
     })
 }
 
-/// May the reference window start against this database's schema stamp? **Pure.**
+/// May a process that cannot replay DDL start against this database's schema stamp? **Pure.**
 ///
-/// The window's own login cannot replay DDL (db/062), so it never loads the schema; it only
-/// checks that the owner's install/upgrade step left a stamp for exactly this build. `Ok` iff the
-/// loader's own skip test would pass. A database newer than this window is told apart from one
-/// not yet prepared, because the remedies differ (install a newer window vs. run the owner step).
-pub fn window_schema_verdict(stamp: Option<&SchemaStamp>) -> Result<(), String> {
-    schema_verdict(stamp, "window", "provision-window-role")
-}
-
-/// [`window_schema_verdict`] for any process that cannot replay DDL: `who` is what it is called
-/// in the refusal ("window", "terminal service"), `verb` the owner step that prepares the database.
+/// Its login cannot replay DDL (db/062), so it never loads the schema; it only checks that the
+/// owner's install/upgrade step left a stamp for exactly this build. `Ok` iff the loader's own skip
+/// test would pass. A database newer than this process is told apart from one not yet prepared,
+/// because the remedies differ (install a newer build vs. run the owner step). `who` is what it is
+/// called in the refusal ("terminal service"), `verb` the owner step that prepares the database.
 pub fn schema_verdict(stamp: Option<&SchemaStamp>, who: &str, verb: &str) -> Result<(), String> {
     let ours = embedded_schema_version();
     if replay_can_be_skipped(stamp, ours, LOADER_BUILD, &embedded_schema_hash()) {

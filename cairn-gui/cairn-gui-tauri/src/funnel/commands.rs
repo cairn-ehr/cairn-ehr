@@ -21,7 +21,7 @@ use crate::funnel::rows::{person_row_view, PersonRowView};
 use crate::funnel::view::{
     browse_summary, header_from_candidate, header_from_registration, prompt_summary,
     register_behind_open_chart_view, register_error_view, registered_behind_open_chart_view,
-    search_error_view, token_error_view, waiting_sentence, ChartHeaderView, ErrorView,
+    search_error_view, token_error_view, waiting_sentence, ChartHeaderView, ErrorView, Retry,
 };
 use crate::funnel::window::OpenChart;
 use crate::state::AppState;
@@ -247,11 +247,20 @@ pub async fn prompt_search_impl(
 ///    invalidate exists for).
 /// 4. The new chart opens only if the front door is still showing (`open_after_registering`).
 ///
+/// Below the window floor nothing is registered at all (`crate::update::refuse_another_chart`),
+/// checked first so the search stays intact for after the update.
+///
 /// ⚠️ Cancellation-unsafe (#649, #669): nothing may race this against a timeout or `select!`.
 pub async fn register_impl(
     state: &AppState,
     token: SearchToken,
 ) -> Result<ChartHeaderView, ErrorView> {
+    crate::update::refuse_another_chart(state, None)
+        .await
+        .map_err(|text| ErrorView {
+            text,
+            retry: Retry::AfterOperator,
+        })?;
     if let Some(open) = state.chart.lock().await.as_ref() {
         return Err(register_behind_open_chart_view(&open.header));
     }
@@ -282,7 +291,8 @@ pub async fn register_impl(
     }
 }
 
-/// Open a chart the clerk picked — only one some list on screen actually showed.
+/// Open a chart the clerk picked — only one some list on screen actually showed. Below the window
+/// floor, only the chart already open (`crate::update::refuse_another_chart`).
 pub async fn open_chart_impl(
     state: &AppState,
     patient_id: &str,
@@ -293,6 +303,7 @@ pub async fn open_chart_impl(
     let patient: uuid::Uuid = patient_id.parse().map_err(|_| {
         format!("the window could not read the chart id {patient_id:?} — search again")
     })?;
+    crate::update::refuse_another_chart(state, Some(patient)).await?;
     let candidate = state
         .shown
         .lock()

@@ -49,6 +49,9 @@ impl AppState {
             whos_here: tokio::sync::Mutex::new(crate::whos_here::Here::new(
                 crate::whos_here::DEFAULT_IDLE_LOCK,
             )),
+            verdict: cairn_node::window_floor::WindowVerdict::Current.into(),
+            // No installed program: fixture mode never restarts (Review Focus 5).
+            launched_exe: None,
         }
     }
 

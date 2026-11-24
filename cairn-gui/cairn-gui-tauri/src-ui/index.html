@@ -22,6 +22,15 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <!-- An update to this window (#909 slice C1, update.js): a calm line while one waits, a
+         persistent alert once this window is below the node's floor. Outside <main>, above the
+         terminal lock, so it shows and Update now works at every screen. -->
+    <div id="update-line" hidden>
+      <p id="update-calm" role="status">An update is waiting; it installs when this terminal is next idle.</p>
+      <p id="update-alert" role="alert" hidden></p>
+      <button id="update-now" type="button">Update now</button>
+      <p id="update-answer" role="status" aria-live="polite"></p>
+    </div>
     <main inert>
       <!-- Whether this node may write at all (asked at boot and after a search that succeeded while it warns, #654, #882), or why the window could
            not start. Above everything, because it qualifies every act on both surfaces. -->
@@ -673,6 +682,7 @@
     <script src="worklist.js"></script>
     <script src="funnel.js"></script>
     <script src="leave_chart.js"></script>
+    <script src="update.js"></script>
     <script src="link.js"></script>
     <script src="unlink.js"></script>
   </body>

@@ -16,7 +16,8 @@
 // and `displayedPatient` (WRITTEN here, as in funnel.js's `enterChart`), funnel.js's
 // `resetFrontDoor` and `failureText`, notes.js's `signsSettled`/`signInFlight`, notes_save.js's
 // `notesSaved`, med_list.js's `medListSaved`, person_menu.js's `SETTLED_WELL`/`refreshMenuCount`,
-// worklist.js's `refreshTray` and link.js's / unlink.js's panel closers — all read when called.
+// worklist.js's `refreshTray`, link.js's / unlink.js's panel closers and update.js's
+// `updateAfterClose` — all read when called.
 "use strict";
 
 /**
@@ -103,6 +104,7 @@ async function leaveChart() {
   el("browse-name").focus();
   void refreshTray();
   void refreshMenuCount(); // person_menu.js: a saved draft may have moved the count
+  updateAfterClose(); // update.js: below the floor, the chart being finished has closed
 }
 
 /**
