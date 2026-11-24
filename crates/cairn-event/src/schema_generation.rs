@@ -39,10 +39,43 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/084_terminal_gateway.sql` → 84).
+/// (`db/085_window_floor.sql` → 85).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 84;
+pub const SCHEMA_GENERATION: i32 = 85;
+
+/// The oldest schema generation an older reference-UI window may run against (#909 slice C1).
+///
+/// A window built at generation G keeps working against a database stamped at any generation
+/// whose floor is <= G. Raise it ONLY when a change would make an old window misbehave, and
+/// record the raise in [`WINDOW_FLOOR_LEDGER`] in the same commit (the tests enforce this).
+pub const WINDOW_FLOOR_GENERATION: i32 = 85;
+
+/// One row of the floor ledger: at `generation`, the floor stood at `floor`, and why.
+pub struct FloorEntry {
+    pub generation: i32,
+    pub floor: i32,
+    pub why: &'static str,
+    /// Set exactly when this entry RAISES the floor: what an old window would miss.
+    pub old_window_misses: Option<&'static str>,
+}
+
+/// The history of the floor, oldest first; the last entry is the current generation.
+pub const WINDOW_FLOOR_LEDGER: &[FloorEntry] = &[FloorEntry {
+    generation: 85,
+    floor: 85,
+    why: "the first generation that records a floor; older windows know only the exact check",
+    old_window_misses: Some("this node's update notices"),
+}];
+
+/// What an old window misses because of the raise that set today's floor: the
+/// `old_window_misses` of the FIRST ledger entry whose floor equals [`WINDOW_FLOOR_GENERATION`].
+pub fn latest_floor_reason() -> Option<&'static str> {
+    WINDOW_FLOOR_LEDGER
+        .iter()
+        .find(|e| e.floor == WINDOW_FLOOR_GENERATION)
+        .and_then(|e| e.old_window_misses)
+}
 
 /// Advisory-lock key (ASCII `"CARNLOAD"`) serializing a loader's whole
 /// check→replay→stamp sequence against every other loader on the same database.
@@ -196,5 +229,67 @@ mod tests {
         let names = ["020_apply_remote_event", "037_born_sealed", "001_envelope"];
         assert_eq!(newest_migration_prefix(names), Some(37));
         assert_eq!(newest_migration_prefix([]), None);
+    }
+
+    // ----- the window floor ledger (#909 slice C1) -----
+
+    #[test]
+    fn ledger_ends_at_the_current_generation() {
+        assert_eq!(
+            WINDOW_FLOOR_LEDGER.last().unwrap().generation,
+            SCHEMA_GENERATION
+        );
+    }
+
+    #[test]
+    fn ledger_floor_is_the_constant() {
+        assert_eq!(
+            WINDOW_FLOOR_LEDGER.last().unwrap().floor,
+            WINDOW_FLOOR_GENERATION
+        );
+    }
+
+    #[test]
+    fn ledger_is_ordered_and_floors_never_fall() {
+        for pair in WINDOW_FLOOR_LEDGER.windows(2) {
+            assert!(
+                pair[0].generation < pair[1].generation,
+                "generations strictly increase"
+            );
+            assert!(pair[0].floor <= pair[1].floor, "a floor never falls");
+        }
+        for e in WINDOW_FLOOR_LEDGER {
+            assert!(
+                e.floor <= e.generation,
+                "a floor cannot exceed its generation"
+            );
+        }
+    }
+
+    #[test]
+    fn a_raise_names_what_an_old_window_misses() {
+        let mut prev: Option<i32> = None;
+        for e in WINDOW_FLOOR_LEDGER {
+            let raised = prev.is_none_or(|p| e.floor > p);
+            assert_eq!(
+                e.old_window_misses.is_some(),
+                raised,
+                "generation {}",
+                e.generation
+            );
+            prev = Some(e.floor);
+        }
+    }
+
+    #[test]
+    fn every_entry_says_why() {
+        for e in WINDOW_FLOOR_LEDGER {
+            assert!(!e.why.trim().is_empty(), "generation {}", e.generation);
+        }
+    }
+
+    #[test]
+    fn the_latest_floor_reason_is_the_raise_that_set_todays_floor() {
+        assert_eq!(latest_floor_reason(), Some("this node's update notices"));
     }
 }

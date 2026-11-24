@@ -1091,3 +1091,39 @@ Steps: paper *N* = 0 → observed \_\_.
 | Another key at the node's address: refused at launch, no override | | |
 | Revoked: the reopen names the operator; re-admitting the old key refused | | |
 | A revoke cancels a running statement; nothing is signed | | |
+
+## An upgrade disturbs no one (#909 slice C1, runbook §40)
+
+Supervisor: launchd / systemd · remote terminal (Measurements 2 and 8): ___ · rig events (Measurement 7): ___
+
+| Figure | n | median | slowest | Budget | Inside? |
+|---|---|---|---|---|---|
+| Update now → the restarted window's lock, ready | 5 | | | ≤ 10 s | |
+| The service's exit → a remote press reads | | | | ≤ 5 s | |
+| The service's exit → an untouched remote lock restarted | 1 | | | ≤ 75 s | |
+| A clinical press during the upgrade under a 60 s reader | ≥ 9 | | | never past 15 s | |
+| The upgrade's `real` time under the reader (context) | 1 | | | — | |
+| An untouched lock screen → restarted (minutes, context) | 1 | | | — (≤ about 2 min) | |
+| The node back → the waiting window restarted | 1 | | | ≤ 70 s | |
+| The heal's `elapsed_ms`, ~100 k events, and the wait of a write behind it | 1 | | | > 15 s is a finding | |
+
+Steps: paper *N* = 1 → observed \_\_ (idle) / \_\_ (someone working).
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| The service's startup line names status 75 and a supervisor | | |
+| The replay names the long reader and retries until it commits | | |
+| The service exits 75 on the new stamp and its supervisor restarts it | | |
+| The calm line within 60 s; nothing else changes | | |
+| Update now: nothing newer → "No newer version is installed…", no restart | | |
+| Update now: too new → "…does not fit this node yet.", no restart | | |
+| A Sign cut off at 15 s keeps its chart and stops the restart; the draft survives a restart | | |
+| An untouched lock screen restarts; someone typing at it is never restarted under | | |
+| The idle re-lock restarts into a fitting install | | |
+| The node unreachable: "cannot reach the node right now", no restart, nothing closed; restarted and working once it is back | | |
+| Below the floor: the alert, the open chart works, another chart and a registration are refused | | |
+| Below the floor: a front door waits for the idle re-lock or Update now | | |
+| Below the floor: a launch is refused, naming the reason | | |
+| A symlink-swap install never updates | | |
+| An unsupervised service that exits stays down | | |
+| An untouched remote terminal at its lock restarts after an upgrade | | |

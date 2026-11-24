@@ -531,6 +531,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "084_terminal_gateway",
         include_str!("../../../db/084_terminal_gateway.sql"),
     ),
+    // db/085 (#909 slice C1): the window floor, stamped beside the generation.
+    (
+        "085_window_floor",
+        include_str!("../../../db/085_window_floor.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
@@ -873,6 +878,17 @@ pub struct SchemaStamp {
     pub version: i32,
     pub loader_build: String,
     pub schema_hash: Option<Vec<u8>>,
+    /// The window floor (db/085) — `None` unless it was written for THIS stamp's version
+    /// (cairn-sync restamps the version without touching it) or the columns do not exist yet.
+    pub window_floor: Option<WindowFloor>,
+}
+
+/// The oldest window generation this stamped schema still serves, and what an older window
+/// would miss (db/085; `cairn_event::schema_generation::WINDOW_FLOOR_LEDGER`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowFloor {
+    pub floor: i32,
+    pub reason: Option<String>,
 }
 
 /// May this connect skip the file replay? (#726) **Pure.**
@@ -976,7 +992,10 @@ pub async fn read_schema_stamp(client: &Client) -> anyhow::Result<Option<SchemaS
         client
             .query_opt(
                 "SELECT version, loader_build, \
-                        decode(substr(to_jsonb(n) ->> 'schema_hash', 3), 'hex') \
+                        decode(substr(to_jsonb(n) ->> 'schema_hash', 3), 'hex'), \
+                        (to_jsonb(n) ->> 'window_floor')::int, \
+                        to_jsonb(n) ->> 'window_floor_reason', \
+                        (to_jsonb(n) ->> 'window_floor_for')::int \
                    FROM node_schema n",
                 &[],
             )
@@ -987,10 +1006,22 @@ pub async fn read_schema_stamp(client: &Client) -> anyhow::Result<Option<SchemaS
                     legible_db_error(&e)
                 )
             })?
-            .map(|row| SchemaStamp {
-                version: row.get(0),
-                loader_build: row.get(1),
-                schema_hash: row.get(2),
+            .map(|row| {
+                let version: i32 = row.get(0);
+                // Trust the floor only when it was written for this very version (db/085).
+                let floor: Option<i32> = row.get(3);
+                let floor_for: Option<i32> = row.get(5);
+                SchemaStamp {
+                    version,
+                    loader_build: row.get(1),
+                    schema_hash: row.get(2),
+                    window_floor: floor.filter(|_| floor_for == Some(version)).map(|floor| {
+                        WindowFloor {
+                            floor,
+                            reason: row.get(4),
+                        }
+                    }),
+                }
             })
     } else {
         None
@@ -1035,6 +1066,8 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {}", legible_db_error(&e)))?;
+    // #909 C1: time out lock waits only NOW — the advisory wait above stays blocking.
+    crate::replay_wait::arm(&client).await?;
     let stamp = read_schema_stamp(&client).await?;
     let recorded: Option<i32> = stamp.as_ref().map(|s| s.version);
     if let Some(recorded) = recorded {
@@ -1060,7 +1093,7 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     let replay = !replay_can_be_skipped(stamp.as_ref(), embedded, LOADER_BUILD, &schema_hash);
     if replay {
         for (name, sql) in SCHEMA.iter() {
-            load_migration(&client, name, sql).await?;
+            crate::replay_wait::run_waiting(&client, name, sql).await?;
         }
     }
     // ADR-0056 decision 4 (#266): RE-ADJUDICATE FIRST, REPROJECT SECOND.
@@ -1083,15 +1116,14 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // Ordered before the stamp for the same reason the heal is (see the long note below): a
     // failure here must leave the recorded generation at its OLD value so the next connect
     // retries the whole replay-then-adjudicate-then-heal sequence.
-    let promoted = client
-        .query(
+    let promoted = crate::replay_wait::retry_on_lock_timeout(&client, "re-adjudication", || {
+        client.query(
             "SELECT promoted_type, promoted_count FROM cairn_readjudicate_deferred()",
             &[],
         )
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!("re-adjudicating deferred events: {}", legible_db_error(&e))
-        })?;
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("re-adjudicating deferred events: {}", legible_db_error(&e)))?;
     // Granting power is never a silent event: an operator who upgrades a node wants to see
     // which types just became live. Empty on a healthy node, so this prints nothing.
     for row in &promoted {
@@ -1129,36 +1161,55 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // and the projections stay SILENTLY stale — the worst failure mode, and the
     // reason this order is load-bearing, not cosmetic.
     if recorded != Some(embedded) {
-        client
-            .execute(
+        crate::replay_wait::retry_on_lock_timeout(&client, "the post-upgrade heal", || {
+            client.execute(
                 "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
                 &[],
             )
-            .await
-            .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {}", legible_db_error(&e)))?;
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {}", legible_db_error(&e)))?;
     }
     // Stamp only AFTER the full replay (and any heal above) succeeded: a
     // half-applied load must not claim the new generation. loaded_at defaults to
     // now() on insert; refresh it on conflict so the record always says who
     // touched the schema last, and when. The hash (#726) goes in with it, so the stamp
     // vouches for exactly what was replayed — and a skipped replay writes nothing, since
-    // nothing was touched (and a no-op connect stays write-free).
+    // nothing was touched (and a no-op connect stays write-free). `lock_timeout` is still
+    // armed here, so the stamp waits out a `55P03` like every replay step before it.
     if replay {
-        client
-            .execute(
-                "INSERT INTO node_schema (version, loader_build, schema_hash) VALUES ($1, $2, $3)
+        let (hash, floor_reason) = (
+            schema_hash.as_slice(),
+            cairn_event::schema_generation::latest_floor_reason(),
+        );
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] = [
+            &embedded,
+            &LOADER_BUILD,
+            &hash,
+            &cairn_event::schema_generation::WINDOW_FLOOR_GENERATION,
+            &floor_reason,
+        ];
+        crate::replay_wait::retry_on_lock_timeout(&client, "the schema stamp", || {
+            client.execute(
+                "INSERT INTO node_schema (version, loader_build, schema_hash,
+                                          window_floor, window_floor_reason, window_floor_for)
+                 VALUES ($1, $2, $3, $4, $5, $1)
                  ON CONFLICT (id) DO UPDATE
                    SET version = EXCLUDED.version,
                        loaded_at = now(),
                        loader_build = EXCLUDED.loader_build,
-                       schema_hash = EXCLUDED.schema_hash",
-                &[&embedded, &LOADER_BUILD, &schema_hash.as_slice()],
+                       schema_hash = EXCLUDED.schema_hash,
+                       window_floor = EXCLUDED.window_floor,
+                       window_floor_reason = EXCLUDED.window_floor_reason,
+                       window_floor_for = EXCLUDED.window_floor_for",
+                &params,
             )
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e))
-            })?;
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e)))?;
     }
+    // After the stamp: the client lives on as the daemon's connection (error paths drop it).
+    crate::replay_wait::disarm(&client).await?;
     client
         .execute(
             "SELECT pg_advisory_unlock($1)",
@@ -1290,6 +1341,7 @@ mod tests {
             version,
             loader_build: loader.into(),
             schema_hash: hash.map(<[u8]>::to_vec),
+            window_floor: None,
         }
     }
 

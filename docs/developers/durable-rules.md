@@ -10,6 +10,120 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #909 SLICE C1 — AN OLDER WINDOW WORKS ABOVE A FLOOR (ADR-0111, db/085) — do not undo.**
+- **Never reset the floor ledger.** `WINDOW_FLOOR_LEDGER` (`cairn-event`'s `schema_generation.rs`) gains one entry
+  per generation and keeps every earlier one: a floor never falls, and a raise names what an old window misses.
+  **Tempting wrong fix:** start it afresh, or lower a floor "to let an old terminal back in". Pins:
+  `ledger_ends_at_the_current_generation`, `ledger_floor_is_the_constant`, `ledger_is_ordered_and_floors_never_fall`,
+  `a_raise_names_what_an_old_window_misses`, `every_entry_says_why`. A rewrite of past entries that stays ordered
+  passes them all, so review is the only guard against it.
+- **A new state value the window renders raises the floor**, even though no door vanished. `window_door_surface.rs`
+  catches a removed function or column, never a changed meaning (an old window would show a new hold state as an
+  active medication). **Tempting wrong fix:** "the door guard passed, so the floor can stay". Pin: none; it is
+  `CONTRIBUTING.md`'s migration checklist line and the ledger entry's reason.
+- **A raise excuses a vanished door only while the snapshot predates it.** `db/window_door_surface.txt`'s first line,
+  `# generation N`, is written on every regeneration, and `window_door_surface.rs` excuses vanished doors only when the
+  ledger's last entry raised the floor AND that header is older than `SCHEMA_GENERATION`, and only a REGENERATION
+  applies that excuse: check mode fails such a door, saying to regenerate at the raise, and the regeneration bumps the
+  header. Regenerated at 85, the guard bites now, an in-place edit at 85 (ADR-0080) included. **Tempting wrong fix:**
+  drop the header, excuse on the raise alone, or let check mode pass an excused door, each of which excuses every door
+  dropped at the raising generation for that generation's whole life. Ordering trap: a regeneration at generation N
+  made BEFORE the ledger's raise at N writes header N, so that raise can no longer excuse a door removed at N; list
+  such a door in `db/window_not_facing.txt`. Pins:
+  `window_door_surface.rs::a_raise_excuses_only_a_snapshot_older_than_the_generation`,
+  `a_raise_is_applied_only_by_regenerating`, `the_snapshot_header_names_its_generation`, `only_1_regenerates`.
+- **A raise must not remove a door the open chart uses.** A window below the floor still finishes the chart in hand,
+  on the doors it has, and the guard excuses every door a raise removes. Raise first; remove the door in a later
+  generation, listing it in `db/window_not_facing.txt` (used by no window at or above the floor). "Later" is a
+  sequence, not a time bound: it is safe only once no window below the floor can still have a chart open, and nothing
+  checks that. **Tempting wrong fix:** raise and remove in one generation "because the raise excuses it": the
+  clinician finishing a chart on an old window loses the door mid-chart. Pin: none; review.
+- **A long-lived dev database can fail the door guard on a leftover column** that no `db/*.sql` creates any more. In
+  2026-11, `cairn_test` kept an empty `medication_charting.restores` from an intermediate db/080 commit, so the guard
+  reported it as an unrecorded door. The guard is telling the truth. **Tempting wrong fix:** regenerate the snapshot from
+  that database. That writes the leftover into the snapshot, and every fresh database (CI's included) then fails with a
+  "vanished" door. Instead, check the snapshot against a fresh database (`CREATE DATABASE`, `CREATE EXTENSION cairn_pgx`,
+  then run the test against it). If it passes there, drop the leftover column from the stale database. Pin: CI's fresh
+  database.
+- **The floor counts only when `window_floor_for` equals the stamp's `version`**, and an absent floor means the
+  database's own generation. cairn-sync restamps the version without touching the floor. **Tempting wrong fix:**
+  read `window_floor` alone. Pin:
+  `schema_replay_gate.rs::the_floor_is_stamped_and_read_only_for_its_own_generation`.
+- **The window trusts a stamp by the loader's NAME** (`cairn-node `), never its version: `LOADER_BUILD` carries
+  `CARGO_PKG_VERSION`. **Tempting wrong fix:** compare it with this build's `LOADER_BUILD`, which refuses every
+  window after a version bump. Pin: `window_floor_tests.rs::window_verdict_cases`.
+- **`run_waiting` must `ROLLBACK` before retrying.** A `55P03` inside a file's own `BEGIN` leaves the session
+  aborted; a bare retry fails `25P02`, and that is not retried. **Tempting wrong fix:** drop the `ROLLBACK` "because
+  the error already ended the statement". Pin:
+  `replay_lock_timeout.rs::a_waiting_change_lets_readers_through_and_then_lands` (the change must land, and the
+  session answers `SELECT 1` after).
+- **The loader resets `lock_timeout`, and arms it only after the advisory load lock.** The loader's client lives on
+  as the daemon's connection, where a leftover 2 s timeout would fail ordinary statements under contention; and the
+  loader-against-loader wait must stay blocking. **Tempting wrong fix:** put the timeout in the connection string,
+  or arm it before the advisory lock. Pin: `replay_lock_timeout.rs::the_loaders_connection_keeps_no_lock_timeout`
+  (on a replaying and a skipping connect). No test pins the order against the advisory lock.
+- **Only `55P03` is retried**, and a file's other errors keep `load_migration`'s exact text (#467). **Tempting wrong
+  fix:** retry every error "since the replay is idempotent": a broken file would loop forever. Pins:
+  `replay_wait_tests.rs::only_55p03_is_a_lock_timeout`,
+  `replay_lock_timeout.rs::a_failing_file_reads_the_same_through_run_waiting_as_through_load_migration`.
+- **`update_state` REOPENS a lost connection, and keeps the last verdict and stamp when it gets no answer.** It takes
+  the window's one connection with the reopening `lock()` (#807's backoff): the service's exit on a new stamp drops
+  every remote window's connection (its gateway restarts), and an untouched remote terminal at its lock may have
+  nothing else that would reopen it, so with `lock_if_open` it would never learn of the upgrade. A lost connection that could
+  not be reopened, or a failed read, changes neither the verdict nor `AppState::last_stamp`; the install check judges
+  against a fresh stamp, else that cached one (and never restarts on it, the next rule). **Tempting wrong fixes:**
+  `lock_if_open` "so a poll never spends a reopen attempt" (the review finding that reversed this rule), or `current`
+  on a failed read (a blip would lift a below-floor alert). Pins:
+  `update_tests.rs::a_lost_connection_keeps_the_verdict`, `the_install_check_falls_back_to_the_cached_stamp`. No test
+  pins that `read_stamp` calls `lock()` rather than `lock_if_open()`: review it.
+- **Never restart on a cached stamp.** Only a stamp read just now may answer `fits`; a fit on the cached stamp, or a
+  misfit when no stamp was ever read, is `unreachable` ("This terminal cannot reach the node right now; the update installs once it
+  can."), which closes nothing and restarts nothing. A cached stamp that refuses is still `does_not_fit`.
+  **Tempting wrong fix:** restart on the cached stamp "because it fit a minute ago": the node is not answering, so
+  the relaunched window exits at its first connect and the terminal is gone. Pins:
+  `update_tests.rs::only_a_fresh_stamp_restarts`, `a_fit_on_the_cached_stamp_is_unreachable`;
+  `update_webview_tests.rs::unreachable_closes_nothing`.
+- **Below the floor gates only opening a DIFFERENT chart, and registration.** The open chart's re-reads, saves, Sign
+  and close never pass `refuse_another_chart`, and the alert never closes the chart. **Tempting wrong fix:** gate
+  every database command "to be safe", or close the chart when the alert shows: the clinician must finish the sheet
+  in hand. Pins: `update_tests.rs::a_below_floor_window_refuses_another_chart_but_not_its_own`,
+  `an_update_waiting_opens_any_chart`; `update_webview_tests.rs::the_alert_never_closes_the_open_chart`.
+- **A restart asks the installed program first, and waits for every act and the close.** `restartIfFits` calls
+  `installed_program` before anything, and `signsSettled` and `closeChart` before `restart_window`; a hung or garbled
+  program reads as not installed. An act that did not settle well (`SETTLED_WELL`, as `findAnotherPatient` reads it,
+  #1130) keeps its chart and restarts nothing: its outcome is said only on that chart. TWO outcomes are checked: the
+  act in flight when the sequence began, its `signsSettled()` promise captured BEFORE `installed_program` is asked (a
+  note's Sign holds the window's one connection while it writes, so the answer may come once `signInFlight()` is
+  false), and any act begun while the program answered (up to 5 s, without the connection). **Tempting wrong fix:**
+  restart at once "because the user pressed Update now": an unchanged program brings the same line back, and a
+  too-new one turns the terminal dark; or ignore what `signsSettled` returned, sample `signInFlight()` only after the
+  answer, or `await (settling ?? …)`, which never asks about an act begun during the check, so the chart closes over
+  a Sign's "not known whether it was recorded" or a Stop's words. Pins:
+  `update_webview_tests.rs::a_restart_asks_first`, `a_restart_waits_for_acts_and_the_close`;
+  `update_tests.rs::a_hung_program_reads_as_not_installed`, `a_garbled_line_is_not_installed`.
+- **At the terminal lock the poll restarts only after a whole idle period with no touch, checked before AND after
+  the installed program answers** (it may take 5 s). Someone typing a passphrase is never restarted under.
+  **Tempting wrong fix:** restart whenever the lock shows, or check only before the install check. An Update now
+  press during that attempt joins it (`updatePressed`); it is a touch, and must not make the attempt give up. The
+  restart after the idle re-lock re-checks the same way (`restartIfFits(idleForAWholePeriod)`). Pins:
+  `update_webview_tests.rs::the_lock_screen_restart_needs_a_full_idle_period`,
+  `a_press_during_an_idle_attempt_counts`, `the_relock_and_the_close_hand_over_once_done`.
+- **`--print-schema-generation` and its `<generation> <64 hex>` line never change, and the flag is read before
+  clap.** An OLDER window runs the NEWER program with it (`update::PRINT_FLAG`), so a renamed flag, a changed line,
+  or clap refusing the arguments first makes every older window read "not installed" for good.
+  `update::asks_for_generation_line(std::env::args_os())` runs before `Cli::parse()`. **Tempting wrong fix:** make it
+  a clap `#[arg(long)]` again "for --help": a required argument a later build adds then stops clap before the flag is
+  seen. Pins: `update_tests.rs::the_print_flag_is_read_before_clap`, `the_printed_line_round_trips`.
+- **The terminal service exits 75 only on a changed stamp, never on an unread one.** At startup an unread stamp
+  refuses to start; in the loop it is logged once and the loop carries on. **Tempting wrong fix:** exit on any error
+  "to be safe": a dropped connection would restart the service and end every remote session. Pins:
+  `terminal_service/run.rs::startup_fails_on_an_unread_or_changed_stamp_and_the_loop_only_on_a_changed_one`,
+  `the_stamp_is_due_every_five_seconds`; `terminal_service_stamp.rs::a_changed_stamp_is_noticed`.
+- **Extension-owned objects stay out of the door snapshot** (`pg_depend` `deptype = 'e'`): they move with
+  `cairn_pgx`'s version, not `db/*.sql`, and differ between machines. **Tempting wrong fix:** include them "for
+  completeness": the snapshot would then fail on any machine with another `cairn_pgx` build. Pin: the catalogue query
+  in `window_door_surface.rs::the_windows_doors_never_vanish_within_the_floor`.
+
 **⇒ #909 SLICE B — THE PINNED TERMINAL GATEWAY (ADR-0110, db/084) — do not undo.**
 - **No fallback verifier, and TLS 1.3 only, on both ends.** `transport::gateway_server_config` and
   `terminal_client_config` pin a key or refuse; neither accepts a certificate any other way, and neither offers

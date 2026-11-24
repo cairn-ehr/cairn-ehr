@@ -1,4 +1,4 @@
-use super::{over_powered, require_local, window_schema_verdict, PostureFacts};
+use super::{over_powered, require_local, schema_verdict, PostureFacts};
 use crate::db::{embedded_schema_hash, embedded_schema_version, SchemaStamp, LOADER_BUILD};
 
 #[test]
@@ -84,33 +84,39 @@ fn stamp(version: i32, loader: &str, hash: Option<Vec<u8>>) -> SchemaStamp {
         version,
         loader_build: loader.into(),
         schema_hash: hash,
+        window_floor: None,
     }
 }
 
+/// The terminal service's check, the one caller left of the exact match (the window has a floor).
+fn service_verdict(stamp: Option<&SchemaStamp>) -> Result<(), String> {
+    schema_verdict(stamp, "terminal service", "provision-terminal-service-role")
+}
+
 #[test]
-fn a_matching_stamp_lets_the_window_start() {
+fn a_matching_stamp_lets_the_service_start() {
     let s = stamp(
         embedded_schema_version(),
         LOADER_BUILD,
         Some(embedded_schema_hash().to_vec()),
     );
-    assert!(window_schema_verdict(Some(&s)).is_ok());
+    assert!(service_verdict(Some(&s)).is_ok());
 }
 
 #[test]
-fn a_newer_database_says_the_window_is_older() {
+fn a_newer_database_says_the_service_is_older() {
     let s = stamp(
         embedded_schema_version() + 1,
         LOADER_BUILD,
         Some(embedded_schema_hash().to_vec()),
     );
-    assert!(window_schema_verdict(Some(&s))
+    assert!(service_verdict(Some(&s))
         .unwrap_err()
         .contains("older than"));
 }
 
 #[test]
-fn every_other_mismatch_sends_the_operator_to_provision_window_role() {
+fn every_other_mismatch_sends_the_operator_to_the_owner_step() {
     let v = embedded_schema_version();
     let h = embedded_schema_hash().to_vec();
     let cases = [
@@ -120,16 +126,16 @@ fn every_other_mismatch_sends_the_operator_to_provision_window_role() {
         Some(stamp(v, "cairn-sync 0.0.0", Some(h))),
     ];
     for c in cases {
-        let e = window_schema_verdict(c.as_ref()).unwrap_err();
-        assert!(e.contains("provision-window-role"));
+        let e = service_verdict(c.as_ref()).unwrap_err();
+        assert!(e.contains("provision-terminal-service-role"));
         assert!(!e.contains("older than"));
     }
 }
 
 /// At the SAME generation the database was prepared by a different build (another hash or
-/// loader): only the cairn-node built with this window can stamp what it expects, so say so.
+/// loader): only the cairn-node built with this service can stamp what it expects, so say so.
 #[test]
-fn a_same_generation_mismatch_names_the_cairn_node_built_with_this_window() {
+fn a_same_generation_mismatch_names_the_cairn_node_built_with_this_service() {
     let v = embedded_schema_version();
     let h = embedded_schema_hash().to_vec();
     for s in [
@@ -137,19 +143,22 @@ fn a_same_generation_mismatch_names_the_cairn_node_built_with_this_window() {
         stamp(v, LOADER_BUILD, Some(vec![0; h.len()])),
         stamp(v, "cairn-sync 0.0.0", Some(h.clone())),
     ] {
-        let e = window_schema_verdict(Some(&s)).unwrap_err();
-        assert!(e.contains("the cairn-node built with this window"), "{e}");
+        let e = service_verdict(Some(&s)).unwrap_err();
+        assert!(
+            e.contains("the cairn-node built with this terminal service"),
+            "{e}"
+        );
     }
-    let older = window_schema_verdict(Some(&stamp(v - 1, LOADER_BUILD, Some(h)))).unwrap_err();
-    assert!(!older.contains("built with this window"), "{older}");
+    let older = service_verdict(Some(&stamp(v - 1, LOADER_BUILD, Some(h)))).unwrap_err();
+    assert!(!older.contains("built with this"), "{older}");
 }
 
 /// The terminal service's refusal names ITS verb and itself, never the window's: for an
 /// unprepared database, one stamped by another build, and one NEWER than the service.
 #[test]
 fn the_service_refusal_names_the_service_verb() {
-    let e = super::schema_verdict(None, "terminal service", "provision-terminal-service-role")
-        .unwrap_err();
+    let e =
+        schema_verdict(None, "terminal service", "provision-terminal-service-role").unwrap_err();
     assert!(e.contains("provision-terminal-service-role") && e.contains("this terminal service"));
     let v = embedded_schema_version();
     let h = embedded_schema_hash().to_vec();
@@ -158,7 +167,7 @@ fn the_service_refusal_names_the_service_verb() {
     let mut said = vec![e];
     for s in [&same, &newer] {
         said.push(
-            super::schema_verdict(
+            schema_verdict(
                 Some(s),
                 "terminal service",
                 "provision-terminal-service-role",
@@ -177,19 +186,4 @@ fn the_service_refusal_names_the_service_verb() {
             "{e}"
         );
     }
-}
-
-/// The window's newer-database refusal is unchanged, word for word.
-#[test]
-fn the_windows_newer_database_text_is_unchanged() {
-    let v = embedded_schema_version();
-    let s = stamp(v + 1, LOADER_BUILD, Some(embedded_schema_hash().to_vec()));
-    assert_eq!(
-        window_schema_verdict(Some(&s)).unwrap_err(),
-        format!(
-            "This window is older than the node's database (generation {} against {v}). \
-             Install the window that matches the node.",
-            v + 1
-        )
-    );
 }

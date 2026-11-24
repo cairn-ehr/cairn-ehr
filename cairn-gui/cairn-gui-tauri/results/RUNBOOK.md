@@ -4291,3 +4291,336 @@ in Measurement 5, with the `\watch` running.
   (DB-gated window tests run locally only, #905).
 
 `TEMPLATE.md` carries a matching block (*The pinned terminal gateway*).
+
+## 40. An upgrade disturbs no one: the window floor, Update now, the replay's lock timeout (#909 slice C1, ADR-0111)
+
+What changed: an upgrade of the node no longer refuses every window's next launch. The database's stamp carries a
+**floor** (`db/085`): a window at or above it keeps working and shows "An update is waiting; it installs when this
+terminal is next idle." with **Update now**; one below it finishes the chart in hand, opens no other and registers
+nothing. The window restarts into the program installed at its own path only if that program fits the database. The
+upgrade's replay waits for each lock under a 2 s `lock_timeout` instead of holding every clinical read behind one long
+reader, and the terminal service exits with status 75 on a changed stamp so that its supervisor restarts it from the
+new binary.
+
+Paper counterpart: a revised form. Old stock stays valid until used up; a recalled form is finished on the sheet in
+hand, then a new pad is taken. **Live only** (`--mock` never polls or restarts). Measurements 2 and 8 need section 39's
+two machines; the rest runs on the node's machine.
+
+**Budgets (the slice plan's §1.2).**
+
+| Gesture | Start | Stop | Budget |
+|---|---|---|---|
+| Update now → the restarted window | the press | its terminal lock, ready for a passphrase | **≤ 10 s** |
+| The service's restart, seen by a remote window | the service's "schema changed" line | a press on the remote window reads | **≤ 5 s** |
+| A remote terminal untouched at its lock restarts by itself | the service's "schema changed" line | the remote window's new process | **≤ 75 s** (derived below) |
+| A waiting window restarts once the node is back | Postgres's restart | the window's new process | **≤ 70 s** (derived below) |
+| A clinical press during an upgrade under a 60 s reader | the press | its outcome | **never past the 15 s cut-off** |
+| The heal's longest lock, ~100 k events | the heal's start | its end (its locks are held to the end) | stated; **> 15 s is a finding** |
+
+Steps: paper *N* = 1 (take the new pad) → forced *M* = 0 at an idle update, 1 press (Update now) when someone is
+working → target *K* = 0 or 1; below the floor, 0 extra acts on the open chart. **A figure outside its budget, or an
+`M > N`, is the finding: file an issue, and never adjust the budget.**
+
+> [!WARNING]
+> This section **leaves the rig at generation 87**, and a `cairn-node` built from this checkout (generation 85) then
+> refuses to load it ("refusing to load schema: this database was last loaded at schema generation 87, …"). Run it
+> last, and rebuild the rig per section 0 before any later section.
+
+**Setup: the install paths.** As sections 0, 38 and (for Measurements 2 and 8) 39, with the supervised service
+running. An update replaces the program at the path it runs from, so both programs run from paths of their own, never
+from `target/` (a probe copied over a build output would outlive the next `cargo build` unseen):
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+# Not under /tmp: on macOS /tmp is a symlink, and a window launched through a symlinked path never updates.
+export NODE_DIR="$HOME/.cairn-measure/node" WIN_DIR="$HOME/.cairn-measure/window" PROBE=/tmp/cairn-probe-bins
+mkdir -p "$NODE_DIR" "$WIN_DIR" "$PROBE"/{85a,85b,86,87}
+cargo build --release -p cairn-node
+cargo build --release --manifest-path cairn-gui/Cargo.toml -p cairn-gui-tauri
+cp "${CARGO_TARGET_DIR:-$PWD/target}/release/cairn-node" "$NODE_DIR/cairn-node"
+cp "${CARGO_TARGET_DIR:-$PWD/cairn-gui/target}/release/cairn-gui-tauri" "$PROBE/85a/cairn-gui-tauri"
+cp "$PROBE/85a/cairn-gui-tauri" "$WIN_DIR/cairn-gui-tauri"
+# Install = copy beside, then rename over: a running program's file is never written in place
+# (Linux refuses with "Text file busy"; macOS may kill a program whose signed file changed).
+install_at() { cp "$1" "$2.new" && mv -f "$2.new" "$2"; }
+```
+
+`svc_stop`, `export CAIRN_NODE_BIN="$NODE_DIR/cairn-node"`, write section 38's plist or unit again (with section 39's
+`--gateway-listen`), and `svc_start`.
+
+- [ ] Its log says "terminal service running (it exits with status 75 when the node's schema changes: run it under a
+      supervisor that restarts it)".
+- [ ] `"$WIN_DIR/cairn-gui-tauri" --print-schema-generation` prints `85 ` and 64 hex digits, opens no window and
+      exits at once.
+
+**Setup: the probe builds** (never committed). A worktree of this checkout makes three more programs: `85b`, the same
+generation with another content hash; `86`, one generation newer with the floor left at 85; and `87`, a window newer
+than the database will be:
+
+```bash
+git worktree add --detach /tmp/cairn-probe HEAD
+probe_generation() {   # $1 = the next generation; the floor stays 85
+  ( cd /tmp/cairn-probe && python3 - "$1" <<'PY'
+import pathlib, sys
+g = sys.argv[1]
+name = f"0{g}_runbook_probe"
+pathlib.Path(f"db/{name}.sql").write_text(f"-- RUNBOOK section 40's probe generation {g}: never committed.\nSELECT 1;\n")
+db = pathlib.Path("crates/cairn-node/src/db.rs"); s = db.read_text()
+end = "\n];\n\n/// Name a database connection"
+assert s.count(end) == 1
+s = s.replace(end, f'\n    ("{name}", include_str!("../../../db/{name}.sql")),{end}')
+db.write_text(s)
+gen = pathlib.Path("crates/cairn-event/src/schema_generation.rs"); t = gen.read_text()
+old = f"pub const SCHEMA_GENERATION: i32 = {int(g) - 1};"
+assert old in t
+t = t.replace(old, f"pub const SCHEMA_GENERATION: i32 = {g};")
+tail = "}];\n\n/// What an old window misses"
+assert t.count(tail) == 1
+t = t.replace(tail, f'}}, FloorEntry {{ generation: {g}, floor: 85, why: "RUNBOOK probe", old_window_misses: None }}];\n\n/// What an old window misses')
+gen.write_text(t)
+PY
+  ); }
+probe_build() {   # $1 = the folder under $PROBE; $2 = node to build cairn-node too
+  ( cd /tmp/cairn-probe && unset CARGO_TARGET_DIR \
+    && cargo build --release --manifest-path cairn-gui/Cargo.toml -p cairn-gui-tauri \
+    && cp cairn-gui/target/release/cairn-gui-tauri "$PROBE/$1/" \
+    && if [ "${2:-}" = node ]; then cargo build --release -p cairn-node && cp target/release/cairn-node "$PROBE/$1/"; fi ); }
+echo "-- RUNBOOK section 40: another build of generation 85" >> /tmp/cairn-probe/db/085_window_floor.sql
+probe_build 85b
+probe_generation 86 && probe_build 86 node
+probe_generation 87 && probe_build 87 node
+for v in 85a 85b 86 87; do "$PROBE/$v/cairn-gui-tauri" --print-schema-generation; done
+```
+
+- [ ] The last line prints four lines: `85`, `85`, `86` and `87`, each with its hash, and the two `85` hashes differ.
+
+Launch the node's own window from its install path, with a one-minute idle re-lock so the idle cases fit in a sitting:
+`CAIRN_CONN="$WINDOW_CONN" "$WIN_DIR/cairn-gui-tauri" --idle-lock-minutes 1`. Sign in, and keep touching it while you
+work (the re-lock is one minute).
+
+- [ ] No update line shows: the database is at the window's generation.
+
+**Measurement 1 — the upgrade under a 60 s reader (no clinical press past 15 s).** In a second terminal, hold a reader
+on `event_log` for 60 s, named so that the replay's log can name it:
+
+```bash
+PGAPPNAME=runbook-long-reader psql "$CONN" -c "BEGIN" -c "SELECT count(*) FROM event_log" -c "SELECT pg_sleep(60)" -c "COMMIT"
+```
+
+Within 5 s, install the new node program and run the upgrade with it, timing it:
+
+```bash
+install_at "$PROBE/86/cairn-node" "$NODE_DIR/cairn-node"
+time "$NODE_DIR/cairn-node" --conn "$CONN" provision-window-role --role cairn_window_login
+```
+
+- [ ] While the reader is open, the upgrade prints lines like "schema replay: <a migration's name> is waiting for a lock
+      (attempt 1); these sessions may be holding it: runbook-long-reader (pid …, transaction open …); retrying in
+      250 ms", the pause doubling to 5000 ms and staying there. Record the first line exactly.
+- [ ] Meanwhile, on the window: open a chart, write and Sign a one-line note, open another chart, three times or
+      more. Record the longest wait from a press to its outcome. **None waits past 15 s** or is cut off; expect each
+      to wait about 2 s per lock the replay waits on, longer when a file already holds a lock the press needs (it
+      keeps it through its later waits), and a write longest during the heal, which holds its row locks to its end
+      (Measurement 7).
+- [ ] Once the reader commits, the upgrade completes. Record its `real` time.
+      `psql "$CONN" -Atc "SELECT version, window_floor, window_floor_for, window_floor_reason FROM node_schema"` reads
+      `86|85|86|this node's update notices`.
+
+**Measurement 2 — the service exits and its supervisor restarts it (≤ 5 s blip on a remote window).** Before
+Measurement 1, open a chart on section 39's terminal. Within 5 s of the stamp:
+
+- [ ] The service's log says "the node's schema changed (…); exiting so the supervisor restarts this service with the
+      new build", then "terminal service running (…)" and "terminal gateway listening on 0.0.0.0:5543" again. The exit
+      status was 75: launchd, `launchctl print "$SVC" | grep "last exit code"`; systemd,
+      `systemctl --user status cairn-terminal-service` (`status=75`).
+- [ ] From that exit line, press something that reads on the terminal's chart, again until one reads; record the
+      seconds (stopwatch). Budget **≤ 5 s**. Record the text any failed press showed.
+
+**Measurement 3 — the calm line and Update now (≤ 10 s).** Within 60 s of the stamp the node's window shows "An update
+is waiting; it installs when this terminal is next idle." and **Update now**.
+
+- [ ] Nothing else changed: the open chart still reads and signs, and another chart still opens.
+- [ ] **Nothing newer installed.** Press Update now: "No newer version is installed on this terminal yet — ask
+      whoever installs Cairn here." The window does not restart.
+- [ ] **Too new.** `install_at "$PROBE/87/cairn-gui-tauri" "$WIN_DIR/cairn-gui-tauri"`, press Update now: "The
+      version installed here does not fit this node yet." No restart; the window works on.
+- [ ] **It fits.** `install_at "$PROBE/85b/cairn-gui-tauri" "$WIN_DIR/cairn-gui-tauri"`. With a chart open and a line
+      typed into a note's draft, press Update now and time from the press to the restarted window's terminal lock,
+      ready for a passphrase. Budget **≤ 10 s**. Sign in again, open the chart: the draft line is there. The calm line
+      shows again (generation 85 is still behind 86).
+- [ ] Repeat **It fits** five times, alternating `85a` and `85b` (an install identical to the running program reads
+      as nothing newer). Record each.
+- [ ] **A Sign in flight.** In a separate `psql "$CONN"` session hold the node's clock row
+      (`BEGIN; SELECT * FROM hlc_state FOR UPDATE;`), install the other `85` variant, press Sign on a note, then
+      Update now. The install check waits behind the Sign (they share the window's one connection). The Sign meets
+      the 15 s cut-off and its line says it did not go through, or that it is not known whether it did; the check then
+      answers, and the chart stays on screen with that line, and the window does **not** restart. Record what the
+      Sign said. `ROLLBACK;`, then press Update now again: the window restarts.
+
+**Measurement 4 — the idle restarts.** Install the other `85` variant each time.
+
+- [ ] **An untouched lock screen.** Quit the window, launch it again as above, install the other variant, and touch
+      nothing (not even the mouse): within about two
+      minutes (a whole idle minute, then the next 60 s poll) it restarts by itself. `pgrep -f cairn-gui-tauri` shows a
+      new pid. Record the minutes.
+- [ ] **Someone typing at the lock.** Install the other variant, then at the lock press a key into the passphrase
+      field every 30 s for three minutes: it never restarts under you.
+- [ ] **The idle re-lock.** Install the other variant, sign in, open a chart, and leave it: one minute later the
+      re-lock closes the chart, shows the lock, and the window restarts.
+- [ ] **The node unreachable: no restart into an outage.** The window has just restarted and sits at its lock,
+      untouched. Install the other variant at once, then stop the node's database within that first minute:
+      `"$PGBIN/pg_ctl" -D "$MDATA" stop -m fast`. After a whole idle minute the next poll cannot read the stamp, so
+      the window judges the install on the stamp it read last and says "This terminal cannot reach the node right
+      now; the update installs once it can." It does not restart (`pgrep -f cairn-gui-tauri` shows the same pid) and
+      closes nothing. Watch two more polls: the same. Press Update now: the same line, no restart. Then start it
+      again, `"$PGBIN/pg_ctl" -D "$MDATA" -o "-p $MPORT" -l "$MDATA.log" start`, and time to the window's restart (a
+      new pid). Budget **≤ 70 s**: the next poll after the database is back (≤ 60 s), its reopen (≤ 5 s) and the
+      installed program's answer (≤ 5 s). Nobody is named on a freshly restarted window and the 10 s lock poll reads
+      no database, so no other command's failed reopen can skip the poll's. Sign in: the window works.
+
+**Measurement 5 — below the floor.** Raise the floor by hand (the service's exact check ignores these columns, so it
+keeps running):
+
+```bash
+psql "$CONN" -c "UPDATE node_schema SET window_floor = 86, window_floor_reason = 'a test floor this runbook set'"
+```
+
+Keep the window open on a chart, and the `85` variant that is running also installed (nothing newer).
+
+- [ ] Within 60 s a persistent alert: "This terminal needs its update: it does not show a test floor this runbook
+      set. Finish what you are doing." with Update now. The open chart still reads, saves and signs.
+- [ ] Open a DIFFERENT patient from the front door: "This terminal needs its update before it can open another
+      chart." Register a fresh name: the same sentence, and `reqs` (section 38) shows no new request.
+- [ ] Close the chart by hand: "No newer version is installed on this terminal yet — …"; the alert stays.
+- [ ] **A front door below the floor waits** (no test reaches it).
+      `install_at "$PROBE/86/cairn-gui-tauri" "$WIN_DIR/cairn-gui-tauri"`, and keep touching the front door for two
+      minutes: the window does not restart.
+      Press Update now: it restarts into generation 86, and no line shows.
+- [ ] **A launch below the floor.** Quit it, `install_at "$PROBE/85a/cairn-gui-tauri" "$WIN_DIR/cairn-gui-tauri"`, and
+      launch: refused, "This window is older than the node's database can show correctly: it does not show a test
+      floor this runbook set. Install the window that matches the node."
+
+Then put the floor back:
+`psql "$CONN" -c "UPDATE node_schema SET window_floor = 85, window_floor_reason = 'this node''s update notices'"`.
+
+**Measurement 6 — the behaviours the build could not test.**
+
+- [ ] **A symlink-swap install never updates.** Quit the window. `mkdir -p "$WIN_DIR"/{v1,v2}`, copy `85a` into `v1`
+      and `85b` into `v2`, `ln -sfn v1 "$WIN_DIR/current"`, and launch `"$WIN_DIR/current/cairn-gui-tauri"` (as above).
+      Swap the link (`ln -sfn v2 "$WIN_DIR/current"`) and press Update now. Expected, on Linux: "No newer version is
+      installed on this terminal yet — …" (Tauri resolves the link to `v1` once, when the window loads); on macOS:
+      "This terminal cannot check which version is installed here; restart it once the update is installed." (a path
+      through any link reads as no path at all). No restart either way. A site must install by replacing the file at
+      a path with no symlink in it, never by swapping a link.
+- [ ] **An unsupervised service that exits stays down.** `svc_stop`, then run the service in the foreground:
+      `CAIRN_CONN="$SERVICE_CONN" "$NODE_DIR/cairn-node" --key "$NODE_KEY" terminal-service`. In another terminal,
+      `psql "$CONN" -c "UPDATE node_schema SET schema_hash = NULL"`. Within 5 s it prints the "schema changed" line
+      and `echo $?` reads `75`; nothing starts it again, and a Register press on the window says the terminal service
+      did not answer. Restore the stamp by replaying it,
+      `"$NODE_DIR/cairn-node" --conn "$CONN" provision-window-role --role cairn_window_login`, then `svc_start`.
+
+**Measurement 7 — the heal's longest lock (~100 k events).** On a throwaway database, never `cairn_measure`. The
+reproject benchmark, cut to 100 000 events, builds it and runs the same heal the upgrade runs
+(`cairn_reproject('', …)`) as its step (2):
+
+```bash
+export PGHOST=127.0.0.1 PGPORT="$MPORT"    # the rig's cluster (cairn_pgx, and PGPASSWORD from section 0)
+perl -pe 's/2004000/100000/g; s/2,004,000/100,000/g' scripts/bench-reproject.sh > scripts/.bench-100k.sh
+bash scripts/.bench-100k.sh cairn_heal_probe; rm scripts/.bench-100k.sh
+```
+
+While its step (2) runs, in a second terminal:
+
+```bash
+psql -d cairn_heal_probe -c "SELECT l.relation::regclass, l.mode FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE a.query LIKE '%cairn_reproject%' AND a.pid <> pg_backend_pid() AND l.locktype = 'relation' AND l.mode <> 'AccessShareLock' ORDER BY 1"
+```
+
+- [ ] Record the relations the heal holds stronger than `AccessShareLock`, and its `elapsed_ms` (the script prints it
+      from `reproject_log`).
+- [ ] Still during step (2), time a WRITE to an existing projection row: one more `dob` assertion for bench patient
+      `…00a`, whose `dob` row the heal re-projects. The heal's upserts (`INSERT … ON CONFLICT DO UPDATE`) lock every row
+      they touch, even one their `WHERE` leaves unchanged, and hold those row locks to the heal's end, so this write
+      waits for the whole heal (a medication Stop or a demographics edit on a node would too); a read does not wait.
+
+      ```bash
+      psql -d cairn_heal_probe -c "\timing on" -c "INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address, body, contributors, signer_key_id, plaintext_twin) VALUES (uuidv7(), '00000000-0000-7000-8000-00000000000a', 'demographic.field.asserted', 'bench-1', 1900000000000, 0, 'bench-node', 'heal-probe'::bytea, '\x1220'::bytea || digest('heal-probe'::bytea, 'sha256'), jsonb_build_object('field', 'dob', 'value', '1970-01-01', 'provenance', 'patient-reported'), '[]'::jsonb, 'bench-key', 'heal probe write')"
+      ```
+
+      Record its time. **Over 15 s is a finding** (design §4.6: the heal holds a clinical table past the cut-off):
+      file it, never widen the budget. Then `dropdb cairn_heal_probe`.
+
+**Measurement 8 — a remote terminal untouched at its lock learns of an upgrade (≤ 75 s).** Its connection runs only
+through the service's gateway, so the service's exit on the new stamp drops it, and nothing at an untouched lock but
+the update poll reopens it. The budget is derived from the code: the gateway's restart (≤ 5 s, Measurement 2), then
+the window's first poll after the gateway is back (polls are 60 s apart, and one that falls inside the restart learns
+nothing), that poll's reopen (up to 5 s; a reopen is never tried within 2 s of a failed one, which at an untouched
+lock only the poll itself could have been: the 10 s lock poll reads no database, and the person menu's 60 s re-read
+runs only while someone is named), and the installed program's answer (up to 5 s): 5 + 60 + 5 + 5 = 75 s. The
+restart needs a stamp read just then, so a terminal that cannot reach the node says it and waits instead.
+A second upgrade, 86 → 87, makes the window old only once it is already waiting at its lock.
+
+On the terminal, copy the two windows from the node (`scp` from `$PROBE/86/` and `$PROBE/87/`), define `install_at`
+as in the setup, install generation 86 at a link-free path (`$HOME/.cairn-measure/window/cairn-gui-tauri`), and
+launch it from there as section 39 does, adding `--idle-lock-minutes 1`. Then install 87 at the same path, and
+touch nothing on the terminal from here on.
+
+- [ ] It opens at its lock with no update line (the database is at its generation, 86). Note its pid
+      (`pgrep -f cairn-gui-tauri`).
+- [ ] After at least a minute untouched, on the node:
+      `install_at "$PROBE/87/cairn-node" "$NODE_DIR/cairn-node"` and
+      `"$NODE_DIR/cairn-node" --conn "$CONN" provision-window-role --role cairn_window_login`. Start a stopwatch at
+      the service's "schema changed" line.
+- [ ] The terminal's window restarts by itself into generation 87: a new pid, its lock, and no update line. Record
+      the seconds. Budget **≤ 75 s**. If it shows the calm line and does not restart, record that and what Update now
+      then says (a "No newer version…" answer would mean it judged the program it launched from, not the one installed).
+
+**Afterwards.** `git worktree remove --force /tmp/cairn-probe`, `rm -rf "$PROBE"`, and rebuild the rig per section 0
+for any later section (the warning above).
+
+**Results (fill in).**
+
+| Figure | n | median | slowest | Budget | Inside? |
+|---|---|---|---|---|---|
+| Update now → the restarted window's lock, ready | 5 | | | ≤ 10 s | |
+| The service's exit → a remote press reads | | | | ≤ 5 s | |
+| The service's exit → an untouched remote lock restarted | 1 | | | ≤ 75 s | |
+| A clinical press during the upgrade under a 60 s reader | ≥ 9 | | | never past 15 s | |
+| The upgrade's `real` time under the reader (context) | 1 | | | — | |
+| An untouched lock screen → restarted (minutes, context) | 1 | | | — (≤ about 2 min) | |
+| The node back → the waiting window restarted | 1 | | | ≤ 70 s | |
+| The heal's `elapsed_ms`, ~100 k events, and the wait of a write behind it | 1 | | | > 15 s is a finding | |
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| The service's startup line names status 75 and a supervisor | | |
+| The replay names the long reader and retries until it commits | | |
+| The service exits 75 on the new stamp and its supervisor restarts it | | |
+| The calm line within 60 s; nothing else changes | | |
+| Update now: nothing newer → "No newer version is installed…", no restart | | |
+| Update now: too new → "…does not fit this node yet.", no restart | | |
+| A Sign cut off at 15 s keeps its chart and stops the restart; the draft survives a restart | | |
+| An untouched lock screen restarts; someone typing at it is never restarted under | | |
+| The idle re-lock restarts into a fitting install | | |
+| The node unreachable: "cannot reach the node right now", no restart, nothing closed; restarted and working once it is back | | |
+| Below the floor: the alert, the open chart works, another chart and a registration are refused | | |
+| Below the floor: a front door waits for the idle re-lock or Update now | | |
+| Below the floor: a launch is refused, naming the reason | | |
+| A symlink-swap install never updates | | |
+| An unsupervised service that exits stays down | | |
+| An untouched remote terminal at its lock restarts after an upgrade | | |
+
+**Where it is pinned.**
+- **The floor and the stamp:** `cairn-event`'s `schema_generation` ledger tests;
+  `crates/cairn-node/tests/schema_replay_gate.rs::the_floor_is_stamped_and_read_only_for_its_own_generation`;
+  `src/window_floor_tests.rs` (`window_verdict_cases`, `install_fit_cases`).
+- **The doors:** `tests/window_door_surface.rs` (the snapshot, the pure `door_drift`, and `raise_excuses`: a raise
+  excuses only a snapshot whose `# generation N` predates it).
+- **The replay:** `tests/replay_lock_timeout.rs` (a waiting change lets readers through and lands; the loader's
+  connection keeps no `lock_timeout`; a failing file's text is `load_migration`'s) and `src/replay_wait_tests.rs`.
+- **The service:** `tests/terminal_service_stamp.rs` and `terminal_service/run.rs`'s unit tests (the 5 s tick; an
+  unread stamp stops the startup, never the loop).
+- **The window:** `cairn-gui-tauri`'s `update_tests.rs` (the printed line, the flag read before clap, a hung program,
+  the gate, mock) and `update_webview_tests.rs` (the copy, the restart's order and an act that did not settle well,
+  the lock-screen idle period).
+
+`TEMPLATE.md` carries a matching block (*An upgrade disturbs no one*).

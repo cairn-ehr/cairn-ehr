@@ -272,6 +272,12 @@ pub struct AppState {
     /// Who the terminal says is at the keyboard, their recent people and bookmarks, and the idle
     /// re-lock interval — in memory only (`crate::whos_here`).
     pub whos_here: tokio::sync::Mutex<crate::whos_here::Here>,
+    /// What the window last learned of the database's floor (`crate::update`); a std mutex, never held over an await.
+    pub verdict: std::sync::Mutex<cairn_node::window_floor::WindowVerdict>,
+    /// The last schema stamp read (at launch or by that poll): the install check's fallback.
+    pub last_stamp: std::sync::Mutex<Option<cairn_node::db::SchemaStamp>>,
+    /// The program this window was launched from, asked before a restart; `None` in fixture mode.
+    pub launched_exe: Option<std::path::PathBuf>,
 }
 
 impl AppState {

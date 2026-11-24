@@ -1,6 +1,8 @@
 # #909 slice C1: an upgrade disturbs no one — the window floor, the waiting update, the lock timeout — design
 
 Status: **approved 2026-11-24**, brainstormed with the maintainer (PR #1173 began it; this session finished it).
+Amended at plan and build time (§10); built on `feat/909-slice-c1-rollout`, recorded in
+[ADR-0111](../../spec/decisions/0111-an-older-window-works-above-a-floor.md).
 Parent: [`2026-11-16-pinned-terminal-link-909-design.md`](2026-11-16-pinned-terminal-link-909-design.md) §6, which
 made the rollout its own slice. Slice C2 (a terminal fetches its new program from its node) is a later slice with its
 own brainstorm (§9).
@@ -121,10 +123,10 @@ new program's generation, so a program that would refuse this database is never 
 ### 4.4 Inside the floor: the calm line and Update now
 
 - The window learns the verdict at **launch**, at each **reconnect** (#807, `cairn-gui-live/src/connection.rs`), and
-  on a **new, slower stamp poll** (≈ 60 s) — the upgrade drops no connection, so without a poll a running window
-  would never learn of it. *(Builder check: `lock_state` touches no database today, `commands.rs` ≈145, so this is a
-  new query on the window's one shared connection; my call: its own cadence, not the 10 s lock poll, and it never
-  reopens a lost connection — the reconnect path already checks.)*
+  on a **new, slower stamp poll** (≈ 60 s) — the upgrade drops no connection (corrected — see §10), so without a
+  poll a running window would never learn of it. *(Builder check: `lock_state` touches no database today,
+  `commands.rs` ≈145, so this is a new query on the window's one shared connection; my call: its own cadence, not the
+  10 s lock poll, and it never reopens a lost connection (corrected — see §10) — the reconnect path already checks.)*
 - It shows one calm line: "An update is waiting; it installs when this terminal is next idle." with **Update now**.
   Nothing else changes.
 - **Update now** (D3) and the **idle re-lock** (D2) do the same thing: wait for any act in flight to settle, close the
@@ -234,3 +236,60 @@ terminal follows. **It must check the release's signature itself, never trust th
 node could push code that captures every clinician's passphrase. That is the terminal's share of the
 signed-release checks in [security §7.6](../../spec/security.md#76-the-software-distribution-plane-signed-releases-and-extension-load),
 none of which is built, and it is safety-critical.
+
+## 10. Amendments made at plan and build time (2026-11-24)
+
+The design above stands as approved; these calls refine it. Each is marked with when it was made. ADR-0111 records
+the result.
+
+- **The loader is checked by name** *(plan time)*. `loader_build` is `cairn-node <CARGO_PKG_VERSION>`, so §4.2's
+  exact match would refuse every window after a version bump. The window accepts a stamp whose `loader_build`
+  starts with `cairn-node `.
+- **The reconnect re-check is the 60 s poll's next tick** *(plan time)*, not a check inside the #807 reopen (§4.4):
+  `connection.rs` is over its cap (#1164). **Corrected at build time (Task 8 review):** §4.4's premise that "the
+  upgrade drops no connection" is false for a REMOTE window, whose only link is the terminal service's gateway
+  (ADR-0110), and the service exits on the new stamp (§4.7). So the poll does not "never reopen": `update_state`
+  takes the connection with the reopening `lock()` (#807's 5 s attempt, none within 2 s of a failed one), or an
+  untouched remote terminal at its lock would never learn of the upgrade. A remote window therefore learns at its
+  first poll after the gateway is back.
+- **A never-touched terminal updates too** *(plan time)*. `idle.js` arms its timer only at a first touch, so the
+  update also installs when the terminal lock is showing and nobody has touched it for a whole idle period (its clock
+  starts at the page load). This replaces §4.5's "or nobody is signed in, it restarts at once": at the lock the window
+  always waits a whole idle period, so someone typing a passphrase is never restarted under.
+- **The stamped reason is the latest raising entry's** *(plan time)*: the `old_window_misses` of the first ledger
+  entry whose floor equals today's. A window two raises behind sees one reason; upgrade that if it ever confuses.
+- **The service checks the stamp every 5 s and exits with status 75** (`EX_TEMPFAIL`) *(plan time; §8 left both to
+  the builder)*.
+- **`update_state` keeps the last verdict on a blip** *(build time, controller ruling)*. A lost connection that
+  could not be reopened, or a failed read, returns what the window last knew, not "current", so a below-floor alert
+  never vanishes on a blip. It also keeps the last stamp read (seeded at launch), and the install check judges a
+  program against a fresh stamp, else that one.
+- **Only a fresh stamp restarts** *(build time, Tasks 6+7 fix round 2)*. A restart while the node is down would
+  relaunch into a failing first connect, and the window would be gone. So `installed_program` answers a fourth kind,
+  `unreachable`, when a program fits only the cached stamp or no stamp has ever been read; the window says "This
+  terminal cannot reach the node right now; the update installs once it can.", closes nothing and does not restart. A
+  cached stamp that refuses the program still answers `does_not_fit`. Residual: the node can go down between the
+  fresh check and the relaunch, which then fails at launch like any launch against an unreachable node.
+- **An Update now press joins a running idle attempt** *(build time, fix round 2)*: the press is a touch, which
+  would otherwise make the idle poll's re-check abandon the attempt the press wanted.
+- **The lock-screen restart asks again after the install check** *(build time)*: the installed program may take 5 s
+  to answer, so the poll's restart re-checks that nobody touched the terminal meanwhile.
+  A refusal learned mid-session (another loader restamped the database) reads as below the floor with no reason
+  (also a build-time ruling): it gates new charts, the safe direction.
+- **Extension-owned objects are excluded from the door snapshot** *(build time, controller ruling)*: a `pg_depend`
+  row of `deptype = 'e'` moves with `cairn_pgx`'s version, not `db/*.sql`, and differs between machines. An
+  extension's door removal therefore goes unguarded here; the extension has its own version gate.
+- **The service splits an unread stamp by where it is read** *(build time, controller ruling)*. At startup it
+  refuses to start, as before (swallowing it would let the service start unchecked); in the loop it is logged once
+  per distinct message and the loop carries on, so a network blip never restarts the service. Only a verdict that
+  the stamp names another build exits.
+- **The blocker line is a heuristic** *(build time, controller ruling)*. `pg_blocking_pids` is empty once the
+  timeout has cancelled the wait, so §4.6's "which session blocks it" becomes the sessions that MAY be holding the
+  lock: those in this database holding a table lock inside a transaction open at least as long as the timeout.
+- **#1175** *(build time)*: `cairn_readjudicate_deferred()` (db/043) runs each promotion inside
+  `EXCEPTION WHEN OTHERS`, which swallows a `55P03`, so §4.6's retry never sees a re-adjudication's lock timeout. Out
+  of scope here; the event stays deferred and nothing is lost.
+- **Two limits found in the build, for RUNBOOK §40** *(build time)*. An install through a symlink never updates: Tauri
+  reads the program's path once, when it loads, resolving links on Linux and refusing any linked path on macOS. And
+  a front door below the floor, with no chart open and the terminal unlocked, waits for the idle re-lock or Update
+  now (§4.5 said it restarts at once).

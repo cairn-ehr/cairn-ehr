@@ -19,6 +19,11 @@ const REQUEST_TICK: Duration = Duration::from_millis(250);
 /// How often overdue drafts are committed (the window's old tick, moved here).
 pub const COMMIT_TICK: Duration = Duration::from_secs(60);
 const PURGE_TICK: Duration = Duration::from_secs(3600);
+/// How often the schema stamp is re-read (the startup check covers t = 0).
+pub const STAMP_TICK: Duration = Duration::from_secs(5);
+/// The exit status (BSD `EX_TEMPFAIL`) of a service whose node schema changed under it: a
+/// supervisor (launchd/systemd) restarts the service from the new binary.
+pub const SCHEMA_CHANGED_EXIT: i32 = 75;
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
 /// A burst of requests is drained in one tick, but never so many that a commit tick starves.
 const MAX_SERVED_PER_TICK: usize = 50;
@@ -29,6 +34,7 @@ pub struct Schedule {
     last_requests: Option<Instant>,
     last_commit: Instant,
     last_purge: Instant,
+    last_stamp: Instant,
 }
 
 /// Which jobs are due now.
@@ -37,6 +43,7 @@ pub struct Due {
     pub requests: bool,
     pub commits: bool,
     pub purge: bool,
+    pub stamp: bool,
 }
 
 impl Schedule {
@@ -45,6 +52,7 @@ impl Schedule {
             last_requests: None,
             last_commit: start,
             last_purge: start,
+            last_stamp: start,
         }
     }
 
@@ -59,6 +67,9 @@ impl Schedule {
         if d.purge {
             self.last_purge = now;
         }
+        if d.stamp {
+            self.last_stamp = now;
+        }
     }
 }
 
@@ -71,7 +82,59 @@ pub fn due(now: Instant, last: &Schedule) -> Due {
             .is_none_or(|t| elapsed(t) >= REQUEST_TICK),
         commits: elapsed(last.last_commit) >= COMMIT_TICK,
         purge: elapsed(last.last_purge) >= PURGE_TICK,
+        stamp: elapsed(last.last_stamp) >= STAMP_TICK,
     }
+}
+
+/// The node's schema stamp no longer names this build (the reason, ready to print).
+#[derive(Debug)]
+pub struct StampChanged(pub String);
+
+impl std::fmt::Display for StampChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StampChanged {}
+
+/// Does the node's stamp still name this build? The one check, used at startup AND on the
+/// stamp tick so the two cannot drift. Three outcomes: `Ok(Ok(()))` it does; `Ok(Err(_))` it
+/// does not (the exit-for-the-supervisor case); `Err(_)` the stamp could not be READ (a dropped
+/// connection, a missing grant), which says nothing about the stamp: startup fails on it, the
+/// loop logs it and lets the reconnect path work (see `stamp_tick`).
+pub async fn stamp_still_ours(client: &Client) -> anyhow::Result<Result<(), StampChanged>> {
+    let stamp = crate::db::read_schema_stamp(client).await?;
+    Ok(crate::conn_posture::schema_verdict(
+        stamp.as_ref(),
+        "terminal service",
+        "provision-terminal-service-role",
+    )
+    .map_err(StampChanged))
+}
+
+/// The loop's use of [`stamp_still_ours`]: a changed stamp is an error to return; an unread
+/// stamp is logged (once per distinct message, via `slot`) and the loop carries on.
+fn stamp_tick(
+    slot: &mut Option<String>,
+    checked: anyhow::Result<Result<(), StampChanged>>,
+) -> Result<(), StampChanged> {
+    match checked {
+        Err(e) => {
+            let line = format!("the schema stamp could not be read: {e}");
+            log(fresh_failure(slot, Err(line)));
+            Ok(())
+        }
+        Ok(verdict) => {
+            *slot = None;
+            verdict
+        }
+    }
+}
+
+/// Startup's use of [`stamp_still_ours`]: any outcome but "ours" refuses to start. **Pure.**
+pub fn stamp_at_startup(checked: anyhow::Result<Result<(), StampChanged>>) -> anyhow::Result<()> {
+    Ok(checked??)
 }
 
 /// Serve requests until none is waiting (or the cap). A refusal is logged WITHOUT its reason,
@@ -172,8 +235,10 @@ fn log(line: Option<String>) {
     }
 }
 
-/// Run the service forever on `conn`, reopening it after a loss. Never returns. The reconnect
-/// and back-off path is not covered by a test (it needs a killed backend); `run_jobs` is.
+/// Run the service on `conn`, reopening it after a loss, until the node's schema stamp stops
+/// naming this build: then `Err(StampChanged)` (a connection or startup failure is another
+/// error), so the caller can exit for its supervisor. The reconnect and back-off path is not
+/// covered by a test (it needs a killed backend); `run_jobs` is.
 ///
 /// With `gateway` (`--gateway-listen`), the terminal gateway runs beside the jobs as its own
 /// task, restarted whenever it ends, a panic included (`supervise`); it never takes the job
@@ -195,6 +260,7 @@ pub async fn run(
     let mut state = JobState::default();
     let mut client = crate::db::connect(conn).await?;
     let mut schedule = Schedule::new(Instant::now());
+    let mut unread_stamp = None;
     loop {
         if client.is_closed() {
             tokio::time::sleep(RECONNECT_BACKOFF).await;
@@ -209,6 +275,9 @@ pub async fn run(
         let now = Instant::now();
         let d = due(now, &schedule);
         run_jobs(&mut client, sk, origin, &d, &mut state).await;
+        if d.stamp {
+            stamp_tick(&mut unread_stamp, stamp_still_ours(&client).await)?;
+        }
         schedule.mark(&d, now);
         tokio::time::sleep(REQUEST_TICK).await;
     }
@@ -300,6 +369,39 @@ mod tests {
         assert!(d.commits && d.purge);
     }
 
+    #[test]
+    fn startup_fails_on_an_unread_or_changed_stamp_and_the_loop_only_on_a_changed_one() {
+        let unread = || Err(anyhow::anyhow!("permission denied for node_schema"));
+        let changed = || Ok(Err(StampChanged("new build".into())));
+        assert!(stamp_at_startup(Ok(Ok(()))).is_ok());
+        assert!(stamp_at_startup(unread()).is_err(), "unread must not start");
+        assert!(stamp_at_startup(changed()).is_err());
+        let mut slot = None;
+        assert!(stamp_tick(&mut slot, Ok(Ok(()))).is_ok());
+        assert!(
+            stamp_tick(&mut slot, unread()).is_ok(),
+            "the loop carries on"
+        );
+        assert!(
+            slot.is_some(),
+            "the unread line is remembered, so said once"
+        );
+        assert!(stamp_tick(&mut slot, changed()).is_err());
+    }
+
+    #[test]
+    fn the_stamp_is_due_every_five_seconds() {
+        let t0 = Instant::now();
+        let mut s = Schedule::new(t0);
+        assert!(!due(t0, &s).stamp, "not on the first tick: startup checked");
+        assert!(!due(t0 + Duration::from_secs(4), &s).stamp);
+        let d = due(t0 + Duration::from_secs(5), &s);
+        assert!(d.stamp);
+        s.mark(&d, t0 + Duration::from_secs(5));
+        assert!(!due(t0 + Duration::from_secs(9), &s).stamp);
+        assert!(due(t0 + Duration::from_secs(10), &s).stamp);
+    }
+
     /// Far past every period (a stalled host): the jobs run once, not as a burst.
     #[test]
     fn overshoot_runs_each_job_once() {
@@ -307,7 +409,7 @@ mod tests {
         let mut s = Schedule::new(t0);
         let now = t0 + Duration::from_secs(10_000);
         let d = due(now, &s);
-        assert!(d.requests && d.commits && d.purge);
+        assert!(d.requests && d.commits && d.purge && d.stamp);
         s.mark(&d, now);
         assert_eq!(due(now, &s), Due::default());
     }

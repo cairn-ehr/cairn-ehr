@@ -117,6 +117,9 @@ mod superuser_panel;
 mod supervision_panel;
 mod terminal_id;
 mod terminal_launch;
+mod update;
+#[cfg(test)]
+mod update_webview_tests;
 #[cfg(test)]
 mod waiting_webview_tests;
 mod whos_here;
@@ -183,6 +186,18 @@ struct Cli {
 }
 
 fn main() -> anyhow::Result<()> {
+    // `--print-schema-generation` (`update::PRINT_FLAG`): print this program's schema generation
+    // and hash, then exit, connecting to nothing — what a running OLDER window asks of the program
+    // installed here before it restarts into it. Answered from the raw arguments BEFORE clap, so
+    // no argument this build requires or refuses can stop an older window's question (ADR-0111).
+    if update::asks_for_generation_line(std::env::args_os()) {
+        use cairn_node::db::{embedded_schema_hash, embedded_schema_version};
+        println!(
+            "{}",
+            update::generation_line(embedded_schema_version(), embedded_schema_hash())
+        );
+        return Ok(());
+    }
     let cli = Cli::parse();
 
     // A tokio runtime built by hand rather than by `#[tokio::main]`, because Tauri owns the
@@ -290,6 +305,9 @@ fn main() -> anyhow::Result<()> {
             duplicates::duplicate_banner,
             worklist::duplicate_tray_count,
             worklist::duplicate_worklist,
+            update::update_state,
+            update::installed_program,
+            update::restart_window,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))
@@ -341,9 +359,12 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
     let checker =
         terminal_launch::first_connect(&link, &cli.conn, cli.terminal_dir.as_deref()).await?;
     let stamp = cairn_node::db::read_schema_stamp(&checker).await?;
-    if let Err(refusal) = cairn_node::conn_posture::window_schema_verdict(stamp.as_ref()) {
-        anyhow::bail!(refusal);
-    }
+    // Below the floor, or refused, the window opens nothing; an update waiting still opens.
+    let verdict = update::launch_verdict(cairn_node::window_floor::window_verdict(
+        stamp.as_ref(),
+        cairn_node::db::embedded_schema_version(),
+    ))
+    .map_err(anyhow::Error::msg)?;
     let identity = cairn_node::identity::load_local(&checker).await?;
     drop(checker);
     // ONE connection, shared by the chart commands and the funnel's live port, reopened from
@@ -367,5 +388,11 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         // Filled in `main`'s setup hook, which alone can name the config directory.
         terminal_id: std::sync::OnceLock::new(),
         whos_here: tokio::sync::Mutex::new(whos_here::Here::new(cli.idle_lock_minutes)),
+        verdict: verdict.into(),
+        last_stamp: stamp.into(),
+        // The path Tauri's restart relaunches; unreadable reads as "nothing installed".
+        launched_exe: tauri::process::current_binary(&Default::default())
+            .ok()
+            .map(update::exe_path),
     })
 }

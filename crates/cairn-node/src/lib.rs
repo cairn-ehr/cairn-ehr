@@ -26,6 +26,7 @@ pub mod note;
 pub mod pairing;
 pub mod patient;
 pub mod photo_evidence;
+pub mod replay_wait;
 pub mod restore;
 pub mod safety;
 pub mod sensitivity;
@@ -39,6 +40,7 @@ pub mod ui_timing;
 pub mod vault;
 pub mod vault_admin;
 pub mod window_access;
+pub mod window_floor;
 
 // The at-rest key-file layer now lives in its own crate so `cairn-sync` can load the
 // same sealed files this node writes (issue #503) without depending on a node

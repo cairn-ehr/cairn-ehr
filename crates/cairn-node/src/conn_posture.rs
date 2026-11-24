@@ -10,8 +10,9 @@
 //! against a connection that cannot read the sealed keys or write around the floor itself, so a
 //! release over such a connection is refused before any passphrase is sent ([`over_powered`]).
 //!
-//! And a third, for the window's launch: was this database prepared for exactly this build
-//! ([`window_schema_verdict`])? The window's login cannot load the schema itself.
+//! And a third, for the terminal service's start: was this database prepared for exactly this
+//! build ([`schema_verdict`])? Its login cannot load the schema itself. (The window instead
+//! accepts any generation at or above the database's floor, `crate::window_floor`.)
 use crate::db::{
     embedded_schema_hash, embedded_schema_version, replay_can_be_skipped, SchemaStamp, LOADER_BUILD,
 };
@@ -187,18 +188,13 @@ pub async fn read_posture_of(db: &Client, role: &str) -> anyhow::Result<PostureF
     })
 }
 
-/// May the reference window start against this database's schema stamp? **Pure.**
+/// May a process that cannot replay DDL start against this database's schema stamp? **Pure.**
 ///
-/// The window's own login cannot replay DDL (db/062), so it never loads the schema; it only
-/// checks that the owner's install/upgrade step left a stamp for exactly this build. `Ok` iff the
-/// loader's own skip test would pass. A database newer than this window is told apart from one
-/// not yet prepared, because the remedies differ (install a newer window vs. run the owner step).
-pub fn window_schema_verdict(stamp: Option<&SchemaStamp>) -> Result<(), String> {
-    schema_verdict(stamp, "window", "provision-window-role")
-}
-
-/// [`window_schema_verdict`] for any process that cannot replay DDL: `who` is what it is called
-/// in the refusal ("window", "terminal service"), `verb` the owner step that prepares the database.
+/// Its login cannot replay DDL (db/062), so it never loads the schema; it only checks that the
+/// owner's install/upgrade step left a stamp for exactly this build. `Ok` iff the loader's own skip
+/// test would pass. A database newer than this process is told apart from one not yet prepared,
+/// because the remedies differ (install a newer build vs. run the owner step). `who` is what it is
+/// called in the refusal ("terminal service"), `verb` the owner step that prepares the database.
 pub fn schema_verdict(stamp: Option<&SchemaStamp>, who: &str, verb: &str) -> Result<(), String> {
     let ours = embedded_schema_version();
     if replay_can_be_skipped(stamp, ours, LOADER_BUILD, &embedded_schema_hash()) {
@@ -212,20 +208,34 @@ pub fn schema_verdict(stamp: Option<&SchemaStamp>, who: &str, verb: &str) -> Res
         )),
         // Same generation, different build (hash or loader): any other cairn-node would stamp
         // its own build again, so only the one built with this window can satisfy it.
-        Some(s) if s.version == ours => Err(format!(
-            "The node's database was prepared by a different build (generation {ours}, but not \
-             this {who}'s build). At the node, run {verb} with the cairn-node \
-             built with this {who} and the owner's connection, then start this {who} again."
+        Some(s) if s.version == ours => Err(different_build_message(ours, who, verb)),
+        _ => Err(not_prepared_message(
+            stamp.map(|s| s.version),
+            ours,
+            who,
+            verb,
         )),
-        _ => {
-            let db = stamp.map_or("none".to_string(), |s| s.version.to_string());
-            Err(format!(
-                "The node's database has not been prepared for this {who} (generation {db} \
-                 against {ours}). At the node, run cairn-node {verb} with the \
-                 owner's connection, then start this {who} again."
-            ))
-        }
     }
+}
+
+/// The refusal for a database stamped by another build at this generation. Shared with
+/// [`crate::window_floor::window_verdict`] so the two cannot drift.
+pub(crate) fn different_build_message(ours: i32, who: &str, verb: &str) -> String {
+    format!(
+        "The node's database was prepared by a different build (generation {ours}, but not \
+         this {who}'s build). At the node, run {verb} with the cairn-node \
+         built with this {who} and the owner's connection, then start this {who} again."
+    )
+}
+
+/// The refusal for a database with no stamp, or one older than this process.
+pub(crate) fn not_prepared_message(db: Option<i32>, ours: i32, who: &str, verb: &str) -> String {
+    let db = db.map_or("none".to_string(), |v| v.to_string());
+    format!(
+        "The node's database has not been prepared for this {who} (generation {db} \
+         against {ours}). At the node, run cairn-node {verb} with the \
+         owner's connection, then start this {who} again."
+    )
 }
 
 #[cfg(test)]

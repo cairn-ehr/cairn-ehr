@@ -123,6 +123,7 @@ const GUARDED: &[&str] = &[
     "crates/cairn-node/src/matcher_actor.rs",
     "crates/cairn-node/src/patient/compare.rs",
     "crates/cairn-node/src/patient/edges.rs",
+    "crates/cairn-node/src/replay_wait.rs",
     "crates/cairn-node/src/safety.rs",
     "crates/cairn-node/src/sync.rs",
 ];

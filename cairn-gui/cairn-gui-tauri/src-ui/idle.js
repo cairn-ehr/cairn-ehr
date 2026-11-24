@@ -10,13 +10,16 @@
 //
 // Classic script, loaded after whos_here.js, sharing main.js's `el` and `invoke`, notes.js's
 // `signsSettled`, leave_chart.js's `closeChart`, signer.js's `relockTerminal` and whos_here.js's
-// `takeClaim`/`closePicker`/`dismissOffer` — all read only when the timer fires.
+// `takeClaim`/`closePicker`/`dismissOffer`, and update.js's `updateAfterRelock` — all read only
+// when the timer fires.
 "use strict";
 
 /** This terminal's idle re-lock in ms (lock_state.idle_lock_secs); 0 until the poll says. */
 let idleLockMs = 0;
 /** The pending re-lock, or null: none armed yet, or it has fired. */
 let idleTimer = null;
+/** When a person last touched the terminal — the page load until the first touch (update.js). */
+let lastActivityAt = Date.now();
 
 /** The poll's interval (main.js's `renderLockState`). Never arms or pushes back the timer. */
 function setIdleLock(secs) {
@@ -25,6 +28,7 @@ function setIdleLock(secs) {
 
 /** A person touched the terminal: the re-lock starts counting again from now. */
 function noteActivity() {
+  lastActivityAt = Date.now();
   clearTimeout(idleTimer);
   idleTimer = idleLockMs > 0 ? setTimeout(idleRelock, idleLockMs) : null;
 }
@@ -33,7 +37,7 @@ function noteActivity() {
  * The timer fired. A Sign in flight is waited for first (Review Focus 4): cutting it would leave
  * its outcome unsaid. Someone who touched the terminal meanwhile is there, so nothing locks.
  * Then the chart closes (its queued saves awaited), the window's Rust side forgets the key and
- * the claim, and the terminal lock shows again.
+ * the claim, and the terminal lock shows again. Then a waiting update may restart the window.
  */
 async function idleRelock() {
   idleTimer = null;
@@ -51,6 +55,7 @@ async function idleRelock() {
     console.error("the re-lock could not reach the node", failure);
   }
   relockTerminal(lock);
+  updateAfterRelock(); // update.js: an update waiting installs now, if one is installed here
 }
 
 for (const kind of ["keydown", "pointerdown", "input", "wheel"]) {

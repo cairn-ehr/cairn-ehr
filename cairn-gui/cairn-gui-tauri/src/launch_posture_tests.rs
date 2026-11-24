@@ -11,7 +11,7 @@ const MAIN: &str = include_str!("main.rs");
 #[test]
 fn the_schema_stamp_is_judged_before_anything_is_read() {
     let body = rust_fn(MAIN, "build_live_state");
-    assert!(position(body, "window_schema_verdict(") < position(body, "load_local("));
+    assert!(position(body, "window_verdict(") < position(body, "load_local("));
 }
 
 #[test]

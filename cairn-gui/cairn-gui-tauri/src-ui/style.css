@@ -712,3 +712,27 @@ tr[data-stat="true"] td {
 .med-stat-row button {
   margin-right: 0.4rem;
 }
+
+/* The update line (update.js): above the terminal lock (z-index 10), so it shows at every screen. */
+#update-line {
+  position: sticky;
+  top: 0;
+  z-index: 11;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+#update-line p {
+  margin: 0;
+}
+
+#update-alert {
+  border-left: 4px solid var(--warn-line);
+  padding-left: 0.5rem;
+  color: var(--warn-fg);
+}

@@ -193,3 +193,44 @@ async fn the_stamp_records_this_builds_hash_and_force_replay_clears_it() {
         "force_schema_replay must make the next connect replay in full"
     );
 }
+
+#[tokio::test]
+async fn the_floor_is_stamped_and_read_only_for_its_own_generation() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let floor = |s: Option<db::SchemaStamp>| s.unwrap().window_floor;
+
+    assert_eq!(
+        floor(db::read_schema_stamp(&c).await.unwrap()),
+        Some(db::WindowFloor {
+            floor: 85,
+            reason: Some("this node's update notices".into())
+        }),
+        "a replay stamps the floor for its own generation"
+    );
+
+    // cairn-sync restamps `version` without touching the floor columns: the floor then
+    // belongs to another generation and must read as absent.
+    c.batch_execute("UPDATE node_schema SET window_floor_for = window_floor_for - 1")
+        .await
+        .unwrap();
+    assert_eq!(floor(db::read_schema_stamp(&c).await.unwrap()), None);
+
+    // A database from before db/085 has no such columns at all.
+    c.batch_execute(
+        "ALTER TABLE node_schema DROP COLUMN window_floor, DROP COLUMN window_floor_reason, \
+         DROP COLUMN window_floor_for",
+    )
+    .await
+    .unwrap();
+    assert_eq!(floor(db::read_schema_stamp(&c).await.unwrap()), None);
+
+    // Restore: the next connect must replay (db/085 re-adds the columns) and re-stamp.
+    db::force_schema_replay(&c).await.unwrap();
+    drop(db::connect_and_load_schema(&base).await.unwrap());
+    assert!(floor(db::read_schema_stamp(&c).await.unwrap()).is_some());
+}

@@ -81,9 +81,9 @@ impl LiveData {
     /// ([`NodeConnection::fixed`]): the caller made it and may have set session state on it.
     ///
     /// The caller connects (`cairn_node::db::connect`), checks the schema stamp
-    /// (`read_schema_stamp` + `window_schema_verdict`; the window never loads the
-    /// schema, #898) and reads the node identity (`cairn_node::identity::load_local`), exactly as the window's
-    /// `build_live_state` already does. Passing those in rather than doing them here keeps the
+    /// (`read_schema_stamp` + `window_floor::window_verdict`; the window never loads the schema,
+    /// #898) and reads the node identity (`cairn_node::identity::load_local`), exactly as the
+    /// window's `build_live_state` already does. Passing those in rather than doing them here keeps the
     /// "which node am I" question answered in ONE place per window: a `LiveData` that
     /// connected on its own could end up describing a different node than the rest of the
     /// window, and nothing on screen would say so.

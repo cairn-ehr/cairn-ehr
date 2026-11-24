@@ -1,0 +1,4 @@
+# Window-reachable doors used by no window at or above the floor, so removing them cannot hurt a
+# window still served: a door a raise retired, once no window below the floor can still have a
+# chart open on it (ADR-0111).
+# Format: <entry exactly as in window_door_surface.txt>  # <reason>

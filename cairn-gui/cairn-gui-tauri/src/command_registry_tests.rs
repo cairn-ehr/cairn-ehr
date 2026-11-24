@@ -102,6 +102,7 @@ fn webview_calls() -> BTreeSet<&'static str> {
         ("worklist.js", include_str!("../src-ui/worklist.js")),
         ("funnel.js", include_str!("../src-ui/funnel.js")),
         ("leave_chart.js", include_str!("../src-ui/leave_chart.js")),
+        ("update.js", include_str!("../src-ui/update.js")),
         ("link.js", include_str!("../src-ui/link.js")),
         ("unlink.js", include_str!("../src-ui/unlink.js")),
     ];
