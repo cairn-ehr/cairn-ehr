@@ -15,7 +15,7 @@ async fn a_changed_stamp_is_noticed() {
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     assert!(
-        stamp_still_ours(&c).await.is_ok(),
+        stamp_still_ours(&c).await.unwrap().is_ok(),
         "precondition: a freshly loaded schema carries this build's stamp"
     );
 
@@ -25,11 +25,15 @@ async fn a_changed_stamp_is_noticed() {
         .unwrap();
     let err = stamp_still_ours(&c)
         .await
+        .unwrap()
         .expect_err("a stamp without this build's hash must be refused");
     assert!(!err.0.is_empty(), "the refusal says why");
 
     // Restore: force a replay and reload, so later tests inherit a sound stamp.
     db::force_schema_replay(&c).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    assert!(stamp_still_ours(&c).await.is_ok(), "reloaded: ours again");
+    assert!(
+        stamp_still_ours(&c).await.unwrap().is_ok(),
+        "reloaded: ours again"
+    );
 }

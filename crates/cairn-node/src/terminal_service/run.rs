@@ -99,23 +99,32 @@ impl std::fmt::Display for StampChanged {
 impl std::error::Error for StampChanged {}
 
 /// Does the node's stamp still name this build? The one check, used at startup AND on the
-/// stamp tick so the two cannot drift. A READ failure (typically a dropped connection) is NOT
-/// a stamp change: it is logged and passes, and the loop's reconnect path takes over; only a
-/// verdict refusal is `Err(StampChanged)`.
-pub async fn stamp_still_ours(client: &Client) -> Result<(), StampChanged> {
-    let stamp = match crate::db::read_schema_stamp(client).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("the schema stamp could not be read: {e}");
-            return Ok(());
-        }
-    };
-    crate::conn_posture::schema_verdict(
+/// stamp tick so the two cannot drift. Three outcomes: `Ok(Ok(()))` it does; `Ok(Err(_))` it
+/// does not (the exit-for-the-supervisor case); `Err(_)` the stamp could not be READ (a dropped
+/// connection, a missing grant), which says nothing about the stamp: startup fails on it, the
+/// loop logs it and lets the reconnect path work (see [`stamp_tick`]).
+pub async fn stamp_still_ours(client: &Client) -> anyhow::Result<Result<(), StampChanged>> {
+    let stamp = crate::db::read_schema_stamp(client).await?;
+    Ok(crate::conn_posture::schema_verdict(
         stamp.as_ref(),
         "terminal service",
         "provision-terminal-service-role",
     )
-    .map_err(StampChanged)
+    .map_err(StampChanged))
+}
+
+/// The loop's use of [`stamp_still_ours`]: a changed stamp is an error to return; an unread
+/// stamp is logged and the loop carries on. **Pure.**
+fn stamp_tick(checked: anyhow::Result<Result<(), StampChanged>>) -> Result<(), StampChanged> {
+    checked.unwrap_or_else(|e| {
+        eprintln!("the schema stamp could not be read: {e}");
+        Ok(())
+    })
+}
+
+/// Startup's use of [`stamp_still_ours`]: any outcome but "ours" refuses to start. **Pure.**
+pub fn stamp_at_startup(checked: anyhow::Result<Result<(), StampChanged>>) -> anyhow::Result<()> {
+    Ok(checked??)
 }
 
 /// Serve requests until none is waiting (or the cap). A refusal is logged WITHOUT its reason,
@@ -256,7 +265,7 @@ pub async fn run(
         let d = due(now, &schedule);
         run_jobs(&mut client, sk, origin, &d, &mut state).await;
         if d.stamp {
-            stamp_still_ours(&client).await?;
+            stamp_tick(stamp_still_ours(&client).await)?;
         }
         schedule.mark(&d, now);
         tokio::time::sleep(REQUEST_TICK).await;
@@ -347,6 +356,18 @@ mod tests {
         assert!(d.commits && !d.purge);
         let d = due(t0 + Duration::from_secs(3600), &s);
         assert!(d.commits && d.purge);
+    }
+
+    #[test]
+    fn startup_fails_on_an_unread_or_changed_stamp_and_the_loop_only_on_a_changed_one() {
+        let unread = || Err(anyhow::anyhow!("permission denied for node_schema"));
+        let changed = || Ok(Err(StampChanged("new build".into())));
+        assert!(stamp_at_startup(Ok(Ok(()))).is_ok());
+        assert!(stamp_at_startup(unread()).is_err(), "unread must not start");
+        assert!(stamp_at_startup(changed()).is_err());
+        assert!(stamp_tick(Ok(Ok(()))).is_ok());
+        assert!(stamp_tick(unread()).is_ok(), "the loop carries on");
+        assert!(stamp_tick(changed()).is_err());
     }
 
     #[test]
