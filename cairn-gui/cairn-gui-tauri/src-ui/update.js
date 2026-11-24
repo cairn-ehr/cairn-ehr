@@ -13,18 +13,20 @@
 // A restart is the idle re-lock's own sequence (idle.js): every act in flight settles, the chart
 // closes with its queued saves awaited, and the program restarts. But it first ASKS the program
 // installed here for its generation: one unchanged, or one this database would refuse, is never
-// restarted into — the window says so and keeps the chart.
+// restarted into — the window says so and keeps the chart. An act that did not settle well keeps
+// the chart too, as "Find another patient" does (#1130): its outcome is said only on that chart.
 //
 // The poll is its own, once a minute, on the window's one connection, reopening it if it was lost:
 // a remote window's link drops when the node's terminal service restarts on an upgrade. The 10 s
 // lock poll (main.js) touches no database. A restart needs the node to answer just then
-// (`unreachable` otherwise): a window relaunched into an outage would exit at its first connect. A poll is not a person, so at the lock screen
-// the window restarts only after a whole idle period with no touch (idle.js's `lastActivityAt`):
-// someone typing the terminal passphrase is never restarted under.
+// (`unreachable` otherwise): a window relaunched into an outage would exit at its first connect.
+// A poll is not a person, so at the lock screen the window restarts only after a whole idle period
+// with no touch (idle.js's `lastActivityAt`): someone typing the terminal passphrase is never
+// restarted under.
 //
 // Classic script, loaded after idle.js and leave_chart.js, sharing main.js's `el` and `invoke`,
-// notes.js's `signsSettled`, leave_chart.js's `closeChart` and idle.js's `idleLockMs` /
-// `lastActivityAt` — all read only when called.
+// notes.js's `signsSettled`/`signInFlight`, person_menu.js's `SETTLED_WELL`, leave_chart.js's
+// `closeChart` and idle.js's `idleLockMs` / `lastActivityAt` — all read only when called.
 "use strict";
 
 /** How often the window re-reads the database's floor (ms): a minute bounds how late it learns. */
@@ -38,11 +40,15 @@ const UPDATE_DOES_NOT_FIT = "The version installed here does not fit this node y
 /** Said when the node did not answer just now: no restart until it can be reached. */
 const UPDATE_UNREACHABLE =
   "This terminal cannot reach the node right now; the update installs once it can.";
+/** Said when this window cannot name its own program's path, so it cannot check (ADR-0111). */
+const UPDATE_UNKNOWN_INSTALL =
+  "This terminal cannot check which version is installed here; restart it once the update is installed.";
 /** What each `installed_program` answer other than `fits` says; it restarts nothing. */
 const UPDATE_NOT_NOW = {
   same: UPDATE_NOT_INSTALLED,
   does_not_fit: UPDATE_DOES_NOT_FIT,
   unreachable: UPDATE_UNREACHABLE,
+  unknown_install: UPDATE_UNKNOWN_INSTALL,
 };
 
 /** The last view the poll rendered (`update_state`): its kind decides every restart below. */
@@ -63,6 +69,7 @@ function belowFloorText(reason) {
 /**
  * Show what the poll learned. Text is set only when it changed, so an assistive technology does
  * not re-announce the alert every minute. It never closes or restarts anything (design §4.5).
+ * A refusal learned mid-session says its own sentence: "needs its update" would be untrue.
  */
 function renderUpdate(view) {
   if (view.kind !== updateView.kind) el("update-answer").textContent = "";
@@ -71,7 +78,7 @@ function renderUpdate(view) {
   el("update-line").hidden = view.kind === "current";
   el("update-calm").hidden = below;
   el("update-alert").hidden = !below;
-  const alert = below ? belowFloorText(view.reason) : "";
+  const alert = below ? view.refusal ?? belowFloorText(view.reason) : "";
   if (el("update-alert").textContent !== alert) el("update-alert").textContent = alert;
 }
 
@@ -100,7 +107,8 @@ async function pollUpdate() {
 
 /**
  * Restart into the installed program if it fits this database. Asked first; unchanged or not
- * fitting, say so and keep the chart. Otherwise the idle re-lock's sequence, then the restart.
+ * fitting, say so and keep the chart. Otherwise the idle re-lock's sequence, then the restart —
+ * unless the act in flight did not settle well, which keeps its chart (and its outcome) on screen.
  * `stillWanted` is asked again once the program answered (up to 5 s): the idle poll passes its
  * idleness check, so someone who started typing the passphrase meanwhile is not restarted under —
  * unless what they did was press Update now (`updatePressed`), which joins this attempt.
@@ -115,7 +123,8 @@ async function restartIfFits(stillWanted = () => true) {
       sayUpdate(UPDATE_NOT_NOW[installed.kind] ?? UPDATE_UNREACHABLE);
       return;
     }
-    await signsSettled();
+    const outcome = signInFlight() ? await signsSettled() : null;
+    if (outcome && !SETTLED_WELL.has(outcome)) return;
     await closeChart();
     await invoke("restart_window");
   } catch (failure) {
@@ -133,9 +142,12 @@ async function updateNow() {
   await restartIfFits();
 }
 
-/** The idle re-lock finished (idle.js): an update waiting, or a floor passed, installs now. */
+/**
+ * The idle re-lock finished (idle.js): an update waiting, or a floor passed, installs now —
+ * unless someone touches the lock while the installed program answers (up to 5 s).
+ */
 function updateAfterRelock() {
-  if (updateView.kind !== "current") void restartIfFits();
+  if (updateView.kind !== "current") void restartIfFits(idleForAWholePeriod);
 }
 
 /**

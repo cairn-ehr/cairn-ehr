@@ -3,6 +3,7 @@
 use super::*;
 use crate::funnel::commands::{open_chart_impl, register_impl};
 use crate::funnel::view::tests::sample_candidate;
+use crate::source_guard::position;
 use std::time::Instant;
 
 /// A runtime-derived hash, so no 32-byte literal sits in a test (house rule 6).
@@ -60,7 +61,8 @@ async fn mock_update_state_is_current() {
         update_state_impl(&state).await,
         UpdateView {
             kind: "current",
-            reason: None
+            reason: None,
+            refusal: None,
         }
     );
     assert_eq!(installed_program_impl(&state).await.kind, "same");
@@ -82,6 +84,11 @@ fn each_verdict_reads_as_its_kind() {
     );
     let refused = view(WindowVerdict::Refused("prepared by cairn-sync".into()));
     assert_eq!((refused.kind, refused.reason), ("below_floor", None));
+    // Final review M2: the alert shows the refusal's own sentence, not the below-floor copy.
+    assert_eq!(refused.refusal.as_deref(), Some("prepared by cairn-sync"));
+    for other in [WindowVerdict::Current, WindowVerdict::UpdateWaiting] {
+        assert_eq!(view(other).refusal, None);
+    }
     let fresh = |fit| install_view(fit, StampSource::Fresh).kind;
     assert_eq!(fresh(InstallFit::Same), "same");
     assert_eq!(fresh(InstallFit::Fits), "fits");
@@ -296,10 +303,45 @@ async fn a_fit_on_the_cached_stamp_is_unreachable() {
     assert_eq!(install_view(fit, source).kind, "unreachable");
 }
 
-/// `PRINT_FLAG` is the flag clap really parses, so the program a window asks answers it.
+/// Final review I4: `--print-schema-generation` is a contract ACROSS generations — an older window
+/// runs the NEW program with it. It is read from the raw arguments before clap parses anything,
+/// so a required argument added later, or one clap refuses, can never stop it answering.
 #[test]
-fn the_print_flag_is_the_clis() {
-    use clap::Parser;
-    let cli = crate::Cli::try_parse_from(["cairn-med-list", PRINT_FLAG]).unwrap();
-    assert!(cli.print_schema_generation);
+fn the_print_flag_is_read_before_clap() {
+    let args = |xs: &[&str]| xs.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+    assert!(asks_for_generation_line(args(&[
+        "cairn-med-list",
+        PRINT_FLAG
+    ])));
+    assert!(asks_for_generation_line(args(&[
+        "cairn-med-list",
+        "--an-argument-clap-refuses",
+        PRINT_FLAG
+    ])));
+    assert!(!asks_for_generation_line(args(&["cairn-med-list"])));
+    assert!(!asks_for_generation_line(args(&[
+        "cairn-med-list",
+        "--mock"
+    ])));
+    // The program's own name is never the flag.
+    assert!(!asks_for_generation_line(args(&[PRINT_FLAG])));
+    let main = include_str!("main.rs");
+    let body = &main[position(main, "fn main() -> anyhow::Result<()> {")..];
+    assert!(
+        position(
+            body,
+            "update::asks_for_generation_line(std::env::args_os())"
+        ) < position(body, "Cli::parse()"),
+        "the flag is answered before clap parses"
+    );
+}
+
+/// Final review M3: a live window whose own path is unknown (macOS reads a path through any
+/// symlink as none) cannot check what is installed, and says so; fixture mode never asks.
+#[test]
+fn an_unknown_path_is_an_unknown_install() {
+    let path = std::path::Path::new("/opt/cairn/cairn-med-list");
+    assert!(path_unknown(true, None));
+    assert!(!path_unknown(true, Some(path)));
+    assert!(!path_unknown(false, None));
 }

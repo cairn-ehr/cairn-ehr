@@ -183,16 +183,14 @@ struct Cli {
     /// vanishes with the window.
     #[arg(long)]
     mock: bool,
-
-    /// Print this program's schema generation and hash, then exit, connecting to nothing: what a
-    /// running older window asks of the program installed here before it restarts into it.
-    #[arg(long)]
-    print_schema_generation: bool,
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    if cli.print_schema_generation {
+    // `--print-schema-generation` (`update::PRINT_FLAG`): print this program's schema generation
+    // and hash, then exit, connecting to nothing — what a running OLDER window asks of the program
+    // installed here before it restarts into it. Answered from the raw arguments BEFORE clap, so
+    // no argument this build requires or refuses can stop an older window's question (ADR-0111).
+    if update::asks_for_generation_line(std::env::args_os()) {
         use cairn_node::db::{embedded_schema_hash, embedded_schema_version};
         println!(
             "{}",
@@ -200,6 +198,7 @@ fn main() -> anyhow::Result<()> {
         );
         return Ok(());
     }
+    let cli = Cli::parse();
 
     // A tokio runtime built by hand rather than by `#[tokio::main]`, because Tauri owns the
     // main thread for the event loop.

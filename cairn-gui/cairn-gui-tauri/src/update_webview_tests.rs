@@ -23,6 +23,7 @@ fn the_copy_is_the_designs() {
         "No newer version is installed on this terminal yet — ask whoever installs Cairn here.",
         "The version installed here does not fit this node yet.",
         "This terminal cannot reach the node right now; the update installs once it can.",
+        "This terminal cannot check which version is installed here; restart it once the update is installed.",
         "\"This terminal needs its update: it does not show \" + reason + \". Finish what you are doing.\"",
     ] {
         assert!(face.contains(copy), "{copy}");
@@ -30,14 +31,30 @@ fn the_copy_is_the_designs() {
 }
 
 /// Design §4.4: a restart waits for every act in flight, then closes the chart (its queued saves
-/// awaited) — the idle re-lock's own sequence — and only then restarts the program.
+/// awaited) — the idle re-lock's own sequence — and only then restarts the program. An act that
+/// did not settle well keeps the chart on screen and restarts nothing, as "Find another patient"
+/// and the person menu do (#1130): closing it would erase the only place its outcome is said.
 #[test]
 fn a_restart_waits_for_acts_and_the_close() {
     let restart = js_fn(UPDATE_JS, "restartIfFits");
-    let settled = position(restart, "await signsSettled();");
+    let settled = position(
+        restart,
+        "const outcome = signInFlight() ? await signsSettled() : null;",
+    );
+    let kept = position(
+        restart,
+        "if (outcome && !SETTLED_WELL.has(outcome)) return;",
+    );
     let closed = position(restart, "await closeChart();");
     let restarted = position(restart, "invoke(\"restart_window\")");
-    assert!(settled < closed && closed < restarted, "{restart}");
+    assert!(
+        settled < kept && kept < closed && closed < restarted,
+        "{restart}"
+    );
+    // The same test as leave_chart.js's own (#1130), word for word.
+    let find = js_fn(LEAVE_JS, "findAnotherPatient");
+    assert!(find.contains("const outcome = signInFlight() ? await signsSettled() : null;"));
+    assert!(find.contains("if (outcome && !SETTLED_WELL.has(outcome)) return;"));
 }
 
 /// Design §4.4: the installed program is asked FIRST. Unchanged or not fitting, the window says so
@@ -49,7 +66,7 @@ fn a_restart_asks_first() {
     let fits = position(restart, "if (installed.kind !== \"fits\") {");
     assert!(asked < fits, "{restart}");
     assert!(
-        fits < position(restart, "await signsSettled();"),
+        fits < position(restart, "await signsSettled()"),
         "{restart}"
     );
     assert!(fits < position(restart, "await closeChart();"), "{restart}");
@@ -168,7 +185,14 @@ fn the_relock_and_the_close_hand_over_once_done() {
     assert!(
         after_close.contains("(updateView.kind === \"waiting\" && !el(\"terminal-lock\").hidden)")
     );
-    assert!(js_fn(UPDATE_JS, "updateAfterRelock").contains("updateView.kind !== \"current\""));
+    let relocked = js_fn(UPDATE_JS, "updateAfterRelock");
+    assert!(relocked.contains("updateView.kind !== \"current\""));
+    // Final review M1: a touch during the installed program's answer (up to 5 s) after the
+    // re-lock means someone is back at the lock, so the restart gives up as the poll's does.
+    assert!(
+        relocked.contains("restartIfFits(idleForAWholePeriod)"),
+        "{relocked}"
+    );
     // A second attempt while one is running does nothing: two would close and restart twice.
     assert!(js_fn(UPDATE_JS, "restartIfFits").contains("if (restarting) return;"));
 }
@@ -187,4 +211,28 @@ fn update_js_loads_after_leave_chart() {
     let tag = position(INDEX_HTML, "<script src=\"update.js\"></script>");
     assert!(position(INDEX_HTML, "<script src=\"leave_chart.js\"></script>") < tag);
     assert!(position(INDEX_HTML, "<script src=\"idle.js\"></script>") < tag);
+}
+
+/// Final review M2: a refusal learned mid-session (the database restored to an older
+/// generation, say) shows the refusal's own sentence, never the below-floor copy, which would
+/// claim an update is what this terminal needs.
+#[test]
+fn a_refusal_shows_its_own_sentence() {
+    let render = js_fn(UPDATE_JS, "renderUpdate");
+    assert!(
+        render
+            .contains("const alert = below ? view.refusal ?? belowFloorText(view.reason) : \"\";"),
+        "{render}"
+    );
+}
+
+/// Final review M3: a window that cannot name its own program's path (macOS, a path through a
+/// symlink) says it cannot check, and restarts nothing.
+#[test]
+fn an_unknown_install_says_so() {
+    let said = js_const(UPDATE_JS, "UPDATE_NOT_NOW");
+    assert!(
+        UPDATE_JS.contains("  unknown_install: UPDATE_UNKNOWN_INSTALL,\n"),
+        "{said}"
+    );
 }

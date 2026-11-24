@@ -26,7 +26,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The flag that makes this program print its generation line and exit (`main.rs`).
+/// The flag that makes this program print its generation line and exit (`main.rs`). A contract
+/// ACROSS generations: an older window runs the newer program with it, so neither the flag nor
+/// [`generation_line`]'s format ever changes, and [`asks_for_generation_line`] reads it before
+/// clap parses anything.
 pub const PRINT_FLAG: &str = "--print-schema-generation";
 
 /// How long the installed program may take to print its line. A hung or slow one reads as "not
@@ -38,16 +41,19 @@ pub const REFUSED_ANOTHER_CHART: &str =
     "This terminal needs its update before it can open another chart.";
 
 /// What the webview shows: `current` (nothing), `waiting` (the calm line) or `below_floor` (the
-/// alert, naming `reason` when the stamp gave one).
+/// alert, naming `reason` when the stamp gave one). A refusal learned mid-session is
+/// `below_floor` too, gated the same, but its alert is the refusal's own sentence (`refusal`).
 #[derive(Debug, PartialEq, Serialize)]
 pub struct UpdateView {
     pub kind: &'static str,
     pub reason: Option<String>,
+    pub refusal: Option<String>,
 }
 
 /// What the installed program would be: `same` (nothing newer), `fits` (restart into it),
-/// `does_not_fit` (this database would refuse it, or tell it to update) or `unreachable` (the node
-/// did not answer just now, so no restart: the relaunched window would exit at its first connect).
+/// `does_not_fit` (this database would refuse it, or tell it to update), `unreachable` (the node
+/// did not answer just now, so no restart: the relaunched window would exit at its first connect)
+/// or `unknown_install` (this window cannot name its own program's path, so it cannot check).
 #[derive(Debug, PartialEq, Serialize)]
 pub struct InstallView {
     pub kind: &'static str,
@@ -56,6 +62,13 @@ pub struct InstallView {
 /// The line `--print-schema-generation` prints: `<generation> <64 hex>`.
 pub fn generation_line(generation: i32, hash: [u8; 32]) -> String {
     format!("{generation} {}", hex::encode(hash))
+}
+
+/// Was this program started to print its generation line? `args` are the raw arguments,
+/// `std::env::args_os()`, read BEFORE clap: a required argument added later, or one this build's
+/// clap refuses, must never stop an older window's question from being answered. **Pure.**
+pub fn asks_for_generation_line(args: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+    args.into_iter().skip(1).any(|arg| arg == PRINT_FLAG)
 }
 
 /// [`generation_line`] read back. **Pure.** Anything else — an older program's usage text, a
@@ -105,13 +118,17 @@ fn below_floor(verdict: &WindowVerdict) -> bool {
 
 /// The webview's view of a verdict. **Pure.**
 pub fn update_view(verdict: &WindowVerdict) -> UpdateView {
-    let (kind, reason) = match verdict {
-        WindowVerdict::Current => ("current", None),
-        WindowVerdict::UpdateWaiting => ("waiting", None),
-        WindowVerdict::BelowFloor { reason } => ("below_floor", reason.clone()),
-        WindowVerdict::Refused(_) => ("below_floor", None),
+    let (kind, reason, refusal) = match verdict {
+        WindowVerdict::Current => ("current", None, None),
+        WindowVerdict::UpdateWaiting => ("waiting", None, None),
+        WindowVerdict::BelowFloor { reason } => ("below_floor", reason.clone(), None),
+        WindowVerdict::Refused(text) => ("below_floor", None, Some(text.clone())),
     };
-    UpdateView { kind, reason }
+    UpdateView {
+        kind,
+        reason,
+        refusal,
+    }
 }
 
 /// Where an install check's stamp came from: only a fresh read may lead to a restart.
@@ -225,9 +242,20 @@ pub async fn update_state_impl(state: &AppState) -> UpdateView {
     poll_answer(state, read)
 }
 
+/// A live window that cannot name its own program's path cannot check what is installed there
+/// (macOS reads a path through any symlink as none: ADR-0111). Fixture mode never asks. **Pure.**
+pub fn path_unknown(live: bool, program: Option<&Path>) -> bool {
+    live && program.is_none()
+}
+
 /// What the program installed at this window's path would be against the stamp. Fixture mode has
 /// no installed path and is always `same`, so it never restarts (Review Focus 5).
 pub async fn installed_program_impl(state: &AppState) -> InstallView {
+    if path_unknown(!state.is_mock(), state.launched_exe.as_deref()) {
+        return InstallView {
+            kind: "unknown_install",
+        };
+    }
     let read = match state.is_mock() {
         true => None,
         false => read_stamp(state, "install check").await,
