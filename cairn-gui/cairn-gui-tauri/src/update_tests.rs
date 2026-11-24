@@ -82,9 +82,10 @@ fn each_verdict_reads_as_its_kind() {
     );
     let refused = view(WindowVerdict::Refused("prepared by cairn-sync".into()));
     assert_eq!((refused.kind, refused.reason), ("below_floor", None));
-    assert_eq!(install_view(InstallFit::Same).kind, "same");
-    assert_eq!(install_view(InstallFit::Fits).kind, "fits");
-    assert_eq!(install_view(InstallFit::DoesNotFit).kind, "does_not_fit");
+    let fresh = |fit| install_view(fit, StampSource::Fresh).kind;
+    assert_eq!(fresh(InstallFit::Same), "same");
+    assert_eq!(fresh(InstallFit::Fits), "fits");
+    assert_eq!(fresh(InstallFit::DoesNotFit), "does_not_fit");
 }
 
 /// At launch below the floor the window opens nothing and says why (design §4.5).
@@ -234,36 +235,65 @@ fn a_lost_connection_keeps_the_verdict() {
 }
 
 /// Fix round 1: the install check judges against a fresh stamp when it can read one, else the
-/// last one read; only with neither is the stamp unknown (an installed program then does not fit).
+/// last one read, and says which it used.
 #[test]
 fn the_install_check_falls_back_to_the_cached_stamp() {
     let state = AppState::mock(None);
-    assert_eq!(install_stamp(&state, None), None);
+    assert_eq!(install_stamp(&state, None), (None, StampSource::Unknown));
     *state.last_stamp.lock().unwrap() = Some(our_stamp());
-    assert_eq!(install_stamp(&state, None), Some(our_stamp()));
+    assert_eq!(
+        install_stamp(&state, None),
+        (Some(our_stamp()), StampSource::Cached)
+    );
     let mut fresh = our_stamp();
     fresh.version += 1;
     assert_eq!(
         install_stamp(&state, Some(Some(fresh.clone()))),
-        Some(fresh)
+        (Some(fresh), StampSource::Fresh)
     );
     // A fresh read that found no stamp at all is an answer, not a failure to read.
-    assert_eq!(install_stamp(&state, Some(None)), None);
+    assert_eq!(
+        install_stamp(&state, Some(None)),
+        (None, StampSource::Fresh)
+    );
 }
 
-/// The cached stamp really serves the judgement: a program at the database's generation fits
-/// though the connection is lost.
+/// Fix round 2: only a FRESH read restarts. A restart while the node is unreachable relaunches a
+/// window that exits at its first connect, so a fit judged on the cached stamp, or a misfit judged
+/// on no stamp at all, is `unreachable`: say so, close nothing. A cached stamp that refuses is
+/// still `does_not_fit`, and nothing newer installed is `same` whatever the node says.
+#[test]
+fn only_a_fresh_stamp_restarts() {
+    use InstallFit::{DoesNotFit, Fits, Same};
+    use StampSource::{Cached, Fresh, Unknown};
+    for (fit, source, kind) in [
+        (Fits, Fresh, "fits"),
+        (Fits, Cached, "unreachable"),
+        (Fits, Unknown, "unreachable"),
+        (DoesNotFit, Fresh, "does_not_fit"),
+        (DoesNotFit, Cached, "does_not_fit"),
+        (DoesNotFit, Unknown, "unreachable"),
+        (Same, Fresh, "same"),
+        (Same, Cached, "same"),
+        (Same, Unknown, "same"),
+    ] {
+        assert_eq!(install_view(fit, source).kind, kind, "{fit:?} {source:?}");
+    }
+}
+
+/// End to end on the cached stamp: a program that fits it reads as `unreachable`, never `fits`.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_cached_stamp_lets_a_fitting_program_fit() {
+async fn a_fit_on_the_cached_stamp_is_unreachable() {
     let state = AppState::mock(None);
     let mut newer = our_stamp();
     newer.version += 1;
     *state.last_stamp.lock().unwrap() = Some(newer.clone());
     let line = generation_line(newer.version, hash(4));
-    let stamp = install_stamp(&state, None);
+    let (stamp, source) = install_stamp(&state, None);
     let fit = installed_fit(Some("/bin/echo".into()), &[&line], stamp.as_ref()).await;
     assert_eq!(fit, InstallFit::Fits);
+    assert_eq!(install_view(fit, source).kind, "unreachable");
 }
 
 /// `PRINT_FLAG` is the flag clap really parses, so the program a window asks answers it.

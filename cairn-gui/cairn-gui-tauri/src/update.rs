@@ -15,7 +15,7 @@
 //! - **Before a restart**, [`installed_program`] asks the program now installed at this window's
 //!   path for its generation (`--print-schema-generation`, connecting to nothing) and judges it
 //!   against the stamp, so the window never restarts into the same program, or one this database
-//!   would refuse. Then [`restart_window`] restarts.
+//!   would refuse, or while the node does not answer. Then [`restart_window`] restarts.
 use crate::state::AppState;
 use cairn_node::db::{
     embedded_schema_hash, embedded_schema_version, read_schema_stamp, SchemaStamp,
@@ -45,8 +45,9 @@ pub struct UpdateView {
     pub reason: Option<String>,
 }
 
-/// What the installed program would be: `same` (nothing newer), `fits` (restart into it) or
-/// `does_not_fit` (this database would refuse it, or tell it to update).
+/// What the installed program would be: `same` (nothing newer), `fits` (restart into it),
+/// `does_not_fit` (this database would refuse it, or tell it to update) or `unreachable` (the node
+/// did not answer just now, so no restart: the relaunched window would exit at its first connect).
 #[derive(Debug, PartialEq, Serialize)]
 pub struct InstallView {
     pub kind: &'static str,
@@ -113,12 +114,26 @@ pub fn update_view(verdict: &WindowVerdict) -> UpdateView {
     UpdateView { kind, reason }
 }
 
-/// The webview's view of an install fit. **Pure.**
-pub fn install_view(fit: InstallFit) -> InstallView {
-    let kind = match fit {
-        InstallFit::Same => "same",
-        InstallFit::Fits => "fits",
-        InstallFit::DoesNotFit => "does_not_fit",
+/// Where an install check's stamp came from: only a fresh read may lead to a restart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StampSource {
+    /// Read just now: the node answered, so a relaunched window can connect.
+    Fresh,
+    /// The last stamp read (at launch or by a poll): the node did not answer this time.
+    Cached,
+    /// Neither: no stamp has ever been read.
+    Unknown,
+}
+
+/// The webview's view of an install fit judged on a stamp from `source`. **Pure.** A fit on
+/// anything but a fresh stamp, or a misfit on no stamp at all, is `unreachable`: a restart now
+/// would relaunch into an outage, and the window would exit at its first connect.
+pub fn install_view(fit: InstallFit, source: StampSource) -> InstallView {
+    let kind = match (fit, source) {
+        (InstallFit::Same, _) => "same",
+        (InstallFit::Fits, StampSource::Fresh) => "fits",
+        (InstallFit::DoesNotFit, StampSource::Fresh | StampSource::Cached) => "does_not_fit",
+        _ => "unreachable",
     };
     InstallView { kind }
 }
@@ -147,6 +162,9 @@ pub async fn refuse_another_chart(
 /// upgrade. `None` is no answer: fixture mode, a reopen that failed, or a read that failed (each
 /// said on stderr). `Some(None)` is an answer: the database carries no stamp.
 async fn read_stamp(state: &AppState, why: &str) -> Option<Option<SchemaStamp>> {
+    // Accepted cost: the poll may spend #807's reopen attempt and start its backoff, so a press
+    // within about 2 s of a failed poll reopen tries nothing. The node is unreachable then anyway,
+    // and the poll runs at most once a minute.
     let conn = match state.db.as_ref()?.lock().await {
         Ok(conn) => conn,
         Err(lost) => {
@@ -178,16 +196,24 @@ pub fn poll_answer(state: &AppState, read: Option<Option<SchemaStamp>>) -> Updat
     update_view(&verdict)
 }
 
-/// The stamp an install check judges against: a fresh answer, else the last stamp read (at launch
-/// or by a poll). `None` only with neither, and an installed program then reads as not fitting.
-pub fn install_stamp(state: &AppState, read: Option<Option<SchemaStamp>>) -> Option<SchemaStamp> {
-    read.unwrap_or_else(|| {
-        state
-            .last_stamp
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-    })
+/// The stamp an install check judges against, and where it came from: a fresh answer, else the
+/// last stamp read (at launch or by a poll), else none.
+pub fn install_stamp(
+    state: &AppState,
+    read: Option<Option<SchemaStamp>>,
+) -> (Option<SchemaStamp>, StampSource) {
+    if let Some(stamp) = read {
+        return (stamp, StampSource::Fresh);
+    }
+    match state
+        .last_stamp
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+    {
+        Some(stamp) => (Some(stamp), StampSource::Cached),
+        None => (None, StampSource::Unknown),
+    }
 }
 
 /// The poll (`update.js`, once a minute). Fixture mode has no database and is always `current`.
@@ -206,8 +232,9 @@ pub async fn installed_program_impl(state: &AppState) -> InstallView {
         true => None,
         false => read_stamp(state, "install check").await,
     };
-    let stamp = install_stamp(state, read);
-    install_view(installed_fit(state.launched_exe.clone(), &[PRINT_FLAG], stamp.as_ref()).await)
+    let (stamp, source) = install_stamp(state, read);
+    let fit = installed_fit(state.launched_exe.clone(), &[PRINT_FLAG], stamp.as_ref()).await;
+    install_view(fit, source)
 }
 
 /// Run `program args` for its generation line and judge it against `stamp`. No program, one

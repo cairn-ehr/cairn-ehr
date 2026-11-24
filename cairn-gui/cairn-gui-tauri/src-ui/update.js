@@ -15,8 +15,10 @@
 // installed here for its generation: one unchanged, or one this database would refuse, is never
 // restarted into — the window says so and keeps the chart.
 //
-// The poll is its own, once a minute, on the window's one connection (never reopening it); the
-// 10 s lock poll (main.js) touches no database. A poll is not a person, so at the lock screen
+// The poll is its own, once a minute, on the window's one connection, reopening it if it was lost:
+// a remote window's link drops when the node's terminal service restarts on an upgrade. The 10 s
+// lock poll (main.js) touches no database. A restart needs the node to answer just then
+// (`unreachable` otherwise): a window relaunched into an outage would exit at its first connect. A poll is not a person, so at the lock screen
 // the window restarts only after a whole idle period with no touch (idle.js's `lastActivityAt`):
 // someone typing the terminal passphrase is never restarted under.
 //
@@ -33,11 +35,22 @@ const UPDATE_NOT_INSTALLED =
   "No newer version is installed on this terminal yet — ask whoever installs Cairn here.";
 /** Said when the program installed here would be refused, or told to update, by this database. */
 const UPDATE_DOES_NOT_FIT = "The version installed here does not fit this node yet.";
+/** Said when the node did not answer just now: no restart until it can be reached. */
+const UPDATE_UNREACHABLE =
+  "This terminal cannot reach the node right now; the update installs once it can.";
+/** What each `installed_program` answer other than `fits` says; it restarts nothing. */
+const UPDATE_NOT_NOW = {
+  same: UPDATE_NOT_INSTALLED,
+  does_not_fit: UPDATE_DOES_NOT_FIT,
+  unreachable: UPDATE_UNREACHABLE,
+};
 
 /** The last view the poll rendered (`update_state`): its kind decides every restart below. */
 let updateView = { kind: "current", reason: null };
 /** A restart attempt is running: a second one (a close during an idle restart) does nothing. */
 let restarting = false;
+/** Update now was pressed during the running attempt: it goes ahead though the press was a touch. */
+let updatePressed = false;
 
 /** The alert's sentence: what this window would not show, in the stamp's words when it gave any. */
 function belowFloorText(reason) {
@@ -89,16 +102,17 @@ async function pollUpdate() {
  * Restart into the installed program if it fits this database. Asked first; unchanged or not
  * fitting, say so and keep the chart. Otherwise the idle re-lock's sequence, then the restart.
  * `stillWanted` is asked again once the program answered (up to 5 s): the idle poll passes its
- * idleness check, so someone who started typing the passphrase meanwhile is not restarted under.
+ * idleness check, so someone who started typing the passphrase meanwhile is not restarted under —
+ * unless what they did was press Update now (`updatePressed`), which joins this attempt.
  */
 async function restartIfFits(stillWanted = () => true) {
   if (restarting) return;
   restarting = true;
   try {
     const installed = await invoke("installed_program");
-    if (!stillWanted()) return;
+    if (!updatePressed && !stillWanted()) return;
     if (installed.kind !== "fits") {
-      sayUpdate(installed.kind === "same" ? UPDATE_NOT_INSTALLED : UPDATE_DOES_NOT_FIT);
+      sayUpdate(UPDATE_NOT_NOW[installed.kind] ?? UPDATE_UNREACHABLE);
       return;
     }
     await signsSettled();
@@ -108,12 +122,14 @@ async function restartIfFits(stillWanted = () => true) {
     console.error("the update could not be installed", failure);
   } finally {
     restarting = false;
+    updatePressed = false;
   }
 }
 
-/** The Update now button: the same restart, now. */
+/** The Update now button: the same restart, now — or the one already running, made to go ahead. */
 async function updateNow() {
   sayUpdate("");
+  updatePressed = true;
   await restartIfFits();
 }
 

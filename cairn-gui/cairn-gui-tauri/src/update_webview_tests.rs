@@ -5,7 +5,7 @@
 //! like `leave_chart_webview_tests.rs`, each guard reads a script's source (`crate::source_guard`)
 //! and pins the ORDER or the CHOICE a property is. The behaviour was walked headlessly (a stub
 //! `invoke` in a browser) when it was written — see the PR that added this file.
-use crate::source_guard::{js_fn, position};
+use crate::source_guard::{js_const, js_fn, position};
 
 const UPDATE_JS: &str = include_str!("../src-ui/update.js");
 const IDLE_JS: &str = include_str!("../src-ui/idle.js");
@@ -22,6 +22,7 @@ fn the_copy_is_the_designs() {
         ">Update now</button>",
         "No newer version is installed on this terminal yet — ask whoever installs Cairn here.",
         "The version installed here does not fit this node yet.",
+        "This terminal cannot reach the node right now; the update installs once it can.",
         "\"This terminal needs its update: it does not show \" + reason + \". Finish what you are doing.\"",
     ] {
         assert!(face.contains(copy), "{copy}");
@@ -79,7 +80,7 @@ fn the_lock_screen_restart_needs_a_full_idle_period() {
     let restart = js_fn(UPDATE_JS, "restartIfFits");
     assert!(restart.contains("function restartIfFits(stillWanted = () => true) {"));
     let asked = position(restart, "invoke(\"installed_program\")");
-    let again = position(restart, "if (!stillWanted()) return;");
+    let again = position(restart, "if (!updatePressed && !stillWanted()) return;");
     assert!(asked < again, "{restart}");
     assert!(
         again < position(restart, "if (installed.kind !== \"fits\") {"),
@@ -97,6 +98,52 @@ fn the_lock_screen_restart_needs_a_full_idle_period() {
         !UPDATE_JS.contains("lastActivityAt ="),
         "a poll is not a person"
     );
+}
+
+/// Fix round 2: `unreachable` (the node did not answer just now) is said and returns before
+/// anything closes: restarting into an outage relaunches a window that exits at its first connect.
+#[test]
+fn unreachable_closes_nothing() {
+    let said = js_const(UPDATE_JS, "UPDATE_NOT_NOW");
+    assert!(
+        UPDATE_JS.contains("  unreachable: UPDATE_UNREACHABLE,\n"),
+        "{said}"
+    );
+    let restart = js_fn(UPDATE_JS, "restartIfFits");
+    let branch = position(restart, "if (installed.kind !== \"fits\") {");
+    let say = position(
+        restart,
+        "sayUpdate(UPDATE_NOT_NOW[installed.kind] ?? UPDATE_UNREACHABLE);",
+    );
+    let leave = branch + position(&restart[branch..], "return;");
+    assert!(branch < say && say < leave, "{restart}");
+    assert!(
+        leave < position(restart, "await closeChart();"),
+        "{restart}"
+    );
+}
+
+/// Fix round 2: an Update now press made while the idle poll's attempt waits on the installed
+/// program joins that attempt instead of being dropped: the press is also a touch, which would
+/// otherwise make the poll's own idleness re-check give up.
+#[test]
+fn a_press_during_an_idle_attempt_counts() {
+    let now = js_fn(UPDATE_JS, "updateNow");
+    assert!(
+        position(now, "updatePressed = true;") < position(now, "await restartIfFits();"),
+        "{now}"
+    );
+    let restart = js_fn(UPDATE_JS, "restartIfFits");
+    assert!(
+        position(restart, "invoke(\"installed_program\")")
+            < position(restart, "if (!updatePressed && !stillWanted()) return;"),
+        "{restart}"
+    );
+    assert!(
+        position(restart, "} finally {") < position(restart, "updatePressed = false;"),
+        "{restart}"
+    );
+    assert!(UPDATE_JS.contains("let updatePressed = false;"));
 }
 
 /// Design §4.5: the alert is persistent but never takes the chart away; the clinician finishes it.
