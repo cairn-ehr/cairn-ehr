@@ -25,6 +25,6 @@ mod verify_tests;
 
 pub use docs::*;
 pub use refusal::{Refusal, Who};
-pub use status::InstallerStatus;
+pub use status::{InstallerState, InstallerStatus};
 pub use steward::{assemble, make_genesis, rotate};
 pub use verify::*;

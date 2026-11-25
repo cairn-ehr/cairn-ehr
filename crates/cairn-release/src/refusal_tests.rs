@@ -52,8 +52,8 @@ fn all(who: &str) -> Vec<(Refusal, String)> {
             Refusal::ArtifactMismatch { index: 0 },
             "A file in this update is not the file its signed list names. Do not install it; fetch the update again.".into(),
         ),
-        // The terminal installer's own three (Task 9): only a terminal says them, so they
-        // name no `{who}`.
+        // The terminal installer's own three (`cairn-terminal-install`): only a terminal says them,
+        // so they name no `{who}`.
         (
             Refusal::NoProgramForThisTerminal {
                 os: "linux".into(),

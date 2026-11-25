@@ -57,8 +57,14 @@ pub fn install(
         let _ = std::fs::remove_file(&new);
         return Err(e);
     }
+    // The rename has happened: the new program IS in place, so this is an install whatever the
+    // fsync says. Reporting a failure here would leave the old release number recorded beside
+    // the new program (the downgrade hole of #1184).
     let dir = program.parent().filter(|p| !p.as_os_str().is_empty());
-    std::fs::File::open(dir.unwrap_or(Path::new(".")))?.sync_all()?;
+    let synced = std::fs::File::open(dir.unwrap_or(Path::new("."))).and_then(|d| d.sync_all());
+    if let Err(e) = synced {
+        eprintln!("installed, but could not fsync the program's folder: {e}");
+    }
     Ok(true)
 }
 
@@ -118,8 +124,13 @@ pub fn ask(
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    // The child has exited; its answer may still be in the pipe. A small fixed grace, so a
+    // program that answered just before the deadline (a slow first start) is not lost.
     let left = deadline.saturating_duration_since(Instant::now());
-    let out = receive.recv_timeout(left).ok()?.ok()?;
+    let out = receive
+        .recv_timeout(left.max(Duration::from_millis(500)))
+        .ok()?
+        .ok()?;
     status.success().then(|| String::from_utf8(out).ok())?
 }
 

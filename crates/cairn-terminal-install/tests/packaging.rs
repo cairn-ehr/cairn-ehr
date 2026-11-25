@@ -151,6 +151,23 @@ fn every_flag_the_kiosk_passes_is_a_real_window_flag() {
     }
 }
 
+/// systemd's EnvironmentFile parser strips backslashes and quotes from an UNQUOTED value, so a
+/// password `ab\cd` would reach the window as `abcd`. The connection string is written
+/// double-quoted with systemd's four escapes (`"`, `\`, backtick, `$`), and a multi-line one
+/// is refused before the system is touched.
+#[test]
+fn install_sh_quotes_the_connection_string_for_systemd() {
+    let s = repo_file("packaging/terminal/install.sh");
+    let lines = code_lines(&s);
+    assert!(lines
+        .iter()
+        .any(|l| l.contains(r#"CAIRN_CONN="%s""#) && l.contains("$conn_quoted")));
+    assert!(lines.iter().any(|l| l.contains(r#"s/[\\"`$]/\\&/g"#)));
+    assert!(lines
+        .iter()
+        .any(|l| l.contains("die") && l.contains("one line")));
+}
+
 #[test]
 fn install_sh_refuses_a_remote_terminal_without_its_connection() {
     // The kiosk always passes --terminal-dir, which the window refuses for a local database, so

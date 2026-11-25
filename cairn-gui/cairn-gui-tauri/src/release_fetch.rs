@@ -3,11 +3,11 @@
 //!
 //! # Why the window, and why it trusts nothing
 //!
-//! A terminal's installer runs as root and has no database login; the window already has the
-//! node's one connection. So on its 60 s update poll (`crate::update::update_poll`) the window
-//! asks the node, through three read-only doors (db/086), whether a newer release fits this
-//! machine, and downloads it into `<release dir>/incoming/`. It verifies NOTHING: the installer
-//! re-verifies every byte against its own pin (Task 9), so a window or node that lies can at
+//! A terminal's installer runs as root and has no database login; the window already has the node's
+//! one connection. So on its 60 s update poll (`crate::update::update_poll`) the window asks the
+//! node, through three read-only doors (db/086), whether a newer release fits this machine, and
+//! downloads it into `<release dir>/incoming/`. It verifies NOTHING: the installer re-verifies
+//! every byte against its own pin (`cairn-terminal-install`), so a window or node that lies can at
 //! worst stage something the installer refuses.
 //!
 //! # Flow
@@ -28,7 +28,7 @@
 //!    newer than this program is an update `waiting` (a hint only: the restart still asks the
 //!    installed program first, C1's rule), and a refusal shows its sentence.
 //!
-//! # The contract with the installer (Task 9)
+//! # The contract with the installer (`cairn-terminal-install`)
 //!
 //! The installer writes `status.json` FIRST, then clears `incoming/`, on EVERY outcome, installed
 //! or refused (the other order would let a poll see no `complete` beside a stale status). So
@@ -41,8 +41,8 @@ use crate::state::AppState;
 use crate::update::UpdateView;
 use cairn_node::db::SchemaStamp;
 use cairn_node::window_floor::{install_fit, InstallFit, InstalledBuild};
-pub use cairn_release::InstallerStatus;
 use cairn_release::{encode, ReleaseMeta, SignedRoot};
+pub use cairn_release::{InstallerState, InstallerStatus};
 // The staging folder's names, the 64 MiB limit and this machine's target are the installer's
 // contract too, so they are defined once, in cairn-release (ruling R20).
 pub use cairn_release::staging::{this_target, Target, ARTIFACT, COMPLETE, MAX_ARTIFACT, META};
@@ -248,9 +248,9 @@ pub fn installer_view(
     if view.kind == "current" && status.installed_release > running {
         view.kind = "waiting";
     }
-    view.note = match (&status.sentence, status.state.as_str()) {
+    view.note = match (&status.sentence, status.state) {
         _ if fetching => Some(DOWNLOADING.to_string()),
-        (Some(sentence), "refused") => Some(refused_note(sentence)),
+        (Some(sentence), InstallerState::Refused) => Some(refused_note(sentence)),
         _ => None,
     };
     view
@@ -275,6 +275,17 @@ pub async fn after_poll(
     let os_release = std::fs::read_to_string("/etc/os-release").ok();
     let dir = state.release.dir.as_deref();
     let Some(ready) = ready(state.is_mock(), dir, os_release.as_deref()) else {
+        // A release folder means a terminal (the kiosk unit always passes one), so not being
+        // ready there is a broken installer contract: say it once in the journal, not silently.
+        static SAID: std::sync::Once = std::sync::Once::new();
+        if dir.is_some() && !state.is_mock() {
+            SAID.call_once(|| {
+                eprintln!(
+                    "this window will fetch no update: no readable installer status under \
+                     --release-dir, or no ID and VERSION_ID in /etc/os-release"
+                )
+            });
+        }
         return (view, None);
     };
     let job = match fresh {

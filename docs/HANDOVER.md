@@ -190,7 +190,9 @@
 >    (the staging folder has no quota), **#1187** (co-signer floors on release load, ADR-0055 d6); the final review
 >    filed **#1188** (after a release-signer rotation the node offers a kept release no terminal accepts), **#1189**
 >    (terminal-wide refusals cost three downloads per session), **#1190** (three node outages give a release up until
->    restart), **#1191** (`a_press_waits_at_most_one_chunk` failed once under load; DB-gated, CI never runs it).
+>    restart), **#1191** (`a_press_waits_at_most_one_chunk` failed once under load; DB-gated, CI never runs it); the
+>    finalcheck filed **#1192** (a withheld trust-root rotation keeps a rotated-out release key alive: a steward
+>    decision, before the format freezes at #1182) and **#1193** (low-severity installer/intake robustness items).
 >    **⇒ NEXT: the maintainer reviews #1180 + #1181 and merges; then the genesis ceremony (#1182).**
 >    **Slice B must not ship to a site until slice C is settled.** RUNBOOK §38, §39 (two machines), §40 and §41 (a node
 >    and a Pi) are owed by a human. **Otherwise:** sign-in

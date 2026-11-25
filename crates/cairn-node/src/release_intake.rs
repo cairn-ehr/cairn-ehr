@@ -6,11 +6,12 @@
 //! stores it. The node is not the terminal's trust anchor (the installer re-verifies against
 //! its OWN pin), so intake is a courtesy gate: it keeps junk and forks out of the store.
 //!
-//! FLOW of [`take_in`]: load the stored trust roots -> rebuild a VERIFIED history from them
-//! (ruling R7: stored roots are never trusted as verified) -> `verify_bundle` -> check every
-//! file against the signed manifest -> one transaction writes roots, bundle, files and prunes.
-//! A fork is the one refusal that writes: it records an incident (own statement, so it
-//! survives the refusal) which makes the db/086 offer door go silent.
+//! FLOW of [`take_in`], all inside ONE transaction that first takes the intake advisory lock:
+//! load the stored trust roots -> rebuild a VERIFIED history from them (ruling R7: stored roots
+//! are never trusted as verified) -> `verify_bundle` -> check every file against the signed
+//! manifest -> write roots, bundle, files and prune. A fork is the one refusal that writes: after
+//! the rollback it records an incident (own statement, so it survives the refusal), which makes
+//! the db/086 offer door go silent and the chunk door refuse.
 use cairn_release::{
     advance, check_artifact, decode, genesis, official_root, verify_bundle, BundleFile, Refusal,
     SignedRoot, VerifiedRoot, Who,
@@ -21,7 +22,7 @@ use tokio_postgres::{Client, GenericClient, Transaction};
 /// Why an intake did not happen.
 #[derive(Debug, thiserror::Error)]
 pub enum IntakeError {
-    /// The verifier said no; the message is its plain sentence (never cryptographic words).
+    /// The verifier said no; the message is its plain sentence (`Refusal::sentence`).
     #[error("{}", .0.sentence(Who::Node))]
     Refused(Refusal),
     /// `--genesis-root` named a first trust file other than the one this node already holds.

@@ -40,7 +40,7 @@ pub struct SignedRoot {
 }
 
 impl SignedRoot {
-    /// Decode the payload. Verification of the signatures is the verifier's job (Task 3).
+    /// Decode the payload. Verification of the signatures is the verifier's job (`verify.rs`).
     pub fn root(&self) -> Result<TrustRoot, Refusal> {
         decode(&self.payload)
     }

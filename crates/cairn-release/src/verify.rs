@@ -29,7 +29,9 @@ use std::collections::HashSet;
 
 /// A trust root this program has proven, by `genesis` or `advance`. The fields are private
 /// so the only way to hold one is to have verified it: callers that persist roots store the
-/// `SignedRoot`s and re-verify them on load.
+/// `SignedRoot`s and re-verify them on load. A genesis root proves only that it is signed by
+/// its own keys: the trust comes from where its file was obtained (the pinned trust file),
+/// so never run `genesis` on bytes fetched from a node or a window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VerifiedRoot {
     root: TrustRoot,
@@ -276,15 +278,17 @@ pub fn advance(
     }
 }
 
-/// Check a release manifest against the NEWEST verified root: it decodes, is on this
+/// Check a release manifest against the NEWEST verified root (a `VerifiedRoot`, so no caller
+/// can hand it release signers it chose itself): it decodes, is on this
 /// channel, carries at least `release_threshold` valid signatures from `newest`'s release
 /// signers (the manifest's `root_version_ref` is diagnostic only and never chooses the
 /// set), and is newer than `last_installed`. Returns the decoded manifest.
 pub fn verify_release(
-    newest: &TrustRoot,
+    newest: &VerifiedRoot,
     meta: &ReleaseMeta,
     last_installed: u64,
 ) -> Result<Manifest, Refusal> {
+    let newest = &newest.root;
     let manifest: Manifest = decode(&meta.manifest)?;
     if manifest.channel_id != newest.channel_id {
         return Err(Refusal::WrongChannel {
@@ -339,10 +343,7 @@ pub fn verify_bundle(
     last_installed: u64,
 ) -> Result<(Vec<VerifiedRoot>, Manifest), Refusal> {
     let history = advance(history, &meta.root_chain)?;
-    let newest = &history
-        .last()
-        .expect("advance returns a non-empty history")
-        .root;
+    let newest = history.last().expect("advance returns a non-empty history");
     let manifest = verify_release(newest, meta, last_installed)?;
     Ok((history, manifest))
 }

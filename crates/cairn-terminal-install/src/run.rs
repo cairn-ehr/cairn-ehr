@@ -63,9 +63,10 @@ enum Outcome {
 pub fn install_staged(cfg: &Config) -> bool {
     let pin = files::load_pin(&cfg.state.join("roots.cbor"), &cfg.genesis_root);
     let installed = files::read_number(&cfg.state.join("installed_release"));
-    // Fail closed: an incident file that cannot be read still freezes (as version 0).
+    // Fail closed: an incident file that cannot be read, or whose presence cannot be checked,
+    // still freezes (as version 0).
     let incident_file = cfg.state.join("incident");
-    let incident = std::fs::symlink_metadata(&incident_file).is_ok().then(|| {
+    let incident = something_at(&incident_file).then(|| {
         files::read_number(&incident_file)
             .ok()
             .flatten()
@@ -80,7 +81,7 @@ pub fn install_staged(cfg: &Config) -> bool {
         pinned: pin.as_ref().ok().map_or(0, |h| newest(h)),
     };
 
-    if !is_staged(&cfg.staging.join(COMPLETE)) {
+    if !something_at(&cfg.staging.join(COMPLETE)) {
         // A pin that cannot be read (a wrong `--trust` file, damaged state) is said at once,
         // over any status found, and fails the run: `install.sh` requires "idle" (ruling R29).
         if let Err(e) = &pin {
@@ -131,9 +132,10 @@ fn checked_ids(name: &str, ids: Option<(u32, u32)>) -> Result<(u32, u32), String
     }
 }
 
-/// Is anything at `complete`? A link or a FIFO there counts (and is refused as garbage).
-fn is_staged(complete: &Path) -> bool {
-    !matches!(std::fs::symlink_metadata(complete), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+/// Is anything at `path`? A link or a FIFO there counts (and is refused as garbage), and so
+/// does an error other than "not found": a check that cannot tell fails closed.
+fn something_at(path: &Path) -> bool {
+    !matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
 
 fn newest(history: &[VerifiedRoot]) -> u64 {

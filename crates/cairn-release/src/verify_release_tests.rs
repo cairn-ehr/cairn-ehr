@@ -47,14 +47,14 @@ fn only_release_context_signatures_from_release_signers_count() {
     let m = manifest(1, 1);
     // A root signer (a) is not a release signer: its manifest signature counts 0.
     assert_eq!(
-        verify_release(g[0].root(), &meta(vec![], &m, &[&a]), 0).unwrap_err(),
+        verify_release(&g[0], &meta(vec![], &m, &[&a]), 0).unwrap_err(),
         Refusal::ReleaseSignaturesShort { have: 0, need: 1 }
     );
     // The release signer's key, but in the trust-root context: counts 0.
     let mut wrong_ctx = meta(vec![], &m, &[]);
     wrong_ctx.release_signatures = vec![sign_trust_root(&wrong_ctx.manifest, &r1).unwrap()];
     assert_eq!(
-        verify_release(g[0].root(), &wrong_ctx, 0).unwrap_err(),
+        verify_release(&g[0], &wrong_ctx, 0).unwrap_err(),
         Refusal::ReleaseSignaturesShort { have: 0, need: 1 }
     );
 }
@@ -67,7 +67,7 @@ fn a_release_not_newer_is_refused() {
     for (offered, installed) in [(5, 5), (4, 5)] {
         assert_eq!(
             verify_release(
-                g[0].root(),
+                &g[0],
                 &meta(vec![], &manifest(offered, 1), &[&r1]),
                 installed
             )
@@ -77,7 +77,7 @@ fn a_release_not_newer_is_refused() {
     }
     let m = manifest(6, 1);
     assert_eq!(
-        verify_release(g[0].root(), &meta(vec![], &m, &[&r1]), 5).unwrap(),
+        verify_release(&g[0], &meta(vec![], &m, &[&r1]), 5).unwrap(),
         m
     );
 }
@@ -90,7 +90,7 @@ fn a_release_from_another_channel_or_a_damaged_manifest_is_refused() {
     let mut m = manifest(1, 1);
     m.channel_id = "community".into();
     assert_eq!(
-        verify_release(g[0].root(), &meta(vec![], &m, &[&r1]), 0).unwrap_err(),
+        verify_release(&g[0], &meta(vec![], &m, &[&r1]), 0).unwrap_err(),
         Refusal::WrongChannel {
             pinned: "official".into(),
             offered: "community".into()
@@ -99,7 +99,7 @@ fn a_release_from_another_channel_or_a_damaged_manifest_is_refused() {
     let mut damaged = meta(vec![], &manifest(1, 1), &[&r1]);
     damaged.manifest.push(0);
     assert!(matches!(
-        verify_release(g[0].root(), &damaged, 0),
+        verify_release(&g[0], &damaged, 0),
         Err(Refusal::Malformed(_))
     ));
 }

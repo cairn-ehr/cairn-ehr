@@ -8,7 +8,7 @@
 --
 --   * release_root     — the trust-root chain the node holds, one row per version.
 --   * release_bundle   — one signed release (manifest + signatures + inclusion proof).
---   * release_artifact — the files a bundle names, content-addressed by digest.
+--   * release_artifact — a bundle's files, keyed by (release, manifest entry), indexed by digest.
 --   * release_incident — a fork the node saw; while one is unresolved the offer door is silent.
 --
 -- These are NODE-LOCAL operational state: never a clinical event, never synced. The tables are

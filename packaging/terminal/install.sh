@@ -48,6 +48,11 @@ elif [ -e /etc/cairn/window.env ]; then
 else
     die "a first install needs both --conn and --node-fingerprint (a terminal reaches its node remotely)"
 fi
+# systemd's EnvironmentFile strips backslashes and quotes from an unquoted value, so the string
+# is written double-quoted with systemd's four escapes (" \ ` $); a newline cannot be written.
+case "$conn" in *"
+"*) die "the connection string must be one line" ;; esac
+conn_quoted=$(printf '%s' "$conn" | sed 's/[\\"`$]/\\&/g')
 
 here=$(cd "$(dirname "$0")" && pwd)
 
@@ -106,7 +111,7 @@ sha256sum /etc/cairn/channel-root.cbor
 if [ "$write_env" = yes ]; then
     (
         umask 077
-        printf 'CAIRN_CONN=%s\n' "$conn" > /etc/cairn/window.env
+        printf 'CAIRN_CONN="%s"\n' "$conn_quoted" > /etc/cairn/window.env
         printf 'WINDOW_ARGS=--node-fingerprint %s\n' "$fingerprint" >> /etc/cairn/window.env
     )
     chown root:cairn-window /etc/cairn/window.env

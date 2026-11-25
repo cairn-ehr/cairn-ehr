@@ -78,7 +78,7 @@ fn staging_is_empty(rig: &Rig) -> bool {
 fn refused(rig: &Rig, refusal: &Refusal, installed: u64, release: Option<u64>) -> InstallerStatus {
     assert!(staging_is_empty(rig), "staging is cleared on every outcome");
     InstallerStatus {
-        state: "refused".into(),
+        state: InstallerState::Refused,
         installed_release: installed,
         pinned_root_version: 1,
         sentence: Some(refusal.sentence(Who::Terminal)),
@@ -207,7 +207,7 @@ fn a_folder_still_being_written_is_left_alone() {
     assert!(rig.cfg.staging.join(staging::META).exists());
     untouched(&rig);
     let idle = InstallerStatus {
-        state: "idle".into(),
+        state: InstallerState::Idle,
         installed_release: 0,
         pinned_root_version: 1,
         sentence: None,
@@ -262,7 +262,7 @@ fn status_json_matches_the_windows_reader() {
         0o644
     );
     let installed = InstallerStatus {
-        state: "installed".into(),
+        state: InstallerState::Installed,
         installed_release: 7,
         pinned_root_version: 1,
         sentence: None,
@@ -404,6 +404,50 @@ fn a_frozen_terminal_says_fork_before_reading_anything() {
     assert_eq!(status(&rig), refused(&rig, &fork, 0, None));
 }
 
+/// Fail closed: an incident file that is damaged or empty still freezes (as version 0). Were
+/// it read as "no incident", a forked terminal would unfreeze and install from the fork.
+#[test]
+fn a_damaged_incident_file_still_freezes() {
+    for damaged in ["junk", ""] {
+        let rig = terminal();
+        std::fs::write(rig.cfg.state.join("incident"), damaged).unwrap();
+        stage_release(&rig, 7, &script(GEN, 7));
+        assert!(!install_staged(&rig.cfg), "{damaged:?}");
+        untouched(&rig);
+        let fork = Refusal::Fork { version: 0 };
+        assert_eq!(status(&rig), refused(&rig, &fork, 0, None), "{damaged:?}");
+    }
+}
+
+/// A damaged `installed_release` is the terminal's own fault, never read as 0: as 0, a
+/// broken-into window could stage an OLDER genuine release and root would roll back to it.
+#[test]
+fn a_damaged_installed_release_is_a_fault_not_zero() {
+    let rig = terminal();
+    std::fs::write(rig.cfg.state.join("installed_release"), "seven").unwrap();
+    stage_release(&rig, 5, &script(GEN, 5));
+    assert!(!install_staged(&rig.cfg));
+    faulted(&rig);
+}
+
+/// Ruling R12, all or nothing: a bundle whose release is refused does not keep the rotation
+/// its root chain proved; the pin stays where it was and the next good bundle carries it again.
+#[test]
+fn a_refused_release_keeps_no_rotation() {
+    let mut rig = terminal();
+    rig.cfg.check_timeout = Duration::from_millis(300);
+    let c = chain();
+    let h2 = history(&[&c.v1, &c.v2]);
+    let fails = b"#!/bin/sh\nexit 1\n".to_vec();
+    let mut b = release(&h2, 7, vec![(window_for(&this()), fails)], &r2());
+    b.meta.root_chain = vec![c.v2.clone()];
+    stage(&rig, &b.meta, &b.artifacts[0], "7");
+    assert!(!install_staged(&rig.cfg));
+    untouched(&rig);
+    assert_eq!(status(&rig), refused(&rig, &Refusal::WontStart, 0, None));
+    assert!(!rig.cfg.state.join("roots.cbor").exists());
+}
+
 /// Ruling R27: `install.sh` starts the installer once with nothing staged, so the window has a
 /// status to read. With no trust file at all (none installed, no official root before the
 /// ceremony) it still writes the idle status, pinned at 0, and touches nothing else; an existing
@@ -415,7 +459,7 @@ fn nothing_staged_writes_the_idle_status_even_with_no_pin() {
     assert!(install_staged(&rig.cfg));
     untouched(&rig);
     let idle = InstallerStatus {
-        state: "idle".into(),
+        state: InstallerState::Idle,
         installed_release: 0,
         pinned_root_version: 0,
         sentence: None,

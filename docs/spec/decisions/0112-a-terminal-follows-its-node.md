@@ -101,12 +101,12 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
      An offered version above the next one with nothing at the next is **`ChainGap`**, which fails closed even for junk,
      and names the version the caller still holds (ruling R10). Another `channel_id` is **`WrongChannel`**. `advance` is
      all or nothing.
-   - `verify_release` takes the **newest** verified root: the manifest decodes, is on that channel, carries at least its
-     `release_threshold` valid signatures from that root's release signers, and has a `release_version` above the
-     caller's last one. `root_version_ref` is diagnostic only and never chooses the signer set, so a rotated-out release
-     key is dead once the rotation is seen. `check_artifact` requires exact length and SHA-256. `verify_bundle` is
-     `advance` then `verify_release`, all or nothing: a rotation proved by a bundle whose manifest fails is not kept
-     (ruling R12).
+   - `verify_release` takes the **newest** verified root (a `VerifiedRoot`, so no caller can hand it signers it chose):
+     the manifest decodes, is on that channel, carries at least its `release_threshold` valid signatures from that
+     root's release signers, and has a `release_version` above the caller's last one. `root_version_ref` is diagnostic
+     only and never chooses the signer set, so a rotated-out release key is dead once the rotation is seen.
+     `check_artifact` requires exact length and SHA-256. `verify_bundle` is `advance` then `verify_release`, all or
+     nothing: a rotation proved by a bundle whose manifest fails is not kept (ruling R12).
    - **A signature counts by its key** (ruling R6): its `detached_key_id` must equal a trusted signer's `pubkey`, and
      the signature must verify with that key. Each distinct key counts once, however often it signs; anything that does
      not parse counts for nothing. `Signer.kid` stays a label.
@@ -115,11 +115,12 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
      every key decodes and is **not weak** (small order), else `Malformed` (rulings R8, R11).
    - `VerifiedRoot`'s fields are private, so the only way to hold one is to have verified it (ruling R7). Whoever stores
      roots stores the `SignedRoot`s and **re-verifies them on load** (genesis of the first, then `advance`).
-   - **Refusals speak plainly** (`refusal.rs`, one home for all copy, ruling R1). `Refusal::sentence(Who)` names the
-     node or the terminal, says what is pinned, what is needed and what to do, and never says "signature verification
-     failed". The sentences are the plan's, verbatim, plus `TerminalFault` (decision 10). **A channel name from an
-     unverified document is sanitised** before it is quoted (ruling R9): control characters and the bidirectional
-     overrides and isolates are dropped, and it is cut to 64 characters, marked "…".
+   - **Refusals speak plainly** (`refusal.rs`, one home for all copy, ruling R1). `Refusal::sentence(Who)` says what is
+     pinned, what is needed and what to do (naming the node or the terminal where the reader needs to know which is
+     refusing), and never says "signature verification failed". The sentences are the plan's, verbatim, plus
+     `TerminalFault` (decision 10). **A channel name from an unverified document is sanitised** before it is quoted
+     (ruling R9): control characters and the bidirectional overrides and isolates are dropped, and it is cut to 64
+     characters, marked "…".
    - `official_root()` returns `None`: **there is no default pin until the genesis ceremony** (#1182), so every intake
      and install without a configured channel refuses with `NoChannel`.
 
@@ -162,12 +163,12 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
    together or not at all. A **fork** is the one refusal that writes: after the rollback, in its own committed
    statement, it records a `release_incident` (even for a fork inside the first bundle a node takes in), which silences
    the offer door and the chunk door. Each intake then **prunes by key, never by digest**: it keeps the newest two
-   releases per `(os, arch, platform)` of kind `window`, deleting those rows by `(release_version, idx)`, and then any
-   bundle left with no file (a digest-keyed delete would take another release's identical row). `release-status` says,
-   in plain words, the channel and trust version, the newest release held, and every open incident, or that the stored
-   trust file is damaged: the stored roots are re-verified as intake does (ruling R28), so one that decodes but no
-   longer verifies is reported as damaged, never shown as the channel. The node's own program and schema are still
-   installed the existing way: C2 makes no node upgrade itself.
+   releases per `(os, arch, platform)` of kind `window`, deleting those rows by `(release_version, idx)`, and then the
+   bundles whose files that prune removed (a digest-keyed delete would take another release's identical row).
+   `release-status` says, in plain words, the channel and trust version, the newest release held, and every open
+   incident, or that the stored trust file is damaged: the stored roots are re-verified as intake does (ruling R28), so
+   one that decodes but no longer verifies is reported as damaged, never shown as the channel. The node's own program
+   and schema are still installed the existing way: C2 makes no node upgrade itself.
 
 8. **The window knows its release, and the install check compares it** (design §4.4, D5). A new flag,
    `--print-release-version`, prints one decimal `u64` and exits, read from the raw arguments **before clap**, beside
@@ -209,13 +210,14 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
     - With no `complete`, the window may still be writing: the installer touches nothing, and writes an idle status only
       if none exists; but a pin it cannot load (a wrong trust file) writes the `TerminalFault` status over any it finds
       and fails the run, so `install.sh` stops (ruling R29).
-    - **A fork incident first**: an incident file (unreadable reads as version 0, still frozen) refuses `Fork` before a
-      staged byte is read, until a human removes it. Then every staged file is read as hostile: `O_NOFOLLOW` (a link is
-      refused), `O_NONBLOCK` (a FIFO cannot hang it), regular files only, each read capped. `complete` must be a bare
-      decimal and equal the manifest's release, else `Malformed`. `decide` then refuses a file over 64 MiB (`TooLarge`)
-      before reading it, runs `verify_bundle` against this terminal's pin and last installed release, and picks the
-      `window` artifact whose `os`, `arch` and `platform` all equal this machine's, else `NoProgramForThisTerminal`; the
-      bytes read into memory must pass `check_artifact`.
+    - **A fork incident first**: an incident file (unreadable, or its presence uncheckable, reads as version 0, still
+      frozen) refuses `Fork` before a staged byte is read, until a human removes it. Only the terminal's own faults (a
+      damaged pin or `installed_release`, a bad `--run-as`) are said before it, as `TerminalFault`. Then every staged
+      file is read as hostile: `O_NOFOLLOW` (a link is refused), `O_NONBLOCK` (a FIFO cannot hang it), regular files
+      only, each read capped. `complete` must be a bare decimal and equal the manifest's release, else `Malformed`.
+      `decide` then refuses a file over 64 MiB (`TooLarge`) before reading it, runs `verify_bundle` against this
+      terminal's pin and last installed release, and picks the `window` artifact whose `os`, `arch` and `platform` all
+      equal this machine's, else `NoProgramForThisTerminal`; the bytes read into memory must pass `check_artifact`.
     - **The start check runs the verified bytes, never as root** (ruling R21). The installer writes those in-memory
       bytes to `<program>.new` (atomic, mode 0755), and runs THAT file, never the staged one, which its unprivileged
       owner could change after the check, as the `--run-as` user (default `cairn-window`; a missing user, or one with

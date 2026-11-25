@@ -239,7 +239,7 @@ fn one_signer_counted_once() {
     let (r2, x) = (key(12), key(13));
     let g = genesis(&signed(&doc(1, None, &[&a], 1, &[&r2, &x], 2), &[&a])).unwrap();
     assert_eq!(
-        verify_release(g.root(), &meta(vec![], &manifest(1, 1), &[&r2, &r2]), 0).unwrap_err(),
+        verify_release(&g, &meta(vec![], &manifest(1, 1), &[&r2, &r2]), 0).unwrap_err(),
         Refusal::ReleaseSignaturesShort { have: 1, need: 2 }
     );
 }

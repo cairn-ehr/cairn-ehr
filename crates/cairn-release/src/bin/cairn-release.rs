@@ -21,8 +21,14 @@ use std::path::{Path, PathBuf};
 #[command(about = "Steward's offline signing tool for Cairn releases")]
 struct Cli {
     /// Environment variable holding the key-file passphrase (or recovery code).
-    #[arg(long, global = true, default_value = "CAIRN_RELEASE_PASSPHRASE")]
-    passphrase_env: String,
+    // The field holds the variable's NAME, never the secret, and is named for that (house rule
+    // 6b): the name is printed in errors, the value never is.
+    #[arg(
+        long = "passphrase-env",
+        global = true,
+        default_value = "CAIRN_RELEASE_PASSPHRASE"
+    )]
+    unlock_var_name: String,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -149,8 +155,8 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
-    let pass = std::env::var(&cli.passphrase_env)
-        .map_err(|_| format!("environment variable {} is not set", cli.passphrase_env))?;
+    let pass = std::env::var(&cli.unlock_var_name)
+        .map_err(|_| format!("environment variable {} is not set", cli.unlock_var_name))?;
     match cli.cmd {
         Cmd::Keygen { out } => {
             // A mistyped --out must never replace the steward's only signing key.

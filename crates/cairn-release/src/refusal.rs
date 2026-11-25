@@ -1,6 +1,7 @@
 //! Why a release is refused, and the plain sentence a clinician-facing screen shows.
 //! This file owns all the copy: the sentences are fixed by the slice design, are read by
-//! clinicians and caretakers, and never name cryptography.
+//! clinicians and caretakers, and say what to do in plain words: "not signed by enough of the
+//! release signers", never "signature verification failed".
 
 /// Who is speaking: the sentence says "node" or "terminal" so the reader knows which
 /// machine is refusing.

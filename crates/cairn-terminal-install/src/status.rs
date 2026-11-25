@@ -2,7 +2,7 @@
 //! `InstallerStatus::from_json`, cairn-release `status.rs`). Mode 0644: the window runs as
 //! another user and must be able to read it; only root writes it.
 
-use cairn_release::{InstallerStatus, Refusal, Who};
+use cairn_release::{InstallerState, InstallerStatus, Refusal, Who};
 use std::io;
 use std::path::Path;
 
@@ -20,7 +20,7 @@ pub struct Held {
 /// Nothing tried yet.
 pub fn idle(held: Held) -> InstallerStatus {
     InstallerStatus {
-        state: "idle".into(),
+        state: InstallerState::Idle,
         installed_release: held.installed,
         pinned_root_version: held.pinned,
         sentence: None,
@@ -31,7 +31,7 @@ pub fn idle(held: Held) -> InstallerStatus {
 /// `release` is now installed, under trust version `pinned`.
 pub fn installed(release: u64, pinned: u64) -> InstallerStatus {
     InstallerStatus {
-        state: "installed".into(),
+        state: InstallerState::Installed,
         installed_release: release,
         pinned_root_version: pinned,
         sentence: None,
@@ -44,7 +44,7 @@ pub fn installed(release: u64, pinned: u64) -> InstallerStatus {
 /// the release verified (`decide::refused_for_good`, ruling R23).
 pub fn refused(held: Held, refusal: &Refusal, refused_release: Option<u64>) -> InstallerStatus {
     InstallerStatus {
-        state: "refused".into(),
+        state: InstallerState::Refused,
         installed_release: held.installed,
         pinned_root_version: held.pinned,
         sentence: Some(refusal.sentence(Who::Terminal)),

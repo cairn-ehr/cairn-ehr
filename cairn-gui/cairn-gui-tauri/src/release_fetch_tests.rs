@@ -40,9 +40,9 @@ fn offer(release: u64, generation: i32) -> Offer {
 }
 
 /// What the installer last wrote.
-fn status(state: &str, installed: u64, sentence: Option<&str>) -> InstallerStatus {
+fn status(state: InstallerState, installed: u64, sentence: Option<&str>) -> InstallerStatus {
     InstallerStatus {
-        state: state.into(),
+        state,
         installed_release: installed,
         pinned_root_version: 1,
         sentence: sentence.map(str::to_string),
@@ -74,7 +74,7 @@ fn due_picks_the_newest_fitting_newer_offer() {
     // Release 9 needs a newer schema than this database serves: it would be refused, so the
     // newest that FITS is 8. Release 3 is older than what is installed.
     let offers = [offer(9, g + 1), offer(8, g), offer(5, g), offer(3, g)];
-    let s = status("installed", 4, None);
+    let s = status(InstallerState::Installed, 4, None);
     assert_eq!(due_of(&s, &offers), Some(8));
     // An offer without a readable generation line is never fetched: it cannot be judged.
     let mut blank = offer(8, g);
@@ -113,13 +113,25 @@ fn due_with(
 #[test]
 fn due_skips_a_release_already_installed() {
     let g = embedded_schema_version();
-    assert_eq!(due_of(&status("installed", 6, None), &[offer(6, g)]), None);
-    // Not newer than the program running now either (a terminal updated by hand).
     assert_eq!(
-        due_with(&status("idle", 0, None), &[offer(6, g)], 6, false, &[]),
+        due_of(&status(InstallerState::Installed, 6, None), &[offer(6, g)]),
         None
     );
-    assert_eq!(due_of(&status("idle", 0, None), &[offer(6, g)]), Some(6));
+    // Not newer than the program running now either (a terminal updated by hand).
+    assert_eq!(
+        due_with(
+            &status(InstallerState::Idle, 0, None),
+            &[offer(6, g)],
+            6,
+            false,
+            &[]
+        ),
+        None
+    );
+    assert_eq!(
+        due_of(&status(InstallerState::Idle, 0, None), &[offer(6, g)]),
+        Some(6)
+    );
 }
 
 /// Rulings R17/R30: while anything is at `incoming/complete`, nothing is fetched, not even a
@@ -129,7 +141,7 @@ fn due_skips_a_release_already_installed() {
 #[test]
 fn an_untaken_release_waits() {
     let g = embedded_schema_version();
-    let idle = status("idle", 5, None);
+    let idle = status(InstallerState::Idle, 5, None);
     assert_eq!(due_with(&idle, &[offer(6, g)], 0, true, &[]), None);
     assert_eq!(
         due_with(&idle, &[offer(7, g), offer(6, g)], 0, true, &[]),
@@ -164,7 +176,7 @@ fn due_picks_the_lowest_idx_of_the_newest_release() {
         digest: vec![idx as u8 + 1; 32],
         ..offer(7, generation)
     };
-    let s = status("idle", 0, None);
+    let s = status(InstallerState::Idle, 0, None);
     let stamp = our_stamp();
     let pick = |offers: &[Offer]| due(&s, offers, running(0), Some(&stamp), false, &[]);
     assert_eq!(pick(&[entry(0, g), entry(1, g)]).map(|o| o.idx), Some(0));
@@ -181,13 +193,17 @@ fn due_picks_the_lowest_idx_of_the_newest_release() {
 #[test]
 fn a_refused_release_is_fetched_again_only_if_a_fetch_can_fix_it() {
     let g = embedded_schema_version();
-    let mut for_good = status("refused", 4, Some("not signed by enough signers"));
+    let mut for_good = status(
+        InstallerState::Refused,
+        4,
+        Some("not signed by enough signers"),
+    );
     for_good.refused_release = Some(6);
     assert_eq!(due_of(&for_good, &[offer(6, g)]), None);
     assert_eq!(due_of(&for_good, &[offer(7, g), offer(6, g)]), Some(7));
     // A release refused for good does not hold back an older one the installer has not seen.
     assert_eq!(due_of(&for_good, &[offer(6, g), offer(5, g)]), Some(5));
-    let damaged = status("refused", 4, Some("damaged; fetch it again"));
+    let damaged = status(InstallerState::Refused, 4, Some("damaged; fetch it again"));
     assert_eq!(due_of(&damaged, &[offer(6, g)]), Some(6));
 }
 
@@ -203,7 +219,7 @@ fn fetches_stop_after_three() {
     courier.attempted(6);
     assert_eq!(courier.given_up(), vec![6]);
     let g = embedded_schema_version();
-    let idle = status("idle", 0, None);
+    let idle = status(InstallerState::Idle, 0, None);
     assert_eq!(due_with(&idle, &[offer(6, g)], 0, false, &[6]), None);
     assert_eq!(
         due_with(&idle, &[offer(7, g), offer(6, g)], 0, false, &[6]),
@@ -218,7 +234,7 @@ fn fetched_while_refused(
     refuse: impl Fn(u64) -> Option<u64>,
 ) -> std::collections::BTreeMap<u64, u32> {
     let (courier, mut fetched) = (Courier::new(None), std::collections::BTreeMap::new());
-    let mut s = status("idle", 0, None);
+    let mut s = status(InstallerState::Idle, 0, None);
     for _poll in 0..50 {
         let Some(r) = due_with(&s, offers, 0, false, &courier.given_up()) else {
             break;
@@ -226,7 +242,7 @@ fn fetched_while_refused(
         // What `fetch` does first; the installer then refuses it and clears `incoming/`.
         courier.attempted(r);
         *fetched.entry(r).or_insert(0) += 1;
-        s = status("refused", 0, Some("refused"));
+        s = status(InstallerState::Refused, 0, Some("refused"));
         s.refused_release = refuse(r);
     }
     fetched
@@ -259,7 +275,7 @@ fn two_refused_releases_do_not_alternate_forever() {
 fn a_one_off_transit_error_is_fetched_again() {
     let courier = Courier::new(None);
     courier.attempted(6);
-    let damaged = status("refused", 0, Some("damaged; fetch it again"));
+    let damaged = status(InstallerState::Refused, 0, Some("damaged; fetch it again"));
     let offers = [offer(6, embedded_schema_version())];
     assert_eq!(
         due_with(&damaged, &offers, 0, false, &courier.given_up()),
@@ -273,9 +289,15 @@ fn an_oversized_offer_is_never_due() {
     let g = embedded_schema_version();
     let mut big = offer(6, g);
     big.byte_len = MAX_ARTIFACT + 1;
-    assert_eq!(due_of(&status("idle", 0, None), &[big.clone()]), None);
+    assert_eq!(
+        due_of(&status(InstallerState::Idle, 0, None), &[big.clone()]),
+        None
+    );
     big.byte_len = MAX_ARTIFACT;
-    assert_eq!(due_of(&status("idle", 0, None), &[big]), Some(6));
+    assert_eq!(
+        due_of(&status(InstallerState::Idle, 0, None), &[big]),
+        Some(6)
+    );
 }
 
 #[test]
@@ -291,9 +313,9 @@ fn no_status_file_fetches_nothing() {
         ready(false, Some(&dir), Some(OS_RELEASE)).is_none(),
         "half a file"
     );
-    let dir = release_dir_with(&status("idle", 0, None));
+    let dir = release_dir_with(&status(InstallerState::Idle, 0, None));
     let ready = ready(false, Some(&dir), Some(OS_RELEASE)).expect("a status and a target");
-    assert_eq!(ready.status, status("idle", 0, None));
+    assert_eq!(ready.status, status(InstallerState::Idle, 0, None));
     assert_eq!(ready.target.platform, "debian-12");
     // No /etc/os-release: no target, so nothing to ask the node for.
     assert!(super::ready(false, Some(&dir), None).is_none());
@@ -307,7 +329,7 @@ fn no_release_dir_fetches_nothing() {
 /// Review Focus 5 of C1, carried: `--mock` never polls, never restarts, and never fetches.
 #[tokio::test]
 async fn mock_never_fetches() {
-    let dir = release_dir_with(&status("idle", 0, None));
+    let dir = release_dir_with(&status(InstallerState::Idle, 0, None));
     assert!(ready(true, Some(&dir), Some(OS_RELEASE)).is_none());
     let mut state = AppState::mock(None);
     state.release = Courier::new(Some(dir.clone()));
@@ -373,23 +395,45 @@ async fn complete_is_written_last() {
     };
     assert!(stage(&incoming, 4, b"meta", 10, short).await.is_err());
     assert!(!incoming.join(COMPLETE).exists());
+
+    // A node that answers MORE than was asked (its file differs from its offer) fails too.
+    let long = |_offset: u64, len: i32| std::future::ready(Ok(vec![1; len as usize + 1]));
+    assert!(stage(&incoming, 4, b"meta", 10, long).await.is_err());
+    assert!(!incoming.join(COMPLETE).exists());
 }
 
 #[test]
 fn a_newer_installed_release_shows_waiting() {
     let current = || update_view(&WindowVerdict::Current);
-    let seen = installer_view(current(), Some(&status("installed", 5, None)), 4, false);
+    let seen = installer_view(
+        current(),
+        Some(&status(InstallerState::Installed, 5, None)),
+        4,
+        false,
+    );
     assert_eq!((seen.kind, seen.note), ("waiting", None));
     // The same release as this program, or none: nothing is waiting.
     assert_eq!(
-        installer_view(current(), Some(&status("installed", 4, None)), 4, false).kind,
+        installer_view(
+            current(),
+            Some(&status(InstallerState::Installed, 4, None)),
+            4,
+            false
+        )
+        .kind,
         "current"
     );
     assert_eq!(installer_view(current(), None, 4, false).kind, "current");
     // Below the floor stays below the floor: the alert outranks the calm line.
     let below = update_view(&WindowVerdict::BelowFloor { reason: None });
     assert_eq!(
-        installer_view(below, Some(&status("installed", 5, None)), 4, false).kind,
+        installer_view(
+            below,
+            Some(&status(InstallerState::Installed, 5, None)),
+            4,
+            false
+        )
+        .kind,
         "below_floor"
     );
 }
@@ -398,24 +442,45 @@ fn a_newer_installed_release_shows_waiting() {
 #[test]
 fn the_note_says_fetching_or_the_refusal() {
     let current = || update_view(&WindowVerdict::Current);
-    let fetching = installer_view(current(), Some(&status("idle", 0, None)), 0, true);
+    let fetching = installer_view(
+        current(),
+        Some(&status(InstallerState::Idle, 0, None)),
+        0,
+        true,
+    );
     assert_eq!(fetching.note.as_deref(), Some(DOWNLOADING));
     assert_eq!(
         DOWNLOADING,
         "This terminal is fetching its update from the node."
     );
     let said = "This update file is damaged or is not a Cairn update; fetch it again.";
-    let refused = installer_view(current(), Some(&status("refused", 0, Some(said))), 0, false);
+    let refused = installer_view(
+        current(),
+        Some(&status(InstallerState::Refused, 0, Some(said))),
+        0,
+        false,
+    );
     assert_eq!(
         refused.note.as_deref(),
         Some("This terminal did not install the update: This update file is damaged or is not a Cairn update; fetch it again.")
     );
     // A new fetch after a refusal says it is fetching.
-    let again = installer_view(current(), Some(&status("refused", 0, Some(said))), 0, true);
+    let again = installer_view(
+        current(),
+        Some(&status(InstallerState::Refused, 0, Some(said))),
+        0,
+        true,
+    );
     assert_eq!(again.note.as_deref(), Some(DOWNLOADING));
     // Installed or idle says nothing.
     assert_eq!(
-        installer_view(current(), Some(&status("installed", 0, None)), 0, false).note,
+        installer_view(
+            current(),
+            Some(&status(InstallerState::Installed, 0, None)),
+            0,
+            false
+        )
+        .note,
         None
     );
 }
