@@ -16,8 +16,8 @@ StandardOutput=journal
 RuntimeDirectory=cairn-window
 RuntimeDirectoryMode=0700
 Environment=XDG_RUNTIME_DIR=/run/cairn-window
-# CAIRN_CONN (node connection string, may carry a password) and WINDOW_ARGS (first launch:
-# --node-fingerprint <hex>) live in a root-written file readable by cairn-window only.
+# CAIRN_CONN (the node's connection string, may carry a password) and WINDOW_ARGS
+# (--node-fingerprint <hex>) live in a root-written file readable by cairn-window only.
 EnvironmentFile=/etc/cairn/window.env
 ExecStart=/usr/bin/cage -- /opt/cairn/bin/cairn-window --terminal-dir /var/lib/cairn-window/terminal --release-dir /var/lib/cairn-terminal $WINDOW_ARGS
 Restart=always

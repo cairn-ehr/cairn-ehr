@@ -7,6 +7,11 @@ Description=A Cairn window release is staged and waiting for the installer
 [Path]
 PathExists=/var/lib/cairn-terminal/incoming/complete
 Unit=cairn-terminal-install.service
+# If the installer crashes before it clears incoming/, the marker survives and would retrigger
+# at once. Bound that to 10 runs a minute (systemd's default is 200 in 2 s); on hitting it the
+# path unit fails and stays failed until `systemctl reset-failed` (see README).
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=10
 
 [Install]
 WantedBy=multi-user.target

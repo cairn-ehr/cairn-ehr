@@ -23,18 +23,35 @@ started by a systemd path unit, and a kiosk unit that runs the window unprivileg
 ## First install
 
 On a Raspberry Pi OS Lite 64-bit (Debian trixie) terminal, with the two binaries from a
-steward-signed release's CI build and the channel's first trust file:
+steward-signed release's CI build (artifacts download without the execute bit: `chmod +x` them
+first) and the channel's first trust file:
 
-    sudo ./install.sh --window cairn-window --installer cairn-terminal-install \
+    export CAIRN_WINDOW_CONN='host=... dbname=cairn user=... password=...'
+    sudo -E ./install.sh --window cairn-window --installer cairn-terminal-install \
         --trust channel-root.cbor --node-fingerprint <hex from the node's gateway-setup>
+
+A terminal is remote by definition (its window reaches the node through the gateway, and a
+window with a local database refuses `--terminal-dir`), so a first install **requires both**
+the connection string and `--node-fingerprint`; the script refuses with one or neither. The
+connection string may hold a password: pass it in `CAIRN_WINDOW_CONN` (as above), not `--conn`,
+which shows in `ps` and shell history. Both are stored in `/etc/cairn/window.env`
+(root:cairn-window, 0640). The fingerprint may stay there after the pin is written (a matching
+one is accepted) or be dropped.
+
+A re-run without them keeps `window.env`; with both it rewrites it. A re-run never replaces an
+existing `/opt/cairn/bin/cairn-window` (the installer owns updates; replacing would downgrade)
+unless `--replace-window` is given.
 
 The script prints the trust file's SHA-256. **Check it against a second channel** (the
 fingerprint the Cairn project published elsewhere) before trusting the terminal: that file is
 the root of everything the terminal will ever accept. An existing, different trust file is never
 overwritten; the script says so and leaves it.
 
-The connection string, if the node is not on this machine's default socket, is passed with
-`--conn` and stored in `/etc/cairn/window.env` (root:cairn-window, 0640).
+If the installer crashes before it clears `incoming/`, the leftover marker retriggers it; after
+10 runs in a minute the path unit fails and stays failed. Recover with:
+
+    sudo systemctl reset-failed cairn-terminal-install.path cairn-terminal-install.service
+    sudo systemctl restart cairn-terminal-install.path
 
 ## Requirements and notes
 

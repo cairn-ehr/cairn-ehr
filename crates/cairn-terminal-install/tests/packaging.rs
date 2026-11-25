@@ -89,3 +89,93 @@ fn the_release_workflow_holds_no_secret_and_pins_every_action() {
         );
     }
 }
+
+/// Every long flag the window's `Cli` accepts, read from its source, plus the two print flags
+/// it answers before clap. A flag the window does not know makes clap exit and the kiosk loop.
+fn window_flags() -> Vec<String> {
+    let src = repo_file("cairn-gui/cairn-gui-tauri/src/main.rs");
+    let body = src.split("struct Cli {").nth(1).expect("struct Cli");
+    let body = body.split("\n}").next().unwrap();
+    let mut flags = vec![
+        "--print-schema-generation".to_string(),
+        "--print-release-version".to_string(),
+    ];
+    let (mut in_attr, mut attr) = (false, String::new());
+    for line in body.lines().map(str::trim) {
+        if line.starts_with("#[arg(") {
+            in_attr = true;
+            attr.clear();
+        }
+        if in_attr {
+            attr.push_str(line);
+            if line.ends_with(")]") {
+                in_attr = false;
+            }
+        } else if let Some((name, _)) = line.split_once(':') {
+            if attr.contains("long") && !name.contains(' ') {
+                flags.push(format!("--{}", name.replace('_', "-")));
+            }
+            attr.clear();
+        }
+    }
+    flags
+}
+
+fn long_flags_in(line: &str) -> Vec<String> {
+    line.split_whitespace()
+        .filter(|t| t.starts_with("--") && t.len() > 2)
+        .map(|t| t.split('=').next().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn every_flag_the_kiosk_passes_is_a_real_window_flag() {
+    let known = window_flags();
+    assert!(known.contains(&"--terminal-dir".to_string()), "{known:?}");
+    let kiosk = repo_file("packaging/terminal/cairn-window-kiosk.service");
+    let script = repo_file("packaging/terminal/install.sh");
+    let mut used: Vec<String> = code_lines(&kiosk)
+        .iter()
+        .filter(|l| l.starts_with("ExecStart="))
+        .flat_map(|l| long_flags_in(l))
+        .collect();
+    used.extend(
+        code_lines(&script)
+            .iter()
+            .filter(|l| l.contains("WINDOW_ARGS="))
+            .flat_map(|l| long_flags_in(l.split("WINDOW_ARGS=").nth(1).unwrap())),
+    );
+    assert!(!used.is_empty());
+    for f in used {
+        assert!(known.contains(&f), "{f} is not a flag of the window");
+    }
+}
+
+#[test]
+fn install_sh_refuses_a_remote_terminal_without_its_connection() {
+    // The kiosk always passes --terminal-dir, which the window refuses for a local database, so
+    // a first install without BOTH --conn and --node-fingerprint would loop on a blank screen.
+    let s = repo_file("packaging/terminal/install.sh");
+    let lines = code_lines(&s);
+    assert!(lines
+        .iter()
+        .any(|l| l.contains("die") && l.contains("--conn") && l.contains("--node-fingerprint")));
+    assert!(lines.iter().any(|l| l.contains("CAIRN_WINDOW_CONN")));
+    assert!(lines.iter().any(|l| l.contains("--replace-window")));
+    assert!(lines.iter().any(|l| l.contains("$# -ge 2")));
+}
+
+#[test]
+fn a_crash_that_leaves_the_marker_cannot_kill_the_path_unit() {
+    let p = repo_file("packaging/terminal/cairn-terminal-install.path");
+    assert!(code_lines(&p)
+        .iter()
+        .any(|l| l.starts_with("TriggerLimitIntervalSec=")));
+    assert!(code_lines(&p)
+        .iter()
+        .any(|l| l.starts_with("TriggerLimitBurst=")));
+    let r = repo_file("packaging/terminal/README.md");
+    for needle in ["reset-failed", "CAIRN_WINDOW_CONN", "chmod +x"] {
+        assert!(r.contains(needle), "README lacks {needle}");
+    }
+}

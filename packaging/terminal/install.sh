@@ -3,25 +3,51 @@
 # terminal follows its node by itself. Safe to re-run.
 #
 # Usage: install.sh --window <cairn-window> --installer <cairn-terminal-install> \
-#                    --trust <channel-root.cbor> [--node-fingerprint <hex>] [--conn <string>]
+#                    --trust <channel-root.cbor> --node-fingerprint <hex> --conn <string> \
+#                    [--replace-window]
+#
+# A terminal is REMOTE by definition: its window reaches the node through the node's gateway
+# (--terminal-dir), and a window with a local database refuses --terminal-dir. So a first
+# install needs both --node-fingerprint and --conn. A re-run may omit both (the existing
+# /etc/cairn/window.env is kept); with both, it is rewritten.
+# The connection string may carry a password: prefer the CAIRN_WINDOW_CONN environment variable
+# to --conn, which shows in `ps` and shell history.
 set -eu
 
-[ "$(id -u)" -eq 0 ] || { echo "install.sh: run as root" >&2; exit 1; }
+die() { echo "install.sh: $*" >&2; exit 1; }
 
-window=""; installer=""; trust=""; fingerprint=""; conn=""
+[ "$(id -u)" -eq 0 ] || die "run as root"
+
+window=""; installer=""; trust=""; fingerprint=""; conn="${CAIRN_WINDOW_CONN:-}"; replace=no
 while [ $# -gt 0 ]; do
+    case "$1" in
+        --replace-window) replace=yes; shift; continue ;;
+        --window|--installer|--trust|--node-fingerprint|--conn) ;;
+        *) die "unknown argument $1" ;;
+    esac
+    [ $# -ge 2 ] || die "$1 needs a value"
     case "$1" in
         --window) window=$2 ;;
         --installer) installer=$2 ;;
         --trust) trust=$2 ;;
         --node-fingerprint) fingerprint=$2 ;;
         --conn) conn=$2 ;;
-        *) echo "install.sh: unknown argument $1" >&2; exit 1 ;;
     esac
-    shift 2 || { echo "install.sh: $1 needs a value" >&2; exit 1; }
+    shift 2
 done
-[ -f "$window" ] && [ -f "$installer" ] && [ -f "$trust" ] || {
-    echo "install.sh: --window, --installer and --trust must name existing files" >&2; exit 1; }
+[ -f "$window" ] && [ -f "$installer" ] && [ -f "$trust" ] ||
+    die "--window, --installer and --trust must name existing files"
+
+# Decide the window's environment BEFORE touching the system.
+if [ -n "$conn" ] && [ -n "$fingerprint" ]; then
+    write_env=yes
+elif [ -n "$conn" ] || [ -n "$fingerprint" ]; then
+    die "give both --conn and --node-fingerprint, or neither (on a re-run)"
+elif [ -e /etc/cairn/window.env ]; then
+    write_env=no
+else
+    die "a first install needs both --conn and --node-fingerprint (a terminal reaches its node remotely)"
+fi
 
 here=$(cd "$(dirname "$0")" && pwd)
 
@@ -37,7 +63,12 @@ install -d -o root -g cairn-window -m 2770 /var/lib/cairn-terminal/incoming
 install -d -o root -g root -m 0755 /var/lib/cairn-terminal/state
 install -d -o cairn-window -g cairn-window -m 0700 /var/lib/cairn-window/terminal
 
-install -o root -g root -m 0755 "$window" /opt/cairn/bin/cairn-window
+# The installer owns window updates from now on: a re-run must not downgrade the program.
+if [ -e /opt/cairn/bin/cairn-window ] && [ "$replace" = no ]; then
+    echo "install.sh: /opt/cairn/bin/cairn-window exists; keeping it (use --replace-window to replace)." >&2
+else
+    install -o root -g root -m 0755 "$window" /opt/cairn/bin/cairn-window
+fi
 install -o root -g root -m 0755 "$installer" /opt/cairn/bin/cairn-terminal-install
 
 # The trust file is the root of everything this terminal will ever accept: never replace one
@@ -52,14 +83,15 @@ echo "Trust file SHA-256 (compare with the second channel before use):"
 sha256sum /etc/cairn/channel-root.cbor
 
 # Window environment: root-written, readable by cairn-window only (it may hold a password).
-umask 077
-{
-    [ -z "$conn" ] || printf 'CAIRN_CONN=%s\n' "$conn"
-    if [ -n "$fingerprint" ]; then printf 'WINDOW_ARGS=--node-fingerprint %s\n' "$fingerprint"
-    else printf 'WINDOW_ARGS=\n'; fi
-} > /etc/cairn/window.env
-chown root:cairn-window /etc/cairn/window.env
-chmod 0640 /etc/cairn/window.env
+if [ "$write_env" = yes ]; then
+    (
+        umask 077
+        printf 'CAIRN_CONN=%s\n' "$conn" > /etc/cairn/window.env
+        printf 'WINDOW_ARGS=--node-fingerprint %s\n' "$fingerprint" >> /etc/cairn/window.env
+    )
+    chown root:cairn-window /etc/cairn/window.env
+    chmod 0640 /etc/cairn/window.env
+fi
 
 install -m 0644 "$here/cairn-terminal-install.service" "$here/cairn-terminal-install.path" \
     "$here/cairn-window-kiosk.service" /etc/systemd/system/
