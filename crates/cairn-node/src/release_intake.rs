@@ -105,7 +105,8 @@ pub async fn take_in(
     supplied_genesis: Option<SignedRoot>,
 ) -> Result<IntakeOutcome, IntakeError> {
     let tx = db.transaction().await?;
-    let result = verify_and_store(&tx, bundle, supplied_genesis).await;
+    let mut channel = String::new();
+    let result = verify_and_store(&tx, bundle, supplied_genesis, &mut channel).await;
     if result.is_ok() {
         tx.commit().await?;
         return result;
@@ -113,11 +114,10 @@ pub async fn take_in(
     tx.rollback().await?;
     if let Err(IntakeError::Refused(r @ Refusal::Fork { version })) = &result {
         // After the rollback, in its own committed statement, so the incident outlives the
-        // refusal (a fork always has a held root, hence a channel, to name).
+        // refusal. `channel` was filled from the history the fork was found against.
         db.execute(
-            "INSERT INTO release_incident (channel_id, version, detail) \
-             SELECT channel_id, $1, $2 FROM release_root ORDER BY version LIMIT 1",
-            &[&to_i64(*version)?, &r.sentence(Who::Node)],
+            "INSERT INTO release_incident (channel_id, version, detail) VALUES ($1, $2, $3)",
+            &[&channel, &to_i64(*version)?, &r.sentence(Who::Node)],
         )
         .await?;
     }
@@ -129,11 +129,13 @@ async fn verify_and_store(
     tx: &Transaction<'_>,
     bundle: &BundleFile,
     supplied_genesis: Option<SignedRoot>,
+    channel: &mut String,
 ) -> Result<IntakeOutcome, IntakeError> {
     tx.execute("SELECT pg_advisory_xact_lock($1)", &[&INTAKE_LOCK])
         .await?;
     let stored = stored_roots(tx).await?;
     let history = starting_history(&stored, supplied_genesis)?;
+    *channel = history[0].root().channel_id.clone();
     let last_installed: i64 = tx
         .query_one(
             "SELECT coalesce(max(release_version), 0) FROM release_bundle",
@@ -215,10 +217,11 @@ async fn verify_and_store(
 async fn prune(tx: &Transaction<'_>) -> Result<(), IntakeError> {
     let gone = tx
         .query(
-            "WITH ranked AS (SELECT digest, dense_rank() OVER (PARTITION BY os, arch, platform \
+            "WITH ranked AS (SELECT release_version, idx, dense_rank() OVER (PARTITION BY os, arch, platform \
                  ORDER BY release_version DESC) AS r FROM release_artifact WHERE kind = 'window') \
              DELETE FROM release_artifact a USING ranked \
-              WHERE a.digest = ranked.digest AND ranked.r > 2 RETURNING a.release_version",
+              WHERE a.release_version = ranked.release_version AND a.idx = ranked.idx \
+                AND ranked.r > 2 RETURNING a.release_version",
             &[],
         )
         .await?;

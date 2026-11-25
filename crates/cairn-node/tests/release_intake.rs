@@ -181,6 +181,11 @@ async fn a_fork_records_an_incident_and_freezes_offers() {
     assert_eq!(count(&owner, "release_incident").await, 1);
     assert_eq!(count(&owner, "release_bundle").await, 1);
     assert_eq!(
+        count(&owner, "release_root").await,
+        2,
+        "the held chain is untouched"
+    );
+    assert_eq!(
         offered(&owner).await,
         0,
         "an open incident freezes the offer door"
@@ -345,6 +350,51 @@ async fn identical_bytes_for_two_platforms_are_each_offered_with_their_own_entry
         assert_eq!(rows.len(), 1, "{platform}");
         assert_eq!(rows[0].get::<_, i32>(0), idx, "{platform}");
     }
+    // Later debian-only releases prune debian's release 1 row; ubuntu's row, which shares its
+    // bytes, must survive, and so must the newest bundle (N1).
+    for (v, bytes) in [(2, b"two".as_slice()), (3, b"three")] {
+        take_in(&mut owner, &release(&h, v, &rk, bytes), None)
+            .await
+            .unwrap();
+    }
+    let rows = owner
+        .query(
+            "SELECT release_version, idx FROM cairn_release_offer('linux','aarch64','ubuntu-24')",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].get::<_, i64>(0), rows[0].get::<_, i32>(1)), (1, 1));
+    let newest: i64 = owner
+        .query_one("SELECT max(release_version) FROM release_bundle", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(newest, 3);
+}
+
+#[tokio::test]
+async fn a_fork_inside_the_first_bundle_records_one_incident() {
+    let Some((_g, mut owner)) = rig().await else {
+        return;
+    };
+    let (g, h, rootk, rk) = channel();
+    let mut a = rotation_draft(&rootk, &rk);
+    let mut b = rotation_draft(&rootk, &rk);
+    a.release_signers[0].custody_note = "a".into();
+    b.release_signers[0].custody_note = "b".into();
+    let (v2a, v2b) = (rotate(&h[0], a, &[&rootk]), rotate(&h[0], b, &[&rootk]));
+    let ha = cairn_release::advance(&h, std::slice::from_ref(&v2a)).unwrap();
+    let mut bundle = release(&ha, 1, &rk, b"one");
+    bundle.meta.root_chain.push(v2b);
+    let err = take_in(&mut owner, &bundle, Some(g)).await.unwrap_err();
+    assert!(
+        matches!(err, IntakeError::Refused(Refusal::Fork { version: 2 })),
+        "{err}"
+    );
+    assert_eq!(count(&owner, "release_incident").await, 1);
+    assert_eq!(count(&owner, "release_bundle").await, 0);
 }
 
 #[tokio::test]

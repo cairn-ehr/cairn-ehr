@@ -118,7 +118,7 @@ BEGIN
     SELECT CASE WHEN p_offset >= octet_length(a.content) THEN ''::bytea
                 ELSE substring(a.content FROM (least(p_offset, 2147483646) + 1)::int FOR p_len) END
       INTO v_chunk
-      FROM release_artifact a WHERE a.digest = p_digest AND a.kind = 'window' LIMIT 1;
+      FROM release_artifact a WHERE a.digest = p_digest AND a.kind = 'window' ORDER BY a.release_version DESC LIMIT 1;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'no release artifact has that digest';
     END IF;
