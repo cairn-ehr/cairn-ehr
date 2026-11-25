@@ -1,4 +1,4 @@
-# generation 85
+# generation 86
 col actor_current.actor_id
 col actor_current.kind
 col actor_current.pinned
@@ -833,6 +833,9 @@ fn cairn_refuse_substitution(bytea,bytea,uuid,text) -> void
 fn cairn_registration_expire(uuid) -> text
 fn cairn_registration_status(uuid) -> TABLE(status text, patient_id uuid, refusal text)
 fn cairn_registration_submit(uuid,text,jsonb,jsonb,text) -> text
+fn cairn_release_chunk(bytea,bigint,integer) -> bytea
+fn cairn_release_offer(text,text,text) -> TABLE(release_version bigint, manifest bytea, release_signatures bytea[], idx integer, digest bytea, byte_len bigint, generation_line text)
+fn cairn_release_roots(bigint) -> TABLE(version bigint, payload bytea, signatures bytea[])
 fn cairn_rendition_address(jsonb,text) -> bytea
 fn cairn_rendition_byte_len(jsonb,text) -> bigint
 fn cairn_rendition_media_type(jsonb,text) -> text
