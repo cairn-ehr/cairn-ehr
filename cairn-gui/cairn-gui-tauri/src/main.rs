@@ -198,6 +198,12 @@ fn main() -> anyhow::Result<()> {
         );
         return Ok(());
     }
+    // `--print-release-version` (`update::RELEASE_FLAG`): the signed release this build carries,
+    // answered the same way, before clap (#909 slice C2).
+    if update::asks_for_release_line(std::env::args_os()) {
+        println!("{}", update::release_line(update::release_version()));
+        return Ok(());
+    }
     let cli = Cli::parse();
 
     // A tokio runtime built by hand rather than by `#[tokio::main]`, because Tauri owns the
