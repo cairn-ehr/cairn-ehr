@@ -11,8 +11,9 @@ repository.workspace = true
 workspace = true
 
 # Every dependency is already in the tree (AGPL-compatible, checked by cargo-deny);
-# serde_bytes is already used by cairn-event. Task 3 adds cairn-event back for the verifier.
+# serde_bytes is already used by cairn-event. cairn-event supplies the detached signatures.
 [dependencies]
+cairn-event = { path = "../cairn-event" }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 ciborium = "0.2"
