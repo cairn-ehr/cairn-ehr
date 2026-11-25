@@ -17,7 +17,7 @@
 //!    machine's platform. Fixture mode never gets past this.
 //! 2. [`offers`] asks the node (`cairn_release_offer`); [`due`] picks the newest offer that is
 //!    newer than what is installed and running, fits the node's stamp, is at most 64 MiB, was not
-//!    refused for good, and was not given up after [`MAX_ATTEMPTS`] failed downloads this session.
+//!    refused for good, and was not given up after [`MAX_ATTEMPTS`] fetches this session.
 //! 3. [`fetch`] (spawned, at most one at a time: [`Courier::claim`]) writes `meta.cbor`, then
 //!    `artifact.bin` by 256 KiB chunks, each under its own lock of the shared connection so a
 //!    clinical press waits behind at most one chunk, then `complete` LAST: the installer acts on
@@ -28,8 +28,8 @@
 //!
 //! # The contract with the installer (Task 9)
 //!
-//! The installer clears `incoming/` on EVERY outcome, installed or refused, and writes
-//! `status.json`. So a `complete` still there is a release it has not taken yet, and the window
+//! The installer writes `status.json` FIRST, then clears `incoming/`, on EVERY outcome, installed
+//! or refused (the other order would let a poll see no `complete` beside a stale status). So a `complete` still there is a release it has not taken yet, and the window
 //! fetches nothing at all meanwhile: the installer may be reading those files (ruling R17). A
 //! refusal a fresh fetch cannot fix names its release in `refused_release`, which the window then
 //! never fetches again; one damaged in transit leaves it `None`, and the window fetches that
@@ -110,18 +110,18 @@ pub struct Offer {
 
 /// The largest program the window fetches: the installer refuses a larger one (`TooLarge`).
 pub const MAX_ARTIFACT: u64 = 64 * 1024 * 1024;
-/// Failed downloads of one release per session before the window gives it up (a node file shorter
-/// than its offer must not be re-downloaded every minute forever); a window restart tries again.
+/// Fetches of one release per session, failed OR staged, before the window gives it up (R19): a
+/// release that keeps failing, or keeps being refused once staged, must not re-download forever.
 pub const MAX_ATTEMPTS: u32 = 3;
 
 /// The window's fetch bookkeeping, in `AppState`: where to stage, whether a fetch is running,
-/// and how many downloads of each release failed this session.
+/// and how many times each release was fetched this session.
 #[derive(Default)]
 pub struct Courier {
     /// `--release-dir`; `None` never fetches.
     pub dir: Option<PathBuf>,
     fetching: AtomicBool,
-    failures: Mutex<std::collections::BTreeMap<u64, u32>>,
+    attempts: Mutex<std::collections::BTreeMap<u64, u32>>,
 }
 
 /// A running fetch's hold on [`Courier`]; dropping it lets the next fetch start.
@@ -154,16 +154,16 @@ impl Courier {
         self.fetching.load(Ordering::SeqCst)
     }
 
-    /// Count one failed download of `release`.
-    pub fn failed(&self, release: u64) {
-        let mut failures = self.failures.lock().unwrap_or_else(|p| p.into_inner());
-        *failures.entry(release).or_default() += 1;
+    /// Count one fetch of `release`, however it ends.
+    pub fn attempted(&self, release: u64) {
+        let mut attempts = self.attempts.lock().unwrap_or_else(|p| p.into_inner());
+        *attempts.entry(release).or_default() += 1;
     }
 
-    /// The releases whose downloads failed [`MAX_ATTEMPTS`] times this session.
+    /// The releases fetched [`MAX_ATTEMPTS`] times this session.
     pub fn given_up(&self) -> Vec<u64> {
-        let failures = self.failures.lock().unwrap_or_else(|p| p.into_inner());
-        let spent = failures.iter().filter(|(_, n)| **n >= MAX_ATTEMPTS);
+        let attempts = self.attempts.lock().unwrap_or_else(|p| p.into_inner());
+        let spent = attempts.iter().filter(|(_, n)| **n >= MAX_ATTEMPTS);
         spent.map(|(release, _)| *release).collect()
     }
 }
@@ -361,15 +361,15 @@ pub async fn offers(state: &AppState, target: &Target) -> Option<Vec<Offer>> {
 }
 
 /// Fetch `offer` into `<dir>/incoming/` (see the module doc's step 3), unless a fetch is
-/// already running. A failure is said on stderr, counted ([`Courier::failed`]) and leaves no
-/// `complete`; the next poll tries again from the start, at most [`MAX_ATTEMPTS`] times in all.
+/// already running. Every fetch counts ([`Courier::attempted`], at most [`MAX_ATTEMPTS`]); a
+/// failure is said on stderr and leaves no `complete`, and the next poll starts again.
 pub async fn fetch(state: &AppState, offer: Offer, dir: &Path, pinned_root: u64) {
     let Some(_claim) = state.release.claim() else {
         return;
     };
+    state.release.attempted(offer.release_version);
     if let Err(e) = fetch_into(state, &offer, dir, pinned_root).await {
         eprintln!("the update could not be fetched from the node: {e:#}");
-        state.release.failed(offer.release_version);
     }
 }
 

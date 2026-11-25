@@ -166,8 +166,8 @@ async fn a_press_waits_at_most_one_chunk() {
     assert_eq!(staged_release(&dir), Some(1));
 }
 
-/// Ruling R18: the window's own failed downloads of one release stop after [`MAX_ATTEMPTS`] this
-/// session. Here the node's file is shorter than its offer says, so every attempt fails, and
+/// Rulings R18/R19: fetches of one release stop after [`MAX_ATTEMPTS`] this session, failed ones
+/// included. Here the node's file is shorter than its offer says, so every attempt fails, and
 /// none leaves a `complete`.
 #[tokio::test]
 async fn a_download_that_keeps_failing_is_given_up() {
@@ -183,4 +183,23 @@ async fn a_download_that_keeps_failing_is_given_up() {
     }
     assert_eq!(state.release.given_up(), vec![1]);
     assert_eq!(staged_release(&dir), None);
+}
+
+/// Ruling R19: a fetch that SUCCEEDS counts too (the installer may refuse what it staged, and
+/// clear it): after three, the release is given up.
+#[tokio::test]
+async fn a_successful_fetch_counts_as_an_attempt() {
+    let Some((_guard, state)) = holding(b"a program").await else {
+        return;
+    };
+    let offer = offers(&state, &pi()).await.unwrap().remove(0);
+    let dir = std::env::temp_dir().join(format!("cairn-courier-{}", uuid::Uuid::now_v7()));
+    for attempt in 1..=MAX_ATTEMPTS {
+        assert!(state.release.given_up().is_empty(), "attempt {attempt}");
+        fetch(&state, offer.clone(), &dir, 0).await;
+        assert_eq!(staged_release(&dir), Some(1), "attempt {attempt} staged");
+        // The installer refuses it and clears `incoming/`.
+        std::fs::remove_dir_all(dir.join("incoming")).unwrap();
+    }
+    assert_eq!(state.release.given_up(), vec![1]);
 }

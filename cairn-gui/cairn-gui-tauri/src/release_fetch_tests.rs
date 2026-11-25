@@ -152,17 +152,16 @@ fn a_refused_release_is_fetched_again_only_if_a_fetch_can_fix_it() {
     assert_eq!(due_of(&damaged, &[offer(6, g)]), Some(6));
 }
 
-/// Ruling R18: after [`MAX_ATTEMPTS`] failed downloads of one release this session, the window
-/// gives that release up (a stored artifact shorter than its offer must not be re-downloaded every
-/// minute forever); a newer release is still due.
+/// Ruling R19: after [`MAX_ATTEMPTS`] fetches of one release this session, failed or not, the
+/// window gives that release up; a newer release is still due.
 #[test]
-fn failed_downloads_stop_after_three() {
+fn fetches_stop_after_three() {
     let courier = Courier::new(None);
     for _ in 0..MAX_ATTEMPTS - 1 {
-        courier.failed(6);
+        courier.attempted(6);
     }
     assert!(courier.given_up().is_empty());
-    courier.failed(6);
+    courier.attempted(6);
     assert_eq!(courier.given_up(), vec![6]);
     let g = embedded_schema_version();
     let idle = status("idle", 0, None);
@@ -170,6 +169,62 @@ fn failed_downloads_stop_after_three() {
     assert_eq!(
         due_with(&idle, &[offer(7, g), offer(6, g)], 0, None, &[6]),
         Some(7)
+    );
+}
+
+/// One poll after another against `offers`, the installer refusing every staged release with
+/// `refuse` (its `refused_release` for that release); how many times each release was fetched.
+fn fetched_while_refused(
+    offers: &[Offer],
+    refuse: impl Fn(u64) -> Option<u64>,
+) -> std::collections::BTreeMap<u64, u32> {
+    let (courier, mut fetched) = (Courier::new(None), std::collections::BTreeMap::new());
+    let mut s = status("idle", 0, None);
+    for _poll in 0..50 {
+        let Some(r) = due_with(&s, offers, 0, None, &courier.given_up()) else {
+            break;
+        };
+        // What `fetch` does first; the installer then refuses it and clears `incoming/`.
+        courier.attempted(r);
+        *fetched.entry(r).or_insert(0) += 1;
+        s = status("refused", 0, Some("refused"));
+        s.refused_release = refuse(r);
+    }
+    fetched
+}
+
+/// Ruling R19 (a): a node whose stored file is damaged the same way every time stages fine and
+/// is refused as damaged (`refused_release` none) each time: fetched three times, then not again.
+#[test]
+fn deterministic_damage_stops_after_three_fetches() {
+    let fetched = fetched_while_refused(&[offer(6, embedded_schema_version())], |_| None);
+    assert_eq!(
+        fetched.into_iter().collect::<Vec<_>>(),
+        vec![(6, MAX_ATTEMPTS)]
+    );
+}
+
+/// Ruling R19 (b): two releases refused for good (before the genesis ceremony, say) would
+/// alternate, since `refused_release` holds one: each is fetched three times, then neither again.
+#[test]
+fn two_refused_releases_do_not_alternate_forever() {
+    let g = embedded_schema_version();
+    let fetched = fetched_while_refused(&[offer(6, g), offer(5, g)], Some);
+    let expected = vec![(5, MAX_ATTEMPTS), (6, MAX_ATTEMPTS)];
+    assert_eq!(fetched.into_iter().collect::<Vec<_>>(), expected);
+}
+
+/// A genuine one-off transit error still gets its re-fetch: one fetch, refused as damaged, and
+/// the release is due again.
+#[test]
+fn a_one_off_transit_error_is_fetched_again() {
+    let courier = Courier::new(None);
+    courier.attempted(6);
+    let damaged = status("refused", 0, Some("damaged; fetch it again"));
+    let offers = [offer(6, embedded_schema_version())];
+    assert_eq!(
+        due_with(&damaged, &offers, 0, None, &courier.given_up()),
+        Some(6)
     );
 }
 
