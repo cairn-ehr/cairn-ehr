@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS release_bundle (
 );
 
 CREATE TABLE IF NOT EXISTS release_artifact (
-    digest          bytea  PRIMARY KEY,
+    digest          bytea  NOT NULL,
     release_version bigint NOT NULL REFERENCES release_bundle (release_version),
     idx             int    NOT NULL,
     kind            text   NOT NULL,
@@ -46,8 +46,12 @@ CREATE TABLE IF NOT EXISTS release_artifact (
     platform        text,
     generation_line text,
     byte_len        bigint NOT NULL,
-    content         bytea  NOT NULL
+    content         bytea  NOT NULL,
+    -- Keyed by the manifest entry, not the bytes: identical bytes may legitimately appear twice
+    -- (e.g. one program for two platforms), each entry with its own os/arch/platform (R15).
+    PRIMARY KEY (release_version, idx)
 );
+CREATE INDEX IF NOT EXISTS release_artifact_digest ON release_artifact (digest);
 
 CREATE TABLE IF NOT EXISTS release_incident (
     id          bigserial PRIMARY KEY,
@@ -114,7 +118,7 @@ BEGIN
     SELECT CASE WHEN p_offset >= octet_length(a.content) THEN ''::bytea
                 ELSE substring(a.content FROM (least(p_offset, 2147483646) + 1)::int FOR p_len) END
       INTO v_chunk
-      FROM release_artifact a WHERE a.digest = p_digest AND a.kind = 'window';
+      FROM release_artifact a WHERE a.digest = p_digest AND a.kind = 'window' LIMIT 1;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'no release artifact has that digest';
     END IF;

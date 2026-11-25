@@ -16,7 +16,7 @@ use cairn_release::{
     SignedRoot, VerifiedRoot, Who,
 };
 use std::path::Path;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient, Transaction};
 
 /// Why an intake did not happen.
 #[derive(Debug, thiserror::Error)]
@@ -45,8 +45,12 @@ pub struct IntakeOutcome {
     pub files: usize,
 }
 
+/// One intake at a time: the verdict reads the held roots and newest release, so two intakes
+/// racing on them could both pass (R16). Taken inside the intake transaction, released with it.
+const INTAKE_LOCK: i64 = 0x0909_C201;
+
 /// The stored roots, ascending by version.
-async fn stored_roots(db: &Client) -> Result<Vec<SignedRoot>, IntakeError> {
+async fn stored_roots(db: &impl GenericClient) -> Result<Vec<SignedRoot>, IntakeError> {
     let rows = db
         .query(
             "SELECT payload, signatures FROM release_root ORDER BY version",
@@ -87,16 +91,50 @@ fn starting_history(
     }
 }
 
+/// A `u64` from a signed document as the database's `bigint`; one too large is a damaged file.
+fn to_i64(v: u64) -> Result<i64, IntakeError> {
+    i64::try_from(v).map_err(|_| {
+        IntakeError::Refused(Refusal::Malformed("a number is too large to store".into()))
+    })
+}
+
 /// Verify `bundle` and store it. All or nothing, except that a fork leaves an incident row.
 pub async fn take_in(
     db: &mut Client,
     bundle: &BundleFile,
     supplied_genesis: Option<SignedRoot>,
 ) -> Result<IntakeOutcome, IntakeError> {
-    let stored = stored_roots(db).await?;
+    let tx = db.transaction().await?;
+    let result = verify_and_store(&tx, bundle, supplied_genesis).await;
+    if result.is_ok() {
+        tx.commit().await?;
+        return result;
+    }
+    tx.rollback().await?;
+    if let Err(IntakeError::Refused(r @ Refusal::Fork { version })) = &result {
+        // After the rollback, in its own committed statement, so the incident outlives the
+        // refusal (a fork always has a held root, hence a channel, to name).
+        db.execute(
+            "INSERT INTO release_incident (channel_id, version, detail) \
+             SELECT channel_id, $1, $2 FROM release_root ORDER BY version LIMIT 1",
+            &[&to_i64(*version)?, &r.sentence(Who::Node)],
+        )
+        .await?;
+    }
+    result
+}
+
+/// The body of an intake, inside the transaction that holds [`INTAKE_LOCK`].
+async fn verify_and_store(
+    tx: &Transaction<'_>,
+    bundle: &BundleFile,
+    supplied_genesis: Option<SignedRoot>,
+) -> Result<IntakeOutcome, IntakeError> {
+    tx.execute("SELECT pg_advisory_xact_lock($1)", &[&INTAKE_LOCK])
+        .await?;
+    let stored = stored_roots(tx).await?;
     let history = starting_history(&stored, supplied_genesis)?;
-    let channel = history[0].root().channel_id.clone();
-    let last_installed: i64 = db
+    let last_installed: i64 = tx
         .query_one(
             "SELECT coalesce(max(release_version), 0) FROM release_bundle",
             &[],
@@ -104,21 +142,8 @@ pub async fn take_in(
         .await?
         .get(0);
 
-    let (new_history, manifest) = match verify_bundle(&history, &bundle.meta, last_installed as u64)
-    {
-        Ok(v) => v,
-        Err(r) => {
-            if let Refusal::Fork { version } = &r {
-                // Own committed statement (not the intake transaction) so it outlives the refusal.
-                db.execute(
-                    "INSERT INTO release_incident (channel_id, version, detail) VALUES ($1, $2, $3)",
-                    &[&channel, &(*version as i64), &r.sentence(Who::Node)],
-                )
-                .await?;
-            }
-            return Err(IntakeError::Refused(r));
-        }
-    };
+    let (new_history, manifest) = verify_bundle(&history, &bundle.meta, last_installed as u64)
+        .map_err(IntakeError::Refused)?;
     // Every listed file must be present and exact; a spare file the manifest never named is
     // as wrong as a missing one.
     if bundle.artifacts.len() != manifest.artifacts.len() {
@@ -129,14 +154,13 @@ pub async fn take_in(
         check_artifact(&manifest, i, bytes).map_err(IntakeError::Refused)?;
     }
 
-    let tx = db.transaction().await?;
     for r in new_history.iter().skip(stored.len()) {
         let s = r.signed();
         tx.execute(
             "INSERT INTO release_root (version, channel_id, payload, signatures, root_hash) \
              VALUES ($1, $2, $3, $4, $5)",
             &[
-                &(r.root().version as i64),
+                &to_i64(r.root().version)?,
                 &r.root().channel_id,
                 &s.payload,
                 &s.signatures,
@@ -145,7 +169,7 @@ pub async fn take_in(
         )
         .await?;
     }
-    let version = manifest.release_version as i64;
+    let version = to_i64(manifest.release_version)?;
     tx.execute(
         "INSERT INTO release_bundle (release_version, channel_id, manifest, release_signatures, \
          inclusion_proof) VALUES ($1, $2, $3, $4, $5)",
@@ -159,13 +183,10 @@ pub async fn take_in(
     )
     .await?;
     for (i, (a, bytes)) in manifest.artifacts.iter().zip(&bundle.artifacts).enumerate() {
-        // shortcut: a digest is the table's key, so a file re-shipped in a newer release moves
-        // to that release (the older bundle keeps its manifest); upgrade if releases must co-own files.
+        // Keyed by (release, entry): identical bytes in two entries are two rows (R15).
         tx.execute(
             "INSERT INTO release_artifact (digest, release_version, idx, kind, os, arch, platform, \
-             generation_line, byte_len, content) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
-             ON CONFLICT (digest) DO UPDATE SET release_version = EXCLUDED.release_version, \
-             idx = EXCLUDED.idx",
+             generation_line, byte_len, content) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
             &[
                 &a.digest.to_vec(),
                 &version,
@@ -175,14 +196,13 @@ pub async fn take_in(
                 &a.arch,
                 &a.platform,
                 &a.generation_line,
-                &(a.byte_len as i64),
+                &to_i64(a.byte_len)?,
                 bytes,
             ],
         )
         .await?;
     }
-    prune(&tx).await?;
-    tx.commit().await?;
+    prune(tx).await?;
     Ok(IntakeOutcome {
         release_version: manifest.release_version,
         files: bundle.artifacts.len(),
@@ -192,7 +212,7 @@ pub async fn take_in(
 /// Keep the newest two releases per (os, arch, platform) of kind `window`; drop older window
 /// files, then any bundle left with no file at all. Two statements: a data-modifying CTE
 /// cannot see its own deletes in the same statement.
-async fn prune(tx: &tokio_postgres::Transaction<'_>) -> Result<(), IntakeError> {
+async fn prune(tx: &Transaction<'_>) -> Result<(), IntakeError> {
     let gone = tx
         .query(
             "WITH ranked AS (SELECT digest, dense_rank() OVER (PARTITION BY os, arch, platform \
@@ -242,6 +262,8 @@ pub async fn run_intake(
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct StatusFacts {
     pub channel: Option<String>,
+    /// A trust file is stored but cannot be read back.
+    pub root_damaged: bool,
     pub root_version: Option<u64>,
     pub newest_release: Option<u64>,
     pub open_incidents: Vec<String>,
@@ -250,6 +272,10 @@ pub struct StatusFacts {
 /// Practice-manager words, one line per fact. Pure.
 pub fn render_status(f: &StatusFacts) -> String {
     let mut lines = vec![match (&f.channel, f.root_version) {
+        _ if f.root_damaged => {
+            "The trust file stored on this node is damaged; do not rely on it. Ask the Cairn project."
+                .to_string()
+        }
         (Some(c), Some(v)) => format!("Release channel: {c} (trust file version {v})."),
         _ => "No release channel is set up on this node yet.".to_string(),
     }];
@@ -267,7 +293,7 @@ pub fn render_status(f: &StatusFacts) -> String {
 pub async fn status(db: &Client) -> anyhow::Result<String> {
     let run = async {
         let roots = stored_roots(db).await?;
-        let newest_root = roots.last().and_then(|r| r.root().ok());
+        let newest_root = roots.last().map(|r| r.root());
         let newest: Option<i64> = db
             .query_one("SELECT max(release_version) FROM release_bundle", &[])
             .await?
@@ -282,8 +308,12 @@ pub async fn status(db: &Client) -> anyhow::Result<String> {
             .map(|r| r.get(0))
             .collect();
         Ok::<_, IntakeError>(StatusFacts {
-            channel: newest_root.as_ref().map(|r| r.channel_id.clone()),
-            root_version: newest_root.map(|r| r.version),
+            root_damaged: matches!(newest_root, Some(Err(_))),
+            channel: newest_root
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .map(|r| r.channel_id.clone()),
+            root_version: newest_root.and_then(|r| r.ok()).map(|r| r.version),
             newest_release: newest.map(|v| v as u64),
             open_incidents,
         })

@@ -4,6 +4,7 @@ use super::*;
 #[test]
 fn status_names_channel_root_release_and_incident() {
     let s = render_status(&StatusFacts {
+        root_damaged: false,
         channel: Some("cairn-stable".into()),
         root_version: Some(2),
         newest_release: Some(7),
@@ -22,4 +23,16 @@ fn status_of_an_empty_node_says_so() {
 #[test]
 fn an_empty_stored_chain_is_no_channel() {
     assert_eq!(rebuild_history(&[]).err(), Some(Refusal::NoChannel));
+}
+
+#[test]
+fn a_damaged_root_is_not_reported_as_no_channel() {
+    let s = render_status(&StatusFacts {
+        root_damaged: true,
+        ..StatusFacts::default()
+    });
+    assert!(
+        s.contains("damaged") && !s.contains("No release channel"),
+        "{s}"
+    );
 }

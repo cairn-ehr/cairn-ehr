@@ -294,3 +294,153 @@ async fn status_names_channel_root_release_and_incident() {
         .unwrap()
         .contains("Updates are stopped: Two trust files clash."));
 }
+
+/// A rotation draft (the steward's builder fixes version and parent).
+fn rotation_draft(rootk: &SigningKey, rk: &SigningKey) -> TrustRoot {
+    TrustRoot {
+        channel_id: "official".into(),
+        version: 0,
+        root_signers: vec![signer(rootk)],
+        root_threshold: 1,
+        release_signers: vec![signer(rk)],
+        release_threshold: 1,
+        prev_root_hash: None,
+    }
+}
+
+fn artifact_of(kind: &str, platform: Option<&str>) -> Artifact {
+    Artifact {
+        kind: kind.into(),
+        os: platform.map(|_| "linux".into()),
+        arch: platform.map(|_| "aarch64".into()),
+        platform: platform.map(str::to_string),
+        ..window("")
+    }
+}
+
+#[tokio::test]
+async fn identical_bytes_for_two_platforms_are_each_offered_with_their_own_entry() {
+    let Some((_g, mut owner)) = rig().await else {
+        return;
+    };
+    let (g, h, _, rk) = channel();
+    let b = assemble(
+        &h,
+        1,
+        vec![
+            (window("debian-12"), b"same program".to_vec()),
+            (window("ubuntu-24"), b"same program".to_vec()),
+        ],
+        &[&rk],
+    );
+    take_in(&mut owner, &b, Some(g)).await.unwrap();
+    for (platform, idx) in [("debian-12", 0), ("ubuntu-24", 1)] {
+        let rows = owner
+            .query(
+                "SELECT idx FROM cairn_release_offer('linux','aarch64',$1)",
+                &[&platform],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "{platform}");
+        assert_eq!(rows[0].get::<_, i32>(0), idx, "{platform}");
+    }
+}
+
+#[tokio::test]
+async fn a_tampered_stored_root_is_refused_not_trusted() {
+    let Some((_g, mut owner)) = rig().await else {
+        return;
+    };
+    let (g, h, rootk, rk) = channel();
+    let v2 = rotate(&h[0], rotation_draft(&rootk, &rk), &[&rootk]);
+    let h2 = cairn_release::advance(&h, std::slice::from_ref(&v2)).unwrap();
+    take_in(&mut owner, &release(&h2, 1, &rk, b"one"), Some(g))
+        .await
+        .unwrap();
+    // Someone with table access damages the stored version-2 root (R7: it is never trusted).
+    owner
+        .execute(
+            "UPDATE release_root SET signatures = ARRAY[set_byte(signatures[1], 0, \
+             get_byte(signatures[1], 0) # 1)] WHERE version = 2",
+            &[],
+        )
+        .await
+        .unwrap();
+    let err = take_in(&mut owner, &release(&h2, 2, &rk, b"two"), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IntakeError::Refused(_)), "{err}");
+    assert_eq!(count(&owner, "release_bundle").await, 1);
+}
+
+#[tokio::test]
+async fn pruning_is_per_platform_and_keeps_unknown_kinds() {
+    let Some((_g, mut owner)) = rig().await else {
+        return;
+    };
+    let (g, h, _, rk) = channel();
+    let at = |v: u64, parts: Vec<(Artifact, Vec<u8>)>| assemble(&h, v, parts, &[&rk]);
+    let deb = |n: &str| (window("debian-12"), n.as_bytes().to_vec());
+    let ubu = |n: &str| (window("ubuntu-24"), n.as_bytes().to_vec());
+    let docs = (artifact_of("docs", None), b"manual".to_vec());
+    take_in(
+        &mut owner,
+        &at(1, vec![deb("d1"), ubu("u1"), docs]),
+        Some(g),
+    )
+    .await
+    .unwrap();
+    for (v, part) in [
+        (2, deb("d2")),
+        (3, deb("d3")),
+        (4, ubu("u4")),
+        (5, ubu("u5")),
+    ] {
+        take_in(&mut owner, &at(v, vec![part]), None).await.unwrap();
+    }
+    let rows = owner
+        .query(
+            "SELECT release_version, coalesce(platform, kind) FROM release_artifact ORDER BY 1, 2",
+            &[],
+        )
+        .await
+        .unwrap();
+    let got: Vec<(i64, String)> = rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+    let want: Vec<(i64, String)> = [
+        (1, "docs"),
+        (2, "debian-12"),
+        (3, "debian-12"),
+        (4, "ubuntu-24"),
+        (5, "ubuntu-24"),
+    ]
+    .iter()
+    .map(|(v, p)| (*v, p.to_string()))
+    .collect();
+    assert_eq!(got, want);
+    assert_eq!(
+        count(&owner, "release_bundle").await,
+        5,
+        "release 1 survives on its unknown kind"
+    );
+}
+
+#[tokio::test]
+async fn a_damaged_stored_root_is_reported_as_damaged_not_as_no_channel() {
+    let Some((_g, mut owner)) = rig().await else {
+        return;
+    };
+    let (g, h, _, rk) = channel();
+    take_in(&mut owner, &release(&h, 1, &rk, b"one"), Some(g))
+        .await
+        .unwrap();
+    owner
+        .execute("UPDATE release_root SET payload = '\\x00'::bytea", &[])
+        .await
+        .unwrap();
+    let s = status(&owner).await.unwrap();
+    assert!(
+        s.contains("damaged") && !s.contains("No release channel"),
+        "{s}"
+    );
+}
