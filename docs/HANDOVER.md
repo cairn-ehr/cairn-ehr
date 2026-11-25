@@ -182,7 +182,7 @@
 >    keeps `cairn_window`'s doors additive; the replay runs under a 2 s `lock_timeout` with retry; the terminal
 >    service exits 75 on a new stamp for its supervisor. Filed **#1175** (db/043 swallows the re-adjudication's lock
 >    timeout) and **#1177** (the idle re-lock closes a chart whose Sign settled badly — a decision). Final whole-branch
->    review done and fixed. **⇒ NEXT: slice C2's brainstorm** (begun 2026-11-25 on `design/909-slice-c2-signed-release`) (the terminal
+>    review done and fixed. **Slice C2 designed and planned 2026-11-25, PR #1180** (design `superpowers/specs/2026-11-25-909-slice-c2-signed-release-design.md`, approved; plan `superpowers/plans/2026-11-25-909-slice-c2-signed-release.md`, 11 tasks). **⇒ NEXT: build C2 by that plan** (the terminal
 >    fetches a signed release from its node; design §9). **Slice B must not ship to a site until slice C is settled.**
 >    RUNBOOK §38, §39 (two machines) and §40 are owed by a human. **Otherwise:** sign-in
 >    **slice 4** (the emergency key, design §5.6, brainstorm first); **#912**; **#1021**'s obligations projection and

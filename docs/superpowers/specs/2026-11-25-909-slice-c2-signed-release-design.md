@@ -1,6 +1,6 @@
 # #909 slice C2: a terminal follows its node — the signed window release — design
 
-Status: **draft 2026-11-25, awaiting approval**, brainstormed with the maintainer. Parent:
+Status: **approved 2026-11-25**, brainstormed with the maintainer. Parent:
 [`2026-11-24-909-slice-c1-rollout-design.md`](2026-11-24-909-slice-c1-rollout-design.md) §9 (and its D4). Builds the
 first code of [ADR-0055](../../spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md)
 (issue #257's verifier) on top of [ADR-0110](../../spec/decisions/0110-the-pinned-terminal-gateway.md)'s pinned link and
