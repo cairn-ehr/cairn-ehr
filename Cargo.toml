@@ -7,6 +7,7 @@ members = [
     "crates/cairn-medication-view",
     "crates/cairn-medium", # the shared backup-medium container format (#500 slice 2a)
     "crates/cairn-patient-search",
+    "crates/cairn-release", # ADR-0055 signed-release documents + verifier (#909 slice C2)
     "crates/cairn-wire", # the sync wire protocol + the transport seam (#500 slice 2b)
     "crates/cairn-sync",
     "crates/cairn-node", # cairn-node added in Task 6
