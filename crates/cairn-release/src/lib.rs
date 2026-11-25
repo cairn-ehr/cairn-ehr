@@ -10,6 +10,8 @@ mod docs_tests;
 #[cfg(test)]
 mod refusal_tests;
 #[cfg(test)]
+mod verify_release_tests;
+#[cfg(test)]
 mod verify_tests;
 
 pub use docs::*;

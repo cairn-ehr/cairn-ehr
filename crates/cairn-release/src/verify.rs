@@ -25,6 +25,7 @@ use cairn_event::{
     detached_key_id, verify_release_manifest_sig, verify_trust_root_sig, EventError, VerifyingKey,
 };
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 
 /// A trust root this program has proven, by `genesis` or `advance`. The fields are private
 /// so the only way to hold one is to have verified it: callers that persist roots store the
@@ -81,7 +82,9 @@ fn count_valid(sigs: &[Vec<u8>], payload: &[u8], trusted: &[Signer], check: SigC
 
 /// The shape rules every trust root must meet before any signature is counted against it:
 /// thresholds are at least 1 (0 would mean "no signatures needed") and meetable (an
-/// unmeetable one would brick the channel forever), and no signer list repeats a key.
+/// unmeetable one would brick the channel forever), no signer list repeats a key, and every
+/// key is a usable, non-weak Ed25519 public key. Linear in the list length: it runs on
+/// unverified input.
 fn check_shape(root: &TrustRoot) -> Result<(), Refusal> {
     for (what, signers, threshold) in [
         ("root", &root.root_signers, root.root_threshold),
@@ -93,9 +96,16 @@ fn check_shape(root: &TrustRoot) -> Result<(), Refusal> {
                 signers.len()
             )));
         }
-        for (i, s) in signers.iter().enumerate() {
-            if signers[..i].iter().any(|t| t.pubkey == s.pubkey) {
+        let mut seen = HashSet::with_capacity(signers.len());
+        for s in signers {
+            if !seen.insert(s.pubkey) {
                 return Err(Refusal::Malformed(format!("{what} signer key repeated")));
+            }
+            // A pubkey that is not a curve point, or is a small-order (weak) point that
+            // "verifies" forged signatures, can never be a real signer (ruling R11).
+            match VerifyingKey::from_bytes(&s.pubkey) {
+                Ok(vk) if !vk.is_weak() => {}
+                _ => return Err(Refusal::Malformed(format!("{what} signer key unusable"))),
             }
         }
     }
@@ -213,15 +223,18 @@ pub fn advance(
         let candidates: Vec<&(TrustRoot, &SignedRoot)> =
             offered.iter().filter(|(r, _)| r.version == next).collect();
         if candidates.is_empty() {
-            // Nothing for `next`: done, unless something higher was offered (a gap).
+            // Nothing for `next`: done, unless something higher was offered (a gap). This
+            // fails CLOSED: even unverifiable junk at a high version refuses the whole chain
+            // as a gap rather than being silently skipped, so a human looks at it.
             return match offered
                 .iter()
                 .map(|(r, _)| r.version)
                 .filter(|v| *v > next)
                 .min()
             {
+                // `pinned` is what the caller still holds: advance is all or nothing (R10).
                 Some(needs) => Err(Refusal::ChainGap {
-                    pinned: top.root.version,
+                    pinned: pinned.root.version,
                     needs,
                 }),
                 None => Ok(out),
@@ -316,6 +329,10 @@ pub fn check_artifact(manifest: &Manifest, index: usize, bytes: &[u8]) -> Result
 /// Gates 1 and 2 together: advance the pin over the bundle's root chain, then verify the
 /// manifest against the newest root. Returns the new history (for the caller to persist)
 /// and the manifest (for `check_artifact` on each file).
+///
+/// All or nothing (ruling R12): if the manifest fails, a rotation the bundle's chain proved
+/// is NOT kept either; the caller keeps its old history and the next good bundle carries
+/// the rotation again.
 pub fn verify_bundle(
     history: &[VerifiedRoot],
     meta: &ReleaseMeta,

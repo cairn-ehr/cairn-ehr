@@ -68,3 +68,33 @@ fn every_refusal_speaks_plainly() {
         }
     }
 }
+
+#[test]
+fn an_offered_channel_name_cannot_steer_the_screen() {
+    // A forged bundle chooses `offered`: a line break, a quote, a right-to-left override
+    // and a very long tail must not reach the sentence (or the log line) as given.
+    let offered = format!("evil\n\"x\u{202E}y{}", "z".repeat(200));
+    let r = Refusal::WrongChannel {
+        pinned: "official".into(),
+        offered,
+    };
+    let shown = format!("evil\"xy{}…", "z".repeat(57));
+    assert_eq!(shown.chars().count(), 65);
+    assert_eq!(
+        r.sentence(Who::Terminal),
+        format!("This update is from channel \"{shown}\", but this terminal follows \"official\".")
+    );
+    assert_eq!(
+        r.to_string(),
+        format!("wrong channel: pinned official, offered {shown}")
+    );
+}
+
+#[test]
+fn sanitise_keeps_short_plain_names_and_drops_controls() {
+    use crate::refusal::sanitise;
+    assert_eq!(sanitise("official"), "official");
+    assert_eq!(sanitise("a\u{2066}b\u{2069}c\u{202A}\td\u{7}"), "abcd");
+    let exactly_64 = "q".repeat(64);
+    assert_eq!(sanitise(&exactly_64), exactly_64);
+}

@@ -29,10 +29,11 @@ pub enum Refusal {
     #[error("malformed release document: {0}")]
     Malformed(String),
     /// The update belongs to a different release channel than the one pinned here.
-    #[error("wrong channel: pinned {pinned}, offered {offered}")]
+    /// `offered` comes from an unverified document, so it is only ever shown sanitised.
+    #[error("wrong channel: pinned {}, offered {}", sanitise(.pinned), sanitise(.offered))]
     WrongChannel { pinned: String, offered: String },
-    /// The offered root chain skips versions: `pinned` is the last version verified, `needs`
-    /// the lowest version offered above it.
+    /// The offered root chain skips versions: `pinned` is the last version the caller holds,
+    /// `needs` the lowest version offered above the point where the chain broke.
     #[error("root chain gap: pinned {pinned}, needs {needs}")]
     ChainGap { pinned: u64, needs: u64 },
     /// A trust root lacks enough valid signatures from its predecessor's root signers (or,
@@ -65,7 +66,9 @@ impl Refusal {
                 "This update file is damaged or is not a Cairn update; fetch it again.".into()
             }
             Refusal::WrongChannel { pinned, offered } => format!(
-                "This update is from channel \"{offered}\", but this {who} follows \"{pinned}\"."
+                "This update is from channel \"{}\", but this {who} follows \"{}\".",
+                sanitise(offered),
+                sanitise(pinned)
             ),
             Refusal::ChainGap { pinned, needs } => format!(
                 "This {who} last accepted trust version {pinned}; this update needs version {needs}. Take in the newer trust file, or ask the Cairn project."
@@ -87,4 +90,21 @@ impl Refusal {
             }
         }
     }
+}
+
+/// The longest name a sentence quotes; a forged name longer than this is cut.
+const MAX_SHOWN: usize = 64;
+
+/// Make a name taken from an UNVERIFIED document safe to quote on screen and in logs
+/// (ruling R9): drop control characters (line breaks, tabs) and the bidirectional
+/// overrides/isolates that can make text read backwards, and cut it to `MAX_SHOWN`
+/// characters, marking the cut with "…". Pure, so it is tested on its own.
+pub(crate) fn sanitise(s: &str) -> String {
+    let is_bidi = |c: char| matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    let mut kept = s.chars().filter(|c| !c.is_control() && !is_bidi(*c));
+    let mut out: String = kept.by_ref().take(MAX_SHOWN).collect();
+    if kept.next().is_some() {
+        out.push('…');
+    }
+    out
 }

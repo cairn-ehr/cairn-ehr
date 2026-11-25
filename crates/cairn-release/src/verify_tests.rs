@@ -8,11 +8,11 @@ use sha2::{Digest, Sha256};
 // ---- fixtures ---------------------------------------------------------------------------
 
 /// A runtime-derived Ed25519 key (house rule 6: never a literal in a crypto context).
-fn key(seed: u8) -> SigningKey {
+pub(super) fn key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_mul(31) ^ seed))
 }
 
-fn signer(sk: &SigningKey) -> Signer {
+pub(super) fn signer(sk: &SigningKey) -> Signer {
     let pubkey = sk.verifying_key().to_bytes();
     Signer {
         kid: pubkey[..4].to_vec(),
@@ -22,7 +22,7 @@ fn signer(sk: &SigningKey) -> Signer {
 }
 
 /// A trust root on channel "official" with the given signer sets and thresholds.
-fn doc(
+pub(super) fn doc(
     version: u64,
     prev: Option<[u8; 32]>,
     roots: &[&SigningKey],
@@ -41,7 +41,7 @@ fn doc(
     }
 }
 
-fn signed(root: &TrustRoot, with: &[&SigningKey]) -> SignedRoot {
+pub(super) fn signed(root: &TrustRoot, with: &[&SigningKey]) -> SignedRoot {
     let payload = encode(root);
     let signatures = with
         .iter()
@@ -55,13 +55,13 @@ fn signed(root: &TrustRoot, with: &[&SigningKey]) -> SignedRoot {
 
 /// The standard three-root chain: v1 (root a,b ≥2; release r1), v2 (root c,d ≥2; release r2)
 /// signed by a,b, and v3 (root c,d; release r2) signed by c,d.
-struct Chain {
-    v1: SignedRoot,
-    v2: SignedRoot,
-    v3: SignedRoot,
+pub(super) struct Chain {
+    pub(super) v1: SignedRoot,
+    pub(super) v2: SignedRoot,
+    pub(super) v3: SignedRoot,
 }
 
-fn chain() -> Chain {
+pub(super) fn chain() -> Chain {
     let (a, b, c, d, r1, r2) = (key(1), key(2), key(3), key(4), key(11), key(12));
     let v1 = signed(&doc(1, None, &[&a, &b], 2, &[&r1], 1), &[&a, &b]);
     let v2 = signed(&doc(2, Some(v1.hash()), &[&c, &d], 2, &[&r2], 1), &[&a, &b]);
@@ -70,17 +70,17 @@ fn chain() -> Chain {
 }
 
 /// Verify `roots` from genesis, as a node rebuilding its stored history would.
-fn history(roots: &[&SignedRoot]) -> Vec<VerifiedRoot> {
+pub(super) fn history(roots: &[&SignedRoot]) -> Vec<VerifiedRoot> {
     let g = genesis(roots[0]).unwrap();
     let rest: Vec<SignedRoot> = roots[1..].iter().map(|r| (*r).clone()).collect();
     advance(&[g], &rest).unwrap()
 }
 
-fn versions(h: &[VerifiedRoot]) -> Vec<u64> {
+pub(super) fn versions(h: &[VerifiedRoot]) -> Vec<u64> {
     h.iter().map(|v| v.root().version).collect()
 }
 
-fn window(bytes: &[u8]) -> Artifact {
+pub(super) fn window(bytes: &[u8]) -> Artifact {
     Artifact {
         kind: "window".into(),
         digest: Sha256::digest(bytes).into(),
@@ -92,7 +92,7 @@ fn window(bytes: &[u8]) -> Artifact {
     }
 }
 
-fn manifest(release_version: u64, root_version_ref: u64) -> Manifest {
+pub(super) fn manifest(release_version: u64, root_version_ref: u64) -> Manifest {
     Manifest {
         channel_id: "official".into(),
         release_version,
@@ -101,7 +101,7 @@ fn manifest(release_version: u64, root_version_ref: u64) -> Manifest {
     }
 }
 
-fn meta(root_chain: Vec<SignedRoot>, m: &Manifest, with: &[&SigningKey]) -> ReleaseMeta {
+pub(super) fn meta(root_chain: Vec<SignedRoot>, m: &Manifest, with: &[&SigningKey]) -> ReleaseMeta {
     let manifest = encode(m);
     let release_signatures = with
         .iter()
@@ -168,6 +168,36 @@ fn a_root_with_a_zero_or_unmeetable_threshold_or_a_repeated_key_is_malformed() {
             matches!(genesis(&signed(&bad, &[&a])), Err(Refusal::Malformed(_))),
             "{bad:?}"
         );
+    }
+}
+
+#[test]
+fn a_signer_key_that_is_not_a_usable_public_key_is_malformed() {
+    let (a, r) = (key(1), key(11));
+    // The identity point decodes but is weak (small order): a forger's key, never a signer's.
+    let weak: [u8; 32] = std::array::from_fn(|i| u8::from(i == 0));
+    // A value that is not a curve point at all, found at runtime (house rule 6).
+    let not_a_point = (0u8..=255)
+        .map(|seed| std::array::from_fn(|i| (i as u8).wrapping_mul(13) ^ seed))
+        .find(|b: &[u8; 32]| cairn_event::VerifyingKey::from_bytes(b).is_err())
+        .expect("some 32-byte value is not a point");
+    for bad in [weak, not_a_point] {
+        for in_release in [false, true] {
+            let mut root = doc(1, None, &[&a], 1, &[&r], 1);
+            if in_release {
+                root.release_signers[0].pubkey = bad;
+            } else {
+                root.root_signers.push(Signer {
+                    kid: vec![9],
+                    pubkey: bad,
+                    custody_note: String::new(),
+                });
+            }
+            assert!(
+                matches!(genesis(&signed(&root, &[&a])), Err(Refusal::Malformed(_))),
+                "{bad:?} in_release={in_release}"
+            );
+        }
     }
 }
 
@@ -271,6 +301,42 @@ fn a_missing_version_is_a_chain_gap() {
 }
 
 #[test]
+fn a_gap_after_a_verified_step_names_the_held_version() {
+    // advance is all or nothing, so the machine still holds v1, not the v2 verified on the way.
+    let c = chain();
+    let h = history(&[&c.v1]);
+    let (cc, dd, r) = (key(3), key(4), key(12));
+    let v4 = signed(
+        &doc(4, Some([1; 32]), &[&cc, &dd], 2, &[&r], 1),
+        &[&cc, &dd],
+    );
+    assert_eq!(
+        advance(&h, &[c.v2.clone(), v4]).unwrap_err(),
+        Refusal::ChainGap {
+            pinned: 1,
+            needs: 4
+        }
+    );
+}
+
+#[test]
+fn the_same_new_payload_twice_is_accepted_once() {
+    let c = chain();
+    let h = history(&[&c.v1]);
+    let (a, b) = (key(1), key(2));
+    // Same payload, a different signature set: one version, not a fork.
+    let again = SignedRoot {
+        payload: c.v2.payload.clone(),
+        signatures: vec![
+            sign_trust_root(&c.v2.payload, &b).unwrap(),
+            sign_trust_root(&c.v2.payload, &a).unwrap(),
+        ],
+    };
+    let h2 = advance(&h, &[c.v2.clone(), again, c.v2.clone()]).unwrap();
+    assert_eq!(versions(&h2), [1, 2]);
+}
+
+#[test]
 fn two_successors_are_a_fork() {
     let c = chain();
     let h = history(&[&c.v1]);
@@ -342,102 +408,4 @@ fn a_damaged_chain_entry_or_an_empty_pin_is_refused() {
         Err(Refusal::Malformed(_))
     ));
     assert_eq!(advance(&[], &[c.v1]).unwrap_err(), Refusal::NoChannel);
-}
-
-// ---- verify_release / verify_bundle -------------------------------------------------------
-
-#[test]
-fn a_rotated_out_release_key_is_refused_once_seen() {
-    let c = chain();
-    let (r1, r2) = (key(11), key(12));
-    // This terminal already holds v2 (release set r2); a bundle that withholds v2 and is
-    // signed by the rotated-out r1 must not pass.
-    let h = history(&[&c.v1, &c.v2]);
-    let m = manifest(1, 1);
-    assert_eq!(
-        verify_bundle(&h, &meta(vec![c.v1.clone()], &m, &[&r1]), 0).unwrap_err(),
-        Refusal::ReleaseSignaturesShort { have: 0, need: 1 }
-    );
-    let (h2, got) = verify_bundle(&h, &meta(vec![c.v1.clone()], &m, &[&r2]), 0).unwrap();
-    assert_eq!((versions(&h2), got), (vec![1, 2], m));
-}
-
-#[test]
-fn an_older_root_cannot_be_elected() {
-    let c = chain();
-    let (r1, r2) = (key(11), key(12));
-    let h = history(&[&c.v1]);
-    let chain = vec![c.v1.clone(), c.v2.clone()];
-    // root_version_ref names v1, whose release set r1 signed — but v2 is the newest seen.
-    let m = manifest(1, 1);
-    assert_eq!(
-        verify_bundle(&h, &meta(chain.clone(), &m, &[&r1]), 0).unwrap_err(),
-        Refusal::ReleaseSignaturesShort { have: 0, need: 1 }
-    );
-    let (h2, _) = verify_bundle(&h, &meta(chain, &m, &[&r2]), 0).unwrap();
-    assert_eq!(versions(&h2), [1, 2]);
-}
-
-#[test]
-fn a_release_not_newer_is_refused() {
-    let c = chain();
-    let r1 = key(11);
-    let g = history(&[&c.v1]);
-    for (offered, installed) in [(5, 5), (4, 5)] {
-        assert_eq!(
-            verify_release(
-                g[0].root(),
-                &meta(vec![], &manifest(offered, 1), &[&r1]),
-                installed
-            )
-            .unwrap_err(),
-            Refusal::NotNewer { installed, offered }
-        );
-    }
-    let m = manifest(6, 1);
-    assert_eq!(
-        verify_release(g[0].root(), &meta(vec![], &m, &[&r1]), 5).unwrap(),
-        m
-    );
-}
-
-#[test]
-fn a_release_from_another_channel_or_a_damaged_manifest_is_refused() {
-    let c = chain();
-    let r1 = key(11);
-    let g = history(&[&c.v1]);
-    let mut m = manifest(1, 1);
-    m.channel_id = "community".into();
-    assert_eq!(
-        verify_release(g[0].root(), &meta(vec![], &m, &[&r1]), 0).unwrap_err(),
-        Refusal::WrongChannel {
-            pinned: "official".into(),
-            offered: "community".into()
-        }
-    );
-    let mut damaged = meta(vec![], &manifest(1, 1), &[&r1]);
-    damaged.manifest.push(0);
-    assert!(matches!(
-        verify_release(g[0].root(), &damaged, 0),
-        Err(Refusal::Malformed(_))
-    ));
-}
-
-// ---- check_artifact ----------------------------------------------------------------------
-
-#[test]
-fn a_wrong_digest_or_length_is_an_artifact_mismatch() {
-    let m = manifest(1, 1);
-    check_artifact(&m, 0, b"the window program").unwrap();
-    let mismatch = Err(Refusal::ArtifactMismatch { index: 0 });
-    assert_eq!(check_artifact(&m, 0, b"the window programme"), mismatch);
-    assert_eq!(check_artifact(&m, 0, b"the window prograM"), mismatch);
-    // Right digest, wrong declared length: still not the file the list names.
-    let mut lying = m.clone();
-    lying.artifacts[0].byte_len += 1;
-    assert_eq!(check_artifact(&lying, 0, b"the window program"), mismatch);
-    assert_eq!(
-        check_artifact(&m, 1, b"the window program"),
-        Err(Refusal::ArtifactMismatch { index: 1 })
-    );
 }
