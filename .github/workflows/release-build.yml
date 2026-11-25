@@ -1,0 +1,83 @@
+name: release-build
+
+# Builds the UNSIGNED aarch64 Debian artifacts of a Cairn window release (#909 slice C2).
+# Signing is an offline act of the steward: this workflow holds no secret and has no signing
+# step, so a compromise of CI can never become signed code on a terminal. The steward downloads
+# the artifacts, reviews them, and signs the manifest on their own machine (until reproducible
+# builds, #259, the steward signs what CI built: stated, not hidden).
+#
+# Debian trixie = the base of Raspberry Pi OS Lite 64-bit (current since 2025-10). The window
+# links the system WebKitGTK and glibc, so the build must match the terminal's distribution.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release number (a positive integer, higher than the last signed release)
+        required: true
+  push:
+    tags: ["release-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: aarch64 / Debian trixie
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    env:
+      # workflow_dispatch input, else the number after `release-` in the tag.
+      CAIRN_RELEASE_VERSION: ${{ inputs.release_version || github.ref_name }}
+    steps:
+      - name: Install build tools and the WebKitGTK build dependencies
+        run: |
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config file \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Reduce the release number to digits
+        run: |
+          set -euo pipefail
+          v="${CAIRN_RELEASE_VERSION#release-}"
+          case "$v" in ''|*[!0-9]*) echo "release version must be an integer: $v" >&2; exit 1;; esac
+          echo "CAIRN_RELEASE_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Install the pinned toolchain
+        run: |
+          set -euxo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" show
+
+      - name: Build the window and the installer
+        run: |
+          set -euxo pipefail
+          cargo build --release --locked --manifest-path cairn-gui/Cargo.toml -p cairn-gui-tauri
+          cargo build --release --locked -p cairn-terminal-install
+
+      - name: Describe the window (window.json) and sum the files
+        run: |
+          set -euxo pipefail
+          mkdir out
+          cp cairn-gui/target/release/cairn-gui-tauri out/cairn-window
+          cp target/release/cairn-terminal-install out/
+          # The generation line and release number are asked of the built program itself.
+          gen=$(out/cairn-window --print-schema-generation)
+          rel=$(out/cairn-window --print-release-version)
+          platform=$(. /etc/os-release && echo "${ID}-${VERSION_ID}")
+          printf '{"generation_line":"%s","release_version":%s,"platform":"%s"}\n' \
+            "$gen" "$rel" "$platform" > out/window.json
+          cat out/window.json
+          (cd out && sha256sum cairn-window cairn-terminal-install window.json > SHA256SUMS)
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: cairn-window-release-${{ env.CAIRN_RELEASE_VERSION }}-aarch64
+          path: out/
+          if-no-files-found: error

@@ -1,0 +1,12 @@
+# Starts the installer when the window has finished staging a release. The window writes
+# incoming/complete LAST, after meta.cbor and artifact.bin; the installer clears incoming/ on
+# every outcome, so this marker disappears and the unit cannot loop.
+[Unit]
+Description=A Cairn window release is staged and waiting for the installer
+
+[Path]
+PathExists=/var/lib/cairn-terminal/incoming/complete
+Unit=cairn-terminal-install.service
+
+[Install]
+WantedBy=multi-user.target
