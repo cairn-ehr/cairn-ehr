@@ -1,6 +1,7 @@
 [package]
 name = "cairn-release"
 version = "0.0.0"
+publish = false
 description = "Cairn signed releases (ADR-0055): the trust-root / manifest / bundle documents, their canonical CBOR encoding, and (Task 3) the verifier."
 edition.workspace = true
 rust-version.workspace = true

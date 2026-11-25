@@ -26,8 +26,9 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   guard. The two context strings are wire-frozen at genesis and re-typed in `cairn-event`'s
   `release_signing_contexts_are_pinned_and_distinct`: never derive that test's expectation from the constants.
 - **The signed format is frozen at genesis.** Every byte field, the 32-byte ones included, is a CBOR byte string;
-  `decode` refuses a wrong length and any trailing byte; no document holds a map. **Tempting wrong fix:** a `HashMap`
-  field, a lenient decode, or "tidying" an encoding: every signature ever made would stop verifying. Pins:
+  `decode` refuses a wrong length and any trailing byte; no field is a `HashMap`, and each struct encodes as a CBOR map
+  keyed by field name in declaration order. **Tempting wrong fix:** a `HashMap` field, a lenient decode, or "tidying" an
+  encoding: every signature ever made would stop verifying. Pins:
   `docs_tests.rs::every_byte_field_is_a_cbor_byte_string`, `trailing_bytes_are_malformed`,
   `a_short_digest_is_malformed`.
 - **A signature counts by its key, once.** Its `detached_key_id` is matched against `Signer.pubkey`, never `Signer.kid`
@@ -39,7 +40,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   back to the genesis file (that would undo a rotation). **Tempting wrong fix:** a `VerifiedRoot` constructor "for
   loading", or a verified flag in the table. Pins:
   `crates/cairn-node/tests/release_intake.rs::a_tampered_stored_root_is_refused_not_trusted`,
-  `a_damaged_stored_root_is_reported_as_damaged_not_as_no_channel`;
+  `a_damaged_stored_root_is_reported_as_damaged_not_as_no_channel`,
+  `status_reports_a_stored_root_that_decodes_but_does_not_verify_as_damaged` (R28: `release-status` re-verifies too);
   `run_tests.rs::a_damaged_pin_refuses_rather_than_falling_back_to_genesis`.
 - **One chunk per lock of the window's one connection.** Each 256 KiB chunk takes and drops the shared connection, so a
   clinical press waits behind at most one chunk. **Tempting wrong fix:** hold the lock for the whole download "to be
@@ -103,8 +105,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `every_flag_the_kiosk_passes_is_a_real_window_flag`.
 - **`install.sh` starts the installer once, through systemd, after enabling the path unit** (ruling R27). The window
   fetches nothing until `state/status.json` exists, and the path unit starts the installer only once a release is
-  staged, so without this run a fresh terminal never follows its node. **Tempting wrong fix:** drop it as redundant
-  with the path unit, or run the binary directly (it could then run beside a path-unit-triggered run). Pins:
+  staged, so without this run a fresh terminal never follows its node. **Tempting wrong fix:** drop it as redundant with
+  the path unit, or run the binary directly (it could then run beside a path-unit-triggered run). Pins:
   `packaging.rs::install_sh_starts_the_installer_once_so_the_window_has_a_status`;
   `run_tests.rs::nothing_staged_writes_the_idle_status_even_with_no_pin`, `a_folder_still_being_written_is_left_alone`.
 

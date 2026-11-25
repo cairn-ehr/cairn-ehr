@@ -1140,7 +1140,7 @@ program size: ___ MB
 | LAN download of one program to the Pi | ≥ 3 | | | stated | |
 | The longest gap between two chunks on the Pi | ≥ 3 | | | ≤ 0.2 s | |
 | A press during a download, minus the baseline median | ≥ 10 | | | ≤ ~200 ms | |
-| The installer's swap | 2 | | | stated | |
+| The installer's swap | 1 | | | stated | |
 | Intake → the calm line on the Pi | 1 | | | stated (~125 s) | |
 
 | Behaviour | Verdict | Notes |

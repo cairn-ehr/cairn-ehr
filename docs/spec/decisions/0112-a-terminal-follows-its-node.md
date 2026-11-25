@@ -12,7 +12,9 @@
   rulings. Filed by the build: [#1182](https://github.com/cairn-ehr/cairn-ehr/issues/1182),
   [#1183](https://github.com/cairn-ehr/cairn-ehr/issues/1183),
   [#1184](https://github.com/cairn-ehr/cairn-ehr/issues/1184),
-  [#1185](https://github.com/cairn-ehr/cairn-ehr/issues/1185).
+  [#1185](https://github.com/cairn-ehr/cairn-ehr/issues/1185),
+  [#1186](https://github.com/cairn-ehr/cairn-ehr/issues/1186),
+  [#1187](https://github.com/cairn-ehr/cairn-ehr/issues/1187).
 - **Supersedes:** nothing, and it amends no ADR by edit.
 - **Builds on:** [ADR-0055](0055-distribution-trust-root-governance-chained-root-document.md) (the chained trust-root
   document, the self-contained bundle, the gate order and its practice-manager refusals: this slice builds the pure core
@@ -78,10 +80,11 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
    and glibc) and `generation_line`, the exact line its `--print-schema-generation` prints. The release version is the
    manifest's. So the node and the terminal can choose an artifact without running it.
 
-   The encoding is canonical CBOR, written by the same `ciborium` writer `cairn-event` uses; no document holds a map.
-   **Every byte field, the 32-byte ones included, is a CBOR byte string** (ruling R4), and `decode` is strict: bad CBOR,
-   a wrong shape, a 32-byte field of another length, or any byte after the value is `Malformed`, so a signed document
-   has one reading. The format freezes at genesis; this was the cheap time to fix it.
+   The encoding is canonical CBOR, written by the same `ciborium` writer `cairn-event` uses; no field is a `HashMap`,
+   and each struct encodes as a CBOR map keyed by field name in declaration order. **Every byte field, the 32-byte ones
+   included, is a CBOR byte string** (ruling R4), and `decode` is strict: bad CBOR, a wrong shape, a 32-byte field of
+   another length, or any byte after the value is `Malformed`, so a signed document has one reading. The format freezes
+   at genesis; this was the cheap time to fix it.
 
 4. **The verifier is pure** (`verify.rs`; ADR-0055 decisions 2, 5 and 6). No I/O, no clock, no database. The node's
    intake and the terminal's installer both call it with what they hold and act only on `Ok`.
@@ -157,8 +160,10 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
    then **prunes by key, never by digest**: it keeps the newest two releases per `(os, arch, platform)` of kind
    `window`, deleting those rows by `(release_version, idx)`, and then any bundle left with no file (a digest-keyed
    delete would take another release's identical row). `release-status` says, in plain words, the channel and trust
-   version, the newest release held, and every open incident, or that the stored trust file cannot be read back. The
-   node's own program and schema are still installed the existing way: C2 makes no node upgrade itself.
+   version, the newest release held, and every open incident, or that the stored trust file is damaged: the stored roots
+   are re-verified as intake does (ruling R28), so one that decodes but no longer verifies is reported as damaged, never
+   shown as the channel. The node's own program and schema are still installed the existing way: C2 makes no node
+   upgrade itself.
 
 8. **The window knows its release, and the install check compares it** (design §4.4, D5). A new flag,
    `--print-release-version`, prints one decimal `u64` and exits, read from the raw arguments **before clap**, beside
@@ -222,10 +227,15 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
       cannot fix: `NotNewer` and `NoProgramForThisTerminal`** (ruling R23). Every other refusal leaves it empty, because
       its release number may come from a forged meta that would otherwise lock out the genuine release; `WontStart` too,
       because a slow first start on a Pi can time out. The window's three fetches per session bound the re-fetching.
-    - **The installer's own faults say so** (ruling R22): a damaged `roots.cbor`, a failed write, a bad `--run-as` get
-      `TerminalFault`, "This terminal could not install the update because of a fault on the terminal itself; the
-      program in place keeps running. Tell whoever looks after this terminal.", never `WontStart`'s sentence (no precise
-      untruth), with `refused_release` empty, and still write the status and clear `incoming/`.
+    - **The installer's own faults say so** (ruling R22). Exactly these become `TerminalFault`: a damaged or unreadable
+      `roots.cbor` or `channel-root.cbor` (the pin cannot be loaded), a damaged `installed_release`, a `--run-as` that
+      names no user or root, and a failed write while putting the program in place (`.new`, `.prev`, the rename, the
+      directory fsync). They say "This terminal could not install the update because of a fault on the terminal itself;
+      the program in place keeps running. Tell whoever looks after this terminal.", never `WontStart`'s sentence (no
+      precise untruth), with `refused_release` empty, and still write the status and clear `incoming/`. A failed write
+      of `roots.cbor` or `installed_release` AFTER a successful swap is only logged: the status still says `installed`,
+      the new program is in place, and the recorded release may be the old one
+      ([#1184](https://github.com/cairn-ehr/cairn-ehr/issues/1184)).
 
 11. **Packaging and the release build** (`packaging/terminal/`, `.github/workflows/release-build.yml`). **A terminal is
     remote by definition** (ruling R26): it reaches its node through the pinned gateway, and a machine with the database
@@ -234,18 +244,19 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
     are given again, and never replaces an existing `/opt/cairn/bin/cairn-window` (the installer owns updates) without
     `--replace-window`. It installs `cage` (MIT) from apt as the kiosk compositor, creates the `cairn-window` user, sets
     `incoming/` to `root:cairn-window` 2770 and `state/` to root 0755, never silently replaces an existing different
-    trust file, and prints the trust file's SHA-256 to compare with a second channel. **Last, it starts the installer
-    once** (`systemctl start cairn-terminal-install.service`, so it never runs beside a run the path unit started;
-    ruling R27): the window fetches nothing until `state/status.json` exists, and the path unit starts the installer
-    only once a release is staged, so with nothing staged this run writes the idle status carrying the terminal's trust
-    version (0 with no trust file at all), and the script stops if no status was written. **The kiosk never runs as
-    root** (`User=cairn-window`, `cage -- cairn-window --terminal-dir … --release-dir /var/lib/cairn-terminal`); the
-    installer service runs as root, `KillMode=control-group`, with `ProtectSystem=strict` and write access to
-    `/opt/cairn/bin` and `/var/lib/cairn-terminal` only; the path unit's trigger is limited to 10 runs a minute.
-    `fs.protected_hardlinks=1` is a stated requirement. CI builds the **unsigned** `aarch64` window and installer on an
-    `ubuntu-24.04-arm` runner in a `debian:trixie` container, writes `window.json` by running the built window's two
-    print flags, and uploads the files with their SHA-256 sums; it holds no secret and has no signing step. **The
-    steward signs offline**: until reproducible builds exist (#259), the steward signs what CI built.
+    trust file, and prints the trust file's SHA-256 to compare with a second channel. After enabling the path unit, and
+    before enabling the kiosk, **it starts the installer once** (`systemctl start cairn-terminal-install.service`, so it
+    never runs beside a run the path unit started; ruling R27): the window fetches nothing until `state/status.json`
+    exists, and the path unit starts the installer only once a release is staged, so with nothing staged this run writes
+    the idle status carrying the terminal's trust version (0 with no trust file at all), and the script stops if no
+    status was written. **The kiosk never runs as root** (`User=cairn-window`,
+    `cage -- cairn-window --terminal-dir … --release-dir /var/lib/cairn-terminal`); the installer service runs as root,
+    `KillMode=control-group`, with `ProtectSystem=strict` and write access to `/opt/cairn/bin` and
+    `/var/lib/cairn-terminal` only; the path unit's trigger is limited to 10 runs a minute. `fs.protected_hardlinks=1`
+    is a stated requirement. CI builds the **unsigned** `aarch64` window and installer on an `ubuntu-24.04-arm` runner
+    in a `debian:trixie` container, writes `window.json` by running the built window's two print flags, and uploads the
+    files with their SHA-256 sums; it holds no secret and has no signing step. **The steward signs offline**: until
+    reproducible builds exist (#259), the steward signs what CI built.
 
 **Paper-parity.** Not clinical-surface: the slice moves signed program files from the node to its terminals, and no
 clinical workflow gains or loses a step (the restart it leads to is ADR-0111's). RUNBOOK §41 owes the figures, by a
@@ -286,9 +297,10 @@ human on a node and a Pi: intake time for one bundle, LAN download time, the lon
 - **No reproducible builds** ([#259](https://github.com/cairn-ehr/cairn-ehr/issues/259)): the steward signs what CI
   built, so a compromised CI that builds a different program than its source gets it signed unless the steward catches
   it.
-- **No co-signer floors, no freshness rung** (§7.9, [#260](https://github.com/cairn-ehr/cairn-ehr/issues/260)), and
-  ADR-0055's revocation latency holds: a terminal that has not yet seen a rotation still honours the release key it
-  rotated out. A 1-of-1 steward root makes the steward's offline machine the single point of compromise.
+- **No co-signer floors** (ADR-0055 decision 6, [#1187](https://github.com/cairn-ehr/cairn-ehr/issues/1187)), **no
+  freshness rung** (§7.9, [#260](https://github.com/cairn-ehr/cairn-ehr/issues/260)), and ADR-0055's revocation latency
+  holds: a terminal that has not yet seen a rotation still honours the release key it rotated out. A 1-of-1 steward root
+  makes the steward's offline machine the single point of compromise.
 - **The node's own load gate is not built** ([#257](https://github.com/cairn-ehr/cairn-ehr/issues/257)): a node's
   program, DDL and extensions are still installed the existing way, unverified by this plane.
 - **Only an honest window follows the node's choice.** The installer checks signature, newness and platform, not fit: a

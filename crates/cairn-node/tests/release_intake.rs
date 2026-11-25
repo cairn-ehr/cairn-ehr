@@ -494,3 +494,30 @@ async fn a_damaged_stored_root_is_reported_as_damaged_not_as_no_channel() {
         "{s}"
     );
 }
+
+/// Ruling R28: `release-status` re-verifies the stored roots as intake does. A stored root that
+/// still DECODES but no longer verifies (a flipped signature byte) is reported as damaged, never
+/// shown as the channel the node follows.
+#[tokio::test]
+async fn status_reports_a_stored_root_that_decodes_but_does_not_verify_as_damaged() {
+    let Some((_g, mut owner)) = rig().await else {
+        return;
+    };
+    let (g, h, _, rk) = channel();
+    take_in(&mut owner, &release(&h, 1, &rk, b"one"), Some(g))
+        .await
+        .unwrap();
+    owner
+        .execute(
+            "UPDATE release_root SET signatures = ARRAY[set_byte(signatures[1], 0, \
+             get_byte(signatures[1], 0) # 1)] WHERE version = 1",
+            &[],
+        )
+        .await
+        .unwrap();
+    let s = status(&owner).await.unwrap();
+    assert!(
+        s.contains("damaged") && !s.contains("Release channel:"),
+        "{s}"
+    );
+}

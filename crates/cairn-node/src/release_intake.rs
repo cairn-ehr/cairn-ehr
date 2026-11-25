@@ -295,8 +295,12 @@ pub fn render_status(f: &StatusFacts) -> String {
 /// Read the facts and render them.
 pub async fn status(db: &Client) -> anyhow::Result<String> {
     let run = async {
+        // Re-verified as intake does (R28): a stored chain that decodes but no longer verifies
+        // is damaged, never shown as the channel this node follows.
         let roots = stored_roots(db).await?;
-        let newest_root = roots.last().map(|r| r.root());
+        let newest_root = (!roots.is_empty()).then(|| {
+            rebuild_history(&roots).map(|h| h.last().expect("non-empty history").root().clone())
+        });
         let newest: Option<i64> = db
             .query_one("SELECT max(release_version) FROM release_bundle", &[])
             .await?

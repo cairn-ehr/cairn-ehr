@@ -4712,9 +4712,9 @@ for n in 2 3; do "$REL" bundle --history root.cbor --key release.key --artifact 
 
 - [ ] `. /etc/os-release && echo "$ID-$VERSION_ID"` prints the platform every `window.json` names. Another value is a
       finding: every offer would then be filtered out and the terminal would never fetch.
-- [ ] **A terminal is remote by definition.** With no connection and no fingerprint, the script refuses before
-      touching anything: "a first install needs both --conn and --node-fingerprint (a terminal reaches its node
-      remotely)". With only `--node-fingerprint`: "give both --conn and --node-fingerprint, or neither (on a re-run)".
+- [ ] **A terminal is remote by definition.** With no connection and no fingerprint, the script refuses before touching
+      anything: "a first install needs both --conn and --node-fingerprint (a terminal reaches its node remotely)". With
+      only `--node-fingerprint`: "give both --conn and --node-fingerprint, or neither (on a re-run)".
 
 ```bash
 sudo ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/cairn-terminal-install --trust root.cbor
@@ -4736,8 +4736,8 @@ sudo -E ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/
       `"$CAIRN_NODE_BIN" --conn "$CONN" admit-terminal <TERM_FP> --label "pi"`. Within the kiosk's restarts (3 s apart)
       the window opens on its lock; sign in; it works as section 39's terminal.
 - [ ] **The first status file.** The window fetches nothing until `state/status.json` exists, so `install.sh`'s last
-      step started the installer once (with nothing staged it writes only the status), and would have stopped with
-      "the installer wrote no /var/lib/cairn-terminal/state/status.json; …" otherwise.
+      step started the installer once (with nothing staged it writes only the status), and would have stopped with "the
+      installer wrote no /var/lib/cairn-terminal/state/status.json; …" otherwise.
       `cat /var/lib/cairn-terminal/state/status.json` reads `"state": "idle"`, `"installed_release": 0`,
       `"pinned_root_version": 1`, and `journalctl -u cairn-terminal-install` shows that one run.
 
@@ -4861,7 +4861,8 @@ Now take release 4 in on the node (`release-intake "$STEWARD/bundle-4.cbor"`), t
 - [ ] **A damaged pin (the terminal's own fault):** `sudo cp -a /var/lib/cairn-terminal/state/roots.cbor /root/` and
       `echo junk | sudo tee /var/lib/cairn-terminal/state/roots.cbor`. "This terminal could not install the update
       because of a fault on the terminal itself; the program in place keeps running. Tell whoever looks after this
-      terminal." Never the trust file's genesis instead: the program stays release 3. Put `roots.cbor` back.
+      terminal." That sentence on screen is the evidence: it is neither `WontStart`'s nor an install (a fall back to the
+      genesis file would also leave release 3 in place, so the release alone proves nothing). Put `roots.cbor` back.
 - [ ] **A bad `--run-as` (the terminal's own fault):** `sudo systemctl edit cairn-terminal-install.service` with
       `[Service]`, `ExecStart=`, `ExecStart=/opt/cairn/bin/cairn-terminal-install --run-as root`. The same "fault on the
       terminal itself" sentence; `incoming/` is cleared, and `systemctl is-failed cairn-terminal-install.path` does not
@@ -4928,7 +4929,7 @@ psql "$CONN" -c "DELETE FROM release_artifact; DELETE FROM release_bundle; DELET
 | LAN download of one program to the Pi, size: ___ MB | ≥ 3 | | | stated | |
 | The longest gap between two chunks on the Pi | ≥ 3 | | | ≤ 0.2 s | |
 | A press during a download, minus the baseline median | ≥ 10 | | | ≤ ~200 ms | |
-| The installer's swap | 2 | | | stated | |
+| The installer's swap | 1 | | | stated | |
 | Intake → the calm line on the Pi | 1 | | | stated (~125 s) | |
 
 | Behaviour | Verdict | Notes |
