@@ -1127,3 +1127,38 @@ Steps: paper *N* = 1 → observed \_\_ (idle) / \_\_ (someone working).
 | A symlink-swap install never updates | | |
 | An unsupervised service that exits stays down | | |
 | An untouched remote terminal at its lock restarts after an upgrade | | |
+
+## A terminal follows its node (#909 slice C2, runbook §41)
+
+Node: ___ · terminal: Raspberry Pi ___ (Raspberry Pi OS Lite 64-bit, `ID-VERSION_ID` ___) · LAN: wired / other ·
+program size: ___ MB
+
+| Figure | n | median | slowest | Budget | Inside? |
+|---|---|---|---|---|---|
+| The rehearsed ceremony, keygen to fingerprint (minutes, context) | 1 | | | — | |
+| Intake of one bundle (`real`) | 3 | | | stated | |
+| LAN download of one program to the Pi | ≥ 3 | | | stated | |
+| The longest gap between two chunks on the Pi | ≥ 3 | | | ≤ 0.2 s | |
+| A press during a download, minus the baseline median | ≥ 10 | | | ≤ ~200 ms | |
+| The installer's swap | 2 | | | stated | |
+| Intake → the calm line on the Pi | 1 | | | stated (~125 s) | |
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| `keygen` prints the key and the recovery code; refuses to overwrite | | |
+| The trust file's SHA-256 on the Pi equals the second channel's | | |
+| `install.sh` refuses a first install without the connection and the fingerprint | | |
+| The modes; `fs.protected_hardlinks`; the kiosk never root | | |
+| `status.json` exists after the first install (else a finding) | | |
+| The node's refusals: no channel, damaged, genesis already held, not newer, wrong channel | | |
+| "This terminal is fetching its update from the node." during a fetch | | |
+| No trust file on the terminal: the no-channel sentence; nothing installed | | |
+| The swap: `.prev` kept, the release recorded, `incoming/` cleared | | |
+| The start check runs as `cairn-window`, never root | | |
+| The calm line after an install; Update now restarts into the new program on Linux | | |
+| An untouched lock restarts into release 3 by itself | | |
+| Not newer: refused for good, never fetched again | | |
+| Damaged program, damaged list, too large: refused, fetched again | | |
+| A damaged pin, a bad `--run-as`: the terminal's own fault, nothing installed, no loop | | |
+| Will not start: refused, fetched three times, then not again | | |
+| A fork freezes the node's doors; the terminal runs on | | |

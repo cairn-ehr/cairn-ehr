@@ -10,6 +10,98 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #909 SLICE C2 — A TERMINAL FOLLOWS ITS NODE (ADR-0112, db/086) — do not undo.**
+- **The installer never trusts the node or the window.** It verifies every staged release against ITS OWN pin
+  (`state/roots.cbor`, else `/etc/cairn/channel-root.cbor`, else the compiled-in root): the roots the window staged are
+  only ever climbed from that pin, and the node's intake is a courtesy that keeps junk out of its store. **Tempting
+  wrong fix:** skip the installer's check "because the node already verified it", or take the staged chain as the pin.
+  Pins: `cairn-terminal-install`'s `run_tests.rs::a_terminal_pinned_two_rotations_back_installs`,
+  `a_forged_release_never_locks_out_the_genuine_one`; `decide_tests.rs::a_rotated_out_release_key_is_refused`,
+  `a_root_from_another_channel_is_the_wrong_channel`.
+- **No public sign or verify function takes a signing context.** `release_sig.rs` has one pair per document, each
+  binding its own context, so a caller cannot pass the wrong one. **Tempting wrong fix:** make `sign_detached` /
+  `verify_detached` public "to save four wrappers". Pins:
+  `release_sig.rs::a_root_signature_never_verifies_as_a_manifest`, `a_manifest_signature_never_verifies_as_a_root`,
+  `an_event_signature_never_verifies_as_a_root`; none of them fails on a public context parameter, so review is the
+  guard. The two context strings are wire-frozen, and no test re-types them
+  (`signing_context_registry_is_pinned_and_distinct` covers the older three only).
+- **The signed format is frozen at genesis.** Every byte field, the 32-byte ones included, is a CBOR byte string;
+  `decode` refuses a wrong length and any trailing byte; no document holds a map. **Tempting wrong fix:** a `HashMap`
+  field, a lenient decode, or "tidying" an encoding: every signature ever made would stop verifying. Pins:
+  `docs_tests.rs::every_byte_field_is_a_cbor_byte_string`, `trailing_bytes_are_malformed`,
+  `a_short_digest_is_malformed`.
+- **A signature counts by its key, once.** Its `detached_key_id` is matched against `Signer.pubkey`, never `Signer.kid`
+  (a label); a key signing twice is one signer; a weak or non-point key in a root is `Malformed`. **Tempting wrong
+  fix:** match by `kid`, or count signatures rather than keys. Pins: `verify_tests.rs::one_signer_counted_once`,
+  `a_signer_key_that_is_not_a_usable_public_key_is_malformed`.
+- **Stored roots are re-verified on load, on the node and on the terminal.** `VerifiedRoot`'s fields are private, so the
+  only way to hold one is `genesis` then `advance`. A damaged `roots.cbor` is the terminal's own fault, never a fall
+  back to the genesis file (that would undo a rotation). **Tempting wrong fix:** a `VerifiedRoot` constructor "for
+  loading", or a verified flag in the table. Pins:
+  `crates/cairn-node/tests/release_intake.rs::a_tampered_stored_root_is_refused_not_trusted`,
+  `a_damaged_stored_root_is_reported_as_damaged_not_as_no_channel`;
+  `run_tests.rs::a_damaged_pin_refuses_rather_than_falling_back_to_genesis`.
+- **One chunk per lock of the window's one connection.** Each 256 KiB chunk takes and drops the shared connection, so a
+  clinical press waits behind at most one chunk. **Tempting wrong fix:** hold the lock for the whole download "to be
+  faster", or raise the chunk size; the door caps it at 262144 bytes. Pins:
+  `release_fetch_db_tests.rs::a_press_waits_at_most_one_chunk` (DB-gated: CI does not run it, #905, so run it locally);
+  `release_store_doors.rs::a_chunk_over_the_cap_is_refused`.
+- **`complete` is written last; the installer writes `status.json` first, then clears `incoming/`, on every outcome.**
+  The window removes a stale `complete` first and renames the new one in after the artifact is synced; the installer
+  acts on `complete` alone and clears it first. **Tempting wrong fix:** clear before writing the status ("the next
+  release can stage sooner": a poll then sees an empty folder beside a stale status), or keep `incoming/` after the
+  installer's own fault "as evidence" (the path unit would retrigger until its limit fails it). Pins:
+  `release_fetch_tests.rs::complete_is_written_last`, `a_staged_release_is_meta_artifact_then_complete`;
+  `run_tests.rs`'s `refused` helper (staging empty after every refusal), `a_bad_run_as_user_is_the_terminals_own_fault`,
+  `a_half_staged_folder_is_cleared`; `files.rs::clear_removes_complete_first_and_tries_everything`. No test pins the
+  status-before-clear order: review it.
+- **An untaken release waits.** While `incoming/complete` names a release above the installed one, the window fetches
+  nothing: the installer may be reading those files. **Tempting wrong fix:** fetch over it "because a newer release
+  wins". Pin: `release_fetch_tests.rs::an_untaken_release_waits`.
+- **`refused_release` is set only after the release verified, for `NotNewer` and `NoProgramForThisTerminal`.** Any other
+  refusal's release number may come from a forged meta, and `WontStart` may be a slow first start. **Tempting wrong
+  fix:** mark every refusal for good "to stop re-downloads": a forger then locks the genuine release out. Pins:
+  `decide_tests.rs::only_a_verified_verdict_is_refused_for_good`;
+  `run_tests.rs::a_forged_release_never_locks_out_the_genuine_one`, `a_program_that_will_not_start_is_never_swapped_in`.
+- **Every fetch counts**, failed or staged: at most three per release per session. **Tempting wrong fix:** count only
+  failed fetches: a release staged and refused as damaged every time then downloads forever. Pins:
+  `release_fetch_tests.rs::fetches_stop_after_three`, `deterministic_damage_stops_after_three_fetches`,
+  `two_refused_releases_do_not_alternate_forever`; `release_fetch_db_tests.rs::a_successful_fetch_counts_as_an_attempt`.
+- **The print lines never change.** `--print-schema-generation`'s `<generation> <64 hex>` (C1's rule) and
+  `--print-release-version`'s one decimal line are read before clap; CI writes `window.json` from them, and the
+  installer (with its own copy of both flags, `swap.rs`) requires exactly what the manifest names. **Tempting wrong
+  fix:** fold the release into the generation line "so one flag says it all": every older window reads the new program
+  as not installed, and every installer refuses it. Pins: `update_tests.rs::the_release_flag_is_read_before_clap`,
+  `the_release_line_round_trips`; `decide_tests.rs::the_new_program_must_answer_exactly_its_signed_lines`.
+- **The start check runs the verified bytes, and never as root.** The installer writes the bytes it verified to
+  `<program>.new` and runs THAT as `--run-as`; a missing user or uid 0 is the terminal's own fault. **Tempting wrong
+  fix:** run the staged `artifact.bin` "because it is the same bytes" (its unprivileged owner can change it after the
+  check), or fall back to root when the drop fails. Pins: `run_tests.rs::a_bad_run_as_user_is_the_terminals_own_fault`,
+  `a_program_that_will_not_start_is_never_swapped_in`. No test changes the staged file after the check, and the drop
+  itself is untested (it needs root): review, and RUNBOOK §41.
+- **The chunk door serves `window` artifacts only, and refuses while an incident is open**, like the offer door.
+  **Tempting wrong fix:** drop the incident check "because the offer door already freezes": a download in progress would
+  finish. Pins: `release_store_doors.rs::a_chunk_of_a_non_window_artifact_is_refused`,
+  `a_chunk_during_an_open_incident_is_refused`, `an_open_incident_offers_nothing`.
+- **A fork's incident is written after the rollback, in its own statement.** **Tempting wrong fix:** insert it inside
+  the intake's transaction, where the refusal rolls it back. Pins:
+  `release_intake.rs::a_fork_records_an_incident_and_freezes_offers`,
+  `a_fork_inside_the_first_bundle_records_one_incident`.
+- **Prune by key, never by digest.** `release_artifact` is keyed `(release_version, idx)`: identical bytes may be two
+  entries for two platforms, or one file in two releases. **Tempting wrong fix:** key or delete by `digest` "because it
+  is content-addressed": it deletes another release's row. Pins:
+  `release_intake.rs::identical_bytes_for_two_platforms_are_each_offered_with_their_own_entry`,
+  `pruning_is_per_platform_and_keeps_unknown_kinds`, `old_releases_are_pruned_to_two`.
+- **No signing in CI, and no key on a node.** The release workflow builds unsigned and holds no secret; the steward
+  signs offline with `cairn-release`. **Tempting wrong fix:** a signing step with a stored key "to save the steward a
+  step": a CI compromise becomes signed code on every terminal. Pin:
+  `packaging.rs::the_release_workflow_holds_no_secret_and_pins_every_action`.
+- **A terminal is remote by definition, and its kiosk never runs as root.** `install.sh` requires `--conn` and
+  `--node-fingerprint` on a first install, because the kiosk always passes `--terminal-dir`, which a local database
+  refuses. **Tempting wrong fix:** default to a local connection, or run the kiosk as root "for the display". Pins:
+  `packaging.rs::install_sh_refuses_a_remote_terminal_without_its_connection`, `the_kiosk_never_runs_as_root`,
+  `every_flag_the_kiosk_passes_is_a_real_window_flag`.
+
 **⇒ #909 SLICE C1 — AN OLDER WINDOW WORKS ABOVE A FLOOR (ADR-0111, db/085) — do not undo.**
 - **Never reset the floor ledger.** `WINDOW_FLOOR_LEDGER` (`cairn-event`'s `schema_generation.rs`) gains one entry
   per generation and keeps every earlier one: a floor never falls, and a raise names what an old window misses.

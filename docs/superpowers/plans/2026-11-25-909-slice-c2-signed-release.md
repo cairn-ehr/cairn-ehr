@@ -18,6 +18,16 @@ SQL, systemd units, `cage` (kiosk compositor), GitHub Actions arm64 runner, plai
 
 **Spec:** [`docs/superpowers/specs/2026-11-25-909-slice-c2-signed-release-design.md`](../specs/2026-11-25-909-slice-c2-signed-release-design.md)
 
+> [!NOTE]
+> **Executed in PR #1181; this plan is a record, not the build.** Several interfaces below were changed by the build's
+> rulings: `release_artifact` is keyed `(release_version, idx)`, not by digest (Task 5); the chunk door also serves
+> only `window` artifacts and refuses during an open incident (Task 5); intake takes an advisory lock and prunes by
+> key (Task 6); `decide` takes `incident: Option<u64>` and the start check runs `<program>.new` holding the verified
+> bytes (Task 9); `InstallerStatus` lives in `cairn-release` and gains `refused_release`, set only for `NotNewer` and
+> `NoProgramForThisTerminal`; the window waits while a release is untaken and fetches one release at most three times
+> a session (Task 8); the installer's own faults have their own sentence (Task 9); `install.sh` requires `--conn` and
+> `--node-fingerprint` (Task 10). ADR-0112 records what was built. Where this plan and it disagree, it wins.
+
 Paper-parity: not clinical-surface — the slice moves signed program files from the node to its terminals; no clinical workflow gains or loses a step (the restart is C1's, RUNBOOK §40).
 
 ## Global Constraints
