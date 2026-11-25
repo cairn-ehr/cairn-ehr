@@ -42,6 +42,11 @@ A re-run without them keeps `window.env`; with both it rewrites it. A re-run nev
 existing `/opt/cairn/bin/cairn-window` (the installer owns updates; replacing would downgrade)
 unless `--replace-window` is given.
 
+Last, the script starts the installer once (`systemctl start cairn-terminal-install.service`). With
+nothing staged it writes `state/status.json` (idle, carrying the terminal's trust version): the window
+fetches nothing until that file exists, and the path unit starts the installer only once a release is
+staged. The script stops if no status was written.
+
 The script prints the trust file's SHA-256. **Check it against a second channel** (the
 fingerprint the Cairn project published elsewhere) before trusting the terminal: that file is
 the root of everything the terminal will ever accept. An existing, different trust file is never

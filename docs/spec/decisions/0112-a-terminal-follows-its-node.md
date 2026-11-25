@@ -234,14 +234,18 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
     are given again, and never replaces an existing `/opt/cairn/bin/cairn-window` (the installer owns updates) without
     `--replace-window`. It installs `cage` (MIT) from apt as the kiosk compositor, creates the `cairn-window` user, sets
     `incoming/` to `root:cairn-window` 2770 and `state/` to root 0755, never silently replaces an existing different
-    trust file, and prints the trust file's SHA-256 to compare with a second channel. **The kiosk never runs as root**
-    (`User=cairn-window`, `cage -- cairn-window --terminal-dir … --release-dir /var/lib/cairn-terminal`); the installer
-    service runs as root, `KillMode=control-group`, with `ProtectSystem=strict` and write access to `/opt/cairn/bin` and
-    `/var/lib/cairn-terminal` only; the path unit's trigger is limited to 10 runs a minute. `fs.protected_hardlinks=1`
-    is a stated requirement. CI builds the **unsigned** `aarch64` window and installer on an `ubuntu-24.04-arm` runner
-    in a `debian:trixie` container, writes `window.json` by running the built window's two print flags, and uploads the
-    files with their SHA-256 sums; it holds no secret and has no signing step. **The steward signs offline**: until
-    reproducible builds exist (#259), the steward signs what CI built.
+    trust file, and prints the trust file's SHA-256 to compare with a second channel. **Last, it starts the installer
+    once** (`systemctl start cairn-terminal-install.service`, so it never runs beside a run the path unit started;
+    ruling R27): the window fetches nothing until `state/status.json` exists, and the path unit starts the installer
+    only once a release is staged, so with nothing staged this run writes the idle status carrying the terminal's trust
+    version (0 with no trust file at all), and the script stops if no status was written. **The kiosk never runs as
+    root** (`User=cairn-window`, `cage -- cairn-window --terminal-dir … --release-dir /var/lib/cairn-terminal`); the
+    installer service runs as root, `KillMode=control-group`, with `ProtectSystem=strict` and write access to
+    `/opt/cairn/bin` and `/var/lib/cairn-terminal` only; the path unit's trigger is limited to 10 runs a minute.
+    `fs.protected_hardlinks=1` is a stated requirement. CI builds the **unsigned** `aarch64` window and installer on an
+    `ubuntu-24.04-arm` runner in a `debian:trixie` container, writes `window.json` by running the built window's two
+    print flags, and uploads the files with their SHA-256 sums; it holds no secret and has no signing step. **The
+    steward signs offline**: until reproducible builds exist (#259), the steward signs what CI built.
 
 **Paper-parity.** Not clinical-surface: the slice moves signed program files from the node to its terminals, and no
 clinical workflow gains or loses a step (the restart it leads to is ADR-0111's). RUNBOOK §41 owes the figures, by a
@@ -251,8 +255,7 @@ human on a node and a Pi: intake time for one bundle, LAN download time, the lon
 ## Consequences
 
 - The owner takes in one bundle per release, and each terminal fetches, re-verifies and installs it with no human act at
-  the terminal (once it has a status file: see below), then restarts through ADR-0111's path. A same-schema fix to the
-  window reaches every terminal.
+  the terminal, then restarts through ADR-0111's path. A same-schema fix to the window reaches every terminal.
 - A broken-into node, or a broken-into window, cannot put on a terminal any program the steward did not sign: the
   installer verifies against its own pin, test-runs the verified bytes unprivileged and installs those bytes.
 - The node holds one window artifact per release per platform (the design's estimate: ~20 MB), two releases deep, in its
@@ -268,9 +271,6 @@ human on a node and a Pi: intake time for one bundle, LAN download time, the lon
   hand. The ceremony (offline root and release keys, ADR-0026's escrow rungs, root version 1 published with its
   fingerprint on a second channel, 1-of-1 as ADR-0055 decision 8 declares) is a human act owed by the maintainer; the
   root file lands in `crates/cairn-release/official/` in its own PR after it.
-- **A fresh terminal has no status file, and the window fetches nothing without one.** The installer writes the first
-  `status.json` only when it runs, and as built nothing in `packaging/terminal/` runs it before a release is staged;
-  RUNBOOK §41 checks it.
 - **A node restored to an older release** may leave a terminal with a newer window than its database; the installer
   never goes back, so that terminal needs a hand fix ([#1183](https://github.com/cairn-ehr/cairn-ehr/issues/1183)).
 - **A crash between the swap and the record** leaves the new program in place with `installed_release` still old; a
@@ -294,8 +294,8 @@ human on a node and a Pi: intake time for one bundle, LAN download time, the lon
 - **Only an honest window follows the node's choice.** The installer checks signature, newness and platform, not fit: a
   compromised window could stage any signed release newer than the installed one, even one the node does not serve, and
   a program the node's database refuses would then not open at its next launch. It still cannot stage an unsigned one.
-  No staging quota is set: the 64 MiB limit bounds what the installer reads, not what the window's user can write to the
-  folder's filesystem.
+  No staging quota is set ([#1186](https://github.com/cairn-ehr/cairn-ehr/issues/1186)): the 64 MiB limit bounds what
+  the installer reads, not what the window's user can write to the folder's filesystem.
 - **No verb resolves an incident.** On the node it stays open until someone sets `release_incident.resolved_at` by hand;
   on a terminal, until root removes `state/incident`. ADR-0055 decision 5's audited resolution ceremony is not built.
 - **The privilege drop is untested, and the units have never run on a Pi.** The tests run the start check as the test's

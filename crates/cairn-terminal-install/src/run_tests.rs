@@ -403,3 +403,31 @@ fn a_frozen_terminal_says_fork_before_reading_anything() {
     let fork = Refusal::Fork { version: 2 };
     assert_eq!(status(&rig), refused(&rig, &fork, 0, None));
 }
+
+/// Ruling R27: `install.sh` starts the installer once with nothing staged, so the window has a
+/// status to read. With no trust file at all (none installed, no official root before the
+/// ceremony) it still writes the idle status, pinned at 0, and touches nothing else; an existing
+/// status is never overwritten by such a run.
+#[test]
+fn nothing_staged_writes_the_idle_status_even_with_no_pin() {
+    let rig = terminal();
+    std::fs::remove_file(&rig.cfg.genesis_root).unwrap();
+    assert!(install_staged(&rig.cfg));
+    untouched(&rig);
+    let idle = InstallerStatus {
+        state: "idle".into(),
+        installed_release: 0,
+        pinned_root_version: 0,
+        sentence: None,
+        refused_release: None,
+    };
+    assert_eq!(status(&rig), idle);
+    // A second run leaves the status it finds alone.
+    let marked = InstallerStatus {
+        installed_release: 9,
+        ..idle
+    };
+    std::fs::write(rig.cfg.state.join("status.json"), marked.to_json()).unwrap();
+    assert!(install_staged(&rig.cfg));
+    assert_eq!(status(&rig), marked);
+}

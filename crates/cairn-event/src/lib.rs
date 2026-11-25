@@ -1888,6 +1888,30 @@ mod tests {
         assert_ne!(CTX_ATTESTATION, CTX_PAIRING);
     }
 
+    // The release plane's two contexts (#909 slice C2) freeze at the channel's genesis: every
+    // trust root and manifest ever signed binds one of them. Re-typed, like the test above.
+    #[test]
+    fn release_signing_contexts_are_pinned_and_distinct() {
+        assert_eq!(CTX_TRUST_ROOT.as_str(), "application/cairn-trust-root+cbor");
+        assert_eq!(
+            CTX_RELEASE_MANIFEST.as_str(),
+            "application/cairn-release-manifest+cbor"
+        );
+        let all = [
+            CTX_EVENT,
+            CTX_ATTESTATION,
+            CTX_PAIRING,
+            CTX_UNWRAP_KEY,
+            CTX_TRUST_ROOT,
+            CTX_RELEASE_MANIFEST,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
     // ── ADR-0052 §4: the unwrap-key certificate (CTX_UNWRAP_KEY) ───────────────
 
     #[test]

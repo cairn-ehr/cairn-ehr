@@ -1149,7 +1149,7 @@ program size: ___ MB
 | The trust file's SHA-256 on the Pi equals the second channel's | | |
 | `install.sh` refuses a first install without the connection and the fingerprint | | |
 | The modes; `fs.protected_hardlinks`; the kiosk never root | | |
-| `status.json` exists after the first install (else a finding) | | |
+| `install.sh` started the installer once: `status.json` idle, trust version 1 | | |
 | The node's refusals: no channel, damaged, genesis already held, not newer, wrong channel | | |
 | "This terminal is fetching its update from the node." during a fetch | | |
 | No trust file on the terminal: the no-channel sentence; nothing installed | | |

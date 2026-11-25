@@ -179,3 +179,26 @@ fn a_crash_that_leaves_the_marker_cannot_kill_the_path_unit() {
         assert!(r.contains(needle), "README lacks {needle}");
     }
 }
+
+/// Ruling R27: the window fetches nothing until `state/status.json` exists, and only the installer
+/// writes it, which the path unit starts only once a release is staged. So `install.sh` must start
+/// the installer once itself (nothing staged: it writes the idle status with the terminal's pin),
+/// through systemd, so that it can never run beside a path-unit-triggered run, and only after the
+/// path unit is enabled. It then refuses to finish if no status was written.
+#[test]
+fn install_sh_starts_the_installer_once_so_the_window_has_a_status() {
+    let s = repo_file("packaging/terminal/install.sh");
+    let lines = code_lines(&s);
+    let at = |wanted: &str| lines.iter().position(|l| l.starts_with(wanted));
+    let enabled =
+        at("systemctl enable --now cairn-terminal-install.path").expect("path unit enabled");
+    let started =
+        at("systemctl start cairn-terminal-install.service").expect("installer started once");
+    assert!(
+        started > enabled,
+        "the installer is started after the path unit is enabled"
+    );
+    assert!(lines[started..]
+        .iter()
+        .any(|l| l.contains("/var/lib/cairn-terminal/state/status.json") && l.contains("die")));
+}

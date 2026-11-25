@@ -23,8 +23,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `verify_detached` public "to save four wrappers". Pins:
   `release_sig.rs::a_root_signature_never_verifies_as_a_manifest`, `a_manifest_signature_never_verifies_as_a_root`,
   `an_event_signature_never_verifies_as_a_root`; none of them fails on a public context parameter, so review is the
-  guard. The two context strings are wire-frozen, and no test re-types them
-  (`signing_context_registry_is_pinned_and_distinct` covers the older three only).
+  guard. The two context strings are wire-frozen at genesis and re-typed in `cairn-event`'s
+  `release_signing_contexts_are_pinned_and_distinct`: never derive that test's expectation from the constants.
 - **The signed format is frozen at genesis.** Every byte field, the 32-byte ones included, is a CBOR byte string;
   `decode` refuses a wrong length and any trailing byte; no document holds a map. **Tempting wrong fix:** a `HashMap`
   field, a lenient decode, or "tidying" an encoding: every signature ever made would stop verifying. Pins:
@@ -101,6 +101,12 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   refuses. **Tempting wrong fix:** default to a local connection, or run the kiosk as root "for the display". Pins:
   `packaging.rs::install_sh_refuses_a_remote_terminal_without_its_connection`, `the_kiosk_never_runs_as_root`,
   `every_flag_the_kiosk_passes_is_a_real_window_flag`.
+- **`install.sh` starts the installer once, through systemd, after enabling the path unit** (ruling R27). The window
+  fetches nothing until `state/status.json` exists, and the path unit starts the installer only once a release is
+  staged, so without this run a fresh terminal never follows its node. **Tempting wrong fix:** drop it as redundant
+  with the path unit, or run the binary directly (it could then run beside a path-unit-triggered run). Pins:
+  `packaging.rs::install_sh_starts_the_installer_once_so_the_window_has_a_status`;
+  `run_tests.rs::nothing_staged_writes_the_idle_status_even_with_no_pin`, `a_folder_still_being_written_is_left_alone`.
 
 **⇒ #909 SLICE C1 — AN OLDER WINDOW WORKS ABOVE A FLOOR (ADR-0111, db/085) — do not undo.**
 - **Never reset the floor ledger.** `WINDOW_FLOOR_LEDGER` (`cairn-event`'s `schema_generation.rs`) gains one entry

@@ -4321,6 +4321,11 @@ Steps: paper *N* = 1 (take the new pad) → forced *M* = 0 at an idle update, 1 
 working → target *K* = 0 or 1; below the floor, 0 extra acts on the open chart. **A figure outside its budget, or an
 `M > N`, is the finding: file an issue, and never adjust the budget.**
 
+> [!NOTE]
+> Every generation below (85, 86, 87, the floor 85) is written for the C1 build, and the probe script asserts it: on a
+> later checkout (generation 86 since #909 slice C2) it fails. Run the whole section from a worktree of C1's merge
+> commit, `git worktree add --detach "$HOME/.cairn-measure/c1" d6163b5d`, with every command below run inside it.
+
 > [!WARNING]
 > This section **leaves the rig at generation 87**, and a `cairn-node` built from this checkout (generation 85) then
 > refuses to load it ("refusing to load schema: this database was last loaded at schema generation 87, …"). Run it
@@ -4730,11 +4735,11 @@ sudo -E ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/
       the terminal's fingerprint (`TERM_FP`). On the node,
       `"$CAIRN_NODE_BIN" --conn "$CONN" admit-terminal <TERM_FP> --label "pi"`. Within the kiosk's restarts (3 s apart)
       the window opens on its lock; sign in; it works as section 39's terminal.
-- [ ] **The first status file.** `sudo cat /var/lib/cairn-terminal/state/status.json`. The window fetches nothing until
-      this file exists, and the installer writes the first one only when it runs; as built, nothing in
-      `packaging/terminal/` runs it before a release is staged. **A missing file is a finding** (record it, and file it
-      unless already filed). To go on, run `sudo /opt/cairn/bin/cairn-terminal-install` once: with nothing staged it
-      writes `"state": "idle"`, `"installed_release": 0`, `"pinned_root_version": 1`.
+- [ ] **The first status file.** The window fetches nothing until `state/status.json` exists, so `install.sh`'s last
+      step started the installer once (with nothing staged it writes only the status), and would have stopped with
+      "the installer wrote no /var/lib/cairn-terminal/state/status.json; …" otherwise.
+      `cat /var/lib/cairn-terminal/state/status.json` reads `"state": "idle"`, `"installed_release": 0`,
+      `"pinned_root_version": 1`, and `journalctl -u cairn-terminal-install` shows that one run.
 
 **Measurement 1 — intake (node).** First the node's refusals that need no channel yet:
 
@@ -4932,7 +4937,7 @@ psql "$CONN" -c "DELETE FROM release_artifact; DELETE FROM release_bundle; DELET
 | The trust file's SHA-256 on the Pi equals the second channel's | | |
 | `install.sh` refuses a first install without the connection and the fingerprint | | |
 | The modes; `fs.protected_hardlinks`; the kiosk never root | | |
-| `status.json` exists after the first install (else a finding) | | |
+| `install.sh` started the installer once: `status.json` idle, trust version 1 | | |
 | The node's refusals: no channel, damaged, genesis already held, not newer, wrong channel | | |
 | "This terminal is fetching its update from the node." during a fetch | | |
 | No trust file on the terminal: the no-channel sentence; nothing installed | | |

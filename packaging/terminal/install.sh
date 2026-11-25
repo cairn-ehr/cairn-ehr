@@ -97,5 +97,14 @@ install -m 0644 "$here/cairn-terminal-install.service" "$here/cairn-terminal-ins
     "$here/cairn-window-kiosk.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now cairn-terminal-install.path
+# The window fetches nothing until the installer's state/status.json exists, and the path unit
+# starts the installer only once a release is staged. So start it once now: with nothing staged
+# it writes the idle status carrying this terminal's pin. Through systemd (same defaults and
+# hardening), so it never runs beside a run the path unit started. On a re-run that finds a
+# release staged it installs or refuses it, as the path unit would; a refusal is not an error here.
+systemctl start cairn-terminal-install.service ||
+    echo "install.sh: the installer refused what was staged; see journalctl -u cairn-terminal-install." >&2
+[ -f /var/lib/cairn-terminal/state/status.json ] ||
+    die "the installer wrote no /var/lib/cairn-terminal/state/status.json; see journalctl -u cairn-terminal-install"
 systemctl enable cairn-window-kiosk.service
 echo "Installed. Reboot to start the kiosk."
