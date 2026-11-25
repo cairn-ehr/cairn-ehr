@@ -16,7 +16,8 @@
 //!    `state/status.json` (else there is no installer here), and `/etc/os-release` names this
 //!    machine's platform. Fixture mode never gets past this.
 //! 2. [`offers`] asks the node (`cairn_release_offer`); [`due`] picks the newest offer that is
-//!    newer than what is installed and running, fits the node's stamp, and is not staged yet.
+//!    newer than what is installed and running, fits the node's stamp, is at most 64 MiB, was not
+//!    refused for good, and was not given up after [`MAX_ATTEMPTS`] failed downloads this session.
 //! 3. [`fetch`] (spawned, at most one at a time: [`Courier::claim`]) writes `meta.cbor`, then
 //!    `artifact.bin` by 256 KiB chunks, each under its own lock of the shared connection so a
 //!    clinical press waits behind at most one chunk, then `complete` LAST: the installer acts on
@@ -24,6 +25,15 @@
 //! 4. [`installer_view`] adds what the installer said to the update line: an installed release
 //!    newer than this program is an update `waiting` (a hint only: the restart still asks the
 //!    installed program first, C1's rule), and a refusal shows its sentence.
+//!
+//! # The contract with the installer (Task 9)
+//!
+//! The installer clears `incoming/` on EVERY outcome, installed or refused, and writes
+//! `status.json`. So a `complete` still there is a release it has not taken yet, and the window
+//! fetches nothing at all meanwhile: the installer may be reading those files (ruling R17). A
+//! refusal a fresh fetch cannot fix names its release in `refused_release`, which the window then
+//! never fetches again; one damaged in transit leaves it `None`, and the window fetches that
+//! release again on a later poll.
 use crate::state::AppState;
 use crate::update::UpdateView;
 use cairn_node::db::SchemaStamp;
@@ -32,11 +42,9 @@ pub use cairn_release::InstallerStatus;
 use cairn_release::{encode, ReleaseMeta, SignedRoot};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Mutex};
 
-/// The largest slice the chunk door serves (db/086's cap): the longest a fetch holds the
-/// window's one connection at a time.
+/// The chunk door's cap (db/086): the longest a fetch holds the window's one connection at once.
 pub const CHUNK: u64 = 262_144;
 
 /// Said while this window fetches a release (the plan's copy, verbatim).
@@ -100,15 +108,20 @@ pub struct Offer {
     pub generation_line: Option<String>,
 }
 
+/// The largest program the window fetches: the installer refuses a larger one (`TooLarge`).
+pub const MAX_ARTIFACT: u64 = 64 * 1024 * 1024;
+/// Failed downloads of one release per session before the window gives it up (a node file shorter
+/// than its offer must not be re-downloaded every minute forever); a window restart tries again.
+pub const MAX_ATTEMPTS: u32 = 3;
+
 /// The window's fetch bookkeeping, in `AppState`: where to stage, whether a fetch is running,
-/// and the newest release this session staged (so a release the installer refused is not
-/// fetched again every minute; a restart of the window tries once more).
+/// and how many downloads of each release failed this session.
 #[derive(Default)]
 pub struct Courier {
     /// `--release-dir`; `None` never fetches.
     pub dir: Option<PathBuf>,
     fetching: AtomicBool,
-    staged: Mutex<Option<u64>>,
+    failures: Mutex<std::collections::BTreeMap<u64, u32>>,
 }
 
 /// A running fetch's hold on [`Courier`]; dropping it lets the next fetch start.
@@ -141,8 +154,17 @@ impl Courier {
         self.fetching.load(Ordering::SeqCst)
     }
 
-    fn staged(&self) -> Option<u64> {
-        *self.staged.lock().unwrap_or_else(|p| p.into_inner())
+    /// Count one failed download of `release`.
+    pub fn failed(&self, release: u64) {
+        let mut failures = self.failures.lock().unwrap_or_else(|p| p.into_inner());
+        *failures.entry(release).or_default() += 1;
+    }
+
+    /// The releases whose downloads failed [`MAX_ATTEMPTS`] times this session.
+    pub fn given_up(&self) -> Vec<u64> {
+        let failures = self.failures.lock().unwrap_or_else(|p| p.into_inner());
+        let spent = failures.iter().filter(|(_, n)| **n >= MAX_ATTEMPTS);
+        spent.map(|(release, _)| *release).collect()
     }
 }
 
@@ -180,21 +202,31 @@ pub fn staged_release(dir: &Path) -> Option<u64> {
     text.trim().parse().ok()
 }
 
-/// The offer to fetch now, if any. **Pure.** The newest offer that is newer than the installed
-/// release, the `running` one and anything `staged`, and whose program this node's `stamp` would
-/// serve ([`install_fit`] says `Fits`): one it would refuse is never fetched. An offer whose
-/// generation line cannot be read cannot be judged, so it is skipped.
+/// The offer to fetch now, if any. **Pure.** None at all while `untaken` (the release in
+/// `incoming/complete`) is newer than the installed one: the installer has not taken it yet, and
+/// a fetch would truncate files it may be reading. Otherwise the newest offer that is newer than
+/// the installed and `running` releases, is at most [`MAX_ARTIFACT`] bytes, is neither the
+/// installer's `refused_release` nor `given_up` this session, and whose program this node's
+/// `stamp` would serve ([`install_fit`] says `Fits`): one it would refuse is never fetched. An
+/// offer whose generation line cannot be read cannot be judged, so it is skipped.
 pub fn due(
     status: &InstallerStatus,
     offers: &[Offer],
     running: InstalledBuild,
     stamp: Option<&SchemaStamp>,
-    staged: Option<u64>,
+    untaken: Option<u64>,
+    given_up: &[u64],
 ) -> Option<Offer> {
-    let floor = status
-        .installed_release
-        .max(running.release)
-        .max(staged.unwrap_or(0));
+    if untaken.is_some_and(|r| r > status.installed_release) {
+        return None;
+    }
+    let floor = status.installed_release.max(running.release);
+    let wanted = |o: &&Offer| {
+        o.release_version > floor
+            && o.byte_len <= MAX_ARTIFACT
+            && status.refused_release != Some(o.release_version)
+            && !given_up.contains(&o.release_version)
+    };
     let fits = |offer: &Offer| {
         let line = offer.generation_line.as_deref();
         let Some((generation, hash)) = line.and_then(crate::update::parse_generation_line) else {
@@ -209,7 +241,7 @@ pub fn due(
     };
     offers
         .iter()
-        .filter(|o| o.release_version > floor && fits(o))
+        .filter(|o| wanted(o) && fits(o))
         .max_by_key(|o| o.release_version)
         .cloned()
 }
@@ -261,9 +293,17 @@ pub async fn after_poll(
     let job = match fresh {
         Some(stamp) if !state.release.is_fetching() => {
             let offers = offers(state, &ready.target).await.unwrap_or_default();
-            let staged = state.release.staged().max(staged_release(&ready.dir));
-            let running = crate::update::running_build();
-            due(&ready.status, &offers, running, stamp.as_ref(), staged).map(|offer| Job {
+            let untaken = staged_release(&ready.dir);
+            let (running, given_up) = (crate::update::running_build(), state.release.given_up());
+            let due = due(
+                &ready.status,
+                &offers,
+                running,
+                stamp.as_ref(),
+                untaken,
+                &given_up,
+            );
+            due.map(|offer| Job {
                 offer,
                 dir: ready.dir.clone(),
                 pinned_root: ready.status.pinned_root_version,
@@ -321,21 +361,15 @@ pub async fn offers(state: &AppState, target: &Target) -> Option<Vec<Offer>> {
 }
 
 /// Fetch `offer` into `<dir>/incoming/` (see the module doc's step 3), unless a fetch is
-/// already running. A failure is said on stderr and leaves no `complete`; the next poll tries
-/// again from the start.
+/// already running. A failure is said on stderr, counted ([`Courier::failed`]) and leaves no
+/// `complete`; the next poll tries again from the start, at most [`MAX_ATTEMPTS`] times in all.
 pub async fn fetch(state: &AppState, offer: Offer, dir: &Path, pinned_root: u64) {
     let Some(_claim) = state.release.claim() else {
         return;
     };
-    match fetch_into(state, &offer, dir, pinned_root).await {
-        Ok(()) => {
-            *state
-                .release
-                .staged
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = Some(offer.release_version);
-        }
-        Err(e) => eprintln!("the update could not be fetched from the node: {e:#}"),
+    if let Err(e) = fetch_into(state, &offer, dir, pinned_root).await {
+        eprintln!("the update could not be fetched from the node: {e:#}");
+        state.release.failed(offer.release_version);
     }
 }
 
@@ -443,6 +477,8 @@ where
     out.sync_all()?;
     let pending = incoming.join("complete.partial");
     write_synced(&pending, release.to_string().as_bytes())?;
+    // No fsync of the directory after the rename: a power cut may lose `complete`, which is
+    // safe (no `complete`, nothing installs, and the next poll fetches again).
     std::fs::rename(pending, incoming.join(COMPLETE))?;
     Ok(())
 }

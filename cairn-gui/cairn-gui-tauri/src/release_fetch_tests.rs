@@ -45,6 +45,7 @@ fn status(state: &str, installed: u64, sentence: Option<&str>) -> InstallerStatu
         installed_release: installed,
         pinned_root_version: 1,
         sentence: sentence.map(str::to_string),
+        refused_release: None,
     }
 }
 
@@ -73,19 +74,38 @@ fn due_picks_the_newest_fitting_newer_offer() {
     // newest that FITS is 8. Release 3 is older than what is installed.
     let offers = [offer(9, g + 1), offer(8, g), offer(5, g), offer(3, g)];
     let s = status("installed", 4, None);
-    let due = due(&s, &offers, running(0), Some(&our_stamp()), None);
-    assert_eq!(due.map(|o| o.release_version), Some(8));
+    assert_eq!(due_of(&s, &offers), Some(8));
     // An offer without a readable generation line is never fetched: it cannot be judged.
     let mut blank = offer(8, g);
     blank.generation_line = None;
     assert_eq!(due_of(&s, &[blank]), None);
     // No stamp: nothing can be judged to fit.
-    assert_eq!(super::due(&s, &offers, running(0), None, None), None);
+    assert_eq!(due(&s, &offers, running(0), None, None, &[]), None);
 }
 
-/// [`due`] against this build at release 0 and this build's stamp, nothing staged.
+/// [`due`] against this build at release 0 and this build's stamp, nothing staged or given up.
 fn due_of(s: &InstallerStatus, offers: &[Offer]) -> Option<u64> {
-    due(s, offers, running(0), Some(&our_stamp()), None).map(|o| o.release_version)
+    due_with(s, offers, 0, None, &[])
+}
+
+/// [`due`] on this build's stamp, running `running`, with `untaken` in `incoming/`.
+fn due_with(
+    s: &InstallerStatus,
+    offers: &[Offer],
+    running_release: u64,
+    untaken: Option<u64>,
+    given_up: &[u64],
+) -> Option<u64> {
+    let stamp = our_stamp();
+    due(
+        s,
+        offers,
+        running(running_release),
+        Some(&stamp),
+        untaken,
+        given_up,
+    )
+    .map(|o| o.release_version)
 }
 
 #[test]
@@ -94,25 +114,74 @@ fn due_skips_a_release_already_installed() {
     assert_eq!(due_of(&status("installed", 6, None), &[offer(6, g)]), None);
     // Not newer than the program running now either (a terminal updated by hand).
     assert_eq!(
-        due(
-            &status("idle", 0, None),
-            &[offer(6, g)],
-            running(6),
-            Some(&our_stamp()),
-            None
-        ),
+        due_with(&status("idle", 0, None), &[offer(6, g)], 6, None, &[]),
         None
     );
-    // Already staged, this session or still waiting in `incoming/`: not fetched twice.
-    let staged = due(
-        &status("idle", 0, None),
-        &[offer(6, g)],
-        running(0),
-        Some(&our_stamp()),
-        Some(6),
-    );
-    assert_eq!(staged, None);
     assert_eq!(due_of(&status("idle", 0, None), &[offer(6, g)]), Some(6));
+}
+
+/// Ruling R17: while `incoming/complete` names a release the installer has not taken, nothing
+/// is fetched, not even a newer one: the installer may be reading those files, and a new fetch
+/// would truncate them under it. The installer clears `incoming/` on every outcome.
+#[test]
+fn an_untaken_release_waits() {
+    let g = embedded_schema_version();
+    let idle = status("idle", 5, None);
+    assert_eq!(due_with(&idle, &[offer(6, g)], 0, Some(6), &[]), None);
+    assert_eq!(
+        due_with(&idle, &[offer(7, g), offer(6, g)], 0, Some(6), &[]),
+        None
+    );
+    // A `complete` at or below what is installed was taken: the newer offer is due.
+    assert_eq!(due_with(&idle, &[offer(7, g)], 0, Some(5), &[]), Some(7));
+}
+
+/// Ruling R18: a release the installer refused for good (`refused_release`) is never fetched
+/// again; one refused as damaged in transit (no `refused_release`, `incoming/` cleared) is, on a
+/// later poll; and a newer release after a refused one is due.
+#[test]
+fn a_refused_release_is_fetched_again_only_if_a_fetch_can_fix_it() {
+    let g = embedded_schema_version();
+    let mut for_good = status("refused", 4, Some("not signed by enough signers"));
+    for_good.refused_release = Some(6);
+    assert_eq!(due_of(&for_good, &[offer(6, g)]), None);
+    assert_eq!(due_of(&for_good, &[offer(7, g), offer(6, g)]), Some(7));
+    // A release refused for good does not hold back an older one the installer has not seen.
+    assert_eq!(due_of(&for_good, &[offer(6, g), offer(5, g)]), Some(5));
+    let damaged = status("refused", 4, Some("damaged; fetch it again"));
+    assert_eq!(due_of(&damaged, &[offer(6, g)]), Some(6));
+}
+
+/// Ruling R18: after [`MAX_ATTEMPTS`] failed downloads of one release this session, the window
+/// gives that release up (a stored artifact shorter than its offer must not be re-downloaded every
+/// minute forever); a newer release is still due.
+#[test]
+fn failed_downloads_stop_after_three() {
+    let courier = Courier::new(None);
+    for _ in 0..MAX_ATTEMPTS - 1 {
+        courier.failed(6);
+    }
+    assert!(courier.given_up().is_empty());
+    courier.failed(6);
+    assert_eq!(courier.given_up(), vec![6]);
+    let g = embedded_schema_version();
+    let idle = status("idle", 0, None);
+    assert_eq!(due_with(&idle, &[offer(6, g)], 0, None, &[6]), None);
+    assert_eq!(
+        due_with(&idle, &[offer(7, g), offer(6, g)], 0, None, &[6]),
+        Some(7)
+    );
+}
+
+/// No Cairn program is over 64 MiB (the installer refuses one as `TooLarge`): never fetched.
+#[test]
+fn an_oversized_offer_is_never_due() {
+    let g = embedded_schema_version();
+    let mut big = offer(6, g);
+    big.byte_len = MAX_ARTIFACT + 1;
+    assert_eq!(due_of(&status("idle", 0, None), &[big.clone()]), None);
+    big.byte_len = MAX_ARTIFACT;
+    assert_eq!(due_of(&status("idle", 0, None), &[big]), Some(6));
 }
 
 #[test]

@@ -9,13 +9,17 @@ fn installer_status_round_trips() {
             installed_release: 0,
             pinned_root_version: 1,
             sentence: None,
+            refused_release: None,
         },
         InstallerStatus {
             state: "refused".into(),
             installed_release: 7,
             pinned_root_version: 2,
+            refused_release: Some(8),
             sentence: Some(
-                "This update file is damaged or is not a Cairn update; fetch it again.".into(),
+                "This update is not signed by enough of the Cairn project's release signers \
+                 (1 of 2). Do not install it; report it to the Cairn project."
+                    .into(),
             ),
         },
     ] {
@@ -37,6 +41,8 @@ fn the_plans_shape_is_read() {
         ("installed", 12, 3)
     );
     assert_eq!(status.sentence, None);
+    // A file written before `refused_release` existed still reads, as no such refusal.
+    assert_eq!(status.refused_release, None);
 }
 
 /// A damaged or half-written file is no status, never a guess (the window then fetches nothing).

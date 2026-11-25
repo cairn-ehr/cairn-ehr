@@ -17,6 +17,12 @@ pub struct InstallerStatus {
     pub pinned_root_version: u64,
     /// The refusal's sentence (`Refusal::sentence`, `Who::Terminal`) when `state` is `"refused"`.
     pub sentence: Option<String>,
+    /// The release refused for good: set ONLY for a refusal that fetching it again cannot fix
+    /// (every refusal but `ArtifactMismatch` and `Malformed`), so the window never fetches that
+    /// release again; `None` for one damaged in transit, which the window does fetch again. Absent
+    /// in an older file, read as `None`.
+    #[serde(default)]
+    pub refused_release: Option<u64>,
 }
 
 impl InstallerStatus {
