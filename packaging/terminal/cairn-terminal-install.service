@@ -1,0 +1,21 @@
+# The root-owned installer: verifies the staged release against THIS terminal's own pin, test-runs
+# the new program as cairn-window, swaps it in atomically, and exits. One run per trigger.
+[Unit]
+Description=Cairn terminal installer (verify and swap a staged window release)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/cairn/bin/cairn-terminal-install
+# Explicit, though it is systemd's default: the start-check child (and anything WebKit forks)
+# must die with the run, never outlive it.
+KillMode=control-group
+# Hardening limited to what is clear: the installer writes only the program folder and the
+# terminal's state folders; /etc (the trust file) is read-only to it. NoNewPrivileges blocks
+# gaining privilege through exec of setuid files; it does not stop root dropping to cairn-window
+# with setuid(2), which is what the start check does. NOT yet run on a real Pi (RUNBOOK owed).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/cairn/bin /var/lib/cairn-terminal
+ProtectHome=yes
+PrivateTmp=yes

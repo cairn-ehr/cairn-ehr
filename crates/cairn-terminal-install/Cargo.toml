@@ -1,0 +1,27 @@
+[package]
+name = "cairn-terminal-install"
+version = "0.0.0"
+description = "The root-owned terminal installer (#909 slice C2): verifies a staged window release against the terminal's own pin, proves it starts, and swaps it in atomically."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# Every dependency is already in the tree (no new licence surface, house rule 1):
+# cairn-release (the verifier, without its steward CLI: ruling R13), cairn-keystore (the
+# atomic write), clap (MIT/Apache-2.0, as cairn-node), libc (MIT/Apache-2.0, already locked
+# as a transitive dependency) for O_NOFOLLOW / O_NONBLOCK and getpwnam_r.
+[dependencies]
+cairn-release = { path = "../cairn-release", default-features = false }
+cairn-keystore = { path = "../cairn-keystore" }
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+
+[dev-dependencies]
+# Tests mint roots and releases at runtime with keys derived by std::array::from_fn.
+cairn-event = { path = "../cairn-event" }
+tempfile = "3"

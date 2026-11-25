@@ -4321,6 +4321,11 @@ Steps: paper *N* = 1 (take the new pad) → forced *M* = 0 at an idle update, 1 
 working → target *K* = 0 or 1; below the floor, 0 extra acts on the open chart. **A figure outside its budget, or an
 `M > N`, is the finding: file an issue, and never adjust the budget.**
 
+> [!NOTE]
+> Every generation below (85, 86, 87, the floor 85) is written for the C1 build, and the probe script asserts it: on a
+> later checkout (generation 86 since #909 slice C2) it fails. Run the whole section from a worktree of C1's merge
+> commit, `git worktree add --detach "$HOME/.cairn-measure/c1" d6163b5d`, with every command below run inside it.
+
 > [!WARNING]
 > This section **leaves the rig at generation 87**, and a `cairn-node` built from this checkout (generation 85) then
 > refuses to load it ("refusing to load schema: this database was last loaded at schema generation 87, …"). Run it
@@ -4624,3 +4629,357 @@ for any later section (the warning above).
   the lock-screen idle period).
 
 `TEMPLATE.md` carries a matching block (*An upgrade disturbs no one*).
+
+## 41. A terminal follows its node: the signed window release (#909 slice C2, ADR-0112)
+
+What changed: the owner takes one steward-signed release into the node (`cairn-node release-intake`), and a Linux
+terminal fetches its window program from it through the pinned gateway, by itself. The window only carries the bytes
+into `/var/lib/cairn-terminal/incoming/`; a root-owned installer (`cairn-terminal-install`, started by a systemd path
+unit) re-verifies them against the terminal's **own** trust file, test-runs the new program as `cairn-window`, swaps it
+in atomically keeping `.prev`, and writes `state/status.json`, which the window reads to show the calm line or the
+refusal. Section 40's restart then takes the new program.
+
+Paper counterpart: none; the slice moves program files, and no clinical workflow gains or loses a step
+(`Paper-parity: not clinical-surface`). What a human owes here is the timing on real hardware and the on-screen
+sentences. **This section needs two machines** on one wired LAN: the node (section 0's rig, with sections 38 and 39's
+supervised service and gateway) and a **Raspberry Pi 4 or 5 running Raspberry Pi OS Lite 64-bit**, freshly imaged, as
+the terminal. **Live only.** Nothing here has run on a Pi before: every unit, `install.sh`, the installer's drop to
+`cairn-window` and the rename over a running program are first seen here.
+
+**Budgets (the slice design's §7).**
+
+| Figure | Start | Stop | Budget |
+|---|---|---|---|
+| Intake of one bundle | `release-intake` starts | it prints "Release N taken in …" | stated |
+| LAN download of one program to the Pi | `artifact.bin` first grows | `complete` appears | stated (with its size) |
+| The longest press delay during a download | the press | its outcome, minus the same press with no download | **≤ ~200 ms** |
+| The installer's swap | the journal's start of `cairn-terminal-install.service` | "installed release N" | stated |
+| Intake → the terminal's calm line | `release-intake` returns | "An update is waiting; …" on the Pi | stated (≤ two polls + download + swap, ~125 s on a LAN) |
+
+**A figure outside its budget is the finding: file an issue, and never adjust the budget.** A press that reaches the 15
+s cut-off during a download is a finding whatever the budget.
+
+> [!WARNING]
+> This rehearses the genesis ceremony with **throwaway keys** on a throwaway channel (`runbook-41`). The official
+> ceremony ([#1182](https://github.com/cairn-ehr/cairn-ehr/issues/1182)) is the maintainer's, on an offline machine, and
+> none of its keys may ever touch this rig. The section leaves release rows in the rig's database (see **Afterwards**).
+
+**Setup: the node at generation 86.** As sections 0, 38 and 39. This build adds `db/086`, so rebuild `cairn-node` from
+this checkout, re-run section 0's `provision-window-role` and section 38's `provision-terminal-service-role` with the
+owner's connection, and `svc_stop; svc_start`, as section 39's setup does. Keep `NODE_FP` and `REMOTE_CONN` from section
+39.
+
+**Step 1 — the ceremony, rehearsed** (on the node's machine, standing in for the steward's offline one):
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+cargo build --release -p cairn-release
+export REL="${CARGO_TARGET_DIR:-$PWD/target}/release/cairn-release" STEWARD="$HOME/.cairn-measure/steward"
+mkdir -p "$STEWARD" && cd "$STEWARD"
+export CAIRN_RELEASE_PASSPHRASE='runbook 41 rehearsal only'
+ROOT_PUB=$("$REL" keygen --out root.key)
+REL_PUB=$("$REL" keygen --out release.key)
+"$REL" genesis --channel runbook-41 --root-signer "$ROOT_PUB" --root-threshold 1 \
+  --release-signer "$REL_PUB" --release-threshold 1 --key root.key --out root.cbor
+shasum -a 256 root.cbor     # Linux: sha256sum
+```
+
+- [ ] Each `keygen` printed 64 hex digits (the public key) on stdout and "RECOVERY CODE (shown once; write it on paper
+      and store it apart): …" on stderr. Write both codes on paper. Time the whole step, keygen to fingerprint.
+- [ ] `"$REL" keygen --out root.key` again: "… already exists; refusing to overwrite a key", and `root.key` is
+      unchanged.
+- [ ] **The second channel.** Publish the SHA-256 somewhere other than the file's own route (read it out by phone, or
+      write it on paper), as the steward will publish the official one. It is compared on the Pi in Step 3.
+
+**Step 2 — three releases from CI, two bundles.** Run `.github/workflows/release-build.yml` three times on this commit,
+with `release_version` **1**, **2** and **3** (a manual run once the workflow is on `main`, or a `release-<N>` tag), and
+download each run's artifact into `$STEWARD/r1`, `r2`, `r3`
+(`gh run download <run id> -n cairn-window-release-<N>-aarch64 --dir r<N>`). Then, in `$STEWARD`:
+
+```bash
+for n in 1 2 3; do cat r$n/window.json; (cd r$n && sha256sum -c SHA256SUMS || shasum -a 256 -c SHA256SUMS); done
+for n in 2 3; do "$REL" bundle --history root.cbor --key release.key --artifact r$n/cairn-window \
+  --sidecar r$n/window.json --release-version $n --out bundle-$n.cbor; done
+```
+
+- [ ] Each `window.json` names its own `release_version`, the same `generation_line` (one commit, one schema) and
+      `"platform":"debian-13"`. That generation line equals the node's: in this checkout,
+      `cargo run --release --manifest-path cairn-gui/Cargo.toml -p cairn-gui-tauri -- --print-schema-generation` prints
+      the same line. Every checksum is `OK`. The workflow's log shows no signing step and no secret.
+
+**Step 3 — the terminal's genesis: the first hand install** (on the Pi). Copy `r1/`, `root.cbor` and this checkout's
+`packaging/terminal/` to the Pi; `chmod +x r1/cairn-window r1/cairn-terminal-install`.
+
+- [ ] `. /etc/os-release && echo "$ID-$VERSION_ID"` prints the platform every `window.json` names. Another value is a
+      finding: every offer would then be filtered out and the terminal would never fetch.
+- [ ] **A terminal is remote by definition.** With no connection and no fingerprint, the script refuses before touching
+      anything: "a first install needs both --conn and --node-fingerprint (a terminal reaches its node remotely)". With
+      only `--node-fingerprint`: "give both --conn and --node-fingerprint, or neither (on a re-run)".
+
+```bash
+sudo ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/cairn-terminal-install --trust root.cbor
+```
+
+- [ ] **A wrong trust file stops the install** (ruling R29). Once, before the real install: `head -c 200 /dev/urandom >
+      junk.cbor`, then the second command below with `--trust junk.cbor`. It ends with "install.sh: the installer did
+      not report idle in /var/lib/cairn-terminal/state/status.json. If it says a fault on the terminal itself, the trust
+      file /etc/cairn/channel-root.cbor …", never "Installed.", and `status.json` reads `"state": "refused"`. Then
+      remove the junk by hand (`sudo rm /etc/cairn/channel-root.cbor /var/lib/cairn-terminal/state/status.json`): the
+      script never replaces a different trust file.
+
+```bash
+export CAIRN_WINDOW_CONN="$REMOTE_CONN"     # section 39's, naming the node's address and the gateway's port
+sudo -E ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/cairn-terminal-install \
+  --trust root.cbor --node-fingerprint <NODE_FP, typed>
+```
+
+- [ ] It ends with "Trust file SHA-256 (compare with the second channel before use):" and a sum **equal to Step 1's**,
+      then "Installed. Reboot to start the kiosk." Record the match. Earlier it said "install.sh: recorded the installed
+      window as release 1." (ruling R29: the installer's "newer" gate starts at the program in place), and
+      `sudo cat /var/lib/cairn-terminal/state/installed_release` prints `1`.
+- [ ] `stat -c '%U:%G %a %n' /var/lib/cairn-terminal/incoming /var/lib/cairn-terminal/state /etc/cairn/window.env` reads
+      `root:cairn-window 2770`, `root:root 755` and `root:cairn-window 640`. `sysctl fs.protected_hardlinks` reads `1`.
+- [ ] Reboot. The kiosk starts `cage` and the window on the screen; `ps -o user=,args= -C cage` names `cairn-window`,
+      never root. The first launch is not yet admitted: its refusal, also in `journalctl -u cairn-window-kiosk`, names
+      the terminal's fingerprint (`TERM_FP`). On the node,
+      `"$CAIRN_NODE_BIN" --conn "$CONN" admit-terminal <TERM_FP> --label "pi"`. Within the kiosk's restarts (3 s apart)
+      the window opens on its lock; sign in; it works as section 39's terminal.
+- [ ] **The first status file.** The window fetches nothing until `state/status.json` exists, so `install.sh`'s last
+      step started the installer once (with nothing staged it writes only the status), and would have stopped with "the
+      installer did not report idle in /var/lib/cairn-terminal/state/status.json. …" otherwise.
+      `cat /var/lib/cairn-terminal/state/status.json` reads `"state": "idle"`, `"installed_release": 1`,
+      `"pinned_root_version": 1`, and `journalctl -u cairn-terminal-install` shows that one run.
+
+**Measurement 1 — intake (node).** First the node's refusals that need no channel yet:
+
+- [ ] `"$CAIRN_NODE_BIN" --conn "$CONN" release-intake "$STEWARD/bundle-2.cbor"` (no genesis): "No release channel is
+      set up on this node yet, so it accepts no update. Whoever set it up must install the channel's first trust file."
+- [ ] `head -c 1000 "$STEWARD/bundle-2.cbor" > "$STEWARD/damaged.cbor"`, and take that in: "This update file is damaged
+      or is not a Cairn update; fetch it again."
+
+On the Pi, stop the installer so that what the window stages waits for you
+(`sudo systemctl stop cairn-terminal-install.path`), and start the download log of Measurement 2. Then:
+
+```bash
+time "$CAIRN_NODE_BIN" --conn "$CONN" release-intake "$STEWARD/bundle-2.cbor" --genesis-root "$STEWARD/root.cbor"
+"$CAIRN_NODE_BIN" --conn "$CONN" release-status
+```
+
+- [ ] It prints "Release 2 taken in (1 file); terminals can now fetch it." Record `real`. `release-status` prints
+      "Release channel: runbook-41 (trust file version 1)." and "Newest release held: 2.".
+- [ ] Again with the same `--genesis-root` (the file the node holds, given again, is accepted: ruling R30), and again
+      without it: both say "This node already has release 2; the update offered is release 2, which is not newer." A
+      different first file is refused in Measurement 7.
+
+**Measurement 2 — the LAN download, and one chunk's hold** (on the Pi, started before the intake above):
+
+```bash
+f=/var/lib/cairn-terminal/incoming
+while :; do printf '%s %s %s\n' "$(date +%s.%N)" "$(stat -c %s "$f/artifact.bin" 2>/dev/null || echo -)" \
+  "$([ -e "$f/complete" ] && echo complete)"; sleep 0.02; done > /tmp/dl.log
+```
+
+- [ ] Within about a minute of the intake (the window's next poll) the update line says "This terminal is fetching its
+      update from the node." and `incoming/` fills: `meta.cbor`, `artifact.bin`, then `complete`, holding `2`. Stop the
+      log (Ctrl-C). Record the time from the first line where `artifact.bin` is non-empty to the first `complete`, and
+      the file's size (`stat -c %s "$f/artifact.bin"`).
+- [ ] The longest gap between two successive sizes, an upper bound on how long one chunk holds the window's one
+      connection (below). Record it; over 0.2 s is a finding.
+
+```bash
+awk '$2 != "-" && $2 != last { if (t) { d = $1 - t; if (d > m) m = d }; t = $1; last = $2 } END { print m }' /tmp/dl.log
+```
+
+- [ ] Keep a copy for Measurement 6: `sudo cp -a "$f" /root/staged-2`.
+
+**Measurement 3 — a press during a download (≤ ~200 ms).** The window waits while anything is at `incoming/complete`,
+and fetches one release at most three times a session. To make it fetch again, empty the folder:
+`sudo sh -c 'rm -f /var/lib/cairn-terminal/incoming/*'`; the next poll fetches it afresh. After three fetches it gives
+the release up until it restarts: `sudo systemctl restart cairn-window-kiosk`, sign in again.
+
+- [ ] **Baseline:** ten presses with no download, from a press on a front-door row to the chart's identity header, timed
+      from a screen recording read frame by frame (a phone at 60 fps, filming the screen, will do). Record the median.
+- [ ] **During a download:** the same press, as many times as each fetch allows, over at least three fetches, ten
+      presses or more. Record the slowest. The budget is the slowest minus the baseline median. A press waits behind at
+      most one chunk (256 KiB) by design; one that waits longer, or one cut off at 15 s, is a finding.
+
+**Measurement 4 — the first follow: NoChannel, then the swap.** With release 2 staged and the installer stopped, take
+the terminal's trust file away, so that it has no pin at all (it has accepted no release yet, so it holds no
+`roots.cbor`):
+
+```bash
+sudo mv /etc/cairn/channel-root.cbor /root/
+sudo systemctl start cairn-terminal-install.path
+```
+
+- [ ] Within a minute the update line says "This terminal did not install the update: No release channel is set up on
+      this terminal yet, so it accepts no update. Whoever set it up must install the channel's first trust file."
+      `status.json` reads `"state": "refused"`, `"refused_release": null`, and `incoming/` is empty. The program is
+      still release 1: `/opt/cairn/bin/cairn-window --print-release-version` prints `1`.
+
+Put the trust file back (`sudo mv /root/channel-root.cbor /etc/cairn/`). In a second shell, watch who runs the new
+program while the installer checks it: `while :; do ps -eo user:16,args | grep '[c]airn-window.new'; done`. The window
+fetches release 2 again on a later poll (if it has fetched it three times already, restart the kiosk), and the
+installer, started by the path unit, installs it.
+
+- [ ] `journalctl -u cairn-terminal-install -o short-precise -n 20`: record the seconds from the service's start to
+      "installed release 2". That is the swap time.
+- [ ] Every line the `ps` loop printed names `cairn-window`, never `root`. (It may print nothing: the check takes well
+      under a second. Run the loop through Measurement 5 too.)
+- [ ] `ls -l /opt/cairn/bin/`: `cairn-window` and `cairn-window.prev`, both `root root` mode 755, no `.new`.
+      `/opt/cairn/bin/cairn-window --print-release-version` prints `2`; `/opt/cairn/bin/cairn-window.prev` prints `1`.
+      `sudo cat /var/lib/cairn-terminal/state/installed_release` prints `2`; `status.json` reads `"state": "installed"`,
+      `"installed_release": 2`, `"pinned_root_version": 1`; `incoming/` is empty.
+- [ ] **The restart into it (section 40's path on a real Linux terminal).** Within 60 s the window shows "An update is
+      waiting; it installs when this terminal is next idle." and Update now. Press Update now: the window restarts (if
+      `cage` exits with it, the kiosk unit starts it again 3 s later) into release 2, and the calm line is gone. "No
+      newer version is installed on this terminal yet — …" instead is a finding: the window asked about the old program,
+      not the file now at its path. Record what happened.
+
+**Measurement 5 — intake to the calm line, end to end.** The installer running and the window at release 2, idle:
+
+- [ ] On the node, `"$CAIRN_NODE_BIN" --conn "$CONN" release-intake "$STEWARD/bundle-3.cbor"` (no genesis now). Start a
+      stopwatch when it returns; stop it when the Pi shows "An update is waiting; it installs when this terminal is next
+      idle.". Record the seconds. Then let the terminal sit untouched at its lock: it restarts into release 3 by itself
+      (section 40's idle restart).
+
+**Measurement 6 — the refusals on screen.** Each refusal is said on the update line as "This terminal did not install
+the update: <its sentence>" within a minute of the installer's run. For each one, stop the installer
+(`sudo systemctl stop cairn-terminal-install.path`), wait until `incoming/complete` exists, do what the row says, start
+the installer again, read the screen and `status.json`, then stop it again before the window's next fetch is installed.
+Release 4 (below) never installs, so it can be fetched for every row; restart the kiosk after every third fetch of it.
+
+```bash
+sed 's/"release_version":3/"release_version":4/' r3/window.json > w4.json
+"$REL" bundle --history root.cbor --key release.key --artifact r3/cairn-window --sidecar w4.json \
+  --release-version 4 --out bundle-4.cbor
+```
+
+- [ ] **Not newer** (before release 4 is taken in): with the installer stopped and `incoming/` empty, copy
+      `/root/staged-2`'s `meta.cbor` and `artifact.bin` into it, then its `complete` LAST. "This terminal already has
+      release 3; the update offered is release 2, which is not newer." `status.json`'s `"refused_release": 2`.
+
+Now take release 4 in on the node (`release-intake "$STEWARD/bundle-4.cbor"`), the installer still stopped.
+
+- [ ] **A damaged program:** `echo x | sudo tee -a /var/lib/cairn-terminal/incoming/artifact.bin`. "A file in this
+      update is not the file its signed list names. Do not install it; fetch the update again."
+- [ ] **A damaged list:** `echo junk | sudo tee /var/lib/cairn-terminal/incoming/meta.cbor`. "This update file is
+      damaged or is not a Cairn update; fetch it again."
+- [ ] **Too large:** `sudo truncate -s 70M /var/lib/cairn-terminal/incoming/artifact.bin`. "The update file is larger
+      than any Cairn program; it was not installed."
+- [ ] **A damaged pin (the terminal's own fault):** `sudo cp -a /var/lib/cairn-terminal/state/roots.cbor /root/` and
+      `echo junk | sudo tee /var/lib/cairn-terminal/state/roots.cbor`. "This terminal could not install the update
+      because of a fault on the terminal itself; the program in place keeps running. Tell whoever looks after this
+      terminal." That sentence on screen is the evidence: it is neither `WontStart`'s nor an install (a fall back to the
+      genesis file would also leave release 3 in place, so the release alone proves nothing). Put `roots.cbor` back.
+- [ ] **A bad `--run-as` (the terminal's own fault):** `sudo systemctl edit cairn-terminal-install.service` with
+      `[Service]`, `ExecStart=`, `ExecStart=/opt/cairn/bin/cairn-terminal-install --run-as root`. The same "fault on the
+      terminal itself" sentence; `incoming/` is cleared, and `systemctl is-failed cairn-terminal-install.path` does not
+      say `failed`: the unit did not loop. `sudo systemctl revert cairn-terminal-install.service`.
+- [ ] Each of the five rows above leaves `"refused_release": null`, and the window fetches release 4 again on a later
+      poll (each is something a fresh fetch, or a fix on the terminal, can cure).
+- [ ] **Will not start:** restart the kiosk, start the installer, and leave both running. Release 4's program prints
+      release 3, not the 4 its manifest names: "The new program does not start on this terminal; the one in place keeps
+      running. Tell whoever looks after the node." The program stays release 3 and no `.new` is left. The window fetches
+      release 4 three times this session (three "refused:" lines in `journalctl -u cairn-terminal-install`), then no
+      more until it restarts.
+
+The verifier's other refusals cannot be reached with the steward's tool, which verifies what it writes; their sentences
+are pinned by `cairn-release`'s `refusal_tests.rs::every_refusal_speaks_plainly`, and each case by its test: `ChainGap`
+(`verify_tests.rs::a_missing_version_is_a_chain_gap`), `RootSignaturesShort` (`a_rotation_needs_the_previous_signers`),
+`ReleaseSignaturesShort` (`verify_release_tests.rs::a_rotated_out_release_key_is_refused_once_seen`), and
+`NoProgramForThisTerminal` (`cairn-terminal-install`'s `decide_tests.rs::a_platform_mismatch_names_this_terminal`; the
+node's offer door never offers another platform's program).
+
+**Measurement 7 — the node's channel refusals and the fork freeze** (on the node; run it last, it freezes updates):
+
+```bash
+"$REL" genesis --channel runbook-41-other --root-signer "$ROOT_PUB" --root-threshold 1 \
+  --release-signer "$REL_PUB" --release-threshold 1 --key root.key --out other.cbor
+"$REL" bundle --history other.cbor --key release.key --artifact r3/cairn-window --sidecar w4.json \
+  --release-version 4 --out other-4.cbor
+for v in a b; do "$REL" rotate --history root.cbor --root-signer "$ROOT_PUB" --root-threshold 1 \
+  --release-signer "$REL_PUB" $([ $v = b ] && echo --release-signer "$ROOT_PUB") --release-threshold 1 \
+  --key root.key --out v2$v.cbor; done
+for n in 5 6; do sed "s/\"release_version\":3/\"release_version\":$n/" r3/window.json > w$n.json; done
+"$REL" bundle --history root.cbor --history v2a.cbor --key release.key --artifact r3/cairn-window --sidecar w5.json \
+  --release-version 5 --out bundle-5.cbor
+"$REL" bundle --history root.cbor --history v2b.cbor --key release.key --artifact r3/cairn-window --sidecar w6.json \
+  --release-version 6 --out bundle-6.cbor
+```
+
+- [ ] `release-intake other-4.cbor`: "This update is from channel "runbook-41-other", but this node follows
+      "runbook-41"." `release-intake other-4.cbor --genesis-root other.cbor`: "This node already holds a release
+      channel's trust file, so it will not take a different first one."
+- [ ] Stop the Pi's installer first (release 5 does not start either). `release-intake bundle-5.cbor` is taken in, and
+      `release-status` now says trust file version 2.
+- [ ] `release-intake bundle-6.cbor`: "Two different trust files both claim version 2. Updates are stopped on this node
+      until the Cairn project resolves it; nothing that runs is affected." `release-status` ends with "Updates are
+      stopped: Two different trust files …". As the window's login, the offer door is silent and the chunk door refuses:
+      `psql "$WINDOW_CONN" -c "SELECT count(*) FROM cairn_release_offer('linux', 'aarch64', 'debian-13')"` reads `0`,
+      and `psql "$WINDOW_CONN" -c "SELECT cairn_release_chunk('\x00'::bytea, 0, 1)"` fails with "release updates are
+      stopped while an incident is open". The Pi keeps running release 3 and fetches nothing.
+- [ ] There is no verb that resolves an incident (ADR-0112's limits). As the owner:
+      `psql "$CONN" -c "UPDATE release_incident SET resolved_at = now() WHERE resolved_at IS NULL"`; the offer door
+      answers again.
+
+**Afterwards.** On the node, as the owner, empty the release store so that a later section starts without a channel.
+Keep `$STEWARD` only as long as the rig: its keys are throwaway, and never a release key.
+
+```bash
+psql "$CONN" -c "DELETE FROM release_artifact; DELETE FROM release_bundle; DELETE FROM release_root; DELETE FROM release_incident"
+```
+
+**Results (fill in).**
+
+| Figure | n | median | slowest | Budget | Inside? |
+|---|---|---|---|---|---|
+| The rehearsed ceremony, keygen to fingerprint (minutes, context) | 1 | | | — | |
+| Intake of one bundle (`real`), size: ___ MB | 3 | | | stated | |
+| LAN download of one program to the Pi, size: ___ MB | ≥ 3 | | | stated | |
+| The longest gap between two chunks on the Pi | ≥ 3 | | | ≤ 0.2 s | |
+| A press during a download, minus the baseline median | ≥ 10 | | | ≤ ~200 ms | |
+| The installer's swap | 1 | | | stated | |
+| Intake → the calm line on the Pi | 1 | | | stated (~125 s) | |
+
+| Behaviour | Verdict | Notes |
+|---|---|---|
+| `keygen` prints the key and the recovery code; refuses to overwrite | | |
+| The trust file's SHA-256 on the Pi equals the second channel's | | |
+| `install.sh` refuses a first install without the connection and the fingerprint | | |
+| A junk trust file: `install.sh` stops naming the trust file, never "Installed." | | |
+| `install.sh` recorded the hand-installed release (`installed_release` = 1) | | |
+| The modes; `fs.protected_hardlinks`; the kiosk never root | | |
+| `install.sh` started the installer once: `status.json` idle, trust version 1 | | |
+| The node's refusals: no channel, damaged, genesis already held, not newer, wrong channel | | |
+| "This terminal is fetching its update from the node." during a fetch | | |
+| No trust file on the terminal: the no-channel sentence; nothing installed | | |
+| The swap: `.prev` kept, the release recorded, `incoming/` cleared | | |
+| The start check runs as `cairn-window`, never root | | |
+| The calm line after an install; Update now restarts into the new program on Linux | | |
+| An untouched lock restarts into release 3 by itself | | |
+| Not newer: refused for good, never fetched again | | |
+| Damaged program, damaged list, too large: refused, fetched again | | |
+| A damaged pin, a bad `--run-as`: the terminal's own fault, nothing installed, no loop | | |
+| Will not start: refused, fetched three times, then not again | | |
+| A fork freezes the node's doors; the terminal runs on | | |
+
+**Where it is pinned.**
+- **The signatures and the documents:** `cairn-event`'s `release_sig.rs` tests; `cairn-release`'s `docs_tests.rs` (byte
+  strings, strict decode, no official root), `verify_tests.rs` and `verify_release_tests.rs` (the chain, the fork, the
+  gap, distinct signers, weak keys, the newest root's release set), `refusal_tests.rs` (the copy, a sanitised channel
+  name), `steward_tests.rs` and `tests/cli.rs`.
+- **The node:** `crates/cairn-node/tests/release_store_doors.rs` (window kind only, the cap, the incident freeze on both
+  doors) and `tests/release_intake.rs` (all or nothing, a different genesis refused and the same one accepted, the fork
+  incident, pruning by entry, stored roots re-verified).
+- **The window:** `cairn-gui-tauri`'s `update_tests.rs` (the release flag before clap), `release_fetch_tests.rs` (`due`
+  and its lowest `idx`, any `complete` waits, three fetches, `complete` last) and the DB-gated
+  `release_fetch_db_tests.rs` (`a_press_waits_at_most_one_chunk`; CI does not run it, #905);
+  `crates/cairn-node/src/window_floor_tests.rs` (`a_same_schema_higher_release_fits`, `a_lower_release_is_same`).
+- **The installer:** `cairn-terminal-install`'s `decide_tests.rs`, `run_tests.rs` (the swap and `.prev`, a program that
+  will not start, a half-staged folder, a fork until a human clears it, the terminal's own faults, a forged release that
+  cannot lock out the genuine one, a bad trust file with nothing staged, a `--run-as` user in group 0) and
+  `tests/packaging.rs` (the units, the modes, no secret in the workflow, the recorded release, the idle requirement).
+  The privilege drop itself is untested: the tests cannot drop from root.
+
+`TEMPLATE.md` carries a matching block (*A terminal follows its node*).

@@ -39,10 +39,10 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/085_window_floor.sql` → 85).
+/// (`db/086_release_store.sql` → 86).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 85;
+pub const SCHEMA_GENERATION: i32 = 86;
 
 /// The oldest schema generation an older reference-UI window may run against (#909 slice C1).
 ///
@@ -61,12 +61,20 @@ pub struct FloorEntry {
 }
 
 /// The history of the floor, oldest first; the last entry is the current generation.
-pub const WINDOW_FLOOR_LEDGER: &[FloorEntry] = &[FloorEntry {
-    generation: 85,
-    floor: 85,
-    why: "the first generation that records a floor; older windows know only the exact check",
-    old_window_misses: Some("this node's update notices"),
-}];
+pub const WINDOW_FLOOR_LEDGER: &[FloorEntry] = &[
+    FloorEntry {
+        generation: 85,
+        floor: 85,
+        why: "the first generation that records a floor; older windows know only the exact check",
+        old_window_misses: Some("this node's update notices"),
+    },
+    FloorEntry {
+        generation: 86,
+        floor: 85,
+        why: "adds the release store and its read-only doors; no window renders a new state",
+        old_window_misses: None,
+    },
+];
 
 /// What an old window misses because of the raise that set today's floor: the
 /// `old_window_misses` of the FIRST ledger entry whose floor equals [`WINDOW_FLOOR_GENERATION`].

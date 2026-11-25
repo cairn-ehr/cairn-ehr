@@ -8,8 +8,9 @@
 //! This module is the window's Rust half of that:
 //!
 //! - **At launch**, [`launch_verdict`] opens the window or refuses it with a sentence.
-//! - **A 60 s poll** (`update.js`), [`update_state`], re-reads the stamp on the window's one
-//!   shared connection (reopening it if lost) and remembers the verdict and the stamp.
+//! - **A 60 s poll** (`update.js`), [`update_state`] / [`update_poll`], re-reads the stamp on
+//!   the window's one shared connection (reopening it if lost) and remembers the verdict and the
+//!   stamp; it also starts a release fetch when one is due (`crate::release_fetch`, #909 C2).
 //! - **The gate**, [`refuse_another_chart`]: below the floor, opening a DIFFERENT chart and
 //!   registering are refused. The open chart's re-reads, Sign, saves and close never come here.
 //! - **Before a restart**, [`installed_program`] asks the program now installed at this window's
@@ -20,7 +21,9 @@ use crate::state::AppState;
 use cairn_node::db::{
     embedded_schema_hash, embedded_schema_version, read_schema_stamp, SchemaStamp,
 };
-use cairn_node::window_floor::{install_fit, window_verdict, InstallFit, WindowVerdict};
+use cairn_node::window_floor::{
+    install_fit, window_verdict, InstallFit, InstalledBuild, WindowVerdict,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -31,6 +34,34 @@ use std::time::{Duration, Instant};
 /// [`generation_line`]'s format ever changes, and [`asks_for_generation_line`] reads it before
 /// clap parses anything.
 pub const PRINT_FLAG: &str = "--print-schema-generation";
+
+/// The flag that makes this program print its signed release version (a decimal `u64`; 0 when
+/// built without one) and exit, answered before clap like [`PRINT_FLAG`]. An older program that
+/// does not know it fails or prints usage, which reads as release 0.
+pub const RELEASE_FLAG: &str = "--print-release-version";
+
+/// This build's signed release version, stamped at build time by `CAIRN_RELEASE_VERSION`;
+/// absent or unparsable is 0 (an unreleased build).
+pub fn release_version() -> u64 {
+    option_env!("CAIRN_RELEASE_VERSION")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// The line `--print-release-version` prints.
+pub fn release_line(release: u64) -> String {
+    release.to_string()
+}
+
+/// Was this program started to print its release line? Read BEFORE clap. **Pure.**
+pub fn asks_for_release_line(args: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+    args.into_iter().skip(1).any(|arg| arg == RELEASE_FLAG)
+}
+
+/// [`release_line`] read back; anything else is `None`. **Pure.**
+pub fn parse_release_line(line: &str) -> Option<u64> {
+    line.trim().parse().ok()
+}
 
 /// How long the installed program may take to print its line. A hung or slow one reads as "not
 /// installed" (Review Focus 4): it must never block, or darken, the window asking.
@@ -43,11 +74,14 @@ pub const REFUSED_ANOTHER_CHART: &str =
 /// What the webview shows: `current` (nothing), `waiting` (the calm line) or `below_floor` (the
 /// alert, naming `reason` when the stamp gave one). A refusal learned mid-session is
 /// `below_floor` too, gated the same, but its alert is the refusal's own sentence (`refusal`).
+/// `note` is the courier's line (`crate::release_fetch::installer_view`): fetching, or the
+/// installer's refusal; shown whatever the kind.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct UpdateView {
     pub kind: &'static str,
     pub reason: Option<String>,
     pub refusal: Option<String>,
+    pub note: Option<String>,
 }
 
 /// What the installed program would be: `same` (nothing newer), `fits` (restart into it),
@@ -128,6 +162,7 @@ pub fn update_view(verdict: &WindowVerdict) -> UpdateView {
         kind,
         reason,
         refusal,
+        note: None,
     }
 }
 
@@ -233,13 +268,27 @@ pub fn install_stamp(
     }
 }
 
-/// The poll (`update.js`, once a minute). Fixture mode has no database and is always `current`.
-pub async fn update_state_impl(state: &AppState) -> UpdateView {
+/// The poll (`update.js`, once a minute), and the release fetch it found due
+/// (`crate::release_fetch`), which the Tauri forwarder spawns: a fetch takes minutes, and the
+/// poll's answer must not wait for it. Fixture mode reads nothing and fetches nothing.
+pub async fn update_poll(state: &AppState) -> (UpdateView, Option<crate::release_fetch::Job>) {
     if state.is_mock() {
-        return update_view(&WindowVerdict::Current);
+        return (update_view(&WindowVerdict::Current), None);
     }
     let read = read_stamp(state, "update check").await;
-    poll_answer(state, read)
+    let fresh = read.clone();
+    let view = poll_answer(state, read);
+    crate::release_fetch::after_poll(state, view, fresh.as_ref()).await
+}
+
+/// This running program as an installed build: what an installed or offered one is judged
+/// against.
+pub fn running_build() -> InstalledBuild {
+    InstalledBuild {
+        generation: embedded_schema_version(),
+        hash: embedded_schema_hash(),
+        release: release_version(),
+    }
 }
 
 /// A live window that cannot name its own program's path cannot check what is installed there
@@ -265,8 +314,9 @@ pub async fn installed_program_impl(state: &AppState) -> InstallView {
     install_view(fit, source)
 }
 
-/// Run `program args` for its generation line and judge it against `stamp`. No program, one
-/// that fails, hangs past [`INSTALLED_CHECK_TIMEOUT`] or prints anything else is not installed.
+/// Run `program args` for its generation line (and `RELEASE_FLAG` for its release, 0 if it
+/// cannot answer) and judge it against `stamp`. No program, one that fails, hangs past
+/// [`INSTALLED_CHECK_TIMEOUT`] or prints anything else is not installed.
 pub async fn installed_fit(
     program: Option<PathBuf>,
     args: &[&str],
@@ -274,22 +324,40 @@ pub async fn installed_fit(
 ) -> InstallFit {
     let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     let installed = match program {
-        // Off the async runtime: the wait below sleeps.
+        // Off the async runtime: the waits below sleep.
         Some(program) => tokio::task::spawn_blocking(move || {
-            generation_of(&program, &args, INSTALLED_CHECK_TIMEOUT)
+            let (generation, hash) = generation_of(&program, &args, INSTALLED_CHECK_TIMEOUT)?;
+            // An older program cannot answer the release flag: release 0.
+            let release = run_for_line(
+                &program,
+                &[RELEASE_FLAG.to_string()],
+                INSTALLED_CHECK_TIMEOUT,
+            )
+            .and_then(|l| parse_release_line(&l))
+            .unwrap_or(0);
+            Some(InstalledBuild {
+                generation,
+                hash,
+                release,
+            })
         })
         .await
         .ok()
         .flatten(),
         None => None,
     };
-    let running = (embedded_schema_version(), embedded_schema_hash());
-    install_fit(installed, running, stamp)
+    install_fit(installed, running_build(), stamp)
 }
 
-/// Run `program args`, wait at most `timeout`, and read its line. Blocking. A program still
-/// running at the deadline is killed, so a hung one leaves nothing behind.
+/// Run `program args` and read its generation line. Blocking; see [`run_for_line`].
 fn generation_of(program: &Path, args: &[String], timeout: Duration) -> Option<(i32, [u8; 32])> {
+    parse_generation_line(&run_for_line(program, args, timeout)?)
+}
+
+/// Run `program args`, wait at most `timeout`, and return its stdout if it exited successfully.
+/// Blocking. A program still running at the deadline is killed, so a hung one leaves nothing
+/// behind.
+fn run_for_line(program: &Path, args: &[String], timeout: Duration) -> Option<String> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -309,14 +377,27 @@ fn generation_of(program: &Path, args: &[String], timeout: Duration) -> Option<(
     }
     let output = child.wait_with_output().ok()?;
     output.status.success().then_some(())?;
-    parse_generation_line(&String::from_utf8_lossy(&output.stdout))
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 // ---- The Tauri forwarders (`update.js` calls all three). ----
 
+/// The poll; a release fetch it found due runs on its own task, through the app's state (a
+/// `tauri::State` cannot outlive this call).
 #[tauri::command]
-pub async fn update_state(state: tauri::State<'_, AppState>) -> Result<UpdateView, ()> {
-    Ok(update_state_impl(&state).await)
+pub async fn update_state(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<UpdateView, ()> {
+    use tauri::Manager;
+    let (view, job) = update_poll(&state).await;
+    if let Some(job) = job {
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            crate::release_fetch::fetch(&state, job.offer, &job.dir, job.pinned_root).await;
+        });
+    }
+    Ok(view)
 }
 
 #[tauri::command]

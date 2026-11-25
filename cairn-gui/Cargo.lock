@@ -532,6 +532,7 @@ dependencies = [
  "cairn-medication-view",
  "cairn-node",
  "cairn-patient-search",
+ "cairn-release",
  "chrono",
  "clap",
  "hex",
@@ -591,6 +592,7 @@ dependencies = [
  "cairn-medication-view",
  "cairn-medium",
  "cairn-patient-search",
+ "cairn-release",
  "chacha20poly1305",
  "chrono",
  "ciborium",
@@ -620,6 +622,19 @@ dependencies = [
  "serde",
  "unicode-normalization",
  "uuid",
+]
+
+[[package]]
+name = "cairn-release"
+version = "0.0.0"
+dependencies = [
+ "cairn-event",
+ "ciborium",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

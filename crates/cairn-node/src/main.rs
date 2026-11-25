@@ -1747,6 +1747,17 @@ enum Cmd {
     RevokeTerminal { fingerprint: String },
     /// List every terminal that has tried to connect, newest first, with its status (#909).
     ListTerminals,
+    /// Verify a steward-signed release bundle and store it so terminals can fetch it (#909).
+    /// `--genesis-root` is the channel's first trust file, taken in while the node holds no trust
+    /// root; once one is held, the same file is accepted again and a different one refused. Owner
+    /// only.
+    ReleaseIntake {
+        bundle: PathBuf,
+        #[arg(long)]
+        genesis_root: Option<PathBuf>,
+    },
+    /// Say which release channel this node follows and what it holds (#909). Owner only.
+    ReleaseStatus,
     /// Run the node-side service that registers patients for, and commits overdue note drafts
     /// of, the reference window (#909). Unattended: needs `CAIRN_KEY_PASSPHRASE` for a sealed
     /// key, never prompts. Connect as the login `provision-terminal-service-role` made.
@@ -3106,6 +3117,23 @@ async fn run() -> anyhow::Result<()> {
             cairn_node::conn_posture::require_local(&cli.conn)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
             println!("{}", t::render(&t::list(&db).await?));
+        }
+        Cmd::ReleaseIntake {
+            bundle,
+            genesis_root,
+        } => {
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            println!(
+                "{}",
+                cairn_node::release_intake::run_intake(&mut db, &bundle, genesis_root.as_deref())
+                    .await?
+            );
+        }
+        Cmd::ReleaseStatus => {
+            cairn_node::conn_posture::require_local(&cli.conn)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            println!("{}", cairn_node::release_intake::status(&db).await?);
         }
         Cmd::TerminalService { gateway_listen } => {
             // Refuse a remote database BEFORE any connection; then the key (never prompt: an

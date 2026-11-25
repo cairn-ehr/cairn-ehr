@@ -1,0 +1,27 @@
+# The window as a single-app kiosk: cage (a Wayland kiosk compositor) runs it full-screen on
+# tty1. Never root: the window is the unprivileged courier and holds no authority over what
+# it installs.
+[Unit]
+Description=Cairn window (kiosk)
+After=systemd-user-sessions.service systemd-logind.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+User=cairn-window
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty-fail
+StandardOutput=journal
+RuntimeDirectory=cairn-window
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=/run/cairn-window
+# CAIRN_CONN (the node's connection string, may carry a password) and WINDOW_ARGS
+# (--node-fingerprint <hex>) live in a root-written file readable by cairn-window only.
+EnvironmentFile=/etc/cairn/window.env
+ExecStart=/usr/bin/cage -- /opt/cairn/bin/cairn-window --terminal-dir /var/lib/cairn-window/terminal --release-dir /var/lib/cairn-terminal $WINDOW_ARGS
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -21,6 +21,8 @@ cairn-keystore = { path = "../cairn-keystore" }
 cairn-medication-view = { path = "../cairn-medication-view" }
 cairn-medium = { path = "../cairn-medium" }
 cairn-patient-search = { path = "../cairn-patient-search" }
+# The signed-release verifier (#909 slice C2). default-features = false: its `cli` feature pulls key-handling code a node must not carry.
+cairn-release = { path = "../cairn-release", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
 # with-chrono: timestamptz <-> chrono::DateTime<Utc> for the note draft/read doors (slice 3a).

@@ -5,6 +5,8 @@
 //
 // - an update WAITING (still at or above the floor): one calm line and Update now; nothing else
 //   changes, and the update installs when the terminal is next idle;
+// - a NOTE from the courier (#909 slice C2, `crate::release_fetch`): the window is fetching a
+//   release from the node, or the terminal's installer refused the last one (its sentence);
 // - BELOW the floor: a persistent alert naming what this window would not show. The chart in hand
 //   stays open to be finished; the window's Rust side refuses to open another or to register
 //   (`crate::update::refuse_another_chart`). It restarts once that chart closes or the terminal
@@ -52,7 +54,7 @@ const UPDATE_NOT_NOW = {
 };
 
 /** The last view the poll rendered (`update_state`): its kind decides every restart below. */
-let updateView = { kind: "current", reason: null };
+let updateView = { kind: "current", reason: null, note: null };
 /** A restart attempt is running: a second one (a close during an idle restart) does nothing. */
 let restarting = false;
 /** Update now was pressed during the running attempt: it goes ahead though the press was a touch. */
@@ -70,16 +72,22 @@ function belowFloorText(reason) {
  * Show what the poll learned. Text is set only when it changed, so an assistive technology does
  * not re-announce the alert every minute. It never closes or restarts anything (design §4.5).
  * A refusal learned mid-session says its own sentence: "needs its update" would be untrue.
+ * The courier's `note` (#909 slice C2: fetching, or the installer's refusal, set as text) shows
+ * the line on its own when nothing is waiting: then there is nothing for Update now to install.
  */
 function renderUpdate(view) {
   if (view.kind !== updateView.kind) el("update-answer").textContent = "";
   updateView = view;
   const below = view.kind === "below_floor";
-  el("update-line").hidden = view.kind === "current";
-  el("update-calm").hidden = below;
+  el("update-line").hidden = view.kind === "current" && !view.note;
+  el("update-calm").hidden = below || view.kind === "current";
+  el("update-now").hidden = view.kind === "current";
   el("update-alert").hidden = !below;
   const alert = below ? view.refusal ?? belowFloorText(view.reason) : "";
   if (el("update-alert").textContent !== alert) el("update-alert").textContent = alert;
+  el("update-note").hidden = !view.note;
+  const note = view.note ?? "";
+  if (el("update-note").textContent !== note) el("update-note").textContent = note;
 }
 
 /** The answer to an attempt that did not restart, beside the button. */

@@ -58,11 +58,12 @@ fn a_deleted_exe_path_is_the_installed_path() {
 async fn mock_update_state_is_current() {
     let state = AppState::mock(None);
     assert_eq!(
-        update_state_impl(&state).await,
+        update_poll(&state).await.0,
         UpdateView {
             kind: "current",
             reason: None,
             refusal: None,
+            note: None,
         }
     );
     assert_eq!(installed_program_impl(&state).await.kind, "same");
@@ -344,4 +345,52 @@ fn an_unknown_path_is_an_unknown_install() {
     assert!(path_unknown(true, None));
     assert!(!path_unknown(true, Some(path)));
     assert!(!path_unknown(false, None));
+}
+
+/// `--print-release-version` is answered from the raw arguments before clap, beside the
+/// generation flag (#909 slice C2).
+#[test]
+fn the_release_flag_is_read_before_clap() {
+    let args = |xs: &[&str]| xs.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+    assert!(asks_for_release_line(args(&["w", "--bogus", RELEASE_FLAG])));
+    assert!(!asks_for_release_line(args(&["w", PRINT_FLAG])));
+    assert!(!asks_for_release_line(args(&[RELEASE_FLAG])));
+    let main = include_str!("main.rs");
+    let body = &main[position(main, "fn main() -> anyhow::Result<()> {")..];
+    assert!(
+        position(body, "update::asks_for_release_line(std::env::args_os())")
+            < position(body, "Cli::parse()"),
+        "the release flag is answered before clap parses"
+    );
+}
+
+#[test]
+fn the_release_line_round_trips() {
+    assert_eq!(parse_release_line(&release_line(42)), Some(42));
+    assert_eq!(parse_release_line("42\n"), Some(42));
+    for bad in ["", "x", "-1", "4 2", "error: unexpected argument"] {
+        assert_eq!(parse_release_line(bad), None, "{bad:?}");
+    }
+}
+
+/// Design section 4.5, "run early on Linux": a program renamed over while running still reads
+/// as its own path, and the file there is the new one. Unrun on macOS; CI's Linux job runs it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_program_renamed_over_while_running_is_read_at_its_path() {
+    let dir = std::env::temp_dir().join(format!("cairn-swap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("prog");
+    std::fs::copy("/bin/sleep", &path).unwrap();
+    let mut child = std::process::Command::new(&path).arg("30").spawn().unwrap();
+    let fresh = dir.join("prog.new");
+    std::fs::write(&fresh, b"the new program").unwrap();
+    std::fs::rename(&fresh, &path).unwrap();
+    let raw = std::fs::read_link(format!("/proc/{}/exe", child.id())).unwrap();
+    let read = exe_path(raw);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(read, path);
+    assert_eq!(std::fs::read(&read).unwrap(), b"the new program");
+    let _ = std::fs::remove_dir_all(&dir);
 }

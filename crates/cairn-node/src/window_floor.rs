@@ -63,18 +63,29 @@ pub enum InstallFit {
     DoesNotFit,
 }
 
-/// Would the installed window `(generation, hash)` still be served by `stamp`? **Pure.**
-/// "Not installed" reads as `Same`, the safe answer. It is [`window_verdict`] with the
-/// installed generation as `w`.
+/// What a window build reports about itself: its schema generation and hash (C1) and its signed
+/// release version (C2; 0 for a build that carries none).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InstalledBuild {
+    pub generation: i32,
+    pub hash: [u8; 32],
+    pub release: u64,
+}
+
+/// Would the installed window still be served by `stamp`? **Pure.** `Same` if nothing is
+/// installed ("not installed" is the safe answer), the build is identical, or the installed
+/// release is LOWER than the running one (never restart backwards). Otherwise it is
+/// [`window_verdict`] with the installed generation as `w`; a same-schema program with a higher
+/// release therefore `Fits`.
 pub fn install_fit(
-    installed: Option<(i32, [u8; 32])>,
-    running: (i32, [u8; 32]),
+    installed: Option<InstalledBuild>,
+    running: InstalledBuild,
     stamp: Option<&SchemaStamp>,
 ) -> InstallFit {
     match installed {
         None => InstallFit::Same,
-        Some(i) if i == running => InstallFit::Same,
-        Some((gen, _)) => match window_verdict(stamp, gen) {
+        Some(i) if i == running || i.release < running.release => InstallFit::Same,
+        Some(i) => match window_verdict(stamp, i.generation) {
             WindowVerdict::Current | WindowVerdict::UpdateWaiting => InstallFit::Fits,
             _ => InstallFit::DoesNotFit,
         },

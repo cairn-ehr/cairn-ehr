@@ -355,6 +355,7 @@ dependencies = [
  "cairn-medication-view",
  "cairn-medium",
  "cairn-patient-search",
+ "cairn-release",
  "chacha20poly1305",
  "chrono",
  "ciborium",
@@ -391,6 +392,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-release"
+version = "0.0.0"
+dependencies = [
+ "cairn-event",
+ "cairn-keystore",
+ "ciborium",
+ "clap",
+ "hex",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "cairn-sync"
 version = "0.0.0"
 dependencies = [
@@ -409,6 +427,18 @@ dependencies = [
  "tokio-postgres",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "cairn-terminal-install"
+version = "0.0.0"
+dependencies = [
+ "cairn-event",
+ "cairn-keystore",
+ "cairn-release",
+ "clap",
+ "libc",
+ "tempfile",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ pub mod note;
 pub mod pairing;
 pub mod patient;
 pub mod photo_evidence;
+pub mod release_intake;
 pub mod replay_wait;
 pub mod restore;
 pub mod safety;

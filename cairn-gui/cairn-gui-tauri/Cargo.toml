@@ -24,6 +24,9 @@ cairn-gui-live = { path = "../cairn-gui-live" }
 cairn-patient-search = { path = "../../crates/cairn-patient-search" }
 cairn-gui-tab = { path = "../cairn-gui-tab" }
 cairn-gui-tab-medications = { path = "../cairn-gui-tabs/cairn-gui-tab-medications" }
+# The release documents only (`ReleaseMeta`, `InstallerStatus`; #909 slice C2): the window stages
+# a release, it never verifies one. No CLI (ruling R13).
+cairn-release = { path = "../../crates/cairn-release", default-features = false }
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-postgres = "0.7"

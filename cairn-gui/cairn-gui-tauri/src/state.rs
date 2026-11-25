@@ -16,11 +16,10 @@
 //!
 //! # Why it is re-locked
 //!
-//! A held key widens the unattended-workstation window. Paper has the same failure — an
-//! open chart on a desk — so this is parity rather than regression, but Cairn should not be
-//! WORSE than paper. The key is wiped once the hold runs out, and only the 32-byte seed is
-//! retained, inside `Zeroizing`, so the wipe is real rather than a dropped reference the
-//! allocator may leave behind.
+//! A held key widens the unattended-workstation window. Paper has the same failure — an open chart
+//! on a desk — so this is parity rather than regression, but Cairn should not be WORSE than paper.
+//! The key is wiped once the hold runs out, and only the 32-byte seed is retained, inside
+//! `Zeroizing`, so the wipe is real rather than a dropped reference the allocator may leave behind.
 //!
 //! # What "activity" means, and what it deliberately does not
 //!
@@ -278,6 +277,8 @@ pub struct AppState {
     pub last_stamp: std::sync::Mutex<Option<cairn_node::db::SchemaStamp>>,
     /// The program this window was launched from, asked before a restart; `None` in fixture mode.
     pub launched_exe: Option<std::path::PathBuf>,
+    /// `--release-dir` and the release fetch from the node (`crate::release_fetch`, #909 C2).
+    pub release: crate::release_fetch::Courier,
 }
 
 impl AppState {
@@ -292,9 +293,8 @@ impl AppState {
 
     /// Wipe the held key if it has gone idle, and hand back the guard.
     ///
-    /// The ONE place a stale key can be reached from: both accessors below go through it,
-    /// so there is no path that reads a held key without first asking whether it should
-    /// still be held.
+    /// The ONE place a stale key can be reached from: both accessors below go through it, so there
+    /// is no path that reads a held key without first asking whether it should still be held.
     async fn expire_if_idle(&self, now: Now) -> tokio::sync::MutexGuard<'_, Held> {
         let mut guard = self.session.lock().await;
         if guard

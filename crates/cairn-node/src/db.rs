@@ -536,6 +536,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "085_window_floor",
         include_str!("../../../db/085_window_floor.sql"),
     ),
+    // db/086 (#909 slice C2): the node's release store and the window's three read-only doors.
+    (
+        "086_release_store",
+        include_str!("../../../db/086_release_store.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

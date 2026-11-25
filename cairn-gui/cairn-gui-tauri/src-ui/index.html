@@ -23,13 +23,16 @@
   </head>
   <body>
     <!-- An update to this window (#909 slice C1, update.js): a calm line while one waits, a
-         persistent alert once this window is below the node's floor. Outside <main>, above the
+         persistent alert once this window is below the node's floor, and a note while the
+         release is fetched or after the installer refused it. Outside <main>, above the
          terminal lock, so it shows and Update now works at every screen. -->
     <div id="update-line" hidden>
       <p id="update-calm" role="status">An update is waiting; it installs when this terminal is next idle.</p>
       <p id="update-alert" role="alert" hidden></p>
       <button id="update-now" type="button">Update now</button>
       <p id="update-answer" role="status" aria-live="polite"></p>
+      <!-- The courier's note (#909 slice C2): fetching the update, or the installer's refusal. -->
+      <p id="update-note" role="status" hidden></p>
     </div>
     <main inert>
       <!-- Whether this node may write at all (asked at boot and after a search that succeeded while it warns, #654, #882), or why the window could
