@@ -278,33 +278,6 @@ async fn mock_never_fetches() {
     assert!(!dir.join("incoming").exists());
 }
 
-/// `/etc/os-release`'s two keys, quoted or not; anything without both is no platform.
-#[test]
-fn the_platform_is_id_and_version_id() {
-    assert_eq!(platform_of(OS_RELEASE).as_deref(), Some("debian-12"));
-    assert_eq!(
-        platform_of("ID='raspbian'\nVERSION_ID=11").as_deref(),
-        Some("raspbian-11")
-    );
-    assert_eq!(
-        platform_of("VERSION_ID=\"12\"\nID=debian").as_deref(),
-        Some("debian-12")
-    );
-    // A `#` comment and an `ID_LIKE` line are not `ID`.
-    assert_eq!(
-        platform_of("# ID=fake\nID_LIKE=debian\nID=ubuntu\nVERSION_ID=\"24.04\"").as_deref(),
-        Some("ubuntu-24.04")
-    );
-    for text in ["", "ID=debian", "VERSION_ID=12", "ID=\nVERSION_ID=12"] {
-        assert_eq!(platform_of(text), None, "{text:?}");
-    }
-    let target = this_target(Some(OS_RELEASE)).unwrap();
-    assert_eq!(
-        (target.os.as_str(), target.arch.as_str()),
-        (std::env::consts::OS, std::env::consts::ARCH)
-    );
-}
-
 /// The artifact arrives by chunks of at most [`CHUNK`], from offset 0 to its length.
 #[tokio::test]
 async fn a_staged_release_is_meta_artifact_then_complete() {

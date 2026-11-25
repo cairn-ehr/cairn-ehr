@@ -3,6 +3,7 @@
 
 mod docs;
 mod refusal;
+pub mod staging;
 mod status;
 mod steward;
 mod verify;
@@ -11,6 +12,8 @@ mod verify;
 mod docs_tests;
 #[cfg(test)]
 mod refusal_tests;
+#[cfg(test)]
+mod staging_tests;
 #[cfg(test)]
 mod status_tests;
 #[cfg(test)]

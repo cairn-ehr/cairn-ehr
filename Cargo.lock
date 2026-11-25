@@ -430,6 +430,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-terminal-install"
+version = "0.0.0"
+dependencies = [
+ "cairn-event",
+ "cairn-keystore",
+ "cairn-release",
+ "clap",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "cairn-wire"
 version = "0.0.0"
 dependencies = [

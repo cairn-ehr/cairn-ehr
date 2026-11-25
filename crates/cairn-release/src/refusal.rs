@@ -52,6 +52,21 @@ pub enum Refusal {
     /// Artifact `index` does not match its signed digest and length (or does not exist).
     #[error("artifact {index} does not match the manifest")]
     ArtifactMismatch { index: usize },
+    /// Terminal installer only: the verified release lists no `window` program for this
+    /// machine. The fields are this terminal's own (never from the update).
+    #[error("no program for {os} {arch} {platform}")]
+    NoProgramForThisTerminal {
+        os: String,
+        arch: String,
+        platform: String,
+    },
+    /// Terminal installer only: the verified program, run unprivileged, did not print the
+    /// generation line and release its signed manifest names.
+    #[error("the new program does not start")]
+    WontStart,
+    /// Terminal installer only: the staged program is larger than `staging::MAX_ARTIFACT`.
+    #[error("the staged program is too large")]
+    TooLarge,
 }
 
 impl Refusal {
@@ -87,6 +102,13 @@ impl Refusal {
             ),
             Refusal::ArtifactMismatch { .. } => {
                 "A file in this update is not the file its signed list names. Do not install it; fetch the update again.".into()
+            }
+            Refusal::NoProgramForThisTerminal { os, arch, platform } => {
+                format!("This update has no program for this terminal ({os} {arch} {platform}).")
+            }
+            Refusal::WontStart => "The new program does not start on this terminal; the one in place keeps running. Tell whoever looks after the node.".into(),
+            Refusal::TooLarge => {
+                "The update file is larger than any Cairn program; it was not installed.".into()
             }
         }
     }

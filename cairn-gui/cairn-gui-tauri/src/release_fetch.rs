@@ -40,6 +40,9 @@ use cairn_node::db::SchemaStamp;
 use cairn_node::window_floor::{install_fit, InstallFit, InstalledBuild};
 pub use cairn_release::InstallerStatus;
 use cairn_release::{encode, ReleaseMeta, SignedRoot};
+// The staging folder's names, the 64 MiB limit and this machine's target are the installer's
+// contract too, so they are defined once, in cairn-release (ruling R20).
+pub use cairn_release::staging::{this_target, Target, ARTIFACT, COMPLETE, MAX_ARTIFACT, META};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Mutex};
@@ -50,48 +53,10 @@ pub const CHUNK: u64 = 262_144;
 /// Said while this window fetches a release (the plan's copy, verbatim).
 pub const DOWNLOADING: &str = "This terminal is fetching its update from the node.";
 
-/// The staged signed part of the release ([`ReleaseMeta`], canonical CBOR).
-pub const META: &str = "meta.cbor";
-/// The staged program's bytes.
-pub const ARTIFACT: &str = "artifact.bin";
-/// Written last, holding the release number: the installer's signal that the rest is whole.
-pub const COMPLETE: &str = "complete";
-
 /// Said when the installer refused the staged release: its own sentence (already sanitised by
 /// the verifier; the webview sets it as text, never HTML).
 pub fn refused_note(sentence: &str) -> String {
     format!("This terminal did not install the update: {sentence}")
-}
-
-/// The machine a program must be built for: what the offer door filters on.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Target {
-    pub os: String,
-    pub arch: String,
-    pub platform: String,
-}
-
-/// `<ID>-<VERSION_ID>` from `/etc/os-release`'s text (values unquoted), e.g. `debian-12`.
-/// Either key missing or empty is `None`. **Pure.**
-pub fn platform_of(os_release: &str) -> Option<String> {
-    let value = |key: &str| {
-        os_release.lines().find_map(|line| {
-            let v = line.trim().strip_prefix(key)?.strip_prefix('=')?;
-            let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
-            (!v.is_empty()).then(|| v.to_string())
-        })
-    };
-    Some(format!("{}-{}", value("ID")?, value("VERSION_ID")?))
-}
-
-/// This machine's target: the build's own os and arch, and `os_release`'s platform. No
-/// os-release (not Linux, or unreadable) is no target, so nothing is fetched. **Pure.**
-pub fn this_target(os_release: Option<&str>) -> Option<Target> {
-    Some(Target {
-        os: std::env::consts::OS.into(),
-        arch: std::env::consts::ARCH.into(),
-        platform: platform_of(os_release?)?,
-    })
 }
 
 /// One `window` program the node offers for this target (a row of `cairn_release_offer`).
@@ -108,8 +73,6 @@ pub struct Offer {
     pub generation_line: Option<String>,
 }
 
-/// The largest program the window fetches: the installer refuses a larger one (`TooLarge`).
-pub const MAX_ARTIFACT: u64 = 64 * 1024 * 1024;
 /// Fetches of one release per session, failed OR staged, before the window gives it up (R19): a
 /// release that keeps failing, or keeps being refused once staged, must not re-download forever.
 pub const MAX_ATTEMPTS: u32 = 3;

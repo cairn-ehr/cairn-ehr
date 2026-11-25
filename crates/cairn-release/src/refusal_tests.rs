@@ -52,6 +52,24 @@ fn all(who: &str) -> Vec<(Refusal, String)> {
             Refusal::ArtifactMismatch { index: 0 },
             "A file in this update is not the file its signed list names. Do not install it; fetch the update again.".into(),
         ),
+        // The terminal installer's own three (Task 9): only a terminal says them, so they
+        // name no `{who}`.
+        (
+            Refusal::NoProgramForThisTerminal {
+                os: "linux".into(),
+                arch: "aarch64".into(),
+                platform: "debian-12".into(),
+            },
+            "This update has no program for this terminal (linux aarch64 debian-12).".into(),
+        ),
+        (
+            Refusal::WontStart,
+            "The new program does not start on this terminal; the one in place keeps running. Tell whoever looks after the node.".into(),
+        ),
+        (
+            Refusal::TooLarge,
+            "The update file is larger than any Cairn program; it was not installed.".into(),
+        ),
     ]
 }
 
