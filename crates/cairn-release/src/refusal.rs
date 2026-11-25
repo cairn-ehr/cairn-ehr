@@ -64,6 +64,10 @@ pub enum Refusal {
     /// generation line and release its signed manifest names.
     #[error("the new program does not start")]
     WontStart,
+    /// Terminal installer only: the installer could not do its own work (its state is damaged,
+    /// a write failed, its `--run-as` user is wrong). Not the update's fault.
+    #[error("a fault on the terminal itself")]
+    TerminalFault,
     /// Terminal installer only: the staged program is larger than `staging::MAX_ARTIFACT`.
     #[error("the staged program is too large")]
     TooLarge,
@@ -107,6 +111,7 @@ impl Refusal {
                 format!("This update has no program for this terminal ({os} {arch} {platform}).")
             }
             Refusal::WontStart => "The new program does not start on this terminal; the one in place keeps running. Tell whoever looks after the node.".into(),
+            Refusal::TerminalFault => "This terminal could not install the update because of a fault on the terminal itself; the program in place keeps running. Tell whoever looks after this terminal.".into(),
             Refusal::TooLarge => {
                 "The update file is larger than any Cairn program; it was not installed.".into()
             }

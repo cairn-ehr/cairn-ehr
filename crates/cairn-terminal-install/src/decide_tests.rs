@@ -204,23 +204,30 @@ fn the_new_program_must_answer_exactly_its_signed_lines() {
     assert!(!answers_match(&unnamed, 7, Some(&line), Some("7\n")));
 }
 
-/// Ruling R18: only what a corrupt transfer can cause is fetched again.
+/// Ruling R23: only a verdict reached AFTER the release verified is for good; anything else
+/// may be a forgery naming the genuine release's number, or a slow start.
 #[test]
-fn only_transit_damage_is_fetched_again() {
-    assert!(!refused_for_good(&Refusal::Malformed("x".into())));
-    assert!(!refused_for_good(&Refusal::ArtifactMismatch { index: 0 }));
+fn only_a_verified_verdict_is_refused_for_good() {
+    assert!(refused_for_good(&Refusal::NotNewer {
+        installed: 7,
+        offered: 7
+    }));
+    assert!(refused_for_good(&Refusal::NoProgramForThisTerminal {
+        os: "linux".into(),
+        arch: "aarch64".into(),
+        platform: "debian-12".into(),
+    }));
     for r in [
+        Refusal::Malformed("x".into()),
+        Refusal::ArtifactMismatch { index: 0 },
         Refusal::NoChannel,
         Refusal::Fork { version: 2 },
-        Refusal::NotNewer {
-            installed: 7,
-            offered: 7,
-        },
         Refusal::ReleaseSignaturesShort { have: 0, need: 1 },
         Refusal::TooLarge,
         Refusal::WontStart,
+        Refusal::TerminalFault,
     ] {
-        assert!(refused_for_good(&r), "{r:?}");
+        assert!(!refused_for_good(&r), "{r:?}");
     }
 }
 

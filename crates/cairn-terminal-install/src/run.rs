@@ -18,7 +18,7 @@ use crate::status::{self, Held};
 use crate::swap;
 use cairn_keystore::fsio::atomic_write;
 use cairn_release::staging::{Target, ARTIFACT, COMPLETE, MAX_ARTIFACT, META};
-use cairn_release::{check_artifact, decode, encode, Manifest, Refusal, ReleaseMeta};
+use cairn_release::{check_artifact, decode, encode, Manifest, Refusal, ReleaseMeta, Who};
 use cairn_release::{SignedRoot, VerifiedRoot};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -31,8 +31,9 @@ pub struct Config {
     pub state: PathBuf,
     /// The installed window program.
     pub program: PathBuf,
-    /// The (uid, gid) the new program is test-run as; `None` keeps this user (tests only).
-    pub run_as: Option<(u32, u32)>,
+    /// The user the new program is test-run as (never root); `None` keeps this process's
+    /// user (tests only: dropping privilege needs root).
+    pub run_as: Option<String>,
     /// The channel's first trust file, used only while `state/roots.cbor` does not exist.
     pub genesis_root: PathBuf,
     /// This machine: what the program must be built for.
@@ -52,8 +53,8 @@ enum Outcome {
         refusal: Refusal,
         release: Option<u64>,
     },
-    /// The installer could not do its own work (its state is damaged, a write failed): not
-    /// the release's fault, so it is never refused for good.
+    /// The installer could not do its own work (its state is damaged, a write failed, its
+    /// `--run-as` user is wrong): not the release's fault, so it is never refused for good.
     Failed(String),
 }
 
@@ -90,9 +91,25 @@ pub fn install_staged(cfg: &Config) -> bool {
     let outcome = match (pin, installed) {
         (Err(e), _) => Outcome::Failed(format!("this terminal's trust state: {}", e.0)),
         (_, Err(e)) => Outcome::Failed(format!("this terminal's installed_release: {e}")),
-        (Ok(history), Ok(installed)) => attempt(cfg, &history, installed.unwrap_or(0), incident),
+        (Ok(history), Ok(installed)) => match run_as(cfg) {
+            Ok(ids) => attempt(cfg, &history, installed.unwrap_or(0), incident, ids),
+            Err(why) => Outcome::Failed(why),
+        },
     };
     record(cfg, held, incident, outcome)
+}
+
+/// The (uid, gid) to test-run the new program as. Resolved here, inside the run, so a wrong
+/// `--run-as` is recorded and staging cleared like any other fault (ruling R22).
+fn run_as(cfg: &Config) -> Result<Option<(u32, u32)>, String> {
+    let Some(name) = &cfg.run_as else {
+        return Ok(None);
+    };
+    match swap::user_ids(name) {
+        Some((0, _)) => Err(format!("--run-as {name:?} is root")),
+        Some(ids) => Ok(Some(ids)),
+        None => Err(format!("--run-as {name:?} is no user on this terminal")),
+    }
 }
 
 /// Is anything at `complete`? A link or a FIFO there counts (and is refused as garbage).
@@ -110,7 +127,15 @@ fn attempt(
     history: &[VerifiedRoot],
     installed: u64,
     incident: Option<u64>,
+    run_as: Option<(u32, u32)>,
 ) -> Outcome {
+    // A frozen terminal says so before reading a staged byte, whatever was staged.
+    if let Some(version) = incident {
+        return Outcome::Refused {
+            refusal: Refusal::Fork { version },
+            release: None,
+        };
+    }
     let staged = |name: &str| cfg.staging.join(name);
     let damaged = |why: String| Outcome::Refused {
         refusal: Refusal::Malformed(why),
@@ -158,7 +183,7 @@ fn attempt(
         &bytes,
         artifact,
         number,
-        cfg.run_as,
+        run_as,
         cfg.check_timeout,
     ) {
         Ok(true) => Outcome::Installed {
@@ -200,7 +225,8 @@ fn record(cfg: &Config, held: Held, incident: Option<u64>, outcome: Outcome) -> 
                 );
                 report(wrote, "record the fork incident");
             }
-            eprintln!("refused: {refusal}");
+            // The sentence only: a refusal's diagnostic can quote staged (hostile) bytes.
+            eprintln!("refused: {}", refusal.sentence(Who::Terminal));
             ok = false;
             let for_good = release.filter(|_| refused_for_good(&refusal));
             status::refused(held, &refusal, for_good)
@@ -208,12 +234,13 @@ fn record(cfg: &Config, held: Held, incident: Option<u64>, outcome: Outcome) -> 
         Outcome::Failed(why) => {
             eprintln!("the installer could not finish: {why}");
             ok = false;
-            // No sentence names the installer's own failure; this one is true (the program in
-            // place keeps running) and says whom to tell. Never refused for good.
-            status::refused(held, &Refusal::WontStart, None)
+            // Ruling R22: the terminal's own fault, never refused for good.
+            status::refused(held, &Refusal::TerminalFault, None)
         }
     };
     ok &= report(status::write(state, &status), "write the status");
+    // Cleared even if the status write failed: a `complete` left behind would re-trigger the
+    // path unit forever; a window reading a stale status at worst fetches again (capped).
     ok & report(files::clear(&cfg.staging), "clear the staging folder")
 }
 

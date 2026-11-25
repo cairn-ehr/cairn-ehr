@@ -149,7 +149,7 @@ fn a_program_that_will_not_start_is_never_swapped_in() {
         stage_release(&rig, 7, &program);
         assert!(!install_staged(&rig.cfg));
         untouched(&rig);
-        let want = refused(&rig, &Refusal::WontStart, 0, Some(7));
+        let want = refused(&rig, &Refusal::WontStart, 0, None); // R23: may be a slow start
         assert_eq!(status(&rig), want, "{}", String::from_utf8_lossy(&program));
         assert!(!rig.cfg.state.join("installed_release").exists());
     }
@@ -310,13 +310,13 @@ fn a_fork_freezes_the_terminal_until_a_human_clears_it() {
     stage(&rig, &b.meta, &b.artifacts[0], "7");
     assert!(!install_staged(&rig.cfg));
     let fork = Refusal::Fork { version: 2 };
-    assert_eq!(status(&rig), refused(&rig, &fork, 0, Some(7)));
+    assert_eq!(status(&rig), refused(&rig, &fork, 0, None));
     assert!(rig.cfg.state.join("incident").exists());
     // A good release is refused while the incident stands...
     stage_release(&rig, 8, &script(GEN, 8));
     assert!(!install_staged(&rig.cfg));
     untouched(&rig);
-    assert_eq!(status(&rig), refused(&rig, &fork, 0, Some(8)));
+    assert_eq!(status(&rig), refused(&rig, &fork, 0, None));
     // ...and installs once a human removes it.
     std::fs::remove_file(rig.cfg.state.join("incident")).unwrap();
     stage_release(&rig, 8, &script(GEN, 8));
@@ -330,9 +330,18 @@ fn no_channel_refuses_and_says_so() {
     stage_release(&rig, 7, &script(GEN, 7));
     assert!(!install_staged(&rig.cfg));
     untouched(&rig);
-    let mut want = refused(&rig, &Refusal::NoChannel, 0, Some(7));
+    let mut want = refused(&rig, &Refusal::NoChannel, 0, None);
     want.pinned_root_version = 0;
     assert_eq!(status(&rig), want);
+}
+
+/// Ruling R22: the terminal's own faults say so, are never refused for good, and still write
+/// the status first and clear staging (else `complete` would re-trigger the unit forever).
+fn faulted(rig: &Rig) {
+    untouched(rig);
+    let mut want = refused(rig, &Refusal::TerminalFault, 0, None);
+    want.pinned_root_version = status(rig).pinned_root_version;
+    assert_eq!(status(rig), want);
 }
 
 #[test]
@@ -341,8 +350,56 @@ fn a_damaged_pin_refuses_rather_than_falling_back_to_genesis() {
     std::fs::write(rig.cfg.state.join("roots.cbor"), b"damaged").unwrap();
     stage_release(&rig, 7, &script(GEN, 7));
     assert!(!install_staged(&rig.cfg));
+    faulted(&rig);
+}
+
+#[test]
+fn a_write_that_fails_is_the_terminals_own_fault() {
+    let rig = terminal();
+    stage_release(&rig, 7, &script(GEN, 7));
+    let bin = rig.cfg.program.parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let installed = install_staged(&rig.cfg);
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!installed);
+    faulted(&rig);
+}
+
+#[test]
+fn a_bad_run_as_user_is_the_terminals_own_fault() {
+    // Not a user, or root: the new program must never be test-run as either.
+    for user in ["no-such-cairn-user", "root"] {
+        let mut rig = terminal();
+        rig.cfg.run_as = Some(user.into());
+        stage_release(&rig, 7, &script(GEN, 7));
+        assert!(!install_staged(&rig.cfg), "{user}");
+        faulted(&rig);
+    }
+}
+
+/// Ruling R23: a release whose signatures do not verify cannot lock out the genuine release of
+/// the same number; only a verdict on a verified release is for good.
+#[test]
+fn a_forged_release_never_locks_out_the_genuine_one() {
+    let rig = terminal();
+    let h = history(&[&chain().v1]);
+    let forged = release(&h, 7, vec![(window_for(&this()), script(GEN, 7))], &r2());
+    stage(&rig, &forged.meta, &forged.artifacts[0], "7");
+    assert!(!install_staged(&rig.cfg));
+    let r = Refusal::ReleaseSignaturesShort { have: 0, need: 1 };
+    assert_eq!(status(&rig), refused(&rig, &r, 0, None));
+    stage_release(&rig, 7, &script(GEN, 7));
+    assert!(install_staged(&rig.cfg));
+}
+
+#[test]
+fn a_frozen_terminal_says_fork_before_reading_anything() {
+    let rig = terminal();
+    std::fs::write(rig.cfg.state.join("incident"), "2").unwrap();
+    stage_release(&rig, 7, &script(GEN, 7));
+    std::fs::write(rig.cfg.staging.join(staging::META), b"junk").unwrap();
+    assert!(!install_staged(&rig.cfg));
     untouched(&rig);
-    let s = status(&rig);
-    assert_eq!((s.state.as_str(), s.refused_release), ("refused", None));
-    assert!(staging_is_empty(&rig));
+    let fork = Refusal::Fork { version: 2 };
+    assert_eq!(status(&rig), refused(&rig, &fork, 0, None));
 }

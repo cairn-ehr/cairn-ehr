@@ -54,18 +54,6 @@ const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    // Refuse to start rather than test-run the program as root or as nobody we know. Nothing
-    // is touched, so the staged release waits for the setup to be fixed.
-    let run_as = match user_ids(&cli.run_as) {
-        Some((0, _)) | None => {
-            eprintln!(
-                "--run-as {:?} is not an unprivileged user on this terminal",
-                cli.run_as
-            );
-            return ExitCode::from(2);
-        }
-        Some(ids) => ids,
-    };
     // No /etc/os-release: no platform, so no program in any release fits ("unknown").
     let os_release = std::fs::read_to_string("/etc/os-release").ok();
     let this = cairn_release::staging::Target {
@@ -80,7 +68,7 @@ fn main() -> ExitCode {
         staging: cli.staging,
         state: cli.state,
         program: cli.program,
-        run_as: Some(run_as),
+        run_as: Some(cli.run_as),
         genesis_root: cli.genesis_root,
         this,
         check_timeout: CHECK_TIMEOUT,
@@ -92,39 +80,9 @@ fn main() -> ExitCode {
     }
 }
 
-/// The (uid, gid) of user `name` through the system's user database (`getpwnam_r`, so NSS
-/// users resolve too), or `None` if there is no such user.
-fn user_ids(name: &str) -> Option<(u32, u32)> {
-    let name = std::ffi::CString::new(name).ok()?;
-    let mut buf = vec![0 as libc::c_char; 16 * 1024];
-    // SAFETY: `passwd` is plain C data, so all-zero is a valid value to be overwritten.
-    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut found: *mut libc::passwd = std::ptr::null_mut();
-    // SAFETY: every pointer is valid for the call: `name` is NUL-terminated, `buf` is
-    // `buf.len()` bytes, and `pwd`/`found` are live locals. The strings `pwd` points into live
-    // in `buf`, but only the two integers are read, and before `buf` is dropped.
-    let rc = unsafe {
-        libc::getpwnam_r(
-            name.as_ptr(),
-            &mut pwd,
-            buf.as_mut_ptr(),
-            buf.len(),
-            &mut found,
-        )
-    };
-    (rc == 0 && !found.is_null()).then_some((pwd.pw_uid, pwd.pw_gid))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_user_is_looked_up_by_name() {
-        assert_eq!(user_ids("root"), Some((0, 0)));
-        assert_eq!(user_ids("no-such-cairn-user"), None);
-        assert_eq!(user_ids("ro\0ot"), None);
-    }
 
     #[test]
     fn the_command_line_defaults_are_the_terminal_layout() {

@@ -67,6 +67,10 @@ fn all(who: &str) -> Vec<(Refusal, String)> {
             "The new program does not start on this terminal; the one in place keeps running. Tell whoever looks after the node.".into(),
         ),
         (
+            Refusal::TerminalFault,
+            "This terminal could not install the update because of a fault on the terminal itself; the program in place keeps running. Tell whoever looks after this terminal.".into(),
+        ),
+        (
             Refusal::TooLarge,
             "The update file is larger than any Cairn program; it was not installed.".into(),
         ),

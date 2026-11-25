@@ -9,6 +9,7 @@
 //! while we read it. The installer verifies the bytes it read into memory and installs those
 //! same bytes, so a file changed after the check changes nothing.
 
+use cairn_release::staging::COMPLETE;
 use cairn_release::{advance, decode, genesis, official_root, Refusal, SignedRoot, VerifiedRoot};
 use std::fs::File;
 use std::io::{self, Read};
@@ -54,19 +55,27 @@ pub fn read_staged(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 }
 
 /// Remove everything inside the staging folder, keeping the folder (it is set up with the
-/// window's group by packaging; the window cannot recreate it). A symlink is removed as a
-/// link (its target is untouched), and `remove_dir_all` does not follow links inside a
-/// directory, so nothing outside the folder is ever deleted.
+/// window's group by packaging; the window cannot recreate it). `complete` goes FIRST, so a
+/// folder the installer cannot fully remove (an attacker's deep tree) never leaves a release
+/// marked staged; every other entry is then tried, and the first error is returned. A symlink
+/// is removed as a link (its target is untouched), and `remove_dir_all` does not follow links
+/// inside a directory, so nothing outside the folder is ever deleted.
 pub fn clear(staging: &Path) -> io::Result<()> {
+    let mut first = match std::fs::remove_file(staging.join(COMPLETE)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    };
     for entry in std::fs::read_dir(staging)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            std::fs::remove_dir_all(entry.path())?;
-        } else {
-            std::fs::remove_file(entry.path())?;
-        }
+        let removed = entry.and_then(|entry| {
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(entry.path())
+            } else {
+                std::fs::remove_file(entry.path())
+            }
+        });
+        first = first.and(removed);
     }
-    Ok(())
+    first
 }
 
 /// A small decimal state file (`installed_release`, `incident`): absent is `None`.
@@ -123,5 +132,31 @@ pub fn load_pin(roots_file: &Path, genesis_file: &Path) -> Result<Vec<VerifiedRo
             })?])
         }
         None => Ok(Vec::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A directory the installer cannot fully remove (here: a read-only one deep inside, as
+    /// an unprivileged user can build) must not leave `complete` behind, nor stop the rest.
+    #[test]
+    fn clear_removes_complete_first_and_tries_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = dir.path();
+        let deep = staging.join("a/b/c");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("stuck"), b"x").unwrap();
+        std::fs::write(staging.join(COMPLETE), b"7").unwrap();
+        std::fs::write(staging.join("z-other"), b"x").unwrap();
+        let ro = std::fs::Permissions::from_mode(0o555);
+        std::fs::set_permissions(&deep, ro).unwrap();
+        let cleared = clear(staging);
+        std::fs::set_permissions(&deep, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(cleared.is_err(), "the stuck file is reported");
+        assert!(!staging.join(COMPLETE).exists());
+        assert!(!staging.join("z-other").exists());
     }
 }

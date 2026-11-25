@@ -137,3 +137,38 @@ fn spawn(command: &mut Command) -> Option<std::process::Child> {
     }
     None
 }
+
+/// The (uid, gid) of user `name` through the system's user database (`getpwnam_r`, so NSS
+/// users resolve too), or `None` if there is no such user.
+pub fn user_ids(name: &str) -> Option<(u32, u32)> {
+    let name = std::ffi::CString::new(name).ok()?;
+    let mut buf = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: `passwd` is plain C data, so all-zero is a valid value to be overwritten.
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: every pointer is valid for the call: `name` is NUL-terminated, `buf` is
+    // `buf.len()` bytes, and `pwd`/`found` are live locals. The strings `pwd` points into live
+    // in `buf`, but only the two integers are read, and before `buf` is dropped.
+    let rc = unsafe {
+        libc::getpwnam_r(
+            name.as_ptr(),
+            &mut pwd,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut found,
+        )
+    };
+    (rc == 0 && !found.is_null()).then_some((pwd.pw_uid, pwd.pw_gid))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_user_is_looked_up_by_name() {
+        assert_eq!(user_ids("root"), Some((0, 0)));
+        assert_eq!(user_ids("no-such-cairn-user"), None);
+        assert_eq!(user_ids("ro\0ot"), None);
+    }
+}

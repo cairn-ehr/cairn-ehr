@@ -17,10 +17,12 @@ pub struct InstallerStatus {
     pub pinned_root_version: u64,
     /// The refusal's sentence (`Refusal::sentence`, `Who::Terminal`) when `state` is `"refused"`.
     pub sentence: Option<String>,
-    /// The release refused for good: set ONLY for a refusal that fetching it again cannot fix
-    /// (every refusal but `ArtifactMismatch` and `Malformed`), so the window never fetches that
-    /// release again; `None` for one damaged in transit, which the window does fetch again. Absent
-    /// in an older file, read as `None`.
+    /// The release refused for good, so the window never fetches it again (ruling R23). Set
+    /// ONLY for the two refusals reached after the release's signatures verified: `NotNewer` and
+    /// `NoProgramForThisTerminal`. Every other refusal (`WontStart` included: a slow first start
+    /// on a Pi can time out) leaves it `None`, because its release number may come from a forged
+    /// meta that would otherwise lock out the genuine release; the window's three fetches per
+    /// session bound the re-fetching. Absent in an older file, read as `None`.
     #[serde(default)]
     pub refused_release: Option<u64>,
 }

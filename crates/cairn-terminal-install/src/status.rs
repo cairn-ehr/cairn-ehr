@@ -40,8 +40,8 @@ pub fn installed(release: u64, pinned: u64) -> InstallerStatus {
 }
 
 /// A refusal, said as the terminal. `refused_release` is the release refused for good (the
-/// window then never fetches it again), or `None` when a fresh fetch may fix it or the
-/// release's number could not be read (ruling R18).
+/// window then never fetches it again), or `None` for every refusal but the two reached after
+/// the release verified (`decide::refused_for_good`, ruling R23).
 pub fn refused(held: Held, refusal: &Refusal, refused_release: Option<u64>) -> InstallerStatus {
     InstallerStatus {
         state: "refused".into(),

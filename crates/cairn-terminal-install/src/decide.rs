@@ -73,13 +73,15 @@ pub fn answers_match(
         && one_line(release_out) == Some(release.to_string())
 }
 
-/// Ruling R18: is this refusal for good, so the window must never fetch that release again?
-/// Every refusal is, except the two a corrupt transfer can cause (`Malformed`,
-/// `ArtifactMismatch`): those the window fetches again.
+/// Ruling R23: is this refusal for good, so the window must never fetch that release again?
+/// Only the two verdicts reached AFTER the release verified (`verify_bundle` passed): a release
+/// not newer than the installed one, and one with no program for this terminal. Any other
+/// refusal may be a forged meta naming the genuine release's number, transit damage, or a slow
+/// first start, so the window may fetch it again (at most three times a session).
 pub fn refused_for_good(refusal: &Refusal) -> bool {
-    !matches!(
+    matches!(
         refusal,
-        Refusal::Malformed(_) | Refusal::ArtifactMismatch { .. }
+        Refusal::NotNewer { .. } | Refusal::NoProgramForThisTerminal { .. }
     )
 }
 
