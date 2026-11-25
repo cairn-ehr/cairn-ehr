@@ -61,6 +61,8 @@ pub mod note;
 pub mod note_attestation;
 pub mod note_discard;
 pub mod registration;
+mod release_sig;
+pub use release_sig::*;
 pub mod safety;
 pub mod schema_generation;
 pub mod seal;
@@ -150,6 +152,14 @@ pub const CTX_PAIRING: SigningContext = SigningContext("application/cairn-pairin
 /// public key to its Ed25519 identity, in its own context so it can never be
 /// replayed as an event, attestation, or pairing bundle.
 pub const CTX_UNWRAP_KEY: SigningContext = SigningContext("application/cairn-unwrap-key+cbor");
+/// Release-channel trust roots (#909 slice C2) — the steward's signed list of release
+/// keys. Signed DETACHED (see `release_sig.rs`), in its own context so a root signature
+/// can never verify as a manifest, an event, or anything else.
+pub const CTX_TRUST_ROOT: SigningContext = SigningContext("application/cairn-trust-root+cbor");
+/// Release manifests (#909 slice C2) — the signed list of one release's artifacts.
+/// Signed DETACHED, like [`CTX_TRUST_ROOT`], in its own context.
+pub const CTX_RELEASE_MANIFEST: SigningContext =
+    SigningContext("application/cairn-release-manifest+cbor");
 
 /// Build a COSE_Sign1 over `payload` bound to `ctx` (the one generic signer every
 /// public signing function delegates to, so threading the context cannot be
@@ -160,15 +170,9 @@ fn cose_sign1_in_context(
     sk: &(impl EventSigner + ?Sized),
     ctx: SigningContext,
 ) -> Result<Vec<u8>, EventError> {
-    use coset::{iana, CborSerializable, CoseSign1Builder, HeaderBuilder};
-    let kid = sk.verifying_key().to_bytes().to_vec();
-    let protected = HeaderBuilder::new()
-        .algorithm(iana::Algorithm::EdDSA)
-        .key_id(kid)
-        .content_type(ctx.as_str().to_string())
-        .build();
+    use coset::{CborSerializable, CoseSign1Builder};
     let sign1 = CoseSign1Builder::new()
-        .protected(protected)
+        .protected(protected_header(&sk.verifying_key(), ctx))
         .payload(payload)
         // The fallible variant lets a vault-backed signer's refusal propagate as an error.
         .try_create_signature(ctx.as_bytes(), |tbs| {
@@ -176,6 +180,38 @@ fn cose_sign1_in_context(
         })?
         .build();
     sign1.to_vec().map_err(|e| EventError::Cose(e.to_string()))
+}
+
+/// The protected header every Cairn signature carries: EdDSA alg, the signer's public
+/// key as key id, and the context string as content type. Shared by the attached signer
+/// above and the detached release signer (`release_sig.rs`), so the two cannot drift.
+pub(crate) fn protected_header(vk: &VerifyingKey, ctx: SigningContext) -> coset::Header {
+    use coset::{iana, HeaderBuilder};
+    HeaderBuilder::new()
+        .algorithm(iana::Algorithm::EdDSA)
+        .key_id(vk.to_bytes().to_vec())
+        .content_type(ctx.as_str().to_string())
+        .build()
+}
+
+/// The fail-closed header checks (1–3 in [`cose_verify1_parsed`]'s list), shared with the
+/// detached release verifier (`release_sig.rs`) so every verifier applies the same gate.
+pub(crate) fn check_protected_header(
+    sign1: &coset::CoseSign1,
+    ctx: SigningContext,
+) -> Result<(), EventError> {
+    use coset::{iana, ContentType, RegisteredLabelWithPrivate};
+    match &sign1.protected.header.content_type {
+        Some(ContentType::Text(t)) if t == ctx.as_str() => {}
+        _ => return Err(EventError::ContextMismatch),
+    }
+    if sign1.unprotected.content_type.is_some() {
+        return Err(EventError::ContextMismatch);
+    }
+    match sign1.protected.header.alg {
+        Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::EdDSA)) => Ok(()),
+        _ => Err(EventError::AlgMismatch),
+    }
 }
 
 /// The context-bound verification core over an already-parsed COSE_Sign1. Both
@@ -201,18 +237,7 @@ fn cose_verify1_parsed(
     vk: &VerifyingKey,
     ctx: SigningContext,
 ) -> Result<Vec<u8>, EventError> {
-    use coset::{iana, ContentType, RegisteredLabelWithPrivate};
-    match &sign1.protected.header.content_type {
-        Some(ContentType::Text(t)) if t == ctx.as_str() => {}
-        _ => return Err(EventError::ContextMismatch),
-    }
-    if sign1.unprotected.content_type.is_some() {
-        return Err(EventError::ContextMismatch);
-    }
-    match sign1.protected.header.alg {
-        Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::EdDSA)) => {}
-        _ => return Err(EventError::AlgMismatch),
-    }
+    check_protected_header(&sign1, ctx)?;
     sign1.verify_signature(ctx.as_bytes(), |sig, tbs| {
         let signature =
             ed25519_dalek::Signature::from_slice(sig).map_err(|_| EventError::BadSignature)?;
