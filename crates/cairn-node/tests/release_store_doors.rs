@@ -257,3 +257,96 @@ async fn roots_after_returns_only_later_versions() {
         .collect();
     assert_eq!(got, vec![2, 3]);
 }
+
+#[tokio::test]
+async fn a_chunk_of_a_non_window_artifact_is_refused() {
+    let Some(r) = rig().await else { return };
+    bundle(&r.owner, 1, &[(1, "docs", "debian-12", b"abc")]).await;
+    assert!(
+        r.window
+            .query_one("SELECT cairn_release_chunk($1, 0, 3)", &[&digest(1)])
+            .await
+            .is_err(),
+        "an unknown kind is stored but never served"
+    );
+}
+
+#[tokio::test]
+async fn a_chunk_during_an_open_incident_is_refused() {
+    let Some(r) = rig().await else { return };
+    bundle(&r.owner, 1, &[(1, "window", "debian-12", b"abc")]).await;
+    r.owner
+        .execute("INSERT INTO release_incident (channel_id, version, detail) VALUES ('stable', 1, 'fork')", &[])
+        .await
+        .unwrap();
+    assert!(r
+        .window
+        .query_one("SELECT cairn_release_chunk($1, 0, 3)", &[&digest(1)])
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn a_huge_offset_is_empty_and_bad_arguments_are_refused() {
+    let Some(r) = rig().await else { return };
+    bundle(&r.owner, 1, &[(1, "window", "debian-12", b"abc")]).await;
+    let far: Vec<u8> = r
+        .window
+        .query_one(
+            "SELECT cairn_release_chunk($1, 1099511627776, 4)",
+            &[&digest(1)],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        far.is_empty(),
+        "an offset of 2^40 is past the end, not an overflow"
+    );
+    for sql in [
+        "SELECT cairn_release_chunk($1, 0, -1)",
+        "SELECT cairn_release_chunk($1, 0, NULL)",
+        "SELECT cairn_release_chunk($1, NULL, 1)",
+    ] {
+        assert!(
+            r.window.query_one(sql, &[&digest(1)]).await.is_err(),
+            "{sql}"
+        );
+    }
+    // NULL "after" is read as 0: the whole chain (documented in db/086).
+    r.owner
+        .execute(
+            "INSERT INTO release_root VALUES (1, 'stable', $1, ARRAY[$1::bytea], $1)",
+            &[&vec![1u8]],
+        )
+        .await
+        .unwrap();
+    let n = r
+        .window
+        .query("SELECT 1 FROM cairn_release_roots(NULL)", &[])
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn public_cannot_execute_the_doors() {
+    let Some(r) = rig().await else { return };
+    for f in [
+        "cairn_release_offer(text,text,text)",
+        "cairn_release_roots(bigint)",
+        "cairn_release_chunk(bytea,bigint,int)",
+    ] {
+        let has: bool = r
+            .owner
+            .query_one(
+                "SELECT has_function_privilege('public', $1::text::regprocedure, 'EXECUTE')",
+                &[&f],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!has, "PUBLIC can execute {f}");
+    }
+}

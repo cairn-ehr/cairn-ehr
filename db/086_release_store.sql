@@ -76,32 +76,49 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 
 -- The trust-root chain after version p_after, ascending (the terminal walks it from its pin).
+-- A NULL p_after is read as 0 (the whole chain), not an error: a terminal with no pin asks for all.
 CREATE OR REPLACE FUNCTION cairn_release_roots(p_after bigint)
 RETURNS TABLE(version bigint, payload bytea, signatures bytea[])
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT r.version, r.payload, r.signatures FROM release_root r
-     WHERE r.version > p_after ORDER BY r.version;
+     WHERE r.version > coalesce(p_after, 0) ORDER BY r.version;
 $$;
 
--- One slice of an artifact: p_len bytes from the 0-based byte p_offset ('' past the end). Capped
--- at 256 KiB so the window's one shared connection is held for one chunk at a time. An unknown
--- digest is an error, never an empty answer.
+-- Store file bytes out of line and uncompressed, so PostgreSQL can slice a chunk from TOAST
+-- without reading the whole (up to 64 MiB) artifact on every 256 KiB call. Repeatable.
+ALTER TABLE release_artifact ALTER COLUMN content SET STORAGE EXTERNAL;
+
+-- One slice of a `window` artifact: p_len bytes from the 0-based byte p_offset ('' at or past the
+-- end, for any bigint offset). Capped at 256 KiB so the window's one shared connection is held
+-- for one chunk at a time. An unknown digest, a non-`window` kind (stored but never served) and an
+-- open incident (incidents freeze EVERY channel; there is one today) are errors, never empty.
 CREATE OR REPLACE FUNCTION cairn_release_chunk(p_digest bytea, p_offset bigint, p_len int)
 RETURNS bytea LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
-    v_content bytea;
+    v_chunk bytea;
 BEGIN
-    IF p_len IS NULL OR p_len < 0 OR p_len > 262144 THEN
+    IF p_len IS NULL OR p_len < 0 THEN
+        RAISE EXCEPTION 'a release chunk length must be given and not negative';
+    END IF;
+    IF p_len > 262144 THEN
         RAISE EXCEPTION 'a release chunk is at most 262144 bytes';
     END IF;
     IF p_offset IS NULL OR p_offset < 0 THEN
-        RAISE EXCEPTION 'a release chunk offset cannot be negative';
+        RAISE EXCEPTION 'a release chunk offset must be given and not negative';
     END IF;
-    SELECT a.content INTO v_content FROM release_artifact a WHERE a.digest = p_digest;
+    IF EXISTS (SELECT 1 FROM release_incident i WHERE i.resolved_at IS NULL) THEN
+        RAISE EXCEPTION 'release updates are stopped while an incident is open';
+    END IF;
+    -- least() keeps the ::int cast in range even where the planner folds it ahead of the CASE
+    -- (the CASE already answers '' for any offset at or past the end).
+    SELECT CASE WHEN p_offset >= octet_length(a.content) THEN ''::bytea
+                ELSE substring(a.content FROM (least(p_offset, 2147483646) + 1)::int FOR p_len) END
+      INTO v_chunk
+      FROM release_artifact a WHERE a.digest = p_digest AND a.kind = 'window';
     IF NOT FOUND THEN
         RAISE EXCEPTION 'no release artifact has that digest';
     END IF;
-    RETURN substring(v_content FROM (p_offset + 1)::int FOR p_len);
+    RETURN v_chunk;
 END;
 $$;
 
