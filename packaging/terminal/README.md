@@ -42,15 +42,25 @@ A re-run without them keeps `window.env`; with both it rewrites it. A re-run nev
 existing `/opt/cairn/bin/cairn-window` (the installer owns updates; replacing would downgrade)
 unless `--replace-window` is given.
 
-Last, the script starts the installer once (`systemctl start cairn-terminal-install.service`). With
-nothing staged it writes `state/status.json` (idle, carrying the terminal's trust version): the window
-fetches nothing until that file exists, and the path unit starts the installer only once a release is
-staged. The script stops if no status was written.
+When `state/installed_release` is absent (a fresh terminal) or `--replace-window` is given, the
+script records the hand-installed program's own release there, asking it
+`--print-release-version` as `cairn-window` (a dev build answers 0). The installer accepts only a
+release newer than that, so a compromised window cannot have it put back an older signed one.
+
+Last, the script removes any old `state/status.json` and starts the installer once
+(`systemctl start cairn-terminal-install.service`). With nothing staged it writes a fresh status
+(idle, carrying the terminal's trust version): the window fetches nothing until that file exists,
+and the path unit starts the installer only once a release is staged. The script stops unless that
+status says `"state": "idle"`: a trust file the installer cannot read makes it write a refusal
+instead (a fault on the terminal itself), and the script then names the trust file. (Removing the
+old status forgets at most a release refused for good, which the window may fetch once more.)
 
 The script prints the trust file's SHA-256. **Check it against a second channel** (the
 fingerprint the Cairn project published elsewhere) before trusting the terminal: that file is
 the root of everything the terminal will ever accept. An existing, different trust file is never
-overwritten; the script says so and leaves it.
+overwritten; the script says so and leaves it. To really change channel, remove by hand
+`/etc/cairn/channel-root.cbor`, `/var/lib/cairn-terminal/state/roots.cbor` (once it exists it wins
+over the trust file) and `/var/lib/cairn-terminal/state/status.json`, then re-run.
 
 If the installer crashes before it clears `incoming/`, the leftover marker retriggers it; after
 10 runs in a minute the path unit fails and stays failed. Recover with:
@@ -70,4 +80,7 @@ If the installer crashes before it clears `incoming/`, the leftover marker retri
 
 `.github/workflows/release-build.yml` builds the unsigned aarch64 artifacts on Debian trixie
 and uploads them with a `window.json` and SHA-256 sums. It holds no key: the steward signs the
-manifest offline.
+manifest offline, and so signs what CI built. That build is not fully pinned: the `debian:trixie`
+container image is named by tag, not digest, and the rustup bootstrap is unpinned, so what CI
+builds also depends on what those fetched that day (and there are no reproducible builds yet,
+#259).

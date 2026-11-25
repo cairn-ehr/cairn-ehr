@@ -14,7 +14,10 @@
   [#1184](https://github.com/cairn-ehr/cairn-ehr/issues/1184),
   [#1185](https://github.com/cairn-ehr/cairn-ehr/issues/1185),
   [#1186](https://github.com/cairn-ehr/cairn-ehr/issues/1186),
-  [#1187](https://github.com/cairn-ehr/cairn-ehr/issues/1187).
+  [#1187](https://github.com/cairn-ehr/cairn-ehr/issues/1187),
+  [#1188](https://github.com/cairn-ehr/cairn-ehr/issues/1188),
+  [#1189](https://github.com/cairn-ehr/cairn-ehr/issues/1189),
+  [#1190](https://github.com/cairn-ehr/cairn-ehr/issues/1190).
 - **Supersedes:** nothing, and it amends no ADR by edit.
 - **Builds on:** [ADR-0055](0055-distribution-trust-root-governance-chained-root-document.md) (the chained trust-root
   document, the self-contained bundle, the gate order and its practice-manager refusals: this slice builds the pure core
@@ -151,19 +154,20 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
    connection; `release_intake.rs`). Inside **one transaction** it first takes a transaction-scoped **advisory lock**
    (ruling R16), so two intakes serialise and a rival root is seen as a fork, never a unique violation; then it reads
    the stored roots and **re-verifies them** (a stored chain that no longer verifies is refused, not trusted); the
-   history is the stored roots, else the supplied genesis (refused once a root is held), else `official_root()`, else
-   `NoChannel`. "Newer" means above the newest release the node holds. It **verifies everything before its first
-   write**: `verify_bundle`, then every file against the manifest, the bundle holding exactly as many files as the
-   manifest lists. Only then do the new roots, the bundle and its files land, together or not at all. A **fork** is the
-   one refusal that writes: after the rollback, in its own committed statement, it records a `release_incident` (even
-   for a fork inside the first bundle a node takes in), which silences the offer door and the chunk door. Each intake
-   then **prunes by key, never by digest**: it keeps the newest two releases per `(os, arch, platform)` of kind
-   `window`, deleting those rows by `(release_version, idx)`, and then any bundle left with no file (a digest-keyed
-   delete would take another release's identical row). `release-status` says, in plain words, the channel and trust
-   version, the newest release held, and every open incident, or that the stored trust file is damaged: the stored roots
-   are re-verified as intake does (ruling R28), so one that decodes but no longer verifies is reported as damaged, never
-   shown as the channel. The node's own program and schema are still installed the existing way: C2 makes no node
-   upgrade itself.
+   history is the stored roots, else the supplied genesis, else `official_root()`, else `NoChannel`. Once a root is
+   held, a supplied genesis whose payload is the first held root's is accepted (a re-run of the first intake's command
+   changes nothing) and a different one is refused (ruling R30). "Newer" means above the newest release the node holds.
+   It **verifies everything before its first write**: `verify_bundle`, then every file against the manifest, the bundle
+   holding exactly as many files as the manifest lists. Only then do the new roots, the bundle and its files land,
+   together or not at all. A **fork** is the one refusal that writes: after the rollback, in its own committed
+   statement, it records a `release_incident` (even for a fork inside the first bundle a node takes in), which silences
+   the offer door and the chunk door. Each intake then **prunes by key, never by digest**: it keeps the newest two
+   releases per `(os, arch, platform)` of kind `window`, deleting those rows by `(release_version, idx)`, and then any
+   bundle left with no file (a digest-keyed delete would take another release's identical row). `release-status` says,
+   in plain words, the channel and trust version, the newest release held, and every open incident, or that the stored
+   trust file is damaged: the stored roots are re-verified as intake does (ruling R28), so one that decodes but no
+   longer verifies is reported as damaged, never shown as the channel. The node's own program and schema are still
+   installed the existing way: C2 makes no node upgrade itself.
 
 8. **The window knows its release, and the install check compares it** (design §4.4, D5). A new flag,
    `--print-release-version`, prints one decimal `u64` and exits, read from the raw arguments **before clap**, beside
@@ -176,12 +180,14 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
 9. **The window is the courier and verifies nothing** (`release_fetch.rs`; plan-time calls). On ADR-0111's 60 s poll
    (`update_poll`, not a new Tauri command) it may fetch only with a `--release-dir`, outside fixture mode, with the
    installer's `state/status.json` present and whole (a missing file means no installer here) and a platform from
-   `/etc/os-release`, and only on a stamp read just then. `due` picks the newest offer that is newer than both the
-   installed and the running release, is at most **64 MiB** (`MAX_ARTIFACT`), is neither the installer's
-   `refused_release` nor given up this session, and whose program **fits** the node's stamp by `install_fit`; an offer
-   whose generation line cannot be read is skipped. So the window never fetches a program its node's database would
-   refuse. **An untaken release waits** (ruling R17): while `incoming/complete` names a release above the installed one,
-   nothing is fetched. **Every fetch counts** (ruling R19): at most **three fetches of one release per session**,
+   `/etc/os-release`, and only on a stamp read just then. `due` considers only each release's first program for this
+   terminal (lowest `idx`, the one the installer takes, ruling R30; a release whose first program does not qualify is
+   skipped whole) and picks the newest that is newer than both the installed and the running release, is at most **64
+   MiB** (`MAX_ARTIFACT`), is neither the installer's `refused_release` nor given up this session, and whose program
+   **fits** the node's stamp by `install_fit`; an offer whose generation line cannot be read is skipped. So the window
+   never fetches a program its node's database would refuse. **An untaken release waits** (rulings R17, R30): while
+   anything is at `incoming/complete`, nothing is fetched, even when it is stale or no number: it re-triggers the path
+   unit, whose run clears it. **Every fetch counts** (ruling R19): at most **three fetches of one release per session**,
    whatever their outcome.
 
    The fetch runs at most one at a time, spawned off the poll. It writes `incoming/meta.cbor` (a `ReleaseMeta` with the
@@ -201,7 +207,8 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
     ceremony); else no pin, which refuses `NoChannel`. A damaged `roots.cbor` is the terminal's own fault, never a fall
     back to genesis, which would undo an accepted rotation. Nothing the node or the window says is trusted.
     - With no `complete`, the window may still be writing: the installer touches nothing, and writes an idle status only
-      if none exists.
+      if none exists; but a pin it cannot load (a wrong trust file) writes the `TerminalFault` status over any it finds
+      and fails the run, so `install.sh` stops (ruling R29).
     - **A fork incident first**: an incident file (unreadable reads as version 0, still frozen) refuses `Fork` before a
       staged byte is read, until a human removes it. Then every staged file is read as hostile: `O_NOFOLLOW` (a link is
       refused), `O_NONBLOCK` (a FIFO cannot hang it), regular files only, each read capped. `complete` must be a bare
@@ -211,11 +218,11 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
       bytes read into memory must pass `check_artifact`.
     - **The start check runs the verified bytes, never as root** (ruling R21). The installer writes those in-memory
       bytes to `<program>.new` (atomic, mode 0755), and runs THAT file, never the staged one, which its unprivileged
-      owner could change after the check, as the `--run-as` user (default `cairn-window`; a missing user or one with uid
-      0 is refused as the terminal's own fault), with an empty environment, `/` as its directory and a 5 s timeout per
-      flag. It must print the artifact's generation line and the manifest's release, one line each, else `.new` is
-      removed and the release is `WontStart`. This proves the program loads its libraries here before it replaces
-      anything, so no revert is needed.
+      owner could change after the check, as the `--run-as` user (default `cairn-window`; a missing user, or one with
+      uid 0 or primary gid 0, is refused as the terminal's own fault), with an empty environment, `/` as its directory
+      and a 5 s timeout per flag. It must print the artifact's generation line and the manifest's release, one line
+      each, else `.new` is removed and the release is `WontStart`. This proves the program loads its libraries here
+      before it replaces anything, so no revert is needed.
     - **The swap is atomic and keeps `.prev`**: the current program is hard-linked to `<program>.prev` (an older one
       replaced; none on a first install), `.new` is renamed over the program, and the directory is fsynced.
     - **Recording**: on success the new `roots.cbor` and `installed_release` first; a fresh fork writes
@@ -228,13 +235,13 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
       its release number may come from a forged meta that would otherwise lock out the genuine release; `WontStart` too,
       because a slow first start on a Pi can time out. The window's three fetches per session bound the re-fetching.
     - **The installer's own faults say so** (ruling R22). Exactly these become `TerminalFault`: a damaged or unreadable
-      `roots.cbor` or `channel-root.cbor` (the pin cannot be loaded), a damaged `installed_release`, a `--run-as` that
-      names no user or root, and a failed write while putting the program in place (`.new`, `.prev`, the rename, the
-      directory fsync). They say "This terminal could not install the update because of a fault on the terminal itself;
-      the program in place keeps running. Tell whoever looks after this terminal.", never `WontStart`'s sentence (no
-      precise untruth), with `refused_release` empty, and still write the status and clear `incoming/`. A failed write
-      of `roots.cbor` or `installed_release` AFTER a successful swap is only logged: the status still says `installed`,
-      the new program is in place, and the recorded release may be the old one
+      `roots.cbor` or `channel-root.cbor` (the pin cannot be loaded, staged or not), a damaged `installed_release`, a
+      `--run-as` that names no user, root or a user in group 0, and a failed write while putting the program in place
+      (`.new`, `.prev`, the rename, the directory fsync). They say "This terminal could not install the update because
+      of a fault on the terminal itself; the program in place keeps running. Tell whoever looks after this terminal.",
+      never `WontStart`'s sentence (no precise untruth), with `refused_release` empty, and still write the status and
+      clear `incoming/`. A failed write of `roots.cbor` or `installed_release` AFTER a successful swap is only logged:
+      the status still says `installed`, the new program is in place, and the recorded release may be the old one
       ([#1184](https://github.com/cairn-ehr/cairn-ehr/issues/1184)).
 
 11. **Packaging and the release build** (`packaging/terminal/`, `.github/workflows/release-build.yml`). **A terminal is
@@ -244,19 +251,25 @@ the node, and the node's check is a courtesy that keeps junk and forks out of it
     are given again, and never replaces an existing `/opt/cairn/bin/cairn-window` (the installer owns updates) without
     `--replace-window`. It installs `cage` (MIT) from apt as the kiosk compositor, creates the `cairn-window` user, sets
     `incoming/` to `root:cairn-window` 2770 and `state/` to root 0755, never silently replaces an existing different
-    trust file, and prints the trust file's SHA-256 to compare with a second channel. After enabling the path unit, and
+    trust file, and prints the trust file's SHA-256 to compare with a second channel. **It records the hand-installed
+    program's release** (ruling R29): when `state/installed_release` is absent or `--replace-window` was given, it
+    writes it (root, 0644, the installer's bare decimal) from `cairn-window --print-release-version`, asked as
+    `cairn-window` (a dev build answers 0), so the installer's "newer" gate never starts below the program in place and
+    a compromised window cannot have root downgrade it to an older signed release. After enabling the path unit, and
     before enabling the kiosk, **it starts the installer once** (`systemctl start cairn-terminal-install.service`, so it
     never runs beside a run the path unit started; ruling R27): the window fetches nothing until `state/status.json`
     exists, and the path unit starts the installer only once a release is staged, so with nothing staged this run writes
-    the idle status carrying the terminal's trust version (0 with no trust file at all), and the script stops if no
-    status was written. **The kiosk never runs as root** (`User=cairn-window`,
-    `cage -- cairn-window --terminal-dir … --release-dir /var/lib/cairn-terminal`); the installer service runs as root,
-    `KillMode=control-group`, with `ProtectSystem=strict` and write access to `/opt/cairn/bin` and
+    the idle status carrying the terminal's trust version (0 with no trust file at all). The script removes any old
+    status first (forgetting at most a release refused for good, which the window may fetch once more) and stops, naming
+    the trust file, unless that run wrote `"state": "idle"` (ruling R29). **The kiosk never runs as root**
+    (`User=cairn-window`, `cage -- cairn-window --terminal-dir … --release-dir /var/lib/cairn-terminal`); the installer
+    service runs as root, `KillMode=control-group`, with `ProtectSystem=strict` and write access to `/opt/cairn/bin` and
     `/var/lib/cairn-terminal` only; the path unit's trigger is limited to 10 runs a minute. `fs.protected_hardlinks=1`
     is a stated requirement. CI builds the **unsigned** `aarch64` window and installer on an `ubuntu-24.04-arm` runner
-    in a `debian:trixie` container, writes `window.json` by running the built window's two print flags, and uploads the
-    files with their SHA-256 sums; it holds no secret and has no signing step. **The steward signs offline**: until
-    reproducible builds exist (#259), the steward signs what CI built.
+    in a `debian:trixie` container (named by tag, not digest; the rustup bootstrap is unpinned), writes `window.json` by
+    running the built window's two print flags, and uploads the files with their SHA-256 sums; it holds no secret and
+    has no signing step. **The steward signs offline**: until reproducible builds exist (#259), the steward signs what
+    CI built.
 
 **Paper-parity.** Not clinical-surface: the slice moves signed program files from the node to its terminals, and no
 clinical workflow gains or loses a step (the restart it leads to is ADR-0111's). RUNBOOK §41 owes the figures, by a
@@ -296,7 +309,8 @@ human on a node and a Pi: intake time for one bundle, LAN download time, the lon
   detectable as evidence, and `release-status` reports no log freshness.
 - **No reproducible builds** ([#259](https://github.com/cairn-ehr/cairn-ehr/issues/259)): the steward signs what CI
   built, so a compromised CI that builds a different program than its source gets it signed unless the steward catches
-  it.
+  it. CI's `debian:trixie` image is a tag, not a digest, and its rustup bootstrap is unpinned, so what CI built also
+  depends on what those fetched that day.
 - **No co-signer floors** (ADR-0055 decision 6, [#1187](https://github.com/cairn-ehr/cairn-ehr/issues/1187)), **no
   freshness rung** (§7.9, [#260](https://github.com/cairn-ehr/cairn-ehr/issues/260)), and ADR-0055's revocation latency
   holds: a terminal that has not yet seen a rotation still honours the release key it rotated out. A 1-of-1 steward root
@@ -305,16 +319,26 @@ human on a node and a Pi: intake time for one bundle, LAN download time, the lon
   program, DDL and extensions are still installed the existing way, unverified by this plane.
 - **Only an honest window follows the node's choice.** The installer checks signature, newness and platform, not fit: a
   compromised window could stage any signed release newer than the installed one, even one the node does not serve, and
-  a program the node's database refuses would then not open at its next launch. It still cannot stage an unsigned one.
+  a program the node's database refuses would then not open at its next launch. It still cannot stage an unsigned one,
+  nor an older one: on a fresh terminal "installed" is the hand-installed program's own release, which `install.sh`
+  records (ruling R29); a terminal set up with a dev build records 0, so any signed release is newer there.
   No staging quota is set ([#1186](https://github.com/cairn-ehr/cairn-ehr/issues/1186)): the 64 MiB limit bounds what
   the installer reads, not what the window's user can write to the folder's filesystem.
 - **No verb resolves an incident.** On the node it stays open until someone sets `release_incident.resolved_at` by hand;
   on a terminal, until root removes `state/incident`. ADR-0055 decision 5's audited resolution ceremony is not built.
 - **The privilege drop is untested, and the units have never run on a Pi.** The tests run the start check as the test's
-  own user (dropping privilege needs root); a `--run-as` user whose primary group is 0 is not refused. The units and
-  `install.sh` have run on no real Pi; RUNBOOK §41 is owed by a human.
+  own user (dropping privilege needs root). The units and `install.sh` have run on no real Pi; RUNBOOK §41 is owed by a
+  human.
 - **The window fetches only on its 60 s poll and on a fresh stamp**, so a terminal learns of a release up to a minute
-  late, and three fetches of one release cut off by node outages in one session give it up until the window restarts.
+  late, and three fetches of one release cut off by node outages in one session give it up until the window restarts
+  ([#1190](https://github.com/cairn-ehr/cairn-ehr/issues/1190)).
+- **After a release-signer rotation the node still offers a kept release no terminal accepts**
+  ([#1188](https://github.com/cairn-ehr/cairn-ehr/issues/1188)): the installer checks a manifest against the newest
+  root's release signers only, so the older of the two kept releases is refused as "not signed by enough of the Cairn
+  project's release signers", up to three times per window session.
+- **Refusals that are not the release's fault still cost three downloads per session**
+  ([#1189](https://github.com/cairn-ehr/cairn-ehr/issues/1189)): `Fork`, `NoChannel` and `TerminalFault` leave
+  `refused_release` empty (ruling R23), so the window cannot tell them from transit damage.
 
 Pins: `cairn-event`'s `release_sig.rs` tests; `cairn-release`'s `docs_tests`, `verify_tests`, `verify_release_tests`,
 `refusal_tests`, `staging_tests`, `status_tests`, `steward_tests` and `tests/cli.rs`;

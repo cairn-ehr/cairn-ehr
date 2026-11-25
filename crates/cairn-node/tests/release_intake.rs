@@ -110,8 +110,10 @@ async fn a_signed_bundle_is_taken_in_and_offered() {
     assert_eq!(offered(&owner).await, 1);
 }
 
+/// Ruling R30: once a root is held, the SAME first trust file given again is harmless and
+/// accepted (an owner re-running the first intake's command); a DIFFERENT one is refused.
 #[tokio::test]
-async fn genesis_is_refused_once_a_root_is_held() {
+async fn a_different_genesis_is_refused_once_a_root_is_held() {
     let Some((_g, mut owner)) = rig().await else {
         return;
     };
@@ -119,11 +121,22 @@ async fn genesis_is_refused_once_a_root_is_held() {
     take_in(&mut owner, &release(&h, 1, &rk, b"one"), Some(g.clone()))
         .await
         .unwrap();
-    let err = take_in(&mut owner, &release(&h, 2, &rk, b"two"), Some(g))
+    take_in(&mut owner, &release(&h, 2, &rk, b"two"), Some(g))
+        .await
+        .expect("the held first trust file, given again");
+    let other = make_genesis(
+        "other",
+        vec![signer(&key(2))],
+        1,
+        vec![signer(&key(12))],
+        1,
+        &[&key(2)],
+    );
+    let err = take_in(&mut owner, &release(&h, 3, &rk, b"three"), Some(other))
         .await
         .unwrap_err();
     assert!(matches!(err, IntakeError::GenesisAlreadyHeld), "{err}");
-    assert_eq!(count(&owner, "release_bundle").await, 1);
+    assert_eq!(count(&owner, "release_bundle").await, 2);
 }
 
 #[tokio::test]

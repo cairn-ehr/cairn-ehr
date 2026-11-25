@@ -5,7 +5,8 @@
 //! 1. read this terminal's own state: its pin (`files::load_pin`, re-verified), its last
 //!    installed release, and whether a fork incident froze it;
 //! 2. no `complete` in the staging folder: the window may still be writing, so touch nothing
-//!    (only write an idle status if there is none yet: the window fetches only once it exists);
+//!    (only write an idle status if there is none yet: the window fetches only once it exists;
+//!    but a pin that cannot be read writes the terminal's-fault status and fails, ruling R29);
 //! 3. otherwise [`attempt`] the staged release (read hostile files, `decide`, check the bytes,
 //!    `swap::install`), giving an [`Outcome`];
 //! 4. [`record`] it: on success the new pin and release first, then ALWAYS `status.json`, then
@@ -80,6 +81,17 @@ pub fn install_staged(cfg: &Config) -> bool {
     };
 
     if !is_staged(&cfg.staging.join(COMPLETE)) {
+        // A pin that cannot be read (a wrong `--trust` file, damaged state) is said at once,
+        // over any status found, and fails the run: `install.sh` requires "idle" (ruling R29).
+        if let Err(e) = &pin {
+            eprintln!(
+                "the installer could not read this terminal's trust state: {}",
+                e.0
+            );
+            let faulted = status::refused(held, &Refusal::TerminalFault, None);
+            report(status::write(&cfg.state, &faulted), "write the status");
+            return false;
+        }
         if !cfg.state.join(status::STATUS).exists() {
             return report(
                 status::write(&cfg.state, &status::idle(held)),
@@ -105,9 +117,16 @@ fn run_as(cfg: &Config) -> Result<Option<(u32, u32)>, String> {
     let Some(name) = &cfg.run_as else {
         return Ok(None);
     };
-    match swap::user_ids(name) {
+    checked_ids(name, swap::user_ids(name)).map(Some)
+}
+
+/// Refuse a `--run-as` user the new program must never be test-run as: none at all, root, or
+/// a user whose primary group is root's (gid 0), whose files it could then read or write.
+fn checked_ids(name: &str, ids: Option<(u32, u32)>) -> Result<(u32, u32), String> {
+    match ids {
         Some((0, _)) => Err(format!("--run-as {name:?} is root")),
-        Some(ids) => Ok(Some(ids)),
+        Some((_, 0)) => Err(format!("--run-as {name:?} is in root's group (gid 0)")),
+        Some(ids) => Ok(ids),
         None => Err(format!("--run-as {name:?} is no user on this terminal")),
     }
 }

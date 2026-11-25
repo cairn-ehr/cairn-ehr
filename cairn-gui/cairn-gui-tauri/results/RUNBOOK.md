@@ -4720,6 +4720,13 @@ for n in 2 3; do "$REL" bundle --history root.cbor --key release.key --artifact 
 sudo ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/cairn-terminal-install --trust root.cbor
 ```
 
+- [ ] **A wrong trust file stops the install** (ruling R29). Once, before the real install: `head -c 200 /dev/urandom >
+      junk.cbor`, then the second command below with `--trust junk.cbor`. It ends with "install.sh: the installer did
+      not report idle in /var/lib/cairn-terminal/state/status.json. If it says a fault on the terminal itself, the trust
+      file /etc/cairn/channel-root.cbor …", never "Installed.", and `status.json` reads `"state": "refused"`. Then
+      remove the junk by hand (`sudo rm /etc/cairn/channel-root.cbor /var/lib/cairn-terminal/state/status.json`): the
+      script never replaces a different trust file.
+
 ```bash
 export CAIRN_WINDOW_CONN="$REMOTE_CONN"     # section 39's, naming the node's address and the gateway's port
 sudo -E ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/cairn-terminal-install \
@@ -4727,7 +4734,9 @@ sudo -E ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/
 ```
 
 - [ ] It ends with "Trust file SHA-256 (compare with the second channel before use):" and a sum **equal to Step 1's**,
-      then "Installed. Reboot to start the kiosk." Record the match.
+      then "Installed. Reboot to start the kiosk." Record the match. Earlier it said "install.sh: recorded the installed
+      window as release 1." (ruling R29: the installer's "newer" gate starts at the program in place), and
+      `sudo cat /var/lib/cairn-terminal/state/installed_release` prints `1`.
 - [ ] `stat -c '%U:%G %a %n' /var/lib/cairn-terminal/incoming /var/lib/cairn-terminal/state /etc/cairn/window.env` reads
       `root:cairn-window 2770`, `root:root 755` and `root:cairn-window 640`. `sysctl fs.protected_hardlinks` reads `1`.
 - [ ] Reboot. The kiosk starts `cage` and the window on the screen; `ps -o user=,args= -C cage` names `cairn-window`,
@@ -4737,8 +4746,8 @@ sudo -E ./packaging/terminal/install.sh --window r1/cairn-window --installer r1/
       the window opens on its lock; sign in; it works as section 39's terminal.
 - [ ] **The first status file.** The window fetches nothing until `state/status.json` exists, so `install.sh`'s last
       step started the installer once (with nothing staged it writes only the status), and would have stopped with "the
-      installer wrote no /var/lib/cairn-terminal/state/status.json; …" otherwise.
-      `cat /var/lib/cairn-terminal/state/status.json` reads `"state": "idle"`, `"installed_release": 0`,
+      installer did not report idle in /var/lib/cairn-terminal/state/status.json. …" otherwise.
+      `cat /var/lib/cairn-terminal/state/status.json` reads `"state": "idle"`, `"installed_release": 1`,
       `"pinned_root_version": 1`, and `journalctl -u cairn-terminal-install` shows that one run.
 
 **Measurement 1 — intake (node).** First the node's refusals that need no channel yet:
@@ -4758,9 +4767,9 @@ time "$CAIRN_NODE_BIN" --conn "$CONN" release-intake "$STEWARD/bundle-2.cbor" --
 
 - [ ] It prints "Release 2 taken in (1 file); terminals can now fetch it." Record `real`. `release-status` prints
       "Release channel: runbook-41 (trust file version 1)." and "Newest release held: 2.".
-- [ ] Again with `--genesis-root`: "This node already holds a release channel's trust file, so it will not take a
-      different first one." Again without it: "This node already has release 2; the update offered is release 2, which
-      is not newer."
+- [ ] Again with the same `--genesis-root` (the file the node holds, given again, is accepted: ruling R30), and again
+      without it: both say "This node already has release 2; the update offered is release 2, which is not newer." A
+      different first file is refused in Measurement 7.
 
 **Measurement 2 — the LAN download, and one chunk's hold** (on the Pi, started before the intake above):
 
@@ -4783,8 +4792,8 @@ awk '$2 != "-" && $2 != last { if (t) { d = $1 - t; if (d > m) m = d }; t = $1; 
 
 - [ ] Keep a copy for Measurement 6: `sudo cp -a "$f" /root/staged-2`.
 
-**Measurement 3 — a press during a download (≤ ~200 ms).** The window waits while a release is staged and untaken, and
-fetches one release at most three times a session. To make it fetch again, empty the folder:
+**Measurement 3 — a press during a download (≤ ~200 ms).** The window waits while anything is at `incoming/complete`,
+and fetches one release at most three times a session. To make it fetch again, empty the folder:
 `sudo sh -c 'rm -f /var/lib/cairn-terminal/incoming/*'`; the next poll fetches it afresh. After three fetches it gives
 the release up until it restarts: `sudo systemctl restart cairn-window-kiosk`, sign in again.
 
@@ -4900,7 +4909,8 @@ for n in 5 6; do sed "s/\"release_version\":3/\"release_version\":$n/" r3/window
 ```
 
 - [ ] `release-intake other-4.cbor`: "This update is from channel "runbook-41-other", but this node follows
-      "runbook-41"."
+      "runbook-41"." `release-intake other-4.cbor --genesis-root other.cbor`: "This node already holds a release
+      channel's trust file, so it will not take a different first one."
 - [ ] Stop the Pi's installer first (release 5 does not start either). `release-intake bundle-5.cbor` is taken in, and
       `release-status` now says trust file version 2.
 - [ ] `release-intake bundle-6.cbor`: "Two different trust files both claim version 2. Updates are stopped on this node
@@ -4937,6 +4947,8 @@ psql "$CONN" -c "DELETE FROM release_artifact; DELETE FROM release_bundle; DELET
 | `keygen` prints the key and the recovery code; refuses to overwrite | | |
 | The trust file's SHA-256 on the Pi equals the second channel's | | |
 | `install.sh` refuses a first install without the connection and the fingerprint | | |
+| A junk trust file: `install.sh` stops naming the trust file, never "Installed." | | |
+| `install.sh` recorded the hand-installed release (`installed_release` = 1) | | |
 | The modes; `fs.protected_hardlinks`; the kiosk never root | | |
 | `install.sh` started the installer once: `status.json` idle, trust version 1 | | |
 | The node's refusals: no channel, damaged, genesis already held, not newer, wrong channel | | |
@@ -4958,15 +4970,16 @@ psql "$CONN" -c "DELETE FROM release_artifact; DELETE FROM release_bundle; DELET
   gap, distinct signers, weak keys, the newest root's release set), `refusal_tests.rs` (the copy, a sanitised channel
   name), `steward_tests.rs` and `tests/cli.rs`.
 - **The node:** `crates/cairn-node/tests/release_store_doors.rs` (window kind only, the cap, the incident freeze on both
-  doors) and `tests/release_intake.rs` (all or nothing, genesis once, the fork incident, pruning by entry, stored roots
-  re-verified).
-- **The window:** `cairn-gui-tauri`'s `update_tests.rs` (the release flag before clap), `release_fetch_tests.rs` (`due`,
-  the untaken release, three fetches, `complete` last) and the DB-gated `release_fetch_db_tests.rs`
-  (`a_press_waits_at_most_one_chunk`; CI does not run it, #905); `crates/cairn-node/src/window_floor_tests.rs`
-  (`a_same_schema_higher_release_fits`, `a_lower_release_is_same`).
+  doors) and `tests/release_intake.rs` (all or nothing, a different genesis refused and the same one accepted, the fork
+  incident, pruning by entry, stored roots re-verified).
+- **The window:** `cairn-gui-tauri`'s `update_tests.rs` (the release flag before clap), `release_fetch_tests.rs` (`due`
+  and its lowest `idx`, any `complete` waits, three fetches, `complete` last) and the DB-gated
+  `release_fetch_db_tests.rs` (`a_press_waits_at_most_one_chunk`; CI does not run it, #905);
+  `crates/cairn-node/src/window_floor_tests.rs` (`a_same_schema_higher_release_fits`, `a_lower_release_is_same`).
 - **The installer:** `cairn-terminal-install`'s `decide_tests.rs`, `run_tests.rs` (the swap and `.prev`, a program that
   will not start, a half-staged folder, a fork until a human clears it, the terminal's own faults, a forged release that
-  cannot lock out the genuine one) and `tests/packaging.rs` (the units, the modes, no secret in the workflow). The
-  privilege drop itself is untested: the tests cannot drop from root.
+  cannot lock out the genuine one, a bad trust file with nothing staged, a `--run-as` user in group 0) and
+  `tests/packaging.rs` (the units, the modes, no secret in the workflow, the recorded release, the idle requirement).
+  The privilege drop itself is untested: the tests cannot drop from root.
 
 `TEMPLATE.md` carries a matching block (*A terminal follows its node*).

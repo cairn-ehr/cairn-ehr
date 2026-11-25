@@ -57,9 +57,15 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   `run_tests.rs`'s `refused` helper (staging empty after every refusal), `a_bad_run_as_user_is_the_terminals_own_fault`,
   `a_half_staged_folder_is_cleared`; `files.rs::clear_removes_complete_first_and_tries_everything`. No test pins the
   status-before-clear order: review it.
-- **An untaken release waits.** While `incoming/complete` names a release above the installed one, the window fetches
-  nothing: the installer may be reading those files. **Tempting wrong fix:** fetch over it "because a newer release
-  wins". Pin: `release_fetch_tests.rs::an_untaken_release_waits`.
+- **An untaken release waits.** While anything is at `incoming/complete`, the window fetches nothing: the installer may
+  be reading those files, and even a stale or unreadable `complete` re-triggers the path unit, whose run clears it
+  (R30). **Tempting wrong fix:** fetch over it "because a newer release wins", or wait only for a number above the
+  installed release. Pins: `release_fetch_tests.rs::an_untaken_release_waits`,
+  `a_stale_or_unreadable_complete_still_counts_as_staged`.
+- **The window fetches the program the installer will take: each release's lowest `idx` for this terminal** (R30).
+  The installer takes the FIRST matching manifest entry, so a release whose first program does not qualify is skipped
+  whole. **Tempting wrong fix:** `max_by_key(release_version)` over all entries (it returns the LAST of a tie), or fall
+  back to a later entry that fits. Pin: `release_fetch_tests.rs::due_picks_the_lowest_idx_of_the_newest_release`.
 - **`refused_release` is set only after the release verified, for `NotNewer` and `NoProgramForThisTerminal`.** Any other
   refusal's release number may come from a forged meta, and `WontStart` may be a slow first start. **Tempting wrong
   fix:** mark every refusal for good "to stop re-downloads": a forger then locks the genuine release out. Pins:
@@ -76,9 +82,10 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   as not installed, and every installer refuses it. Pins: `update_tests.rs::the_release_flag_is_read_before_clap`,
   `the_release_line_round_trips`; `decide_tests.rs::the_new_program_must_answer_exactly_its_signed_lines`.
 - **The start check runs the verified bytes, and never as root.** The installer writes the bytes it verified to
-  `<program>.new` and runs THAT as `--run-as`; a missing user or uid 0 is the terminal's own fault. **Tempting wrong
-  fix:** run the staged `artifact.bin` "because it is the same bytes" (its unprivileged owner can change it after the
-  check), or fall back to root when the drop fails. Pins: `run_tests.rs::a_bad_run_as_user_is_the_terminals_own_fault`,
+  `<program>.new` and runs THAT as `--run-as`; a missing user, uid 0 or primary gid 0 is the terminal's own fault.
+  **Tempting wrong fix:** run the staged `artifact.bin` "because it is the same bytes" (its unprivileged owner can
+  change it after the check), or fall back to root when the drop fails. Pins:
+  `run_tests.rs::a_bad_run_as_user_is_the_terminals_own_fault`, `a_run_as_user_in_roots_group_is_refused`,
   `a_program_that_will_not_start_is_never_swapped_in`. No test changes the staged file after the check, and the drop
   itself is untested (it needs root): review, and RUNBOOK §41.
 - **The chunk door serves `window` artifacts only, and refuses while an incident is open**, like the offer door.
@@ -109,6 +116,18 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   the path unit, or run the binary directly (it could then run beside a path-unit-triggered run). Pins:
   `packaging.rs::install_sh_starts_the_installer_once_so_the_window_has_a_status`;
   `run_tests.rs::nothing_staged_writes_the_idle_status_even_with_no_pin`, `a_folder_still_being_written_is_left_alone`.
+- **`install.sh` records the hand-installed program's release before the installer first runs** (ruling R29), when
+  `state/installed_release` is absent or `--replace-window` was given, asking `cairn-window --print-release-version` as
+  `cairn-window`. Without it the installer's "newer" gate starts at 0 on a fresh terminal, and a compromised window
+  could stage an OLDER genuine signed release for root to install. **Tempting wrong fix:** drop it "because the
+  installer refuses `NotNewer` anyway", or ask the program as root. Pin:
+  `packaging.rs::install_sh_records_the_hand_installed_release_before_the_installer_runs`.
+- **A trust file the installer cannot read fails `install.sh`** (ruling R29). With nothing staged, a pin that cannot
+  be loaded writes the `TerminalFault` status (over any it finds) and fails the run, and `install.sh` removes the old
+  status first and then requires `"state": "idle"`, naming the trust file. **Tempting wrong fix:** check only that
+  `status.json` exists, or let the idle run ignore the pin error: a wrong `--trust` file then ends in "Installed.".
+  Pins: `packaging.rs::install_sh_requires_the_idle_status`;
+  `run_tests.rs::nothing_staged_with_a_bad_trust_file_is_the_terminals_own_fault`.
 
 **⇒ #909 SLICE C1 — AN OLDER WINDOW WORKS ABOVE A FLOOR (ADR-0111, db/085) — do not undo.**
 - **Never reset the floor ledger.** `WINDOW_FLOOR_LEDGER` (`cairn-event`'s `schema_generation.rs`) gains one entry

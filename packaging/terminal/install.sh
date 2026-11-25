@@ -71,11 +71,31 @@ else
 fi
 install -o root -g root -m 0755 "$installer" /opt/cairn/bin/cairn-terminal-install
 
+# Ruling R29 (rollback): the installer refuses any release not newer than
+# state/installed_release. A fresh terminal has none, so a compromised window could stage an
+# OLDER genuine signed release and root would install it. So record the program's own release
+# first, whenever the file is absent or the program was just replaced by hand (a deliberate
+# downgrade by the person at the terminal is theirs to make). The program is asked as
+# cairn-window, never as root; a dev build answers 0, which every signed release is newer than.
+if [ ! -e /var/lib/cairn-terminal/state/installed_release ] || [ "$replace" = yes ]; then
+    release=$(runuser -u cairn-window -- /opt/cairn/bin/cairn-window --print-release-version) ||
+        die "/opt/cairn/bin/cairn-window did not answer --print-release-version"
+    case "$release" in
+        ''|*[!0-9]*) die "/opt/cairn/bin/cairn-window gave \"$release\" as its release, not a number" ;;
+    esac
+    tmp=$(mktemp)
+    printf '%s' "$release" > "$tmp"
+    install -o root -g root -m 0644 "$tmp" /var/lib/cairn-terminal/state/installed_release
+    rm -f "$tmp"
+    echo "install.sh: recorded the installed window as release $release."
+fi
+
 # The trust file is the root of everything this terminal will ever accept: never replace one
 # silently.
 if [ -e /etc/cairn/channel-root.cbor ] && ! cmp -s "$trust" /etc/cairn/channel-root.cbor; then
     echo "install.sh: /etc/cairn/channel-root.cbor already exists and DIFFERS; leaving it alone." >&2
-    echo "  Remove it by hand if you really mean to change channel." >&2
+    echo "  To really change channel, remove it AND /var/lib/cairn-terminal/state/roots.cbor (which" >&2
+    echo "  wins over it once it exists) and state/status.json by hand, then re-run." >&2
 else
     install -o root -g root -m 0644 "$trust" /etc/cairn/channel-root.cbor
 fi
@@ -100,11 +120,16 @@ systemctl enable --now cairn-terminal-install.path
 # The window fetches nothing until the installer's state/status.json exists, and the path unit
 # starts the installer only once a release is staged. So start it once now: with nothing staged
 # it writes the idle status carrying this terminal's pin. Through systemd (same defaults and
-# hardening), so it never runs beside a run the path unit started. On a re-run that finds a
-# release staged it installs or refuses it, as the path unit would; a refusal is not an error here.
+# hardening), so it never runs beside a run the path unit started.
+# Ruling R29: the run must leave "state": "idle". A trust file the installer cannot read makes it
+# write a refused (terminal's own fault) status and fail instead, and that must stop the install
+# here rather than end in "Installed.". The old status is removed first so that this run writes
+# a fresh one (an existing status is never overwritten by an idle run); all it forgets is a
+# release refused for good, which the window may then fetch once more and see refused again.
+rm -f /var/lib/cairn-terminal/state/status.json
 systemctl start cairn-terminal-install.service ||
-    echo "install.sh: the installer refused what was staged; see journalctl -u cairn-terminal-install." >&2
-[ -f /var/lib/cairn-terminal/state/status.json ] ||
-    die "the installer wrote no /var/lib/cairn-terminal/state/status.json; see journalctl -u cairn-terminal-install"
+    echo "install.sh: the installer's first run failed; see journalctl -u cairn-terminal-install." >&2
+grep -qs '"state": "idle"' /var/lib/cairn-terminal/state/status.json ||
+    die "the installer did not report idle in /var/lib/cairn-terminal/state/status.json. If it says a fault on the terminal itself, the trust file /etc/cairn/channel-root.cbor (or state/roots.cbor) is not one it can read: install the channel's real trust file. If it found a release staged, re-run. See journalctl -u cairn-terminal-install."
 systemctl enable cairn-window-kiosk.service
 echo "Installed. Reboot to start the kiosk."

@@ -24,7 +24,7 @@ pub enum IntakeError {
     /// The verifier said no; the message is its plain sentence (never cryptographic words).
     #[error("{}", .0.sentence(Who::Node))]
     Refused(Refusal),
-    /// `--genesis-root` was given but the node already holds a trust root.
+    /// `--genesis-root` named a first trust file other than the one this node already holds.
     #[error("This node already holds a release channel's trust file, so it will not take a different first one.")]
     GenesisAlreadyHeld,
     /// A database failure, already rendered legibly.
@@ -73,16 +73,18 @@ pub fn rebuild_history(stored: &[SignedRoot]) -> Result<Vec<VerifiedRoot>, Refus
     advance(&[genesis(first)?], &stored[1..])
 }
 
-/// Choose the history to verify against: the stored roots if any (a supplied genesis is then
-/// refused), else the supplied genesis, else the compiled-in official root, else `NoChannel`.
+/// Choose the history to verify against: the stored roots if any, else the supplied genesis,
+/// else the compiled-in official root, else `NoChannel`. With roots held, a supplied genesis is
+/// refused unless it is the very first file held (same payload, so the same content address):
+/// an owner re-running the first intake's command changes nothing (ruling R30).
 fn starting_history(
     stored: &[SignedRoot],
     supplied: Option<SignedRoot>,
 ) -> Result<Vec<VerifiedRoot>, IntakeError> {
-    match (stored.is_empty(), supplied) {
-        (false, Some(_)) => Err(IntakeError::GenesisAlreadyHeld),
-        (false, None) => rebuild_history(stored).map_err(IntakeError::Refused),
-        (true, supplied) => {
+    match (stored.first(), supplied) {
+        (Some(held), Some(s)) if s.payload != held.payload => Err(IntakeError::GenesisAlreadyHeld),
+        (Some(_), _) => rebuild_history(stored).map_err(IntakeError::Refused),
+        (None, supplied) => {
             let root = supplied
                 .or_else(official_root)
                 .ok_or(IntakeError::Refused(Refusal::NoChannel))?;

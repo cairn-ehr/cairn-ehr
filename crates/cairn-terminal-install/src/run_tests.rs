@@ -431,3 +431,25 @@ fn nothing_staged_writes_the_idle_status_even_with_no_pin() {
     assert!(install_staged(&rig.cfg));
     assert_eq!(status(&rig), marked);
 }
+
+/// Ruling R29: a wrong `--trust` file must not pass `install.sh` as "Installed.". With nothing
+/// staged, a pin that cannot be read writes the terminal's-fault status (over any status it
+/// finds) and the run fails, so `install.sh`, which requires `"state": "idle"`, stops there.
+#[test]
+fn nothing_staged_with_a_bad_trust_file_is_the_terminals_own_fault() {
+    let rig = terminal();
+    std::fs::write(&rig.cfg.genesis_root, b"not a trust file").unwrap();
+    assert!(!install_staged(&rig.cfg));
+    faulted(&rig);
+    assert_eq!(status(&rig).pinned_root_version, 0);
+}
+
+/// Ruling R30: a user whose primary group is root's (gid 0) is refused like root itself: the
+/// test-run would otherwise hold root's group's file access.
+#[test]
+fn a_run_as_user_in_roots_group_is_refused() {
+    assert!(checked_ids("cw", Some((1000, 0))).is_err());
+    assert!(checked_ids("cw", Some((0, 1000))).is_err());
+    assert!(checked_ids("cw", None).is_err());
+    assert_eq!(checked_ids("cw", Some((1000, 1000))), Ok((1000, 1000)));
+}

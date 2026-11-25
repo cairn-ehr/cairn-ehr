@@ -30,6 +30,7 @@ fn our_stamp() -> SchemaStamp {
 fn offer(release: u64, generation: i32) -> Offer {
     Offer {
         release_version: release,
+        idx: 0,
         manifest: vec![release as u8; 3],
         release_signatures: vec![vec![1, 2]],
         digest: vec![release as u8; 32],
@@ -80,20 +81,21 @@ fn due_picks_the_newest_fitting_newer_offer() {
     blank.generation_line = None;
     assert_eq!(due_of(&s, &[blank]), None);
     // No stamp: nothing can be judged to fit.
-    assert_eq!(due(&s, &offers, running(0), None, None, &[]), None);
+    assert_eq!(due(&s, &offers, running(0), None, false, &[]), None);
 }
 
 /// [`due`] against this build at release 0 and this build's stamp, nothing staged or given up.
 fn due_of(s: &InstallerStatus, offers: &[Offer]) -> Option<u64> {
-    due_with(s, offers, 0, None, &[])
+    due_with(s, offers, 0, false, &[])
 }
 
-/// [`due`] on this build's stamp, running `running`, with `untaken` in `incoming/`.
+/// [`due`] on this build's stamp, running `running`, with `staged` saying whether anything is
+/// at `incoming/complete`.
 fn due_with(
     s: &InstallerStatus,
     offers: &[Offer],
     running_release: u64,
-    untaken: Option<u64>,
+    staged: bool,
     given_up: &[u64],
 ) -> Option<u64> {
     let stamp = our_stamp();
@@ -102,7 +104,7 @@ fn due_with(
         offers,
         running(running_release),
         Some(&stamp),
-        untaken,
+        staged,
         given_up,
     )
     .map(|o| o.release_version)
@@ -114,26 +116,63 @@ fn due_skips_a_release_already_installed() {
     assert_eq!(due_of(&status("installed", 6, None), &[offer(6, g)]), None);
     // Not newer than the program running now either (a terminal updated by hand).
     assert_eq!(
-        due_with(&status("idle", 0, None), &[offer(6, g)], 6, None, &[]),
+        due_with(&status("idle", 0, None), &[offer(6, g)], 6, false, &[]),
         None
     );
     assert_eq!(due_of(&status("idle", 0, None), &[offer(6, g)]), Some(6));
 }
 
-/// Ruling R17: while `incoming/complete` names a release the installer has not taken, nothing
-/// is fetched, not even a newer one: the installer may be reading those files, and a new fetch
-/// would truncate them under it. The installer clears `incoming/` on every outcome.
+/// Rulings R17/R30: while anything is at `incoming/complete`, nothing is fetched, not even a
+/// newer release: the installer may be reading those files, and a new fetch would truncate them
+/// under it. That holds for a stale or unreadable `complete` too (one at or below what is
+/// installed): it re-triggers the path unit, whose run clears `incoming/` on every outcome.
 #[test]
 fn an_untaken_release_waits() {
     let g = embedded_schema_version();
     let idle = status("idle", 5, None);
-    assert_eq!(due_with(&idle, &[offer(6, g)], 0, Some(6), &[]), None);
+    assert_eq!(due_with(&idle, &[offer(6, g)], 0, true, &[]), None);
     assert_eq!(
-        due_with(&idle, &[offer(7, g), offer(6, g)], 0, Some(6), &[]),
+        due_with(&idle, &[offer(7, g), offer(6, g)], 0, true, &[]),
         None
     );
-    // A `complete` at or below what is installed was taken: the newer offer is due.
-    assert_eq!(due_with(&idle, &[offer(7, g)], 0, Some(5), &[]), Some(7));
+    // Nothing staged: the newer offer is due.
+    assert_eq!(due_with(&idle, &[offer(7, g)], 0, false, &[]), Some(7));
+}
+
+/// Ruling R30: any `complete` holds the window back, also one that is stale or no number (the
+/// old rule waited only for a number newer than the installed release, and so fetched over it).
+#[test]
+fn a_stale_or_unreadable_complete_still_counts_as_staged() {
+    let dir = scratch();
+    std::fs::create_dir_all(dir.join("incoming")).unwrap();
+    assert!(!is_staged(&dir));
+    for junk in ["3", "not a number"] {
+        std::fs::write(dir.join("incoming").join(COMPLETE), junk).unwrap();
+        assert!(is_staged(&dir), "{junk}");
+    }
+}
+
+/// Ruling R30: the window fetches the very entry the installer will take. A release may carry
+/// two programs for this terminal; the installer takes the FIRST (lowest `idx`), so the window
+/// stages that one, and a release whose first program does not fit is not fetched at all
+/// (staging its second would end in a refusal for a file the signed list does not name there).
+#[test]
+fn due_picks_the_lowest_idx_of_the_newest_release() {
+    let g = embedded_schema_version();
+    let entry = |idx: u32, generation: i32| Offer {
+        idx,
+        digest: vec![idx as u8 + 1; 32],
+        ..offer(7, generation)
+    };
+    let s = status("idle", 0, None);
+    let stamp = our_stamp();
+    let pick = |offers: &[Offer]| due(&s, offers, running(0), Some(&stamp), false, &[]);
+    assert_eq!(pick(&[entry(0, g), entry(1, g)]).map(|o| o.idx), Some(0));
+    assert_eq!(pick(&[entry(1, g), entry(0, g)]).map(|o| o.idx), Some(0));
+    // The first program needs another schema: not the second instead, but the older release.
+    let older = offer(6, g);
+    let got = pick(&[entry(0, g + 1), entry(1, g), older.clone()]);
+    assert_eq!(got, Some(older));
 }
 
 /// Ruling R18: a release the installer refused for good (`refused_release`) is never fetched
@@ -165,9 +204,9 @@ fn fetches_stop_after_three() {
     assert_eq!(courier.given_up(), vec![6]);
     let g = embedded_schema_version();
     let idle = status("idle", 0, None);
-    assert_eq!(due_with(&idle, &[offer(6, g)], 0, None, &[6]), None);
+    assert_eq!(due_with(&idle, &[offer(6, g)], 0, false, &[6]), None);
     assert_eq!(
-        due_with(&idle, &[offer(7, g), offer(6, g)], 0, None, &[6]),
+        due_with(&idle, &[offer(7, g), offer(6, g)], 0, false, &[6]),
         Some(7)
     );
 }
@@ -181,7 +220,7 @@ fn fetched_while_refused(
     let (courier, mut fetched) = (Courier::new(None), std::collections::BTreeMap::new());
     let mut s = status("idle", 0, None);
     for _poll in 0..50 {
-        let Some(r) = due_with(&s, offers, 0, None, &courier.given_up()) else {
+        let Some(r) = due_with(&s, offers, 0, false, &courier.given_up()) else {
             break;
         };
         // What `fetch` does first; the installer then refuses it and clears `incoming/`.
@@ -223,7 +262,7 @@ fn a_one_off_transit_error_is_fetched_again() {
     let damaged = status("refused", 0, Some("damaged; fetch it again"));
     let offers = [offer(6, embedded_schema_version())];
     assert_eq!(
-        due_with(&damaged, &offers, 0, None, &courier.given_up()),
+        due_with(&damaged, &offers, 0, false, &courier.given_up()),
         Some(6)
     );
 }

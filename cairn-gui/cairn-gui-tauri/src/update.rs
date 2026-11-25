@@ -315,8 +315,8 @@ pub async fn installed_program_impl(state: &AppState) -> InstallView {
 }
 
 /// Run `program args` for its generation line (and `RELEASE_FLAG` for its release, 0 if it
-/// cannot answer) and judge it against `stamp`. No program, one
-/// that fails, hangs past [`INSTALLED_CHECK_TIMEOUT`] or prints anything else is not installed.
+/// cannot answer) and judge it against `stamp`. No program, one that fails, hangs past
+/// [`INSTALLED_CHECK_TIMEOUT`] or prints anything else is not installed.
 pub async fn installed_fit(
     program: Option<PathBuf>,
     args: &[&str],

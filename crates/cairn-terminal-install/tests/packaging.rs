@@ -184,7 +184,7 @@ fn a_crash_that_leaves_the_marker_cannot_kill_the_path_unit() {
 /// writes it, which the path unit starts only once a release is staged. So `install.sh` must start
 /// the installer once itself (nothing staged: it writes the idle status with the terminal's pin),
 /// through systemd, so that it can never run beside a path-unit-triggered run, and only after the
-/// path unit is enabled. It then refuses to finish if no status was written.
+/// path unit is enabled. It then refuses to finish unless the status says idle (R29, below).
 #[test]
 fn install_sh_starts_the_installer_once_so_the_window_has_a_status() {
     let s = repo_file("packaging/terminal/install.sh");
@@ -201,4 +201,48 @@ fn install_sh_starts_the_installer_once_so_the_window_has_a_status() {
     assert!(lines[started..]
         .iter()
         .any(|l| l.contains("/var/lib/cairn-terminal/state/status.json") && l.contains("die")));
+}
+
+/// Ruling R29 (rollback): the installer refuses any release not newer than
+/// `state/installed_release`, which a fresh terminal lacks, so a compromised window could stage
+/// an older genuine release and have root downgrade the program. `install.sh` therefore
+/// records the hand-installed program's own release (asked of it as `cairn-window`, never as
+/// root) when the file is absent or the window was replaced, before the installer first runs.
+#[test]
+fn install_sh_records_the_hand_installed_release_before_the_installer_runs() {
+    let s = repo_file("packaging/terminal/install.sh");
+    let lines = code_lines(&s);
+    let at = |wanted: &str| lines.iter().position(|l| l.contains(wanted));
+    let asked =
+        at("runuser -u cairn-window -- /opt/cairn/bin/cairn-window --print-release-version")
+            .expect("the program is asked its release as cairn-window");
+    let recorded = lines
+        .iter()
+        .position(|l| {
+            l.starts_with("install -o root -g root -m 0644")
+                && l.ends_with("/var/lib/cairn-terminal/state/installed_release")
+        })
+        .expect("installed_release written root-owned");
+    let started = at("systemctl start cairn-terminal-install.service").unwrap();
+    assert!(asked < recorded && recorded < started);
+    assert!(lines[..asked]
+        .iter()
+        .any(|l| l.contains("installed_release") && l.contains("$replace")));
+}
+
+/// Ruling R29 (trust file): the installer's idle run with a trust file it cannot read writes a
+/// refused status, so `install.sh` must require the idle state, not merely a status file, and
+/// name the trust file when it is not there.
+#[test]
+fn install_sh_requires_the_idle_status() {
+    let s = repo_file("packaging/terminal/install.sh");
+    let lines = code_lines(&s);
+    let check = lines
+        .iter()
+        .position(|l| l.contains(r#""state": "idle""#) && l.contains("status.json"))
+        .expect("the idle state is required");
+    assert!(lines[check..]
+        .iter()
+        .take(3)
+        .any(|l| l.contains("die") && l.contains("/etc/cairn/channel-root.cbor")));
 }

@@ -1148,6 +1148,8 @@ program size: ___ MB
 | `keygen` prints the key and the recovery code; refuses to overwrite | | |
 | The trust file's SHA-256 on the Pi equals the second channel's | | |
 | `install.sh` refuses a first install without the connection and the fingerprint | | |
+| A junk trust file: `install.sh` stops naming the trust file, never "Installed." | | |
+| `install.sh` recorded the hand-installed release (`installed_release` = 1) | | |
 | The modes; `fs.protected_hardlinks`; the kiosk never root | | |
 | `install.sh` started the installer once: `status.json` idle, trust version 1 | | |
 | The node's refusals: no channel, damaged, genesis already held, not newer, wrong channel | | |

@@ -1748,8 +1748,9 @@ enum Cmd {
     /// List every terminal that has tried to connect, newest first, with its status (#909).
     ListTerminals,
     /// Verify a steward-signed release bundle and store it so terminals can fetch it (#909).
-    /// `--genesis-root` is the channel's first trust file, accepted only while the node holds
-    /// no trust root. Owner only.
+    /// `--genesis-root` is the channel's first trust file, taken in while the node holds no trust
+    /// root; once one is held, the same file is accepted again and a different one refused. Owner
+    /// only.
     ReleaseIntake {
         bundle: PathBuf,
         #[arg(long)]

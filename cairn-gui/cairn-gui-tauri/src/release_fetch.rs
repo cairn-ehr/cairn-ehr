@@ -15,9 +15,11 @@
 //! 1. [`ready`]: a release dir was given (`--release-dir`), the installer has written
 //!    `state/status.json` (else there is no installer here), and `/etc/os-release` names this
 //!    machine's platform. Fixture mode never gets past this.
-//! 2. [`offers`] asks the node (`cairn_release_offer`); [`due`] picks the newest offer that is
-//!    newer than what is installed and running, fits the node's stamp, is at most 64 MiB, was not
-//!    refused for good, and was not given up after [`MAX_ATTEMPTS`] fetches this session.
+//! 2. [`offers`] asks the node (`cairn_release_offer`); [`due`] picks, of each release's first
+//!    program for this terminal (lowest `idx`, the one the installer takes), the newest that is
+//!    newer than what is installed and running, fits the node's stamp, is at most 64 MiB, was
+//!    not refused for good, and was not given up after [`MAX_ATTEMPTS`] fetches this session;
+//!    and nothing at all while anything is at `incoming/complete`.
 //! 3. [`fetch`] (spawned, at most one at a time: [`Courier::claim`]) writes `meta.cbor`, then
 //!    `artifact.bin` by 256 KiB chunks, each under its own lock of the shared connection so a
 //!    clinical press waits behind at most one chunk, then `complete` LAST: the installer acts on
@@ -29,11 +31,12 @@
 //! # The contract with the installer (Task 9)
 //!
 //! The installer writes `status.json` FIRST, then clears `incoming/`, on EVERY outcome, installed
-//! or refused (the other order would let a poll see no `complete` beside a stale status). So a `complete` still there is a release it has not taken yet, and the window
-//! fetches nothing at all meanwhile: the installer may be reading those files (ruling R17). A
-//! refusal a fresh fetch cannot fix names its release in `refused_release`, which the window then
-//! never fetches again; one damaged in transit leaves it `None`, and the window fetches that
-//! release again on a later poll.
+//! or refused (the other order would let a poll see no `complete` beside a stale status). So
+//! while ANYTHING is at `complete` the window fetches nothing at all: the installer may be
+//! reading those files (ruling R17), and even a stale or unreadable `complete` re-triggers the
+//! path unit, whose run clears it (R30). A refusal a fresh fetch cannot fix names its release in
+//! `refused_release`, which the window then never fetches again; one damaged in transit leaves
+//! it `None`, and the window fetches that release again on a later poll.
 use crate::state::AppState;
 use crate::update::UpdateView;
 use cairn_node::db::SchemaStamp;
@@ -63,6 +66,9 @@ pub fn refused_note(sentence: &str) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Offer {
     pub release_version: u64,
+    /// The program's place in the manifest's artifact list: the installer takes a release's
+    /// FIRST program for this terminal, so the window fetches only the lowest `idx` (R30).
+    pub idx: u32,
     /// The signed manifest's bytes and its signatures, staged as they came.
     pub manifest: Vec<u8>,
     pub release_signatures: Vec<Vec<u8>>,
@@ -159,16 +165,26 @@ pub fn read_status(dir: &Path) -> Option<InstallerStatus> {
     InstallerStatus::from_json(&std::fs::read(dir.join("state").join("status.json")).ok()?)
 }
 
-/// The release staged in `<dir>/incoming/` and not yet taken by the installer, if any.
+/// Is anything at `<dir>/incoming/complete`? A link, a FIFO or a file that is no number counts
+/// too, as it does for the installer: the path unit runs on it, and that run clears it (R30).
+pub fn is_staged(dir: &Path) -> bool {
+    let found = std::fs::symlink_metadata(dir.join("incoming").join(COMPLETE));
+    !matches!(found, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// The release number staged in `<dir>/incoming/`, if any (the tests' view of what a fetch
+/// staged; the poll asks only [`is_staged`]).
+#[cfg(test)]
 pub fn staged_release(dir: &Path) -> Option<u64> {
     let text = std::fs::read_to_string(dir.join("incoming").join(COMPLETE)).ok()?;
     text.trim().parse().ok()
 }
 
-/// The offer to fetch now, if any. **Pure.** None at all while `untaken` (the release in
-/// `incoming/complete`) is newer than the installed one: the installer has not taken it yet, and
-/// a fetch would truncate files it may be reading. Otherwise the newest offer that is newer than
-/// the installed and `running` releases, is at most [`MAX_ARTIFACT`] bytes, is neither the
+/// The offer to fetch now, if any. **Pure.** None at all while anything is `staged` at
+/// `incoming/complete` ([`is_staged`]): the installer has not taken it yet, and a fetch would
+/// truncate files it may be reading. Otherwise the newest offer that is its release's first
+/// program for this terminal (lowest `idx`, the one the installer takes), is newer than the
+/// installed and `running` releases, is at most [`MAX_ARTIFACT`] bytes, is neither the
 /// installer's `refused_release` nor `given_up` this session, and whose program this node's
 /// `stamp` would serve ([`install_fit`] says `Fits`): one it would refuse is never fetched. An
 /// offer whose generation line cannot be read cannot be judged, so it is skipped.
@@ -177,10 +193,10 @@ pub fn due(
     offers: &[Offer],
     running: InstalledBuild,
     stamp: Option<&SchemaStamp>,
-    untaken: Option<u64>,
+    staged: bool,
     given_up: &[u64],
 ) -> Option<Offer> {
-    if untaken.is_some_and(|r| r > status.installed_release) {
+    if staged {
         return None;
     }
     let floor = status.installed_release.max(running.release);
@@ -202,9 +218,17 @@ pub fn due(
         };
         install_fit(Some(build), running, stamp) == InstallFit::Fits
     };
+    // The installer takes each release's FIRST program for this terminal (lowest `idx`), so only
+    // that entry may be fetched; a release whose first program is unwanted is skipped whole.
+    let first = |o: &&Offer| {
+        let same = offers
+            .iter()
+            .filter(|p| p.release_version == o.release_version);
+        same.map(|p| p.idx).min() == Some(o.idx)
+    };
     offers
         .iter()
-        .filter(|o| wanted(o) && fits(o))
+        .filter(|o| first(o) && wanted(o) && fits(o))
         .max_by_key(|o| o.release_version)
         .cloned()
 }
@@ -256,14 +280,14 @@ pub async fn after_poll(
     let job = match fresh {
         Some(stamp) if !state.release.is_fetching() => {
             let offers = offers(state, &ready.target).await.unwrap_or_default();
-            let untaken = staged_release(&ready.dir);
+            let staged = is_staged(&ready.dir);
             let (running, given_up) = (crate::update::running_build(), state.release.given_up());
             let due = due(
                 &ready.status,
                 &offers,
                 running,
                 stamp.as_ref(),
-                untaken,
+                staged,
                 &given_up,
             );
             due.map(|offer| Job {
@@ -295,7 +319,7 @@ pub async fn offers(state: &AppState, target: &Target) -> Option<Vec<Offer>> {
     let rows = conn
         .query(
             "SELECT release_version, manifest, release_signatures, digest, byte_len, \
-                    generation_line FROM cairn_release_offer($1, $2, $3)",
+                    generation_line, idx FROM cairn_release_offer($1, $2, $3)",
             &[&target.os, &target.arch, &target.platform],
         )
         .await;
@@ -318,6 +342,7 @@ pub async fn offers(state: &AppState, target: &Target) -> Option<Vec<Offer>> {
             digest: r.get(3),
             byte_len: u64::try_from(r.get::<_, i64>(4)).ok()?,
             generation_line: r.get(5),
+            idx: u32::try_from(r.get::<_, i32>(6)).ok()?,
         })
     });
     Some(rows.collect())
