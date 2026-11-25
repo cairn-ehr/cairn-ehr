@@ -60,16 +60,11 @@ pub fn verify_release_manifest_sig(
 /// verifier can pick which of its pinned keys to try. Like `key_id`, this proves NOTHING: a
 /// `verify_*_sig` call against the chosen key must follow.
 pub fn detached_key_id(sig: &[u8]) -> Result<Vec<u8>, EventError> {
-    let kid = parse(sig)?.protected.header.key_id;
+    let kid = crate::key_id(sig)?;
     if kid.len() != 32 {
         return Err(EventError::BadKeyId);
     }
     Ok(kid)
-}
-
-fn parse(sig: &[u8]) -> Result<coset::CoseSign1, EventError> {
-    use coset::CborSerializable;
-    coset::CoseSign1::from_slice(sig).map_err(|e| EventError::Cose(e.to_string()))
 }
 
 /// The detached twin of `cose_sign1_in_context`: same header, same `external_aad`, but the
@@ -98,10 +93,12 @@ fn verify_detached(
     vk: &VerifyingKey,
     ctx: SigningContext,
 ) -> Result<(), EventError> {
-    let sign1 = parse(sig)?;
+    use coset::CborSerializable;
+    let sign1 = coset::CoseSign1::from_slice(sig).map_err(|e| EventError::Cose(e.to_string()))?;
     check_protected_header(&sign1, ctx)?;
     // A blob carrying its own payload is not a detached signature; refuse it here, because
-    // coset's detached verifier panics on one.
+    // coset's detached verifier panics on one. This `Cose(..)` means "not detached": a verifier
+    // crate maps it to Malformed.
     if sign1.payload.is_some() {
         return Err(EventError::Cose(
             "a detached signature must carry no payload".into(),
@@ -200,7 +197,8 @@ mod tests {
         assert!(matches!(err, EventError::ContextMismatch), "{err:?}");
     }
 
-    // An attached blob in the right context must be refused, never panic (coset's detached verifier asserts no payload).
+    // An attached blob in the right context must be refused, never panic (coset's detached
+    // verifier asserts there is no payload).
     #[test]
     fn an_attached_blob_in_the_root_context_is_refused_not_a_panic() {
         use coset::{CborSerializable, CoseSign1Builder};
@@ -211,7 +209,25 @@ mod tests {
             .build()
             .to_vec()
             .unwrap();
-        assert!(verify_trust_root_sig(&blob, b"root v1", &sk.verifying_key()).is_err());
+        let err = verify_trust_root_sig(&blob, b"root v1", &sk.verifying_key()).unwrap_err();
+        assert!(matches!(err, EventError::Cose(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_short_key_id_is_refused() {
+        use coset::{iana, CborSerializable, CoseSign1Builder, HeaderBuilder};
+        let header = HeaderBuilder::new()
+            .algorithm(iana::Algorithm::EdDSA)
+            .key_id(vec![1; 31])
+            .content_type(crate::CTX_TRUST_ROOT.as_str().to_string())
+            .build();
+        let blob = CoseSign1Builder::new()
+            .protected(header)
+            .build()
+            .to_vec()
+            .unwrap();
+        let err = detached_key_id(&blob).unwrap_err();
+        assert!(matches!(err, EventError::BadKeyId), "{err:?}");
     }
 
     #[test]
