@@ -809,6 +809,12 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
          current and writes nothing",
     ),
     (
+        "crates/cairn-node/src/release_intake.rs",
+        "node-local release store, not a clinical event: a re-run after a lost commit finds the \
+         release already held and is refused as not newer, or (commit lost) takes it in again \
+         identically (#909)",
+    ),
+    (
         "cairn-gui/cairn-gui-tauri/src/link/record_links.rs",
         "a read-only snapshot: it writes nothing",
     ),

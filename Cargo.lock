@@ -355,6 +355,7 @@ dependencies = [
  "cairn-medication-view",
  "cairn-medium",
  "cairn-patient-search",
+ "cairn-release",
  "chacha20poly1305",
  "chrono",
  "ciborium",
