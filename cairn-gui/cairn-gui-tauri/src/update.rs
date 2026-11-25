@@ -8,8 +8,9 @@
 //! This module is the window's Rust half of that:
 //!
 //! - **At launch**, [`launch_verdict`] opens the window or refuses it with a sentence.
-//! - **A 60 s poll** (`update.js`), [`update_state`], re-reads the stamp on the window's one
-//!   shared connection (reopening it if lost) and remembers the verdict and the stamp.
+//! - **A 60 s poll** (`update.js`), [`update_state`] / [`update_poll`], re-reads the stamp on
+//!   the window's one shared connection (reopening it if lost) and remembers the verdict and the
+//!   stamp; it also starts a release fetch when one is due (`crate::release_fetch`, #909 C2).
 //! - **The gate**, [`refuse_another_chart`]: below the floor, opening a DIFFERENT chart and
 //!   registering are refused. The open chart's re-reads, Sign, saves and close never come here.
 //! - **Before a restart**, [`installed_program`] asks the program now installed at this window's
@@ -73,11 +74,14 @@ pub const REFUSED_ANOTHER_CHART: &str =
 /// What the webview shows: `current` (nothing), `waiting` (the calm line) or `below_floor` (the
 /// alert, naming `reason` when the stamp gave one). A refusal learned mid-session is
 /// `below_floor` too, gated the same, but its alert is the refusal's own sentence (`refusal`).
+/// `note` is the courier's line (`crate::release_fetch::installer_view`): fetching, or the
+/// installer's refusal; shown whatever the kind.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct UpdateView {
     pub kind: &'static str,
     pub reason: Option<String>,
     pub refusal: Option<String>,
+    pub note: Option<String>,
 }
 
 /// What the installed program would be: `same` (nothing newer), `fits` (restart into it),
@@ -158,6 +162,7 @@ pub fn update_view(verdict: &WindowVerdict) -> UpdateView {
         kind,
         reason,
         refusal,
+        note: None,
     }
 }
 
@@ -263,13 +268,27 @@ pub fn install_stamp(
     }
 }
 
-/// The poll (`update.js`, once a minute). Fixture mode has no database and is always `current`.
-pub async fn update_state_impl(state: &AppState) -> UpdateView {
+/// The poll (`update.js`, once a minute), and the release fetch it found due
+/// (`crate::release_fetch`), which the Tauri forwarder spawns: a fetch takes minutes, and the
+/// poll's answer must not wait for it. Fixture mode reads nothing and fetches nothing.
+pub async fn update_poll(state: &AppState) -> (UpdateView, Option<crate::release_fetch::Job>) {
     if state.is_mock() {
-        return update_view(&WindowVerdict::Current);
+        return (update_view(&WindowVerdict::Current), None);
     }
     let read = read_stamp(state, "update check").await;
-    poll_answer(state, read)
+    let fresh = read.clone();
+    let view = poll_answer(state, read);
+    crate::release_fetch::after_poll(state, view, fresh.as_ref()).await
+}
+
+/// This running program as an installed build: what an installed or offered one is judged
+/// against.
+pub fn running_build() -> InstalledBuild {
+    InstalledBuild {
+        generation: embedded_schema_version(),
+        hash: embedded_schema_hash(),
+        release: release_version(),
+    }
 }
 
 /// A live window that cannot name its own program's path cannot check what is installed there
@@ -327,12 +346,7 @@ pub async fn installed_fit(
         .flatten(),
         None => None,
     };
-    let running = InstalledBuild {
-        generation: embedded_schema_version(),
-        hash: embedded_schema_hash(),
-        release: release_version(),
-    };
-    install_fit(installed, running, stamp)
+    install_fit(installed, running_build(), stamp)
 }
 
 /// Run `program args` and read its generation line. Blocking; see [`run_for_line`].
@@ -368,9 +382,22 @@ fn run_for_line(program: &Path, args: &[String], timeout: Duration) -> Option<St
 
 // ---- The Tauri forwarders (`update.js` calls all three). ----
 
+/// The poll; a release fetch it found due runs on its own task, through the app's state (a
+/// `tauri::State` cannot outlive this call).
 #[tauri::command]
-pub async fn update_state(state: tauri::State<'_, AppState>) -> Result<UpdateView, ()> {
-    Ok(update_state_impl(&state).await)
+pub async fn update_state(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<UpdateView, ()> {
+    use tauri::Manager;
+    let (view, job) = update_poll(&state).await;
+    if let Some(job) = job {
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            crate::release_fetch::fetch(&state, job.offer, &job.dir, job.pinned_root).await;
+        });
+    }
+    Ok(view)
 }
 
 #[tauri::command]

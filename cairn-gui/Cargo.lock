@@ -532,6 +532,7 @@ dependencies = [
  "cairn-medication-view",
  "cairn-node",
  "cairn-patient-search",
+ "cairn-release",
  "chrono",
  "clap",
  "hex",
@@ -631,6 +632,7 @@ dependencies = [
  "ciborium",
  "serde",
  "serde_bytes",
+ "serde_json",
  "sha2 0.11.0",
  "thiserror 1.0.69",
 ]

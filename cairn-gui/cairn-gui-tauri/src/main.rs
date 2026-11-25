@@ -104,6 +104,7 @@ mod person_menu_webview_tests;
 #[cfg(test)]
 mod read_again_webview_tests;
 mod rekey;
+mod release_fetch;
 #[cfg(test)]
 mod reread_webview_tests;
 mod reseal;
@@ -177,6 +178,12 @@ struct Cli {
     /// 1 to 240; 15 by default. A separate setting from the key hold's cap.
     #[arg(long, default_value = "15", value_parser = whos_here::parse_idle_lock_minutes)]
     idle_lock_minutes: std::time::Duration,
+
+    /// This terminal's release folder, shared with its installer (#909 slice C2): the window
+    /// stages a newer release from the node in `<dir>/incoming/` and reads the installer's
+    /// `<dir>/state/status.json`. Left out, the window fetches nothing.
+    #[arg(long)]
+    release_dir: Option<std::path::PathBuf>,
 
     /// Run against fixtures with no database. Clinical writes (sign-off, stopping a drug) are
     /// refused in this mode; registering a patient succeeds into an in-memory population that
@@ -400,5 +407,6 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
         launched_exe: tauri::process::current_binary(&Default::default())
             .ok()
             .map(update::exe_path),
+        release: release_fetch::Courier::new(cli.release_dir.clone()),
     })
 }

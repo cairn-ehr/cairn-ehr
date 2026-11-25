@@ -53,6 +53,8 @@ impl AppState {
             last_stamp: None.into(),
             // No installed program: fixture mode never restarts (Review Focus 5).
             launched_exe: None,
+            // No release dir: fixture mode never fetches.
+            release: Default::default(),
         }
     }
 

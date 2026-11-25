@@ -253,3 +253,39 @@ fn an_unknown_install_says_so() {
         "{said}"
     );
 }
+
+/// #909 slice C2: the courier's note (fetching, or the installer's refusal) sits INSIDE the update
+/// line, which is shown whenever there is a note, even with no update waiting; then only the note
+/// shows (no calm line, no Update now: nothing is installed to restart into). Visible is pinned,
+/// not just its text: the note's ancestors are the line alone, the line is un-hidden by the note,
+/// no style rule hides the note, and the sentence is set as text, never HTML.
+#[test]
+fn a_refused_install_shows_its_sentence() {
+    let line = &INDEX_HTML[position(INDEX_HTML, "<div id=\"update-line\" hidden>")..];
+    let line = &line[..position(line, "</div>")];
+    assert!(
+        line.contains("<p id=\"update-note\" role=\"status\" hidden></p>"),
+        "{line}"
+    );
+    let render = js_fn(UPDATE_JS, "renderUpdate");
+    for shown in [
+        "el(\"update-line\").hidden = view.kind === \"current\" && !view.note;",
+        "el(\"update-note\").hidden = !view.note;",
+        "el(\"update-calm\").hidden = below || view.kind === \"current\";",
+        "el(\"update-now\").hidden = view.kind === \"current\";",
+        "if (el(\"update-note\").textContent !== note) el(\"update-note\").textContent = note;",
+    ] {
+        assert!(render.contains(shown), "{shown}\n{render}");
+    }
+    assert!(!UPDATE_JS.contains("innerHTML"), "text, never HTML");
+    let css = include_str!("../src-ui/style.css");
+    assert!(
+        !css.contains("#update-note"),
+        "no rule may hide or restyle the note"
+    );
+    // The copy itself is Rust's (`crate::release_fetch`), and `installer_view` puts it in `note`.
+    assert_eq!(
+        crate::release_fetch::refused_note("{sentence}"),
+        "This terminal did not install the update: {sentence}"
+    );
+}

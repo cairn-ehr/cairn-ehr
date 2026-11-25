@@ -278,6 +278,7 @@ pub struct AppState {
     pub last_stamp: std::sync::Mutex<Option<cairn_node::db::SchemaStamp>>,
     /// The program this window was launched from, asked before a restart; `None` in fixture mode.
     pub launched_exe: Option<std::path::PathBuf>,
+    pub release: crate::release_fetch::Courier, // `--release-dir` and its fetch (#909 C2)
 }
 
 impl AppState {

@@ -58,11 +58,12 @@ fn a_deleted_exe_path_is_the_installed_path() {
 async fn mock_update_state_is_current() {
     let state = AppState::mock(None);
     assert_eq!(
-        update_state_impl(&state).await,
+        update_poll(&state).await.0,
         UpdateView {
             kind: "current",
             reason: None,
             refusal: None,
+            note: None,
         }
     );
     assert_eq!(installed_program_impl(&state).await.kind, "same");
