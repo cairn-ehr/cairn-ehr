@@ -4,7 +4,9 @@
 //!
 //! Key files use `cairn-keystore`'s sealed CAIRNK1 format. The passphrase comes from the
 //! environment variable named by `--passphrase-env` (no prompt, so it scripts cleanly);
-//! this tool never writes a plaintext key.
+//! this tool never writes a plaintext key. (An environment variable is readable by the same
+//! user's other processes; acceptable for a tool that runs only on the steward's offline
+//! machine.)
 
 use cairn_event::SigningKey;
 use cairn_keystore::{keystore, seal};
@@ -13,7 +15,7 @@ use cairn_release::{
     SignedRoot, Signer, TrustRoot, VerifiedRoot,
 };
 use clap::{Args, Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(about = "Steward's offline signing tool for Cairn releases")]
@@ -91,6 +93,9 @@ enum Cmd {
     },
 }
 
+/// Shown beside every signer this tool names; one place to change when custody is richer.
+const CUSTODY_NOTE: &str = "steward-held key";
+
 /// Public key (hex) -> a `Signer`. The kid is the key's first 4 bytes, a readable label only;
 /// verification names keys by their full public key.
 fn signer_from_hex(h: &str) -> Result<Signer, String> {
@@ -101,7 +106,7 @@ fn signer_from_hex(h: &str) -> Result<Signer, String> {
     Ok(Signer {
         kid: pubkey[..4].to_vec(),
         pubkey,
-        custody_note: "steward-held key".into(),
+        custody_note: CUSTODY_NOTE.into(),
     })
 }
 
@@ -123,6 +128,7 @@ fn load_history(paths: &[PathBuf]) -> Result<Vec<VerifiedRoot>, String> {
         let bytes = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
         roots.push(decode::<SignedRoot>(&bytes).map_err(|e| format!("{}: {e:?}", p.display()))?);
     }
+    // clap guarantees `--history` is non-empty (`required = true`), so index 0 exists.
     let first = genesis(&roots[0]).map_err(|e| format!("genesis: {e:?}"))?;
     advance(&[first], &roots[1..]).map_err(|e| format!("history: {e:?}"))
 }
@@ -135,8 +141,11 @@ struct Sidecar {
     platform: String,
 }
 
-fn write(path: &PathBuf, bytes: &[u8]) -> Result<(), String> {
-    std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+/// Write a public output file (root or bundle) atomically, mode 0644: a crash never leaves
+/// a half-written release file.
+fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    cairn_keystore::fsio::atomic_write(path, bytes, Some(0o644))
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn run(cli: Cli) -> Result<(), String> {
@@ -144,6 +153,13 @@ fn run(cli: Cli) -> Result<(), String> {
         .map_err(|_| format!("environment variable {} is not set", cli.passphrase_env))?;
     match cli.cmd {
         Cmd::Keygen { out } => {
+            // A mistyped --out must never replace the steward's only signing key.
+            if out.exists() {
+                return Err(format!(
+                    "{} already exists; refusing to overwrite a key",
+                    out.display()
+                ));
+            }
             let code = seal::generate_recovery_code();
             let (_, kid) =
                 keystore::generate_sealed(&out, &pass, &code).map_err(|e| e.to_string())?;
@@ -220,6 +236,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 kind: "window".into(),
                 digest: [0; 32], // filled by `assemble`
                 byte_len: 0,     // filled by `assemble`
+                // Hard-coded: linux/aarch64 is the only target built. A second target needs
+                // os/arch fields in window.json.
                 os: Some("linux".into()),
                 arch: Some("aarch64".into()),
                 platform: Some(side.platform),

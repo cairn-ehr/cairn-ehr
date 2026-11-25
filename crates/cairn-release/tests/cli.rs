@@ -1,6 +1,8 @@
 //! The `cairn-release` binary end to end, in a temp dir with a runtime-generated passphrase.
 
-use cairn_release::{check_artifact, decode, genesis, verify_bundle, BundleFile, SignedRoot};
+use cairn_release::{
+    advance, check_artifact, decode, genesis, verify_bundle, BundleFile, SignedRoot,
+};
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -139,4 +141,114 @@ fn the_cli_refuses_a_sidecar_whose_release_differs() {
     ]);
     assert!(!o.status.success());
     assert!(!out.exists(), "nothing is written for a refused bundle");
+}
+
+/// keygen -> genesis (root key `rk`, release key `ak`) in `d`; returns (rk, ak, genesis path).
+fn minted(
+    d: &Path,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    String,
+    String,
+) {
+    let (rk, ak, g) = (d.join("root.key"), d.join("rel.key"), d.join("g.cbor"));
+    let rpub = ok(&["keygen", "--out", s(&rk)]);
+    let apub = ok(&["keygen", "--out", s(&ak)]);
+    ok(&[
+        "genesis",
+        "--channel",
+        "official",
+        "--root-signer",
+        &rpub,
+        "--root-threshold",
+        "1",
+        "--release-signer",
+        &apub,
+        "--release-threshold",
+        "1",
+        "--key",
+        s(&rk),
+        "--out",
+        s(&g),
+    ]);
+    (rk, ak, g, rpub, apub)
+}
+
+#[test]
+fn keygen_refuses_to_overwrite_an_existing_key() {
+    let d = tempfile::tempdir().unwrap();
+    let k = d.path().join("k.key");
+    ok(&["keygen", "--out", s(&k)]);
+    let before = std::fs::read(&k).unwrap();
+    let o = run(&["keygen", "--out", s(&k)]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
+    assert_eq!(
+        std::fs::read(&k).unwrap(),
+        before,
+        "the old key is untouched"
+    );
+}
+
+#[test]
+fn a_rotation_from_the_cli_advances_a_pin() {
+    let d = tempfile::tempdir().unwrap();
+    let (rk, _ak, g, _rpub, _apub) = minted(d.path());
+    let (nk, nr) = (d.path().join("new-root.key"), d.path().join("new-rel.key"));
+    let (npub, nrpub) = (
+        ok(&["keygen", "--out", s(&nk)]),
+        ok(&["keygen", "--out", s(&nr)]),
+    );
+    let v2 = d.path().join("v2.cbor");
+    ok(&[
+        "rotate",
+        "--history",
+        s(&g),
+        "--root-signer",
+        &npub,
+        "--root-threshold",
+        "1",
+        "--release-signer",
+        &nrpub,
+        "--release-threshold",
+        "1",
+        "--key",
+        s(&rk),
+        "--out",
+        s(&v2),
+    ]);
+    let g1: SignedRoot = decode(&std::fs::read(&g).unwrap()).unwrap();
+    let r2: SignedRoot = decode(&std::fs::read(&v2).unwrap()).unwrap();
+    let h = advance(&[genesis(&g1).unwrap()], &[r2]).unwrap();
+    assert_eq!(h.len(), 2);
+}
+
+#[test]
+fn a_rotation_signed_by_a_stranger_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let (_rk, _ak, g, rpub, apub) = minted(d.path());
+    let stranger = d.path().join("stranger.key");
+    ok(&["keygen", "--out", s(&stranger)]);
+    let v2 = d.path().join("v2.cbor");
+    let o = run(&[
+        "rotate",
+        "--history",
+        s(&g),
+        "--root-signer",
+        &rpub,
+        "--root-threshold",
+        "1",
+        "--release-signer",
+        &apub,
+        "--release-threshold",
+        "1",
+        "--key",
+        s(&stranger),
+        "--out",
+        s(&v2),
+    ]);
+    assert!(!o.status.success());
+    assert!(!v2.exists(), "nothing is written for a refused rotation");
 }
