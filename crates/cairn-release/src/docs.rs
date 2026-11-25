@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 pub struct Signer {
     #[serde(with = "serde_bytes")]
     pub kid: Vec<u8>,
+    #[serde(with = "bytes32")]
     pub pubkey: [u8; 32],
     pub custody_note: String,
 }
@@ -25,6 +26,7 @@ pub struct TrustRoot {
     pub root_threshold: u32,
     pub release_signers: Vec<Signer>,
     pub release_threshold: u32,
+    #[serde(with = "opt_bytes32")]
     pub prev_root_hash: Option<[u8; 32]>,
 }
 
@@ -55,6 +57,7 @@ impl SignedRoot {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Artifact {
     pub kind: String,
+    #[serde(with = "bytes32")]
     pub digest: [u8; 32],
     pub byte_len: u64,
     pub os: Option<String>,
@@ -80,7 +83,8 @@ pub struct ReleaseMeta {
     pub manifest: Vec<u8>,
     #[serde(with = "bytes_vec")]
     pub release_signatures: Vec<Vec<u8>>,
-    pub inclusion_proof: Option<serde_bytes::ByteBuf>,
+    #[serde(with = "opt_bytes")]
+    pub inclusion_proof: Option<Vec<u8>>,
 }
 
 /// The whole bundle file: meta plus the artifact bytes, in manifest order.
@@ -98,15 +102,25 @@ pub fn official_root() -> Option<SignedRoot> {
 }
 
 /// Canonical CBOR (the same `ciborium::into_writer` `cairn_event::canonical_cbor` uses).
+/// Deterministic: struct fields are written in declaration order and no type here holds a
+/// map. Panics only if a type cannot serialise, which none of this crate's types can
+/// (writing to a `Vec` is infallible), so callers stay simple.
 pub fn encode<T: Serialize>(value: &T) -> Vec<u8> {
     let mut buf = Vec::new();
-    // Writing to a Vec cannot fail and these types have no unserialisable members.
     ciborium::into_writer(value, &mut buf).expect("CBOR encode to Vec");
     buf
 }
 
+/// Parse exactly one CBOR value of type `T`. Anything wrong (bad CBOR, wrong shape,
+/// wrong fixed length, or extra bytes after the value) is `Refusal::Malformed`: a
+/// signed document must have one and only one reading.
 pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Refusal> {
-    ciborium::from_reader(bytes).map_err(|e| Refusal::Malformed(e.to_string()))
+    let mut cur = std::io::Cursor::new(bytes);
+    let v = ciborium::from_reader(&mut cur).map_err(|e| Refusal::Malformed(e.to_string()))?;
+    if (cur.position() as usize) != bytes.len() {
+        return Err(Refusal::Malformed("trailing bytes after document".into()));
+    }
+    Ok(v)
 }
 
 /// Serde adapter: a list of byte strings as CBOR byte strings (not arrays of ints,
@@ -127,5 +141,57 @@ mod bytes_vec {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {
         let v: Vec<ByteBuf> = serde::Deserialize::deserialize(d)?;
         Ok(v.into_iter().map(ByteBuf::into_vec).collect())
+    }
+}
+
+/// Serde adapter: `[u8; 32]` as a CBOR byte string; any other length is refused.
+mod bytes32 {
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(v)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        let v = serde_bytes::ByteBuf::deserialize(d)?;
+        <[u8; 32]>::try_from(v.as_slice())
+            .map_err(|_| D::Error::custom(format!("expected 32 bytes, got {}", v.len())))
+    }
+}
+
+/// Serde adapter: `Option<[u8; 32]>`, byte string or null, same length rule.
+mod opt_bytes32 {
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(b) => s.serialize_bytes(b),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<[u8; 32]>, D::Error> {
+        Option::<serde_bytes::ByteBuf>::deserialize(d)?
+            .map(|v| {
+                <[u8; 32]>::try_from(v.as_slice())
+                    .map_err(|_| D::Error::custom(format!("expected 32 bytes, got {}", v.len())))
+            })
+            .transpose()
+    }
+}
+
+/// Serde adapter: `Option<Vec<u8>>` as a CBOR byte string or null.
+mod opt_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(b) => s.serialize_bytes(b),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        Ok(Option::<serde_bytes::ByteBuf>::deserialize(d)?.map(|b| b.into_vec()))
     }
 }

@@ -119,3 +119,73 @@ fn no_channel_says_who() {
         "This update file is damaged or is not a Cairn update; fetch it again."
     );
 }
+
+/// True if `hay` contains `needle` as a contiguous run.
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+fn artifact(digest: [u8; 32]) -> Artifact {
+    Artifact {
+        kind: "window".into(),
+        digest,
+        byte_len: 3,
+        os: None,
+        arch: None,
+        platform: None,
+        generation_line: None,
+    }
+}
+
+#[test]
+fn every_byte_field_is_a_cbor_byte_string() {
+    // [u8; 32]: major type 2, length 32 => header 0x58 0x20, then the bytes.
+    let d = arr(5);
+    let mut want = vec![0x58, 0x20];
+    want.extend_from_slice(&d);
+    assert!(contains(&encode(&artifact(d)), &want));
+    // Vec<u8> (Signer.kid, 4 bytes): header 0x44.
+    let s = signer(7);
+    let mut want = vec![0x44];
+    want.extend_from_slice(&s.kid);
+    assert!(contains(&encode(&s), &want));
+    // Option<[u8; 32]> (prev_root_hash) is a byte string too.
+    let mut want = vec![0x58, 0x20];
+    want.extend_from_slice(&arr(9));
+    assert!(contains(&encode(&root()), &want));
+    // Some(Vec<u8>) inclusion proof: 3 bytes => 0x43.
+    let mut m = meta();
+    m.inclusion_proof = Some(vec![1, 2, 3]);
+    assert!(contains(&encode(&m), &[0x43, 1, 2, 3]));
+}
+
+#[test]
+fn a_short_digest_is_malformed() {
+    let mut bytes = encode(&artifact(arr(5)));
+    // Rewrite the 32-byte string header to 31 bytes and drop one byte.
+    let at = bytes.windows(2).position(|w| w == [0x58, 0x20]).unwrap();
+    bytes[at + 1] = 0x1f;
+    bytes.remove(at + 2);
+    assert!(matches!(
+        decode::<Artifact>(&bytes),
+        Err(Refusal::Malformed(_))
+    ));
+}
+
+#[test]
+fn trailing_bytes_are_malformed() {
+    let mut bytes = encode(&root());
+    bytes.push(0);
+    assert!(matches!(
+        decode::<TrustRoot>(&bytes),
+        Err(Refusal::Malformed(_))
+    ));
+}
+
+#[test]
+fn encoding_is_deterministic_and_proof_round_trips() {
+    let mut m = meta();
+    m.inclusion_proof = Some(vec![9; 40]);
+    assert_eq!(encode(&m), encode(&m.clone()));
+    assert_eq!(decode::<ReleaseMeta>(&encode(&m)).unwrap(), m);
+}

@@ -394,7 +394,6 @@ dependencies = [
 name = "cairn-release"
 version = "0.0.0"
 dependencies = [
- "cairn-event",
  "ciborium",
  "serde",
  "serde_bytes",
