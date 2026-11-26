@@ -127,13 +127,20 @@ BEGIN
     END IF;
 END $$;
 
--- 4. The promotion pass is OWNER-ONLY, like cairn_reproject (db/039). It grants power to
---    events admitted without it, so the runtime role must not be able to call it: a
---    compromised runtime role could otherwise promote an event the floor refused.
+-- 4. Who may run the promotion pass (#912). The runtime role MAY: `cairn-sync run` connects as
+--    it, and the pass takes no input, so a caller chooses nothing — it promotes only what the
+--    gates inside admit (db/043's GRANT note). PUBLIC may NOT, and the pass must be a DEFINER, or
+--    a cairn_node caller would run it without the owner's rights and fail.
 DO $$
 BEGIN
-    IF has_function_privilege('cairn_node', 'cairn_readjudicate_deferred()', 'EXECUTE') THEN
-        RAISE EXCEPTION 'cairn_node can EXECUTE cairn_readjudicate_deferred — the runtime role must not be able to grant power to a deferred event';
+    IF NOT has_function_privilege('cairn_node', 'cairn_readjudicate_deferred()', 'EXECUTE') THEN
+        RAISE EXCEPTION 'cairn_node cannot EXECUTE cairn_readjudicate_deferred — cairn-sync run cannot re-adjudicate deferred events (#912)';
+    END IF;
+    IF has_function_privilege('public', 'cairn_readjudicate_deferred()', 'EXECUTE') THEN
+        RAISE EXCEPTION 'PUBLIC can EXECUTE cairn_readjudicate_deferred — only the runtime role and the owner may';
+    END IF;
+    IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = 'cairn_readjudicate_deferred()'::regprocedure) THEN
+        RAISE EXCEPTION 'cairn_readjudicate_deferred is not SECURITY DEFINER — the runtime role''s call would run without the owner''s rights';
     END IF;
 END $$;
 

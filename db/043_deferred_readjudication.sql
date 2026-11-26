@@ -64,16 +64,28 @@ BEGIN
 END $$;
 
 -- Read-only for the runtime role: the `cairn-node deferred` listing and any future operator
--- surface. The PASS itself is owner-only (the REVOKE at the foot of this file) — it GRANTS
--- POWER, so it belongs to the same privilege tier as cairn_reproject (db/039).
+-- surface. The PASS itself is a definer the runtime role may CALL (the GRANT at the foot of this
+-- file, #912) — it takes no input, so calling it chooses nothing.
 GRANT SELECT ON event_deferred TO cairn_node;
 
 CREATE OR REPLACE FUNCTION cairn_readjudicate_deferred()
 RETURNS TABLE(promoted_type text, promoted_count bigint)
 LANGUAGE plpgsql
+-- A DEFINER since #912, so `cairn-sync run` can call it as the runtime role (see the GRANT at the
+-- foot of this file for why that grants nothing a caller can steer).
+SECURITY DEFINER
 -- Pinned like every dispatching function in this schema: the helper calls below must never
 -- resolve into an attacker-shadowed schema, regardless of caller.
 SET search_path = public, pg_temp
+-- THE LENIENT MARKER DIES WITH THE CALL. The body raises cairn.remote_apply = 'on' (below); a
+-- function-level SET restores the caller's value at exit, so a runtime caller cannot run this
+-- pass and then author on the lenient tier in the same transaction (#602's hole). Pinned by
+-- tests/deferred_readjudication_runner.rs.
+SET cairn.remote_apply = ''
+-- The whole-log replay marker pinned off, as apply_remote_event (db/020) and submit_event (db/005)
+-- pin it (ADR-0105 decision 18): a caller who raised it would skip db/082's per-stop lock during a
+-- promotion and race a strike. cairn_reproject never calls this pass.
+SET cairn.reprojecting = ''
 AS $$
 DECLARE
     r          record;
@@ -112,10 +124,11 @@ BEGIN
          ORDER BY el.hlc_wall, el.hlc_counter, el.node_origin COLLATE "C"
     LOOP
         v_err := NULL;
-        -- Per-row subtransaction. A failure here must NEVER propagate: this pass runs inside
+        -- Per-row subtransaction. A REFUSAL here must NEVER propagate: this pass runs inside
         -- connect_and_load_schema, so a raise would abort the whole schema load and wedge
         -- the node on one bad event — precisely the failure mode ADR-0056 exists to remove.
-        -- The refusal is captured and recorded instead.
+        -- The refusal is captured and recorded instead. The one exception is a lock wait
+        -- (#1175, the handler below): it says nothing about the event, and the caller retries.
         BEGIN
             -- THE CUSTODY LOCK FIRST, before any gate reads the clear view (#603, and its PR's
             -- review). Gate 4's dispatch takes this lock too, but gate 0 below reads the body
@@ -269,8 +282,17 @@ BEGIN
             -- late-custody path (#584) so the two cannot drift on which appliers may run again
             -- over a live row.
             PERFORM cairn_projection_dispatch_heal_safe(r.el_row);
-        EXCEPTION WHEN OTHERS THEN
-            v_err := SQLERRM;
+        EXCEPTION
+            -- A LOCK WAIT IS NOT AN ADJUDICATION (#1175). Under a caller's lock_timeout (the
+            -- loader's 2 s, the sync daemon's own) a promotion waiting on a lock fails with 55P03.
+            -- Caught by WHEN OTHERS it was recorded as the event's refusal and the caller's retry
+            -- never saw it. Re-raised, it fails the whole pass (earlier promotions in this run
+            -- roll back and redo next time — the pass is idempotent) and the caller retries.
+            -- A caller with no lock_timeout simply waits, as before.
+            WHEN lock_not_available THEN
+                RAISE;
+            WHEN OTHERS THEN
+                v_err := SQLERRM;
         END;
 
         IF v_err IS NULL THEN
@@ -282,8 +304,8 @@ BEGIN
                 to_jsonb(COALESCE((v_promoted ->> r.event_type)::bigint, 0) + 1));
         ELSE
             -- STILL POWERLESS, and now flagged legibly (decision 4). The marker stays, so the
-            -- event remains replay-ineligible; the next connect retries it, which is how the
-            -- target-arrived-later case heals itself.
+            -- event remains replay-ineligible; the next pass (a connect, or `cairn-sync run`'s)
+            -- retries it, which is how the target-arrived-later case heals itself.
             UPDATE event_deferred
                SET adjudication_error = v_err,
                    last_attempt_at    = clock_timestamp()
@@ -300,10 +322,16 @@ BEGIN
 END;
 $$;
 
--- Owner-only, exactly like cairn_reproject (db/039): this function GRANTS POWER to events
--- that were admitted without it. The loader and the CLI connect with owner privileges; the
--- runtime role must not be able to promote anything.
+-- WHO MAY CALL IT. Not PUBLIC. The runtime role (cairn_node) may, since #912: the long-running
+-- process deferred events arrive through (`cairn-sync run`) connects as it, and while only the
+-- loader called this pass, a deferred event stayed powerless on a running node until an operator
+-- ran a loader verb. It was owner-only "like cairn_reproject (db/039)", but the two differ where it
+-- matters: this pass takes NO input, so a caller chooses nothing — it promotes exactly what the
+-- gates above admit, which every connect would promote anyway — and it is cheap (event_deferred is
+-- empty on a healthy node). The runtime role already calls apply_remote_event (db/020), a definer
+-- that runs the same lenient tier over bytes the CALLER supplies; this is strictly less.
 REVOKE EXECUTE ON FUNCTION cairn_readjudicate_deferred() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_readjudicate_deferred() TO cairn_node;
 
 -- ---------------------------------------------------------------------------
 -- #388 part 2 — this chart's deferred sensitivity events, for the operator surface.

@@ -10,6 +10,28 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #912 + #1175 — `cairn-sync run` RE-ADJUDICATES DEFERRED EVENTS (db/043) — do not undo.**
+- **The pass is a definer the runtime role may call.** `cairn_readjudicate_deferred()` is `SECURITY DEFINER`,
+  `GRANT EXECUTE … TO cairn_node`, never PUBLIC: it takes no input, so a caller chooses nothing.
+  `apply_remote_event` already gives that role a lenient-tier definer over bytes the caller supplies, which is more
+  power than this pass gives. **Tempting wrong fix:** make it owner-only again "like `cairn_reproject`". Every
+  deferred event on a running node then stays powerless until someone runs a loader verb. Pins:
+  `deferred_readjudication_runner.rs::the_runtime_role_runs_the_pass_and_the_lenient_marker_does_not_leak`,
+  `cairn-sync`'s `readjudicate::tests::the_runtime_role_can_run_a_pass`, `db/tests/043` part 4.
+- **Every caller-settable marker is pinned off on the definer.** That means `SET cairn.remote_apply = ''` (the body
+  raises it, so the caller's value comes back at exit) and `SET cairn.reprojecting = ''` (raised, it would skip db/082's
+  per-stop lock). **Tempting wrong fix:** drop either as redundant. A runtime caller could then author on the lenient
+  tier in the same transaction (#602), or race a strike. Pins: `the_definer_pins_every_caller_settable_marker_off` and
+  the leak assertion above. A NEW `current_setting('cairn.…')` read by a gate or applier needs a pin here and in
+  db/020.
+- **A lock wait fails the pass; it is never an adjudication.** `WHEN lock_not_available THEN RAISE` comes before
+  `WHEN OTHERS`. **Tempting wrong fix:** fold it into `WHEN OTHERS`. The loader's retry then never sees a `55P03`,
+  and the event reads as refused. Pin: `a_lock_wait_fails_the_pass_and_is_not_recorded_as_a_refusal`.
+- **The daemon's pass never stalls sync.** `readjudicate::run` uses its own transaction with
+  `SET LOCAL lock_timeout = '2s'`. A failure is logged to stderr AND to the JSONL (`readjudicate_error`), and it never
+  ends the loop. It runs only after a cycle that applied events, or on the full sweep. **Tempting wrong fix:** run it
+  every cycle with no timeout. Pin: `readjudicate::tests::a_pass_behind_a_held_lock_gives_up_and_says_why`.
+
 **⇒ #909 SLICE C2 — A TERMINAL FOLLOWS ITS NODE (ADR-0112, db/086) — do not undo.**
 - **The installer never trusts the node or the window.** It verifies every staged release against ITS OWN pin
   (`state/roots.cbor`, else `/etc/cairn/channel-root.cbor`, else the compiled-in root): the roots the window staged are

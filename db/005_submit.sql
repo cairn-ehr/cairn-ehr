@@ -359,7 +359,8 @@ BEGIN
 END;
 $$;
 -- It writes projections, so it takes the appliers' posture (#382): callers are the SECURITY
--- DEFINER doors and the owner-only re-adjudication, which already run as the owner.
+-- DEFINER doors and the re-adjudication pass (db/043, itself a definer since #912), all running as
+-- the owner.
 REVOKE EXECUTE ON FUNCTION cairn_projection_dispatch_heal_safe(event_log) FROM PUBLIC;
 
 -- #584 / ADR-0070 — custody arrived for an event already in the log: bring it to the chart.
@@ -477,7 +478,8 @@ AS $$
     SELECT pg_advisory_xact_lock(hashtextextended('cairn.custody:' || p_event_id::text, 0));
 $$;
 -- Called only by the SECURITY DEFINER doors, the shred executor and the heal-safe dispatch (which
--- only those doors and the owner-only re-adjudication call), all running as the owner.
+-- only those doors and the re-adjudication pass call — a definer too since #912), all running as
+-- the owner.
 REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 
 -- #773 — a crypto-shred and a whole-log heal/rebuild never interleave.
@@ -633,14 +635,13 @@ $$;
 -- family EXCEPT its entry point is a rule a reader cannot tell from an oversight, and the
 -- refusal it produced named which validator an event type maps to — from the wrong layer.
 --
--- Safe because no live caller needs a grant, and the three kinds of caller are worth naming so
--- a future one is checked against them rather than assumed: submit_event (below) and
--- apply_remote_event (db/020) are SECURITY DEFINER and run as this schema's owner;
--- cairn_readjudicate_deferred (db/043) is invoker-rights but runs during schema load as the
--- owner, and is itself already REVOKEd FROM PUBLIC. A future INVOKER-rights caller reachable by
--- cairn_agent or cairn_node would need an explicit GRANT here — that is the one change that
--- would turn this line into a breakage, and it should be made deliberately, not by deleting
--- this REVOKE.
+-- Safe because no live caller needs a grant, and the three callers are worth naming so a future
+-- one is checked against them rather than assumed: submit_event (below), apply_remote_event
+-- (db/020) and, since #912, cairn_readjudicate_deferred (db/043; EXECUTE granted to cairn_node,
+-- never to PUBLIC) are all SECURITY DEFINER and run as this schema's owner. A future
+-- INVOKER-rights caller reachable by cairn_agent or cairn_node would need an explicit GRANT
+-- here — that is the one change that would turn this line into a breakage, and it should be
+-- made deliberately, not by deleting this REVOKE.
 --
 -- Asserted over the catalogue by crates/cairn-node/tests/floor_execute_grants.rs
 -- (public_cannot_execute_the_twin_dispatcher).

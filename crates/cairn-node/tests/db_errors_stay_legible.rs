@@ -850,6 +850,12 @@ const UNMARKED_COMMITS: &[(&str, &str)] = &[
         "crates/cairn-sync/src/main.rs",
         "the sync harness's `write`/`gen` load generator and its content-addressed blob store",
     ),
+    (
+        "crates/cairn-sync/src/readjudicate.rs",
+        "the deferred-event re-adjudication pass writes no event: it promotes or flags markers, \
+         and is idempotent, so a re-run after a lost commit promotes the same events again or \
+         finds them promoted (#912)",
+    ),
 ];
 
 /// A database commit in flattened code: tokio_postgres's `.commit().await` or the sync

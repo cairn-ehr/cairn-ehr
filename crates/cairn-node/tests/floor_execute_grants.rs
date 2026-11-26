@@ -303,10 +303,9 @@ async fn public_cannot_execute_the_twin_dispatcher() {
         DISPATCHER_FNS_TODAY,
         "twin-dispatch",
         "Fix: `REVOKE EXECUTE ON FUNCTION cairn_event_twin(text, jsonb) FROM PUBLIC;` in \
-         db/005_submit.sql. Every live caller reaches it either from inside a SECURITY \
-         DEFINER door (submit_event, apply_remote_event) or as the schema owner \
-         (cairn_readjudicate_deferred, itself already revoked), so no runtime role \
-         needs a grant.",
+         db/005_submit.sql. Every live caller reaches it from inside a SECURITY \
+         DEFINER door (submit_event, apply_remote_event, cairn_readjudicate_deferred), \
+         so no runtime role needs a grant.",
     )
     .await;
 }
