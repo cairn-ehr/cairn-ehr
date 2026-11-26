@@ -212,3 +212,9 @@ that ends at `localhost` on the terminal's machine is accepted.
   an owner-run step before the new window starts.
 - We are betting that the over-inclusive predicate does not refuse a legitimate deployment. If it does, the operator
   sees the specific reason on stderr and the fix is to give the window the login this verb makes.
+
+> [!NOTE]
+> **Erratum E1 (2026-11-26).** The consequence *"Deferred events heal later … only one-off loader verbs do"* was
+> resolved by PR [#1195](https://github.com/cairn-ehr/cairn-ehr/pull/1195) ([#912](https://github.com/cairn-ehr/cairn-ehr/issues/912)):
+> `cairn-sync run`'s pull loop now runs the re-adjudication pass, which became a `SECURITY DEFINER` granted to
+> `cairn_node`. The decision itself, that the window and `serve` hold no owner keys and run no loader, is unchanged.

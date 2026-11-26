@@ -5579,19 +5579,8 @@ fn cmd_run(
         // #912: promote deferred events whose wait may be over. Never fatal and never silent:
         // both the JSONL and stderr say what happened, as every other step here does.
         if readjudicate::due(applied_new, full_sweep) {
-            match readjudicate::run(&mut client) {
-                Ok(n) => {
-                    if n > 0 {
-                        status += &format!(", {n} deferred promoted");
-                    }
-                    line["readjudicated"] = serde_json::json!(n);
-                }
-                Err(e) => {
-                    let why = readjudicate::failure_line(&e);
-                    eprintln!("{why}");
-                    line["readjudicate_error"] = serde_json::json!(why);
-                }
-            }
+            let outcome = readjudicate::run(&mut client);
+            readjudicate::record(&mut line, &mut status, &outcome);
         }
         // Cumulative blobs fetched by the separate byte-tier thread (informational;
         // never blocks this loop).

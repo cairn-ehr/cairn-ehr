@@ -112,23 +112,32 @@ async fn the_runtime_role_runs_the_pass_and_the_lenient_marker_does_not_leak() {
             &[],
         )
         .await;
+    let rows = match ran {
+        Ok(rows) => rows,
+        Err(e) => {
+            c.batch_execute("ROLLBACK").await.unwrap();
+            c.batch_execute("RESET ROLE").await.unwrap();
+            panic!(
+                "THE RUNTIME ROLE MUST BE ABLE TO RUN THE PASS: `cairn-sync run` connects as it, \
+                 and a pass it cannot run leaves every deferred event powerless on a running \
+                 node (#912): {e:?}"
+            );
+        }
+    };
+    // The pass succeeded, so this transaction is healthy and the probe must answer.
     let leaked: Option<String> = c
         .query_one("SELECT current_setting('cairn.remote_apply', true)", &[])
         .await
-        .ok()
-        .and_then(|r| r.get(0));
-    c.batch_execute("COMMIT").await.ok();
-    c.batch_execute("ROLLBACK; RESET ROLE").await.ok();
+        .expect("the leak probe runs in the pass's (healthy) transaction")
+        .get(0);
+    c.batch_execute("COMMIT").await.unwrap();
+    c.batch_execute("RESET ROLE").await.unwrap();
 
-    let rows = ran.expect(
-        "THE RUNTIME ROLE MUST BE ABLE TO RUN THE PASS: `cairn-sync run` connects as it, and a \
-         pass it cannot run leaves every deferred event powerless on a running node (#912)",
-    );
     let promoted: i64 = rows.iter().map(|r| r.get::<_, i64>(0)).sum();
     assert_eq!(promoted, 1, "the deferred event is promoted");
-    assert_ne!(
-        leaked.as_deref(),
-        Some("on"),
+    assert_eq!(
+        leaked.as_deref().unwrap_or(""),
+        "",
         "THE LENIENT MARKER MUST NOT OUTLIVE THE PASS: a runtime caller could otherwise author \
          on the lenient tier in the same transaction (#602)"
     );
@@ -183,12 +192,57 @@ async fn a_lock_wait_fails_the_pass_and_is_not_recorded_as_a_refusal() {
     );
 }
 
-/// Every session setting a caller can raise and a gate or applier reads is pinned OFF on the
-/// definer, exactly as `apply_remote_event` (db/020) pins them: `cairn.remote_apply` (above), and
-/// `cairn.reprojecting`, which would let a runtime caller skip db/082's per-stop lock during a
-/// promotion and race a strike (ADR-0105 decision 18).
+/// Passes never overlap. Before #912 every pass ran under the loader's `SCHEMA_LOAD_LOCK`; now
+/// `cairn-sync run` calls it too, outside that lock, and the gate-4 appliers were never written to
+/// run concurrently over the same unsealed event (only sealed ones meet the custody lock). So the
+/// pass takes its own transaction-scoped advisory lock first; a second caller waits for it, or
+/// under a `lock_timeout` gives up with `55P03` and retries, like any other lock wait.
 #[tokio::test]
-async fn the_definer_pins_every_caller_settable_marker_off() {
+async fn a_second_pass_waits_for_the_first() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // Hold the pass's own lock, as a pass in flight on another connection does.
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('cairn.readjudicate', 0))",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let (c2, _) = second_connection(&base).await;
+    c2.batch_execute("SET lock_timeout = '200ms'")
+        .await
+        .unwrap();
+    let ran = c2
+        .execute("SELECT count(*) FROM cairn_readjudicate_deferred()", &[])
+        .await;
+    c.batch_execute("ROLLBACK").await.unwrap();
+
+    let err = ran.expect_err(
+        "A PASS MUST WAIT FOR ONE ALREADY RUNNING: overlapping passes run the same appliers over \
+         the same unsealed event at once",
+    );
+    assert_eq!(
+        err.code(),
+        Some(&tokio_postgres::error::SqlState::LOCK_NOT_AVAILABLE),
+        "the pass waits on the shared lock and gives up with 55P03: {err:?}"
+    );
+}
+
+/// The two replay-tier markers a caller can raise are pinned OFF on the definer, as
+/// `submit_event` (db/005) pins both: `cairn.remote_apply` (above), and `cairn.reprojecting`,
+/// which would let a runtime caller skip db/082's per-stop lock during a promotion and race a
+/// strike (ADR-0105 decision 18). NOT every caller-settable setting: the size caps
+/// (`cairn.max_component_size`, `cairn.max_medication_group_size`) stay caller-settable here
+/// exactly as on both doors — #1196 decides that for all three definers together.
+#[tokio::test]
+async fn the_definer_pins_both_tier_markers_off() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

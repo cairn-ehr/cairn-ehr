@@ -128,8 +128,8 @@ BEGIN
 END $$;
 
 -- 4. Who may run the promotion pass (#912). The runtime role MAY: `cairn-sync run` connects as
---    it, and the pass takes no input, so a caller chooses nothing — it promotes only what the
---    gates inside admit (db/043's GRANT note). PUBLIC may NOT, and the pass must be a DEFINER, or
+--    it, and the pass takes no input, so a caller chooses when it runs, not what it promotes —
+--    only what the gates inside admit (db/043's GRANT note; the caps and isolation level, #1196). PUBLIC may NOT, and the pass must be a DEFINER, or
 --    a cairn_node caller would run it without the owner's rights and fail.
 DO $$
 BEGIN

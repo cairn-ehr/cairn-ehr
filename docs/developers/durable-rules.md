@@ -12,25 +12,38 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 **⇒ #912 + #1175 — `cairn-sync run` RE-ADJUDICATES DEFERRED EVENTS (db/043) — do not undo.**
 - **The pass is a definer the runtime role may call.** `cairn_readjudicate_deferred()` is `SECURITY DEFINER`,
-  `GRANT EXECUTE … TO cairn_node`, never PUBLIC: it takes no input, so a caller chooses nothing.
-  `apply_remote_event` already gives that role a lenient-tier definer over bytes the caller supplies, which is more
-  power than this pass gives. **Tempting wrong fix:** make it owner-only again "like `cairn_reproject`". Every
-  deferred event on a running node then stays powerless until someone runs a loader verb. Pins:
+  `GRANT EXECUTE … TO cairn_node`, never PUBLIC. It takes no input, so a caller chooses when it runs, not what it
+  promotes: the next connect would promote the same events. `apply_remote_event` already gives that role a
+  lenient-tier definer over bytes the caller supplies. What a caller can still set around either one (the size caps,
+  the isolation level) is #1196, decided for all three lenient definers together. **Tempting wrong fix:** make it
+  owner-only again "like `cairn_reproject`". Every deferred event on a running node then stays powerless until someone
+  runs a loader verb. Pins:
   `deferred_readjudication_runner.rs::the_runtime_role_runs_the_pass_and_the_lenient_marker_does_not_leak`,
   `cairn-sync`'s `readjudicate::tests::the_runtime_role_can_run_a_pass`, `db/tests/043` part 4.
-- **Every caller-settable marker is pinned off on the definer.** That means `SET cairn.remote_apply = ''` (the body
+- **Both replay-tier markers are pinned off on the definer.** That means `SET cairn.remote_apply = ''` (the body
   raises it, so the caller's value comes back at exit) and `SET cairn.reprojecting = ''` (raised, it would skip db/082's
-  per-stop lock). **Tempting wrong fix:** drop either as redundant. A runtime caller could then author on the lenient
-  tier in the same transaction (#602), or race a strike. Pins: `the_definer_pins_every_caller_settable_marker_off` and
-  the leak assertion above. A NEW `current_setting('cairn.…')` read by a gate or applier needs a pin here and in
-  db/020.
+  per-stop lock), as `submit_event` pins both. **Tempting wrong fix:** drop either as redundant. A runtime caller could
+  then author on the lenient tier in the same transaction (#602), or race a strike. Pins:
+  `the_definer_pins_both_tier_markers_off` and the leak assertion above. A NEW tier marker read by a gate or applier
+  needs a pin here, in db/020 and in db/005.
+- **One pass at a time.** The body takes `pg_advisory_xact_lock(hashtextextended('cairn.readjudicate', 0))` before
+  any row lock. Until #912 every pass ran under the loader's `SCHEMA_LOAD_LOCK`; the daemon calls it outside that
+  lock, and the gate-4 appliers were never written to run concurrently over one unsealed event. **Tempting wrong
+  fix:** drop it because sealed events already meet the custody lock. Unsealed ones do not. Pin:
+  `a_second_pass_waits_for_the_first`.
 - **A lock wait fails the pass; it is never an adjudication.** `WHEN lock_not_available THEN RAISE` comes before
   `WHEN OTHERS`. **Tempting wrong fix:** fold it into `WHEN OTHERS`. The loader's retry then never sees a `55P03`,
-  and the event reads as refused. Pin: `a_lock_wait_fails_the_pass_and_is_not_recorded_as_a_refusal`.
-- **The daemon's pass never stalls sync.** `readjudicate::run` uses its own transaction with
-  `SET LOCAL lock_timeout = '2s'`. A failure is logged to stderr AND to the JSONL (`readjudicate_error`), and it never
-  ends the loop. It runs only after a cycle that applied events, or on the full sweep. **Tempting wrong fix:** run it
-  every cycle with no timeout. Pin: `readjudicate::tests::a_pass_behind_a_held_lock_gives_up_and_says_why`.
+  and the event reads as refused. Pin: `a_lock_wait_fails_the_pass_and_is_not_recorded_as_a_refusal`. The price is
+  head-of-line blocking: one long-held lock fails every pass until it frees (#1197). The loader's wait line therefore
+  names ADVISORY-lock holders as well as table-lock holders (`replay_wait::blockers`); pin
+  `the_blocker_line_names_an_advisory_lock_holder`. A deadlock is still recorded as a refusal (#1194).
+- **The daemon's pass never parks sync on a lock.** `readjudicate::run` uses its own transaction with
+  `SET LOCAL lock_timeout = '2s'` (equal to `REPLAY_LOCK_TIMEOUT`, pinned). That bounds each ONE wait, not the pass,
+  which runs on the pull loop's thread. `readjudicate::record` logs a failure to stderr AND to the JSONL
+  (`readjudicate_error`), and a failure never ends the loop. It runs only after a cycle that applied events, or on
+  the full sweep. **Tempting wrong fix:** run it every cycle with no timeout. Pins:
+  `readjudicate::tests::a_pass_behind_a_held_lock_gives_up_and_says_why`, `a_successful_pass_is_recorded`. Refused
+  events are re-run on every due pass (#1198).
 
 **⇒ #909 SLICE C2 — A TERMINAL FOLLOWS ITS NODE (ADR-0112, db/086) — do not undo.**
 - **The installer never trusts the node or the window.** It verifies every staged release against ITS OWN pin
@@ -2153,7 +2166,7 @@ which reader asks which question: `docs/superpowers/plans/2026-11-01-slice-2-act
   connection guard mid-query (PR #892 review): pin `funnel_status_probes_the_live_node_afresh_and_bounded`.
 - **The reopen is `cairn_node::db::connect_with_task`, not `connect_and_load_schema`.** The schema was checked (never loaded) at launch, and a
   replay takes DDL locks a read never needs (#726). It also skips the deferred-event re-adjudication, and since
-  ADR-0084 so does the window's launch: only one-off loader verbs run it (#912). Unpinned — the tempting "keep it the same as launch" fix.
+  ADR-0084 so does the window's launch: one-off loader verbs and, since #912, `cairn-sync run` run it. Unpinned — the tempting "keep it the same as launch" fix.
 - **`LiveData::new` is `NodeConnection::fixed`**: a caller-made client may carry session state (`lost_commit.rs`'s
   kill switch is a `SET`) that a fresh one would silently lack. Only the window's launch uses `reopening`.
 - Not checked on reopen: that the database is still the SAME node. Writes there are expected to be refused if this

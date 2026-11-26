@@ -337,7 +337,7 @@ CREATE TRIGGER cairn_projection_dispatch_trg
 --
 -- Gate 4 runs inside a per-row subtransaction, so a deadlock its wait might meet (the shape is in
 -- cairn_lock_custody's note below) is caught there: the event keeps its marker with the error
--- recorded, and the next connect retries it. Nothing is lost.
+-- recorded, and the next pass (a connect, or `cairn-sync run`'s) retries it. Nothing is lost.
 --
 -- search_path pinned for the %I EXECUTE, exactly like cairn_projection_dispatch (#426).
 CREATE OR REPLACE FUNCTION cairn_projection_dispatch_heal_safe(e event_log)
@@ -452,16 +452,17 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- lock and wants hlc_state — the hot one. Postgres aborts one side with 40P01, a retryable failure
 -- that writes nothing. Every product DOOR caller (pull, requeue, restore) applies one event per
 -- statement, so a caller that starts batching events into one transaction must revisit this.
--- There are two multi-event holders. The first is connect-time re-adjudication (db/043,
--- #603/#773): it takes each sealed candidate's lock at the top of its row and keeps it to the end
+-- There are two multi-event holders. The first is the re-adjudication pass (db/043,
+-- #603/#773; run at connect and, since #912, by `cairn-sync run`): it takes each sealed candidate's lock at the top of its row and keeps it to the end
 -- of the pass, along with any CARNMR lock or projection row lock an earlier event's appliers took. Two shapes can therefore
 -- deadlock with it: a late-key door holding a later event's lock from step 9 whose applier wants a
 -- CARNMR lock re-adjudication holds, and a shred holding a later event's lock that blocks on a
 -- medication_reconciliation / medication_group_member row an earlier gate-4 applier wrote.
 -- Whichever side Postgres aborts loses nothing: the row runs in a per-row subtransaction, so a
--- 40P01 there is recorded on the marker and retried at the next connect, and a 40P01 at the door
--- is a retryable failure that wrote nothing. The deferred set is empty on a healthy node, so the
--- pass is short and rare.
+-- 40P01 there is recorded on the marker and retried at the next pass (#1194: it reads as a
+-- refusal until then), and a 40P01 at the door is a retryable failure that wrote nothing. The
+-- deferred set holds no classifiable row on a healthy node, so the pass is short; since #912 it
+-- runs after every sync cycle that applied events, so no longer rare.
 -- The second, since #863, is a SHRED: after its scrub it re-folds the siblings that can win the
 -- rows it emptied (cairn_refold_after_shred, db/037), taking each sealed sibling's lock in turn
 -- while it holds its target's, plus CARNMR when the shredded event was a reconciliation or
@@ -477,9 +478,9 @@ SET search_path = public, pg_temp
 AS $$
     SELECT pg_advisory_xact_lock(hashtextextended('cairn.custody:' || p_event_id::text, 0));
 $$;
--- Called only by the SECURITY DEFINER doors, the shred executor and the heal-safe dispatch (which
--- only those doors and the re-adjudication pass call — a definer too since #912), all running as
--- the owner.
+-- Called only by the SECURITY DEFINER doors, the shred executor, the re-adjudication pass (db/043,
+-- directly and through the heal-safe dispatch — a definer too since #912) and that dispatch
+-- (which only those doors and the pass call), all running as the owner.
 REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 
 -- #773 — a crypto-shred and a whole-log heal/rebuild never interleave.
@@ -1167,7 +1168,8 @@ DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);
 -- `SET cairn.remote_apply = ''` — THIS IS THE STRICT DOOR, and nothing a caller does may make
 -- it lenient (#602). `cairn.remote_apply` = 'on' is the marker that switches the projection
 -- guards (db/018, 023, 031, 033, 041) from REFUSE to CLAMP-AND-FLAG; only the lenient doors
--- (db/020 apply_remote_event, the owner-only reprojection paths) are meant to raise it. But it
+-- (db/020 apply_remote_event, the owner-only reprojection paths, and db/043's re-adjudication
+-- pass, which pins it back off at exit) are meant to raise it. But it
 -- is an unregistered placeholder setting, and PostgreSQL lets ANY role set one — so before
 -- #602 a client holding nothing but cairn_agent could `SET cairn.remote_apply = 'on'` and have
 -- this door admit, as a mere flag, a medication thread re-homed onto another patient. That

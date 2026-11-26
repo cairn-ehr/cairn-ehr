@@ -245,3 +245,9 @@ Pins: `cairn-event`'s `schema_generation` ledger tests;
 `cairn-gui-tauri`'s `update_tests.rs` and `update_webview_tests.rs`.
 RUNBOOK §40 carries the human measurements: Update now to the lock screen, the service-restart blip, an upgrade under
 a long reader, the heal's longest lock, the idle restart and a too-new install.
+
+> [!NOTE]
+> **Erratum E1 (2026-11-26).** The consequence *"The re-adjudication swallows its lock timeout (#1175)"* was fixed by
+> PR [#1195](https://github.com/cairn-ehr/cairn-ehr/pull/1195): db/043 re-raises `55P03`, so decision 7's retry sees it,
+> and `cairn-sync run` re-adjudicates routinely (#912). The trade it bought, one long-held lock failing every pass,
+> is [#1197](https://github.com/cairn-ehr/cairn-ehr/issues/1197).
