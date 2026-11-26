@@ -179,3 +179,45 @@ async fn a_failing_file_reads_the_same_through_run_waiting_as_through_load_migra
         .expect_err("the body cannot succeed");
     assert_eq!(format!("{waiting}"), format!("{single}"));
 }
+
+/// #1175 (PR #1195 review): since the re-adjudication pass re-raises a lock wait, the loader can
+/// retry on an ADVISORY lock — a custody lock held by a late key, a running pass's own lock. The
+/// retry's log line must name that holder too, not report "no session found" while the connect
+/// waits on it indefinitely.
+#[tokio::test]
+async fn the_blocker_line_names_an_advisory_lock_holder() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let holder = raw(&base).await;
+    let holder_pid: i32 = holder
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    holder.batch_execute("BEGIN").await.unwrap();
+    holder
+        .execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('cairn.readjudicate', 0))",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let probe = raw(&base).await;
+    // A blocker must have held its lock at least `lock_timeout`; keep that short and outwait it.
+    probe
+        .batch_execute("SET lock_timeout = '100ms'")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let line = cairn_node::replay_wait::blockers(&probe).await;
+    holder.batch_execute("ROLLBACK").await.unwrap();
+
+    assert!(
+        line.contains(&format!("pid {holder_pid}")),
+        "THE LOADER'S WAIT LINE MUST NAME AN ADVISORY-LOCK HOLDER: {line}"
+    );
+}

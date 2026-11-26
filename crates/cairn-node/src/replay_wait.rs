@@ -117,15 +117,17 @@ where
 /// Why not `pg_blocking_pids(pg_backend_pid())`: it lists who blocks a wait IN PROGRESS, and
 /// once the timeout has cancelled our statement we wait on nothing, so it is always empty
 /// (checked on PG 18). With only this one connection, the honest substitute is the sessions in
-/// this database that hold a table lock inside a transaction open at least as long as the
-/// timeout — a blocker must have held its lock that long. Oldest first, at most five.
-async fn blockers(client: &Client) -> String {
+/// this database that hold a table or advisory lock inside a transaction open at least as long
+/// as the timeout — a blocker must have held its lock that long. Advisory, because the
+/// re-adjudication pass waits on custody locks and on its own (db/043, #1175). Oldest first, at
+/// most five. Public for `tests/replay_lock_timeout.rs`, which pins the advisory case.
+pub async fn blockers(client: &Client) -> String {
     let rows = client
         .query(
             "SELECT DISTINCT a.pid, coalesce(nullif(a.application_name, ''), '(unnamed)'), \
                     date_trunc('second', now() - a.xact_start)::text, a.xact_start \
                FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
-              WHERE l.granted AND l.locktype = 'relation' \
+              WHERE l.granted AND l.locktype IN ('relation', 'advisory') \
                 AND a.datname = current_database() AND a.pid <> pg_backend_pid() \
                 AND a.xact_start <= now() - current_setting('lock_timeout')::interval \
               ORDER BY a.xact_start LIMIT 5",
@@ -133,7 +135,9 @@ async fn blockers(client: &Client) -> String {
         )
         .await;
     match rows {
-        Ok(rows) if rows.is_empty() => "no long-open session found holding a table lock".into(),
+        Ok(rows) if rows.is_empty() => {
+            "no long-open session found holding a table or advisory lock".into()
+        }
         Ok(rows) => {
             let named: Vec<String> = rows
                 .iter()

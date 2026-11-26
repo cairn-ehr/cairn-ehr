@@ -56,6 +56,10 @@ mod pull_page;
 // once, in a file a reviewer can hold in their head, rather than inline in a 13k-line main.rs.
 mod requeue;
 
+// The pull loop's routine re-adjudication of deferred events (#912): when a pass is due, and one
+// pass under its own lock timeout. Its own file for the same reason as the two above.
+mod readjudicate;
+
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
 //
@@ -5534,6 +5538,8 @@ fn cmd_run(
         // is_multiple_of, stabilized only in Rust 1.87) keeps within the MSRV 1.74.
         #[allow(clippy::manual_is_multiple_of)]
         let full_sweep = cycle % FULL_SWEEP_EVERY == 0;
+        // What this cycle applied, for the re-adjudication below (0 when the pull failed).
+        let mut applied_new = 0;
         match do_pull(
             &mut client,
             &transport,
@@ -5544,6 +5550,7 @@ fn cmd_run(
         ) {
             Ok(m) => {
                 status += &format!(": pull {} shipped / {} new", m["shipped"], m["applied_new"]);
+                applied_new = m["applied_new"].as_u64().unwrap_or(0);
                 line["pull"] = m;
             }
             Err(e) => {
@@ -5568,6 +5575,12 @@ fn cmd_run(
                 status += &format!(": PULL FAILED: {}", operator_chain(e.as_ref()));
                 record_pull_failure(&mut line, e.as_ref());
             }
+        }
+        // #912: promote deferred events whose wait may be over. Never fatal and never silent:
+        // both the JSONL and stderr say what happened, as every other step here does.
+        if readjudicate::due(applied_new, full_sweep) {
+            let outcome = readjudicate::run(&mut client);
+            readjudicate::record(&mut line, &mut status, &outcome);
         }
         // Cumulative blobs fetched by the separate byte-tier thread (informational;
         // never blocks this loop).
