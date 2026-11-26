@@ -191,9 +191,10 @@
 >    filed **#1188** (after a release-signer rotation the node offers a kept release no terminal accepts), **#1189**
 >    (terminal-wide refusals cost three downloads per session), **#1190** (three node outages give a release up until
 >    restart), **#1191** (`a_press_waits_at_most_one_chunk` failed once under load; DB-gated, CI never runs it); the
->    finalcheck filed #1192 (a withheld trust-root rotation keeps a rotated-out release key alive; **ruled 2026-11-26:
->    accepted, no expiry, ADR-0055 d2 + d6, stated in security §7.6; the clockless guard is #1199**) and **#1193**
->    (low-severity installer/intake robustness items).
+>    finalcheck filed **#1192** (a withheld trust-root rotation keeps a rotated-out release key alive; **ruled
+>    2026-11-26: accepted, no expiry, ADR-0055 d2 + d6, stated in security §7.6** — a terminal keeps a new root only
+>    on installing a release signed under it; the clockless guard is #1199) and **#1193** (low-severity
+>    installer/intake robustness items).
 >    **⇒ NEXT: the genesis ceremony (#1182, a human act — no release channel exists until it does).**
 >    **Slice B must not ship to a site until #1182 is done** (C1 + C2 are merged). RUNBOOK §38, §39 (two machines), §40 and §41 (a node
 >    and a Pi) are owed by a human. **Otherwise:** sign-in
