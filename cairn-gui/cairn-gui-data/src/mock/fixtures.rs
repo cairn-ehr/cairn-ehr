@@ -94,7 +94,7 @@ pub fn starting_population() -> Vec<FixturePatient> {
             "Amina أمينة अमीना 阿明娜",
             "female",
             "1984-03-02",
-            &[("mrn", "12345"), ("national-id", "QLD-998877")],
+            &[("mrn", "12345"), ("medicare-au", "2123456701")],
             TrustState::Confirmed,
         ),
         patient(
