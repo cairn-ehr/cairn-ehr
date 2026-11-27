@@ -19,7 +19,7 @@ const OVERLAYS_JS: &str = include_str!("../src-ui/allergy_overlays.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
 /// Every `src-ui/*.js` file, as (name, source): a guard over them all covers a new script too.
-fn scripts() -> Vec<(String, String)> {
+pub(crate) fn scripts() -> Vec<(String, String)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src-ui");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&dir).expect("src-ui is readable") {

@@ -72,12 +72,14 @@ fn an_open_from_the_menu_skips_the_closes_own_menu_read() {
         leave.contains("if (!menuReadFollows) void refreshMenuCount();"),
         "{leave}"
     );
-    // No other caller passes the option: their closes still re-read the menu.
-    let passes = [MENU_JS, WHOS_HERE_JS, NOTES_JS, LEAVE_JS, SUPERVISION_JS]
-        .iter()
-        .map(|js| js.matches("menuReadFollows: true").count())
-        .sum::<usize>();
-    assert_eq!(passes, 1);
+    // No other caller passes the option, in ANY script (idle.js's re-lock and update.js's Update
+    // now close the chart too): their closes still re-read the menu.
+    let passes: Vec<(String, usize)> = crate::leave_chart_webview_tests::scripts()
+        .into_iter()
+        .map(|(name, js)| (name, js.matches("menuReadFollows: true").count()))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    assert_eq!(passes, [("person_menu.js".to_string(), 1)], "{passes:?}");
 }
 
 /// The button's visible words and its accessible name are both Rust's, and are two fields.

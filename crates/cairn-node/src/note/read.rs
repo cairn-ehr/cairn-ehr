@@ -246,10 +246,11 @@ const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])", "TR
 /// the record never required co-signing for, and is outside the window: owed to no one, listed by
 /// no one. `tests/note_person_menu.rs` re-reads every menu scenario 30 days on, when only the other
 /// terms can keep a part, and asserts the same groups 1 and 2; removing any one term fails a test.
-// shortcut: `base` still scans every part the keys ever wrote, one attester-door call each, and
-// every part by a student or a writer ever required co-signing is kept, cleared or not. Measured
-// by `examples/measure_person_menu.rs` (results/2026-11-08-person-menu-reads-macos-m3max.md).
-// Upgrade to a projection of open obligations when a node outgrows it, see #1021.
+// shortcut: `parts` still scans every part the keys ever wrote (their attesters in one set-door
+// call), and every part by a student or a writer ever required co-signing is kept, cleared or
+// not. Measured by `examples/measure_person_menu.rs`
+// (results/2026-11-08-person-menu-reads-macos-m3max.md). Upgrade to a projection of open
+// obligations when a node outgrows it, see #1021.
 const NOTES_BY_KEYS_SQL: &str = notes_sql!(
     "e.signer_key_id = ANY($1::text[]) OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
       WHERE c ->> 'actor_id' = ANY($1::text[]))",
