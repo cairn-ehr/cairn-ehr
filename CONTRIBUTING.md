@@ -140,6 +140,11 @@ Three things that have bitten us, so they are worth stating outright:
   floor — add a `WINDOW_FLOOR_LEDGER` entry (`cairn-event`'s `schema_generation.rs`). A door the window
   never faced goes in `db/window_not_facing.txt` with a reason; new doors are recorded with
   `CAIRN_REGEN_DOOR_SURFACE=1 cargo test -p cairn-node --test window_door_surface`.
+- **A door the window CALLS lands in a new `db/*.sql` file, never an in-place edit.** A window meets a
+  database of its own generation as current whatever that database's content (ADR-0111 decision 2), so
+  a door added in place (ADR-0080) lets a new window open a database without it, and fail there with
+  "function does not exist". The new file's generation bump makes that window refuse the older
+  database instead (`db/087` is the example).
 - **Renaming any required job means updating branch protection in lockstep.** Because required checks are
   matched by exact name, changing a job's `name:` without updating `main`'s required-checks list orphans
   the old name. If you must rename, coordinate the branch-protection change with a maintainer.

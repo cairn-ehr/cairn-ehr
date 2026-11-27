@@ -1,4 +1,4 @@
-# generation 86
+# generation 87
 col actor_current.actor_id
 col actor_current.kind
 col actor_current.pinned
@@ -817,6 +817,7 @@ fn cairn_note_quarantine_minutes() -> integer
 fn cairn_note_signer_name(text) -> text
 fn cairn_note_staff_actor(text) -> text
 fn cairn_note_vouched_attester(uuid) -> text
+fn cairn_note_vouched_attesters(uuid[]) -> TABLE(event_id uuid, attester text)
 fn cairn_patient_attachment_flags(uuid) -> TABLE(event_id uuid, event_type text, attachment_index integer, rendition_index integer, reason text, flagged_at timestamp with time zone)
 fn cairn_patient_deferred_sensitivity(uuid) -> TABLE(event_id uuid, event_type text, admitted_at timestamp with time zone, adjudication_error text)
 fn cairn_patient_safety(uuid) -> TABLE(event_id uuid, rung text, class text, severity text, event_type text, grade text, subject_kind text)

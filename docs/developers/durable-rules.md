@@ -10,6 +10,26 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #1021 — THE NOTE READS' COST (db/087; the keep rule is PR #1025's) — do not undo.**
+- **The note reads ask db/087's set door ONCE per read, never db/065's door once per part.** `notes_sql!`'s `parts`
+  CTE runs the WHERE, and `base` joins `cairn_note_vouched_attesters((SELECT array_agg(event_id) FROM parts))`.
+  It uses db/065's predicate; that door stays for the vouch column, `version_settle_read` and older windows.
+  **Tempting wrong fixes:** put the per-part `CROSS JOIN LATERAL` back for readability (about a fifth of a
+  ward-year's menu read), or hand the door every event on the node (the chart list would then pay for the whole
+  node). Pins: `read.rs::key_facts_are_looked_up_once_per_key_not_once_per_row`,
+  `the_attester_is_read_only_through_the_vouch_door`, `db/tests/087` (the two doors agree event by event).
+- **A door the window calls lands in a NEW file** (CONTRIBUTING's migration checklist). A window at its own
+  generation opens whatever the database's hash (ADR-0111 decision 2). **Tempting wrong fix:** fold db/087 into
+  db/065 under ADR-0080. Pin: none. A test cannot tell an in-place door from a new one.
+- **"Open note" from an open chart skips the close's own menu read.** `openMenuRow` calls
+  `closeChart({ menuReadFollows: true })`, and the open's outcome re-reads (the note pane's draw, or the refusal's
+  catch). A failed note-pane read leaves the bar as drawn before the open until the menu opens or the 60 s tick.
+  **Tempting wrong fix:** pass it from another close (Find another patient, a switch, the idle re-lock, Update now).
+  Nothing re-reads after those. Pin: `person_menu_webview_tests.rs::an_open_from_the_menu_skips_the_closes_own_menu_read`.
+- **The keep rule** (`read.rs`'s `NOTES_BY_KEYS_SQL`, PR #1025) must stay a superset of what any menu could list.
+  Pins: `tests/note_person_menu.rs`'s 30-days-on re-reads (removing any one term fails one) and
+  `the_keep_rule_keeps_exactly_the_words_signer_of_reads_as_repudiated`.
+
 **⇒ #912 + #1175 — `cairn-sync run` RE-ADJUDICATES DEFERRED EVENTS (db/043) — do not undo.**
 - **The pass is a definer the runtime role may call.** `cairn_readjudicate_deferred()` is `SECURITY DEFINER`,
   `GRANT EXECUTE … TO cairn_node`, never PUBLIC. It takes no input, so a caller chooses when it runs, not what it

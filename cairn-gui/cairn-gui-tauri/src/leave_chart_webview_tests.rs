@@ -62,7 +62,7 @@ fn a_close_waits_for_every_act_in_flight_before_it_takes_the_chart_down() {
 fn a_close_in_progress_is_joined_never_run_twice() {
     let close = js_fn(LEAVE_JS, "closeChart");
     assert!(
-        close.contains("closing ??= leaveChart().finally(() => {"),
+        close.contains("closing ??= leaveChart(menuReadFollows).finally(() => {"),
         "{close}"
     );
     assert!(close.contains("closing = null;"), "{close}");
@@ -79,7 +79,10 @@ fn an_open_waits_for_a_close_in_progress() {
     let open = js_fn(MENU_JS, "openMenuRow");
     assert!(
         position(open, "await closing;")
-            < position(open, "if (displayedPatient) await closeChart();"),
+            < position(
+                open,
+                "if (displayedPatient) await closeChart({ menuReadFollows: true });"
+            ),
         "{open}"
     );
     let open_chart = js_fn(FUNNEL_JS, "openChart");
@@ -291,8 +294,10 @@ fn every_chart_opener_is_placed() {
     assert_eq!(found, expected);
     let menu = js_fn(MENU_JS, "openMenuRow");
     assert!(
-        position(menu, "if (displayedPatient) await closeChart();")
-            < position(menu, "enterChart(header);"),
+        position(
+            menu,
+            "if (displayedPatient) await closeChart({ menuReadFollows: true });"
+        ) < position(menu, "enterChart(header);"),
         "{menu}"
     );
 }
