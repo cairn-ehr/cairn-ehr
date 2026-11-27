@@ -480,7 +480,7 @@ mod tests {
     /// 10.4 s counts read. So outside the vouch column (whose calls run once per VOUCH, a few
     /// rows) each key-fact function is named exactly once. The verified attesters come from ONE
     /// call of db/087's set door for every part the WHERE kept, never one call per part: at a
-    /// ward-year that per-part call was about a fifth of the counts read (#1021, PR 2).
+    /// ward-year that per-part call was about a fifth of the counts read (#1021, PR #1202).
     #[test]
     fn key_facts_are_looked_up_once_per_key_not_once_per_row() {
         const KEY_FACTS: [&str; 5] = [
